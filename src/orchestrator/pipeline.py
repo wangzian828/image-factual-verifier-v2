@@ -14,8 +14,11 @@ from src.orchestrator.llm_backend import APIBackend, LLMBackend
 from src.orchestrator.stage_runner import StageRunner, StageStep
 from src.orchestrator.stages import perception, planning, verification, judgment
 from src.orchestrator.state import (
+    Entity,
+    FaceDetection,
     FinalJudgment,
     PerceptionReport,
+    TextRegion,
     VerificationPlan,
     VerificationResult,
     VerificationState,
@@ -151,10 +154,72 @@ class Orchestrator:
         self._accumulate_tokens(state, steps)
 
         if result and isinstance(result, PerceptionReport):
-            return result
+            # Check if it's actually populated (not empty defaults)
+            if result.entities or result.text_regions or result.faces or result.scene_description:
+                return result
 
-        # Fallback: minimal report
-        return PerceptionReport(scene_description="(perception failed)")
+        # Fallback: reconstruct from tool results
+        return self._reconstruct_perception_from_steps(steps)
+
+    def _reconstruct_perception_from_steps(self, steps: List) -> PerceptionReport:
+        """Reconstruct PerceptionReport from tool call results when model output fails."""
+        import json as _json
+
+        entities = []
+        text_regions = []
+        faces = []
+        scene_description = ""
+        image_type = "photo"
+
+        for step in steps:
+            if step.action_type != "tool_call" or not step.tool_result:
+                continue
+            try:
+                data = _json.loads(step.tool_result) if isinstance(step.tool_result, str) else step.tool_result
+            except (_json.JSONDecodeError, TypeError):
+                continue
+
+            if not isinstance(data, dict) or data.get("status") == "error":
+                continue
+
+            if step.tool_name == "perceive_scene":
+                for e in data.get("entities", []):
+                    entities.append(Entity(
+                        name=e.get("name", ""),
+                        entity_type=e.get("entity_type", ""),
+                        bbox=e.get("bbox", []),
+                        confidence=e.get("confidence", 1.0),
+                        attributes=e.get("attributes", {}),
+                    ))
+                scene_description = data.get("scene_description", "")
+                image_type = data.get("image_type", "photo")
+
+            elif step.tool_name == "ocr_with_position":
+                for t in data.get("text_regions", []):
+                    text_regions.append(TextRegion(
+                        text=t.get("text", ""),
+                        bbox_quad=t.get("bbox_quad", []),
+                        confidence=t.get("confidence", 0.0),
+                        language=t.get("language", "unknown"),
+                    ))
+
+            elif step.tool_name == "face_detect":
+                for f in data.get("faces", []):
+                    faces.append(FaceDetection(
+                        bbox=f.get("bbox", []),
+                        confidence=f.get("confidence", 0.0),
+                    ))
+
+        if not entities and not text_regions and not faces and not scene_description:
+            return PerceptionReport(scene_description="(perception failed)")
+
+        return PerceptionReport(
+            entities=entities,
+            text_regions=text_regions,
+            faces=faces,
+            scene_description=scene_description,
+            image_type=image_type,
+        )
 
     async def _run_planning(
         self, state: VerificationState, image_path: str
