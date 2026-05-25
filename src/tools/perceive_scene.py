@@ -89,19 +89,29 @@ class PerceiveSceneTool(BaseTool):
         """Run scene perception on the image."""
         image_input = params["image_input"]
 
-        try:
-            client = self._get_client()
-            parsed = client.create_image_json(
-                system_prompt=PERCEIVE_SCENE_PROMPT,
-                user_text="请仔细观察这张图片，输出结构化的实体列表和场景信息。",
-                image_input=image_input,
-                max_tokens=2000,
-                model_name=self.model_name,
-            )
-        except Exception as e:
+        last_error = None
+        for attempt in range(2):  # Retry once on failure
+            try:
+                client = self._get_client()
+                parsed = client.create_image_json(
+                    system_prompt=PERCEIVE_SCENE_PROMPT,
+                    user_text="请仔细观察这张图片，输出结构化的实体列表和场景信息。",
+                    image_input=image_input,
+                    max_tokens=2000,
+                    model_name=self.model_name,
+                )
+                last_error = None
+                break
+            except Exception as e:
+                last_error = e
+                if attempt == 0:
+                    import time
+                    time.sleep(2)
+
+        if last_error is not None:
             return {
                 "status": "error",
-                "error": f"Scene perception failed: {str(e)}",
+                "error": f"Scene perception failed: {str(last_error)}",
                 "entities": [],
                 "scene_description": "",
                 "image_type": "unknown",

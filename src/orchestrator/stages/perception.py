@@ -15,9 +15,15 @@ SYSTEM_PROMPT = """\
 你的任务：使用工具提取图片中所有可观察到的内容，输出结构化报告。
 你不需要验证任何事实，只需要准确观察和记录。
 
-## 必须执行的步骤
+## 第一步（必须执行）
 
-1. 第一步必须调用 perceive_scene 工具（不可跳过）
+你的第一个动作必须是调用 perceive_scene 工具：
+
+<think>我需要先调用 perceive_scene 来获取图片的结构化信息。</think>
+<tool_call>{"name": "perceive_scene", "arguments": {"image_input": "image"}}</tool_call>
+
+## 后续步骤
+
 2. 如果 perceive_scene 发现图中有可见文字，调用 ocr_with_position
 3. 如果 perceive_scene 发现图中有人物面孔，调用 face_detect
 
