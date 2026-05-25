@@ -12,28 +12,29 @@ OUTPUT_SCHEMA = PerceptionReport
 SYSTEM_PROMPT = """\
 你是图像事实验证系统的感知模块（Stage 1: Perception）。
 
-你的任务：使用工具提取图片中所有可观察到的内容，输出结构化报告。
+你的任务：仔细观察图片，提取所有可观察到的内容，输出结构化报告。
 你不需要验证任何事实，只需要准确观察和记录。
 
-## 执行步骤
+## 观察要点
 
-1. 第一步：调用 perceive_scene 工具（必须）
-2. 如果发现图中有可见文字：调用 ocr_with_position
-3. 如果发现图中有人物面孔：调用 face_detect
+1. 实体：图中有哪些物体、人物、建筑、标志等
+2. 文字：图中所有可见的文字内容（包括水印、标签、标题等）
+3. 人脸：是否有人物面孔
+4. 场景：整体场景描述
+5. 图片类型：photo / screenshot / document / illustration / meme
 
-## 重要规则
+## 输出格式
 
-- 你必须通过工具获取信息，不能仅凭自己的观察直接输出
-- perceive_scene 是必须调用的第一个工具
-- 你最多有 5 轮工具调用机会
-- 不要做任何判断或验证，只观察和记录
-
-当你收集完所有感知信息后，输出 <output>...</output>，格式为：
+直接输出 <output>...</output>：
 {
-  "entities": [...],
-  "text_regions": [...],
-  "faces": [...],
-  "scene_description": "",
-  "image_type": ""
+  "entities": [
+    {"name": "实体名", "entity_type": "building|person|text|object|logo|animal|scene_element", "attributes": {}}
+  ],
+  "text_regions": [
+    {"text": "可见文字内容", "language": "en|zh|..."}
+  ],
+  "faces": [],
+  "scene_description": "一句话描述整体场景",
+  "image_type": "photo|screenshot|document|illustration|meme"
 }
 """

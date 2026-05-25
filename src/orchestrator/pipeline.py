@@ -133,19 +133,18 @@ class Orchestrator:
         """Stage 1: Extract all observable content from the image."""
         t0 = time.time()
 
-        tools = build_stage_tools("perception", self.all_tools)
         runner = StageRunner(
             llm=self.llm,
             system_prompt=perception.SYSTEM_PROMPT,
-            tools=tools,
+            tools=[],  # No tools — model observes directly
             output_schema=PerceptionReport,
-            max_rounds=self.max_rounds_perception,
+            max_rounds=2,
             image_path=image_path,
             stage_name="perception",
         )
 
         result, steps = await runner.run(
-            "请观察这张图片，提取所有可见的实体、文字和人脸信息。"
+            "请仔细观察这张图片，提取所有可见的实体、文字和人脸信息。直接输出 <output>...</output>。"
         )
 
         # Record
