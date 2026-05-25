@@ -54,11 +54,13 @@ class CropAndReverseSearchTool(BaseTool):
             raise FileNotFoundError(f"Image not found: {image_input}")
 
         upload_url = os.getenv("IMAGE_UPLOAD_API_URL", "").strip() or "https://litterbox.catbox.moe/resources/internals/api.php"
+        proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY") or os.environ.get("https_proxy") or os.environ.get("http_proxy")
+        proxies = {"http": proxy, "https": proxy} if proxy else None
         with path.open("rb") as handle:
             if "catbox" in upload_url or "litterbox" in upload_url:
-                response = requests.post(upload_url, data={"reqtype": "fileupload", "time": "1h"}, files={"fileToUpload": (path.name, handle)}, timeout=30)
+                response = requests.post(upload_url, data={"reqtype": "fileupload", "time": "1h"}, files={"fileToUpload": (path.name, handle)}, timeout=30, proxies=proxies)
             else:
-                response = requests.post(upload_url, files={"file": (path.name, handle)}, timeout=30)
+                response = requests.post(upload_url, files={"file": (path.name, handle)}, timeout=30, proxies=proxies)
         response.raise_for_status()
 
         content_type = response.headers.get("Content-Type", "").lower()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import os
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -29,7 +30,9 @@ def _guess_mime_from_name(name: str) -> str:
 
 
 def _remote_image_to_data_url(image_url: str) -> str:
-    response = requests.get(image_url, headers=REMOTE_IMAGE_HEADERS, timeout=20)
+    proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY") or os.environ.get("https_proxy") or os.environ.get("http_proxy")
+    proxies = {"http": proxy, "https": proxy} if proxy else None
+    response = requests.get(image_url, headers=REMOTE_IMAGE_HEADERS, timeout=20, proxies=proxies)
     response.raise_for_status()
     content_type = response.headers.get("Content-Type", "").split(";")[0].strip()
     mime = content_type or _guess_mime_from_name(urlparse(image_url).path)

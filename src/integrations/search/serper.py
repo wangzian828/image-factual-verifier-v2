@@ -14,6 +14,17 @@ SERPER_IMAGE_ENDPOINT = "https://google.serper.dev/images"
 SERPER_LENS_ENDPOINT = "https://google.serper.dev/lens"
 
 
+def _get_proxies() -> Optional[Dict[str, str]]:
+    """Get proxy settings from environment."""
+    proxy = (
+        os.environ.get("HTTPS_PROXY")
+        or os.environ.get("HTTP_PROXY")
+        or os.environ.get("https_proxy")
+        or os.environ.get("http_proxy")
+    )
+    return {"http": proxy, "https": proxy} if proxy else None
+
+
 def contains_cjk(text: str) -> bool:
     return any("\u4e00" <= char <= "\u9fff" for char in text or "")
 
@@ -71,7 +82,7 @@ class SerperTextSearchClient:
         last_error: Exception | None = None
         for attempt in range(self.max_retries + 1):
             try:
-                response = requests.post(self.endpoint, json=payload, headers=headers, timeout=self.timeout)
+                response = requests.post(self.endpoint, json=payload, headers=headers, timeout=self.timeout, proxies=_get_proxies())
                 response.raise_for_status()
                 return response.json()
             except requests.RequestException as exc:
@@ -133,7 +144,7 @@ class SerperNewsSearchClient:
         last_error: Exception | None = None
         for attempt in range(self.max_retries + 1):
             try:
-                response = requests.post(self.endpoint, json=payload, headers=headers, timeout=self.timeout)
+                response = requests.post(self.endpoint, json=payload, headers=headers, timeout=self.timeout, proxies=_get_proxies())
                 response.raise_for_status()
                 return response.json()
             except requests.RequestException as exc:
@@ -186,7 +197,7 @@ class SerperImageSearchClient:
         last_error: Exception | None = None
         for attempt in range(self.max_retries + 1):
             try:
-                response = requests.post(self.endpoint, json=payload, headers=headers, timeout=self.timeout)
+                response = requests.post(self.endpoint, json=payload, headers=headers, timeout=self.timeout, proxies=_get_proxies())
                 response.raise_for_status()
                 return response.json()
             except requests.RequestException as exc:
@@ -238,7 +249,7 @@ class SerperLensSearchClient:
         last_error: Exception | None = None
         for attempt in range(self.max_retries + 1):
             try:
-                response = requests.post(self.endpoint, json=payload, headers=headers, timeout=self.timeout)
+                response = requests.post(self.endpoint, json=payload, headers=headers, timeout=self.timeout, proxies=_get_proxies())
                 response.raise_for_status()
                 return response.json()
             except requests.RequestException as exc:

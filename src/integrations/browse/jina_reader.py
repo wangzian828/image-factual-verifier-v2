@@ -40,7 +40,9 @@ class JinaReaderClient:
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
 
-        response = requests.get(normalize_reader_url(url), headers=headers, timeout=self.timeout)
+        proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY") or os.environ.get("https_proxy") or os.environ.get("http_proxy")
+        proxies = {"http": proxy, "https": proxy} if proxy else None
+        response = requests.get(normalize_reader_url(url), headers=headers, timeout=self.timeout, proxies=proxies)
         response.raise_for_status()
         content = response.text[: self.max_chars]
         evidence = self.extract_goal_snippet(content, goal)

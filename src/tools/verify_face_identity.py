@@ -185,7 +185,9 @@ class VerifyFaceIdentityTool(BaseTool):
                     "AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36"
                 ),
             }
-            resp = requests.get(reference_url, headers=headers, timeout=15)
+            proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY") or os.environ.get("https_proxy") or os.environ.get("http_proxy")
+            proxies = {"http": proxy, "https": proxy} if proxy else None
+            resp = requests.get(reference_url, headers=headers, timeout=15, proxies=proxies)
             resp.raise_for_status()
 
             # Save to temp file
