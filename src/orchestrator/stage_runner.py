@@ -125,13 +125,13 @@ class StageRunner:
 
             # Check for output — either <output> tags or bare JSON (for no-tool stages)
             if "<output>" in content and "</output>" in content:
-                # If tools are available but none have been called yet, reject early output (once)
+                # If tools are available but none have been called yet, reject early output
                 tool_calls_so_far = sum(1 for s in steps if s.action_type == "tool_call")
-                rejected_before = any(s.thought == "(tried to output without calling any tools)" for s in steps)
-                if self.tools_list and tool_calls_so_far == 0 and not rejected_before and round_num <= self.max_rounds - 1:
+                if self.tools_list and tool_calls_so_far == 0 and round_num <= self.max_rounds - 1:
                     step.action_type = "format_error"
                     step.thought = "(tried to output without calling any tools)"
                     steps.append(step)
+                    # Don't increment consecutive_errors — this is expected behavior
                     shadow.append({"role": "assistant", "content": content})
                     available_tools = list(self.tools.keys())
                     shadow.append({
