@@ -183,8 +183,8 @@ class Orchestrator:
             for e in report.entities
         )
 
-        # Call OCR if text detected
-        if has_text and "ocr_with_position" in self.all_tools:
+        # Always call OCR (most images have text; cheap CPU operation)
+        if "ocr_with_position" in self.all_tools:
             try:
                 ocr_tool = self.all_tools["ocr_with_position"]
                 loop = asyncio.get_event_loop()
@@ -203,8 +203,9 @@ class Orchestrator:
             except Exception:
                 pass
 
-        # Call face_detect if people detected
-        if has_person and "face_detect" in self.all_tools:
+        # Call face_detect if people detected (or if perception failed — be safe)
+        perception_failed = not report.entities and not report.scene_description
+        if (has_person or perception_failed) and "face_detect" in self.all_tools:
             try:
                 face_tool = self.all_tools["face_detect"]
                 loop = asyncio.get_event_loop()
