@@ -21,10 +21,16 @@ class OpenAICompatibleChatClient:
     def build_client(self) -> OpenAI:
         if not self.api_key:
             raise RuntimeError("LLM API key is not set.")
+        # Use proxy from environment if available
+        proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY") or os.environ.get("https_proxy") or os.environ.get("http_proxy")
+        http_client = httpx.Client(
+            proxy=proxy,
+            timeout=self.timeout,
+        )
         return OpenAI(
             api_key=self.api_key,
             base_url=self.base_url,
-            http_client=httpx.Client(trust_env=False, timeout=self.timeout),
+            http_client=http_client,
         )
 
     def create_json_completion(
