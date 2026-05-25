@@ -40,7 +40,7 @@ class Orchestrator:
         model_name: str = "gpt-5.5",
         vlm_provider: Optional[str] = None,
         vlm_model: Optional[str] = None,
-        max_rounds_perception: int = 3,
+        max_rounds_perception: int = 5,
         max_rounds_verification: int = 8,
         timeout: float = 300.0,
         temperature: float = 0.0,

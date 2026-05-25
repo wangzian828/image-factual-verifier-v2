@@ -245,7 +245,7 @@ class StageRunner:
                     "content": "格式错误。请直接输出 <output>{...JSON...}</output>。",
                 })
 
-            if consecutive_errors >= 3:
+            if consecutive_errors >= 5:
                 break
 
         # Max rounds exhausted — force output
