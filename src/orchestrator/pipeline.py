@@ -130,13 +130,19 @@ class Orchestrator:
     async def _run_perception(
         self, state: VerificationState, image_path: str
     ) -> PerceptionReport:
-        """Stage 1: Extract all observable content from the image."""
+        """Stage 1: Extract all observable content from the image.
+
+        Two-step approach:
+        1. Model directly observes the image and outputs PerceptionReport (no tools)
+        2. Pipeline automatically calls OCR/face_detect based on what was observed
+        """
         t0 = time.time()
 
+        # Step 1: Model observes directly (no tools, 1 LLM call)
         runner = StageRunner(
             llm=self.llm,
             system_prompt=perception.SYSTEM_PROMPT,
-            tools=[],  # No tools — model observes directly
+            tools=[],
             output_schema=PerceptionReport,
             max_rounds=2,
             image_path=image_path,
@@ -147,20 +153,75 @@ class Orchestrator:
             "请仔细观察这张图片，提取所有可见的实体、文字和人脸信息。直接输出 <output>...</output>。"
         )
 
-        # Record
-        state.stage_timings["perception"] = round(time.time() - t0, 2)
         state.all_steps.extend(steps)
-        state.total_tool_calls += sum(1 for s in steps if s.action_type == "tool_call")
         state.llm_api_calls += runner.llm_api_calls
         self._accumulate_tokens(state, steps)
 
-        if result and isinstance(result, PerceptionReport):
-            # Check if it's actually populated (not empty defaults)
-            if result.entities or result.text_regions or result.faces or result.scene_description:
-                return result
+        if not result or not isinstance(result, PerceptionReport):
+            result = PerceptionReport(scene_description="(perception failed)")
 
-        # Fallback: reconstruct from tool results
-        return self._reconstruct_perception_from_steps(steps)
+        # Step 2: Automatically supplement with tools based on observations
+        result = await self._supplement_perception(result, image_path, state)
+
+        state.stage_timings["perception"] = round(time.time() - t0, 2)
+        return result
+
+    async def _supplement_perception(
+        self, report: PerceptionReport, image_path: str, state: VerificationState
+    ) -> PerceptionReport:
+        """Automatically call OCR and face_detect based on perception results."""
+        import asyncio
+        import json as _json
+
+        has_text = (
+            bool(report.text_regions)
+            or any(e.entity_type in ("text", "logo") for e in report.entities)
+            or any("text" in e.name.lower() or "文字" in e.name for e in report.entities)
+        )
+        has_person = any(
+            e.entity_type == "person" or "person" in e.name.lower() or "人" in e.name
+            for e in report.entities
+        )
+
+        # Call OCR if text detected
+        if has_text and "ocr_with_position" in self.all_tools:
+            try:
+                ocr_tool = self.all_tools["ocr_with_position"]
+                loop = asyncio.get_event_loop()
+                ocr_result = await loop.run_in_executor(
+                    None, ocr_tool.call, {"image_input": image_path}
+                )
+                state.total_tool_calls += 1
+                if isinstance(ocr_result, dict) and ocr_result.get("status") == "success":
+                    for t in ocr_result.get("text_regions", []):
+                        report.text_regions.append(TextRegion(
+                            text=t.get("text", ""),
+                            bbox_quad=t.get("bbox_quad", []),
+                            confidence=t.get("confidence", 0.0),
+                            language=t.get("language", "unknown"),
+                        ))
+            except Exception:
+                pass
+
+        # Call face_detect if people detected
+        if has_person and "face_detect" in self.all_tools:
+            try:
+                face_tool = self.all_tools["face_detect"]
+                loop = asyncio.get_event_loop()
+                face_result = await loop.run_in_executor(
+                    None, face_tool.call, {"image_input": image_path}
+                )
+                state.total_tool_calls += 1
+                if isinstance(face_result, dict) and face_result.get("status") == "success":
+                    for f in face_result.get("faces", []):
+                        report.faces.append(FaceDetection(
+                            bbox=f.get("bbox", []),
+                            confidence=f.get("confidence", 0.0),
+                        ))
+            except Exception:
+                pass
+
+        return report
 
     def _reconstruct_perception_from_steps(self, steps: List) -> PerceptionReport:
         """Reconstruct PerceptionReport from tool call results when model output fails."""
