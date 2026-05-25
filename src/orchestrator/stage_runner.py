@@ -380,9 +380,11 @@ IMPORTANT: Only ONE action per round. Always include <think> first.
         """
         tool = self.tools[tool_name]
 
-        # Inject image_input if the tool needs it and it's not provided
+        # Inject image_input if the tool needs it and it's not a valid path
         if "image_input" in tool.parameters.get("properties", {}):
-            if "image_input" not in tool_args or not tool_args["image_input"]:
+            provided = tool_args.get("image_input", "")
+            # Override if empty, or if it doesn't look like a real file path
+            if not provided or ("/" not in provided and "\\" not in provided):
                 tool_args["image_input"] = self.image_path
 
         # Some tools (visual_anomaly, compare_reference) use self.image_path attribute
