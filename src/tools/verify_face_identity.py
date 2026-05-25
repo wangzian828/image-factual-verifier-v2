@@ -92,7 +92,9 @@ class VerifyFaceIdentityTool(BaseTool):
     known_faces: Dict[str, np.ndarray] = field(default_factory=dict)
 
     # Similarity threshold for a match
-    match_threshold: float = 0.4
+    # facenet-pytorch (VGGFace2) embeddings are L2-normalized,
+    # cosine similarity > 0.6 is typically a match
+    match_threshold: float = 0.6
 
     def call(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Compare face embeddings."""
@@ -171,6 +173,9 @@ class VerifyFaceIdentityTool(BaseTool):
         """Download a reference image, detect faces, and compare embeddings."""
         import requests
 
+        # Save main image embeddings (face_detect_tool.call will overwrite them)
+        saved_embeddings = self.face_detect_tool.get_embeddings().copy()
+
         # Download reference image
         tmp_path = None
         try:
@@ -202,33 +207,34 @@ class VerifyFaceIdentityTool(BaseTool):
 
         # Detect faces in reference image
         try:
-            import cv2
-            img = cv2.imread(tmp_path)
-            if img is None:
+            # Reuse face_detect_tool to detect faces in the reference image
+            ref_result = self.face_detect_tool.call({"image_input": tmp_path})
+
+            if ref_result.get("status") == "error":
                 return {
                     "status": "error",
-                    "error": "Cannot read downloaded reference image.",
+                    "error": f"Face detection on reference failed: {ref_result.get('error')}",
+                    "reference_url": reference_url,
                 }
 
-            app = self.face_detect_tool._get_app()
-            ref_faces = app.get(img)
-
-            if not ref_faces:
+            if ref_result.get("total_faces", 0) == 0:
                 return {
                     "status": "error",
                     "error": "No faces detected in reference image.",
                     "reference_url": reference_url,
                 }
 
-            if reference_face_index >= len(ref_faces):
-                reference_face_index = 0  # Fall back to first face
-
-            ref_embedding = ref_faces[reference_face_index].embedding
-            if ref_embedding is None:
+            ref_embeddings = self.face_detect_tool.get_embeddings()
+            if not ref_embeddings:
                 return {
                     "status": "error",
                     "error": "Could not extract embedding from reference face.",
                 }
+
+            if reference_face_index >= len(ref_embeddings):
+                reference_face_index = 0
+
+            ref_embedding = ref_embeddings[reference_face_index]
 
         except Exception as e:
             return {
@@ -236,6 +242,8 @@ class VerifyFaceIdentityTool(BaseTool):
                 "error": f"Face detection on reference image failed: {str(e)}",
             }
         finally:
+            # Restore main image embeddings
+            self.face_detect_tool._last_embeddings = saved_embeddings
             if tmp_path:
                 try:
                     os.remove(tmp_path)

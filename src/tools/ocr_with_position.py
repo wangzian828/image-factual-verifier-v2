@@ -1,55 +1,32 @@
 # -*- coding: utf-8 -*-
-"""OCR with position information using PaddleOCR.
+"""OCR with position information using EasyOCR.
 
 Returns text regions with bounding box coordinates, confidence scores,
-and detected language. Runs on CPU.
+and language detection. Uses PyTorch backend (no PaddlePaddle dependency).
 """
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from src.tools.base import BaseTool
 
 
-def _detect_language(text: str) -> str:
-    """Simple heuristic language detection."""
-    if not text:
-        return "unknown"
-    # Count CJK characters
-    cjk_count = len(re.findall(r"[一-鿿㐀-䶿]", text))
-    if cjk_count > len(text) * 0.3:
-        return "zh"
-    # Count Korean
-    korean_count = len(re.findall(r"[가-힯]", text))
-    if korean_count > len(text) * 0.3:
-        return "ko"
-    # Count Japanese hiragana/katakana
-    jp_count = len(re.findall(r"[぀-ゟ゠-ヿ]", text))
-    if jp_count > len(text) * 0.2:
-        return "ja"
-    # Default to English/Latin
-    return "en"
-
-
 @dataclass
 class OCRWithPositionTool(BaseTool):
-    """OCR tool using PaddleOCR that returns text with bounding box positions.
+    """OCR tool that returns text with position information.
 
-    Unlike the old VLM-based OCR, this provides:
-    - Precise bounding box coordinates (quad points)
-    - Per-region confidence scores
-    - Language detection
-    - Works on CPU with ~0.5-2s per image
+    Uses EasyOCR (PyTorch-based) for text detection and recognition.
+    Supports Chinese + English. Returns bounding boxes as normalized
+    coordinates (0-1) for compatibility with crop tools.
     """
 
     name: str = "ocr_with_position"
     description: str = (
-        "Extract text from the image with precise bounding box positions. "
-        "Returns a list of text regions, each with the recognized text, "
-        "bounding box coordinates (4 corner points), confidence score, and language. "
-        "Use this to know WHERE text appears in the image and read it accurately."
+        "Extract text from the image with position information. "
+        "Returns each text region with its bounding box (normalized 0-1), "
+        "the recognized text, confidence score, and detected language. "
+        "Use when you need to know what text is in the image and where it is."
     )
     parameters: dict = field(
         default_factory=lambda: {
@@ -64,53 +41,79 @@ class OCRWithPositionTool(BaseTool):
         }
     )
 
-    _ocr: Optional[Any] = field(default=None, repr=False)
+    _reader: Optional[Any] = field(default=None, repr=False)
 
-    def _get_ocr(self):
-        """Lazy initialization of PaddleOCR (loads model on first call)."""
-        if self._ocr is None:
-            from paddleocr import PaddleOCR
-
-            self._ocr = PaddleOCR(
-                use_angle_cls=True,
-                lang="ch",  # Chinese + English
-                use_gpu=False,
-                show_log=False,
+    def _get_reader(self):
+        """Lazy initialization of EasyOCR reader."""
+        if self._reader is None:
+            import easyocr
+            # Support Chinese (simplified + traditional) and English
+            self._reader = easyocr.Reader(
+                ["ch_sim", "en"],
+                gpu=True,
+                verbose=False,
             )
-        return self._ocr
+        return self._reader
 
     def call(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Run OCR on the image and return structured results."""
         image_path = params["image_input"]
 
         try:
-            ocr = self._get_ocr()
-            result = ocr.ocr(image_path, cls=True)
+            from PIL import Image
+
+            img = Image.open(image_path)
+            img_w, img_h = img.size
+
+            reader = self._get_reader()
+            # EasyOCR returns: [[bbox, text, confidence], ...]
+            # bbox is [[x1,y1], [x2,y1], [x2,y2], [x1,y2]] (4 corners)
+            results = reader.readtext(image_path)
+
+            if not results:
+                return {
+                    "status": "success",
+                    "text_regions": [],
+                    "total_regions": 0,
+                    "full_text": "",
+                }
+
+            text_regions: List[Dict[str, Any]] = []
+            full_text_parts: List[str] = []
+
+            for bbox, text, confidence in results:
+                # Convert 4-corner bbox to normalized [x1, y1, x2, y2]
+                xs = [p[0] for p in bbox]
+                ys = [p[1] for p in bbox]
+                x1 = min(xs) / img_w
+                y1 = min(ys) / img_h
+                x2 = max(xs) / img_w
+                y2 = max(ys) / img_h
+
+                # Detect language (simple heuristic)
+                has_chinese = any('一' <= c <= '鿿' for c in text)
+                language = "zh" if has_chinese else "en"
+
+                text_regions.append({
+                    "text": text,
+                    "bbox": [round(x1, 4), round(y1, 4), round(x2, 4), round(y2, 4)],
+                    "confidence": round(float(confidence), 3),
+                    "language": language,
+                })
+                full_text_parts.append(text)
+
         except Exception as e:
             return {
                 "status": "error",
                 "error": f"OCR failed: {str(e)}",
                 "text_regions": [],
+                "total_regions": 0,
+                "full_text": "",
             }
-
-        text_regions: List[Dict[str, Any]] = []
-
-        if result and result[0]:
-            for line in result[0]:
-                bbox_quad = line[0]  # [[x1,y1],[x2,y2],[x3,y3],[x4,y4]]
-                text = line[1][0]  # recognized text
-                confidence = float(line[1][1])  # confidence score
-
-                text_regions.append({
-                    "text": text,
-                    "bbox_quad": bbox_quad,
-                    "confidence": round(confidence, 3),
-                    "language": _detect_language(text),
-                })
 
         return {
             "status": "success",
             "text_regions": text_regions,
             "total_regions": len(text_regions),
-            "full_text": "\n".join(r["text"] for r in text_regions),
+            "full_text": " ".join(full_text_parts),
         }
