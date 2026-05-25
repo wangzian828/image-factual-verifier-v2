@@ -139,12 +139,22 @@ class FaceDetectTool(BaseTool):
                 "faces": [],
                 "total_faces": 0,
             }
+        finally:
+            # Release GPU/CPU memory after each call
+            self._release_models()
 
         return {
             "status": "success",
             "faces": detections,
             "total_faces": len(detections),
         }
+
+    def _release_models(self):
+        """Release models to free memory after use."""
+        import gc
+        self._mtcnn = None
+        self._resnet = None
+        gc.collect()
 
     def get_embeddings(self) -> List[np.ndarray]:
         """Get raw embeddings from the last detection call (for identity verification)."""

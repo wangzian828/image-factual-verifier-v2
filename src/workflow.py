@@ -15,6 +15,11 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+# Limit thread usage to prevent memory explosion
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+
 from src.orchestrator.pipeline import Orchestrator
 
 

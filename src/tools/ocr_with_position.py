@@ -111,6 +111,9 @@ class OCRWithPositionTool(BaseTool):
                 "total_regions": 0,
                 "full_text": "",
             }
+        finally:
+            # Release model to free memory
+            self._release_reader()
 
         return {
             "status": "success",
@@ -118,3 +121,9 @@ class OCRWithPositionTool(BaseTool):
             "total_regions": len(text_regions),
             "full_text": " ".join(full_text_parts),
         }
+
+    def _release_reader(self):
+        """Release EasyOCR reader to free memory."""
+        import gc
+        self._reader = None
+        gc.collect()
