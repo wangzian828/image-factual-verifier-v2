@@ -48,9 +48,10 @@ class OCRWithPositionTool(BaseTool):
         if self._reader is None:
             import easyocr
             # Support Chinese (simplified + traditional) and English
+            # Use CPU to avoid cuDNN version issues
             self._reader = easyocr.Reader(
                 ["ch_sim", "en"],
-                gpu=True,
+                gpu=False,
                 verbose=False,
             )
         return self._reader

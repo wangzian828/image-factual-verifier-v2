@@ -57,7 +57,8 @@ class FaceDetectTool(BaseTool):
             import torch
             from facenet_pytorch import MTCNN, InceptionResnetV1
 
-            device = "cuda" if torch.cuda.is_available() else "cpu"
+            # Use CPU for face detection — fast enough and avoids cuDNN version issues
+            device = "cpu"
             self._mtcnn = MTCNN(
                 keep_all=True,
                 device=device,
