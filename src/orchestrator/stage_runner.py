@@ -132,9 +132,15 @@ class StageRunner:
                     steps.append(step)
                     consecutive_errors += 1
                     shadow.append({"role": "assistant", "content": content})
+                    # Give specific tool call format example
+                    available_tools = list(self.tools.keys())
                     shadow.append({
                         "role": "user",
-                        "content": "你必须先使用工具收集信息，不能直接输出结论。请调用工具。",
+                        "content": (
+                            f"你必须先使用工具收集信息。可用工具: {available_tools}\n"
+                            f"请用以下格式调用工具：\n"
+                            f'<tool_call>{{"name": "{available_tools[0]}", "arguments": {{...}}}}</tool_call>'
+                        ),
                     })
                     continue
 
@@ -223,10 +229,21 @@ class StageRunner:
             steps.append(step)
             consecutive_errors += 1
             shadow.append({"role": "assistant", "content": content})
-            shadow.append({
-                "role": "user",
-                "content": "格式错误。请输出 <tool_call>...</tool_call> 或 <output>...</output>。",
-            })
+            if self.tools_list:
+                available_tools = list(self.tools.keys())
+                shadow.append({
+                    "role": "user",
+                    "content": (
+                        f"格式错误。请用以下格式调用工具：\n"
+                        f'<tool_call>{{"name": "{available_tools[0]}", "arguments": {{...}}}}</tool_call>\n'
+                        f"或者输出最终结果：<output>{{...JSON...}}</output>"
+                    ),
+                })
+            else:
+                shadow.append({
+                    "role": "user",
+                    "content": "格式错误。请直接输出 <output>{...JSON...}</output>。",
+                })
 
             if consecutive_errors >= 3:
                 break
