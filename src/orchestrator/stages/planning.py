@@ -51,5 +51,23 @@ suggested_queries: 建议的搜索关键词（用图片内容的语言）
 - priority=2: 建议调查（辅助验证）
 - priority=3: 可选（边缘信息）
 
-直接输出 <output>...</output>，格式为 VerificationPlan JSON。
+直接输出 <output>...</output>，格式为：
+```json
+{
+  "questions": [
+    {
+      "question_id": "q0",
+      "question": "问题内容",
+      "why": "为什么需要调查",
+      "suggested_tools": ["tool1", "tool2"],
+      "suggested_queries": ["查询词1"],
+      "related_entities": [],
+      "priority": 1
+    }
+  ],
+  "image_intent": "图片试图传达的信息（一句话）",
+  "is_trying_to_be_real": true,
+  "risk_assessment": "初步风险判断"
+}
+```
 """
