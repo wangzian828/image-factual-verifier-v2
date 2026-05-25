@@ -104,7 +104,8 @@ class OpenAICompatibleChatClient:
         if temperature is not None:
             payload["temperature"] = temperature
 
-        with httpx.Client(trust_env=False, timeout=self.timeout) as client:
+        proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY") or os.environ.get("https_proxy") or os.environ.get("http_proxy")
+        with httpx.Client(proxy=proxy, timeout=self.timeout) as client:
             response = client.post(
                 f"{base_url}/responses",
                 headers={
