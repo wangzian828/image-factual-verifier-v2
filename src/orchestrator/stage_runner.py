@@ -148,13 +148,18 @@ class StageRunner:
                     parsed = self._validate_output(output_json)
                     if parsed is not None:
                         return parsed, steps
-                    # Schema validation failed — try to use raw dict
-                    # Still return it, orchestrator can handle partial data
-                    if self.output_schema:
-                        try:
-                            return self.output_schema.model_validate(output_json), steps
-                        except Exception:
-                            pass
+                    # Validation failed but we have JSON — return None, let orchestrator fallback
+                    return None, steps
+
+                # <output> tags present but JSON extraction failed — try bare JSON from full content
+                bare_json = self._try_parse_bare_json(content)
+                if bare_json is not None:
+                    step.action_type = "output"
+                    step.output = bare_json
+                    steps.append(step)
+                    parsed = self._validate_output(bare_json)
+                    if parsed is not None:
+                        return parsed, steps
                     return None, steps
 
                 step.action_type = "format_error"
@@ -408,11 +413,21 @@ IMPORTANT: Only ONE action per round. Always include <think> first.
             return json.dumps({"status": "error", "error": str(e)}, ensure_ascii=False)
 
     def _validate_output(self, output_json: Dict[str, Any]) -> Optional[BaseModel]:
-        """Validate output against pydantic schema."""
+        """Validate output against pydantic schema.
+
+        Tries strict validation first, then lenient (coerce types, ignore extras).
+        """
         if self.output_schema is None:
             return None
         try:
             return self.output_schema.model_validate(output_json)
+        except Exception:
+            pass
+        # Lenient: strip unknown fields and retry
+        try:
+            known_fields = set(self.output_schema.model_fields.keys())
+            filtered = {k: v for k, v in output_json.items() if k in known_fields}
+            return self.output_schema.model_validate(filtered)
         except Exception:
             return None
 
@@ -584,10 +599,10 @@ IMPORTANT: Only ONE action per round. Always include <think> first.
         )
 
         messages = [system_msg, user_msg]
-        # Add last few rounds for context
+        # Add last few rounds for context (more context = better forced output)
         recent = shadow[2:]
-        if len(recent) > 4:
-            recent = recent[-4:]
+        if len(recent) > 8:
+            recent = recent[-8:]
         messages.extend(recent)
         messages.append({"role": "user", "content": force_prompt})
 
@@ -596,9 +611,8 @@ IMPORTANT: Only ONE action per round. Always include <think> first.
             output_json = self._extract_output(response.text)
             if output_json is None:
                 output_json = self._try_parse_bare_json(response.text)
-            if output_json and self.output_schema:
-                try:
-                    return self.output_schema.model_validate(output_json)
-                except Exception:
-                    pass
+            if output_json:
+                parsed = self._validate_output(output_json)
+                if parsed is not None:
+                    return parsed
         return None

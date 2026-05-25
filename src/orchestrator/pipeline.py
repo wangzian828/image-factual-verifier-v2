@@ -236,7 +236,7 @@ class Orchestrator:
             system_prompt=planning.SYSTEM_PROMPT,
             tools=[],  # No tools for planning
             output_schema=VerificationPlan,
-            max_rounds=1,
+            max_rounds=2,
             image_path=image_path,
             stage_name="planning",
         )
@@ -308,9 +308,62 @@ class Orchestrator:
         if result and isinstance(result, VerificationResult):
             return result
 
-        # Fallback: empty result
+        # Fallback: reconstruct from tool results
+        return self._reconstruct_verification_from_steps(steps)
+
+    def _reconstruct_verification_from_steps(self, steps: List) -> VerificationResult:
+        """Reconstruct VerificationResult from tool call results."""
+        import json as _json
+
+        evidence = []
+        key_findings = []
+
+        for step in steps:
+            if step.action_type != "tool_call" or not step.tool_result:
+                continue
+            try:
+                data = _json.loads(step.tool_result) if isinstance(step.tool_result, str) else step.tool_result
+            except (_json.JSONDecodeError, TypeError):
+                continue
+
+            if not isinstance(data, dict):
+                continue
+
+            tool_name = step.tool_name or ""
+            # Summarize tool result as evidence
+            if data.get("status") == "error":
+                continue
+
+            summary = ""
+            if tool_name == "text_search":
+                results = data.get("results", [])
+                if results:
+                    summary = f"搜索到 {len(results)} 条结果"
+                    for r in results[:2]:
+                        summary += f"; {r.get('title', '')}"
+                else:
+                    summary = "搜索无结果"
+            elif tool_name == "news_search":
+                results = data.get("results", [])
+                summary = f"新闻搜索: {len(results)} 条" if results else "新闻搜索无结果"
+            elif tool_name == "reverse_image_search":
+                results = data.get("results", [])
+                summary = f"反向搜图: {len(results)} 条匹配" if results else "反向搜图无结果"
+            elif tool_name in ("check_consistency", "crop_and_inspect"):
+                summary = data.get("analysis", data.get("result", str(data)[:100]))
+            else:
+                # Generic summary
+                summary = f"{tool_name}: {str(data)[:100]}"
+
+            if summary:
+                key_findings.append(f"[{tool_name}] {summary}")
+
+        if not key_findings:
+            key_findings = ["Verification stage did not produce structured output"]
+
         return VerificationResult(
-            key_findings=["Verification stage did not produce structured output"]
+            key_findings=key_findings,
+            authenticity_assessment="uncertain",
         )
 
     async def _run_judgment(
