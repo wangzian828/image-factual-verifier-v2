@@ -81,6 +81,7 @@ class StageRunner:
             (parsed_output, steps) — parsed_output is None if stage failed to produce valid output.
         """
         steps: List[StageStep] = []
+        self.llm_api_calls = 0  # Track LLM calls for this stage run
         messages: List[Dict[str, Any]] = []
 
         # Build initial messages
@@ -348,10 +349,12 @@ IMPORTANT: Only ONE action per round. Always include <think> first.
 
     async def _call_llm(self, messages: List[Dict[str, Any]]) -> LLMResponse:
         """Call LLM with retry on empty response."""
+        self.llm_api_calls += 1
         response = await self.llm.get_response(messages)
         if not response.text or not response.text.strip():
             import asyncio
             await asyncio.sleep(2)
+            self.llm_api_calls += 1
             response = await self.llm.get_response(messages)
         return response
 
@@ -623,6 +626,7 @@ IMPORTANT: Only ONE action per round. Always include <think> first.
         messages.extend(recent)
         messages.append({"role": "user", "content": force_prompt})
 
+        self.llm_api_calls += 1
         response = await self.llm.get_response(messages)
         if response.text:
             output_json = self._extract_output(response.text)

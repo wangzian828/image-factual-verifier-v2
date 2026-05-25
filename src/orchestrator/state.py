@@ -149,6 +149,7 @@ class VerificationState:
     # Metadata
     stage_timings: Dict[str, float] = field(default_factory=dict)
     total_tool_calls: int = 0
+    llm_api_calls: int = 0  # Total LLM API calls across all stages
     token_usage: Dict[str, int] = field(default_factory=lambda: {"prompt": 0, "completion": 0})
     termination: str = ""  # "success"|"timeout"|"error"|"fallback"
 
@@ -163,6 +164,7 @@ class VerificationState:
             "judgment": self.judgment.model_dump() if self.judgment else None,
             "stage_timings": self.stage_timings,
             "total_tool_calls": self.total_tool_calls,
+            "llm_api_calls": self.llm_api_calls,
             "token_usage": self.token_usage,
             "termination": self.termination,
         }

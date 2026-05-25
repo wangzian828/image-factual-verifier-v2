@@ -120,6 +120,7 @@ class Orchestrator:
             "time_taken": total_time,
             "token_usage": state.token_usage,
             "total_tool_calls": state.total_tool_calls,
+            "llm_api_calls": state.llm_api_calls,
         }
 
     # =========================================================================
@@ -151,6 +152,7 @@ class Orchestrator:
         state.stage_timings["perception"] = round(time.time() - t0, 2)
         state.all_steps.extend(steps)
         state.total_tool_calls += sum(1 for s in steps if s.action_type == "tool_call")
+        state.llm_api_calls += runner.llm_api_calls
         self._accumulate_tokens(state, steps)
 
         if result and isinstance(result, PerceptionReport):
@@ -245,6 +247,7 @@ class Orchestrator:
 
         state.stage_timings["planning"] = round(time.time() - t0, 2)
         state.all_steps.extend(steps)
+        state.llm_api_calls += runner.llm_api_calls
         self._accumulate_tokens(state, steps)
 
         if result and isinstance(result, VerificationPlan):
@@ -303,6 +306,7 @@ class Orchestrator:
         state.stage_timings["verification"] = round(time.time() - t0, 2)
         state.all_steps.extend(steps)
         state.total_tool_calls += sum(1 for s in steps if s.action_type == "tool_call")
+        state.llm_api_calls += runner.llm_api_calls
         self._accumulate_tokens(state, steps)
 
         if result and isinstance(result, VerificationResult):
@@ -393,6 +397,7 @@ class Orchestrator:
 
         state.stage_timings["judgment"] = round(time.time() - t0, 2)
         state.all_steps.extend(steps)
+        state.llm_api_calls += runner.llm_api_calls
         self._accumulate_tokens(state, steps)
 
         if result and isinstance(result, FinalJudgment):
