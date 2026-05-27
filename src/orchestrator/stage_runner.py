@@ -332,16 +332,22 @@ class StageRunner:
         elif tool_name == "news_search":
             return {"queries": query}
         elif tool_name == "reverse_image_search":
-            return {"image_path": self.image_path}
+            return {"image_input": self.image_path}
         elif tool_name == "crop_and_inspect":
-            return {"image_path": self.image_path, "question": "Are there any visual anomalies?"}
+            return {"image_input": self.image_path, "bbox": [0.0, 0.0, 1.0, 1.0], "focus_question": "Are there any visual anomalies or signs of manipulation?"}
         elif tool_name == "check_consistency":
-            return {"image_path": self.image_path, "aspect": "all"}
+            return {"image_input": self.image_path, "aspect": "all"}
         elif tool_name == "compare_with_reference":
-            return {"query": query}
+            return {"reference_url": "", "focus": query}
+        elif tool_name == "analyze_visual_anomalies":
+            return {"focus_areas": [], "context": query}
+        elif tool_name == "count_objects":
+            return {"image_input": self.image_path, "target_object": query}
+        elif tool_name == "visit":
+            return {"url": query, "goal": "verify image content"}
         else:
             # Generic fallback
-            return {"query": query} if "search" in tool_name else {}
+            return {"queries": query} if "search" in tool_name else {}
 
     def _build_system_content(self) -> str:
         """Build system prompt with tool descriptions."""
