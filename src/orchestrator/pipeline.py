@@ -401,6 +401,10 @@ class Orchestrator:
             except (_json.JSONDecodeError, TypeError):
                 continue
 
+            # Normalize: text_search/news_search return a list of query results
+            if isinstance(data, list) and data and isinstance(data[0], dict):
+                data = data[0]
+
             if not isinstance(data, dict):
                 continue
 
@@ -422,8 +426,13 @@ class Orchestrator:
                 results = data.get("results", [])
                 summary = f"新闻搜索: {len(results)} 条" if results else "新闻搜索无结果"
             elif tool_name == "reverse_image_search":
-                results = data.get("results", [])
-                summary = f"反向搜图: {len(results)} 条匹配" if results else "反向搜图无结果"
+                results = data.get("lens_results") or data.get("semantic_results") or data.get("results") or []
+                if results:
+                    summary = f"反向搜图: {len(results)} 条匹配"
+                    for r in results[:2]:
+                        summary += f"; {r.get('title', '')[:50]}"
+                else:
+                    summary = "反向搜图无结果"
             elif tool_name in ("check_consistency", "crop_and_inspect"):
                 summary = data.get("analysis", data.get("result", str(data)[:100]))
             else:

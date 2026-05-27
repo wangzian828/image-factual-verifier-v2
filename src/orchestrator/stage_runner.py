@@ -573,9 +573,15 @@ IMPORTANT: Only ONE action per round. Always include <think> first.
         except (json.JSONDecodeError, TypeError):
             data = None
 
+        # Normalize: text_search/news_search return a list of query results
+        if isinstance(data, list) and data and isinstance(data[0], dict):
+            data = data[0]
+
         # --- Search tools: extract top result ---
         if tool_name in ("text_search", "news_search"):
-            query = tool_args.get("query", "")
+            query = tool_args.get("queries", tool_args.get("query", ""))
+            if isinstance(query, list):
+                query = query[0] if query else ""
             if data and isinstance(data, dict):
                 results = data.get("results", data.get("organic", []))
                 if isinstance(results, list) and results:
@@ -589,11 +595,19 @@ IMPORTANT: Only ONE action per round. Always include <think> first.
         # --- Reverse image search ---
         if tool_name == "reverse_image_search":
             if data and isinstance(data, dict):
-                matches = data.get("results", data.get("matches", []))
+                # Check lens_results first, then semantic_results, then legacy fields
+                matches = (
+                    data.get("lens_results")
+                    or data.get("semantic_results")
+                    or data.get("results")
+                    or data.get("matches")
+                    or []
+                )
                 if isinstance(matches, list) and matches:
                     first = matches[0]
                     title = first.get("title", first.get("source", ""))[:80]
-                    return f"[reverse_image_search] → found: {title}"
+                    url = first.get("url", "")[:60]
+                    return f"[reverse_image_search] → found: {title} ({url})"
             return f"[reverse_image_search] → no matches"
 
         # --- Visit ---
