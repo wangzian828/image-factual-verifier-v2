@@ -102,6 +102,28 @@ class ContextRenderer:
             if q.suggested_tools:
                 parts.append(f"    Suggested tools: {q.suggested_tools}")
 
+        # Build mandatory tool checklist from high-priority questions
+        mandatory_tools = []
+        for q in plan.questions:
+            if q.priority == 1 and q.suggested_tools:
+                for tool in q.suggested_tools:
+                    if tool not in mandatory_tools:
+                        mandatory_tools.append(tool)
+
+        if mandatory_tools:
+            parts.append("\n### ⚠️ MANDATORY Tool Checklist")
+            parts.append("You MUST call each of the following tools at least once before outputting your conclusion:")
+            for i, tool in enumerate(mandatory_tools, 1):
+                # Find a relevant query for this tool
+                relevant_query = ""
+                for q in plan.questions:
+                    if q.priority == 1 and tool in (q.suggested_tools or []):
+                        if q.suggested_queries:
+                            relevant_query = f' (e.g. query: "{q.suggested_queries[0]}")'
+                        break
+                parts.append(f"  {i}. {tool}{relevant_query}")
+            parts.append("Do NOT skip any of these. Only output <output> after completing this checklist.")
+
         return "\n".join(parts)
 
     # --- Stage 4 (Judgment) input ---
