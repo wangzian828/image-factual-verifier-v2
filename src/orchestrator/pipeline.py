@@ -433,8 +433,29 @@ class Orchestrator:
                         summary += f"; {r.get('title', '')[:50]}"
                 else:
                     summary = "反向搜图无结果"
-            elif tool_name in ("check_consistency", "crop_and_inspect"):
-                summary = data.get("analysis", data.get("result", str(data)[:100]))
+            elif tool_name == "check_consistency":
+                consistent = data.get("consistent", True)
+                aspect = data.get("aspect_checked", "all")
+                details = data.get("details", "")[:80]
+                status = "一致" if consistent else "不一致"
+                summary = f"一致性检查({aspect}): {status}. {details}"
+            elif tool_name == "crop_and_inspect":
+                answer = data.get("answer", "")[:80]
+                anomalies = data.get("anomalies", [])
+                if anomalies:
+                    summary = f"裁剪检查发现异常: {anomalies}"
+                elif answer:
+                    summary = f"裁剪检查: {answer}"
+                else:
+                    summary = "裁剪检查无异常"
+            elif tool_name == "analyze_visual_anomalies":
+                auth = data.get("overall_authenticity", "uncertain")
+                anomalies = data.get("anomalies", [])
+                n = len(anomalies) if isinstance(anomalies, list) else 0
+                summary = f"视觉异常分析: {auth}, {n} 个异常"
+            elif tool_name == "visit":
+                evidence = data.get("evidence", data.get("summary", ""))[:100]
+                summary = f"网页访问: {evidence}" if evidence else "网页访问无结果"
             else:
                 # Generic summary
                 summary = f"{tool_name}: {str(data)[:100]}"
