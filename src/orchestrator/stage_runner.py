@@ -328,9 +328,9 @@ class StageRunner:
         query = queries[0] if queries else "verify image content"
 
         if tool_name == "text_search":
-            return {"query": query}
+            return {"queries": query}
         elif tool_name == "news_search":
-            return {"query": query}
+            return {"queries": query}
         elif tool_name == "reverse_image_search":
             return {"image_path": self.image_path}
         elif tool_name == "crop_and_inspect":
