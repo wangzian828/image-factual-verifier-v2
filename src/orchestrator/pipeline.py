@@ -351,6 +351,15 @@ class Orchestrator:
             state.perception, state.plan
         )
 
+        # Extract mandatory tools from high-priority plan questions
+        mandatory_tools = []
+        if state.plan and state.plan.questions:
+            for q in state.plan.questions:
+                if q.priority == 1 and q.suggested_tools:
+                    for tool in q.suggested_tools:
+                        if tool not in mandatory_tools:
+                            mandatory_tools.append(tool)
+
         runner = StageRunner(
             llm=self.llm,
             system_prompt=verification.SYSTEM_PROMPT,
@@ -360,6 +369,7 @@ class Orchestrator:
             image_path=image_path,
             stage_name="verification",
             recent_rounds_to_keep=2,
+            mandatory_tools=mandatory_tools,
         )
 
         result, steps = await runner.run(input_context)

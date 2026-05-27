@@ -60,6 +60,7 @@ class StageRunner:
         image_path: str = "",
         stage_name: str = "",
         recent_rounds_to_keep: int = 2,
+        mandatory_tools: Optional[List[str]] = None,
     ):
         self.llm = llm
         self.system_prompt = system_prompt
@@ -70,6 +71,8 @@ class StageRunner:
         self.image_path = image_path
         self.stage_name = stage_name
         self.recent_rounds_to_keep = recent_rounds_to_keep
+        # Tools that MUST be called before output is accepted
+        self.mandatory_tools = [t for t in (mandatory_tools or []) if t in self.tools]
 
     async def run(self, input_context: str) -> Tuple[Optional[BaseModel], List[StageStep]]:
         """Run the mini-ReAct loop for this stage.
@@ -143,6 +146,25 @@ class StageRunner:
                     })
                     continue
                     continue
+
+                # Check mandatory tools — reject output if required tools haven't been called
+                if self.mandatory_tools and round_num <= self.max_rounds - 1:
+                    tools_called = set(s.tool_name for s in steps if s.action_type == "tool_call" and s.tool_name)
+                    missing = [t for t in self.mandatory_tools if t not in tools_called]
+                    if missing:
+                        step.action_type = "format_error"
+                        step.thought = f"(output rejected: mandatory tools not called: {missing})"
+                        steps.append(step)
+                        shadow.append({"role": "assistant", "content": content})
+                        shadow.append({
+                            "role": "user",
+                            "content": (
+                                f"你还没有调用以下必须的工具: {missing}\n"
+                                f"请先调用它们收集证据，再输出结论。\n"
+                                f'格式：<tool_call>{{"name": "{missing[0]}", "arguments": {{...}}}}</tool_call>'
+                            ),
+                        })
+                        continue
 
                 output_json = self._extract_output(content)
                 if output_json is not None:
