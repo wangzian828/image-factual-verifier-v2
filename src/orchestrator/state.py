@@ -155,6 +155,21 @@ class VerificationState:
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize full state for trajectory export."""
+        # Serialize all_steps (tool calls with results)
+        steps_data = []
+        for step in self.all_steps:
+            step_dict = {
+                "round": step.round,
+                "action_type": step.action_type,
+                "tool_name": step.tool_name,
+                "tool_args": step.tool_args,
+                "tool_result": step.tool_result[:2000] if step.tool_result else "",
+                "tokens": step.tokens,
+            }
+            if step.thought:
+                step_dict["thought"] = step.thought[:200]
+            steps_data.append(step_dict)
+
         return {
             "image_path": self.image_path,
             "image_id": self.image_id,
@@ -162,6 +177,7 @@ class VerificationState:
             "plan": self.plan.model_dump() if self.plan else None,
             "verification": self.verification.model_dump() if self.verification else None,
             "judgment": self.judgment.model_dump() if self.judgment else None,
+            "all_steps": steps_data,
             "stage_timings": self.stage_timings,
             "total_tool_calls": self.total_tool_calls,
             "llm_api_calls": self.llm_api_calls,
