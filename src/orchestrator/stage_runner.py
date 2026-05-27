@@ -270,6 +270,28 @@ class StageRunner:
             if consecutive_errors >= 5:
                 break
 
+        # Auto-execute missing mandatory tools before forcing output
+        if self.mandatory_tools:
+            tools_called = set(s.tool_name for s in steps if s.action_type == "tool_call" and s.tool_name)
+            missing = [t for t in self.mandatory_tools if t not in tools_called]
+            for tool_name in missing:
+                # Build a default query from the plan context
+                default_args = self._build_default_args_for_tool(tool_name, input_context)
+                step = StageStep(
+                    round=len(steps) + 1,
+                    action_type="tool_call",
+                    tool_name=tool_name,
+                    tool_args=default_args,
+                )
+                result = await self._execute_tool(tool_name, default_args)
+                step.tool_result = result
+                steps.append(step)
+                summary = self._summarize_tool_result(tool_name, default_args, result)
+                if summary:
+                    evidence_so_far.append(summary)
+                shadow.append({"role": "assistant", "content": f'<tool_call>{{"name": "{tool_name}", "arguments": {default_args}}}</tool_call>'})
+                shadow.append({"role": "user", "content": f"<tool_response>\n{result}\n</tool_response>"})
+
         # Max rounds exhausted — force output
         forced = await self._force_output(system_msg, user_msg, shadow, evidence_so_far)
         if forced is not None:
@@ -282,6 +304,44 @@ class StageRunner:
             return forced, steps
 
         return None, steps
+
+    def _build_default_args_for_tool(self, tool_name: str, input_context: str) -> Dict[str, Any]:
+        """Build default arguments for a mandatory tool from the input context."""
+        import re
+        # Extract suggested queries from the context for this tool
+        # Look for lines like: Suggested queries: ['query1', 'query2']
+        queries = []
+        lines = input_context.split("\n")
+        for i, line in enumerate(lines):
+            if tool_name in line or (i > 0 and tool_name in lines[i - 1]):
+                match = re.search(r"Suggested queries:\s*\[([^\]]+)\]", line)
+                if match:
+                    queries = [q.strip().strip("'\"") for q in match.group(1).split(",")]
+        # Also try to find queries from nearby lines
+        if not queries:
+            for i, line in enumerate(lines):
+                match = re.search(r"Suggested queries:\s*\[([^\]]+)\]", line)
+                if match:
+                    queries = [q.strip().strip("'\"") for q in match.group(1).split(",")]
+                    break
+
+        query = queries[0] if queries else "verify image content"
+
+        if tool_name == "text_search":
+            return {"query": query}
+        elif tool_name == "news_search":
+            return {"query": query}
+        elif tool_name == "reverse_image_search":
+            return {"image_path": self.image_path}
+        elif tool_name == "crop_and_inspect":
+            return {"image_path": self.image_path, "question": "Are there any visual anomalies?"}
+        elif tool_name == "check_consistency":
+            return {"image_path": self.image_path, "aspect": "all"}
+        elif tool_name == "compare_with_reference":
+            return {"query": query}
+        else:
+            # Generic fallback
+            return {"query": query} if "search" in tool_name else {}
 
     def _build_system_content(self) -> str:
         """Build system prompt with tool descriptions."""
