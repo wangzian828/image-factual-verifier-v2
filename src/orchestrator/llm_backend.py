@@ -129,10 +129,13 @@ class APIBackend(LLMBackend):
         last_error: Optional[Exception] = None
         for attempt in range(5):
             try:
-                async with httpx.AsyncClient(
-                    timeout=self.timeout,
-                    proxy=self.proxy,
-                ) as client:
+                client_kwargs: Dict[str, Any] = {"timeout": self.timeout}
+                if self.proxy:
+                    client_kwargs["proxy"] = self.proxy
+                else:
+                    # Disable env proxy for local services
+                    client_kwargs["trust_env"] = False
+                async with httpx.AsyncClient(**client_kwargs) as client:
                     response = await client.post(url, headers=headers, json=body)
                     response.raise_for_status()
 

@@ -21,11 +21,16 @@ class OpenAICompatibleChatClient:
     def build_client(self) -> OpenAI:
         if not self.api_key:
             raise RuntimeError("LLM API key is not set.")
-        # Use proxy from environment if available
-        proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY") or os.environ.get("https_proxy") or os.environ.get("http_proxy")
+        # Use proxy from environment if available, but skip for local services
+        is_local = self.base_url and ("127.0.0.1" in self.base_url or "localhost" in self.base_url)
+        if is_local:
+            proxy = None
+        else:
+            proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY") or os.environ.get("https_proxy") or os.environ.get("http_proxy")
         http_client = httpx.Client(
             proxy=proxy,
             timeout=self.timeout,
+            trust_env=not is_local,
         )
         return OpenAI(
             api_key=self.api_key,
@@ -104,8 +109,12 @@ class OpenAICompatibleChatClient:
         if temperature is not None:
             payload["temperature"] = temperature
 
-        proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY") or os.environ.get("https_proxy") or os.environ.get("http_proxy")
-        with httpx.Client(proxy=proxy, timeout=self.timeout) as client:
+        is_local = base_url and ("127.0.0.1" in base_url or "localhost" in base_url)
+        if is_local:
+            proxy = None
+        else:
+            proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY") or os.environ.get("https_proxy") or os.environ.get("http_proxy")
+        with httpx.Client(proxy=proxy, timeout=self.timeout, trust_env=not is_local) as client:
             response = client.post(
                 f"{base_url}/responses",
                 headers={
