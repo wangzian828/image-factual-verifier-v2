@@ -5,7 +5,11 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
+
+from dotenv import load_dotenv
+load_dotenv()
 
 from src.workflow import VerificationWorkflow, WorkflowConfig
 
