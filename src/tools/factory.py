@@ -45,8 +45,8 @@ def build_external_tools(
     ocr_cfg = config.get("ocr", {})
     vlm_cfg = config.get("vlm", {})
 
-    default_vlm_provider = vlm_provider_override or str(vlm_cfg.get("provider", "qwen"))
-    default_vlm_model = vlm_model_override or str(vlm_cfg.get("model_name", "qwen3.6-plus"))
+    default_vlm_provider = vlm_provider_override or str(vlm_cfg.get("provider", "lmdeploy"))
+    default_vlm_model = vlm_model_override or str(vlm_cfg.get("model_name", "/gsdata/home/wza/models/Qwen3-VL-8B-Thinking"))
 
     text_search = TextSearchTool(
         client=SerperTextSearchClient(),

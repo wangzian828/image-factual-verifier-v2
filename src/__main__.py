@@ -13,8 +13,8 @@ from src.workflow import VerificationWorkflow, WorkflowConfig
 def main():
     parser = argparse.ArgumentParser(description="Image Factual Verifier v2")
     parser.add_argument("image_path", help="Path to the image to verify")
-    parser.add_argument("--provider", default="necodex", help="LLM provider")
-    parser.add_argument("--model", default="gpt-5.5", help="Model name")
+    parser.add_argument("--provider", default="lmdeploy", help="LLM provider")
+    parser.add_argument("--model", default="/gsdata/home/wza/models/Qwen3-VL-8B-Thinking", help="Model name")
     parser.add_argument("--output-dir", default="outputs/traces", help="Trace output directory")
     parser.add_argument("--timeout", type=float, default=300.0, help="Timeout in seconds")
     parser.add_argument("--no-trace", action="store_true", help="Don't save trace files")

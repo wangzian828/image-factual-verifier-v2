@@ -58,8 +58,8 @@ def build_stage_tools(
 
 
 def build_all_tools(
-    vlm_provider: str = "necodex",
-    vlm_model: str = "gpt-5.5",
+    vlm_provider: str = "lmdeploy",
+    vlm_model: str = "/gsdata/home/wza/models/Qwen3-VL-8B-Thinking",
 ) -> Dict[str, BaseTool]:
     """Build all tool instances for the pipeline.
 

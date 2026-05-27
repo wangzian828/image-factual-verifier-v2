@@ -39,9 +39,9 @@ class ReverseImageSearchTool(BaseTool):
     vlm_client: Optional[Any] = None
     image_search_client: Optional[SerperImageSearchClient] = None
     lens_client: Optional[SerperLensSearchClient] = None
-    provider: str = "qwen"
-    model_name: str = "qwen3.6-plus"
-    qwen_model_name: str = "qwen3.6-plus"
+    provider: str = "lmdeploy"
+    model_name: str = "/gsdata/home/wza/models/Qwen3-VL-8B-Thinking"
+    qwen_model_name: str = "/gsdata/home/wza/models/Qwen3-VL-8B-Thinking"
     top_k: int = 5
     use_lens: bool = True
     use_vlm_query: bool = True

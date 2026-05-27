@@ -30,14 +30,14 @@ class Orchestrator:
     """4-stage pipeline orchestrator for image factual verification.
 
     Usage:
-        orchestrator = Orchestrator(provider="necodex", model_name="gpt-5.5")
+        orchestrator = Orchestrator(provider="lmdeploy", model_name="/gsdata/home/wza/models/Qwen3-VL-8B-Thinking")
         result = await orchestrator.run("path/to/image.jpg")
     """
 
     def __init__(
         self,
-        provider: str = "necodex",
-        model_name: str = "gpt-5.5",
+        provider: str = "lmdeploy",
+        model_name: str = "/gsdata/home/wza/models/Qwen3-VL-8B-Thinking",
         vlm_provider: Optional[str] = None,
         vlm_model: Optional[str] = None,
         max_rounds_perception: int = 5,

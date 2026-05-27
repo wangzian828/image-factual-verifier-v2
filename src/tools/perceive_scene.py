@@ -72,8 +72,8 @@ class PerceiveSceneTool(BaseTool):
 
     # VLM client (injected at construction or built lazily)
     client: Optional[Any] = field(default=None, repr=False)
-    provider: str = "necodex"
-    model_name: str = "gpt-5.5"
+    provider: str = "lmdeploy"
+    model_name: str = "/gsdata/home/wza/models/Qwen3-VL-8B-Thinking"
 
     def _get_client(self):
         """Lazy initialization of VLM client."""

@@ -28,8 +28,8 @@ class WorkflowConfig:
     """Configuration for the verification workflow."""
 
     # LLM settings
-    provider: str = "necodex"
-    model_name: str = "gpt-5.5"
+    provider: str = "lmdeploy"
+    model_name: str = "/gsdata/home/wza/models/Qwen3-VL-8B-Thinking"
     vlm_provider: Optional[str] = None  # Defaults to provider
     vlm_model: Optional[str] = None  # Defaults to model_name
     temperature: float = 0.0

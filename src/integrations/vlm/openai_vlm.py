@@ -40,8 +40,11 @@ class OpenAIVisionClient:
         temperature: float = 0.0,
     ) -> Dict[str, Any]:
         if not self.api_key:
-            env_name = "NECODEX_API_KEY" if self.provider == "necodex" else "OPENAI_API_KEY"
-            raise RuntimeError(f"{env_name} is not set. Add it to the environment before using vision tools.")
+            if self.provider == "lmdeploy":
+                self.api_key = "none"
+            else:
+                env_name = "NECODEX_API_KEY" if self.provider == "necodex" else "OPENAI_API_KEY"
+                raise RuntimeError(f"{env_name} is not set. Add it to the environment before using vision tools.")
 
         image_url = image_to_data_url(image_input)
         chat = OpenAICompatibleChatClient(

@@ -180,6 +180,8 @@ def resolve_model_api_key(provider: str, api_key: Optional[str]) -> Optional[str
         return resolve_openai_api_key(api_key)
     if provider == "necodex":
         return resolve_necodex_api_key(api_key)
+    if provider == "lmdeploy":
+        return api_key or os.getenv("LMDEPLOY_API_KEY", "none")
     return api_key
 
 
@@ -193,6 +195,8 @@ def resolve_model_base_url(provider: str, base_url: Optional[str]) -> Optional[s
         return os.getenv("OPENAI_BASE_URL")
     if provider == "necodex":
         return os.getenv("NECODEX_BASE_URL") or "https://api.sbbbbbbbbb.xyz/v1"
+    if provider == "lmdeploy":
+        return os.getenv("LMDEPLOY_BASE_URL", "http://127.0.0.1:8899/v1")
     return base_url
 
 

@@ -70,6 +70,8 @@ class APIBackend(LLMBackend):
             return os.getenv("NECODEX_API_KEY", "")
         elif self.provider == "gpustack":
             return os.getenv("GPUSTACK_API_KEY", "gpustack_8aca4b4af71f9120_a54d3398223f67830dcd8ffa962ec735")
+        elif self.provider == "lmdeploy":
+            return os.getenv("LMDEPLOY_API_KEY", "none")
         else:
             return os.getenv("OPENAI_API_KEY", "")
 
@@ -80,12 +82,16 @@ class APIBackend(LLMBackend):
             return os.getenv("NECODEX_BASE_URL", "https://api.sbbbbbbbbb.xyz/v1")
         elif self.provider == "gpustack":
             return "http://10.254.47.36/v1"
+        elif self.provider == "lmdeploy":
+            return os.getenv("LMDEPLOY_BASE_URL", "http://127.0.0.1:8899/v1")
         else:
             return "https://api.openai.com/v1"
 
     def _resolve_proxy(self) -> Optional[str]:
         if self.provider == "gpustack":
             return os.getenv("GPUSTACK_PROXY", "http://100.10.1.210:80")
+        if self.provider == "lmdeploy":
+            return None  # Local service, no proxy needed
         # Use HTTP proxy for external API calls
         return os.getenv("HTTPS_PROXY", os.getenv("HTTP_PROXY", None))
 

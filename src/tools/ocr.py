@@ -24,8 +24,8 @@ class OCRTool(BaseTool):
     """OCR extraction using a configurable vision-language model."""
 
     client: Optional[Any] = None
-    provider: str = "qwen"
-    model_name: str = "qwen3.6-plus"
+    provider: str = "lmdeploy"
+    model_name: str = "/gsdata/home/wza/models/Qwen3-VL-8B-Thinking"
     max_tokens: int = 500
     name: str = "ocr"
     description: str = "Read visible text from an input image."

@@ -76,8 +76,8 @@ class CheckConsistencyTool(BaseTool):
     )
 
     client: Optional[Any] = field(default=None, repr=False)
-    provider: str = "necodex"
-    model_name: str = "gpt-5.5"
+    provider: str = "lmdeploy"
+    model_name: str = "/gsdata/home/wza/models/Qwen3-VL-8B-Thinking"
 
     def _get_client(self):
         if self.client is None:

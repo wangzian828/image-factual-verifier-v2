@@ -24,6 +24,16 @@ def build_vlm_client(
             timeout=timeout,
             max_retries=max_retries,
         )
+    if provider == "lmdeploy":
+        import os
+        return OpenAIVisionClient(
+            api_key=api_key or os.getenv("LMDEPLOY_API_KEY", "none"),
+            provider="lmdeploy",
+            base_url=base_url or os.getenv("LMDEPLOY_BASE_URL", "http://127.0.0.1:8899/v1"),
+            model_name=model_name or os.getenv("LMDEPLOY_MODEL", "/gsdata/home/wza/models/Qwen3-VL-8B-Thinking"),
+            timeout=timeout,
+            max_retries=max_retries,
+        )
     if provider in {"openai", "necodex"}:
         return OpenAIVisionClient(
             api_key=api_key,
