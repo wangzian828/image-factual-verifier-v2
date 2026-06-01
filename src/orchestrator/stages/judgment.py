@@ -20,7 +20,6 @@ SYSTEM_PROMPT = """\
 verdict 取值：
 - "real": 图片是真实的，内容与事实一致
 - "fake": 图片是伪造的（AI 生成、PS 合成、或内容虚假）
-- "misleading": 图片本身可能是真实的，但被用于误导（错误的上下文、断章取义）
 - "unverifiable": 经过充分调查仍无法确定真伪
 
 ## 关于 unverifiable
@@ -35,7 +34,7 @@ verdict 取值：
 
 直接输出 <output>...</output>：
 {
-  "verdict": "real|fake|misleading|unverifiable",
+  "verdict": "real|fake|unverifiable",
   "confidence": 0.0-1.0,
   "reasoning_chain": "完整推理链...",
   "key_evidence": ["关键证据1", "关键证据2", ...],

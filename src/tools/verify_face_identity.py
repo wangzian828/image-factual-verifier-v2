@@ -263,5 +263,5 @@ class VerifyFaceIdentityTool(BaseTool):
             "threshold": self.match_threshold,
             "comparison": f"main image face vs reference image face (from {reference_url})",
             "verdict": "same person" if is_match else "different people",
-            "reference_faces_found": len(ref_faces),
+            "reference_faces_found": ref_result.get("total_faces", len(ref_embeddings)),
         }

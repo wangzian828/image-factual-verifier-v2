@@ -69,7 +69,7 @@ class APIBackend(LLMBackend):
         elif self.provider == "necodex":
             return os.getenv("NECODEX_API_KEY", "")
         elif self.provider == "gpustack":
-            return os.getenv("GPUSTACK_API_KEY", "gpustack_8aca4b4af71f9120_a54d3398223f67830dcd8ffa962ec735")
+            return os.getenv("GPUSTACK_API_KEY", "")
         elif self.provider == "lmdeploy":
             return os.getenv("LMDEPLOY_API_KEY", "none")
         else:
