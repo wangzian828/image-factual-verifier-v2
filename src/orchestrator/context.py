@@ -152,6 +152,10 @@ class ContextRenderer:
                 parts.append(
                     f"  {direction_icon} [{ev.quality}] {ev.summary} (via {ev.tool_used}, re: {ev.related_question})"
                 )
+                # 一手证据原文：judgment 据此独立判断，不被 summary 的转写偏差带偏
+                excerpt = getattr(ev, "raw_excerpt", "")
+                if excerpt:
+                    parts.append(f"      原文: \"{excerpt[:300]}\"")
 
         # Visual anomalies
         if verification.visual_anomalies:

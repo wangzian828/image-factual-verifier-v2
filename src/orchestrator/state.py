@@ -94,6 +94,7 @@ class EvidenceItem(BaseModel):
 
     source: str = ""  # URL or tool name
     summary: str = ""  # 1-2 sentence summary of what was found
+    raw_excerpt: str = ""  # 搜索结果/网页的原文关键句，逐字摘抄，不转写（供 judgment 看一手证据）
     direction: str = "neutral"  # "supports"|"refutes"|"neutral"
     quality: str = "moderate"  # "strong"|"moderate"|"weak"
     tool_used: str = ""  # which tool produced this evidence
@@ -117,7 +118,7 @@ class VerificationResult(BaseModel):
 class FinalJudgment(BaseModel):
     """Stage 4 output: the final verdict."""
 
-    verdict: str = "unverifiable"  # "real"|"fake"|"misleading"|"unverifiable"
+    verdict: str = "unverifiable"  # "real"|"fake"|"unverifiable"
     confidence: float = 0.5
     reasoning_chain: str = ""  # 完整推理链
     key_evidence: List[str] = Field(default_factory=list)  # 支撑判定的关键证据摘要

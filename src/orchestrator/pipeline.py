@@ -15,6 +15,7 @@ from src.orchestrator.stage_runner import StageRunner, StageStep
 from src.orchestrator.stages import perception, planning, verification, judgment
 from src.orchestrator.state import (
     Entity,
+    EvidenceItem,
     FaceDetection,
     FinalJudgment,
     PerceptionReport,
@@ -404,10 +405,14 @@ class Orchestrator:
         return self._reconstruct_verification_from_steps(steps)
 
     def _reconstruct_verification_from_steps(self, steps: List) -> VerificationResult:
-        """Reconstruct VerificationResult from tool call results."""
+        """Reconstruct VerificationResult from tool call results.
+
+        Fallback path (timeout / unparseable output). Best-effort: also captures
+        a raw excerpt per tool so judgment still sees first-hand evidence text.
+        """
         import json as _json
 
-        evidence = []
+        evidence_items = []
         key_findings = []
 
         for step in steps:
@@ -426,28 +431,35 @@ class Orchestrator:
                 continue
 
             tool_name = step.tool_name or ""
-            # Summarize tool result as evidence
             if data.get("status") == "error":
                 continue
 
             summary = ""
+            excerpt = ""  # 逐字摘抄的原文关键句
             if tool_name == "text_search":
                 results = data.get("results", [])
                 if results:
                     summary = f"搜索到 {len(results)} 条结果"
                     for r in results[:2]:
                         summary += f"; {r.get('title', '')}"
+                    excerpt = " | ".join(
+                        f"{r.get('title','')}: {r.get('snippet','')}" for r in results[:3]
+                    )
                 else:
                     summary = "搜索无结果"
             elif tool_name == "news_search":
                 results = data.get("results", [])
                 summary = f"新闻搜索: {len(results)} 条" if results else "新闻搜索无结果"
+                excerpt = " | ".join(
+                    f"{r.get('title','')}: {r.get('snippet','')}" for r in results[:3]
+                )
             elif tool_name == "reverse_image_search":
                 results = data.get("lens_results") or data.get("semantic_results") or data.get("results") or []
                 if results:
                     summary = f"反向搜图: {len(results)} 条匹配"
                     for r in results[:2]:
                         summary += f"; {r.get('title', '')[:50]}"
+                    excerpt = " | ".join(r.get("title", "")[:120] for r in results[:3])
                 else:
                     summary = "反向搜图无结果"
             elif tool_name == "check_consistency":
@@ -470,20 +482,32 @@ class Orchestrator:
                 anomalies = data.get("anomalies", [])
                 n = len(anomalies) if isinstance(anomalies, list) else 0
                 summary = f"视觉异常分析: {auth}, {n} 个异常"
+                excerpt = str(anomalies[:3]) if anomalies else ""
             elif tool_name == "visit":
-                evidence = data.get("evidence", data.get("summary", ""))[:100]
-                summary = f"网页访问: {evidence}" if evidence else "网页访问无结果"
+                page = data.get("evidence", data.get("summary", ""))
+                page = page[:300] if isinstance(page, str) else str(page)[:300]
+                summary = f"网页访问: {page[:100]}" if page else "网页访问无结果"
+                excerpt = page
             else:
                 # Generic summary
                 summary = f"{tool_name}: {str(data)[:100]}"
 
             if summary:
                 key_findings.append(f"[{tool_name}] {summary}")
+                evidence_items.append(
+                    EvidenceItem(
+                        source=tool_name,
+                        summary=summary,
+                        raw_excerpt=excerpt[:300],
+                        tool_used=tool_name,
+                    )
+                )
 
         if not key_findings:
             key_findings = ["Verification stage did not produce structured output"]
 
         return VerificationResult(
+            evidence=evidence_items,
             key_findings=key_findings,
             authenticity_assessment="uncertain",
         )
