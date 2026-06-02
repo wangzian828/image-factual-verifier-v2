@@ -42,7 +42,7 @@ class Orchestrator:
         vlm_model: Optional[str] = None,
         max_rounds_perception: int = 5,
         max_rounds_verification: int = 8,
-        timeout: float = 300.0,
+        timeout: float = 900.0,
         temperature: float = 0.0,
         max_tokens: int = 8192,
     ):
@@ -67,6 +67,23 @@ class Orchestrator:
             vlm_provider=self.vlm_provider,
             vlm_model=self.vlm_model,
         )
+
+        # Current-date anchor, injected into every stage's system prompt.
+        # The model otherwise falls back to its training cutoff (e.g. assumes
+        # "2023") and mis-judges future-dated content. See eval findings.
+        from datetime import datetime
+        _now = datetime.now().astimezone()
+        self.date_prefix = (
+            f"【当前真实日期：{_now.date().isoformat()}（{_now.strftime('%Y年%m月%d日')}），"
+            f"时区 {_now.tzinfo}】\n"
+            "判断任何与时间相关的事实（人物在世/任职年数、产品是否发布、"
+            "事件是否已发生、日期是否为未来）时，必须以上述当前日期为准，"
+            "不要使用你训练数据的知识截止日期。\n\n"
+        )
+
+    def _sp(self, stage_system_prompt: str) -> str:
+        """Prepend the current-date anchor to a stage system prompt."""
+        return self.date_prefix + stage_system_prompt
 
     async def run(self, image_path: str, image_id: str = "") -> Dict[str, Any]:
         """Run the full 4-stage verification pipeline.
@@ -141,7 +158,7 @@ class Orchestrator:
         # Step 1: Model observes directly (no tools, 1 LLM call)
         runner = StageRunner(
             llm=self.llm,
-            system_prompt=perception.SYSTEM_PROMPT,
+            system_prompt=self._sp(perception.SYSTEM_PROMPT),
             tools=[],
             output_schema=PerceptionReport,
             max_rounds=2,
@@ -296,7 +313,7 @@ class Orchestrator:
 
         runner = StageRunner(
             llm=self.llm,
-            system_prompt=planning.SYSTEM_PROMPT,
+            system_prompt=self._sp(planning.SYSTEM_PROMPT),
             tools=[],  # No tools for planning
             output_schema=VerificationPlan,
             max_rounds=2,
@@ -362,7 +379,7 @@ class Orchestrator:
 
         runner = StageRunner(
             llm=self.llm,
-            system_prompt=verification.SYSTEM_PROMPT,
+            system_prompt=self._sp(verification.SYSTEM_PROMPT),
             tools=tools,
             output_schema=VerificationResult,
             max_rounds=self.max_rounds_verification,
@@ -486,7 +503,7 @@ class Orchestrator:
 
         runner = StageRunner(
             llm=self.llm,
-            system_prompt=judgment.SYSTEM_PROMPT,
+            system_prompt=self._sp(judgment.SYSTEM_PROMPT),
             tools=[],  # No tools for judgment
             output_schema=FinalJudgment,
             max_rounds=1,

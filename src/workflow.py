@@ -38,7 +38,7 @@ class WorkflowConfig:
     # Stage settings
     max_rounds_perception: int = 3
     max_rounds_verification: int = 8
-    timeout: float = 300.0
+    timeout: float = 900.0
 
     # Output
     output_dir: str = "outputs/traces"

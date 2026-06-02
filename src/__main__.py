@@ -20,7 +20,7 @@ def main():
     parser.add_argument("--provider", default="lmdeploy", help="LLM provider")
     parser.add_argument("--model", default="/gsdata/home/wza/models/Qwen3-VL-8B-Thinking", help="Model name")
     parser.add_argument("--output-dir", default="outputs/traces", help="Trace output directory")
-    parser.add_argument("--timeout", type=float, default=300.0, help="Timeout in seconds")
+    parser.add_argument("--timeout", type=float, default=900.0, help="Timeout in seconds")
     parser.add_argument("--no-trace", action="store_true", help="Don't save trace files")
     args = parser.parse_args()
 
