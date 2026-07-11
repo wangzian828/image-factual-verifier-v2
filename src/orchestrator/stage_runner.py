@@ -7,6 +7,7 @@ import re
 import time
 from copy import deepcopy
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple, Type
 
 from pydantic import BaseModel
@@ -1028,6 +1029,7 @@ class StageRunner:
                 return cached, {
                     "cache_hit": True,
                     "tool_success": succeeded,
+                    "observed_at": datetime.now(timezone.utc).isoformat(),
                     "duration_ms": round((time.perf_counter() - started) * 1000, 2),
                     "serialized_size": len(cached),
                 }
@@ -1045,6 +1047,7 @@ class StageRunner:
             return serialized, {
                 "cache_hit": False,
                 "tool_success": False,
+                "observed_at": datetime.now(timezone.utc).isoformat(),
                 "duration_ms": round((time.perf_counter() - started) * 1000, 2),
                 "serialized_size": len(serialized),
                 "tool_exception": type(exc).__name__,
@@ -1060,6 +1063,7 @@ class StageRunner:
             return serialized, {
                 "cache_hit": False,
                 "tool_success": False,
+                "observed_at": datetime.now(timezone.utc).isoformat(),
                 "duration_ms": round((time.perf_counter() - started) * 1000, 2),
                 "serialized_size": len(serialized),
                 "tool_exception": "ToolResultContractError",
@@ -1069,6 +1073,7 @@ class StageRunner:
         return serialized, {
             "cache_hit": False,
             "tool_success": succeeded,
+            "observed_at": datetime.now(timezone.utc).isoformat(),
             "duration_ms": round((time.perf_counter() - started) * 1000, 2),
             "serialized_size": len(serialized),
         }

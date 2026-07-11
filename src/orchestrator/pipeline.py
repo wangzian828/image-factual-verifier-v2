@@ -6,7 +6,7 @@ import json
 import os
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence
 
 from src.orchestrator.context import ContextRenderer
@@ -944,6 +944,7 @@ class Orchestrator:
                 return cached, {
                     "cache_hit": True,
                     "tool_success": succeeded,
+                    "observed_at": datetime.now(timezone.utc).isoformat(),
                     "duration_ms": round((time.perf_counter() - started) * 1000, 2),
                     "serialized_size": len(cached),
                 }
@@ -965,6 +966,7 @@ class Orchestrator:
         return serialized, {
             "cache_hit": False,
             "tool_success": succeeded,
+            "observed_at": datetime.now(timezone.utc).isoformat(),
             "duration_ms": round((time.perf_counter() - started) * 1000, 2),
             "serialized_size": len(serialized),
         }

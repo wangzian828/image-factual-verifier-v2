@@ -25,6 +25,7 @@ Every run receives or constructs one strict `VerificationCase`:
 case_id: string
 image_path: string
 image_sha256: 64-character lowercase SHA-256
+created_at: ISO-8601 timestamp for this verification run
 claim_mode: external_claim | embedded_claim
 user_claim: string | null
 claim_surface: string | null
@@ -32,7 +33,7 @@ claim_source_region: [x1, y1, x2, y2] | null
 decision_policy_version: string
 ```
 
-The workflow verifies `image_sha256` against the file before Perception. An `external_claim` requires a non-empty `user_claim`. An `embedded_claim` forbids `user_claim`; after Perception, visible OCR text is copied into `claim_surface` for Planning. A supplied `claim_source_region` is a normalized, non-empty box.
+The workflow verifies `image_sha256` against the file before Perception. `created_at` is fixed once when the runtime case is constructed, so repeated incremental ledger compilation cannot change source provenance. An `external_claim` requires a non-empty `user_claim`. An `embedded_claim` forbids `user_claim`; after Perception, visible OCR text is copied into `claim_surface` for Planning. A supplied `claim_source_region` is a normalized, non-empty box.
 
 The runtime case must never contain a hidden benchmark label or gold `primary_claim`. For an embedded claim, the agent recovers the claim only from pixels, OCR, and scene observations. The active decision policy is `reinspect-v1`; versioning the field does not authorize a different policy without matching validator changes.
 
@@ -92,6 +93,8 @@ After every validated verification observation, and again at the end of an itera
 | `failures` | Failed call ID, tool, optional claim, typed code, severity, recoverability, message, and optional recovery call. Failures never enter the evidence ledger. |
 
 Evidence insertion checks that the claim and source exist, the call succeeded, the same call is not in the failure ledger, and the evidence artifact hash matches its source. Direct evidence can close a claim when it is a moderate/strong image observation, a moderate/strong official source, or corroboration from at least two independent non-UGC, non-risky source families. Opposing direct evidence makes the claim `conflicted`; one non-primary source family leaves it open.
+
+Every completed tool step records one immutable ISO-8601 `observed_at`. The original image has one stable source record timestamped by `VerificationCase.created_at`; each visual evidence record uses its own step `observed_at`. `current_time` produces a `runtime_anchor`, never an image-region record. Recompiling the same steps must therefore produce byte-equivalent ledgers.
 
 `VerificationResult` remains the structured agent output and compatibility view, but Coverage and Judgment are gated by the compiled ledgers. Search snippets, titles, and generated summaries cannot be promoted merely because the model repeats them.
 

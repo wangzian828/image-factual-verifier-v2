@@ -238,8 +238,62 @@ def compile_runtime_ledgers(
                 ),
                 successful_call_ids=successful_call_ids,
             )
+        elif item.tool_used == "current_time":
+            metadata = getattr(step, "metadata", {}) or {}
+            observed_at = str(metadata.get("observed_at") or case.created_at).strip()
+            try:
+                datetime.fromisoformat(observed_at.replace("Z", "+00:00"))
+            except ValueError as exc:
+                raise ValueError(
+                    "Runtime observation provenance must contain an ISO-8601 observed_at or case.created_at."
+                ) from exc
+            artifact = content_sha256(item.raw_excerpt)
+            source_id = ledger._id(
+                "source", "runtime", item.tool_used, item.function_call_id, artifact
+            )
+            ledger.add_source(
+                SourceRecord(
+                    source_id=source_id,
+                    canonical_url="",
+                    hostname="",
+                    registered_domain="",
+                    source_family="runtime:current_time",
+                    source_class="runtime",
+                    artifact_sha256=artifact,
+                    retrieved_at=observed_at,
+                )
+            )
+            ledger.add_evidence(
+                EvidenceRecord(
+                    evidence_id=ledger._id(
+                        "evidence", item.function_call_id, claim_id, source_id, item.raw_excerpt
+                    ),
+                    claim_id=claim_id,
+                    source_id=source_id,
+                    function_call_id=item.function_call_id,
+                    tool_name=item.tool_used,
+                    evidence_kind="runtime_anchor",
+                    exact_text=item.raw_excerpt,
+                    artifact_sha256=artifact,
+                    retrieved_at=observed_at,
+                    stance=_stance(item.direction),
+                    quality=item.quality,
+                ),
+                successful_call_ids=successful_call_ids,
+            )
         else:
-            retrieved_at = datetime.now(timezone.utc).isoformat()
+            metadata = getattr(step, "metadata", {}) or {}
+            observed_at = str(metadata.get("observed_at") or case.created_at).strip()
+            for timestamp_name, timestamp in (
+                ("case.created_at", case.created_at),
+                ("observed_at", observed_at),
+            ):
+                try:
+                    datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+                except ValueError as exc:
+                    raise ValueError(
+                        f"Visual observation provenance {timestamp_name} must be ISO-8601."
+                    ) from exc
             source_id = ledger._id("source", "image", case.image_sha256)
             ledger.add_source(
                 SourceRecord(
@@ -248,9 +302,9 @@ def compile_runtime_ledgers(
                     hostname="",
                     registered_domain="",
                     source_family=f"image:{case.image_sha256}",
-                    source_class="visual" if item.tool_used != "current_time" else "runtime",
+                    source_class="visual",
                     artifact_sha256=case.image_sha256,
-                    retrieved_at=retrieved_at,
+                    retrieved_at=case.created_at,
                 )
             )
             region = getattr(step, "tool_args", {}).get("bbox") or [0.0, 0.0, 1.0, 1.0]
@@ -267,7 +321,7 @@ def compile_runtime_ledgers(
                     exact_text=item.raw_excerpt,
                     image_region=region,
                     artifact_sha256=case.image_sha256,
-                    retrieved_at=retrieved_at,
+                    retrieved_at=observed_at,
                     stance=_stance(item.direction),
                     quality=item.quality,
                 ),

@@ -237,3 +237,114 @@ def test_duplicate_search_candidates_merge_before_ledger_insertion(tmp_path) -> 
     assert ledgers.discoveries[0].snippet == (
         "A longer and more informative reference snippet."
     )
+
+
+def test_visual_ledger_compilation_is_idempotent(tmp_path) -> None:
+    image_path = tmp_path / "input.jpg"
+    image_path.write_bytes(b"idempotent-visual-fixture")
+    case = build_verification_case(
+        str(image_path),
+        user_claim="Does the image contain a reference object?",
+    )
+    steps = [
+        StageStep(
+            round=index,
+            stage_name="verification",
+            action_type="tool_call",
+            tool_name="crop_and_inspect",
+            tool_args={"__question_id": "q0", "bbox": bbox},
+            tool_result=json.dumps({"status": "success", "summary": excerpt}),
+            metadata={
+                "tool_success": True,
+                "function_call_id": call_id,
+                "observed_at": observed_at,
+            },
+        )
+        for index, (call_id, bbox, excerpt, observed_at) in enumerate(
+            [
+                (
+                    "call-visual-1",
+                    [0.1, 0.1, 0.5, 0.5],
+                    "The first inspected region contains a reference object.",
+                    "2026-07-11T08:00:00+00:00",
+                ),
+                (
+                    "call-visual-2",
+                    [0.5, 0.5, 0.9, 0.9],
+                    "The second inspected region contains a matching object.",
+                    "2026-07-11T08:01:00+00:00",
+                ),
+            ],
+            start=1,
+        )
+    ]
+    result = VerificationResult(
+        evidence=[
+            EvidenceItem(
+                function_call_id=step.metadata["function_call_id"],
+                source="",
+                summary=json.loads(step.tool_result)["summary"],
+                raw_excerpt=json.loads(step.tool_result)["summary"],
+                direction="supports",
+                quality="moderate",
+                tool_used="crop_and_inspect",
+                related_question="q0",
+            )
+            for step in steps
+        ]
+    )
+
+    first = compile_runtime_ledgers(case, _plan(), result, steps)
+    second = compile_runtime_ledgers(case, _plan(), result, steps)
+
+    assert first == second
+    assert len(first.sources) == 1
+    assert first.sources[0].retrieved_at == case.created_at
+    assert [item.retrieved_at for item in first.evidence] == [
+        "2026-07-11T08:00:00+00:00",
+        "2026-07-11T08:01:00+00:00",
+    ]
+
+
+def test_current_time_is_recorded_as_runtime_anchor(tmp_path) -> None:
+    image_path = tmp_path / "input.jpg"
+    image_path.write_bytes(b"runtime-anchor-fixture")
+    case = build_verification_case(
+        str(image_path),
+        user_claim="Was this claim posted before today?",
+    )
+    excerpt = "2026-07-11T16:00:00+08:00"
+    step = StageStep(
+        round=1,
+        stage_name="verification",
+        action_type="tool_call",
+        tool_name="current_time",
+        tool_args={"__question_id": "q0"},
+        tool_result=json.dumps({"status": "success", "datetime": excerpt}),
+        metadata={
+            "tool_success": True,
+            "function_call_id": "call-time-1",
+            "observed_at": "2026-07-11T08:00:01+00:00",
+        },
+    )
+    result = VerificationResult(
+        evidence=[
+            EvidenceItem(
+                function_call_id="call-time-1",
+                source="current_time",
+                summary=excerpt,
+                raw_excerpt=excerpt,
+                direction="neutral",
+                quality="strong",
+                tool_used="current_time",
+                related_question="q0",
+            )
+        ]
+    )
+
+    ledgers = compile_runtime_ledgers(case, _plan(), result, [step])
+
+    assert len(ledgers.sources) == 1
+    assert ledgers.sources[0].source_class == "runtime"
+    assert ledgers.evidence[0].evidence_kind == "runtime_anchor"
+    assert ledgers.evidence[0].image_region is None

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Annotated, Any, Dict, List, Literal, Optional
 
@@ -39,6 +39,7 @@ class VerificationCase(StrictModel):
     case_id: str = Field(min_length=1, max_length=200)
     image_path: str = Field(min_length=1)
     image_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     claim_mode: ClaimMode
     user_claim: Optional[str] = Field(default=None, max_length=2000)
     claim_surface: Optional[str] = Field(default=None, max_length=4000)
@@ -47,6 +48,10 @@ class VerificationCase(StrictModel):
 
     @model_validator(mode="after")
     def validate_claim_contract(self) -> "VerificationCase":
+        try:
+            datetime.fromisoformat(self.created_at.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError("created_at must be ISO-8601") from exc
         if self.claim_mode == ClaimMode.EXTERNAL and not str(self.user_claim or "").strip():
             raise ValueError("external_claim requires a non-empty user_claim")
         if self.claim_mode == ClaimMode.EMBEDDED and self.user_claim is not None:
