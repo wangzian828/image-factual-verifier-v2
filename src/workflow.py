@@ -12,15 +12,22 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
+
+from dotenv import load_dotenv
 
 # Limit thread usage to prevent memory explosion
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("MKL_NUM_THREADS", "1")
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 
+load_dotenv()
+
 from src.orchestrator.pipeline import Orchestrator
+from src.orchestrator.state import VerificationCase
+from src.redaction import sanitize_for_persistence
+from src.trace_viewer import save_trace_html
 
 
 @dataclass
@@ -28,15 +35,16 @@ class WorkflowConfig:
     """Configuration for the verification workflow."""
 
     # LLM settings
-    provider: str = "lmdeploy"
-    model_name: str = "/gsdata/home/wza/models/Qwen3-VL-8B-Thinking"
+    provider: str = "gemini"
+    model_name: str = "gemini-3.5-flash"
     vlm_provider: Optional[str] = None  # Defaults to provider
     vlm_model: Optional[str] = None  # Defaults to model_name
+    llm_wire_api: Optional[str] = None
+    vlm_wire_api: Optional[str] = None
     temperature: float = 0.0
     max_tokens: int = 8192
 
     # Stage settings
-    max_rounds_perception: int = 3
     max_rounds_verification: int = 8
     timeout: float = 900.0
 
@@ -60,7 +68,8 @@ class VerificationWorkflow:
                 model_name=self.config.model_name,
                 vlm_provider=self.config.vlm_provider,
                 vlm_model=self.config.vlm_model,
-                max_rounds_perception=self.config.max_rounds_perception,
+                llm_wire_api=self.config.llm_wire_api,
+                vlm_wire_api=self.config.vlm_wire_api,
                 max_rounds_verification=self.config.max_rounds_verification,
                 timeout=self.config.timeout,
                 temperature=self.config.temperature,
@@ -68,7 +77,14 @@ class VerificationWorkflow:
             )
         return self._orchestrator
 
-    async def run_single(self, image_path: str, image_id: str = "") -> Dict[str, Any]:
+    async def run_single(
+        self,
+        image_path: str,
+        image_id: str = "",
+        *,
+        user_claim: Optional[str] = None,
+        verification_case: Optional[VerificationCase] = None,
+    ) -> Dict[str, Any]:
         """Run verification on a single image.
 
         Args:
@@ -79,7 +95,36 @@ class VerificationWorkflow:
             Dict with verdict, confidence, assessment, and full state.
         """
         orchestrator = self._get_orchestrator()
-        result = await orchestrator.run(image_path, image_id)
+        try:
+            if verification_case is None and user_claim is None:
+                result = await orchestrator.run(image_path, image_id)
+            else:
+                result = await orchestrator.run(
+                    image_path,
+                    image_id,
+                    verification_case=verification_case,
+                    user_claim=user_claim,
+                )
+        except Exception:
+            state = getattr(orchestrator, "last_state", None)
+            if self.config.save_traces and state is not None:
+                self._save_trace(
+                    {
+                        "image_id": state.image_id,
+                        "image_path": state.image_path,
+                        "verdict": "error",
+                        "confidence": 0.0,
+                        "overall_assessment": "Verification terminated with an engineering error.",
+                        "state": state.to_dict(),
+                        "termination": "error",
+                        "time_taken": state.stage_timings.get("total", 0.0),
+                        "token_usage": state.token_usage,
+                        "total_tool_calls": state.total_tool_calls,
+                        "llm_api_calls": state.llm_api_calls,
+                        "error": " | ".join(state.errors),
+                    }
+                )
+            raise
 
         # Save trace if configured
         if self.config.save_traces:
@@ -144,10 +189,13 @@ class VerificationWorkflow:
         trace_path = os.path.join(self.config.output_dir, f"{safe_id}.json")
 
         # Remove non-serializable fields
-        serializable = {
+        serializable = sanitize_for_persistence({
             k: v for k, v in result.items()
             if k != "state" or isinstance(v, dict)
-        }
+        })
 
         with open(trace_path, "w", encoding="utf-8") as f:
             json.dump(serializable, f, ensure_ascii=False, indent=2, default=str)
+
+        html_path = os.path.splitext(trace_path)[0] + ".html"
+        save_trace_html(serializable, html_path)

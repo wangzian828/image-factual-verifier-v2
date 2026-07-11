@@ -1,226 +1,204 @@
 # -*- coding: utf-8 -*-
-"""Context rendering and compression for each pipeline stage.
-
-Handles:
-- Converting stage outputs to compact text for the next stage's input
-- Compressing tool results (search results, VLM outputs)
-- Building the input_context string for each stage
-"""
+"""Context rendering for each pipeline stage."""
 from __future__ import annotations
 
-import json
-from typing import Any, Dict, List, Optional
-
 from src.orchestrator.state import (
-    EvidenceItem,
+    CoverageAudit,
     PerceptionReport,
     VerificationPlan,
     VerificationResult,
+    VerificationCase,
+    VerificationLedgers,
 )
 
 
 class ContextRenderer:
-    """Renders inter-stage context: converts structured data to compact text."""
-
-    # --- Stage 2 (Planning) input ---
+    """Render compact structured context for LLM stages."""
 
     @staticmethod
-    def render_for_planning(perception: PerceptionReport) -> str:
-        """Render PerceptionReport as compact text for the Planning stage."""
-        parts = ["## Perception Report\n"]
-
-        # Entities (top 10)
-        if perception.entities:
-            parts.append("### Entities")
-            for i, ent in enumerate(perception.entities[:10]):
-                attrs = ", ".join(f"{k}={v}" for k, v in ent.attributes.items()) if ent.attributes else ""
-                bbox_str = f" bbox={ent.bbox}" if ent.bbox else ""
-                parts.append(
-                    f"  {i}. [{ent.entity_type}] {ent.name}{bbox_str}"
-                    + (f" ({attrs})" if attrs else "")
-                )
-
-        # Text regions
-        if perception.text_regions:
-            parts.append("\n### Text Found")
-            for tr in perception.text_regions:
-                conf = f" (conf={tr.confidence:.2f})" if tr.confidence > 0 else ""
-                parts.append(f'  - "{tr.text}" [{tr.language}]{conf}')
-
-        # Faces
-        if perception.faces:
-            parts.append(f"\n### Faces Detected: {len(perception.faces)}")
-            for i, face in enumerate(perception.faces):
-                parts.append(
-                    f"  {i}. age≈{face.age}, {face.gender}, conf={face.confidence:.2f}"
-                )
-
-        # Scene
-        parts.append(f"\n### Scene: {perception.scene_description}")
-        parts.append(f"### Image Type: {perception.image_type}")
-
-        return "\n".join(parts)
-
-    # --- Stage 3 (Verification) input ---
-
-    @staticmethod
-    def render_for_verification(
+    def render_for_planning(
         perception: PerceptionReport,
-        plan: VerificationPlan,
+        verification_case: VerificationCase | None = None,
     ) -> str:
-        """Render context for the Verification stage."""
-        parts = ["## Context for Verification\n"]
-
-        # Compact perception summary
-        parts.append("### Image Content")
-        parts.append(f"Type: {perception.image_type}")
-        parts.append(f"Scene: {perception.scene_description}")
+        parts = ["## Perception", ""]
+        if verification_case is not None:
+            parts.append(f"Claim mode: {verification_case.claim_mode.value}")
+            if verification_case.user_claim:
+                parts.append(f"External claim (trusted runtime input): {verification_case.user_claim}")
+            elif verification_case.claim_surface:
+                parts.append(f"Embedded claim surface recovered from pixels: {verification_case.claim_surface}")
+        parts.append(f"Scene: {perception.scene_description or '(empty)'}")
+        parts.append(f"Image type: {perception.image_type or 'photo'}")
 
         if perception.entities:
-            entity_names = [e.name for e in perception.entities[:8]]
-            parts.append(f"Key entities: {', '.join(entity_names)}")
+            parts.append("")
+            parts.append("Entities:")
+            for entity in perception.entities[:10]:
+                attrs = ", ".join(f"{k}={v}" for k, v in entity.attributes.items())
+                suffix = f" ({attrs})" if attrs else ""
+                parts.append(f"- [{entity.entity_type}] {entity.name}{suffix}")
 
         if perception.text_regions:
-            texts = [tr.text for tr in perception.text_regions[:5]]
-            parts.append(f"Text found: {'; '.join(texts)}")
-
-        if perception.faces:
-            parts.append(f"Faces: {len(perception.faces)} detected")
-
-        # Verification plan
-        parts.append("\n### Verification Plan")
-        parts.append(f"Image intent: {plan.image_intent}")
-        parts.append(f"Trying to be real: {plan.is_trying_to_be_real}")
-        parts.append(f"Risk: {plan.risk_assessment}")
-
-        parts.append("\n### Questions to Investigate")
-        for q in plan.questions:
-            priority_mark = "⚡" if q.priority == 1 else ("•" if q.priority == 2 else "○")
-            parts.append(f"  {priority_mark} [{q.question_id}] {q.question}")
-            if q.suggested_queries:
-                parts.append(f"    Suggested queries: {q.suggested_queries[:3]}")
-            if q.suggested_tools:
-                parts.append(f"    Suggested tools: {q.suggested_tools}")
-
-        # Build mandatory tool checklist from high-priority questions
-        mandatory_tools = []
-        for q in plan.questions:
-            if q.priority == 1 and q.suggested_tools:
-                for tool in q.suggested_tools:
-                    if tool not in mandatory_tools:
-                        mandatory_tools.append(tool)
-
-        if mandatory_tools:
-            parts.append("\n### ⚠️ MANDATORY Tool Checklist")
-            parts.append("You MUST call each of the following tools at least once before outputting your conclusion:")
-            for i, tool in enumerate(mandatory_tools, 1):
-                # Find a relevant query for this tool
-                relevant_query = ""
-                for q in plan.questions:
-                    if q.priority == 1 and tool in (q.suggested_tools or []):
-                        if q.suggested_queries:
-                            relevant_query = f' (e.g. query: "{q.suggested_queries[0]}")'
-                        break
-                parts.append(f"  {i}. {tool}{relevant_query}")
-            parts.append("Do NOT skip any of these. Only output <output> after completing this checklist.")
+            parts.append("")
+            parts.append("Visible text:")
+            for region in perception.text_regions[:10]:
+                text = region.text.replace("\n", " ").strip()
+                if not text:
+                    continue
+                parts.append(f'- "{text[:120]}" [{region.language}]')
 
         return "\n".join(parts)
 
-    # --- Stage 4 (Judgment) input ---
+    @staticmethod
+    def render_for_verification(perception: PerceptionReport, plan: VerificationPlan) -> str:
+        parts = ["## Verification Context", ""]
+        parts.append(f"Scene: {perception.scene_description or '(empty)'}")
+        parts.append(f"Image type: {perception.image_type or 'photo'}")
+        parts.append(f"Intent: {plan.image_intent or '(empty)'}")
+        parts.append(f"Risk: {plan.risk_assessment or '(empty)'}")
+        parts.append(f"Plan revision: {plan.revision}")
+        if plan.revision_reason:
+            parts.append(f"Revision reason: {plan.revision_reason}")
+        parts.append(f"Trying to look real: {plan.is_trying_to_be_real}")
+
+        if perception.entities:
+            names = [entity.name for entity in perception.entities[:8] if entity.name]
+            if names:
+                parts.append(f"Entities: {', '.join(names)}")
+
+        if perception.text_regions:
+            texts = []
+            for region in perception.text_regions[:5]:
+                text = region.text.replace("\n", " ").strip()
+                if text:
+                    texts.append(text[:80])
+            if texts:
+                parts.append(f"Text: {'; '.join(texts)}")
+
+        if plan.questions:
+            parts.append("")
+            parts.append("Investigation questions:")
+            for question in plan.questions[:6]:
+                row = f"- [{question.question_id}] P{question.priority}: {question.question}"
+                if question.why:
+                    row += f" | why: {question.why}"
+                if question.suggested_tools:
+                    row += f" | tools: {', '.join(question.suggested_tools[:5])}"
+                if question.suggested_queries:
+                    row += f" | queries: {' ; '.join(question.suggested_queries[:3])}"
+                parts.append(row)
+
+        return "\n".join(parts)
 
     @staticmethod
     def render_for_judgment(
         perception: PerceptionReport,
         plan: VerificationPlan,
         verification: VerificationResult,
+        ledgers: VerificationLedgers | None = None,
     ) -> str:
-        """Render context for the Judgment stage."""
-        parts = ["## Evidence Summary for Final Judgment\n"]
+        parts = ["## Judgment Context", ""]
+        parts.append(f"Scene: {perception.scene_description or '(empty)'}")
+        parts.append(f"Image type: {perception.image_type or 'photo'}")
+        parts.append(f"Intent: {plan.image_intent or '(empty)'}")
+        parts.append(f"Risk: {plan.risk_assessment or '(empty)'}")
+        parts.append(f"Verification assessment: {verification.authenticity_assessment}")
 
-        # Image basics
-        parts.append(f"Image type: {perception.image_type}")
-        parts.append(f"Scene: {perception.scene_description}")
-        parts.append(f"Image intent: {plan.image_intent}")
-        parts.append(f"Is trying to be real: {plan.is_trying_to_be_real}")
-        parts.append(f"Risk assessment: {plan.risk_assessment}")
-
-        # Evidence collected
-        if verification.evidence:
-            parts.append("\n### Evidence Collected")
-            for ev in verification.evidence:
-                direction_icon = {"supports": "✓", "refutes": "✗", "neutral": "—"}.get(ev.direction, "?")
+        if ledgers is not None:
+            parts.append("")
+            parts.append("Claim ledger (use these exact claim_id values):")
+            for claim in ledgers.claims:
                 parts.append(
-                    f"  {direction_icon} [{ev.quality}] {ev.summary} (via {ev.tool_used}, re: {ev.related_question})"
+                    f"- {claim.claim_id}: status={claim.status}, criticality={claim.criticality}, "
+                    f"text={claim.text}"
                 )
-                # 一手证据原文：judgment 据此独立判断，不被 summary 的转写偏差带偏
-                excerpt = getattr(ev, "raw_excerpt", "")
-                if excerpt:
-                    parts.append(f"      原文: \"{excerpt[:300]}\"")
+            parts.append("")
+            parts.append("Eligible evidence ledger (use these exact evidence_id values):")
+            for evidence in ledgers.evidence:
+                parts.append(
+                    f"- {evidence.evidence_id}: claim={evidence.claim_id}, "
+                    f"stance={evidence.stance}, quality={evidence.quality}, "
+                    f"source={evidence.source_id}, exact_text={evidence.exact_text[:500]}"
+                )
 
-        # Visual anomalies
-        if verification.visual_anomalies:
-            parts.append("\n### Visual Anomalies Found")
-            for anom in verification.visual_anomalies:
-                if isinstance(anom, dict):
-                    parts.append(f"  - {anom.get('name', 'unnamed')}: {anom.get('phenomenon', '')}")
-
-        # Key findings
         if verification.key_findings:
-            parts.append("\n### Key Findings")
-            for finding in verification.key_findings:
-                parts.append(f"  - {finding}")
+            parts.append("")
+            parts.append("Key findings:")
+            for finding in verification.key_findings[:10]:
+                parts.append(f"- {finding}")
 
-        # Authenticity
-        parts.append(f"\n### Authenticity Assessment: {verification.authenticity_assessment}")
+        if verification.evidence:
+            parts.append("")
+            parts.append("Evidence:")
+            for evidence in verification.evidence[:12]:
+                row = (
+                    f"- [{evidence.direction}/{evidence.quality}] "
+                    f"{evidence.summary} (via {evidence.tool_used}, "
+                    f"call={evidence.function_call_id}, q={evidence.related_question})"
+                )
+                parts.append(row)
+                if evidence.raw_excerpt:
+                    parts.append(f'  excerpt: "{evidence.raw_excerpt[:280]}"')
 
-        # Questions and what was found
-        parts.append("\n### Investigation Questions Status")
-        answered_qs = set(ev.related_question for ev in verification.evidence if ev.related_question)
-        for q in plan.questions:
-            status = "answered" if q.question_id in answered_qs else "unanswered"
-            parts.append(f"  [{status}] {q.question}")
+        if verification.visual_anomalies:
+            parts.append("")
+            parts.append("Visual anomalies:")
+            for anomaly in verification.visual_anomalies[:8]:
+                label = anomaly.name or anomaly.phenomenon or "anomaly"
+                parts.append(
+                    f"- {label} (call={anomaly.function_call_id}, q={anomaly.related_question})"
+                )
 
         return "\n".join(parts)
 
-    # --- Tool result compression ---
-
     @staticmethod
-    def compress_search_result(raw_result: str, max_items: int = 5) -> str:
-        """Compress search tool results to top-N with 1-sentence summaries."""
-        try:
-            data = json.loads(raw_result)
-        except (json.JSONDecodeError, TypeError):
-            # Not JSON, truncate raw text
-            return raw_result[:2000] if len(raw_result) > 2000 else raw_result
+    def render_for_replanning(
+        perception: PerceptionReport,
+        plan: VerificationPlan,
+        audit: CoverageAudit,
+        verification: VerificationResult,
+    ) -> str:
+        """Render only unresolved gaps and compact evidence for plan revision."""
 
-        if isinstance(data, list):
-            # List of search results
-            compressed = []
-            for item in data[:max_items]:
-                if isinstance(item, dict):
-                    title = item.get("title", "")
-                    snippet = item.get("snippet", item.get("description", ""))[:150]
-                    url = item.get("url", item.get("link", ""))
-                    compressed.append(f"- {title}: {snippet} [{url}]")
-            return "\n".join(compressed) if compressed else raw_result[:1000]
+        unresolved = set(audit.unresolved_priority_questions)
+        resolutions = {
+            item.question_id: item for item in audit.question_resolutions
+        }
+        parts = ["## Replanning Context", ""]
+        parts.append(f"Scene: {perception.scene_description[:500] or '(empty)'}")
+        parts.append(f"Intent: {plan.image_intent[:500] or '(empty)'}")
+        parts.append("Unresolved questions to update:")
+        for question in plan.questions:
+            if question.question_id not in unresolved:
+                continue
+            resolution = resolutions.get(question.question_id)
+            gap = resolution.remaining_gap if resolution else "No grounded answer."
+            parts.append(
+                f"- [{question.question_id}] {question.question[:500]} | "
+                f"gap: {gap[:500]}"
+            )
+            if question.suggested_queries:
+                parts.append(
+                    "  previous queries: "
+                    + " ; ".join(query[:160] for query in question.suggested_queries[:4])
+                )
 
-        if isinstance(data, dict):
-            # Single result or wrapped results
-            results = data.get("results", data.get("organic", []))
-            if isinstance(results, list):
-                compressed = []
-                for item in results[:max_items]:
-                    if isinstance(item, dict):
-                        title = item.get("title", "")
-                        snippet = item.get("snippet", "")[:150]
-                        compressed.append(f"- {title}: {snippet}")
-                return "\n".join(compressed) if compressed else json.dumps(data, ensure_ascii=False)[:1000]
+        relevant = [
+            item
+            for item in verification.evidence
+            if item.related_question in unresolved
+        ]
+        if relevant:
+            parts.append("Evidence already collected for unresolved questions:")
+            for item in relevant[:8]:
+                parts.append(
+                    f"- [{item.related_question}] {item.summary[:400]} "
+                    f"(via {item.tool_used})"
+                )
+        else:
+            parts.append("Evidence already collected for unresolved questions: none")
 
-        return raw_result[:2000]
-
-    @staticmethod
-    def compress_visit_result(raw_result: str, max_chars: int = 2000) -> str:
-        """Truncate visit (web page) results."""
-        if len(raw_result) <= max_chars:
-            return raw_result
-        return raw_result[:max_chars] + "\n... (truncated)"
+        parts.append(
+            "Return one update for every unresolved id and no updates for any other id."
+        )
+        return "\n".join(parts)

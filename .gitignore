@@ -1,9 +1,34 @@
+# Python bytecode and tool caches
 __pycache__/
-*.pyc
-*.pyo
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+/.cache/
+/.tmp_paper_audit/
+
+# Local environments and credentials
 .env
-outputs/
+.env.*
+!.env.example
+.venv/
+venv/
+
+# Packaging output
 *.egg-info/
 dist/
 build/
-.venv/
+
+# Runtime logs and generated verification artifacts
+/*.log
+/logs/
+/outputs/
+/data/
+/reports/
+/test_mock_result.json
+/test_mock_result.html
+/test_real_result.json

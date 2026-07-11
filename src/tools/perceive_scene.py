@@ -1,11 +1,8 @@
 # -*- coding: utf-8 -*-
-"""Scene perception using VLM with structured output.
-
-Extracts entities, scene type, and description from the image
-using a carefully designed prompt that forces structured output.
-"""
+"""Scene perception using VLM with structured output."""
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -13,49 +10,67 @@ from src.tools.base import BaseTool
 
 
 PERCEIVE_SCENE_PROMPT = """\
-你是图像感知模块。仔细观察这张图片，提取所有可见的实体和场景信息。
-
-输出要求（严格 JSON）：
+You are the perception module of an image verification system.
+Inspect the image carefully and return exactly one JSON object:
 {
   "entities": [
     {
-      "name": "实体名称（具体描述，如'穿蓝色西装的中年男性'）",
+      "name": "specific entity name",
       "entity_type": "person|object|building|text|logo|animal|scene_element",
-      "bbox": [x1, y1, x2, y2],  // 归一化坐标 0-1，左上角为原点。如果无法确定精确位置则留空 []
-      "confidence": 0.9,  // 你对这个实体存在的确信度
-      "attributes": {"key": "value"}  // 相关属性，如颜色、大小、状态等
+      "bbox": [x_min, y_min, x_max, y_max],
+      "confidence": 0.9,
+      "attributes": {"key": "value"}
     }
   ],
-  "scene_description": "一句话描述整个场景",
+  "scene_description": "one-sentence literal description",
   "image_type": "photo|screenshot|document|illustration|meme"
 }
 
-规则：
-1. 列出所有重要实体（人物、物体、文字、logo、建筑等），最多 15 个
-2. 人物要描述外貌特征（衣着、年龄段、性别）
-3. 文字内容单独作为 entity_type="text" 的实体
-4. logo/品牌标识单独列出
-5. bbox 用归一化坐标 [x1, y1, x2, y2]，范围 0-1。不确定就留空 []
-6. scene_description 要客观描述，不做判断
-7. image_type 判断图片类型
+Rules:
+1. List up to 15 important visible entities.
+2. Include readable text and logos as separate entities when visible.
+3. Use normalized [x_min, y_min, x_max, y_max] bounding boxes in [0,1].
+   If no reliable box is available, use [].
+4. Keep scene_description literal and objective.
+5. Output JSON only.
+"""
 
-只输出 JSON，不要其他文字。"""
+PERCEIVE_SCENE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "entities": {
+            "type": "array",
+            "maxItems": 15,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "maxLength": 160},
+                    "entity_type": {"type": "string"},
+                    "bbox": {"type": "array", "items": {"type": "number"}, "maxItems": 4},
+                    "confidence": {"type": "number"},
+                    "attributes": {"type": "object"},
+                },
+            },
+        },
+        "scene_description": {"type": "string", "maxLength": 700},
+        "image_type": {
+            "type": "string",
+            "enum": ["photo", "screenshot", "document", "illustration", "meme"],
+        },
+    },
+}
 
 
 @dataclass
 class PerceiveSceneTool(BaseTool):
-    """VLM-based scene perception that outputs structured entity list.
-
-    This is the primary perception tool — it uses the VLM's strong semantic
-    understanding to identify all entities, their types, and relationships.
-    """
+    """VLM-based scene perception that outputs a structured entity list."""
 
     name: str = "perceive_scene"
     description: str = (
-        "Observe the image and extract a structured list of all visible entities "
+        "Observe the image and extract a structured list of visible entities "
         "(people, objects, text, logos, buildings, animals), their types, approximate "
-        "positions, and attributes. Also determines the image type and provides a "
-        "scene description. Use this FIRST to understand what's in the image."
+        "positions, and attributes. Also determine the image type and provide a "
+        "scene description."
     )
     parameters: dict = field(
         default_factory=lambda: {
@@ -70,65 +85,68 @@ class PerceiveSceneTool(BaseTool):
         }
     )
 
-    # VLM client (injected at construction or built lazily)
     client: Optional[Any] = field(default=None, repr=False)
-    provider: str = "lmdeploy"
-    model_name: str = "/gsdata/home/wza/models/Qwen3-VL-8B-Thinking"
+    provider: str = "gemini"
+    model_name: str = "gemini-3.5-flash"
 
     def _get_client(self):
-        """Lazy initialization of VLM client."""
         if self.client is None:
             from src.integrations.vlm.factory import build_vlm_client
 
             self.client = build_vlm_client(
-                provider=self.provider, model_name=self.model_name
+                provider=self.provider,
+                model_name=self.model_name,
             )
         return self.client
 
     def call(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Run scene perception on the image."""
         image_input = params["image_input"]
 
-        last_error = None
-        for attempt in range(2):  # Retry once on failure
-            try:
-                client = self._get_client()
-                parsed = client.create_image_json(
-                    system_prompt=PERCEIVE_SCENE_PROMPT,
-                    user_text="请仔细观察这张图片，输出结构化的实体列表和场景信息。",
-                    image_input=image_input,
-                    max_tokens=2000,
-                    model_name=self.model_name,
-                )
-                last_error = None
-                break
-            except Exception as e:
-                last_error = e
-                if attempt == 0:
-                    import time
-                    time.sleep(2)
-
-        if last_error is not None:
+        try:
+            client = self._get_client()
+            parsed = client.create_image_json(
+                system_prompt=PERCEIVE_SCENE_PROMPT,
+                user_text="Inspect this image and output the structured scene JSON.",
+                image_input=image_input,
+                max_tokens=2000,
+                model_name=self.model_name,
+                response_schema=PERCEIVE_SCENE_SCHEMA,
+            )
+        except Exception as exc:
             return {
                 "status": "error",
-                "error": f"Scene perception failed: {str(last_error)}",
+                "error": (
+                    "Scene perception failed: "
+                    f"{type(exc).__name__}: {exc or '<no message>'}"
+                ),
                 "entities": [],
                 "scene_description": "",
                 "image_type": "unknown",
             }
 
-        # Normalize output
         entities = []
         for ent in parsed.get("entities", []):
             if not isinstance(ent, dict):
                 continue
-            entities.append({
-                "name": str(ent.get("name", "")).strip(),
-                "entity_type": str(ent.get("entity_type", "object")).strip(),
-                "bbox": ent.get("bbox", []) if isinstance(ent.get("bbox"), list) else [],
-                "confidence": float(ent.get("confidence", 0.8)),
-                "attributes": ent.get("attributes", {}) if isinstance(ent.get("attributes"), dict) else {},
-            })
+            try:
+                bbox = normalize_entity_bbox(ent.get("bbox", []))
+            except ValueError as exc:
+                return {
+                    "status": "error",
+                    "error": f"Scene perception returned an invalid entity bbox: {exc}",
+                    "entities": [],
+                    "scene_description": "",
+                    "image_type": "unknown",
+                }
+            entities.append(
+                {
+                    "name": str(ent.get("name", "")).strip(),
+                    "entity_type": str(ent.get("entity_type", "object")).strip(),
+                    "bbox": bbox,
+                    "confidence": float(ent.get("confidence", 0.8)),
+                    "attributes": ent.get("attributes", {}) if isinstance(ent.get("attributes"), dict) else {},
+                }
+            )
 
         return {
             "status": "success",
@@ -137,3 +155,36 @@ class PerceiveSceneTool(BaseTool):
             "image_type": str(parsed.get("image_type", "photo")).strip(),
             "total_entities": len(entities[:15]),
         }
+
+
+def normalize_entity_bbox(raw_bbox: Any) -> List[float]:
+    """Convert a model bbox to normalized project-order XYXY coordinates.
+
+    The public tool contract is ``[x_min, y_min, x_max, y_max]`` in ``[0, 1]``.
+    Gemini vision can nevertheless emit its native ``[y_min, x_min, y_max,
+    x_max]`` coordinates on a 0..1000 grid. Non-empty boxes outside these two
+    documented forms are rejected so incorrect regions cannot enter ReInspect.
+    """
+
+    if raw_bbox in (None, []):
+        return []
+    if not isinstance(raw_bbox, list) or len(raw_bbox) != 4:
+        raise ValueError("bbox must contain exactly four coordinates")
+    if not all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in raw_bbox):
+        raise ValueError("bbox coordinates must be numeric")
+    values = [float(value) for value in raw_bbox]
+    if not all(math.isfinite(value) for value in values):
+        raise ValueError("bbox coordinates must be finite")
+
+    if all(0.0 <= value <= 1.0 for value in values):
+        x1, y1, x2, y2 = values
+    elif all(0.0 <= value <= 1000.0 for value in values) and any(
+        value > 1.0 for value in values
+    ):
+        y1, x1, y2, x2 = (value / 1000.0 for value in values)
+    else:
+        raise ValueError("bbox must use normalized XYXY or Gemini 0..1000 YXYX coordinates")
+
+    if not (0.0 <= x1 < x2 <= 1.0 and 0.0 <= y1 < y2 <= 1.0):
+        raise ValueError("bbox must be ordered, normalized, and non-empty")
+    return [round(value, 6) for value in (x1, y1, x2, y2)]

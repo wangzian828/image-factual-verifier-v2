@@ -1,9 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Check visual consistency using VLM.
-
-Analyzes shadow directions, perspective, scale relationships,
-and other physical consistency aspects of the image.
-"""
+"""Check visual consistency using VLM."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -13,49 +9,59 @@ from src.tools.base import BaseTool
 
 
 CONSISTENCY_PROMPT_TEMPLATE = """\
-你是视觉一致性检查模块。检查这张图片中的物理/视觉一致性。
-
-检查方面：{aspect}
-
-请仔细分析，输出 JSON：
+You are a visual consistency checker for image verification.
+Inspect the image for {aspect} consistency and return exactly one JSON object:
 {{
-  "consistent": true/false,
-  "details": "具体分析说明",
+  "consistent": true,
+  "details": "brief explanation",
   "inconsistencies": [
     {{
-      "description": "不一致的具体描述",
+      "description": "what is inconsistent",
       "severity": "high|medium|low",
-      "location": "图中位置描述"
+      "location": "where in the image"
     }}
   ]
 }}
 
-分析要点：
-- shadow: 检查所有物体的阴影方向是否一致（同一光源）
-- perspective: 检查透视关系是否合理（消失点、近大远小）
-- scale: 检查物体间的比例关系是否合理
-- lighting: 检查光照方向和强度是否一致
-- edges: 检查物体边缘是否有拼接痕迹（锯齿、模糊边界、色差）
-- physics: 检查物理规律是否合理（重力、反射、遮挡关系）
+Consider:
+- shadow direction and lighting
+- perspective and geometry
+- relative scale and proportions
+- edges, seams, or compositing artifacts
+- physical plausibility
 
-只输出 JSON。"""
+Be conservative. Output JSON only.
+"""
+
+CONSISTENCY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "consistent": {"type": "boolean"},
+        "details": {"type": "string", "maxLength": 800},
+        "inconsistencies": {
+            "type": "array",
+            "maxItems": 10,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "description": {"type": "string", "maxLength": 300},
+                    "severity": {"type": "string", "enum": ["high", "medium", "low"]},
+                    "location": {"type": "string", "maxLength": 200},
+                },
+            },
+        },
+    },
+}
 
 
 @dataclass
 class CheckConsistencyTool(BaseTool):
-    """VLM-based visual consistency checker.
-
-    Checks whether the image has consistent shadows, perspective, scale,
-    lighting, and physics — indicators of manipulation or AI generation.
-    """
+    """VLM-based visual consistency checker."""
 
     name: str = "check_consistency"
     description: str = (
-        "Check the visual/physical consistency of the image for signs of manipulation. "
-        "Specify an aspect to check: 'shadow' (shadow directions), 'perspective' (vanishing points), "
-        "'scale' (object proportions), 'lighting' (illumination consistency), "
-        "'edges' (splicing artifacts), 'physics' (physical plausibility), or 'all'. "
-        "Use when you suspect the image may be composited or AI-generated."
+        "Check the visual or physical consistency of the image for signs of manipulation. "
+        "Specify an aspect to check: shadow, perspective, scale, lighting, edges, physics, or all."
     )
     parameters: dict = field(
         default_factory=lambda: {
@@ -76,20 +82,20 @@ class CheckConsistencyTool(BaseTool):
     )
 
     client: Optional[Any] = field(default=None, repr=False)
-    provider: str = "lmdeploy"
-    model_name: str = "/gsdata/home/wza/models/Qwen3-VL-8B-Thinking"
+    provider: str = "gemini"
+    model_name: str = "gemini-3.5-flash"
 
     def _get_client(self):
         if self.client is None:
             from src.integrations.vlm.factory import build_vlm_client
 
             self.client = build_vlm_client(
-                provider=self.provider, model_name=self.model_name
+                provider=self.provider,
+                model_name=self.model_name,
             )
         return self.client
 
     def call(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Check visual consistency of the specified aspect."""
         image_input = params["image_input"]
         aspect = params.get("aspect", "all")
 
@@ -98,25 +104,40 @@ class CheckConsistencyTool(BaseTool):
             prompt = CONSISTENCY_PROMPT_TEMPLATE.format(aspect=aspect)
             parsed = client.create_image_json(
                 system_prompt=prompt,
-                user_text=f"请检查这张图片的{aspect}一致性。",
+                user_text=f"Check this image for {aspect} consistency.",
                 image_input=image_input,
                 max_tokens=1000,
                 model_name=self.model_name,
+                response_schema=CONSISTENCY_SCHEMA,
             )
-        except Exception as e:
+        except Exception as exc:
             return {
                 "status": "error",
-                "error": f"Consistency check failed: {str(e)}",
+                "error": f"Consistency check failed: {exc}",
             }
 
         inconsistencies = parsed.get("inconsistencies", [])
         if not isinstance(inconsistencies, list):
-            inconsistencies = []
+            return {
+                "status": "error",
+                "error": "Consistency check returned invalid inconsistencies data.",
+            }
+        if not isinstance(parsed.get("consistent"), bool):
+            return {
+                "status": "error",
+                "error": "Consistency check response is missing boolean 'consistent'.",
+            }
+        details = parsed.get("details")
+        if not isinstance(details, str) or not details.strip():
+            return {
+                "status": "error",
+                "error": "Consistency check response is missing explanatory details.",
+            }
 
         return {
             "status": "success",
-            "consistent": bool(parsed.get("consistent", True)),
+            "consistent": parsed["consistent"],
             "aspect_checked": aspect,
-            "details": str(parsed.get("details", "")),
+            "details": details.strip(),
             "inconsistencies": inconsistencies,
         }

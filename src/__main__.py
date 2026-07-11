@@ -5,8 +5,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import os
-import sys
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -17,8 +15,25 @@ from src.workflow import VerificationWorkflow, WorkflowConfig
 def main():
     parser = argparse.ArgumentParser(description="Image Factual Verifier v2")
     parser.add_argument("image_path", help="Path to the image to verify")
-    parser.add_argument("--provider", default="lmdeploy", help="LLM provider")
-    parser.add_argument("--model", default="/gsdata/home/wza/models/Qwen3-VL-8B-Thinking", help="Model name")
+    parser.add_argument(
+        "--claim",
+        default=None,
+        help="Optional external factual claim. Without it, the claim is recovered from visible pixels/OCR.",
+    )
+    parser.add_argument("--provider", default="gemini", help="LLM provider")
+    parser.add_argument("--model", default="gemini-3.5-flash", help="Model name")
+    parser.add_argument(
+        "--llm-wire-api",
+        default=None,
+        choices=["interactions", "responses", "chat_completions"],
+        help="Wire protocol. Gemini accepts interactions only.",
+    )
+    parser.add_argument(
+        "--vlm-wire-api",
+        default=None,
+        choices=["interactions", "responses", "chat_completions"],
+        help="Vision wire protocol. Gemini accepts interactions only.",
+    )
     parser.add_argument("--output-dir", default="outputs/traces", help="Trace output directory")
     parser.add_argument("--timeout", type=float, default=900.0, help="Timeout in seconds")
     parser.add_argument("--no-trace", action="store_true", help="Don't save trace files")
@@ -27,13 +42,15 @@ def main():
     config = WorkflowConfig(
         provider=args.provider,
         model_name=args.model,
+        llm_wire_api=args.llm_wire_api,
+        vlm_wire_api=args.vlm_wire_api,
         output_dir=args.output_dir,
         timeout=args.timeout,
         save_traces=not args.no_trace,
     )
 
     workflow = VerificationWorkflow(config)
-    result = asyncio.run(workflow.run_single(args.image_path))
+    result = asyncio.run(workflow.run_single(args.image_path, user_claim=args.claim))
 
     # Print summary
     print(f"\n{'='*60}")

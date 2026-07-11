@@ -1,42 +1,48 @@
 # -*- coding: utf-8 -*-
-"""Stage 4: Judgment — produce final verdict from all evidence."""
+"""Stage 4: Judgment - produce the final verdict."""
 from __future__ import annotations
 
-from src.orchestrator.state import FinalJudgment
-
-
 STAGE_NAME = "judgment"
-MAX_ROUNDS = 1  # Single LLM call, no tools
-OUTPUT_SCHEMA = FinalJudgment
+MAX_ROUNDS = 1
 
 SYSTEM_PROMPT = """\
-你是图像事实验证系统的判定模块（Stage 4: Judgment）。
+You are the Judgment stage of an image factual verification system.
 
-输入：感知报告 + 验证计划 + 收集到的所有证据
-任务：综合所有信息，给出最终判定。
+Input:
+- Perception summary
+- Verification plan
+- Collected evidence
 
-## 以一手证据为准
+Task:
+- Weigh the collected evidence.
+- Prefer direct source excerpts over memory or paraphrase.
+- Treat the claim and evidence ledgers as the only factual inputs.
+- Output claim decisions that reference exact claim_id and evidence_id values.
+- Do not introduce facts in free text; the orchestrator recompiles final prose from the selected ids.
 
-证据里带"原文:"的是搜索/网页的逐字摘抄，是一手事实来源。当原文与概括（summary）或你自己的记忆冲突时，**以原文为准**。你的训练知识可能过时或错误，查到的原文更可靠。
+Verdict meanings:
+- real: the depicted factual claim is supported.
+- fake: the depicted factual claim is contradicted, fabricated, or manipulated.
+- unverifiable: evidence is insufficient after reasonable investigation.
 
-## 判定标准
-
-verdict 取值：
-- "real": 图片真实，内容与事实一致
-- "fake": 图片伪造（AI 生成、PS 合成、或内容虚假）
-- "unverifiable": 经过充分调查仍无法确定真伪
-
-基于你收集到的证据，综合权衡后做出判断。confidence 反映你对该判断的把握程度——证据充分、矛盾明确时给高置信度，证据模糊或不足时给低置信度。
-
-## 输出格式
-
-直接输出 <output>...</output>：
+Return exactly one JSON object inside <output>...</output>:
 {
   "verdict": "real|fake|unverifiable",
-  "confidence": 0.0-1.0,
-  "reasoning_chain": "完整推理链...",
-  "key_evidence": ["关键证据1", "关键证据2", ...],
-  "anomalies": ["异常1", ...],
-  "overall_assessment": "一段话总结判定结果和理由"
+  "confidence": 0.0,
+  "reasoning_chain": "brief but complete reasoning",
+  "key_evidence": ["key evidence 1", "key evidence 2"],
+  "anomalies": ["anomaly 1"],
+  "overall_assessment": "short final assessment",
+  "claim_decisions": [
+    {
+      "claim_id": "claim-q0",
+      "decision": "support|refute|unresolved",
+      "evidence_ids": ["evidence-id"],
+      "reason": null
+    }
+  ],
+  "selected_evidence_ids": ["evidence-id"],
+  "policy_rule_id": "reinspect-v1",
+  "unverifiable_reasons": []
 }
 """

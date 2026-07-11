@@ -1,10 +1,10 @@
-# -*- coding: utf-8 -*-
-"""Object counting using VLM with structured prompt.
+"""Count visible objects with schema-constrained vision output."""
 
-VLM-based counting for now. P2: integrate GroundingDINO for precise detection.
-"""
 from __future__ import annotations
 
+import math
+import os
+import tempfile
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
@@ -12,43 +12,46 @@ from src.tools.base import BaseTool
 
 
 COUNT_PROMPT_TEMPLATE = """\
-你是物体计数模块。仔细数一下图中指定物体的数量。
+You are the object-counting module of an image verification system.
+Count only the visible instances of the requested target.
 
-要数的目标：{target_object}
+Target: {target_object}
 
-计数规则：
-1. 仔细逐个数，不要估算
-2. 被遮挡但明显存在的也要数
-3. 如果目标物体不存在，count 为 0
-4. 对于人体部位（手指、腿等），要特别仔细
+Rules:
+1. Inspect the full supplied image or crop systematically.
+2. Count a partially occluded instance only when its presence is visually supported.
+3. Return zero when no target instance is visible.
+4. Do not infer instances outside the frame or hidden behind objects.
+5. Keep the explanation literal and concise.
+6. Return exactly one JSON object matching the response schema.
+"""
 
-输出 JSON：
-{{
-  "target": "{target_object}",
-  "count": 数量,
-  "confidence": 0.0-1.0,
-  "details": "计数过程说明（如：左边3个，右边2个）",
-  "locations": ["位置1描述", "位置2描述", ...]
-}}
 
-只输出 JSON。"""
+COUNT_RESPONSE_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "target": {"type": "string", "maxLength": 200},
+        "count": {"type": "integer", "minimum": 0},
+        "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+        "details": {"type": "string", "maxLength": 800},
+        "locations": {
+            "type": "array",
+            "items": {"type": "string", "maxLength": 240},
+            "maxItems": 50,
+        },
+    },
+}
 
 
 @dataclass
 class CountObjectsTool(BaseTool):
-    """Count specific objects in the image using VLM.
-
-    VLM counting is known to be unreliable (Blink paper), but with
-    structured prompting and chain-of-thought it's acceptable for
-    small counts. For precise counting, GroundingDINO will be added later.
-    """
+    """Count a requested visible object in the image or a normalized crop."""
 
     name: str = "count_objects"
     description: str = (
-        "Count the number of specific objects in the image or a region. "
-        "Specify what to count (e.g., 'fingers on the left hand', 'spires on the tower', "
-        "'people in the background'). Returns count with confidence and location details. "
-        "Note: for counts > 10, accuracy decreases."
+        "Count a specific visible object in the image or in a normalized crop. "
+        "Provide a precise target such as 'fingers on the left hand' or "
+        "'people in the background'. Returns a count, confidence, and locations."
     )
     parameters: dict = field(
         default_factory=lambda: {
@@ -60,93 +63,170 @@ class CountObjectsTool(BaseTool):
                 },
                 "target_object": {
                     "type": "string",
-                    "description": "What to count. Be specific: 'fingers on left hand', not just 'fingers'.",
+                    "description": "A precise description of what to count.",
                 },
                 "bbox": {
                     "type": "array",
                     "items": {"type": "number"},
-                    "description": "Optional: restrict counting to this region [x1,y1,x2,y2] normalized 0-1.",
+                    "minItems": 4,
+                    "maxItems": 4,
+                    "description": (
+                        "Optional normalized crop [x1, y1, x2, y2], with every "
+                        "coordinate in [0, 1]."
+                    ),
                 },
+                "visual_question_id": {"type": "string"},
+                "source_evidence_id": {"type": "string"},
+                "source_discovery_id": {"type": "string"},
+                "expected_property": {"type": "string"},
             },
             "required": ["image_input", "target_object"],
         }
     )
 
     client: Optional[Any] = field(default=None, repr=False)
-    provider: str = "lmdeploy"
-    model_name: str = "/gsdata/home/wza/models/Qwen3-VL-8B-Thinking"
+    provider: str = "gemini"
+    model_name: str = "gemini-3.5-flash"
 
-    def _get_client(self):
+    def _get_client(self) -> Any:
         if self.client is None:
             from src.integrations.vlm.factory import build_vlm_client
 
             self.client = build_vlm_client(
-                provider=self.provider, model_name=self.model_name
+                provider=self.provider,
+                model_name=self.model_name,
             )
         return self.client
 
     def call(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Count objects in the image."""
-        image_input = params["image_input"]
-        target_object = params["target_object"]
-        bbox = params.get("bbox")
+        image_input = str(params.get("image_input", "")).strip()
+        target_object = str(params.get("target_object", "")).strip()
+        if not image_input:
+            return {"status": "error", "error": "image_input is required."}
+        if not target_object:
+            return {"status": "error", "error": "target_object is required."}
 
-        # If bbox provided, crop first
         actual_image = image_input
-        tmp_path = None
-
-        if bbox and len(bbox) == 4:
+        temporary_path: Optional[str] = None
+        bbox = params.get("bbox")
+        if bbox is not None:
             try:
-                from PIL import Image
-                import tempfile
-                import os
-
-                img = Image.open(image_input)
-                w, h = img.size
-                x1 = int(bbox[0] * w)
-                y1 = int(bbox[1] * h)
-                x2 = int(bbox[2] * w)
-                y2 = int(bbox[3] * h)
-                x1, y1 = max(0, x1), max(0, y1)
-                x2, y2 = min(w, x2), min(h, y2)
-
-                cropped = img.crop((x1, y1, x2, y2))
-                tmp_path = os.path.join(
-                    tempfile.gettempdir(), f"count_{os.getpid()}_{id(self)}.png"
-                )
-                cropped.save(tmp_path)
-                actual_image = tmp_path
-            except Exception:
-                pass  # Fall back to full image
+                coordinates = self._validate_bbox(bbox)
+                actual_image, temporary_path = self._crop(image_input, coordinates)
+            except Exception as exc:
+                return {
+                    "status": "error",
+                    "error": f"Requested count region could not be cropped: {exc}",
+                }
 
         try:
-            client = self._get_client()
-            prompt = COUNT_PROMPT_TEMPLATE.format(target_object=target_object)
-            parsed = client.create_image_json(
-                system_prompt=prompt,
-                user_text=f"请数一下图中的{target_object}。",
+            parsed = self._get_client().create_image_json(
+                system_prompt=COUNT_PROMPT_TEMPLATE.format(
+                    target_object=target_object,
+                ),
+                user_text=f"Count the visible instances of: {target_object}",
                 image_input=actual_image,
-                max_tokens=500,
+                max_tokens=1000,
                 model_name=self.model_name,
+                response_schema=COUNT_RESPONSE_SCHEMA,
             )
-        except Exception as e:
+        except Exception as exc:
             return {
                 "status": "error",
-                "error": f"Counting failed: {str(e)}",
+                "error": f"Counting failed: {type(exc).__name__}: {exc or '<no message>'}",
             }
         finally:
-            if tmp_path:
+            if temporary_path:
                 try:
-                    import os
-                    os.remove(tmp_path)
+                    os.remove(temporary_path)
                 except OSError:
                     pass
+
+        return self._validate_response(parsed, target_object)
+
+    @staticmethod
+    def _validate_bbox(value: Any) -> tuple[float, float, float, float]:
+        if not isinstance(value, (list, tuple)) or len(value) != 4:
+            raise ValueError("bbox must contain exactly four normalized coordinates")
+        if any(isinstance(item, bool) or not isinstance(item, (int, float)) for item in value):
+            raise ValueError("bbox coordinates must be numeric")
+        coordinates = tuple(float(item) for item in value)
+        if any(not math.isfinite(item) or item < 0.0 or item > 1.0 for item in coordinates):
+            raise ValueError("bbox coordinates must be finite values in [0, 1]")
+        x1, y1, x2, y2 = coordinates
+        if x1 >= x2 or y1 >= y2:
+            raise ValueError("bbox must satisfy x1 < x2 and y1 < y2")
+        return x1, y1, x2, y2
+
+    @staticmethod
+    def _crop(
+        image_input: str,
+        bbox: tuple[float, float, float, float],
+    ) -> tuple[str, str]:
+        from PIL import Image
+
+        with Image.open(image_input) as image:
+            width, height = image.size
+            x1, y1, x2, y2 = bbox
+            pixel_box = (
+                max(0, min(int(x1 * width), width - 1)),
+                max(0, min(int(y1 * height), height - 1)),
+                max(1, min(int(math.ceil(x2 * width)), width)),
+                max(1, min(int(math.ceil(y2 * height)), height)),
+            )
+            if pixel_box[0] >= pixel_box[2] or pixel_box[1] >= pixel_box[3]:
+                raise ValueError("bbox resolves to an empty crop")
+            cropped = image.crop(pixel_box)
+            handle, temporary_path = tempfile.mkstemp(prefix="count_objects_", suffix=".png")
+            os.close(handle)
+            try:
+                cropped.save(temporary_path)
+            except Exception:
+                try:
+                    os.remove(temporary_path)
+                except OSError:
+                    pass
+                raise
+        return temporary_path, temporary_path
+
+    @staticmethod
+    def _validate_response(parsed: Any, target_object: str) -> Dict[str, Any]:
+        if not isinstance(parsed, dict):
+            return {"status": "error", "error": "Counting response must be a JSON object."}
+
+        count = parsed.get("count")
+        if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+            return {
+                "status": "error",
+                "error": "Counting response must contain a non-negative integer 'count'.",
+            }
+        confidence = parsed.get("confidence")
+        if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
+            return {
+                "status": "error",
+                "error": "Counting response must contain numeric 'confidence'.",
+            }
+        confidence = float(confidence)
+        if not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0:
+            return {
+                "status": "error",
+                "error": "Counting confidence must be a finite value in [0, 1].",
+            }
+
+        details = parsed.get("details")
+        locations = parsed.get("locations")
+        if not isinstance(details, str):
+            return {"status": "error", "error": "Counting details must be a string."}
+        if not isinstance(locations, list) or any(
+            not isinstance(location, str) for location in locations
+        ):
+            return {"status": "error", "error": "Counting locations must be an array of strings."}
 
         return {
             "status": "success",
             "target": target_object,
-            "count": int(parsed.get("count", 0)),
-            "confidence": float(parsed.get("confidence", 0.5)),
-            "details": str(parsed.get("details", "")),
-            "locations": parsed.get("locations", []),
+            "count": count,
+            "confidence": confidence,
+            "details": details.strip(),
+            "locations": [location.strip() for location in locations],
         }

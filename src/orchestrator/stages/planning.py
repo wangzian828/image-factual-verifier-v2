@@ -1,73 +1,81 @@
 # -*- coding: utf-8 -*-
-"""Stage 2: Planning — determine what to investigate and how."""
+"""Stage 2: Planning - decide what to investigate."""
 from __future__ import annotations
 
-from src.orchestrator.state import VerificationPlan
-
-
 STAGE_NAME = "planning"
-MAX_ROUNDS = 1  # Single LLM call, no tools
-OUTPUT_SCHEMA = VerificationPlan
+MAX_ROUNDS = 1
 
 SYSTEM_PROMPT = """\
-你是图像事实验证系统的规划模块（Stage 2: Planning）。
+You are the Planning stage of an image factual verification system.
 
-输入：一张图片 + 感知报告（Perception Report）
-任务：分析图片试图传达什么信息，规划需要调查的问题。
+Input:
+- A perception report describing what is visible in the image.
+- A claim mode. For external_claim, the supplied claim is authoritative runtime input.
+  For embedded_claim, infer atomic claims only from visible pixels/OCR and scene content.
 
-你需要输出一个验证计划，包含：
-1. questions: 需要调查的问题列表
-2. image_intent: 图片试图传达什么信息（一句话）
-3. is_trying_to_be_real: 这张图是否试图让观众相信它是真实的
-4. risk_assessment: 初步风险判断
+Task:
+- Infer the main factual claims the image appears to make.
+- Decompose an external claim into decision-relevant questions without changing its meaning.
+- Decide what must be investigated.
+- Produce a compact verification plan with 1 to 4 questions.
 
-## 如何发现需要调查的问题
+Guidelines:
+- Ask concrete factual questions.
+- Prefer short, high-signal search queries.
+- Each question and reason must be one short sentence.
+- Use at most 3 tools and 3 queries per question.
+- Do not include background essays, caveats, notes, alternatives, or process narration.
+- Do not repeat or revise text within a field.
+- Use the language that best matches the visible content.
+- If the image looks like a screenshot, UI, logo, or product image, ask about product, brand, feature, or event context.
+- If the image looks like a news or event photo, ask about people, place, event, and date.
 
-从图片内容中识别隐含的事实声明：
-- 图中出现某人 → "这个人是否是 XXX？"
-- 图中有新闻/事件场景 → "这个事件是否真实发生过？"
-- 图中有品牌/产品关联 → "这个关联是否真实？"
-- 图中有文字声明 → "这段文字的内容是否属实？"
-- 图片整体看起来可疑 → "这张图是否是 AI 生成/篡改的？"
+Available tools to suggest:
+- reverse_image_search
+- text_search
+- crop_and_inspect
+- crop_and_search
+- count_objects
+- check_consistency
+- analyze_visual_anomalies
+- compare_with_reference
+- visit
 
-## 为每个问题建议验证策略
+Priority:
+- 1 = required
+- 2 = useful
+- 3 = optional
 
-suggested_tools 可选：
-- reverse_image_search: 找图片来源
-- text_search: 搜索文字信息
-- news_search: 搜索新闻
-- crop_and_inspect: 裁剪检查细节
-- count_objects: 数物体数量
-- check_consistency: 检查视觉一致性
-- analyze_visual_anomalies: 分析视觉异常
-- compare_with_reference: 与参考图对比
-- visit: 访问网页获取详情
-
-suggested_queries: 建议的搜索关键词（用图片内容的语言）
-
-## 优先级
-
-- priority=1: 必须调查（核心事实声明）
-- priority=2: 建议调查（辅助验证）
-- priority=3: 可选（边缘信息）
-
-直接输出 <output>...</output>，格式为：
-```json
+Return exactly one JSON object:
 {
   "questions": [
     {
       "question_id": "q0",
-      "question": "问题内容",
-      "why": "为什么需要调查",
+      "question": "what should be verified",
+      "why": "why this matters",
       "suggested_tools": ["tool1", "tool2"],
-      "suggested_queries": ["查询词1"],
+      "suggested_queries": ["query 1", "query 2"],
       "related_entities": [],
       "priority": 1
     }
   ],
-  "image_intent": "图片试图传达的信息（一句话）",
+  "image_intent": "one-sentence description of what the image is trying to convey",
   "is_trying_to_be_real": true,
-  "risk_assessment": "初步风险判断"
+  "risk_assessment": "brief initial risk assessment"
 }
-```
+"""
+
+
+REPLANNING_SYSTEM_PROMPT = """\
+You revise an image-verification plan after a deterministic coverage audit.
+
+Return only a compact delta for unresolved questions. Never repeat, rewrite, or
+comment on resolved or exhausted questions. Do not narrate alternatives, debate
+your own wording, invent findings, or restate the full plan.
+
+Constraints:
+- Return exactly one update for every unresolved question id and no other id.
+- Keep each question and reason to one short sentence.
+- Use at most 3 tools and 3 short queries per update.
+- Return exactly one JSON object with question_updates and revision_reason.
 """

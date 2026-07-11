@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
@@ -9,7 +10,6 @@ import requests
 
 
 SERPER_TEXT_ENDPOINT = "https://google.serper.dev/search"
-SERPER_NEWS_ENDPOINT = "https://google.serper.dev/news"
 SERPER_IMAGE_ENDPOINT = "https://google.serper.dev/images"
 SERPER_LENS_ENDPOINT = "https://google.serper.dev/lens"
 
@@ -51,6 +51,14 @@ class SerperTextSearchClient:
     def __post_init__(self) -> None:
         if self.api_key is None:
             self.api_key = os.getenv("SERPER_API_KEY") or os.getenv("SERPER_KEY_ID")
+        self._thread_local = threading.local()
+
+    def _get_session(self) -> requests.Session:
+        session = getattr(self._thread_local, "session", None)
+        if session is None:
+            session = requests.Session()
+            self._thread_local.session = session
+        return session
 
     def search(self, query: str, *, top_k: int = 10, gl: Optional[str] = None, hl: Optional[str] = None, time_range: Optional[str] = None) -> Dict[str, Any]:
         if not self.api_key:
@@ -82,7 +90,13 @@ class SerperTextSearchClient:
         last_error: Exception | None = None
         for attempt in range(self.max_retries + 1):
             try:
-                response = requests.post(self.endpoint, json=payload, headers=headers, timeout=self.timeout, proxies=_get_proxies())
+                response = self._get_session().post(
+                    self.endpoint,
+                    json=payload,
+                    headers=headers,
+                    timeout=self.timeout,
+                    proxies=_get_proxies(),
+                )
                 response.raise_for_status()
                 return response.json()
             except requests.RequestException as exc:
@@ -108,68 +122,6 @@ class SerperTextSearchClient:
 
 
 @dataclass
-class SerperNewsSearchClient:
-    """Serper News search - better for recent/breaking events."""
-
-    api_key: Optional[str] = None
-    endpoint: str = SERPER_NEWS_ENDPOINT
-    timeout: int = 20
-    max_retries: int = 2
-
-    def __post_init__(self) -> None:
-        if self.api_key is None:
-            self.api_key = os.getenv("SERPER_API_KEY") or os.getenv("SERPER_KEY_ID")
-
-    def search(self, query: str, *, top_k: int = 10, gl: Optional[str] = None, hl: Optional[str] = None) -> Dict[str, Any]:
-        if not self.api_key:
-            raise RuntimeError("SERPER_API_KEY is not set.")
-
-        country = default_gl(query, gl)
-        language = default_hl(query, country, hl)
-        payload = {"q": query, "gl": country, "hl": language, "num": top_k}
-        headers = {"X-API-KEY": self.api_key, "Content-Type": "application/json"}
-
-        raw = self._post_json(payload, headers)
-        news = raw.get("news", [])
-        results = [self._normalize_result(query, item, idx + 1) for idx, item in enumerate(news[:top_k])]
-        return {
-            "query": query,
-            "provider": "serper_news",
-            "gl": country,
-            "hl": language,
-            "results": results,
-        }
-
-    def _post_json(self, payload: Dict[str, Any], headers: Dict[str, str]) -> Dict[str, Any]:
-        last_error: Exception | None = None
-        for attempt in range(self.max_retries + 1):
-            try:
-                response = requests.post(self.endpoint, json=payload, headers=headers, timeout=self.timeout, proxies=_get_proxies())
-                response.raise_for_status()
-                return response.json()
-            except requests.RequestException as exc:
-                last_error = exc
-                if attempt >= self.max_retries:
-                    break
-                time.sleep(1.5 * (attempt + 1))
-        if last_error is not None:
-            raise last_error
-        raise RuntimeError("SerperNewsSearchClient failed without a captured exception.")
-
-    @staticmethod
-    def _normalize_result(query: str, item: Dict[str, Any], rank: int) -> Dict[str, Any]:
-        return {
-            "query": query,
-            "rank": rank,
-            "title": item.get("title", ""),
-            "url": item.get("link", ""),
-            "snippet": item.get("snippet", ""),
-            "source": item.get("source", ""),
-            "date": item.get("date", ""),
-        }
-
-
-@dataclass
 class SerperImageSearchClient:
     api_key: Optional[str] = None
     endpoint: str = SERPER_IMAGE_ENDPOINT
@@ -179,6 +131,14 @@ class SerperImageSearchClient:
     def __post_init__(self) -> None:
         if self.api_key is None:
             self.api_key = os.getenv("SERPER_API_KEY") or os.getenv("SERPER_KEY_ID")
+        self._thread_local = threading.local()
+
+    def _get_session(self) -> requests.Session:
+        session = getattr(self._thread_local, "session", None)
+        if session is None:
+            session = requests.Session()
+            self._thread_local.session = session
+        return session
 
     def search(self, query: str, *, top_k: int = 5, gl: Optional[str] = None, hl: Optional[str] = None) -> List[Dict[str, Any]]:
         if not self.api_key:
@@ -197,7 +157,13 @@ class SerperImageSearchClient:
         last_error: Exception | None = None
         for attempt in range(self.max_retries + 1):
             try:
-                response = requests.post(self.endpoint, json=payload, headers=headers, timeout=self.timeout, proxies=_get_proxies())
+                response = self._get_session().post(
+                    self.endpoint,
+                    json=payload,
+                    headers=headers,
+                    timeout=self.timeout,
+                    proxies=_get_proxies(),
+                )
                 response.raise_for_status()
                 return response.json()
             except requests.RequestException as exc:
@@ -231,6 +197,14 @@ class SerperLensSearchClient:
     def __post_init__(self) -> None:
         if self.api_key is None:
             self.api_key = os.getenv("SERPER_API_KEY") or os.getenv("SERPER_KEY_ID")
+        self._thread_local = threading.local()
+
+    def _get_session(self) -> requests.Session:
+        session = getattr(self._thread_local, "session", None)
+        if session is None:
+            session = requests.Session()
+            self._thread_local.session = session
+        return session
 
     def search(self, image_url: str, *, top_k: int = 5) -> List[Dict[str, Any]]:
         if not self.api_key:
@@ -249,7 +223,13 @@ class SerperLensSearchClient:
         last_error: Exception | None = None
         for attempt in range(self.max_retries + 1):
             try:
-                response = requests.post(self.endpoint, json=payload, headers=headers, timeout=self.timeout, proxies=_get_proxies())
+                response = self._get_session().post(
+                    self.endpoint,
+                    json=payload,
+                    headers=headers,
+                    timeout=self.timeout,
+                    proxies=_get_proxies(),
+                )
                 response.raise_for_status()
                 return response.json()
             except requests.RequestException as exc:

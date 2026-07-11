@@ -27,7 +27,7 @@ class CurrentTimeTool(BaseTool):
             self.client = SystemClockClient()
 
     def get_current_time(self) -> Dict[str, str]:
-        return self.client.now()
+        return {"status": "success", **self.client.now()}
 
     def call(self, params: Dict[str, str]) -> Dict[str, str]:
         return self.get_current_time()

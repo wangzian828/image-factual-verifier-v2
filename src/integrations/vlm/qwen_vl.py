@@ -57,16 +57,18 @@ class QwenVLClient:
         return parse_json_object(content)
 
 
-def parse_json_object(content: str, fallback: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    fallback = fallback or {}
+def parse_json_object(content: str) -> Dict[str, Any]:
     try:
-        return json.loads(content)
+        parsed = json.loads(content)
     except json.JSONDecodeError:
         left = content.find("{")
         right = content.rfind("}")
         if left == -1 or right == -1 or left > right:
-            return dict(fallback)
+            raise ValueError("Model response does not contain a JSON object.")
         try:
-            return json.loads(content[left : right + 1])
-        except json.JSONDecodeError:
-            return dict(fallback)
+            parsed = json.loads(content[left : right + 1])
+        except json.JSONDecodeError as exc:
+            raise ValueError("Model response contains malformed JSON.") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError("Model response JSON must be an object.")
+    return parsed

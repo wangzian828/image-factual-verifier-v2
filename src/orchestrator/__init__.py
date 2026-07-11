@@ -1,10 +1,11 @@
 from src.orchestrator.state import (
     Entity,
-    FaceDetection,
+    CoverageAudit,
     FinalJudgment,
     InvestigationQuestion,
     PerceptionReport,
     TextRegion,
+    QuestionResolution,
     VerificationPlan,
     VerificationResult,
     VerificationState,
@@ -13,11 +14,12 @@ from src.orchestrator.state import (
 
 __all__ = [
     "Entity",
-    "FaceDetection",
+    "CoverageAudit",
     "FinalJudgment",
     "InvestigationQuestion",
     "PerceptionReport",
     "TextRegion",
+    "QuestionResolution",
     "VerificationPlan",
     "VerificationResult",
     "VerificationState",

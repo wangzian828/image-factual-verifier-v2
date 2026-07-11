@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import os
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 import httpx
-from openai import OpenAI
-from openai import APITimeoutError
 
 
 @dataclass
@@ -18,25 +17,39 @@ class OpenAICompatibleChatClient:
     timeout: float = 60.0
     max_retries: int = 2
 
-    def build_client(self) -> OpenAI:
-        if not self.api_key:
-            raise RuntimeError("LLM API key is not set.")
-        # Use proxy from environment if available, but skip for local services
+    def __post_init__(self) -> None:
+        self.wire_api = validate_wire_api(self.wire_api)
+        if self.wire_api == "openai_compat":
+            self.wire_api = "chat_completions"
+        if self.wire_api == "interactions":
+            raise ValueError(
+                "OpenAICompatibleChatClient does not implement Gemini Interactions; "
+                "use GeminiInteractionsClient."
+            )
+        self._thread_local = threading.local()
+
+    def _client_kwargs(self) -> Dict[str, Any]:
         is_local = self.base_url and ("127.0.0.1" in self.base_url or "localhost" in self.base_url)
         if is_local:
-            proxy = None
-        else:
-            proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY") or os.environ.get("https_proxy") or os.environ.get("http_proxy")
-        http_client = httpx.Client(
-            proxy=proxy,
-            timeout=self.timeout,
-            trust_env=not is_local,
+            return {"timeout": self.timeout, "trust_env": False}
+        proxy = (
+            os.environ.get("HTTPS_PROXY")
+            or os.environ.get("HTTP_PROXY")
+            or os.environ.get("https_proxy")
+            or os.environ.get("http_proxy")
         )
-        return OpenAI(
-            api_key=self.api_key,
-            base_url=self.base_url,
-            http_client=http_client,
-        )
+        kwargs: Dict[str, Any] = {"timeout": self.timeout}
+        if proxy:
+            kwargs["proxy"] = proxy
+            kwargs["trust_env"] = True
+        return kwargs
+
+    def _get_client(self) -> httpx.Client:
+        client = getattr(self._thread_local, "client", None)
+        if client is None or client.is_closed:
+            client = httpx.Client(**self._client_kwargs())
+            self._thread_local.client = client
+        return client
 
     def create_json_completion(
         self,
@@ -56,13 +69,18 @@ class OpenAICompatibleChatClient:
                         max_tokens=max_tokens,
                         temperature=temperature,
                     )
-                return self._create_chat_json_completion(
-                    model_name=model_name,
-                    messages=messages,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                )
-            except (APITimeoutError, httpx.TimeoutException) as exc:
+                if self.wire_api == "chat_completions":
+                    return self._create_chat_json_completion(
+                        model_name=model_name,
+                        messages=messages,
+                        max_tokens=max_tokens,
+                        temperature=temperature,
+                    )
+                raise RuntimeError(f"Unsupported wire API at runtime: {self.wire_api}")
+            except httpx.HTTPStatusError as exc:
+                last_error = exc
+                raise
+            except httpx.TimeoutException as exc:
                 last_error = exc
                 if attempt >= self.max_retries:
                     break
@@ -79,15 +97,30 @@ class OpenAICompatibleChatClient:
         max_tokens: int,
         temperature: float,
     ) -> str:
-        client = self.build_client()
-        response = client.chat.completions.create(
-            model=model_name,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            response_format={"type": "json_object"},
-            messages=messages,
+        if not self.api_key:
+            raise RuntimeError("LLM API key is not set.")
+        base_url = (self.base_url or "https://api.openai.com/v1").rstrip("/")
+        payload: Dict[str, Any] = {
+            "model": model_name,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "response_format": {"type": "json_object"},
+            "messages": messages,
+        }
+        response = self._get_client().post(
+            f"{base_url}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
         )
-        return response.choices[0].message.content or "{}"
+        response.raise_for_status()
+        data = response.json()
+        content = data["choices"][0]["message"].get("content")
+        if not isinstance(content, str) or not content.strip():
+            raise RuntimeError("Chat Completions returned an empty JSON response.")
+        return content
 
     def _create_responses_json_completion(
         self,
@@ -114,17 +147,16 @@ class OpenAICompatibleChatClient:
             proxy = None
         else:
             proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY") or os.environ.get("https_proxy") or os.environ.get("http_proxy")
-        with httpx.Client(proxy=proxy, timeout=self.timeout, trust_env=not is_local) as client:
-            response = client.post(
-                f"{base_url}/responses",
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
-                },
-                json=payload,
-            )
-            response.raise_for_status()
-            return self._extract_responses_text(response.json())
+        response = self._get_client().post(
+            f"{base_url}/responses",
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+        )
+        response.raise_for_status()
+        return self._extract_responses_text(response.json())
 
     @staticmethod
     def _to_responses_input(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -166,11 +198,21 @@ class OpenAICompatibleChatClient:
                 text = content_item.get("text")
                 if isinstance(text, str):
                     chunks.append(text)
-        return "\n".join(chunks) or "{}"
-
+        text = "\n".join(chunks).strip()
+        if not text:
+            raise RuntimeError("Responses API returned an empty response.")
+        return text
 
 def resolve_qwen_api_key(api_key: Optional[str]) -> Optional[str]:
     return api_key or os.getenv("QWEN_API_KEY") or os.getenv("DASHSCOPE_API_KEY")
+
+
+def resolve_gemini_api_key(api_key: Optional[str]) -> Optional[str]:
+    if api_key is not None:
+        raise ValueError(
+            "Gemini credentials must come from GEMINI_API_KEY or GOOGLE_API_KEY."
+        )
+    return os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
 
 
 def resolve_openai_api_key(api_key: Optional[str]) -> Optional[str]:
@@ -183,6 +225,8 @@ def resolve_necodex_api_key(api_key: Optional[str]) -> Optional[str]:
 
 def resolve_model_api_key(provider: str, api_key: Optional[str]) -> Optional[str]:
     provider = provider.lower().strip()
+    if provider == "gemini":
+        return resolve_gemini_api_key(api_key)
     if provider == "qwen":
         return resolve_qwen_api_key(api_key)
     if provider == "openai":
@@ -194,10 +238,17 @@ def resolve_model_api_key(provider: str, api_key: Optional[str]) -> Optional[str
     return api_key
 
 
-def resolve_model_base_url(provider: str, base_url: Optional[str]) -> Optional[str]:
+def resolve_model_base_url(
+    provider: str,
+    base_url: Optional[str],
+    wire_api: Optional[str] = None,
+) -> Optional[str]:
     provider = provider.lower().strip()
     if base_url:
         return base_url
+    if provider == "gemini":
+        resolve_model_wire_api(provider, wire_api)
+        return os.getenv("GEMINI_INTERACTIONS_URL") or "https://generativelanguage.googleapis.com/v1beta/interactions"
     if provider == "qwen":
         return os.getenv("QWEN_BASE_URL") or "https://dashscope.aliyuncs.com/compatible-mode/v1"
     if provider == "openai":
@@ -210,9 +261,29 @@ def resolve_model_base_url(provider: str, base_url: Optional[str]) -> Optional[s
 
 
 def resolve_model_wire_api(provider: str, wire_api: Optional[str]) -> str:
-    if wire_api:
-        return wire_api
     provider = provider.lower().strip()
+    if wire_api:
+        value = validate_wire_api(wire_api)
+        if value == "openai_compat":
+            value = "chat_completions"
+        if provider == "gemini" and value != "interactions":
+            raise ValueError("Gemini requires wire_api='interactions'; protocol fallback is disabled.")
+        return value
+    if provider == "gemini":
+        value = validate_wire_api(os.getenv("GEMINI_WIRE_API", "interactions"))
+        if value != "interactions":
+            raise ValueError("Gemini requires wire_api='interactions'; protocol fallback is disabled.")
+        return "interactions"
     if provider == "necodex":
-        return os.getenv("NECODEX_WIRE_API") or "responses"
+        return validate_wire_api(os.getenv("NECODEX_WIRE_API") or "responses")
     return "chat_completions"
+
+
+def validate_wire_api(wire_api: str) -> str:
+    value = str(wire_api or "").strip().lower()
+    allowed = {"interactions", "responses", "chat_completions", "openai_compat"}
+    if value not in allowed:
+        raise ValueError(
+            f"Unsupported wire_api {wire_api!r}; expected one of {', '.join(sorted(allowed))}."
+        )
+    return value
