@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import shutil
 import zipfile
 from collections import Counter
@@ -92,16 +93,47 @@ def _download(
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_suffix(destination.suffix + ".part")
-    response = session.get(source_url, stream=True, timeout=(30, 600))
+    if force and temporary.exists():
+        temporary.unlink()
+
+    resume_offset = temporary.stat().st_size if temporary.exists() else 0
+    headers = {"Range": f"bytes={resume_offset}-"} if resume_offset else {}
+    response = session.get(
+        source_url,
+        headers=headers,
+        stream=True,
+        timeout=(30, 600),
+    )
+    if response.status_code == 416 and resume_offset:
+        total_match = re.search(
+            r"\*/(\d+)", response.headers.get("Content-Range", "")
+        )
+        if total_match and int(total_match.group(1)) == resume_offset:
+            temporary.replace(destination)
+            return {
+                "filename": filename,
+                "source_url": source_url,
+                "path": str(destination.resolve()),
+                "bytes": destination.stat().st_size,
+                "sha256": _sha256(destination),
+                "etag": response.headers.get("ETag"),
+                "status": "resumed",
+            }
     response.raise_for_status()
-    digest = hashlib.sha256()
-    size = 0
-    with temporary.open("wb") as handle:
+    append = resume_offset > 0 and response.status_code == 206
+    if resume_offset and response.status_code == 206:
+        content_range = response.headers.get("Content-Range", "")
+        if not content_range.startswith(f"bytes {resume_offset}-"):
+            raise RuntimeError(
+                f"Unexpected Content-Range for {filename}: {content_range!r}"
+            )
+    mode = "ab" if append else "wb"
+    size = resume_offset if append else 0
+    with temporary.open(mode) as handle:
         for chunk in response.iter_content(chunk_size=1024 * 1024):
             if not chunk:
                 continue
             handle.write(chunk)
-            digest.update(chunk)
             size += len(chunk)
     temporary.replace(destination)
     return {
@@ -109,9 +141,9 @@ def _download(
         "source_url": source_url,
         "path": str(destination.resolve()),
         "bytes": size,
-        "sha256": digest.hexdigest(),
+        "sha256": _sha256(destination),
         "etag": response.headers.get("ETag"),
-        "status": "downloaded",
+        "status": "resumed" if append else "downloaded",
     }
 
 
