@@ -26,7 +26,10 @@ def test_prefilter_routes_and_groups_without_freezing_cases(tmp_path: Path) -> N
             "evidence_urls": ["https://example.com/evidence"],
             "source_article_url": "https://example.com/article",
             "source_metadata": {"image_misuse_types": []},
-            "benchmark_routing": {"person_identity_review_required": True},
+            "benchmark_routing": {
+                "person_identity_investigation_required": True,
+                "biometric_identity_matching_allowed": False,
+            },
         },
         {
             "sample_id": "visual",
@@ -65,8 +68,10 @@ def test_prefilter_routes_and_groups_without_freezing_cases(tmp_path: Path) -> N
 
     assert summary["core_cases_frozen"] == 0
     assert summary["routes_are_suggestions_only"] is True
-    assert by_id["identity"]["suggested_route"] == "excluded"
-    assert "requires_person_identity_review" in by_id["identity"]["reasons"]
+    assert by_id["identity"]["suggested_route"] == "needs_review"
+    assert "person_identity_requires_non_biometric_investigation" in by_id[
+        "identity"
+    ]["reasons"]
     assert by_id["visual"]["suggested_route"] == "needs_review"
     assert by_id["visual"]["duplicate_group"] == by_id["identity"]["duplicate_group"]
     assert sum(bool(row.get("duplicate_representative")) for row in rows) == 1

@@ -45,7 +45,7 @@ The runtime case must never contain a hidden benchmark label or gold `primary_cl
 - `perceive_scene` for visible entities, scene, and image type;
 - `ocr_with_position` for visible text and coordinates.
 
-Their merged `PerceptionReport` is a deterministic visual inventory for Planning. Gemini-backed perception uses Interactions only. The project has no face detection, face recognition, biometric analysis, or identity-matching functionality.
+Their merged `PerceptionReport` is a deterministic visual inventory for Planning. Gemini-backed perception uses Interactions only. The project has no dedicated face detector, face embedding store, biometric recognition model, or biometric similarity tool. Claims about a depicted person's identity remain supported through reverse-image search, original-source captions, public reporting, visible non-biometric cues, and event context.
 
 ### 2. Planning
 

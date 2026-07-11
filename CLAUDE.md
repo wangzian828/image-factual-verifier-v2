@@ -12,7 +12,7 @@ Verification evidence must come from successful recorded tool calls and map to e
 
 Set `IMAGE_UPLOAD_PROVIDER`, `VISUAL_SEARCH_PROVIDER`, and `BROWSE_FETCH_PROVIDER` explicitly; a selected provider never falls through to another. The disk tool cache is disabled by default and, when enabled, is bounded by `TOOL_CACHE_TTL_SECONDS` and `TOOL_CACHE_NAMESPACE`.
 
-Credentials belong only in environment variables or the untracked `.env`. Sanitize secret fields and signed URLs before any trace, HTML, or cache persistence. JSON and sibling HTML export are required; HTML rendering/write errors propagate. Face detection, face recognition, and identity matching are absent and out of scope.
+Credentials belong only in environment variables or the untracked `.env`. Sanitize secret fields and signed URLs before any trace, HTML, or cache persistence. JSON and sibling HTML export are required; HTML rendering/write errors propagate. Dedicated face detection, embeddings, and biometric matching are absent; person-identity claims are investigated with public-source and non-biometric evidence.
 
 Before finishing orchestration changes, run:
 

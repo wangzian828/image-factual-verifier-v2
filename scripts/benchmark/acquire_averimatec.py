@@ -261,7 +261,7 @@ def _has_image_question(question: Mapping[str, Any]) -> bool:
     )
 
 
-def _identity_review_flag(questions: Sequence[Mapping[str, Any]]) -> bool:
+def _non_biometric_identity_flag(questions: Sequence[Mapping[str, Any]]) -> bool:
     patterns = ("who is", "who are", "identity of", "identify the person")
     return any(
         _has_image_question(question)
@@ -306,7 +306,7 @@ def _candidate_record(
         for question in questions
         for url in question.get("evidence_urls", [])
     )
-    identity_review = _identity_review_flag(raw_questions)
+    identity_investigation = _non_biometric_identity_flag(raw_questions)
     review_signals = []
     if transcription:
         review_signals.append("dataset_transcription_present")
@@ -314,8 +314,8 @@ def _candidate_record(
         review_signals.append("image_related_investigation_present")
     if metadata.get("image_misuse_types"):
         review_signals.append("image_misuse_annotation_present")
-    if identity_review:
-        review_signals.append("person_identity_question_requires_exclusion_review")
+    if identity_investigation:
+        review_signals.append("person_identity_requires_non_biometric_investigation")
 
     return {
         "schema_version": "real-seed-candidate-v1",
@@ -355,7 +355,8 @@ def _candidate_record(
             "external_claim_transfer_status": "pending_case_quality_audit",
             "claim_surface_must_be_recovered_from_pixels_for_core": True,
             "gold_claim_must_not_enter_core_runtime_context": True,
-            "person_identity_review_required": identity_review,
+            "person_identity_investigation_required": identity_investigation,
+            "biometric_identity_matching_allowed": False,
             "review_signals": review_signals,
         },
         "license": {
@@ -417,8 +418,8 @@ def build_candidate_manifest(
         "with_dataset_transcription": sum(
             bool(row["source_metadata"]["transcription"]) for row in candidates
         ),
-        "requiring_person_identity_review": sum(
-            row["benchmark_routing"]["person_identity_review_required"]
+        "requiring_non_biometric_identity_investigation": sum(
+            row["benchmark_routing"]["person_identity_investigation_required"]
             for row in candidates
         ),
         "core_cases_frozen": 0,

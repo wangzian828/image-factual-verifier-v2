@@ -341,8 +341,11 @@ def _suggest_route(
     valid_assets = [row for row in asset_rows if row.get("valid")]
     if not asset_rows or not valid_assets:
         return "excluded", ["missing_or_invalid_claim_image"], 0
-    if routing.get("person_identity_review_required"):
-        return "excluded", ["requires_person_identity_review"], 5
+    identity_investigation = bool(
+        routing.get("person_identity_investigation_required")
+        # Compatibility with manifests generated before the field was renamed.
+        or routing.get("person_identity_review_required")
+    )
 
     image_questions = int(candidate.get("image_question_count") or 0)
     evidence_count = len(candidate.get("evidence_urls") or [])
@@ -365,6 +368,8 @@ def _suggest_route(
         reasons.append("visible_text_signal_present")
     if transcription:
         reasons.append("dataset_transcription_present")
+    if identity_investigation:
+        reasons.append("person_identity_requires_non_biometric_investigation")
     if evidence_count:
         reasons.append("evidence_urls_present")
     else:
@@ -376,10 +381,16 @@ def _suggest_route(
 
     if image_questions == 0 and not misuse_signal and not visible_text:
         return "external_claim_transfer", reasons, 35
-    if image_questions > 0 and evidence_count > 0 and visible_text and not low_resolution:
+    if (
+        image_questions > 0
+        and evidence_count > 0
+        and visible_text
+        and not low_resolution
+        and not identity_investigation
+    ):
         return "core", reasons, 100
     if image_questions > 0 or misuse_signal:
-        return "needs_review", reasons, 75
+        return "needs_review", reasons, 90 if identity_investigation else 75
     return "external_claim_transfer", reasons, 40
 
 

@@ -38,7 +38,7 @@ This is an agent, not a fixed tool script. Do not replace verification with a pr
 - Treat JSON and sibling HTML trace export as one required operation. HTML rendering or write errors propagate; export is not best-effort.
 - Keep the disk tool cache opt-in. It is disabled by default and must remain bounded by TTL and namespace when enabled.
 - Read credentials only from environment variables or an untracked `.env`. Never place keys in source, configuration, prompts, traces, tests, or documentation.
-- The active source has no face detection, face recognition, or identity-matching functionality. Do not add related models, state, tools, dependencies, prompts, or claims.
+- Do not add a dedicated face detector, face embedding store, biometric recognition model, or biometric similarity tool. Person-identity claims remain in scope when investigated through reverse-image search, original-source captions, public reporting, visible non-biometric cues, and event context.
 
 ## Active Modules
 
