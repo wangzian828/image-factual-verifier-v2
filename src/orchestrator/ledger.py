@@ -397,7 +397,7 @@ def _record_discoveries(
             for item in (region.get("lens_results", []) or []) + (region.get("semantic_results", []) or []):
                 if isinstance(item, dict):
                     rows.append((str(item.get("url", "")), str(item.get("title", "")), str(item.get("snippet", "")), "visual_reference"))
-    for url, title, snippet, candidate_type in rows:
+    for url, title, snippet, candidate_type in _merge_discovery_rows(rows):
         discovery_id = ledger._id("discovery", call_id, url, title)
         ledger.add_discovery(
             DiscoveryRecord(
@@ -411,6 +411,35 @@ def _record_discoveries(
                 candidate_type=candidate_type,
             )
         )
+
+
+def _merge_discovery_rows(
+    rows: Sequence[tuple[str, str, str, str]],
+) -> List[tuple[str, str, str, str]]:
+    """Merge duplicate candidates emitted inside one immutable tool response.
+
+    Search providers can return the same URL and title in multiple result groups
+    while attaching slightly different snippets. Those entries represent one
+    discovery, not conflicting ledger mutations. The merge remains local to one
+    function result; ``VerificationLedger`` still rejects conflicting records
+    produced elsewhere.
+    """
+
+    merged: Dict[tuple[str, str, str], tuple[str, str, str, str]] = {}
+    for raw_url, raw_title, raw_snippet, candidate_type in rows:
+        url = str(raw_url or "").strip()
+        title = " ".join(str(raw_title or "").split())
+        snippet = " ".join(str(raw_snippet or "").split())
+        if not url:
+            continue
+        key = (url, title, candidate_type)
+        existing = merged.get(key)
+        if existing is None or (len(snippet), snippet) > (
+            len(existing[2]),
+            existing[2],
+        ):
+            merged[key] = (url, title, snippet, candidate_type)
+    return [merged[key] for key in sorted(merged)]
 
 
 def _find_web_record(data: Any, excerpt: str, source: str) -> Optional[Dict[str, Any]]:

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+
+from src.orchestrator.ledger import build_verification_case, compile_runtime_ledgers
 from src.orchestrator.pipeline import Orchestrator
 from src.orchestrator.stage_runner import StageStep
 from src.orchestrator.state import (
@@ -187,3 +190,50 @@ def test_browse_evidence_without_explicit_stance_is_rejected() -> None:
     step.tool_result = step.tool_result.replace(',"relevance":"high","stance":"support"', "")
 
     assert orchestrator._canonicalize_model_evidence(_evidence(), [step], _plan()) is None
+
+
+def test_duplicate_search_candidates_merge_before_ledger_insertion(tmp_path) -> None:
+    image_path = tmp_path / "input.jpg"
+    image_path.write_bytes(b"bounded-ledger-fixture")
+    step = StageStep(
+        round=1,
+        stage_name="verification",
+        action_type="tool_call",
+        tool_name="reverse_image_search",
+        tool_args={"__question_id": "q0"},
+        tool_result=json.dumps(
+            {
+                "status": "success",
+                "lens_results": [
+                    {
+                        "url": "https://example.test/reference",
+                        "title": "Reference image",
+                        "snippet": "Short snippet.",
+                    }
+                ],
+                "semantic_results": [
+                    {
+                        "url": "https://example.test/reference",
+                        "title": "Reference image",
+                        "snippet": "A longer and more informative reference snippet.",
+                    }
+                ],
+            }
+        ),
+        metadata={"tool_success": True, "function_call_id": "call-reverse-1"},
+    )
+
+    ledgers = compile_runtime_ledgers(
+        build_verification_case(
+            str(image_path),
+            user_claim="Does the image match the reference?",
+        ),
+        _plan(),
+        VerificationResult(),
+        [step],
+    )
+
+    assert len(ledgers.discoveries) == 1
+    assert ledgers.discoveries[0].snippet == (
+        "A longer and more informative reference snippet."
+    )
