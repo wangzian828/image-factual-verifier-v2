@@ -97,29 +97,39 @@ class ContextRenderer:
         verification: VerificationResult,
         ledgers: VerificationLedgers | None = None,
     ) -> str:
+        if ledgers is not None:
+            parts = [
+                "## Ledger Judgment Context",
+                "",
+                "Select only exact claim_id and evidence_id values listed below.",
+                "The orchestrator will compile all final prose from these records.",
+                "",
+                "Decisive claims:",
+            ]
+            for claim in ledgers.claims:
+                if claim.criticality != "decisive":
+                    continue
+                parts.append(
+                    f"- {claim.claim_id}: status={claim.status}; text={claim.text[:500]}"
+                )
+            parts.append("")
+            parts.append("Eligible non-neutral evidence:")
+            for evidence in ledgers.evidence:
+                if evidence.stance == "neutral":
+                    continue
+                parts.append(
+                    f"- {evidence.evidence_id}: claim={evidence.claim_id}; "
+                    f"stance={evidence.stance}; quality={evidence.quality}; "
+                    f"text={evidence.exact_text[:280]}"
+                )
+            return "\n".join(parts)
+
         parts = ["## Judgment Context", ""]
         parts.append(f"Scene: {perception.scene_description or '(empty)'}")
         parts.append(f"Image type: {perception.image_type or 'photo'}")
         parts.append(f"Intent: {plan.image_intent or '(empty)'}")
         parts.append(f"Risk: {plan.risk_assessment or '(empty)'}")
         parts.append(f"Verification assessment: {verification.authenticity_assessment}")
-
-        if ledgers is not None:
-            parts.append("")
-            parts.append("Claim ledger (use these exact claim_id values):")
-            for claim in ledgers.claims:
-                parts.append(
-                    f"- {claim.claim_id}: status={claim.status}, criticality={claim.criticality}, "
-                    f"text={claim.text}"
-                )
-            parts.append("")
-            parts.append("Eligible evidence ledger (use these exact evidence_id values):")
-            for evidence in ledgers.evidence:
-                parts.append(
-                    f"- {evidence.evidence_id}: claim={evidence.claim_id}, "
-                    f"stance={evidence.stance}, quality={evidence.quality}, "
-                    f"source={evidence.source_id}, exact_text={evidence.exact_text[:500]}"
-                )
 
         if verification.key_findings:
             parts.append("")

@@ -336,9 +336,11 @@ class FinalJudgment(StrictModel):
     overall_assessment: str = ""
 
 
-class LedgerJudgment(FinalJudgment):
-    """Production Gemini judgment contract bound to immutable ledger ids."""
+class LedgerJudgment(StrictModel):
+    """Compact Gemini decision contract bound to immutable ledger ids."""
 
+    verdict: Literal["real", "fake", "unverifiable"]
+    confidence: float = Field(ge=0.0, le=1.0)
     claim_decisions: List[ClaimDecision] = Field(default_factory=list)
     selected_evidence_ids: List[str] = Field(default_factory=list)
     policy_rule_id: str = Field(default="reinspect-v1", max_length=100)

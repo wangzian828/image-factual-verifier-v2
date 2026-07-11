@@ -77,6 +77,29 @@ def test_no_tool_stage_uses_native_json_schema() -> None:
     assert '"default"' not in json.dumps(request["response_format"]["schema"])
 
 
+def test_stage_generation_config_is_forwarded() -> None:
+    backend = StructuredFakeBackend([response("i1", valid_judgment())])
+    runner = StageRunner(
+        llm=backend,
+        system_prompt="Judge the evidence.",
+        tools=[],
+        output_schema=FinalJudgment,
+        max_rounds=1,
+        stage_name="judgment",
+        attach_image=False,
+        max_output_tokens=8192,
+        generation_config={"thinking_level": "minimal"},
+    )
+
+    parsed, _steps = asyncio.run(runner.run("Evidence context"))
+
+    assert parsed is not None
+    assert backend.requests[0]["max_tokens"] == 8192
+    assert backend.requests[0]["generation_config"] == {
+        "thinking_level": "minimal"
+    }
+
+
 def test_invalid_structured_output_is_corrected_in_same_chain() -> None:
     invalid = valid_judgment()
     invalid["verdict"] = "probably_real"

@@ -242,10 +242,6 @@ class FakeOrchestrator(Orchestrator):
 <output>{
   "verdict": "real",
   "confidence": 0.92,
-  "reasoning_chain": "The image matches an official NASA publication, and no contradictory visual evidence was found.",
-  "key_evidence": ["NASA published the same launch-pad image on its official site."],
-  "anomalies": [],
-  "overall_assessment": "The image is supported by direct official source evidence and appears real.",
   "claim_decisions": [{
     "claim_id": "claim-q0",
     "decision": "support",
@@ -475,10 +471,6 @@ class ReplanningOrchestrator(FakeOrchestrator):
         return """<output>{
           "verdict":"real",
           "confidence":0.92,
-          "reasoning_chain":"Both claims are supported.",
-          "key_evidence":[],
-          "anomalies":[],
-          "overall_assessment":"Supported.",
           "claim_decisions":[
             {"claim_id":"claim-q0","decision":"support","evidence_ids":["evidence-31240b4e2c484290a8c4"],"reason":null},
             {"claim_id":"claim-q1","decision":"support","evidence_ids":["evidence-c3e4da86360f861d07a5"],"reason":null}

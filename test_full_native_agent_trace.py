@@ -203,10 +203,6 @@ def _build_responses(case: VerificationCase) -> List[Dict[str, Any]]:
     judgment = {
         "verdict": "real",
         "confidence": 0.9,
-        "reasoning_chain": "Model prose is replaced by ledger compilation.",
-        "key_evidence": [],
-        "anomalies": [],
-        "overall_assessment": "Model prose is replaced by ledger compilation.",
         "claim_decisions": [
             {
                 "claim_id": "claim-q0",

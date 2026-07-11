@@ -353,7 +353,7 @@ class Orchestrator:
             recent_rounds_to_keep=1,
             output_validator=lambda parsed, steps: self._validate_plan_output(parsed),
             attach_image=False,
-            max_output_tokens=4096,
+            max_output_tokens=self._stage_output_tokens("PLANNING", 8192),
         )
         context = ContextRenderer.render_for_planning(
             state.perception or PerceptionReport(),
@@ -438,6 +438,7 @@ class Orchestrator:
                     if active_reinspect
                     else ""
                 ),
+                max_output_tokens=self._stage_output_tokens("VERIFICATION", 8192),
             )
             context = ContextRenderer.render_for_verification(
                 state.perception or PerceptionReport(),
@@ -556,13 +557,41 @@ class Orchestrator:
                 state.ledgers,
             ),
             attach_image=False,
-            max_output_tokens=4096,
+            max_output_tokens=self._stage_output_tokens("JUDGMENT", 8192),
+            generation_config={
+                "thinking_level": os.getenv(
+                    "GEMINI_JUDGMENT_THINKING_LEVEL", "minimal"
+                ).strip().lower()
+            },
         )
         context = ContextRenderer.render_for_judgment(
             state.perception or PerceptionReport(),
             state.plan or VerificationPlan(),
             state.verification or VerificationResult(),
             state.ledgers,
+        )
+        decisive_statuses = {
+            item.status
+            for item in state.ledgers.claims
+            if item.criticality == "decisive"
+        }
+        expected_verdict = (
+            "fake"
+            if "refuted" in decisive_statuses
+            else (
+                "real"
+                if decisive_statuses and decisive_statuses <= {"supported"}
+                else "unverifiable"
+            )
+        )
+        expected_reasons = [
+            item.value for item in derive_unverifiable_reasons(state.ledgers)
+        ]
+        context += (
+            "\n\nDeterministic policy output to copy exactly:\n"
+            f"- verdict: {expected_verdict}\n"
+            "- unverifiable_reasons: "
+            + json.dumps(expected_reasons, ensure_ascii=False)
         )
         parsed, steps = await runner.run(context)
         self._record_stage_steps(state, steps)
@@ -595,7 +624,7 @@ class Orchestrator:
                 audit,
             ),
             attach_image=False,
-            max_output_tokens=4096,
+            max_output_tokens=self._stage_output_tokens("REPLANNING", 8192),
         )
         context = ContextRenderer.render_for_replanning(
             state.perception or PerceptionReport(),
@@ -811,13 +840,29 @@ class Orchestrator:
                 f"Verdict {parsed.verdict} under policy reinspect-v1 using "
                 f"{len(selected)} validated evidence record(s)."
             )
-        return parsed.model_copy(
-            update={
-                "reasoning_chain": reasoning,
-                "key_evidence": key_evidence,
-                "overall_assessment": assessment,
-            }
+        return FinalJudgment(
+            verdict=parsed.verdict,
+            confidence=parsed.confidence,
+            reasoning_chain=reasoning,
+            key_evidence=key_evidence,
+            anomalies=[],
+            overall_assessment=assessment,
         )
+
+    @staticmethod
+    def _stage_output_tokens(stage_name: str, default: int) -> int:
+        value = os.getenv(f"GEMINI_{stage_name}_MAX_OUTPUT_TOKENS", str(default)).strip()
+        try:
+            tokens = int(value)
+        except ValueError as exc:
+            raise ValueError(
+                f"GEMINI_{stage_name}_MAX_OUTPUT_TOKENS must be an integer."
+            ) from exc
+        if tokens < 1:
+            raise ValueError(
+                f"GEMINI_{stage_name}_MAX_OUTPUT_TOKENS must be positive."
+            )
+        return tokens
 
     def _audit_plan_coverage(
         self,
