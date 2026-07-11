@@ -12,6 +12,7 @@ from src.integrations.gemini import (
     validate_interaction_response,
 )
 from src.tools.base import BaseTool
+from src.orchestrator.source_access import SourceAccessPolicy
 
 
 DIFFERENCE_TYPES = (
@@ -125,6 +126,10 @@ class CompareWithReferenceTool(BaseTool):
     # Kept as the injected backend attribute for compatibility with existing wiring.
     vlm_backend: Any = None
     image_path: str = ""
+    source_access_policy: Any = None
+
+    def set_source_access_policy(self, policy: SourceAccessPolicy) -> None:
+        self.source_access_policy = policy
 
     def call(self, params: Dict[str, Any]) -> Any:
         """Synchronous compatibility entry point."""
@@ -148,6 +153,8 @@ class CompareWithReferenceTool(BaseTool):
 
         if not reference_url:
             return self._error("reference_url is required.")
+        if self.source_access_policy is not None and not self.source_access_policy.allows(reference_url):
+            return self._error("Reference URL blocked by the active source access policy.")
         if self.vlm_backend is None:
             return self._error("VLM backend not configured for image comparison.")
         if not callable(getattr(self.vlm_backend, "create_interaction", None)):
@@ -222,6 +229,16 @@ class CompareWithReferenceTool(BaseTool):
                 response = await client.get(url)
                 if response.status_code != 200:
                     return None
+                if self.source_access_policy is not None:
+                    for redirect in response.history:
+                        if not self.source_access_policy.allows(str(redirect.url)):
+                            raise PermissionError(
+                                "Reference redirect hop blocked by the active source access policy."
+                            )
+                if self.source_access_policy is not None and not self.source_access_policy.allows(str(response.url)):
+                    raise PermissionError(
+                        "Reference redirect target blocked by the active source access policy."
+                    )
 
                 content_type = response.headers.get("content-type", "image/jpeg")
                 content_type = content_type.split(";", 1)[0].strip().lower()

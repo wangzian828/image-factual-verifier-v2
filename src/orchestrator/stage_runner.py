@@ -22,6 +22,7 @@ from src.integrations.gemini import (
 from src.orchestrator.llm_backend import LLMBackend, LLMResponse
 from src.orchestrator.tool_cache import ToolResultCache
 from src.orchestrator.tool_result import ToolResultContractError, parse_tool_result, serialize_tool_result
+from src.orchestrator.source_access import SourceAccessPolicy
 from src.tools.base import BaseTool
 from src.tools.vision_utils import image_to_data_url
 
@@ -68,6 +69,10 @@ class StageRunner:
         generation_config: Optional[Dict[str, Any]] = None,
         observation_callback: Optional[Callable[[StageStep, List[StageStep]], Optional[Dict[str, Any]]]] = None,
         visual_call_validator: Optional[Callable[[str, Dict[str, Any]], str]] = None,
+        question_claims: Optional[Dict[str, str]] = None,
+        priority_question_ids: Optional[List[str]] = None,
+        resolved_priority_question_ids: Optional[List[str]] = None,
+        source_access_policy: Optional[SourceAccessPolicy] = None,
     ):
         self.llm = llm
         self.system_prompt = system_prompt
@@ -95,6 +100,10 @@ class StageRunner:
         self.llm_api_calls = 0
         self.observation_callback = observation_callback
         self.visual_call_validator = visual_call_validator
+        self.question_claims = dict(question_claims or {})
+        self.priority_question_ids = list(dict.fromkeys(priority_question_ids or []))
+        self.resolved_priority_question_ids = set(resolved_priority_question_ids or [])
+        self.source_access_policy = source_access_policy or SourceAccessPolicy()
 
     async def run(self, input_context: str) -> Tuple[Optional[BaseModel], List[StageStep]]:
         """Run the ReAct loop."""
@@ -168,20 +177,45 @@ class StageRunner:
                 step.action_type = "tool_call"
                 step.tool_name = tool_name
                 step.tool_args = self._prepare_tool_args(tool_name, dict(tool_args), input_context)
-                if self.stage_name == "verification" and not step.tool_args.get("__question_id"):
+                question_error = self._question_id_error(step.tool_args)
+                if question_error:
                     step.action_type = "format_error"
-                    step.metadata["missing_question_id"] = True
+                    step.metadata["invalid_question_id"] = True
                     steps.append(step)
                     history.append({"role": "assistant", "content": content})
                     history.append(
                         {
                             "role": "user",
                             "content": (
-                                "A top-level question_id is required for every verification tool "
-                                "call. Choose the planning question this call advances."
+                                question_error
                             ),
                         }
                     )
+                    continue
+                if self.visual_call_validator is not None:
+                    visual_error = self.visual_call_validator(tool_name, step.tool_args)
+                    if visual_error:
+                        step.action_type = "format_error"
+                        step.metadata["invalid_visual_question"] = True
+                        step.tool_result = json.dumps(
+                            {"status": "error", "error": visual_error},
+                            ensure_ascii=False,
+                        )
+                        steps.append(step)
+                        history.append({"role": "assistant", "content": content})
+                        history.append({"role": "user", "content": visual_error})
+                        continue
+                coverage_error = self._priority_coverage_error(step.tool_args, steps)
+                if coverage_error:
+                    step.action_type = "format_error"
+                    step.metadata["unbalanced_priority_coverage"] = True
+                    step.tool_result = json.dumps(
+                        {"status": "error", "error": coverage_error},
+                        ensure_ascii=False,
+                    )
+                    steps.append(step)
+                    history.append({"role": "assistant", "content": content})
+                    history.append({"role": "user", "content": coverage_error})
                     continue
                 serialized, tool_metadata = await self._execute_tool(tool_name, dict(step.tool_args))
                 step.tool_result = serialized
@@ -467,6 +501,13 @@ class StageRunner:
                                 },
                                 ensure_ascii=False,
                             )
+                        elif coverage_error := self._priority_coverage_error(prepared_args, steps):
+                            step.action_type = "format_error"
+                            step.metadata["unbalanced_priority_coverage"] = True
+                            step.tool_result = json.dumps(
+                                {"status": "error", "error": coverage_error},
+                                ensure_ascii=False,
+                            )
                         else:
                             step.action_type = "tool_call"
                             serialized, tool_metadata = await self._execute_tool(
@@ -488,6 +529,7 @@ class StageRunner:
                             tool_args=step.tool_args,
                             result=step.tool_result,
                             state_update=state_update,
+                            control_step=step,
                         )
                     )
 
@@ -724,8 +766,20 @@ class StageRunner:
         tool_args: Dict[str, Any],
         result: str,
         state_update: Optional[Dict[str, Any]] = None,
+        control_step: Optional[StageStep] = None,
     ) -> Dict[str, Any]:
         compact = self._compact_tool_result_for_context(tool_name, result)
+        recorded_step = control_step or StageStep(
+            action_type="tool_call" if not self._tool_result_is_error(result) else "format_error",
+            tool_name=tool_name,
+            tool_args=dict(tool_args),
+            metadata=(
+                {"investigation_state_update": state_update}
+                if state_update
+                else {}
+            ),
+        )
+        self._control_steps = list(getattr(self, "_control_steps", [])) + [recorded_step]
         question_id = str(tool_args.get("__question_id", "")).strip()
         content: Dict[str, Any] = {
             "function_call_id": call_id,
@@ -735,11 +789,13 @@ class StageRunner:
             content["question_id"] = question_id
         if state_update:
             content["investigation_state_update"] = state_update
+        content["agent_control_state"] = self._agent_control_state()
         text = json.dumps(content, ensure_ascii=False, default=str)
         if len(text) > self.tool_response_max_chars:
             content = {
                 "function_call_id": call_id,
                 "question_id": question_id,
+                "agent_control_state": self._agent_control_state(),
                 "result": {
                     "truncated": True,
                     "preview": text[: self.tool_response_max_chars - 160],
@@ -916,6 +972,9 @@ class StageRunner:
         question_id = str(tool_args.pop("question_id", "")).strip()
         if question_id:
             tool_args["__question_id"] = question_id
+            claim_text = self.question_claims.get(question_id, "").strip()
+            if claim_text:
+                tool_args["__claim_text"] = claim_text
         return tool_args
 
     def _question_id_error(self, tool_args: Dict[str, Any]) -> str:
@@ -930,6 +989,123 @@ class StageRunner:
                 + ", ".join(self.active_question_ids)
             )
         return ""
+
+    def _priority_coverage_error(
+        self,
+        tool_args: Dict[str, Any],
+        current_steps: List[StageStep],
+    ) -> str:
+        if self.stage_name != "verification" or not self.priority_question_ids:
+            return ""
+        question_id = str(tool_args.get("__question_id", "")).strip()
+        if (
+            str(tool_args.get("visual_question_id", "")).strip()
+            and self._pending_visual_call_is_valid(tool_args)
+        ):
+            return ""
+        active_priority_ids = [
+            item
+            for item in self.priority_question_ids
+            if item not in self._resolved_priority_ids(current_steps)
+        ]
+        if not active_priority_ids:
+            return ""
+        counts = {item: 0 for item in active_priority_ids}
+        for step in [*self.prior_steps, *current_steps]:
+            if step.action_type != "tool_call":
+                continue
+            step_question = str(step.tool_args.get("__question_id", "")).strip()
+            if step_question in counts:
+                counts[step_question] += 1
+        minimum = min(counts.values()) if counts else 0
+        least_attempted = [item for item in active_priority_ids if counts[item] == minimum]
+        if question_id not in least_attempted:
+            return (
+                "Priority-question coverage requires targeting a least-attempted P1 "
+                "question before further resampling. Least-attempted P1 ids: "
+                + ", ".join(least_attempted)
+            )
+        return ""
+
+    def _resolved_priority_ids(self, current_steps: List[StageStep]) -> set[str]:
+        resolved = set(self.resolved_priority_question_ids)
+        for step in [*self.prior_steps, *current_steps, *list(getattr(self, "_control_steps", []))]:
+            update = (step.metadata or {}).get("investigation_state_update", {})
+            if not isinstance(update, dict):
+                continue
+            delta = update.get("belief_delta", {})
+            if not isinstance(delta, dict):
+                continue
+            claim_id = str(delta.get("claim_id", ""))
+            if (
+                claim_id.startswith("claim-")
+                and str(delta.get("new_status", "")) in {"supported", "refuted"}
+            ):
+                resolved.add(claim_id.removeprefix("claim-"))
+        return resolved
+
+    def _pending_visual_call_is_valid(self, tool_args: Dict[str, Any]) -> bool:
+        visual_question_id = str(tool_args.get("visual_question_id", "")).strip()
+        question_id = str(tool_args.get("__question_id", "")).strip()
+        for step in [*self.prior_steps, *list(getattr(self, "_control_steps", []))]:
+            update = (step.metadata or {}).get("investigation_state_update", {})
+            if not isinstance(update, dict):
+                continue
+            created = update.get("created_visual_questions", []) or []
+            for item in created:
+                if not isinstance(item, dict):
+                    continue
+                if (
+                    str(item.get("visual_question_id", "")) == visual_question_id
+                    and str(item.get("claim_id", "")) == f"claim-{question_id}"
+                    and str(item.get("status", "pending")) == "pending"
+                ):
+                    return visual_question_id in self._pending_visual_question_ids()
+        return False
+
+    def _agent_control_state(self) -> Dict[str, Any]:
+        steps = list(self.prior_steps) + list(getattr(self, "_control_steps", []))
+        attempts = {question_id: 0 for question_id in self.active_question_ids}
+        for step in steps:
+            if step.action_type != "tool_call":
+                continue
+            question_id = str(step.tool_args.get("__question_id", "")).strip()
+            if question_id:
+                attempts[question_id] = attempts.get(question_id, 0) + 1
+        untouched = [
+            question_id
+            for question_id in self.priority_question_ids
+            if attempts.get(question_id, 0) == 0
+        ]
+        remaining = {}
+        for tool_name, limit in self.tool_call_limits.items():
+            used = sum(
+                1
+                for step in steps
+                if step.action_type == "tool_call" and step.tool_name == tool_name
+            )
+            remaining[tool_name] = max(0, int(limit) - used)
+        return {
+            "question_attempts": attempts,
+            "untouched_priority_question_ids": untouched,
+            "remaining_tool_budgets": remaining,
+            "pending_visual_question_ids": self._pending_visual_question_ids(),
+        }
+
+    def _pending_visual_question_ids(self) -> List[str]:
+        pending: List[str] = []
+        for step in [*self.prior_steps, *list(getattr(self, "_control_steps", []))]:
+            update = (step.metadata or {}).get("investigation_state_update", {})
+            if not isinstance(update, dict):
+                continue
+            for item in update.get("created_visual_questions", []) or []:
+                if isinstance(item, dict) and item.get("visual_question_id"):
+                    pending.append(str(item["visual_question_id"]))
+            for item in update.get("resolved_visual_questions", []) or []:
+                if isinstance(item, dict) and item.get("visual_question_id"):
+                    resolved_id = str(item["visual_question_id"])
+                    pending = [value for value in pending if value != resolved_id]
+        return list(dict.fromkeys(pending))
 
     @staticmethod
     def _output_format_instructions() -> str:
@@ -1019,6 +1195,9 @@ class StageRunner:
     async def _execute_tool(self, tool_name: str, tool_args: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
         tool = self.tools[tool_name]
         tool_args.pop("__question_id", None)
+        claim_text = str(tool_args.pop("__claim_text", "")).strip()
+        if claim_text and tool_name in {"text_search", "visit", "crop_and_search"}:
+            tool_args["goal"] = claim_text
         properties = tool.parameters.get("properties", {})
         if "image_input" in properties:
             tool_args["image_input"] = self.image_path
@@ -1030,7 +1209,24 @@ class StageRunner:
         if self.tool_cache and tool_name in self.cacheable_tools:
             cached = self.tool_cache.get(tool_name, cache_args)
             if cached is not None:
-                _, succeeded = parse_tool_result(cached)
+                cached_result, succeeded = parse_tool_result(cached)
+                if succeeded and self.source_access_policy.active:
+                    sanitized, filtered_count = self.source_access_policy.sanitize_payload(cached_result)
+                    if sanitized is None:
+                        succeeded = False
+                        cached = json.dumps(
+                            {
+                                "status": "error",
+                                "error": "Cached tool result blocked by the active source access policy.",
+                            },
+                            ensure_ascii=False,
+                        )
+                    else:
+                        if filtered_count:
+                            sanitized["policy_filtered_count"] = int(
+                                sanitized.get("policy_filtered_count", 0) or 0
+                            ) + filtered_count
+                        cached, succeeded = serialize_tool_result(sanitized)
                 return cached, {
                     "cache_hit": True,
                     "tool_success": succeeded,
@@ -1073,6 +1269,24 @@ class StageRunner:
                 "serialized_size": len(serialized),
                 "tool_exception": "ToolResultContractError",
             }
+        if succeeded and self.source_access_policy.active:
+            parsed_result, _ = parse_tool_result(serialized)
+            sanitized, filtered_count = self.source_access_policy.sanitize_payload(parsed_result)
+            if sanitized is None:
+                serialized = json.dumps(
+                    {
+                        "status": "error",
+                        "error": "Tool result blocked by the active source access policy.",
+                    },
+                    ensure_ascii=False,
+                )
+                succeeded = False
+            else:
+                if filtered_count:
+                    sanitized["policy_filtered_count"] = int(
+                        sanitized.get("policy_filtered_count", 0) or 0
+                    ) + filtered_count
+                serialized, succeeded = serialize_tool_result(sanitized)
         if succeeded and self.tool_cache and tool_name in self.cacheable_tools:
             self.tool_cache.put(tool_name, cache_args, serialized)
         return serialized, {
@@ -1086,6 +1300,7 @@ class StageRunner:
     def _build_cache_args(self, tool_name: str, tool_args: Dict[str, Any]) -> Dict[str, Any]:
         args = dict(tool_args)
         args.pop("__question_id", None)
+        args.pop("__claim_text", None)
         if tool_name in {"compare_with_reference", "analyze_visual_anomalies"} and self.image_path:
             args["__image_input__"] = self.image_path
         return args

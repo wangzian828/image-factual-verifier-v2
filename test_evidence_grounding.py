@@ -29,6 +29,7 @@ def _plan() -> VerificationPlan:
             InvestigationQuestion(
                 question_id="q0",
                 question="Did Reuters publish the flood image?",
+                claim_text="Reuters published the flood image.",
                 related_entities=["Reuters", "flood"],
                 priority=1,
             )
@@ -45,6 +46,7 @@ def _successful_step() -> StageStep:
         tool_args={"__question_id": "q0"},
         tool_result=(
             '{"status":"success","selected_url":"https://reuters.example/flood",'
+            '"goal":"Reuters published the flood image.",'
             '"evidence":"Reuters published the flood image on 10 July.",'
             '"summary":"Reuters published the flood image on 10 July.",'
             '"relevance":"high","stance":"support",'
@@ -166,6 +168,7 @@ def test_nested_text_search_stance_is_bound_to_exact_excerpt() -> None:
     step.tool_result = (
         '{"status":"success","queries":['
         '{"query":"flood","selected_url":"https://reuters.example/flood",'
+        '"goal":"Reuters published the flood image.",'
         '"evidence":"Reuters published the flood image on 10 July.",'
         '"summary":"Reuters published the flood image on 10 July.",'
         '"relevance":"high","stance":"support",'
@@ -174,6 +177,7 @@ def test_nested_text_search_stance_is_bound_to_exact_excerpt() -> None:
         '"retrieved_at":"2026-07-11T00:00:00+00:00",'
         '"injection_flags":[],"directness":"direct","evidence_eligible":true},'
         '{"query":"hoax","selected_url":"https://example.test/hoax",'
+        '"goal":"Reuters published the flood image.",'
         '"evidence":"An unrelated page calls another image a hoax.",'
         '"summary":"Unrelated claim.","relevance":"low","stance":"refute",'
         '"artifact_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",'
@@ -411,3 +415,19 @@ def test_same_source_id_rejects_immutable_conflict() -> None:
         assert "canonical_url" in str(exc)
     else:
         raise AssertionError("immutable source conflict was merged")
+
+
+def test_browse_stance_for_search_query_instead_of_claim_is_rejected() -> None:
+    orchestrator = _orchestrator()
+    step = _successful_step()
+    payload = json.loads(step.tool_result)
+    payload["goal"] = "Reuters flood image keywords"
+    step.tool_result = json.dumps(payload)
+
+    canonical = orchestrator._canonicalize_model_evidence(
+        _evidence(),
+        [step],
+        _plan(),
+    )
+
+    assert canonical is None

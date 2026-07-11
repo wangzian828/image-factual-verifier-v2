@@ -213,6 +213,7 @@ class InvestigationQuestion(StrictModel):
 
     question_id: str = Field(default="", max_length=64)
     question: str = Field(default="", max_length=500)
+    claim_text: str = Field(min_length=1, max_length=1000)
     why: str = Field(default="", max_length=500)
     suggested_tools: List[ShortListText] = Field(default_factory=list, max_length=3)
     suggested_queries: List[ShortListText] = Field(default_factory=list, max_length=3)

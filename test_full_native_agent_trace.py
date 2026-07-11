@@ -116,7 +116,9 @@ def _build_responses(case: VerificationCase) -> List[Dict[str, Any]]:
         "discovery", "call-reverse-q0", REFERENCE_PAGE, "NASA reference launch"
     )
     visual_question_id = investigation_id(
-        "vq", discovery_id, "claim-q0"
+        "vq",
+        "claim-q0",
+        investigation_id("reference", classify_source(REFERENCE_IMAGE).canonical_url),
     )
     visual_excerpt = "Near-duplicate NASA launch scene with no factual edits visible."
     image_source_id = VerificationLedger._id("source", "image", case.image_sha256)
@@ -164,6 +166,7 @@ def _build_responses(case: VerificationCase) -> List[Dict[str, Any]]:
             {
                 "question_id": "q0",
                 "question": "Does the image match NASA's reference launch image without factual edits?",
+                "claim_text": "The image matches NASA's reference launch image without factual edits.",
                 "why": "Visual provenance is decisive.",
                 "suggested_tools": ["reverse_image_search", "compare_with_reference"],
                 "suggested_queries": ["NASA reference launch image"],
@@ -173,6 +176,7 @@ def _build_responses(case: VerificationCase) -> List[Dict[str, Any]]:
             {
                 "question_id": "q1",
                 "question": "Was the launch scene captured at Cape Canaveral in Florida?",
+                "claim_text": "The launch scene was captured at Cape Canaveral in Florida.",
                 "why": "The location claim remains independently checkable.",
                 "suggested_tools": ["visit"],
                 "suggested_queries": ["NASA Cape Canaveral reference launch"],
@@ -191,6 +195,7 @@ def _build_responses(case: VerificationCase) -> List[Dict[str, Any]]:
             {
                 "question_id": "q1",
                 "question": "Does NASA's official location record identify this launch scene as Cape Canaveral in Florida?",
+                "claim_text": "The launch scene was captured at Cape Canaveral in Florida.",
                 "why": "The first iteration left the location claim unresolved.",
                 "suggested_tools": ["visit"],
                 "suggested_queries": ["site:nasa.gov Cape Canaveral Florida reference launch"],
@@ -230,6 +235,12 @@ def _build_responses(case: VerificationCase) -> List[Dict[str, Any]]:
             "call-reverse-q0",
             "reverse_image_search",
             {"question_id": "q0"},
+        ),
+        interaction_call(
+            "interaction-v1-touch-q1",
+            "call-touch-q1",
+            "current_time",
+            {"question_id": "q1"},
         ),
         interaction_call(
             "interaction-v1-compare",
@@ -336,6 +347,15 @@ class FullNativeReferenceOrchestrator(Orchestrator):
                     "required": ["image_input"],
                 },
             ),
+            "current_time": StaticTool(
+                "current_time",
+                {
+                    "status": "success",
+                    "datetime": "2026-07-11T00:00:00+00:00",
+                    "timezone": "UTC",
+                },
+                {"type": "object", "properties": {}, "required": []},
+            ),
             "reverse_image_search": StaticTool(
                 "reverse_image_search",
                 {
@@ -392,6 +412,7 @@ class FullNativeReferenceOrchestrator(Orchestrator):
                 {
                     "status": "success",
                     "selected_url": LOCATION_PAGE,
+                    "goal": "The launch scene was captured at Cape Canaveral in Florida.",
                     "summary": LOCATION_EXCERPT,
                     "evidence": LOCATION_EXCERPT,
                     "relevance": "high",

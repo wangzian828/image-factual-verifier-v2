@@ -182,7 +182,7 @@ def compile_runtime_ledgers(
         ledger.add_claim(
             ClaimRecord(
                 claim_id=claim_id,
-                text=question.question,
+                text=question.claim_text,
                 question_id=question.question_id,
                 criticality="decisive" if question.priority == 1 else (
                     "supporting" if question.priority == 2 else "contextual"
@@ -235,6 +235,13 @@ def compile_runtime_ledgers(
         if item.tool_used in {"visit", "text_search", "crop_and_search"}:
             record = _find_web_record(data, item.raw_excerpt, item.source)
             if record is None:
+                continue
+            question = next(
+                candidate
+                for candidate in plan.questions
+                if candidate.question_id == item.related_question
+            )
+            if str(record.get("goal", "")).strip() != question.claim_text.strip():
                 continue
             identity = classify_source(
                 item.source,

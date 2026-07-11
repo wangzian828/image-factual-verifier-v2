@@ -79,6 +79,7 @@ def test_verification_raises_when_every_tool_fails() -> None:
                     InvestigationQuestion(
                         question_id="q0",
                         question="Find the image source.",
+                        claim_text="The image has the claimed source.",
                         priority=1,
                     )
                 ]
@@ -145,6 +146,7 @@ def test_verification_uses_runtime_observations_when_model_summary_is_rejected(
                     InvestigationQuestion(
                         question_id="q0",
                         question="Where was this image first published?",
+                        claim_text="The image was first published at its claimed source.",
                         priority=1,
                     )
                 ]

@@ -1,0 +1,405 @@
+from __future__ import annotations
+
+import asyncio
+import json
+
+from src.orchestrator.source_access import (
+    benchmark_source_access_policy,
+    url_variants,
+)
+from src.orchestrator.stage_runner import StageRunner
+from src.orchestrator.state import VerificationResult
+from src.orchestrator.state import InvestigationQuestion
+from pydantic import ValidationError
+from src.tools.reverse_image_search import ReverseImageSearchTool
+from src.tools.text_search import TextSearchTool
+from src.tools.visit import VisitTool
+
+
+FACT_CHECK_URL = (
+    "https://web.archive.org/web/20230424080500/"
+    "https://srilanka.factcrescendo.com/english/benchmark-answer/"
+)
+
+
+class SearchClient:
+    def search(self, query: str, **_kwargs):
+        return {
+            "query": query,
+            "results": [
+                {
+                    "title": "Fact-check answer: claim is false",
+                    "url": "https://srilanka.factcrescendo.com/english/benchmark-answer/",
+                    "snippet": "This snippet contains the benchmark verdict.",
+                },
+                {
+                    "title": "Independent primary report",
+                    "url": "https://independent.example/report",
+                    "snippet": "A non-benchmark lead.",
+                },
+            ],
+            "answer_box": {"answer": "claim is false"},
+            "knowledge_graph": {"description": "benchmark answer"},
+        }
+
+
+class BrowseClient:
+    def __init__(self) -> None:
+        self.urls: list[str] = []
+        self.policy = None
+
+    def set_source_access_policy(self, policy) -> None:
+        self.policy = policy
+
+    def visit_many(self, urls, goal):
+        self.urls.extend(urls)
+        return {
+            "status": "success",
+            "visits": [],
+            "selected_url": "",
+            "summary": "",
+            "evidence": "",
+            "rationale": "",
+            "relevance": "low",
+            "stance": "unclear",
+            "directness": "none",
+            "artifact_sha256": "",
+            "evidence_span": {},
+            "retrieved_at": "",
+            "injection_flags": [],
+            "evidence_eligible": False,
+        }
+
+
+class VlmClient:
+    def create_image_json(self, **_kwargs):
+        return {"query": "semantic image query", "keywords": []}
+
+
+class ImageSearchClient:
+    def search(self, **_kwargs):
+        return [
+            {
+                "title": "Leaking semantic match",
+                "url": "https://srilanka.factcrescendo.com/english/benchmark-answer",
+                "image_url": "https://srilanka.factcrescendo.com/images/gold.jpg",
+            },
+            {
+                "title": "Independent match",
+                "url": "https://independent.example/photo",
+                "image_url": "https://independent.example/photo.jpg",
+            },
+        ]
+
+
+class VisualSearchClient:
+    def search(self, *_args, **_kwargs):
+        return {
+            "status": "success",
+            "provider": "fixture",
+            "results": [
+                {
+                    "title": "Leaking Lens match",
+                    "url": FACT_CHECK_URL,
+                    "image_url": "https://srilanka.factcrescendo.com/images/gold.jpg",
+                    "snippet": "The hidden verdict appears here.",
+                }
+            ],
+            "timings": {},
+        }
+
+
+def _policy():
+    return benchmark_source_access_policy([FACT_CHECK_URL], policy_id="fixture-eval")
+
+
+def test_wayback_policy_blocks_outer_and_embedded_fact_check_urls() -> None:
+    variants = url_variants(FACT_CHECK_URL)
+    assert any("web.archive.org" in value for value in variants)
+    assert any("factcrescendo.com" in value for value in variants)
+    policy = _policy()
+    assert not policy.allows(FACT_CHECK_URL)
+    assert not policy.allows("https://sub.srilanka.factcrescendo.com/answer")
+    assert policy.allows("https://independent.example/report")
+
+
+def test_mainstream_fact_check_origin_is_exact_url_only() -> None:
+    policy = benchmark_source_access_policy(
+        ["https://www.newsweek.com/china-us-life-expectancy-birth-2021-fact-check-1740991"]
+    )
+    assert not policy.allows(
+        "https://www.newsweek.com/china-us-life-expectancy-birth-2021-fact-check-1740991"
+    )
+    assert policy.allows("https://www.newsweek.com/unrelated-primary-report")
+
+
+def test_fact_check_subdomain_scope_does_not_block_parent_news_domain() -> None:
+    policy = benchmark_source_access_policy(
+        ["https://factcheck.afp.com/doc.afp.com.example"]
+    )
+    assert not policy.allows("https://factcheck.afp.com/another-answer")
+    assert policy.allows("https://www.afp.com/primary-report")
+
+
+def test_text_search_filters_before_automatic_browse_and_removes_aggregates() -> None:
+    browse = BrowseClient()
+    tool = TextSearchTool(client=SearchClient(), browse_client=browse, visit_top_k=3)
+    tool.set_source_access_policy(_policy())
+
+    result = tool.search("claim keywords")
+
+    assert result["status"] == "success"
+    response = result["queries"][0]
+    serialized = json.dumps(result)
+    assert "benchmark verdict" not in serialized
+    assert "claim is false" not in serialized
+    assert [item["url"] for item in response["results"]] == [
+        "https://independent.example/report"
+    ]
+    assert browse.urls == ["https://independent.example/report"]
+
+
+def test_direct_visit_refuses_blocked_url_without_calling_provider() -> None:
+    class Provider:
+        called = False
+
+        def visit(self, _url, _goal):
+            self.called = True
+            raise AssertionError("blocked URL must not reach fetch provider")
+
+    provider = Provider()
+    tool = VisitTool(client=provider)
+    tool.set_source_access_policy(_policy())
+    result = tool.visit(FACT_CHECK_URL, "claim")
+    assert result["status"] == "error"
+    assert provider.called is False
+
+
+def test_reverse_search_removes_blocked_pages_and_reference_images() -> None:
+    tool = ReverseImageSearchTool(
+        vlm_client=VlmClient(),
+        image_search_client=ImageSearchClient(),
+        visual_search_client=VisualSearchClient(),
+        lens_client=object(),
+    )
+    tool.set_source_access_policy(_policy())
+
+    result = tool.search("image.jpg")
+    serialized = json.dumps(result)
+    assert "factcrescendo" not in serialized
+    assert "hidden verdict" not in serialized
+    assert result["candidate_page_urls"] == ["https://independent.example/photo"]
+    assert result["reference_image_candidates"] == [
+        "https://independent.example/photo.jpg"
+    ]
+
+
+def test_priority_scheduler_requires_each_p1_before_resampling() -> None:
+    runner = StageRunner(
+        llm=object(),
+        system_prompt="",
+        tools=[],
+        output_schema=VerificationResult,
+        stage_name="verification",
+        priority_question_ids=["q0", "q1"],
+    )
+    first = runner._priority_coverage_error(
+        {"__question_id": "q0"},
+        [],
+    )
+    assert first == ""
+    from src.orchestrator.stage_runner import StageStep
+
+    repeated = runner._priority_coverage_error(
+        {"__question_id": "q0"},
+        [StageStep(action_type="tool_call", tool_args={"__question_id": "q0"})],
+    )
+    assert "q1" in repeated
+
+    balanced = runner._priority_coverage_error(
+        {"__question_id": "q0"},
+        [
+            StageStep(action_type="tool_call", tool_args={"__question_id": "q0"}),
+            StageStep(action_type="tool_call", tool_args={"__question_id": "q1"}),
+        ],
+    )
+    assert balanced == ""
+
+    fake_reinspection = runner._priority_coverage_error(
+        {"__question_id": "q0", "visual_question_id": "vq-fabricated"},
+        [
+            StageStep(action_type="tool_call", tool_args={"__question_id": "q0"}),
+            StageStep(action_type="tool_call", tool_args={"__question_id": "q0"}),
+        ],
+    )
+    assert "q1" in fake_reinspection
+
+
+def test_resolved_p1_does_not_block_remaining_question_or_p2() -> None:
+    runner = StageRunner(
+        llm=object(),
+        system_prompt="",
+        tools=[],
+        output_schema=VerificationResult,
+        stage_name="verification",
+        priority_question_ids=["q0", "q1"],
+        resolved_priority_question_ids=["q0"],
+    )
+    assert runner._priority_coverage_error({"__question_id": "q1"}, []) == ""
+
+    all_resolved = StageRunner(
+        llm=object(),
+        system_prompt="",
+        tools=[],
+        output_schema=VerificationResult,
+        stage_name="verification",
+        priority_question_ids=["q0"],
+        resolved_priority_question_ids=["q0"],
+    )
+    assert all_resolved._priority_coverage_error({"__question_id": "q2"}, []) == ""
+
+
+def test_valid_pending_reinspection_can_preempt_fairness() -> None:
+    from src.orchestrator.stage_runner import StageStep
+
+    visual_id = "vq-required"
+    prior = StageStep(
+        action_type="tool_call",
+        tool_args={"__question_id": "q0"},
+        metadata={
+            "investigation_state_update": {
+                "created_visual_questions": [
+                    {
+                        "visual_question_id": visual_id,
+                        "claim_id": "claim-q0",
+                        "status": "pending",
+                    }
+                ]
+            }
+        },
+    )
+    runner = StageRunner(
+        llm=object(),
+        system_prompt="",
+        tools=[],
+        output_schema=VerificationResult,
+        stage_name="verification",
+        priority_question_ids=["q0", "q1"],
+        prior_steps=[prior],
+    )
+    assert runner._priority_coverage_error(
+        {"__question_id": "q0", "visual_question_id": visual_id},
+        [],
+    ) == ""
+
+
+def test_newly_resolved_p1_leaves_fairness_rotation_immediately() -> None:
+    from src.orchestrator.stage_runner import StageStep
+
+    resolved = StageStep(
+        action_type="tool_call",
+        tool_args={"__question_id": "q0"},
+        metadata={
+            "investigation_state_update": {
+                "belief_delta": {
+                    "claim_id": "claim-q0",
+                    "new_status": "supported",
+                }
+            }
+        },
+    )
+    runner = StageRunner(
+        llm=object(),
+        system_prompt="",
+        tools=[],
+        output_schema=VerificationResult,
+        stage_name="verification",
+        priority_question_ids=["q0", "q1"],
+    )
+    assert runner._priority_coverage_error(
+        {"__question_id": "q1"},
+        [resolved],
+    ) == ""
+
+
+def test_claim_text_replaces_model_goal_before_tool_execution() -> None:
+    class Tool:
+        name = "visit"
+        parameters = {
+            "type": "object",
+            "properties": {"url": {"type": "string"}, "goal": {"type": "string"}},
+            "required": ["url", "goal"],
+        }
+
+        def __init__(self):
+            self.params = None
+
+        def call(self, params):
+            self.params = params
+            return {"status": "success", "visits": []}
+
+    tool = Tool()
+    runner = StageRunner(
+        llm=object(),
+        system_prompt="",
+        tools=[tool],
+        output_schema=VerificationResult,
+        stage_name="verification",
+        question_claims={"q0": "The immutable declarative claim."},
+        attach_image=False,
+    )
+    args = runner._prepare_tool_args(
+        "visit",
+        {"question_id": "q0", "url": "https://example.test", "goal": "model query"},
+        "",
+    )
+    asyncio.run(runner._execute_tool("visit", args))
+    assert tool.params["goal"] == "The immutable declarative claim."
+
+
+def test_stage_runner_sanitizes_missed_blocked_rows_before_context_or_ledger() -> None:
+    class LeakyTool:
+        name = "reverse_image_search"
+        parameters = {"type": "object", "properties": {}, "required": []}
+
+        def call(self, _params):
+            return {
+                "status": "success",
+                "lens_results": [
+                    {
+                        "url": FACT_CHECK_URL,
+                        "title": "Gold verdict",
+                        "snippet": "The exact benchmark answer.",
+                    },
+                    {
+                        "url": "https://independent.example/lead",
+                        "title": "Independent lead",
+                    },
+                ],
+            }
+
+    runner = StageRunner(
+        llm=object(),
+        system_prompt="",
+        tools=[LeakyTool()],
+        output_schema=VerificationResult,
+        stage_name="verification",
+        source_access_policy=_policy(),
+        attach_image=False,
+    )
+    serialized, metadata = asyncio.run(
+        runner._execute_tool("reverse_image_search", {})
+    )
+    assert metadata["tool_success"] is True
+    assert "benchmark answer" not in serialized
+    assert "Gold verdict" not in serialized
+    assert "independent.example" in serialized
+
+
+def test_investigation_question_requires_truth_apt_claim_text() -> None:
+    try:
+        InvestigationQuestion(question_id="q0", question="Where did this come from?")
+    except ValidationError:
+        pass
+    else:
+        raise AssertionError("claim_text must be schema-required")

@@ -196,7 +196,12 @@ scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
 
 The command downloads AVerImaTeC into `datasets/averimatec`, extracts the images into
 a content-addressed directory, and writes an audit manifest under
-`benchmarks/candidates/real_seed_v0/averimatec`. It does not freeze any core case:
+`benchmarks/candidates/real_seed_v0/averimatec`. It also writes
+`source_access_policy.json` and an evaluator-private `evaluation.jsonl`, both derived
+from benchmark provenance. `src.eval.run_eval` automatically derives the policy when
+`source_article_url` is present, or accepts the generated file through
+`--source-access-policy`. It refuses AVerImaTeC rows that contain neither. The policy stays outside
+the model-visible case and trace. It does not freeze any core case:
 every item remains pending until a reviewer confirms that the claim is recoverable
 from pixels and has a public evidence path. Person-identity claims are allowed, but
 must be investigated through RIS, source captions, reporting, and event context rather

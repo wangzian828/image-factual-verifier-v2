@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, Union
 
 from src.integrations.browse.jina_reader import JinaReaderClient
 from src.integrations.search.serper import SerperTextSearchClient
+from src.orchestrator.source_access import SourceAccessPolicy
 from src.tools.base import BaseTool
 
 
@@ -18,6 +19,7 @@ class TextSearchTool(BaseTool):
     browse_client: Optional[JinaReaderClient] = None
     top_k: int = 10
     visit_top_k: int = 3
+    source_access_policy: Optional[SourceAccessPolicy] = None
     name: str = "text_search"
     description: str = "Search the web for textual evidence related to one or more queries."
     parameters: dict = field(
@@ -30,6 +32,10 @@ class TextSearchTool(BaseTool):
                 },
                 "gl": {"type": "string", "description": "Country code such as us or cn."},
                 "hl": {"type": "string", "description": "Language code such as en or zh-cn."},
+                "goal": {
+                    "type": "string",
+                    "description": "Immutable declarative claim used only for evidence stance extraction.",
+                },
             },
             "required": ["queries"],
         }
@@ -40,6 +46,14 @@ class TextSearchTool(BaseTool):
             self.client = SerperTextSearchClient()
         if self.browse_client is None:
             self.browse_client = JinaReaderClient()
+        if self.source_access_policy is not None:
+            self.set_source_access_policy(self.source_access_policy)
+
+    def set_source_access_policy(self, policy: SourceAccessPolicy) -> None:
+        self.source_access_policy = policy
+        setter = getattr(self.browse_client, "set_source_access_policy", None)
+        if callable(setter):
+            setter(policy)
 
     def search(
         self,
@@ -47,6 +61,7 @@ class TextSearchTool(BaseTool):
         *,
         gl: Optional[str] = None,
         hl: Optional[str] = None,
+        goal: Optional[str] = None,
     ) -> Dict[str, Any]:
         if isinstance(queries, str):
             queries = [queries]
@@ -54,7 +69,7 @@ class TextSearchTool(BaseTool):
             return {"status": "error", "error": "At least one non-empty search query is required."}
         responses: List[Dict[str, Any]] = []
         for query in queries:
-            responses.append(self._run_single_query(query, gl=gl, hl=hl))
+            responses.append(self._run_single_query(query, gl=gl, hl=hl, goal=goal))
         return self._build_result(responses)
 
     def call(self, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -62,18 +77,20 @@ class TextSearchTool(BaseTool):
             queries=params["queries"],
             gl=params.get("gl"),
             hl=params.get("hl"),
+            goal=params.get("goal"),
         )
 
     async def call_async(self, params: Dict[str, Any]) -> Dict[str, Any]:
         queries = params["queries"]
         gl = params.get("gl")
         hl = params.get("hl")
+        goal = params.get("goal")
         if isinstance(queries, str):
             queries = [queries]
         if not queries:
             return {"status": "error", "error": "At least one non-empty search query is required."}
         tasks = [
-            asyncio.to_thread(self._run_single_query, query, gl=gl, hl=hl)
+            asyncio.to_thread(self._run_single_query, query, gl=gl, hl=hl, goal=goal)
             for query in queries
         ]
         return self._build_result(list(await asyncio.gather(*tasks)))
@@ -96,11 +113,22 @@ class TextSearchTool(BaseTool):
         *,
         gl: Optional[str] = None,
         hl: Optional[str] = None,
+        goal: Optional[str] = None,
     ) -> Dict[str, Any]:
         search_t0 = time.perf_counter()
         response = self.client.search(query, top_k=self.top_k, gl=gl, hl=hl)
+        policy = self.source_access_policy
+        if policy is not None:
+            filtered, blocked_count = policy.filter_rows(response.get("results", []))
+            response = dict(response)
+            response["results"] = filtered
+            # These provider aggregates may quote a filtered result without a URL.
+            response["answer_box"] = None
+            response["knowledge_graph"] = None
+            if blocked_count:
+                response["policy_filtered_count"] = blocked_count
         search_duration_ms = round((time.perf_counter() - search_t0) * 1000, 2)
-        enriched = self._enrich_with_visits(response, goal=query)
+        enriched = self._enrich_with_visits(response, goal=str(goal or query))
         timings = dict(enriched.get("timings", {}))
         timings["search_ms"] = search_duration_ms
         enriched["timings"] = timings
@@ -108,6 +136,7 @@ class TextSearchTool(BaseTool):
 
     def _enrich_with_visits(self, response: Dict[str, Any], *, goal: str) -> Dict[str, Any]:
         enriched = dict(response)
+        enriched["goal"] = goal
         results = response.get("results", [])
         urls = [
             str(item.get("url", "")).strip()

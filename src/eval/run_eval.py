@@ -11,6 +11,7 @@ from typing import Any, Dict, List
 
 from src.workflow import VerificationWorkflow, WorkflowConfig
 from src.storage import default_eval_root
+from src.orchestrator.source_access import SourceAccessPolicy, benchmark_policy_from_rows
 
 
 def _parse_args() -> argparse.Namespace:
@@ -76,6 +77,14 @@ def _parse_args() -> argparse.Namespace:
         type=int,
         default=None,
         help="Optional sample limit for debugging.",
+    )
+    parser.add_argument(
+        "--source-access-policy",
+        default=None,
+        help=(
+            "Evaluation-only JSON policy for blocking benchmark-origin sources. "
+            "The policy is never added to model context or traces."
+        ),
     )
     return parser.parse_args()
 
@@ -188,6 +197,28 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
     trace_dir = run_dir / "traces"
     trace_dir.mkdir(parents=True, exist_ok=True)
 
+    explicit_policy = (
+        SourceAccessPolicy.load(args.source_access_policy)
+        if args.source_access_policy
+        else None
+    )
+    provenance_rows = [
+        row for row in samples if str(row.get("source_article_url", "")).strip()
+    ]
+    if explicit_policy is None and provenance_rows:
+        explicit_policy = benchmark_policy_from_rows(
+            provenance_rows,
+            policy_id=f"{benchmark_path.stem}-evaluation",
+        )
+    looks_like_averimatec = any(
+        str(row.get("sample_id", "")).startswith("averimatec-") for row in samples
+    )
+    if looks_like_averimatec and explicit_policy is None:
+        raise RuntimeError(
+            "AVerImaTeC evaluation requires source_article_url provenance in the "
+            "benchmark rows or --source-access-policy. Refusing a contamination-prone run."
+        )
+
     config = WorkflowConfig(
         provider=args.provider,
         model_name=args.model,
@@ -198,14 +229,23 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
         output_dir=str(trace_dir),
         timeout=args.timeout,
         save_traces=True,
+        source_access_policy=explicit_policy,
     )
     workflow = VerificationWorkflow(config)
 
     image_paths = [str(sample["image_path"]) for sample in samples]
     image_ids = [str(sample["sample_id"]) for sample in samples]
+    user_claims = [
+        (
+            str(sample.get("user_claim") or sample.get("runtime_claim") or "").strip()
+            or None
+        )
+        for sample in samples
+    ]
     results = await workflow.run_batch(
         image_paths=image_paths,
         image_ids=image_ids,
+        user_claims=user_claims,
         concurrency=max(1, args.concurrency),
     )
 

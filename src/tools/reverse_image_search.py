@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 from src.integrations.search.serper import SerperImageSearchClient, SerperLensSearchClient
 from src.integrations.search.visual_search import VisualReverseSearchClient
 from src.integrations.vlm.factory import build_vlm_client
+from src.orchestrator.source_access import SourceAccessPolicy
 from src.tools.base import BaseTool
 
 
@@ -49,6 +50,7 @@ class ReverseImageSearchTool(BaseTool):
     top_k: int = 5
     use_lens: bool = True
     use_vlm_query: bool = True
+    source_access_policy: Optional[SourceAccessPolicy] = None
     name: str = "reverse_image_search"
     description: str = (
         "Reverse image search: finds visually similar web pages and images using a visual search provider, "
@@ -104,6 +106,15 @@ class ReverseImageSearchTool(BaseTool):
 
         lens_results = results.get("lens_results", []) or []
         semantic_results = results.get("semantic_results", []) or []
+        policy = self.source_access_policy
+        if policy is not None:
+            lens_results, lens_blocked = policy.filter_rows(lens_results)
+            semantic_results, semantic_blocked = policy.filter_rows(semantic_results)
+            results["lens_results"] = lens_results
+            results["semantic_results"] = semantic_results
+            blocked_count = lens_blocked + semantic_blocked
+            if blocked_count:
+                results["policy_filtered_count"] = blocked_count
         results["candidate_page_urls"] = self._collect_candidate_page_urls(
             lens_results=lens_results,
             semantic_results=semantic_results,
@@ -226,6 +237,9 @@ class ReverseImageSearchTool(BaseTool):
 
     def call(self, params: Dict[str, Any]) -> Dict[str, Any]:
         return self.search(params["image_input"])
+
+    def set_source_access_policy(self, policy: SourceAccessPolicy) -> None:
+        self.source_access_policy = policy
 
     @staticmethod
     def _collect_candidate_page_urls(

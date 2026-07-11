@@ -141,6 +141,7 @@ class FakeOrchestrator(Orchestrator):
                 {
                     "status": "success",
                     "selected_url": "https://www.nasa.gov/example-launch",
+                    "goal": "NASA published this launch-pad image.",
                     "summary": "NASA published the same launch-pad image on its official site.",
                     "evidence": "NASA published the same launch-pad image on its official site.",
                     "relevance": "high",
@@ -154,6 +155,7 @@ class FakeOrchestrator(Orchestrator):
                     "visits": [
                         {
                             "url": "https://www.nasa.gov/example-launch",
+                            "goal": "NASA published this launch-pad image.",
                             "summary": "NASA published the same image.",
                             "evidence": "NASA published the same image.",
                             "relevance": "high",
@@ -183,6 +185,7 @@ class FakeOrchestrator(Orchestrator):
     {
       "question_id": "q0",
       "question": "Did NASA publish this launch-pad image?",
+      "claim_text": "NASA published this launch-pad image.",
       "why": "Official provenance is the strongest authenticity signal.",
       "suggested_tools": ["reverse_image_search", "visit"],
       "suggested_queries": ["NASA launch pad image"],
@@ -273,6 +276,7 @@ def test_context_rendering():
             InvestigationQuestion(
                 question_id="q0",
                 question="Did NASA publish this image?",
+                claim_text="NASA published this image.",
                 why="Source provenance matters.",
                 suggested_tools=["reverse_image_search", "visit"],
                 suggested_queries=["NASA launch pad image"],
@@ -360,7 +364,7 @@ def test_tool_error_is_not_supporting_evidence():
     orchestrator = object.__new__(Orchestrator)
     state = type("State", (), {})()
     state.plan = VerificationPlan(
-        questions=[InvestigationQuestion(question_id="q0", question="Is it consistent?", priority=1)]
+        questions=[InvestigationQuestion(question_id="q0", question="Is it consistent?", claim_text="The image is internally consistent.", priority=1)]
     )
     state.perception = PerceptionReport()
     steps = [
@@ -382,18 +386,20 @@ def test_tool_error_is_not_supporting_evidence():
 class ReplanningOrchestrator(FakeOrchestrator):
     def __init__(self, image_path: str):
         super().__init__(image_path)
-        self.max_rounds_verification = 3
+        self.max_rounds_verification = 4
         self.max_verification_iterations = 2
         self.llm = FakeLLM(
             [
                 self._two_question_plan(),
                 self._q0_tool_call(),
+                self._q1_touch_call(),
                 self._q0_visit_call(),
                 self._q0_only_output(),
                 self._q0_only_output(),
                 self._revised_plan(),
                 self._q1_tool_call(),
                 self._both_questions_output(),
+                self._judgment_response(),
                 self._judgment_response(),
             ]
         )
@@ -404,6 +410,7 @@ class ReplanningOrchestrator(FakeOrchestrator):
                 "queries": [{
                     "query": "NASA launch location",
                     "selected_url": "https://example.edu/nasa-launch-location",
+                    "goal": "The launch image was captured at the claimed location.",
                     "summary": "A university archive identifies the launch location shown in the image.",
                     "evidence": "A university archive identifies the launch location shown in the image.",
                     "relevance": "high",
@@ -428,8 +435,8 @@ class ReplanningOrchestrator(FakeOrchestrator):
     def _two_question_plan() -> str:
         return """<output>{
           "questions": [
-            {"question_id":"q0","question":"Did NASA publish this image?","why":"provenance","suggested_tools":["reverse_image_search"],"suggested_queries":["NASA launch image"],"related_entities":["NASA"],"priority":1},
-            {"question_id":"q1","question":"Where was the launch image captured?","why":"location context","suggested_tools":["text_search"],"suggested_queries":["NASA launch location"],"related_entities":["launch"],"priority":1}
+            {"question_id":"q0","question":"Did NASA publish this image?","claim_text":"NASA published this launch-pad image.","why":"provenance","suggested_tools":["reverse_image_search"],"suggested_queries":["NASA launch image"],"related_entities":["NASA"],"priority":1},
+            {"question_id":"q1","question":"Where was the launch image captured?","claim_text":"The launch image was captured at the claimed location.","why":"location context","suggested_tools":["text_search"],"suggested_queries":["NASA launch location"],"related_entities":["launch"],"priority":1}
           ],
           "image_intent":"Show a real NASA launch.","is_trying_to_be_real":true,"risk_assessment":"event_photo","revision":0,"revision_reason":""
         }</output>"""
@@ -443,18 +450,22 @@ class ReplanningOrchestrator(FakeOrchestrator):
         return '<tool_call>{"name":"text_search","arguments":{"question_id":"q1","queries":["NASA launch location"]}}</tool_call>'
 
     @staticmethod
+    def _q1_touch_call() -> str:
+        return '<tool_call>{"name":"reverse_image_search","arguments":{"question_id":"q1"}}</tool_call>'
+
+    @staticmethod
     def _q0_visit_call() -> str:
         return '<tool_call>{"name":"visit","arguments":{"question_id":"q0","url":["https://www.nasa.gov/example-launch"],"goal":"Did NASA publish this image?"}}</tool_call>'
 
     @staticmethod
     def _q0_only_output() -> str:
-        return """<output>{"evidence":[{"function_call_id":"legacy-verification-2-2","source":"https://www.nasa.gov/example-launch","summary":"NASA published the same image.","raw_excerpt":"NASA published the same image.","direction":"supports","quality":"strong","tool_used":"visit","related_question":"q0"}],"visual_anomalies":[],"authenticity_assessment":"uncertain","key_findings":["q0 resolved"],"source_findings":[],"visual_evidence":[],"world_model":{},"question_resolutions":[],"coverage_complete":false,"unresolved_priority_questions":["q1"],"exhausted_priority_questions":[],"iteration_count":1}</output>"""
+        return """<output>{"evidence":[{"function_call_id":"legacy-verification-3-3","source":"https://www.nasa.gov/example-launch","summary":"NASA published the same image.","raw_excerpt":"NASA published the same image.","direction":"supports","quality":"strong","tool_used":"visit","related_question":"q0"}],"visual_anomalies":[],"authenticity_assessment":"uncertain","key_findings":["q0 resolved"],"source_findings":[],"visual_evidence":[],"world_model":{},"question_resolutions":[],"coverage_complete":false,"unresolved_priority_questions":["q1"],"exhausted_priority_questions":[],"iteration_count":1}</output>"""
 
     @staticmethod
     def _revised_plan() -> str:
         return """<output>{
           "question_updates": [
-            {"question_id":"q1","question":"Where was the launch image captured?","why":"location context","suggested_tools":["text_search"],"suggested_queries":["NASA launch location official archive"],"related_entities":["launch"],"priority":1}
+            {"question_id":"q1","question":"Where was the launch image captured?","claim_text":"The launch image was captured at the claimed location.","why":"location context","suggested_tools":["text_search"],"suggested_queries":["NASA launch location official archive"],"related_entities":["launch"],"priority":1}
           ],
           "revision_reason":"Refine the unresolved location query."
         }</output>"""
@@ -462,8 +473,8 @@ class ReplanningOrchestrator(FakeOrchestrator):
     @staticmethod
     def _both_questions_output() -> str:
         return """<output>{"evidence":[
-          {"function_call_id":"legacy-verification-2-2","source":"https://www.nasa.gov/example-launch","summary":"NASA published the same image.","raw_excerpt":"NASA published the same image.","direction":"supports","quality":"strong","tool_used":"visit","related_question":"q0"},
-          {"function_call_id":"legacy-verification-1-5","source":"https://example.edu/nasa-launch-location","summary":"A university archive identifies the launch location shown in the image.","raw_excerpt":"A university archive identifies the launch location shown in the image.","direction":"supports","quality":"moderate","tool_used":"text_search","related_question":"q1"}
+          {"function_call_id":"legacy-verification-3-3","source":"https://www.nasa.gov/example-launch","summary":"NASA published the same image.","raw_excerpt":"NASA published the same image.","direction":"supports","quality":"strong","tool_used":"visit","related_question":"q0"},
+          {"function_call_id":"legacy-verification-1-6","source":"https://example.edu/nasa-launch-location","summary":"A university archive identifies the launch location shown in the image.","raw_excerpt":"A university archive identifies the launch location shown in the image.","direction":"supports","quality":"moderate","tool_used":"text_search","related_question":"q1"}
         ],"visual_anomalies":[],"authenticity_assessment":"authentic","key_findings":["Both priority questions resolved"],"source_findings":[],"visual_evidence":[],"world_model":{},"question_resolutions":[],"coverage_complete":false,"unresolved_priority_questions":[],"exhausted_priority_questions":[],"iteration_count":2}</output>"""
 
     @staticmethod
@@ -472,10 +483,10 @@ class ReplanningOrchestrator(FakeOrchestrator):
           "verdict":"real",
           "confidence":0.92,
           "claim_decisions":[
-            {"claim_id":"claim-q0","decision":"support","evidence_ids":["evidence-31240b4e2c484290a8c4"],"reason":null},
-            {"claim_id":"claim-q1","decision":"support","evidence_ids":["evidence-c3e4da86360f861d07a5"],"reason":null}
+            {"claim_id":"claim-q0","decision":"support","evidence_ids":["evidence-4c83ea687a35a9d2bc75"],"reason":null},
+            {"claim_id":"claim-q1","decision":"support","evidence_ids":["evidence-1a44c8fbb15baa6e29a5"],"reason":null}
           ],
-          "selected_evidence_ids":["evidence-31240b4e2c484290a8c4","evidence-c3e4da86360f861d07a5"],
+          "selected_evidence_ids":["evidence-4c83ea687a35a9d2bc75","evidence-1a44c8fbb15baa6e29a5"],
           "policy_rule_id":"reinspect-v1",
           "unverifiable_reasons":[]
         }</output>"""
@@ -506,12 +517,14 @@ def test_plan_revision_only_updates_unresolved_question():
             InvestigationQuestion(
                 question_id="q0",
                 question="Resolved provenance question",
+                claim_text="The provenance claim is true.",
                 suggested_tools=["reverse_image_search"],
                 priority=1,
             ),
             InvestigationQuestion(
                 question_id="q1",
                 question="Original unresolved location question",
+                claim_text="The location claim is true.",
                 suggested_tools=["text_search"],
                 priority=1,
             ),
@@ -532,6 +545,7 @@ def test_plan_revision_only_updates_unresolved_question():
             InvestigationQuestion(
                 question_id="q1",
                 question="Refined unresolved location question",
+                claim_text="The location claim is true.",
                 suggested_tools=["visit"],
                 suggested_queries=["official launch location"],
                 priority=1,
@@ -555,12 +569,14 @@ def test_plan_revision_rejects_resolved_question_update():
             InvestigationQuestion(
                 question_id="q0",
                 question="Resolved question",
+                claim_text="The resolved claim is true.",
                 suggested_tools=["text_search"],
                 priority=1,
             ),
             InvestigationQuestion(
                 question_id="q1",
                 question="Unresolved question",
+                claim_text="The unresolved claim is true.",
                 suggested_tools=["text_search"],
                 priority=1,
             ),
@@ -572,6 +588,7 @@ def test_plan_revision_rejects_resolved_question_update():
             InvestigationQuestion(
                 question_id="q0",
                 question="Rewrite resolved question",
+                claim_text="The resolved claim is true.",
                 suggested_tools=["visit"],
                 priority=1,
             )

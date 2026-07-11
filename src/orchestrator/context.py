@@ -80,6 +80,7 @@ class ContextRenderer:
             parts.append("Investigation questions:")
             for question in plan.questions[:6]:
                 row = f"- [{question.question_id}] P{question.priority}: {question.question}"
+                row += f" | immutable claim: {question.claim_text}"
                 if question.why:
                     row += f" | why: {question.why}"
                 if question.suggested_tools:
@@ -167,6 +168,7 @@ class ContextRenderer:
         plan: VerificationPlan,
         audit: CoverageAudit,
         verification: VerificationResult,
+        available_tools: list[str] | None = None,
     ) -> str:
         """Render only unresolved gaps and compact evidence for plan revision."""
 
@@ -177,6 +179,8 @@ class ContextRenderer:
         parts = ["## Replanning Context", ""]
         parts.append(f"Scene: {perception.scene_description[:500] or '(empty)'}")
         parts.append(f"Intent: {plan.image_intent[:500] or '(empty)'}")
+        if available_tools:
+            parts.append("Available verification tools: " + ", ".join(available_tools))
         parts.append("Unresolved questions to update:")
         for question in plan.questions:
             if question.question_id not in unresolved:
@@ -185,6 +189,7 @@ class ContextRenderer:
             gap = resolution.remaining_gap if resolution else "No grounded answer."
             parts.append(
                 f"- [{question.question_id}] {question.question[:500]} | "
+                f"immutable claim: {question.claim_text[:500]} | "
                 f"gap: {gap[:500]}"
             )
             if question.suggested_queries:

@@ -21,6 +21,8 @@ Task:
 
 Guidelines:
 - Ask concrete factual questions.
+- For every question, write one declarative `claim_text` that can be supported or
+  refuted. The question is the retrieval task; claim_text is the immutable stance target.
 - Prefer short, high-signal search queries.
 - Each question and reason must be one short sentence.
 - Use at most 3 tools and 3 queries per question.
@@ -52,6 +54,7 @@ Return exactly one JSON object:
     {
       "question_id": "q0",
       "question": "what should be verified",
+      "claim_text": "one declarative factual statement to test",
       "why": "why this matters",
       "suggested_tools": ["tool1", "tool2"],
       "suggested_queries": ["query 1", "query 2"],
@@ -76,6 +79,8 @@ your own wording, invent findings, or restate the full plan.
 Constraints:
 - Return exactly one update for every unresolved question id and no other id.
 - Keep each question and reason to one short sentence.
+- Preserve each unresolved question's declarative claim_text exactly; revise only
+  the search question, tools, and queries.
 - Use at most 3 tools and 3 short queries per update.
 - Return exactly one JSON object with question_updates and revision_reason.
 """

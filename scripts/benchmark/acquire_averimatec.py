@@ -18,6 +18,7 @@ import requests
 from PIL import Image
 
 from src.storage import data_path
+from src.orchestrator.source_access import benchmark_policy_from_rows
 
 
 DATASET_ID = "Rui4416/AVerImaTeC"
@@ -367,6 +368,19 @@ def _candidate_record(
     }
 
 
+def _evaluation_record(candidate: Mapping[str, Any]) -> Dict[str, Any]:
+    """Write an evaluator-private row; only runtime fields reach the Agent."""
+
+    return {
+        "sample_id": candidate["sample_id"],
+        "image_path": candidate["primary_image_path"],
+        "ground_truth": candidate["ground_truth"],
+        "bucket": "averimatec_real_seed_candidate",
+        "user_claim": candidate["gold_claim_text"],
+        "source_article_url": candidate["source_article_url"],
+    }
+
+
 def build_candidate_manifest(
     *,
     dataset_root: Path,
@@ -396,6 +410,13 @@ def build_candidate_manifest(
     with manifest_path.open("w", encoding="utf-8") as handle:
         for candidate in candidates:
             handle.write(json.dumps(candidate, ensure_ascii=False) + "\n")
+    evaluation_path = output_dir / "evaluation.jsonl"
+    with evaluation_path.open("w", encoding="utf-8") as handle:
+        for candidate in candidates:
+            if candidate.get("primary_image_path"):
+                handle.write(
+                    json.dumps(_evaluation_record(candidate), ensure_ascii=False) + "\n"
+                )
 
     original_labels = Counter(row["original_label"] for row in candidates)
     mapped_labels = Counter(row["ground_truth"] for row in candidates)
@@ -408,6 +429,7 @@ def build_candidate_manifest(
         "dataset_root": str(dataset_root.resolve()),
         "extraction_root": str(extraction_root.resolve()),
         "candidate_manifest": str(manifest_path.resolve()),
+        "evaluation_manifest": str(evaluation_path.resolve()),
         "total_candidates": len(candidates),
         "unique_claim_assets": len(asset_cache),
         "original_label_distribution": dict(original_labels),
@@ -430,6 +452,19 @@ def build_candidate_manifest(
         "acquisition_files": list(acquisition_files),
     }
     summary_path = output_dir / "summary.json"
+    summary_path.write_text(
+        json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    access_policy = benchmark_policy_from_rows(
+        candidates,
+        policy_id="averimatec-evaluation",
+    )
+    policy_path = output_dir / "source_access_policy.json"
+    policy_path.write_text(
+        json.dumps(access_policy.to_dict(), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    summary["source_access_policy"] = str(policy_path.resolve())
     summary_path.write_text(
         json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
     )

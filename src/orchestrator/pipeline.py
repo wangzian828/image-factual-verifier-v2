@@ -24,6 +24,7 @@ from src.orchestrator.investigation_state import (
 from src.orchestrator.llm_backend import APIBackend
 from src.orchestrator.stage_runner import StageRunner, StageStep
 from src.orchestrator.source_provenance import canonicalize_url, classify_source
+from src.orchestrator.source_access import SourceAccessPolicy
 from src.orchestrator.stages import judgment, planning, verification
 from src.orchestrator.state import (
     CoverageAudit,
@@ -47,6 +48,7 @@ from src.orchestrator.tool_cache import ToolResultCache
 from src.orchestrator.tool_health import require_tools, summarize_health
 from src.orchestrator.tool_registry import (
     REQUIRED_TOOLS,
+    STAGE_TOOLS,
     build_all_tools_with_health,
     build_stage_tools,
 )
@@ -70,6 +72,7 @@ class Orchestrator:
         temperature: float = 0.0,
         max_tokens: int = 8192,
         validate_startup: bool = True,
+        source_access_policy: Optional[SourceAccessPolicy] = None,
     ):
         self.provider = provider.lower().strip()
         self.model_name = model_name
@@ -85,6 +88,7 @@ class Orchestrator:
                 or os.getenv("GEMINI_WIRE_API")
             )
         self.max_rounds_verification = max_rounds_verification
+        self.source_access_policy = source_access_policy or SourceAccessPolicy()
         self.max_verification_iterations = max(1, int(os.getenv("MAX_VERIFICATION_ITERATIONS", "2")))
         self.timeout = timeout
         cache_namespace = os.getenv("TOOL_CACHE_NAMESPACE", "").strip() or "|".join(
@@ -97,6 +101,7 @@ class Orchestrator:
                 os.getenv("VISUAL_SEARCH_PROVIDER", "serper_lens"),
                 os.getenv("IMAGE_UPLOAD_PROVIDER", "oss"),
                 os.getenv("BROWSE_FETCH_PROVIDER", "jina"),
+                self.source_access_policy.cache_partition,
             ]
         )
         self.tool_cache = ToolResultCache(
@@ -141,6 +146,10 @@ class Orchestrator:
             vlm_model=self.vlm_model,
             vlm_wire_api=self.vlm_wire_api,
         )
+        for tool in self.all_tools.values():
+            setter = getattr(tool, "set_source_access_policy", None)
+            if callable(setter):
+                setter(self.source_access_policy)
         self.tool_health_summary = summarize_health(self.tool_health)
         if validate_startup:
             require_tools(self.tool_health, REQUIRED_TOOLS)
@@ -351,7 +360,10 @@ class Orchestrator:
             image_path=image_path,
             stage_name=planning.STAGE_NAME,
             recent_rounds_to_keep=1,
-            output_validator=lambda parsed, steps: self._validate_plan_output(parsed),
+            output_validator=lambda parsed, steps: self._validate_plan_output(
+                parsed,
+                set(STAGE_TOOLS["verification"]),
+            ),
             attach_image=False,
             max_output_tokens=self._stage_output_tokens("PLANNING", 8192),
         )
@@ -438,6 +450,29 @@ class Orchestrator:
                     if active_reinspect
                     else ""
                 ),
+                question_claims={
+                    question.question_id: question.claim_text
+                    for question in (state.plan or VerificationPlan()).questions
+                },
+                priority_question_ids=[
+                    question.question_id
+                    for question in (state.plan or VerificationPlan()).questions
+                    if question.priority == 1
+                ],
+                resolved_priority_question_ids=[
+                    question.question_id
+                    for question in (state.plan or VerificationPlan()).questions
+                    if question.priority == 1
+                    and next(
+                        (
+                            claim.status in {"supported", "refuted"}
+                            for claim in state.ledgers.claims
+                            if claim.question_id == question.question_id
+                        ),
+                        False,
+                    )
+                ],
+                source_access_policy=self.source_access_policy,
                 max_output_tokens=self._stage_output_tokens("VERIFICATION", 8192),
             )
             context = ContextRenderer.render_for_verification(
@@ -618,6 +653,7 @@ class Orchestrator:
                 parsed,
                 current_plan,
                 audit,
+                set(STAGE_TOOLS["verification"]),
             ),
             attach_image=False,
             max_output_tokens=self._stage_output_tokens("REPLANNING", 8192),
@@ -627,6 +663,7 @@ class Orchestrator:
             current_plan,
             audit,
             result,
+            list(STAGE_TOOLS["verification"]),
         )
         revised, steps = await runner.run(context)
         self._record_stage_steps(state, steps)
@@ -685,7 +722,10 @@ class Orchestrator:
         return True, ""
 
     @staticmethod
-    def _validate_plan_output(parsed: VerificationPlan) -> tuple[bool, str]:
+    def _validate_plan_output(
+        parsed: VerificationPlan,
+        available_tools: Optional[set[str]] = None,
+    ) -> tuple[bool, str]:
         if not parsed.questions:
             return False, "the plan must contain at least one investigation question"
         if not any(question.priority == 1 for question in parsed.questions):
@@ -693,6 +733,17 @@ class Orchestrator:
         ids = [question.question_id for question in parsed.questions]
         if any(not question_id for question_id in ids) or len(set(ids)) != len(ids):
             return False, "all investigation questions need unique non-empty question_id values"
+        if any(not question.claim_text.strip() for question in parsed.questions):
+            return False, "every investigation question needs a declarative claim_text"
+        available = available_tools or set()
+        invalid = sorted(
+            tool
+            for question in parsed.questions
+            for tool in question.suggested_tools
+            if tool not in available
+        )
+        if available_tools is not None and invalid:
+            return False, "plan suggested unavailable verification tools: " + ", ".join(invalid)
         return True, ""
 
     @staticmethod
@@ -700,6 +751,7 @@ class Orchestrator:
         parsed: PlanRevision,
         current: VerificationPlan,
         audit: CoverageAudit,
+        available_tools: Optional[set[str]] = None,
     ) -> tuple[bool, str]:
         unresolved_ids = set(audit.unresolved_priority_questions)
         current_ids = {question.question_id for question in current.questions}
@@ -721,8 +773,25 @@ class Orchestrator:
             return False, "all unresolved priority questions need an update: " + ", ".join(missing)
         if any(not question.question.strip() for question in parsed.question_updates):
             return False, "every question update needs a concrete question"
+        current_by_id = {question.question_id: question for question in current.questions}
+        changed_claims = sorted(
+            question.question_id
+            for question in parsed.question_updates
+            if question.claim_text != current_by_id[question.question_id].claim_text
+        )
+        if changed_claims:
+            return False, "replanning cannot change immutable claim_text: " + ", ".join(changed_claims)
         if any(not question.suggested_tools for question in parsed.question_updates):
             return False, "every question update needs at least one suggested tool"
+        available = available_tools or set()
+        invalid = sorted(
+            tool
+            for question in parsed.question_updates
+            for tool in question.suggested_tools
+            if tool not in available
+        )
+        if available_tools is not None and invalid:
+            return False, "plan revision suggested unavailable verification tools: " + ", ".join(invalid)
         return True, ""
 
     def _validate_judgment_output(
@@ -1110,6 +1179,14 @@ class Orchestrator:
                 key_findings.append(f"[{step.tool_name}] Tool call failed and was excluded from evidence.")
                 continue
             data = self._safe_json_dict(step.tool_result)
+            question = next(
+                (
+                    item
+                    for item in (state.plan or VerificationPlan()).questions
+                    if item.question_id == self._step_question_id(step)
+                ),
+                None,
+            )
 
             if step.tool_name == "current_time":
                 current_date_anchor = str(data.get("current_date", "")).strip()
@@ -1138,7 +1215,11 @@ class Orchestrator:
                 evidence_eligible = step.tool_name in {"text_search", "visit", "crop_and_search"}
                 if summary and evidence_eligible and excerpt and url:
                     provenance = self._find_browse_evidence_record(data, excerpt)
-                    if self._browse_record_is_evidence_eligible(provenance, url):
+                    if question is not None and self._browse_record_is_evidence_eligible(
+                        provenance,
+                        url,
+                        claim_text=(question.claim_text if question else ""),
+                    ):
                         stance = str(provenance.get("stance", "")).strip().lower()
                         direction = {"support": "supports", "refute": "refutes"}.get(
                             stance,
@@ -1540,7 +1621,7 @@ class Orchestrator:
                 claims.append({"claim_text": plan.image_intent, "state": "candidate", "confidence": 0.5})
             for question in plan.questions[:6]:
                 if question.question:
-                    claims.append({"claim_text": question.question, "state": "investigation_target", "confidence": 0.4})
+                    claims.append({"claim_text": question.claim_text, "state": "investigation_target", "confidence": 0.4})
 
         for item in evidence[:12]:
             if item.summary:
@@ -1649,6 +1730,7 @@ class Orchestrator:
         question_text = " ".join(
             [
                 question.question,
+                question.claim_text,
                 " ".join(question.related_entities),
                 " ".join(question.suggested_queries),
             ]
@@ -1771,7 +1853,16 @@ class Orchestrator:
             quality = signal["quality"]
         elif item.tool_used in {"visit", "text_search", "crop_and_search"}:
             provenance = self._find_browse_evidence_record(data, item.raw_excerpt)
-            if not self._browse_record_is_evidence_eligible(provenance, item.source):
+            question = next(
+                candidate
+                for candidate in plan.questions
+                if candidate.question_id == item.related_question
+            )
+            if not self._browse_record_is_evidence_eligible(
+                provenance,
+                item.source,
+                claim_text=question.claim_text,
+            ):
                 return None
             stance = str(provenance.get("stance", "")).strip().lower()
             if stance not in {"support", "refute", "unclear"}:
@@ -1800,12 +1891,15 @@ class Orchestrator:
         cls,
         record: Optional[Dict[str, Any]],
         source: str,
+        claim_text: str = "",
     ) -> bool:
         if not record or not bool(record.get("evidence_eligible", False)):
             return False
         if record.get("injection_flags"):
             return False
         if str(record.get("directness", "")).strip().lower() != "direct":
+            return False
+        if not claim_text or str(record.get("goal", "")).strip() != claim_text.strip():
             return False
         artifact_hash = str(record.get("artifact_sha256", "")).strip().lower()
         retrieved_at = str(record.get("retrieved_at", "")).strip()

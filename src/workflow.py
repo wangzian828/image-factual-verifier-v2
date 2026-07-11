@@ -26,6 +26,7 @@ load_dotenv()
 
 from src.orchestrator.pipeline import Orchestrator
 from src.orchestrator.state import VerificationCase
+from src.orchestrator.source_access import SourceAccessPolicy
 from src.redaction import sanitize_for_persistence
 from src.storage import default_trace_dir
 from src.trace_viewer import save_trace_html
@@ -52,6 +53,7 @@ class WorkflowConfig:
     # Output
     output_dir: str = field(default_factory=default_trace_dir)
     save_traces: bool = True
+    source_access_policy: Optional[SourceAccessPolicy] = None
 
 
 class VerificationWorkflow:
@@ -75,6 +77,7 @@ class VerificationWorkflow:
                 timeout=self.config.timeout,
                 temperature=self.config.temperature,
                 max_tokens=self.config.max_tokens,
+                source_access_policy=self.config.source_access_policy,
             )
         return self._orchestrator
 
@@ -137,6 +140,7 @@ class VerificationWorkflow:
         self,
         image_paths: List[str],
         image_ids: Optional[List[str]] = None,
+        user_claims: Optional[List[Optional[str]]] = None,
         concurrency: int = 1,
     ) -> List[Dict[str, Any]]:
         """Run verification on multiple images.
@@ -151,17 +155,21 @@ class VerificationWorkflow:
         """
         if image_ids is None:
             image_ids = [os.path.basename(p) for p in image_paths]
+        if user_claims is None:
+            user_claims = [None] * len(image_paths)
+        if len(user_claims) != len(image_paths):
+            raise ValueError("user_claims must match image_paths length")
 
         semaphore = asyncio.Semaphore(concurrency)
         results = []
 
-        async def _verify(path: str, img_id: str) -> Dict[str, Any]:
+        async def _verify(path: str, img_id: str, claim: Optional[str]) -> Dict[str, Any]:
             async with semaphore:
-                return await self.run_single(path, img_id)
+                return await self.run_single(path, img_id, user_claim=claim)
 
         tasks = [
-            _verify(path, img_id)
-            for path, img_id in zip(image_paths, image_ids)
+            _verify(path, img_id, claim)
+            for path, img_id, claim in zip(image_paths, image_ids, user_claims)
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 

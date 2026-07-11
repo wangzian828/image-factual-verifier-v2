@@ -270,8 +270,24 @@ class InvestigationReducer:
         discovery = next((item for item in new_discoveries if item.candidate_type == "reverse_image"), None)
         reference_url = str(parsed.get("reference_image_url", ""))
         if discovery is not None and reference_url:
+            distinction = _id(
+                "reference",
+                classify_source(reference_url).canonical_url or reference_url,
+            )
+            existing = next(
+                (
+                    item
+                    for item in state.visual_questions
+                    if item.claim_id == claim_id
+                    and item.visual_question_id == _id("vq", claim_id, distinction)
+                ),
+                None,
+            )
+            if existing is not None:
+                discovery = None
+        if discovery is not None and reference_url:
             visual = VisualQuestion(
-                visual_question_id=_id("vq", discovery.discovery_id, claim_id),
+                visual_question_id=_id("vq", claim_id, distinction),
                 claim_id=claim_id,
                 source_discovery_id=discovery.discovery_id,
                 target_bbox=[0.0, 0.0, 1.0, 1.0],
@@ -282,11 +298,29 @@ class InvestigationReducer:
                 created.append(visual)
 
         visual_tokens = ("image", "photo", "picture", "visual", "logo", "text", "depicted", "图片", "照片", "图像", "文字", "标志", "车型", "人物")
-        claim_text = (plan_question.question if plan_question else "").lower()
+        claim_text = (
+            " ".join([plan_question.question, plan_question.claim_text])
+            if plan_question
+            else ""
+        ).lower()
         evidence = next((item for item in new_evidence if item.evidence_kind == "web_span"), None)
         if evidence is not None and any(token in claim_text for token in visual_tokens):
+            distinction = _visual_distinction(plan_question, target, evidence)
+            existing = next(
+                (
+                    item
+                    for item in state.visual_questions
+                    if item.claim_id == claim_id
+                    and item.target_bbox == target
+                    and item.visual_question_id == _id("vq", claim_id, distinction)
+                ),
+                None,
+            )
+            if existing is not None:
+                evidence = None
+        if evidence is not None and any(token in claim_text for token in visual_tokens):
             visual = VisualQuestion(
-                visual_question_id=_id("vq", evidence.evidence_id, claim_id),
+                visual_question_id=_id("vq", claim_id, distinction),
                 claim_id=claim_id,
                 source_evidence_id=evidence.evidence_id,
                 target_bbox=target,
@@ -413,7 +447,9 @@ def _summary(parsed: Dict[str, Any], succeeded: bool) -> str:
 def _target_bbox(question: Any, perception: PerceptionReport) -> List[float]:
     target_tokens = set()
     if question is not None:
-        text = " ".join([question.question, *question.related_entities]).lower()
+        text = " ".join(
+            [question.question, question.claim_text, *question.related_entities]
+        ).lower()
         target_tokens = set(text.split())
     for region in perception.text_regions:
         if target_tokens and any(token in region.text.lower() for token in target_tokens if len(token) >= 3):
@@ -427,6 +463,30 @@ def _target_bbox(question: Any, perception: PerceptionReport) -> List[float]:
         ):
             return [float(item) for item in entity.bbox]
     return [0.0, 0.0, 1.0, 1.0]
+
+
+def _visual_distinction(
+    question: Any,
+    target_bbox: Sequence[float],
+    evidence: Any,
+) -> str:
+    if question is None:
+        target = "visual_claim"
+    else:
+        target = " ".join(
+            [question.claim_text, *question.related_entities]
+        ).strip().lower()
+    normalized = " ".join(target.split())[:300]
+    box = ",".join(f"{float(value):.3f}" for value in target_bbox)
+    return _id(
+        "distinction",
+        normalized or "visual_claim",
+        box,
+        str(getattr(evidence, "artifact_sha256", "")),
+        str(getattr(evidence, "span_start", "")),
+        str(getattr(evidence, "span_end", "")),
+        " ".join(str(getattr(evidence, "exact_text", "")).split())[:500],
+    )
 
 
 def _append_unique(values: List[Any], item: Any, id_field: str) -> bool:

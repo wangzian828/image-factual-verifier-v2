@@ -3,6 +3,8 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any, Dict
 
+from src.orchestrator.source_access import SourceAccessPolicy
+
 
 class BaseTool(ABC):
     name: str = ""
@@ -24,3 +26,13 @@ class BaseTool(ABC):
             "description": self.description,
             "parameters": self.parameters,
         }
+
+    def set_source_access_policy(self, policy: SourceAccessPolicy) -> None:
+        """Bind a runtime retrieval policy without exposing it in the tool schema."""
+
+        self.source_access_policy = policy
+        for attribute in ("client", "browse_client"):
+            child = getattr(self, attribute, None)
+            setter = getattr(child, "set_source_access_policy", None)
+            if callable(setter):
+                setter(policy)

@@ -26,6 +26,7 @@ from src.integrations.llm.openai_compatible import (
     resolve_model_wire_api,
 )
 from src.integrations.vlm.qwen_vl import parse_json_object
+from src.orchestrator.source_access import SourceAccessPolicy
 
 
 JINA_READER_PREFIX = "https://r.jina.ai/http://"
@@ -121,6 +122,7 @@ class JinaReaderClient:
     direct_fetch_timeout: int = DEFAULT_DIRECT_FETCH_TIMEOUT
     max_workers: int = 4
     fetch_provider: str = "jina"
+    source_access_policy: Optional[SourceAccessPolicy] = None
 
     def __post_init__(self) -> None:
         if self.api_key is None:
@@ -159,6 +161,17 @@ class JinaReaderClient:
         self._cache_lock = threading.Lock()
         self._thread_local = threading.local()
 
+    def set_source_access_policy(self, policy: SourceAccessPolicy) -> None:
+        self.source_access_policy = policy
+        with self._cache_lock:
+            self._content_cache.clear()
+            self._visit_cache.clear()
+
+    def _require_url_allowed(self, url: str) -> None:
+        policy = self.source_access_policy
+        if policy is not None and not policy.allows(url):
+            raise PermissionError("URL blocked by the active source access policy.")
+
     def _get_session(self) -> requests.Session:
         session = getattr(self._thread_local, "session", None)
         if session is None:
@@ -169,6 +182,7 @@ class JinaReaderClient:
     def visit(self, url: str, goal: str) -> Dict[str, Any]:
         total_t0 = time.perf_counter()
         normalized_url = self._normalize_url(url)
+        self._require_url_allowed(normalized_url)
         cache_key = (normalized_url, goal.strip())
         with self._cache_lock:
             cached = self._visit_cache.get(cache_key)
@@ -236,6 +250,7 @@ class JinaReaderClient:
 
     def fetch_page_content(self, url: str) -> tuple[str, str]:
         normalized_url = self._normalize_url(url)
+        self._require_url_allowed(normalized_url)
         with self._cache_lock:
             cached = self._content_cache.get(normalized_url)
         if cached is not None:
@@ -261,9 +276,14 @@ class JinaReaderClient:
             proxies=self._get_proxies(),
         )
         response.raise_for_status()
+        reader_target = str(response.url).replace("https://r.jina.ai/http://", "https://", 1)
+        self._require_url_allowed(reader_target)
         text = response.text.strip()
         if not text:
             raise RuntimeError("Jina returned empty content.")
+        source_match = re.search(r"(?im)^URL Source:\s*(https?://\S+)", text)
+        if source_match:
+            self._require_url_allowed(source_match.group(1).strip())
         return text
 
     def _fetch_direct(self, url: str) -> str:
@@ -284,6 +304,9 @@ class JinaReaderClient:
             proxies=self._get_proxies(),
         )
         response.raise_for_status()
+        for redirect in response.history:
+            self._require_url_allowed(str(redirect.url))
+        self._require_url_allowed(str(response.url))
         content_type = (response.headers.get("content-type") or "").lower()
         if "text/html" in content_type or self._looks_like_html(response.text):
             text = self._html_to_text(response.text)
@@ -319,6 +342,8 @@ class JinaReaderClient:
         seen = set()
         for url in urls:
             normalized = self._normalize_url(str(url))
+            if self.source_access_policy is not None and not self.source_access_policy.allows(normalized):
+                continue
             if normalized and normalized not in seen:
                 seen.add(normalized)
                 normalized_urls.append(normalized)

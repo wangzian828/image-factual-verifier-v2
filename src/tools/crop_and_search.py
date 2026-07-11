@@ -15,6 +15,7 @@ from src.integrations.browse.jina_reader import JinaReaderClient
 from src.integrations.search.serper import SerperImageSearchClient, SerperLensSearchClient
 from src.integrations.search.visual_search import VisualReverseSearchClient
 from src.integrations.vlm.factory import build_vlm_client
+from src.orchestrator.source_access import SourceAccessPolicy
 from src.tools.base import BaseTool
 
 
@@ -61,6 +62,7 @@ class CropAndSearchTool(BaseTool):
     top_k: int = 5
     visit_top_k: int = 3
     saved_crop_dir: str = "outputs/trace_artifacts/crops"
+    source_access_policy: Optional[SourceAccessPolicy] = None
     name: str = "crop_and_search"
     description: str = (
         "Crop one or more local regions from the image, run visual search on those crops, "
@@ -110,6 +112,14 @@ class CropAndSearchTool(BaseTool):
             self.visual_search_client = VisualReverseSearchClient(
                 serper_lens_client=self.lens_client,
             )
+        if self.source_access_policy is not None:
+            self.set_source_access_policy(self.source_access_policy)
+
+    def set_source_access_policy(self, policy: SourceAccessPolicy) -> None:
+        self.source_access_policy = policy
+        setter = getattr(self.browse_client, "set_source_access_policy", None)
+        if callable(setter):
+            setter(policy)
 
     def call(self, params: Dict[str, Any]) -> Dict[str, Any]:
         total_t0 = time.perf_counter()
@@ -209,6 +219,11 @@ class CropAndSearchTool(BaseTool):
                     query=semantic_query,
                     top_k=self.top_k,
                 )
+            if self.source_access_policy is not None:
+                lens_results, lens_blocked = self.source_access_policy.filter_rows(lens_results)
+                semantic_results, semantic_blocked = self.source_access_policy.filter_rows(semantic_results)
+            else:
+                lens_blocked = semantic_blocked = 0
             semantic_duration_ms = round((time.perf_counter() - semantic_t0) * 1000, 2)
 
             candidate_urls = self._collect_candidate_urls(lens_results, semantic_results)
@@ -238,6 +253,7 @@ class CropAndSearchTool(BaseTool):
 
             return {
                 "bbox": normalized_bbox,
+                "goal": goal,
                 "saved_crop_path": saved_crop_path,
                 "crop_query": semantic_query,
                 "image_url_for_search": crop_url,
@@ -246,6 +262,7 @@ class CropAndSearchTool(BaseTool):
                 "visual_search_errors": visual.get("errors", {}),
                 "lens_results": lens_results,
                 "semantic_results": semantic_results,
+                "policy_filtered_count": lens_blocked + semantic_blocked,
                 "candidate_page_urls": candidate_urls,
                 "reference_image_candidates": reference_image_candidates,
                 "reference_image_url": reference_image_candidates[0] if reference_image_candidates else "",

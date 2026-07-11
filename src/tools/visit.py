@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from src.integrations.browse.jina_reader import JinaReaderClient
+from src.orchestrator.source_access import SourceAccessPolicy
 from src.tools.base import BaseTool
 
 
@@ -12,6 +13,7 @@ class VisitTool(BaseTool):
     """Goal-conditioned webpage visit using Jina Reader."""
 
     client: Optional[JinaReaderClient] = None
+    source_access_policy: Optional[SourceAccessPolicy] = None
     name: str = "visit"
     description: str = (
         "Visit one or more webpages with a verification goal and extract "
@@ -34,13 +36,33 @@ class VisitTool(BaseTool):
     def __post_init__(self) -> None:
         if self.client is None:
             self.client = JinaReaderClient()
+        if self.source_access_policy is not None:
+            self.set_source_access_policy(self.source_access_policy)
+
+    def set_source_access_policy(self, policy: SourceAccessPolicy) -> None:
+        self.source_access_policy = policy
+        setter = getattr(self.client, "set_source_access_policy", None)
+        if callable(setter):
+            setter(policy)
 
     def visit(self, url: Any, goal: str) -> dict:
         try:
             if isinstance(url, list):
                 urls = [str(item) for item in url if str(item).strip()]
+                if self.source_access_policy is not None:
+                    urls = [item for item in urls if self.source_access_policy.allows(item)]
+                if not urls:
+                    return {
+                        "status": "error",
+                        "error": "All requested URLs are blocked by the active source access policy.",
+                    }
                 result = self.client.visit_many(urls, goal)
             else:
+                if self.source_access_policy is not None and not self.source_access_policy.allows(str(url)):
+                    return {
+                        "status": "error",
+                        "error": "URL blocked by the active source access policy.",
+                    }
                 result = self.client.visit(str(url), goal)
         except Exception as exc:
             return {

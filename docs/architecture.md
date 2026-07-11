@@ -50,7 +50,7 @@ Their merged `PerceptionReport` is a deterministic visual inventory for Planning
 
 ### 2. Planning
 
-Planning receives compact perception context and returns a schema-validated `VerificationPlan`. It must contain at least one question, at least one priority-1 question, and a unique non-empty `question_id` for every question. Suggested tools and queries guide investigation but do not prescribe a fixed sequence.
+Planning receives compact perception context and returns a schema-validated `VerificationPlan`. It must contain at least one question, at least one priority-1 question, and a unique non-empty `question_id` for every question. Every question also carries a declarative `claim_text`: `question` is the retrieval task, while `claim_text` is the immutable support/refute target used by browse extraction and the claim ledger. Replanning may change retrieval wording, tools, and queries but cannot change that claim. Suggested tools are validated against the active Verification registry and guide investigation without prescribing a fixed sequence.
 
 Planning has no tools. For the active ledger contract, each decision-relevant question becomes an atomic `ClaimRecord` with ID `claim-<question_id>`; priority 1, 2, and 3 map to `decisive`, `supporting`, and `contextual`. `image_intent` remains a compact planning field, not a substitute for claim slots. Invalid structured output after bounded correction fails the stage; there is no heuristic plan fallback.
 
@@ -79,6 +79,14 @@ The active native loop is:
 6. Continue until Gemini emits valid structured output or the round budget is exhausted.
 
 Verification cannot finish without a successful tool call. Premature output is rejected within the same interaction chain when required tool work or priority coverage is missing.
+
+Before an already touched priority-1 question can be sampled again, every active priority-1 question must receive at least one real tool attempt. Each function result returns deterministic per-question attempts, untouched priority IDs, pending visual-question IDs, and remaining per-tool budgets so Gemini can react to the bounded runtime state without a scripted tool fallback.
+
+### Evaluation Source Access
+
+`SourceAccessPolicy` is an evaluation-only retrieval boundary and is never part of `VerificationCase`, model context, or trace state. Benchmark acquisition derives excluded registered domains and canonical URLs from benchmark provenance such as `source_article_url`, including the target URL embedded in Wayback links. Product mode uses an empty policy.
+
+In evaluation mode the same policy is bound to text search, direct visits, reverse-image search, crop search, reference-image comparison, and the underlying browse client. Search rows are removed before automatic page enrichment, direct blocked visits fail before fetch, and blocked page/image candidates are removed before tool results, discoveries, evidence, ledgers, or model context are constructed. Tool-cache namespaces include the policy fingerprint so an unrestricted cached result cannot cross into a restricted run.
 
 #### Machine-Verifiable Ledgers
 

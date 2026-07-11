@@ -11,7 +11,7 @@ The supported production path is a multi-stage Gemini agent using the Gemini Int
 Preserve this control flow:
 
 1. **Case and Perception**: construct or accept a strict `VerificationCase`, verify its image SHA-256, then run scene perception and positioned OCR to produce `PerceptionReport`.
-2. **Planning**: have Gemini produce a validated `VerificationPlan` with unique question IDs and at least one priority-1 question; compile those questions into atomic claim slots.
+2. **Planning**: have Gemini produce a validated `VerificationPlan` with unique question IDs, immutable declarative `claim_text` values, and at least one priority-1 question; compile claim text, not open-ended search questions, into atomic claim slots.
 3. **Iterative native ReAct and ReInspect**: let Gemini select tools through Interactions `function_call` items, execute them locally, return `function_result` plus the deterministic observation update, and continue through `previous_interaction_id`.
 4. **Coverage Audit / Replanning loop**: audit decisive claim slots through their linked plan questions. If coverage is incomplete and budget remains, revise only unresolved questions and retain prior steps, ledgers, and evidence.
 5. **Ledger Judgment**: after either all decisive claims resolve or the bounded investigation budget ends, validate a `LedgerJudgment` against exact claim/evidence IDs. Unresolved factual slots yield typed `unverifiable`; engineering failures still raise before Judgment.
@@ -33,6 +33,8 @@ This is an agent, not a fixed tool script. Do not replace verification with a pr
 - Keep ReInspect evidence-conditioned. A search-created `VisualQuestion` must identify exactly one source evidence/discovery ID, normalized target box, expected property, and allowed real visual action. Matching OCR/crop/count/reference calls resolve or fail it; while pending, the linked claim stays open.
 - Keep coverage and judgment deterministic. Claim status depends on direct evidence and source-family independence. `LedgerJudgment` must decide every decisive claim using only matching ledger IDs; `real`, `fake`, and typed `unverifiable` follow the `reinspect-v1` policy.
 - Require an explicit `question_id` on verification function calls. Never silently assign a call to a question.
+- In benchmark evaluation, enforce the provenance-derived `SourceAccessPolicy` before search results are enriched or returned and before any direct page/reference fetch. Do not expose excluded URLs/domains or hidden gold to the model. Product mode remains unrestricted.
+- Ground browse stance to immutable `claim_text`, keep model queries as retrieval parameters only, and require every priority-1 question to receive one tool attempt before resampling a touched priority question.
 - Select upload, visual-search, and browse-fetch providers explicitly. A selected provider's failure must propagate; do not fall through to another provider.
 - Sanitize credentials, secret fields, and signed-URL authentication parameters before writing traces, HTML, or cache entries.
 - Treat JSON and sibling HTML trace export as one required operation. HTML rendering or write errors propagate; export is not best-effort.
