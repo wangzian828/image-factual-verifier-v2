@@ -221,6 +221,11 @@ python -m src.render_trace_html outputs\traces --output-dir outputs\trace_html
 
 Do not commit generated traces or cache files.
 
+When `IFV_DATA_ROOT` is set, default trace, evaluation, cache, benchmark-workbench,
+and source-material paths are rooted there instead of inside the checkout. The gpu-13
+wrapper sets it to `/gsdata/home/wza/image-factual-verifier-v2-data`; see
+`docs/operations/gpu13.md` for the directory layout.
+
 Probe the complete public Gemini Interactions contract without running an image case:
 
 ```powershell

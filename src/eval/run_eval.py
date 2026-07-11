@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from src.workflow import VerificationWorkflow, WorkflowConfig
+from src.storage import default_eval_root
 
 
 def _parse_args() -> argparse.Namespace:
@@ -181,7 +182,8 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
     run_dir = (
         Path(args.output_dir)
         if args.output_dir
-        else Path("outputs") / "eval_runs" / f"{timestamp}_{args.provider}_{args.model.replace('/', '_')}"
+        else default_eval_root()
+        / f"{timestamp}_{args.provider}_{args.model.replace('/', '_')}"
     )
     trace_dir = run_dir / "traces"
     trace_dir.mkdir(parents=True, exist_ok=True)

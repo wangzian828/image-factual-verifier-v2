@@ -19,6 +19,18 @@ if [[ "${OMP_NUM_THREADS}" != "1" ]]; then
     exit 2
 fi
 
+mkdir -p \
+    "${IFV_DATA_ROOT}/datasets" \
+    "${IFV_DATA_ROOT}/artifacts" \
+    "${IFV_DATA_ROOT}/benchmarks" \
+    "${IFV_DATA_ROOT}/cache/huggingface" \
+    "${IFV_DATA_ROOT}/cache/torch" \
+    "${IFV_DATA_ROOT}/cache/easyocr" \
+    "${IFV_DATA_ROOT}/cache/tools" \
+    "${IFV_DATA_ROOT}/runs/traces" \
+    "${IFV_DATA_ROOT}/runs/eval" \
+    "${IFV_DATA_ROOT}/generated"
+
 if [[ -n "$(git -C "${REPO_ROOT}" status --porcelain)" ]]; then
     echo "Refusing to install from a dirty server worktree." >&2
     echo "Commit locally, push to GitHub, then update this checkout." >&2

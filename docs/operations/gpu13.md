@@ -78,6 +78,7 @@ export https_proxy=http://100.10.1.210:47899
 export HTTP_PROXY="$http_proxy"
 export HTTPS_PROXY="$https_proxy"
 export OMP_NUM_THREADS=1
+export IFV_DATA_ROOT=/gsdata/home/wza/image-factual-verifier-v2-data
 ```
 
 The following were verified through that proxy:
@@ -88,6 +89,30 @@ The following were verified through that proxy:
 
 Use `scripts/server/run_gpu13.sh` for project commands. It always sources the
 required proxy and threading environment and fails if the OMP value is not `1`.
+
+## Server Data Root
+
+All datasets and generated runtime artifacts live on the gpu-13 data filesystem:
+
+```text
+/gsdata/home/wza/image-factual-verifier-v2-data/
+  datasets/       downloaded archives and extracted datasets
+  artifacts/      web pages, images, RIS/SERP snapshots, and source material
+  benchmarks/     benchmark manifests and benchmark-owned assets
+  cache/          Hugging Face, Torch, EasyOCR, and tool caches
+  runs/traces/    standalone JSON and HTML Agent trajectories
+  runs/eval/      benchmark predictions, summaries, and per-case traces
+  generated/      later synthetic training and diagnostic data
+```
+
+`/gs/home/wza/gsdata` resolves to `/gsdata/home/wza`; the latter had about 399 TB
+available during the deployment audit. `gpu13_env.sh` exports `IFV_DATA_ROOT` and
+routes Hugging Face, Torch, EasyOCR, and tool caches into this tree. Runtime and data
+scripts also derive their default output paths from `IFV_DATA_ROOT`.
+
+Do not download datasets, write evaluation traces, or generate images inside the Git
+checkout. The repository contains code, schemas, documentation, and small reviewed
+manifests only.
 
 ## First Deployment
 
@@ -159,8 +184,7 @@ scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
   python scripts/probe_gemini_interactions.py --model gemini-3-flash-preview
 ```
 
-Keep benchmark datasets and caches outside the Git checkout. Record their server
-paths in environment configuration, not committed manifests that expose credentials.
+Keep benchmark datasets and caches under `IFV_DATA_ROOT`, outside the Git checkout.
 
 ## Troubleshooting
 

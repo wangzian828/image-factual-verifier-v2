@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from src.workflow import VerificationWorkflow, WorkflowConfig
+from src.storage import default_trace_dir
 
 
 def main():
@@ -34,7 +35,11 @@ def main():
         choices=["interactions", "responses", "chat_completions"],
         help="Vision wire protocol. Gemini accepts interactions only.",
     )
-    parser.add_argument("--output-dir", default="outputs/traces", help="Trace output directory")
+    parser.add_argument(
+        "--output-dir",
+        default=default_trace_dir(),
+        help="Trace output directory",
+    )
     parser.add_argument("--timeout", type=float, default=900.0, help="Timeout in seconds")
     parser.add_argument("--no-trace", action="store_true", help="Don't save trace files")
     args = parser.parse_args()

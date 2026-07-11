@@ -6,10 +6,27 @@ import re
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Sequence
 
+from src.storage import data_path
 
-DEFAULT_EVENT_CARDS = "data/benchmark_candidates/recent_diverse/event_cards/event_cards.jsonl"
-DEFAULT_SCORED_MANIFEST = "data/source_materials/recent_diverse_scored_all/scored_manifest.jsonl"
-DEFAULT_OUTPUT_DIR = "data/benchmarks/v0.1/prompt_prep"
+
+DEFAULT_EVENT_CARDS = str(
+    data_path(
+        "benchmarks/candidates/recent_diverse/event_cards/event_cards.jsonl",
+        "data/benchmark_candidates/recent_diverse/event_cards/event_cards.jsonl",
+    )
+)
+DEFAULT_SCORED_MANIFEST = str(
+    data_path(
+        "artifacts/source_materials/recent_diverse_scored_all/scored_manifest.jsonl",
+        "data/source_materials/recent_diverse_scored_all/scored_manifest.jsonl",
+    )
+)
+DEFAULT_OUTPUT_DIR = str(
+    data_path(
+        "generated/legacy_v0.1/prompt_prep",
+        "data/benchmarks/v0.1/prompt_prep",
+    )
+)
 
 
 def _parse_args() -> argparse.Namespace:

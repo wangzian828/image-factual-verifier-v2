@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional
 import requests
 from dotenv import load_dotenv
 from PIL import Image
+from src.storage import data_path
 
 
 load_dotenv()
@@ -27,6 +28,14 @@ DEFAULT_TIMEOUT = 180
 DEFAULT_MAX_IMAGE_EDGE = 1024
 DEFAULT_MAX_WORKERS = 3
 DEFAULT_WORKER_DELAY_MS = 350
+DEFAULT_INPUT_MANIFEST = data_path(
+    "artifacts/source_materials/recent_official/manifest.jsonl",
+    "data/source_materials/recent_official/manifest.jsonl",
+)
+DEFAULT_OUTPUT_DIR = data_path(
+    "artifacts/source_materials/recent_official_scored",
+    "data/source_materials/recent_official_scored",
+)
 
 _THREAD_LOCAL = local()
 
@@ -110,12 +119,12 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--input-manifest",
-        default="data/source_materials/recent_official/manifest.jsonl",
+        default=str(DEFAULT_INPUT_MANIFEST),
         help="Manifest created by collect_recent_source_materials.py",
     )
     parser.add_argument(
         "--output-dir",
-        default="data/source_materials/recent_official_scored",
+        default=str(DEFAULT_OUTPUT_DIR),
         help="Directory to store scoring results.",
     )
     parser.add_argument(

@@ -51,6 +51,7 @@ from src.orchestrator.tool_registry import (
     build_stage_tools,
 )
 from src.orchestrator.tool_result import parse_tool_result, serialize_tool_result
+from src.storage import default_tool_cache_dir
 
 
 class Orchestrator:
@@ -99,7 +100,7 @@ class Orchestrator:
             ]
         )
         self.tool_cache = ToolResultCache(
-            cache_dir=os.getenv("TOOL_CACHE_DIR", ".cache/tool_results"),
+            cache_dir=os.getenv("TOOL_CACHE_DIR", default_tool_cache_dir()),
             enabled=os.getenv("TOOL_CACHE_ENABLED", "0").strip().lower() in {"1", "true", "yes"},
             ttl_seconds=float(os.getenv("TOOL_CACHE_TTL_SECONDS", "3600")),
             namespace=cache_namespace,

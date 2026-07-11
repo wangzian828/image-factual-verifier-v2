@@ -7,13 +7,33 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 from urllib.parse import urlparse
 
+from src.storage import data_path
 
-DEFAULT_REAL_CANDIDATES = "data/benchmark_candidates/recent_diverse/real_photo_candidates.jsonl"
-DEFAULT_SYNTHETIC_CANDIDATES = (
-    "data/benchmark_candidates/recent_diverse/synthetic_real_candidates.jsonl"
+
+DEFAULT_REAL_CANDIDATES = str(
+    data_path(
+        "benchmarks/candidates/recent_diverse/real_photo_candidates.jsonl",
+        "data/benchmark_candidates/recent_diverse/real_photo_candidates.jsonl",
+    )
 )
-DEFAULT_SOURCE_MANIFEST = "data/source_materials/recent_diverse/manifest.jsonl"
-DEFAULT_OUTPUT_DIR = "data/benchmark_candidates/recent_diverse/event_cards"
+DEFAULT_SYNTHETIC_CANDIDATES = str(
+    data_path(
+        "benchmarks/candidates/recent_diverse/synthetic_real_candidates.jsonl",
+        "data/benchmark_candidates/recent_diverse/synthetic_real_candidates.jsonl",
+    )
+)
+DEFAULT_SOURCE_MANIFEST = str(
+    data_path(
+        "artifacts/source_materials/recent_diverse/manifest.jsonl",
+        "data/source_materials/recent_diverse/manifest.jsonl",
+    )
+)
+DEFAULT_OUTPUT_DIR = str(
+    data_path(
+        "benchmarks/candidates/recent_diverse/event_cards",
+        "data/benchmark_candidates/recent_diverse/event_cards",
+    )
+)
 
 STOP_ENTITY_WORDS = {
     "A",

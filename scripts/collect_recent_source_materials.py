@@ -14,12 +14,16 @@ from urllib.parse import urlparse
 import requests
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
+from src.storage import data_path
 
 
 load_dotenv()
 
 
-DEFAULT_OUTPUT_DIR = Path("data/source_materials/recent_official")
+DEFAULT_OUTPUT_DIR = data_path(
+    "artifacts/source_materials/recent_official",
+    "data/source_materials/recent_official",
+)
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"

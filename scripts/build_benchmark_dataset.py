@@ -5,14 +5,48 @@ import json
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
+from src.storage import data_path
 
-DEFAULT_REAL_EVENT_CARDS = "data/benchmark_candidates/recent_diverse/event_cards/real_photo_event_cards.jsonl"
-DEFAULT_SYNTHETIC_REAL_PROMPTS = "data/benchmarks/v0.1/prompt_prep/synthetic_real_prompts.json"
-DEFAULT_SYNTHETIC_REAL_MANIFEST = "data/benchmarks/v0.1/generated/synthetic_real/manifest.jsonl"
-DEFAULT_SYNTHETIC_FAKE_PROMPTS = "data/benchmarks/v0.1/prompt_prep/synthetic_fake_prompts.json"
-DEFAULT_SYNTHETIC_FAKE_MANIFEST = "data/benchmarks/v0.1/generated/synthetic_fake/manifest.jsonl"
-DEFAULT_UNVERIFIABLE = "data/benchmarks/v0.1/prompt_prep/unverifiable_candidates.json"
-DEFAULT_OUTPUT_DIR = "data/benchmarks/v0.1"
+
+DEFAULT_REAL_EVENT_CARDS = str(
+    data_path(
+        "benchmarks/candidates/recent_diverse/event_cards/real_photo_event_cards.jsonl",
+        "data/benchmark_candidates/recent_diverse/event_cards/real_photo_event_cards.jsonl",
+    )
+)
+DEFAULT_SYNTHETIC_REAL_PROMPTS = str(
+    data_path(
+        "generated/legacy_v0.1/prompt_prep/synthetic_real_prompts.json",
+        "data/benchmarks/v0.1/prompt_prep/synthetic_real_prompts.json",
+    )
+)
+DEFAULT_SYNTHETIC_REAL_MANIFEST = str(
+    data_path(
+        "generated/legacy_v0.1/synthetic_real/manifest.jsonl",
+        "data/benchmarks/v0.1/generated/synthetic_real/manifest.jsonl",
+    )
+)
+DEFAULT_SYNTHETIC_FAKE_PROMPTS = str(
+    data_path(
+        "generated/legacy_v0.1/prompt_prep/synthetic_fake_prompts.json",
+        "data/benchmarks/v0.1/prompt_prep/synthetic_fake_prompts.json",
+    )
+)
+DEFAULT_SYNTHETIC_FAKE_MANIFEST = str(
+    data_path(
+        "generated/legacy_v0.1/synthetic_fake/manifest.jsonl",
+        "data/benchmarks/v0.1/generated/synthetic_fake/manifest.jsonl",
+    )
+)
+DEFAULT_UNVERIFIABLE = str(
+    data_path(
+        "generated/legacy_v0.1/prompt_prep/unverifiable_candidates.json",
+        "data/benchmarks/v0.1/prompt_prep/unverifiable_candidates.json",
+    )
+)
+DEFAULT_OUTPUT_DIR = str(
+    data_path("benchmarks/legacy_v0.1", "data/benchmarks/v0.1")
+)
 
 
 def _parse_args() -> argparse.Namespace:

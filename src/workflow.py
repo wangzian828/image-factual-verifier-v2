@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
@@ -27,6 +27,7 @@ load_dotenv()
 from src.orchestrator.pipeline import Orchestrator
 from src.orchestrator.state import VerificationCase
 from src.redaction import sanitize_for_persistence
+from src.storage import default_trace_dir
 from src.trace_viewer import save_trace_html
 
 
@@ -49,7 +50,7 @@ class WorkflowConfig:
     timeout: float = 900.0
 
     # Output
-    output_dir: str = "outputs/traces"
+    output_dir: str = field(default_factory=default_trace_dir)
     save_traces: bool = True
 
 
