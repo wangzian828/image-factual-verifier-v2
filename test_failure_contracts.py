@@ -92,6 +92,78 @@ def test_verification_raises_when_every_tool_fails() -> None:
         Path(image_path).parent.rmdir()
 
 
+def test_verification_uses_runtime_observations_when_model_summary_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    image_path = make_test_image()
+
+    async def run_with_rejected_summary(_runner, _context):
+        return None, [
+            StageStep(
+                round=1,
+                stage_name="verification",
+                action_type="tool_call",
+                tool_name="reverse_image_search",
+                tool_args={"__question_id": "q0"},
+                tool_result=json.dumps(
+                    {
+                        "status": "success",
+                        "lens_results": [
+                            {
+                                "title": "Candidate source",
+                                "url": "https://example.test/candidate",
+                                "snippet": "A possible visual match.",
+                            }
+                        ],
+                        "semantic_results": [],
+                    }
+                ),
+                metadata={"function_call_id": "call-search-1"},
+            ),
+            StageStep(
+                round=2,
+                stage_name="verification",
+                action_type="output_rejected",
+                output={"authenticity_assessment": "authentic"},
+                metadata={
+                    "rejection_reason": (
+                        "incomplete decisive coverage requires an uncertain verification assessment"
+                    )
+                },
+            ),
+        ]
+
+    monkeypatch.setattr(pipeline_module.StageRunner, "run", run_with_rejected_summary)
+    try:
+        orchestrator = FakeOrchestrator(image_path)
+        orchestrator.max_verification_iterations = 1
+        state = VerificationState(
+            image_path=image_path,
+            perception=PerceptionReport(scene_description="test image"),
+            plan=VerificationPlan(
+                questions=[
+                    InvestigationQuestion(
+                        question_id="q0",
+                        question="Where was this image first published?",
+                        priority=1,
+                    )
+                ]
+            ),
+        )
+
+        result = asyncio.run(orchestrator._run_verification(state, image_path))
+
+        assert result.authenticity_assessment == "uncertain"
+        assert result.coverage_complete is False
+        assert result.unresolved_priority_questions == ["q0"]
+        assert state.coverage_audits[-1].investigation_complete is True
+        assert len(state.ledgers.discoveries) == 1
+        assert any(step.action_type == "output_rejected" for step in state.all_steps)
+    finally:
+        Path(image_path).unlink(missing_ok=True)
+        Path(image_path).parent.rmdir()
+
+
 def test_required_tool_failure_aborts_startup(monkeypatch: pytest.MonkeyPatch) -> None:
     health = {
         name: ToolHealth(available=name != "visit", error="dependency missing" if name == "visit" else "")

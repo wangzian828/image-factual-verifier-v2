@@ -505,10 +505,6 @@ class Orchestrator:
                 "Verification failed: every attempted tool call failed."
                 + (f" Failures: {failures}" if failures else "")
             )
-        if not parsed_results:
-            raise RuntimeError(
-                "Verification failed: the agent did not produce any accepted structured result."
-            )
         if not state.coverage_audits or not state.coverage_audits[-1].investigation_complete:
             unresolved = (
                 state.coverage_audits[-1].unresolved_priority_questions
