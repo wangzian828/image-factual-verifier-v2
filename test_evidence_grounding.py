@@ -2,12 +2,17 @@ from __future__ import annotations
 
 import json
 
-from src.orchestrator.ledger import build_verification_case, compile_runtime_ledgers
+from src.orchestrator.ledger import (
+    VerificationLedger,
+    build_verification_case,
+    compile_runtime_ledgers,
+)
 from src.orchestrator.pipeline import Orchestrator
 from src.orchestrator.stage_runner import StageStep
 from src.orchestrator.state import (
     EvidenceItem,
     InvestigationQuestion,
+    SourceRecord,
     VerificationPlan,
     VerificationResult,
     VisualAnomaly,
@@ -348,3 +353,61 @@ def test_current_time_is_recorded_as_runtime_anchor(tmp_path) -> None:
     assert ledgers.sources[0].source_class == "runtime"
     assert ledgers.evidence[0].evidence_kind == "runtime_anchor"
     assert ledgers.evidence[0].image_region is None
+
+
+def test_same_source_artifact_merges_retrieval_metadata() -> None:
+    ledger = VerificationLedger()
+    base = {
+        "source_id": "source-stable",
+        "canonical_url": "https://example.test/report",
+        "hostname": "example.test",
+        "registered_domain": "example.test",
+        "source_family": "content:" + "a" * 64,
+        "source_class": "unknown",
+        "artifact_sha256": "a" * 64,
+    }
+
+    ledger.add_source(
+        SourceRecord(
+            **base,
+            retrieved_at="2026-07-11T08:01:00+00:00",
+            risk_flags=["second_flag"],
+        )
+    )
+    merged = ledger.add_source(
+        SourceRecord(
+            **base,
+            retrieved_at="2026-07-11T08:00:00+00:00",
+            risk_flags=["first_flag"],
+        )
+    )
+
+    assert len(ledger.data.sources) == 1
+    assert merged.retrieved_at == "2026-07-11T08:00:00+00:00"
+    assert merged.risk_flags == ["first_flag", "second_flag"]
+
+
+def test_same_source_id_rejects_immutable_conflict() -> None:
+    ledger = VerificationLedger()
+    ledger.add_source(
+        SourceRecord(
+            source_id="source-conflict",
+            canonical_url="https://example.test/a",
+            source_family="domain:example.test",
+            artifact_sha256="a" * 64,
+        )
+    )
+
+    try:
+        ledger.add_source(
+            SourceRecord(
+                source_id="source-conflict",
+                canonical_url="https://example.test/b",
+                source_family="domain:example.test",
+                artifact_sha256="a" * 64,
+            )
+        )
+    except ValueError as exc:
+        assert "canonical_url" in str(exc)
+    else:
+        raise AssertionError("immutable source conflict was merged")

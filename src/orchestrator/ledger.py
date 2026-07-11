@@ -78,8 +78,48 @@ class VerificationLedger:
         return record
 
     def add_source(self, record: SourceRecord) -> SourceRecord:
-        self._append_unique("sources", record, "source_id")
-        return record
+        existing = next(
+            (
+                item
+                for item in self.data.sources
+                if item.source_id == record.source_id
+            ),
+            None,
+        )
+        if existing is None:
+            self.data.sources.append(record)
+            return record
+
+        immutable_fields = (
+            "canonical_url",
+            "hostname",
+            "registered_domain",
+            "source_family",
+            "source_class",
+            "artifact_sha256",
+        )
+        conflicts = [
+            field_name
+            for field_name in immutable_fields
+            if getattr(existing, field_name) != getattr(record, field_name)
+        ]
+        if conflicts:
+            raise ValueError(
+                "Duplicate source_id has conflicting immutable content "
+                f"({', '.join(conflicts)}): {record.source_id}"
+            )
+        existing.retrieved_at = min(
+            value
+            for value in (existing.retrieved_at, record.retrieved_at)
+            if value
+        ) if existing.retrieved_at or record.retrieved_at else ""
+        existing.dependency_source_ids = sorted(
+            set(existing.dependency_source_ids) | set(record.dependency_source_ids)
+        )
+        existing.risk_flags = sorted(
+            set(existing.risk_flags) | set(record.risk_flags)
+        )
+        return existing
 
     def add_discovery(self, record: DiscoveryRecord) -> DiscoveryRecord:
         self._require_claim(record.claim_id)
