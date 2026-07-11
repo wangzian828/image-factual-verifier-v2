@@ -272,3 +272,11 @@ in the tested configuration and returns image content inline when the interactio
 completes. `scripts/generate_gpt_image_samples.py` defaults to the Gemini provider;
 another provider is used only when explicitly selected and never as a failure fallback.
 Video generation keeps its separate URI delivery contract.
+
+## Server Operations
+
+The verified gpu-13 deployment topology, Git-only source workflow, mandatory
+`OMP_NUM_THREADS=1` guard, proxy configuration, isolated Conda bootstrap, and test
+commands are documented in `docs/operations/gpu13.md`. Server checkouts are runtime
+artifacts only: source changes are made locally, committed, pushed to GitHub, and then
+fast-forwarded on the server.
