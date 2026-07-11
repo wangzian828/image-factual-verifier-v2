@@ -1,0 +1,1568 @@
+﻿[
+    {
+        "id":  "2104.05893",
+        "title":  "NewsCLIPpings: Automatic Generation of Out-of-Context Multimodal Media",
+        "authors":  [
+                        "Grace Luo",
+                        "Trevor Darrell",
+                        "Anna Rohrbach"
+                    ],
+        "published":  "2021-04-13",
+        "updated":  "2021-09-22",
+        "primary_category":  "cs.CV",
+        "url":  "https://arxiv.org/abs/2104.05893",
+        "abstract":  "Online misinformation is a prevalent societal issue, with adversaries relying on tools ranging from cheap fakes to sophisticated deep fakes. We are motivated by the threat scenario where an image is used out of context to support a certain narrative. While some prior datasets for detecting image-text inconsistency generate samples via text manipulation, we propose a dataset where both image and text are unmanipulated but mismatched. We introduce several strategies for automatically retrieving convincing images for a given caption, capturing cases with inconsistent entities or semantic context. Our large-scale automatically generated NewsCLIPpings Dataset: (1) demonstrates that machine-driven image repurposing is now a realistic threat, and (2) provides samples that represent challenging instances of mismatch between text and image in news that are able to mislead humans. We benchmark several state-of-the-art multimodal models on our dataset and analyze their performance across different pretraining domains and visual backbones."
+    },
+    {
+        "id":  "2112.00061",
+        "title":  "Open-Domain, Content-based, Multi-modal Fact-checking of Out-of-Context Images via Online Resources",
+        "authors":  [
+                        "Sahar Abdelnabi",
+                        "Rakibul Hasan",
+                        "Mario Fritz"
+                    ],
+        "published":  "2021-12-01",
+        "updated":  "2022-03-20",
+        "primary_category":  "cs.CV",
+        "url":  "https://arxiv.org/abs/2112.00061",
+        "abstract":  "Misinformation is now a major problem due to its potential high risks to our core democratic and societal values and orders. Out-of-context misinformation is one of the easiest and effective ways used by adversaries to spread viral false stories. In this threat, a real image is re-purposed to support other narratives by misrepresenting its context and/or elements. The internet is being used as the go-to way to verify information using different sources and modalities. Our goal is an inspectable method that automates this time-consuming and reasoning-intensive process by fact-checking the image-caption pairing using Web evidence. To integrate evidence and cues from both modalities, we introduce the concept of \u0027multi-modal cycle-consistency check\u0027; starting from the image/caption, we gather textual/visual evidence, which will be compared against the other paired caption/image, respectively. Moreover, we propose a novel architecture, Consistency-Checking Network (CCN), that mimics the layered human reasoning across the same and different modalities: the caption vs. textual evidence, the image vs. visual evidence, and the image vs. caption. Our work offers the first step and benchmark for open-domain, content-based, multi-modal fact-checking, and significantly outperforms previous baselines that did not leverage external evidence."
+    },
+    {
+        "id":  "2112.09332",
+        "title":  "WebGPT: Browser-assisted question-answering with human feedback",
+        "authors":  [
+                        "Reiichiro Nakano",
+                        "Jacob Hilton",
+                        "Suchir Balaji",
+                        "Jeff Wu",
+                        "Long Ouyang",
+                        "Christina Kim",
+                        "Christopher Hesse",
+                        "Shantanu Jain",
+                        "Vineet Kosaraju",
+                        "William Saunders",
+                        "Xu Jiang",
+                        "Karl Cobbe",
+                        "Tyna Eloundou",
+                        "Gretchen Krueger",
+                        "Kevin Button",
+                        "Matthew Knight",
+                        "Benjamin Chess",
+                        "John Schulman"
+                    ],
+        "published":  "2021-12-17",
+        "updated":  "2022-06-02",
+        "primary_category":  "cs.CL",
+        "url":  "https://arxiv.org/abs/2112.09332",
+        "abstract":  "We fine-tune GPT-3 to answer long-form questions using a text-based web-browsing environment, which allows the model to search and navigate the web. By setting up the task so that it can be performed by humans, we are able to train models on the task using imitation learning, and then optimize answer quality with human feedback. To make human evaluation of factual accuracy easier, models must collect references while browsing in support of their answers. We train and evaluate our models on ELI5, a dataset of questions asked by Reddit users. Our best model is obtained by fine-tuning GPT-3 using behavior cloning, and then performing rejection sampling against a reward model trained to predict human preferences. This model\u0027s answers are preferred by humans 56% of the time to those of our human demonstrators, and 69% of the time to the highest-voted answer from Reddit."
+    },
+    {
+        "id":  "2210.03629",
+        "title":  "ReAct: Synergizing Reasoning and Acting in Language Models",
+        "authors":  [
+                        "Shunyu Yao",
+                        "Jeffrey Zhao",
+                        "Dian Yu",
+                        "Nan Du",
+                        "Izhak Shafran",
+                        "Karthik Narasimhan",
+                        "Yuan Cao"
+                    ],
+        "published":  "2022-10-06",
+        "updated":  "2023-03-10",
+        "primary_category":  "cs.CL",
+        "url":  "https://arxiv.org/abs/2210.03629",
+        "abstract":  "While large language models (LLMs) have demonstrated impressive capabilities across tasks in language understanding and interactive decision making, their abilities for reasoning (e.g. chain-of-thought prompting) and acting (e.g. action plan generation) have primarily been studied as separate topics. In this paper, we explore the use of LLMs to generate both reasoning traces and task-specific actions in an interleaved manner, allowing for greater synergy between the two: reasoning traces help the model induce, track, and update action plans as well as handle exceptions, while actions allow it to interface with external sources, such as knowledge bases or environments, to gather additional information. We apply our approach, named ReAct, to a diverse set of language and decision making tasks and demonstrate its effectiveness over state-of-the-art baselines, as well as improved human interpretability and trustworthiness over methods without reasoning or acting components. Concretely, on question answering (HotpotQA) and fact verification (Fever), ReAct overcomes issues of hallucination and error propagation prevalent in chain-of-thought reasoning by interacting with a simple Wikipedia API, and generates human-like task-solving trajectories that are more interpretable than baselines without reasoning traces. On two interactive decision making benchmarks (ALFWorld and WebShop), ReAct outperforms imitation and reinforcement learning methods by an absolute success rate of 34% and 10% respectively, while being prompted with only one or two in-context examples. Project site with code: https://react-lm.github.io"
+    },
+    {
+        "id":  "2212.10509",
+        "title":  "Interleaving Retrieval with Chain-of-Thought Reasoning for Knowledge-Intensive Multi-Step Questions",
+        "authors":  [
+                        "Harsh Trivedi",
+                        "Niranjan Balasubramanian",
+                        "Tushar Khot",
+                        "Ashish Sabharwal"
+                    ],
+        "published":  "2022-12-21",
+        "updated":  "2023-06-23",
+        "primary_category":  "cs.CL",
+        "url":  "https://arxiv.org/abs/2212.10509",
+        "abstract":  "Prompting-based large language models (LLMs) are surprisingly powerful at generating natural language reasoning steps or Chains-of-Thoughts (CoT) for multi-step question answering (QA). They struggle, however, when the necessary knowledge is either unavailable to the LLM or not up-to-date within its parameters. While using the question to retrieve relevant text from an external knowledge source helps LLMs, we observe that this one-step retrieve-and-read approach is insufficient for multi-step QA. Here, \\textit{what to retrieve} depends on \\textit{what has already been derived}, which in turn may depend on \\textit{what was previously retrieved}. To address this, we propose IRCoT, a new approach for multi-step QA that interleaves retrieval with steps (sentences) in a CoT, guiding the retrieval with CoT and in turn using retrieved results to improve CoT. Using IRCoT with GPT3 substantially improves retrieval (up to 21 points) as well as downstream QA (up to 15 points) on four datasets: HotpotQA, 2WikiMultihopQA, MuSiQue, and IIRC. We observe similar substantial gains in out-of-distribution (OOD) settings as well as with much smaller models such as Flan-T5-large without additional training. IRCoT reduces model hallucination, resulting in factually more accurate CoT reasoning. Code, data, and prompts are available at \\url{https://github.com/stonybrooknlp/ircot}"
+    },
+    {
+        "id":  "2304.04639",
+        "title":  "EKILA: Synthetic Media Provenance and Attribution for Generative Art",
+        "authors":  [
+                        "Kar Balan",
+                        "Shruti Agarwal",
+                        "Simon Jenni",
+                        "Andy Parsons",
+                        "Andrew Gilbert",
+                        "John Collomosse"
+                    ],
+        "published":  "2023-04-10",
+        "updated":  "2023-04-10",
+        "primary_category":  "cs.CV",
+        "url":  "https://arxiv.org/abs/2304.04639",
+        "abstract":  "We present EKILA; a decentralized framework that enables creatives to receive recognition and reward for their contributions to generative AI (GenAI). EKILA proposes a robust visual attribution technique and combines this with an emerging content provenance standard (C2PA) to address the problem of synthetic image provenance -- determining the generative model and training data responsible for an AI-generated image. Furthermore, EKILA extends the non-fungible token (NFT) ecosystem to introduce a tokenized representation for rights, enabling a triangular relationship between the asset\u0027s Ownership, Rights, and Attribution (ORA). Leveraging the ORA relationship enables creators to express agency over training consent and, through our attribution model, to receive apportioned credit, including royalty payments for the use of their assets in GenAI."
+    },
+    {
+        "id":  "2304.14133",
+        "title":  "VERITE: A Robust Benchmark for Multimodal Misinformation Detection Accounting for Unimodal Bias",
+        "authors":  [
+                        "Stefanos-Iordanis Papadopoulos",
+                        "Christos Koutlis",
+                        "Symeon Papadopoulos",
+                        "Panagiotis C. Petrantonakis"
+                    ],
+        "published":  "2023-04-27",
+        "updated":  "2023-10-18",
+        "primary_category":  "cs.CV",
+        "url":  "https://arxiv.org/abs/2304.14133",
+        "abstract":  "Multimedia content has become ubiquitous on social media platforms, leading to the rise of multimodal misinformation (MM) and the urgent need for effective strategies to detect and prevent its spread. In recent years, the challenge of multimodal misinformation detection (MMD) has garnered significant attention by researchers and has mainly involved the creation of annotated, weakly annotated, or synthetically generated training datasets, along with the development of various deep learning MMD models. However, the problem of unimodal bias has been overlooked, where specific patterns and biases in MMD benchmarks can result in biased or unimodal models outperforming their multimodal counterparts on an inherently multimodal task; making it difficult to assess progress. In this study, we systematically investigate and identify the presence of unimodal bias in widely-used MMD benchmarks, namely VMU-Twitter and COSMOS. To address this issue, we introduce the \"VERification of Image-TExt pairs\" (VERITE) benchmark for MMD which incorporates real-world data, excludes \"asymmetric multimodal misinformation\" and utilizes \"modality balancing\". We conduct an extensive comparative study with a Transformer-based architecture that shows the ability of VERITE to effectively address unimodal bias, rendering it a robust evaluation framework for MMD. Furthermore, we introduce a new method -- termed Crossmodal HArd Synthetic MisAlignment (CHASMA) -- for generating realistic synthetic training data that preserve crossmodal relations between legitimate images and false human-written captions. By leveraging CHASMA in the training process, we observe consistent and notable improvements in predictive performance on VERITE; with a 9.2% increase in accuracy. We release our code at: https://github.com/stevejpapad/image-text-verification"
+    },
+    {
+        "id":  "2305.06983",
+        "title":  "Active Retrieval Augmented Generation",
+        "authors":  [
+                        "Zhengbao Jiang",
+                        "Frank F. Xu",
+                        "Luyu Gao",
+                        "Zhiqing Sun",
+                        "Qian Liu",
+                        "Jane Dwivedi-Yu",
+                        "Yiming Yang",
+                        "Jamie Callan",
+                        "Graham Neubig"
+                    ],
+        "published":  "2023-05-12",
+        "updated":  "2023-10-22",
+        "primary_category":  "cs.CL",
+        "url":  "https://arxiv.org/abs/2305.06983",
+        "abstract":  "Despite the remarkable ability of large language models (LMs) to comprehend and generate language, they have a tendency to hallucinate and create factually inaccurate output. Augmenting LMs by retrieving information from external knowledge resources is one promising solution. Most existing retrieval augmented LMs employ a retrieve-and-generate setup that only retrieves information once based on the input. This is limiting, however, in more general scenarios involving generation of long texts, where continually gathering information throughout generation is essential. In this work, we provide a generalized view of active retrieval augmented generation, methods that actively decide when and what to retrieve across the course of the generation. We propose Forward-Looking Active REtrieval augmented generation (FLARE), a generic method which iteratively uses a prediction of the upcoming sentence to anticipate future content, which is then utilized as a query to retrieve relevant documents to regenerate the sentence if it contains low-confidence tokens. We test FLARE along with baselines comprehensively over 4 long-form knowledge-intensive generation tasks/datasets. FLARE achieves superior or competitive performance on all tasks, demonstrating the effectiveness of our method. Code and datasets are available at https://github.com/jzbjyb/FLARE."
+    },
+    {
+        "id":  "2305.13507",
+        "title":  "Multimodal Automated Fact-Checking: A Survey",
+        "authors":  [
+                        "Mubashara Akhtar",
+                        "Michael Schlichtkrull",
+                        "Zhijiang Guo",
+                        "Oana Cocarascu",
+                        "Elena Simperl",
+                        "Andreas Vlachos"
+                    ],
+        "published":  "2023-05-23",
+        "updated":  "2023-10-26",
+        "primary_category":  "cs.CL",
+        "url":  "https://arxiv.org/abs/2305.13507",
+        "abstract":  "Misinformation is often conveyed in multiple modalities, e.g. a miscaptioned image. Multimodal misinformation is perceived as more credible by humans, and spreads faster than its text-only counterparts. While an increasing body of research investigates automated fact-checking (AFC), previous surveys mostly focus on text. In this survey, we conceptualise a framework for AFC including subtasks unique to multimodal misinformation. Furthermore, we discuss related terms used in different communities and map them to our framework. We focus on four modalities prevalent in real-world fact-checking: text, image, audio, and video. We survey benchmarks and models, and discuss limitations and promising directions for future research"
+    },
+    {
+        "id":  "2305.14251",
+        "title":  "FActScore: Fine-grained Atomic Evaluation of Factual Precision in Long Form Text Generation",
+        "authors":  [
+                        "Sewon Min",
+                        "Kalpesh Krishna",
+                        "Xinxi Lyu",
+                        "Mike Lewis",
+                        "Wen-tau Yih",
+                        "Pang Wei Koh",
+                        "Mohit Iyyer",
+                        "Luke Zettlemoyer",
+                        "Hannaneh Hajishirzi"
+                    ],
+        "published":  "2023-05-24",
+        "updated":  "2023-10-11",
+        "primary_category":  "cs.CL",
+        "url":  "https://arxiv.org/abs/2305.14251",
+        "abstract":  "Evaluating the factuality of long-form text generated by large language models (LMs) is non-trivial because (1) generations often contain a mixture of supported and unsupported pieces of information, making binary judgments of quality inadequate, and (2) human evaluation is time-consuming and costly. In this paper, we introduce FACTSCORE, a new evaluation that breaks a generation into a series of atomic facts and computes the percentage of atomic facts supported by a reliable knowledge source. We conduct an extensive human evaluation to obtain FACTSCOREs of people biographies generated by several state-of-the-art commercial LMs -- InstructGPT, ChatGPT, and the retrieval-augmented PerplexityAI -- and report new analysis demonstrating the need for such a fine-grained score (e.g., ChatGPT only achieves 58%). Since human evaluation is costly, we also introduce an automated model that estimates FACTSCORE using retrieval and a strong language model, with less than a 2% error rate. Finally, we use this automated metric to evaluate 6,500 generations from a new set of 13 recent LMs that would have cost $26K if evaluated by humans, with various findings: GPT-4 and ChatGPT are more factual than public models, and Vicuna and Alpaca are some of the best public models. FACTSCORE is available for public use via `pip install factscore`."
+    },
+    {
+        "id":  "2305.14627",
+        "title":  "Enabling Large Language Models to Generate Text with Citations",
+        "authors":  [
+                        "Tianyu Gao",
+                        "Howard Yen",
+                        "Jiatong Yu",
+                        "Danqi Chen"
+                    ],
+        "published":  "2023-05-24",
+        "updated":  "2023-10-31",
+        "primary_category":  "cs.CL",
+        "url":  "https://arxiv.org/abs/2305.14627",
+        "abstract":  "Large language models (LLMs) have emerged as a widely-used tool for information seeking, but their generated outputs are prone to hallucination. In this work, our aim is to allow LLMs to generate text with citations, improving their factual correctness and verifiability. Existing work mainly relies on commercial search engines and human evaluation, making it challenging to reproduce and compare different modeling approaches. We propose ALCE, the first benchmark for Automatic LLMs\u0027 Citation Evaluation. ALCE collects a diverse set of questions and retrieval corpora and requires building end-to-end systems to retrieve supporting evidence and generate answers with citations. We develop automatic metrics along three dimensions -- fluency, correctness, and citation quality -- and demonstrate their strong correlation with human judgements. Our experiments with state-of-the-art LLMs and novel prompting strategies show that current systems have considerable room for improvement -- For example, on the ELI5 dataset, even the best models lack complete citation support 50% of the time. Our analyses further highlight promising future directions, including developing better retrievers, advancing long-context LLMs, and improving the ability to synthesize information from multiple sources."
+    },
+    {
+        "id":  "2310.03214",
+        "title":  "FreshLLMs: Refreshing Large Language Models with Search Engine Augmentation",
+        "authors":  [
+                        "Tu Vu",
+                        "Mohit Iyyer",
+                        "Xuezhi Wang",
+                        "Noah Constant",
+                        "Jerry Wei",
+                        "Jason Wei",
+                        "Chris Tar",
+                        "Yun-Hsuan Sung",
+                        "Denny Zhou",
+                        "Quoc Le",
+                        "Thang Luong"
+                    ],
+        "published":  "2023-10-05",
+        "updated":  "2023-11-22",
+        "primary_category":  "cs.CL",
+        "url":  "https://arxiv.org/abs/2310.03214",
+        "abstract":  "Most large language models (LLMs) are trained once and never updated; thus, they lack the ability to dynamically adapt to our ever-changing world. In this work, we perform a detailed study of the factuality of LLM-generated text in the context of answering questions that test current world knowledge. Specifically, we introduce FreshQA, a novel dynamic QA benchmark encompassing a diverse range of question and answer types, including questions that require fast-changing world knowledge as well as questions with false premises that need to be debunked. We benchmark a diverse array of both closed and open-source LLMs under a two-mode evaluation procedure that allows us to measure both correctness and hallucination. Through human evaluations involving more than 50K judgments, we shed light on limitations of these models and demonstrate significant room for improvement: for instance, all models (regardless of model size) struggle on questions that involve fast-changing knowledge and false premises. Motivated by these results, we present FreshPrompt, a simple few-shot prompting method that substantially boosts the performance of an LLM on FreshQA by incorporating relevant and up-to-date information retrieved from a search engine into the prompt. Our experiments show that FreshPrompt outperforms both competing search engine-augmented prompting methods such as Self-Ask (Press et al., 2022) as well as commercial systems such as Perplexity.AI. Further analysis of FreshPrompt reveals that both the number of retrieved evidences and their order play a key role in influencing the correctness of LLM-generated answers. Additionally, instructing the LLM to generate concise and direct answers helps reduce hallucination compared to encouraging more verbose answers. To facilitate future work, we release FreshQA at github.com/freshllms/freshqa and commit to updating it at regular intervals."
+    },
+    {
+        "id":  "2310.11511",
+        "title":  "Self-RAG: Learning to Retrieve, Generate, and Critique through Self-Reflection",
+        "authors":  [
+                        "Akari Asai",
+                        "Zeqiu Wu",
+                        "Yizhong Wang",
+                        "Avirup Sil",
+                        "Hannaneh Hajishirzi"
+                    ],
+        "published":  "2023-10-18",
+        "updated":  "2023-10-18",
+        "primary_category":  "cs.CL",
+        "url":  "https://arxiv.org/abs/2310.11511",
+        "abstract":  "Despite their remarkable capabilities, large language models (LLMs) often produce responses containing factual inaccuracies due to their sole reliance on the parametric knowledge they encapsulate. Retrieval-Augmented Generation (RAG), an ad hoc approach that augments LMs with retrieval of relevant knowledge, decreases such issues. However, indiscriminately retrieving and incorporating a fixed number of retrieved passages, regardless of whether retrieval is necessary, or passages are relevant, diminishes LM versatility or can lead to unhelpful response generation. We introduce a new framework called Self-Reflective Retrieval-Augmented Generation (Self-RAG) that enhances an LM\u0027s quality and factuality through retrieval and self-reflection. Our framework trains a single arbitrary LM that adaptively retrieves passages on-demand, and generates and reflects on retrieved passages and its own generations using special tokens, called reflection tokens. Generating reflection tokens makes the LM controllable during the inference phase, enabling it to tailor its behavior to diverse task requirements. Experiments show that Self-RAG (7B and 13B parameters) significantly outperforms state-of-the-art LLMs and retrieval-augmented models on a diverse set of tasks. Specifically, Self-RAG outperforms ChatGPT and retrieval-augmented Llama2-chat on Open-domain QA, reasoning and fact verification tasks, and it shows significant gains in improving factuality and citation accuracy for long-form generations relative to these models."
+    },
+    {
+        "id":  "2311.09939",
+        "title":  "RED-DOT: Multimodal Fact-checking via Relevant Evidence Detection",
+        "authors":  [
+                        "Stefanos-Iordanis Papadopoulos",
+                        "Christos Koutlis",
+                        "Symeon Papadopoulos",
+                        "Panagiotis C. Petrantonakis"
+                    ],
+        "published":  "2023-11-16",
+        "updated":  "2024-03-07",
+        "primary_category":  "cs.MM",
+        "url":  "https://arxiv.org/abs/2311.09939",
+        "abstract":  "Online misinformation is often multimodal in nature, i.e., it is caused by misleading associations between texts and accompanying images. To support the fact-checking process, researchers have been recently developing automatic multimodal methods that gather and analyze external information, evidence, related to the image-text pairs under examination. However, prior works assumed all external information collected from the web to be relevant. In this study, we introduce a \"Relevant Evidence Detection\" (RED) module to discern whether each piece of evidence is relevant, to support or refute the claim. Specifically, we develop the \"Relevant Evidence Detection Directed Transformer\" (RED-DOT) and explore multiple architectural variants (e.g., single or dual-stage) and mechanisms (e.g., \"guided attention\"). Extensive ablation and comparative experiments demonstrate that RED-DOT achieves significant improvements over the state-of-the-art (SotA) on the VERITE benchmark by up to 33.7%. Furthermore, our evidence re-ranking and element-wise modality fusion led to RED-DOT surpassing the SotA on NewsCLIPings+ by up to 3% without the need for numerous evidence or multiple backbone encoders. We release our code at: https://github.com/stevejpapad/relevant-evidence-detection"
+    },
+    {
+        "id":  "2311.12983",
+        "title":  "GAIA: a benchmark for General AI Assistants",
+        "authors":  [
+                        "Grégoire Mialon",
+                        "Clémentine Fourrier",
+                        "Craig Swift",
+                        "Thomas Wolf",
+                        "Yann LeCun",
+                        "Thomas Scialom"
+                    ],
+        "published":  "2023-11-22",
+        "updated":  "2023-11-22",
+        "primary_category":  "cs.CL",
+        "url":  "https://arxiv.org/abs/2311.12983",
+        "abstract":  "We introduce GAIA, a benchmark for General AI Assistants that, if solved, would represent a milestone in AI research. GAIA proposes real-world questions that require a set of fundamental abilities such as reasoning, multi-modality handling, web browsing, and generally tool-use proficiency. GAIA questions are conceptually simple for humans yet challenging for most advanced AIs: we show that human respondents obtain 92\\% vs. 15\\% for GPT-4 equipped with plugins. This notable performance disparity contrasts with the recent trend of LLMs outperforming humans on tasks requiring professional skills in e.g. law or chemistry. GAIA\u0027s philosophy departs from the current trend in AI benchmarks suggesting to target tasks that are ever more difficult for humans. We posit that the advent of Artificial General Intelligence (AGI) hinges on a system\u0027s capability to exhibit similar robustness as the average human does on such questions. Using GAIA\u0027s methodology, we devise 466 questions and their answer. We release our questions while retaining answers to 300 of them to power a leader-board available at https://huggingface.co/gaia-benchmark."
+    },
+    {
+        "id":  "2401.15884",
+        "title":  "Corrective Retrieval Augmented Generation",
+        "authors":  [
+                        "Shi-Qi Yan",
+                        "Jia-Chen Gu",
+                        "Yun Zhu",
+                        "Zhen-Hua Ling"
+                    ],
+        "published":  "2024-01-29",
+        "updated":  "2024-10-07",
+        "primary_category":  "cs.CL",
+        "url":  "https://arxiv.org/abs/2401.15884",
+        "abstract":  "Large language models (LLMs) inevitably exhibit hallucinations since the accuracy of generated texts cannot be secured solely by the parametric knowledge they encapsulate. Although retrieval-augmented generation (RAG) is a practicable complement to LLMs, it relies heavily on the relevance of retrieved documents, raising concerns about how the model behaves if retrieval goes wrong. To this end, we propose the Corrective Retrieval Augmented Generation (CRAG) to improve the robustness of generation. Specifically, a lightweight retrieval evaluator is designed to assess the overall quality of retrieved documents for a query, returning a confidence degree based on which different knowledge retrieval actions can be triggered. Since retrieval from static and limited corpora can only return sub-optimal documents, large-scale web searches are utilized as an extension for augmenting the retrieval results. Besides, a decompose-then-recompose algorithm is designed for retrieved documents to selectively focus on key information and filter out irrelevant information in them. CRAG is plug-and-play and can be seamlessly coupled with various RAG-based approaches. Experiments on four datasets covering short- and long-form generation tasks show that CRAG can significantly improve the performance of RAG-based approaches."
+    },
+    {
+        "id":  "2402.14207",
+        "title":  "Assisting in Writing Wikipedia-like Articles From Scratch with Large Language Models",
+        "authors":  [
+                        "Yijia Shao",
+                        "Yucheng Jiang",
+                        "Theodore A. Kanell",
+                        "Peter Xu",
+                        "Omar Khattab",
+                        "Monica S. Lam"
+                    ],
+        "published":  "2024-02-22",
+        "updated":  "2024-04-08",
+        "primary_category":  "cs.CL",
+        "url":  "https://arxiv.org/abs/2402.14207",
+        "abstract":  "We study how to apply large language models to write grounded and organized long-form articles from scratch, with comparable breadth and depth to Wikipedia pages. This underexplored problem poses new challenges at the pre-writing stage, including how to research the topic and prepare an outline prior to writing. We propose STORM, a writing system for the Synthesis of Topic Outlines through Retrieval and Multi-perspective Question Asking. STORM models the pre-writing stage by (1) discovering diverse perspectives in researching the given topic, (2) simulating conversations where writers carrying different perspectives pose questions to a topic expert grounded on trusted Internet sources, (3) curating the collected information to create an outline. For evaluation, we curate FreshWiki, a dataset of recent high-quality Wikipedia articles, and formulate outline assessments to evaluate the pre-writing stage. We further gather feedback from experienced Wikipedia editors. Compared to articles generated by an outline-driven retrieval-augmented baseline, more of STORM\u0027s articles are deemed to be organized (by a 25% absolute increase) and broad in coverage (by 10%). The expert feedback also helps identify new challenges for generating grounded long articles, such as source bias transfer and over-association of unrelated facts."
+    },
+    {
+        "id":  "2403.14403",
+        "title":  "Adaptive-RAG: Learning to Adapt Retrieval-Augmented Large Language Models through Question Complexity",
+        "authors":  [
+                        "Soyeong Jeong",
+                        "Jinheon Baek",
+                        "Sukmin Cho",
+                        "Sung Ju Hwang",
+                        "Jong C. Park"
+                    ],
+        "published":  "2024-03-21",
+        "updated":  "2024-03-28",
+        "primary_category":  "cs.CL",
+        "url":  "https://arxiv.org/abs/2403.14403",
+        "abstract":  "Retrieval-Augmented Large Language Models (LLMs), which incorporate the non-parametric knowledge from external knowledge bases into LLMs, have emerged as a promising approach to enhancing response accuracy in several tasks, such as Question-Answering (QA). However, even though there are various approaches dealing with queries of different complexities, they either handle simple queries with unnecessary computational overhead or fail to adequately address complex multi-step queries; yet, not all user requests fall into only one of the simple or complex categories. In this work, we propose a novel adaptive QA framework, that can dynamically select the most suitable strategy for (retrieval-augmented) LLMs from the simplest to the most sophisticated ones based on the query complexity. Also, this selection process is operationalized with a classifier, which is a smaller LM trained to predict the complexity level of incoming queries with automatically collected labels, obtained from actual predicted outcomes of models and inherent inductive biases in datasets. This approach offers a balanced strategy, seamlessly adapting between the iterative and single-step retrieval-augmented LLMs, as well as the no-retrieval methods, in response to a range of query complexities. We validate our model on a set of open-domain QA datasets, covering multiple query complexities, and show that ours enhances the overall efficiency and accuracy of QA systems, compared to relevant baselines including the adaptive retrieval approaches. Code is available at: https://github.com/starsuzi/Adaptive-RAG."
+    },
+    {
+        "id":  "2403.18802",
+        "title":  "Long-form factuality in large language models",
+        "authors":  [
+                        "Jerry Wei",
+                        "Chengrun Yang",
+                        "Xinying Song",
+                        "Yifeng Lu",
+                        "Nathan Hu",
+                        "Jie Huang",
+                        "Dustin Tran",
+                        "Daiyi Peng",
+                        "Ruibo Liu",
+                        "Da Huang",
+                        "Cosmo Du",
+                        "Quoc V. Le"
+                    ],
+        "published":  "2024-03-28",
+        "updated":  "2024-11-07",
+        "primary_category":  "cs.CL",
+        "url":  "https://arxiv.org/abs/2403.18802",
+        "abstract":  "Large language models (LLMs) often generate content that contains factual errors when responding to fact-seeking prompts on open-ended topics. To benchmark a model\u0027s long-form factuality in open domains, we first use GPT-4 to generate LongFact, a prompt set comprising thousands of questions spanning 38 topics. We then propose that LLM agents can be used as automated evaluators for long-form factuality through a method which we call Search-Augmented Factuality Evaluator (SAFE). SAFE utilizes an LLM to break down a long-form response into a set of individual facts and to evaluate the accuracy of each fact using a multi-step reasoning process comprising sending search queries to Google Search and determining whether a fact is supported by the search results. Furthermore, we propose extending F1 score as an aggregated metric for long-form factuality. To do so, we balance the percentage of supported facts in a response (precision) with the percentage of provided facts relative to a hyperparameter representing a user\u0027s preferred response length (recall). Empirically, we demonstrate that LLM agents can outperform crowdsourced human annotators - on a set of ~16k individual facts, SAFE agrees with crowdsourced human annotators 72% of the time, and on a random subset of 100 disagreement cases, SAFE wins 76% of the time. At the same time, SAFE is more than 20 times cheaper than human annotators. We also benchmark thirteen language models on LongFact across four model families (Gemini, GPT, Claude, and PaLM-2), finding that larger language models generally achieve better long-form factuality. LongFact, SAFE, and all experimental code are available at https://github.com/google-deepmind/long-form-factuality."
+    },
+    {
+        "id":  "2406.04744",
+        "title":  "CRAG -- Comprehensive RAG Benchmark",
+        "authors":  [
+                        "Xiao Yang",
+                        "Kai Sun",
+                        "Hao Xin",
+                        "Yushi Sun",
+                        "Nikita Bhalla",
+                        "Xiangsen Chen",
+                        "Sajal Choudhary",
+                        "Rongze Daniel Gui",
+                        "Ziran Will Jiang",
+                        "Ziyu Jiang",
+                        "Lingkun Kong",
+                        "Brian Moran",
+                        "Jiaqi Wang",
+                        "Yifan Ethan Xu",
+                        "An Yan",
+                        "Chenyu Yang",
+                        "Eting Yuan",
+                        "Hanwen Zha",
+                        "Nan Tang",
+                        "Lei Chen",
+                        "Nicolas Scheffer",
+                        "Yue Liu",
+                        "Nirav Shah",
+                        "Rakesh Wanga",
+                        "Anuj Kumar",
+                        "Wen-tau Yih",
+                        "Xin Luna Dong"
+                    ],
+        "published":  "2024-06-07",
+        "updated":  "2024-11-01",
+        "primary_category":  "cs.CL",
+        "url":  "https://arxiv.org/abs/2406.04744",
+        "abstract":  "Retrieval-Augmented Generation (RAG) has recently emerged as a promising solution to alleviate Large Language Model (LLM)\u0027s deficiency in lack of knowledge. Existing RAG datasets, however, do not adequately represent the diverse and dynamic nature of real-world Question Answering (QA) tasks. To bridge this gap, we introduce the Comprehensive RAG Benchmark (CRAG), a factual question answering benchmark of 4,409 question-answer pairs and mock APIs to simulate web and Knowledge Graph (KG) search. CRAG is designed to encapsulate a diverse array of questions across five domains and eight question categories, reflecting varied entity popularity from popular to long-tail, and temporal dynamisms ranging from years to seconds. Our evaluation of this benchmark highlights the gap to fully trustworthy QA. Whereas most advanced LLMs achieve \u003c=34% accuracy on CRAG, adding RAG in a straightforward manner improves the accuracy only to 44%. State-of-the-art industry RAG solutions only answer 63% of questions without any hallucination. CRAG also reveals much lower accuracy in answering questions regarding facts with higher dynamism, lower popularity, or higher complexity, suggesting future research directions. The CRAG benchmark laid the groundwork for a KDD Cup 2024 challenge and attracted thousands of participants and submissions. We commit to maintaining CRAG to serve research communities in advancing RAG solutions and general QA solutions. CRAG is available at https://github.com/facebookresearch/CRAG/."
+    },
+    {
+        "id":  "2406.13352",
+        "title":  "AgentDojo: A Dynamic Environment to Evaluate Prompt Injection Attacks and Defenses for LLM Agents",
+        "authors":  [
+                        "Edoardo Debenedetti",
+                        "Jie Zhang",
+                        "Mislav Balunović",
+                        "Luca Beurer-Kellner",
+                        "Marc Fischer",
+                        "Florian Tramèr"
+                    ],
+        "published":  "2024-06-19",
+        "updated":  "2024-11-25",
+        "primary_category":  "cs.CR",
+        "url":  "https://arxiv.org/abs/2406.13352",
+        "abstract":  "AI agents aim to solve complex tasks by combining text-based reasoning with external tool calls. Unfortunately, AI agents are vulnerable to prompt injection attacks where data returned by external tools hijacks the agent to execute malicious tasks. To measure the adversarial robustness of AI agents, we introduce AgentDojo, an evaluation framework for agents that execute tools over untrusted data. To capture the evolving nature of attacks and defenses, AgentDojo is not a static test suite, but rather an extensible environment for designing and evaluating new agent tasks, defenses, and adaptive attacks. We populate the environment with 97 realistic tasks (e.g., managing an email client, navigating an e-banking website, or making travel bookings), 629 security test cases, and various attack and defense paradigms from the literature. We find that AgentDojo poses a challenge for both attacks and defenses: state-of-the-art LLMs fail at many tasks (even in the absence of attacks), and existing prompt injection attacks break some security properties but not all. We hope that AgentDojo can foster research on new design principles for AI agents that solve common tasks in a reliable and robust manner.. We release the code for AgentDojo at https://github.com/ethz-spylab/agentdojo."
+    },
+    {
+        "id":  "2406.19435",
+        "title":  "A Sanity Check for AI-generated Image Detection",
+        "authors":  [
+                        "Shilin Yan",
+                        "Ouxiang Li",
+                        "Jiayin Cai",
+                        "Yanbin Hao",
+                        "Xiaolong Jiang",
+                        "Yao Hu",
+                        "Weidi Xie"
+                    ],
+        "published":  "2024-06-28",
+        "updated":  "2025-02-16",
+        "primary_category":  "cs.CV",
+        "url":  "https://arxiv.org/abs/2406.19435",
+        "abstract":  "With the rapid development of generative models, discerning AI-generated content has evoked increasing attention from both industry and academia. In this paper, we conduct a sanity check on \"whether the task of AI-generated image detection has been solved\". To start with, we present Chameleon dataset, consisting AIgenerated images that are genuinely challenging for human perception. To quantify the generalization of existing methods, we evaluate 9 off-the-shelf AI-generated image detectors on Chameleon dataset. Upon analysis, almost all models classify AI-generated images as real ones. Later, we propose AIDE (AI-generated Image DEtector with Hybrid Features), which leverages multiple experts to simultaneously extract visual artifacts and noise patterns. Specifically, to capture the high-level semantics, we utilize CLIP to compute the visual embedding. This effectively enables the model to discern AI-generated images based on semantics or contextual information; Secondly, we select the highest frequency patches and the lowest frequency patches in the image, and compute the low-level patchwise features, aiming to detect AI-generated images by low-level artifacts, for example, noise pattern, anti-aliasing, etc. While evaluating on existing benchmarks, for example, AIGCDetectBenchmark and GenImage, AIDE achieves +3.5% and +4.6% improvements to state-of-the-art methods, and on our proposed challenging Chameleon benchmarks, it also achieves the promising results, despite this problem for detecting AI-generated images is far from being solved."
+    },
+    {
+        "id":  "2407.13488",
+        "title":  "Similarity over Factuality: Are we making progress on multimodal out-of-context misinformation detection?",
+        "authors":  [
+                        "Stefanos-Iordanis Papadopoulos",
+                        "Christos Koutlis",
+                        "Symeon Papadopoulos",
+                        "Panagiotis C. Petrantonakis"
+                    ],
+        "published":  "2024-07-18",
+        "updated":  "2024-07-18",
+        "primary_category":  "cs.CV",
+        "url":  "https://arxiv.org/abs/2407.13488",
+        "abstract":  "Out-of-context (OOC) misinformation poses a significant challenge in multimodal fact-checking, where images are paired with texts that misrepresent their original context to support false narratives. Recent research in evidence-based OOC detection has seen a trend towards increasingly complex architectures, incorporating Transformers, foundation models, and large language models. In this study, we introduce a simple yet robust baseline, which assesses MUltimodal SimilaritiEs (MUSE), specifically the similarity between image-text pairs and external image and text evidence. Our results demonstrate that MUSE, when used with conventional classifiers like Decision Tree, Random Forest, and Multilayer Perceptron, can compete with and even surpass the state-of-the-art on the NewsCLIPpings and VERITE datasets. Furthermore, integrating MUSE in our proposed \"Attentive Intermediate Transformer Representations\" (AITR) significantly improved performance, by 3.3% and 7.5% on NewsCLIPpings and VERITE, respectively. Nevertheless, the success of MUSE, relying on surface-level patterns and shortcuts, without examining factuality and logical inconsistencies, raises critical questions about how we define the task, construct datasets, collect external evidence and overall, how we assess progress in the field. We release our code at: https://github.com/stevejpapad/outcontext-misinfo-progress"
+    },
+    {
+        "id":  "2407.15711",
+        "title":  "AssistantBench: Can Web Agents Solve Realistic and Time-Consuming Tasks?",
+        "authors":  [
+                        "Ori Yoran",
+                        "Samuel Joseph Amouyal",
+                        "Chaitanya Malaviya",
+                        "Ben Bogin",
+                        "Ofir Press",
+                        "Jonathan Berant"
+                    ],
+        "published":  "2024-07-22",
+        "updated":  "2024-10-21",
+        "primary_category":  "cs.CL",
+        "url":  "https://arxiv.org/abs/2407.15711",
+        "abstract":  "Language agents, built on top of language models (LMs), are systems that can interact with complex environments, such as the open web. In this work, we examine whether such agents can perform realistic and time-consuming tasks on the web, e.g., monitoring real-estate markets or locating relevant nearby businesses. We introduce AssistantBench, a challenging new benchmark consisting of 214 realistic tasks that can be automatically evaluated, covering different scenarios and domains. We find that AssistantBench exposes the limitations of current systems, including language models and retrieval-augmented language models, as no model reaches an accuracy of more than 26 points. While closed-book LMs perform well in terms of accuracy, they exhibit low precision and tend to hallucinate facts. State-of-the-art web agents reach a score of near zero. Additionally, we introduce SeePlanAct (SPA), a new web agent that significantly outperforms previous agents, and an ensemble of SPA and closed-book models reaches the best overall performance. Moreover, we analyze failures of current systems and highlight that open web navigation remains a major challenge."
+    },
+    {
+        "id":  "2407.20183",
+        "title":  "MindSearch: Mimicking Human Minds Elicits Deep AI Searcher",
+        "authors":  [
+                        "Zehui Chen",
+                        "Kuikun Liu",
+                        "Qiuchen Wang",
+                        "Jiangning Liu",
+                        "Wenwei Zhang",
+                        "Kai Chen",
+                        "Feng Zhao"
+                    ],
+        "published":  "2024-07-30",
+        "updated":  "2025-10-31",
+        "primary_category":  "cs.CL",
+        "url":  "https://arxiv.org/abs/2407.20183",
+        "abstract":  "Information seeking and integration is a complex cognitive task that consumes enormous time and effort. Inspired by the remarkable progress of Large Language Models, recent works attempt to solve this task by combining LLMs and search engines. However, these methods still obtain unsatisfying performance due to three challenges: (1) complex requests often cannot be accurately and completely retrieved by the search engine once (2) corresponding information to be integrated is spread over multiple web pages along with massive noise, and (3) a large number of web pages with long contents may quickly exceed the maximum context length of LLMs. Inspired by the cognitive process when humans solve these problems, we introduce MindSearch to mimic the human minds in web information seeking and integration, which can be instantiated by a simple yet effective LLM-based multi-agent framework. The WebPlanner models the human mind of multi-step information seeking as a dynamic graph construction process: it decomposes the user query into atomic sub-questions as nodes in the graph and progressively extends the graph based on the search result from WebSearcher. Tasked with each sub-question, WebSearcher performs hierarchical information retrieval with search engines and collects valuable information for WebPlanner. The multi-agent design of MindSearch enables the whole framework to seek and integrate information parallelly from larger-scale (e.g., more than 300) web pages in 3 minutes, which is worth 3 hours of human effort. MindSearch demonstrates significant improvement in the response quality in terms of depth and breadth, on both close-set and open-set QA problems. Besides, responses from MindSearch based on InternLM2.5-7B are preferable by humans to ChatGPT-Web and Perplexity.ai applications, which implies that MindSearch can already deliver a competitive solution to the proprietary AI search engine."
+    },
+    {
+        "id":  "2408.08067",
+        "title":  "RAGChecker: A Fine-grained Framework for Diagnosing Retrieval-Augmented Generation",
+        "authors":  [
+                        "Dongyu Ru",
+                        "Lin Qiu",
+                        "Xiangkun Hu",
+                        "Tianhang Zhang",
+                        "Peng Shi",
+                        "Shuaichen Chang",
+                        "Cheng Jiayang",
+                        "Cunxiang Wang",
+                        "Shichao Sun",
+                        "Huanyu Li",
+                        "Zizhao Zhang",
+                        "Binjie Wang",
+                        "Jiarong Jiang",
+                        "Tong He",
+                        "Zhiguo Wang",
+                        "Pengfei Liu",
+                        "Yue Zhang",
+                        "Zheng Zhang"
+                    ],
+        "published":  "2024-08-15",
+        "updated":  "2024-08-17",
+        "primary_category":  "cs.CL",
+        "url":  "https://arxiv.org/abs/2408.08067",
+        "abstract":  "Despite Retrieval-Augmented Generation (RAG) showing promising capability in leveraging external knowledge, a comprehensive evaluation of RAG systems is still challenging due to the modular nature of RAG, evaluation of long-form responses and reliability of measurements. In this paper, we propose a fine-grained evaluation framework, RAGChecker, that incorporates a suite of diagnostic metrics for both the retrieval and generation modules. Meta evaluation verifies that RAGChecker has significantly better correlations with human judgments than other evaluation metrics. Using RAGChecker, we evaluate 8 RAG systems and conduct an in-depth analysis of their performance, revealing insightful patterns and trade-offs in the design choices of RAG architectures. The metrics of RAGChecker can guide researchers and practitioners in developing more effective RAG systems. This work has been open sourced at https://github.com/amazon-science/RAGChecker."
+    },
+    {
+        "id":  "2409.12959",
+        "title":  "MMSearch: Benchmarking the Potential of Large Models as Multi-modal Search Engines",
+        "authors":  [
+                        "Dongzhi Jiang",
+                        "Renrui Zhang",
+                        "Ziyu Guo",
+                        "Yanmin Wu",
+                        "Jiayi Lei",
+                        "Pengshuo Qiu",
+                        "Pan Lu",
+                        "Zehui Chen",
+                        "Chaoyou Fu",
+                        "Guanglu Song",
+                        "Peng Gao",
+                        "Yu Liu",
+                        "Chunyuan Li",
+                        "Hongsheng Li"
+                    ],
+        "published":  "2024-09-20",
+        "updated":  "2024-11-27",
+        "primary_category":  "cs.CV",
+        "url":  "https://arxiv.org/abs/2409.12959",
+        "abstract":  "The advent of Large Language Models (LLMs) has paved the way for AI search engines, e.g., SearchGPT, showcasing a new paradigm in human-internet interaction. However, most current AI search engines are limited to text-only settings, neglecting the multimodal user queries and the text-image interleaved nature of website information. Recently, Large Multimodal Models (LMMs) have made impressive strides. Yet, whether they can function as AI search engines remains under-explored, leaving the potential of LMMs in multimodal search an open question. To this end, we first design a delicate pipeline, MMSearch-Engine, to empower any LMMs with multimodal search capabilities. On top of this, we introduce MMSearch, a comprehensive evaluation benchmark to assess the multimodal search performance of LMMs. The curated dataset contains 300 manually collected instances spanning 14 subfields, which involves no overlap with the current LMMs\u0027 training data, ensuring the correct answer can only be obtained within searching. By using MMSearch-Engine, the LMMs are evaluated by performing three individual tasks (requery, rerank, and summarization), and one challenging end-to-end task with a complete searching process. We conduct extensive experiments on closed-source and open-source LMMs. Among all tested models, GPT-4o with MMSearch-Engine achieves the best results, which surpasses the commercial product, Perplexity Pro, in the end-to-end task, demonstrating the effectiveness of our proposed pipeline. We further present error analysis to unveil current LMMs still struggle to fully grasp the multimodal search tasks, and conduct ablation study to indicate the potential of scaling test-time computation for AI search engine. We hope MMSearch may provide unique insights to guide the future development of multimodal AI search engine. Project Page: https://mmsearch.github.io"
+    },
+    {
+        "id":  "2410.04616",
+        "title":  "Can LLMs Improve Multimodal Fact-Checking by Asking Relevant Questions?",
+        "authors":  [
+                        "Alimohammad Beigi",
+                        "Bohan Jiang",
+                        "Dawei Li",
+                        "Zhen Tan",
+                        "Pouya Shaeri",
+                        "Tharindu Kumarage",
+                        "Amrita Bhattacharjee",
+                        "Huan Liu"
+                    ],
+        "published":  "2024-10-07",
+        "updated":  "2025-02-21",
+        "primary_category":  "cs.CL",
+        "url":  "https://arxiv.org/abs/2410.04616",
+        "abstract":  "Traditional fact-checking relies on humans to formulate relevant and targeted fact-checking questions (FCQs), search for evidence, and verify the factuality of claims. While Large Language Models (LLMs) have been commonly used to automate evidence retrieval and factuality verification at scale, their effectiveness for fact-checking is hindered by the absence of FCQ formulation. To bridge this gap, we seek to answer two research questions: (1) Can LLMs generate relevant FCQs? (2) Can LLM-generated FCQs improve multimodal fact-checking? We therefore introduce a framework LRQ-FACT for using LLMs to generate relevant FCQs to facilitate evidence retrieval and enhance fact-checking by probing information across multiple modalities. Through extensive experiments, we verify if LRQ-FACT can generate relevant FCQs of different types and if LRQ-FACT can consistently outperform baseline methods in multimodal fact-checking. Further analysis illustrates how each component in LRQ-FACT works toward improving the fact-checking performance."
+    },
+    {
+        "id":  "2412.10510",
+        "title":  "DEFAME: Dynamic Evidence-based FAct-checking with Multimodal Experts",
+        "authors":  [
+                        "Tobias Braun",
+                        "Mark Rothermel",
+                        "Marcus Rohrbach",
+                        "Anna Rohrbach"
+                    ],
+        "published":  "2024-12-14",
+        "updated":  "2025-07-24",
+        "primary_category":  "cs.CV",
+        "url":  "https://arxiv.org/abs/2412.10510",
+        "abstract":  "The proliferation of disinformation demands reliable and scalable fact-checking solutions. We present Dynamic Evidence-based FAct-checking with Multimodal Experts (DEFAME), a modular, zero-shot MLLM pipeline for open-domain, text-image claim verification. DEFAME operates in a six-stage process, dynamically selecting the tools and search depth to extract and evaluate textual and visual evidence. Unlike prior approaches that are text-only, lack explainability, or rely solely on parametric knowledge, DEFAME performs end-to-end verification, accounting for images in claims and evidence while generating structured, multimodal reports. Evaluation on the popular benchmarks VERITE, AVerITeC, and MOCHEG shows that DEFAME surpasses all previous methods, establishing itself as the new state-of-the-art fact-checking system for uni- and multimodal fact-checking. Moreover, we introduce a new multimodal benchmark, ClaimReview2024+, featuring claims after the knowledge cutoff of GPT-4o, avoiding data leakage. Here, DEFAME drastically outperforms the GPT-4o baselines, showing temporal generalizability and the potential for real-time fact-checking."
+    },
+    {
+        "id":  "2501.05366",
+        "title":  "Search-o1: Agentic Search-Enhanced Large Reasoning Models",
+        "authors":  [
+                        "Xiaoxi Li",
+                        "Guanting Dong",
+                        "Jiajie Jin",
+                        "Yuyao Zhang",
+                        "Yujia Zhou",
+                        "Yutao Zhu",
+                        "Peitian Zhang",
+                        "Zhicheng Dou"
+                    ],
+        "published":  "2025-01-10",
+        "updated":  "2025-01-10",
+        "primary_category":  "cs.AI",
+        "url":  "https://arxiv.org/abs/2501.05366",
+        "abstract":  "Large reasoning models (LRMs) like OpenAI-o1 have demonstrated impressive long stepwise reasoning capabilities through large-scale reinforcement learning. However, their extended reasoning processes often suffer from knowledge insufficiency, leading to frequent uncertainties and potential errors. To address this limitation, we introduce \\textbf{Search-o1}, a framework that enhances LRMs with an agentic retrieval-augmented generation (RAG) mechanism and a Reason-in-Documents module for refining retrieved documents. Search-o1 integrates an agentic search workflow into the reasoning process, enabling dynamic retrieval of external knowledge when LRMs encounter uncertain knowledge points. Additionally, due to the verbose nature of retrieved documents, we design a separate Reason-in-Documents module to deeply analyze the retrieved information before injecting it into the reasoning chain, minimizing noise and preserving coherent reasoning flow. Extensive experiments on complex reasoning tasks in science, mathematics, and coding, as well as six open-domain QA benchmarks, demonstrate the strong performance of Search-o1. This approach enhances the trustworthiness and applicability of LRMs in complex reasoning tasks, paving the way for more reliable and versatile intelligent systems. The code is available at \\url{https://github.com/sunnynexus/Search-o1}."
+    },
+    {
+        "id":  "2501.07572",
+        "title":  "WebWalker: Benchmarking LLMs in Web Traversal",
+        "authors":  [
+                        "Jialong Wu",
+                        "Wenbiao Yin",
+                        "Yong Jiang",
+                        "Zhenglin Wang",
+                        "Zekun Xi",
+                        "Runnan Fang",
+                        "Linhai Zhang",
+                        "Yulan He",
+                        "Deyu Zhou",
+                        "Pengjun Xie",
+                        "Fei Huang"
+                    ],
+        "published":  "2025-01-14",
+        "updated":  "2025-08-10",
+        "primary_category":  "cs.CL",
+        "url":  "https://arxiv.org/abs/2501.07572",
+        "abstract":  "Retrieval-augmented generation (RAG) demonstrates remarkable performance across tasks in open-domain question-answering. However, traditional search engines may retrieve shallow content, limiting the ability of LLMs to handle complex, multi-layered information. To address it, we introduce WebWalkerQA, a benchmark designed to assess the ability of LLMs to perform web traversal. It evaluates the capacity of LLMs to traverse a website\u0027s subpages to extract high-quality data systematically. We propose WebWalker, which is a multi-agent framework that mimics human-like web navigation through an explore-critic paradigm. Extensive experimental results show that WebWalkerQA is challenging and demonstrates the effectiveness of RAG combined with WebWalker, through the horizontal and vertical integration in real-world scenarios."
+    },
+    {
+        "id":  "2503.05592",
+        "title":  "R1-Searcher: Incentivizing the Search Capability in LLMs via Reinforcement Learning",
+        "authors":  [
+                        "Huatong Song",
+                        "Jinhao Jiang",
+                        "Yingqian Min",
+                        "Jie Chen",
+                        "Zhipeng Chen",
+                        "Wayne Xin Zhao",
+                        "Lei Fang",
+                        "Ji-Rong Wen"
+                    ],
+        "published":  "2025-03-08",
+        "updated":  "2025-03-18",
+        "primary_category":  "cs.AI",
+        "url":  "https://arxiv.org/abs/2503.05592",
+        "abstract":  "Existing Large Reasoning Models (LRMs) have shown the potential of reinforcement learning (RL) to enhance the complex reasoning capabilities of Large Language Models~(LLMs). While they achieve remarkable performance on challenging tasks such as mathematics and coding, they often rely on their internal knowledge to solve problems, which can be inadequate for time-sensitive or knowledge-intensive questions, leading to inaccuracies and hallucinations. To address this, we propose \\textbf{R1-Searcher}, a novel two-stage outcome-based RL approach designed to enhance the search capabilities of LLMs. This method allows LLMs to autonomously invoke external search systems to access additional knowledge during the reasoning process. Our framework relies exclusively on RL, without requiring process rewards or distillation for a cold start. % effectively generalizing to out-of-domain datasets and supporting both Base and Instruct models. Our experiments demonstrate that our method significantly outperforms previous strong RAG methods, even when compared to the closed-source GPT-4o-mini."
+    },
+    {
+        "id":  "2503.09516",
+        "title":  "Search-R1: Training LLMs to Reason and Leverage Search Engines with Reinforcement Learning",
+        "authors":  [
+                        "Bowen Jin",
+                        "Hansi Zeng",
+                        "Zhenrui Yue",
+                        "Jinsung Yoon",
+                        "Sercan Arik",
+                        "Dong Wang",
+                        "Hamed Zamani",
+                        "Jiawei Han"
+                    ],
+        "published":  "2025-03-13",
+        "updated":  "2025-08-06",
+        "primary_category":  "cs.CL",
+        "url":  "https://arxiv.org/abs/2503.09516",
+        "abstract":  "Efficiently acquiring external knowledge and up-to-date information is essential for effective reasoning and text generation in large language models (LLMs). Prompting advanced LLMs with reasoning capabilities to use search engines during inference is often suboptimal, as the LLM might not fully possess the capability on how to interact optimally with the search engine. This paper introduces Search-R1, an extension of reinforcement learning (RL) for reasoning frameworks where the LLM learns to autonomously generate (multiple) search queries during step-by-step reasoning with real-time retrieval. Search-R1 optimizes LLM reasoning trajectories with multi-turn search interactions, leveraging retrieved token masking for stable RL training and a simple outcome-based reward function. Experiments on seven question-answering datasets show that Search-R1 improves performance by 41% (Qwen2.5-7B) and 20% (Qwen2.5-3B) over various RAG baselines under the same setting. This paper further provides empirical insights into RL optimization methods, LLM choices, and response length dynamics in retrieval-augmented reasoning. The code and model checkpoints are available at https://github.com/PeterGriffinJin/Search-R1."
+    },
+    {
+        "id":  "2503.19470",
+        "title":  "ReSearch: Learning to Reason with Search for LLMs via Reinforcement Learning",
+        "authors":  [
+                        "Mingyang Chen",
+                        "Linzhuang Sun",
+                        "Tianpeng Li",
+                        "Haoze Sun",
+                        "Yijie Zhou",
+                        "Chenzheng Zhu",
+                        "Haofen Wang",
+                        "Jeff Z. Pan",
+                        "Wen Zhang",
+                        "Huajun Chen",
+                        "Fan Yang",
+                        "Zenan Zhou",
+                        "Weipeng Chen"
+                    ],
+        "published":  "2025-03-25",
+        "updated":  "2025-09-23",
+        "primary_category":  "cs.AI",
+        "url":  "https://arxiv.org/abs/2503.19470",
+        "abstract":  "Large Language Models (LLMs) have shown remarkable capabilities in reasoning, exemplified by the success of OpenAI-o1 and DeepSeek-R1. However, integrating reasoning with external search processes remains challenging, especially for complex multi-hop questions requiring multiple retrieval steps. We propose ReSearch, a novel framework that trains LLMs to Reason with Search via reinforcement learning without using any supervised data on reasoning steps. Our approach treats search operations as integral components of the reasoning chain, where when and how to perform searches is guided by text-based thinking, and search results subsequently influence further reasoning. We train ReSearch on Qwen2.5-7B(-Instruct) and Qwen2.5-32B(-Instruct) models and conduct extensive experiments. Despite being trained on only one dataset, our models demonstrate strong generalizability across various benchmarks. Analysis reveals that ReSearch naturally elicits advanced reasoning capabilities such as reflection and self-correction during the reinforcement learning process."
+    },
+    {
+        "id":  "2504.03160",
+        "title":  "DeepResearcher: Scaling Deep Research via Reinforcement Learning in Real-world Environments",
+        "authors":  [
+                        "Yuxiang Zheng",
+                        "Dayuan Fu",
+                        "Xiangkun Hu",
+                        "Xiaojie Cai",
+                        "Lyumanshan Ye",
+                        "Pengrui Lu",
+                        "Pengfei Liu"
+                    ],
+        "published":  "2025-04-04",
+        "updated":  "2025-04-17",
+        "primary_category":  "cs.AI",
+        "url":  "https://arxiv.org/abs/2504.03160",
+        "abstract":  "Large Language Models (LLMs) equipped with web search capabilities have demonstrated impressive potential for deep research tasks. However, current approaches predominantly rely on either manually engineered prompts (prompt engineering-based) with brittle performance or reinforcement learning within controlled Retrieval-Augmented Generation (RAG) environments (RAG-based) that fail to capture the complexities of real-world interaction. In this paper, we introduce DeepResearcher, the first comprehensive framework for end-to-end training of LLM-based deep research agents through scaling reinforcement learning (RL) in real-world environments with authentic web search interactions. Unlike RAG-based approaches that assume all necessary information exists within a fixed corpus, our method trains agents to navigate the noisy, unstructured, and dynamic nature of the open web. We implement a specialized multi-agent architecture where browsing agents extract relevant information from various webpage structures and overcoming significant technical challenges. Extensive experiments on open-domain research tasks demonstrate that DeepResearcher achieves substantial improvements of up to 28.9 points over prompt engineering-based baselines and up to 7.2 points over RAG-based RL agents. Our qualitative analysis reveals emergent cognitive behaviors from end-to-end RL training, including the ability to formulate plans, cross-validate information from multiple sources, engage in self-reflection to redirect research, and maintain honesty when unable to find definitive answers. Our results highlight that end-to-end training in real-world web environments is not merely an implementation detail but a fundamental requirement for developing robust research capabilities aligned with real-world applications. We release DeepResearcher at https://github.com/GAIR-NLP/DeepResearcher."
+    },
+    {
+        "id":  "2504.12516",
+        "title":  "BrowseComp: A Simple Yet Challenging Benchmark for Browsing Agents",
+        "authors":  [
+                        "Jason Wei",
+                        "Zhiqing Sun",
+                        "Spencer Papay",
+                        "Scott McKinney",
+                        "Jeffrey Han",
+                        "Isa Fulford",
+                        "Hyung Won Chung",
+                        "Alex Tachard Passos",
+                        "William Fedus",
+                        "Amelia Glaese"
+                    ],
+        "published":  "2025-04-17",
+        "updated":  "2025-04-17",
+        "primary_category":  "cs.CL",
+        "url":  "https://arxiv.org/abs/2504.12516",
+        "abstract":  "We present BrowseComp, a simple yet challenging benchmark for measuring the ability for agents to browse the web. BrowseComp comprises 1,266 questions that require persistently navigating the internet in search of hard-to-find, entangled information. Despite the difficulty of the questions, BrowseComp is simple and easy-to-use, as predicted answers are short and easily verifiable against reference answers. BrowseComp for browsing agents can be seen as analogous to how programming competitions are an incomplete but useful benchmark for coding agents. While BrowseComp sidesteps challenges of a true user query distribution, like generating long answers or resolving ambiguity, it measures the important core capability of exercising persistence and creativity in finding information. BrowseComp can be found at https://github.com/openai/simple-evals."
+    },
+    {
+        "id":  "2504.21776",
+        "title":  "WebThinker: Empowering Large Reasoning Models with Deep Research Capability",
+        "authors":  [
+                        "Xiaoxi Li",
+                        "Jiajie Jin",
+                        "Guanting Dong",
+                        "Hongjin Qian",
+                        "Yongkang Wu",
+                        "Ji-Rong Wen",
+                        "Yutao Zhu",
+                        "Zhicheng Dou"
+                    ],
+        "published":  "2025-05-01",
+        "updated":  "2025-10-13",
+        "primary_category":  "cs.CL",
+        "url":  "https://arxiv.org/abs/2504.21776",
+        "abstract":  "Large reasoning models (LRMs), such as OpenAI-o1 and DeepSeek-R1, demonstrate impressive long-horizon reasoning capabilities. However, their reliance on static internal knowledge limits their performance on complex, knowledge-intensive tasks and hinders their ability to produce comprehensive research reports requiring synthesis of diverse web information. To address this, we propose WebThinker, a deep research agent that empowers LRMs to autonomously search the web, navigate among web pages, and draft reports during the reasoning process. WebThinker integrates a Deep Web Explorer module, enabling LRMs to dynamically search, navigate, and extract information from the web when encountering knowledge gaps. It also employs an Autonomous Think-Search-and-Draft strategy, allowing the model to seamlessly interleave reasoning, information gathering, and report writing in real time. To further enhance research tool utilization, we introduce an RL-based training strategy via iterative online Direct Preference Optimization (DPO). Extensive experiments on complex reasoning benchmarks (GPQA, GAIA, WebWalkerQA, HLE) and scientific report generation tasks (Glaive) demonstrate that WebThinker significantly outperforms existing methods and strong proprietary systems. Our approach enhances LRM reliability and applicability in complex scenarios, paving the way for more capable and versatile deep research systems. The code is available at https://github.com/RUC-NLPIR/WebThinker."
+    },
+    {
+        "id":  "2505.03135",
+        "title":  "Beyond Retrieval: Improving Evidence Quality for LLM-based Multimodal Fact-Checking",
+        "authors":  [
+                        "Haoran Ou",
+                        "Gelei Deng",
+                        "Xingshuo Han",
+                        "Jie Zhang",
+                        "Han Qiu",
+                        "Shangwei Guo",
+                        "Tianwei Zhang"
+                    ],
+        "published":  "2025-05-06",
+        "updated":  "2026-01-08",
+        "primary_category":  "cs.AI",
+        "url":  "https://arxiv.org/abs/2505.03135",
+        "abstract":  "The increasing multimodal disinformation, where deceptive claims are reinforced through coordinated text and visual content, poses significant challenges to automated fact-checking. Recent efforts leverage Large Language Models (LLMs) for this task, capitalizing on their strong reasoning and multimodal understanding capabilities. Emerging retrieval-augmented frameworks further equip LLMs with access to open-domain external information, enabling evidence-based verification beyond their internal knowledge. Despite their promising gains, our empirical study reveals notable shortcomings in the external search coverage and evidence quality evaluation. To mitigate those limitations, we propose Aletheia, an end-to-end framework for automated multimodal fact-checking. It introduces a novel evidence retrieval strategy that improves evidence coverage and filters useless information from open-domain sources, enabling the extraction of high-quality evidence for verification. Extensive experiments demonstrate that Aletheia achieves an accuracy of 88.3% on two public multimodal disinformation datasets and 90.2% on newly emerging claims. Compared with existing evidence retrieval strategies, our approach improves verification accuracy by up to 30.8%, highlighting the critical role of evidence quality in LLM-based disinformation verification."
+    },
+    {
+        "id":  "2505.17978",
+        "title":  "AVerImaTeC: A Dataset for Automatic Verification of Image-Text Claims with Evidence from the Web",
+        "authors":  [
+                        "Rui Cao",
+                        "Zifeng Ding",
+                        "Zhijiang Guo",
+                        "Michael Schlichtkrull",
+                        "Andreas Vlachos"
+                    ],
+        "published":  "2025-05-23",
+        "updated":  "2025-10-07",
+        "primary_category":  "cs.CL",
+        "url":  "https://arxiv.org/abs/2505.17978",
+        "abstract":  "Textual claims are often accompanied by images to enhance their credibility and spread on social media, but this also raises concerns about the spread of misinformation. Existing datasets for automated verification of image-text claims remain limited, as they often consist of synthetic claims and lack evidence annotations to capture the reasoning behind the verdict. In this work, we introduce AVerImaTeC, a dataset consisting of 1,297 real-world image-text claims. Each claim is annotated with question-answer (QA) pairs containing evidence from the web, reflecting a decomposed reasoning regarding the verdict. We mitigate common challenges in fact-checking datasets such as contextual dependence, temporal leakage, and evidence insufficiency, via claim normalization, temporally constrained evidence annotation, and a two-stage sufficiency check. We assess the consistency of the annotation in AVerImaTeC via inter-annotator studies, achieving a $κ=0.742$ on verdicts and $74.7\\%$ consistency on QA pairs. We also propose a novel evaluation method for evidence retrieval and conduct extensive experiments to establish baselines for verifying image-text claims using open-web evidence."
+    },
+    {
+        "id":  "2505.19253",
+        "title":  "DeepResearchGym: A Free, Transparent, and Reproducible Evaluation Sandbox for Deep Research",
+        "authors":  [
+                        "João Coelho",
+                        "Jingjie Ning",
+                        "Jingyuan He",
+                        "Kangrui Mao",
+                        "Abhijay Paladugu",
+                        "Pranav Setlur",
+                        "Jiahe Jin",
+                        "Jamie Callan",
+                        "João Magalhães",
+                        "Bruno Martins",
+                        "Chenyan Xiong"
+                    ],
+        "published":  "2025-05-26",
+        "updated":  "2025-12-16",
+        "primary_category":  "cs.IR",
+        "url":  "https://arxiv.org/abs/2505.19253",
+        "abstract":  "Deep research systems represent an emerging class of agentic information retrieval methods that generate comprehensive and well-supported reports to complex queries. However, most existing frameworks rely on dynamic commercial search APIs, which pose reproducibility and transparency challenges in addition to their cost. To address these limitations, we introduce \\textsc{DeepResearchGym} as an open-source sandbox that combines a reproducible search API with a rigorous evaluation protocol for benchmarking deep research systems. The API indexes large-scale public web corpora, namely ClueWeb22 and FineWeb, using a state-of-the-art dense retriever and approximate nearest neighbor search via DiskANN. It achieves lower latency than popular commercial APIs while ensuring stable document rankings across runs, and is free for research use. To evaluate deep research systems\u0027 outputs, we extend the Researchy Questions benchmark with automatic metrics through LLM-as-a-judge to measure alignment with users\u0027 information needs, retrieval faithfulness, and report quality. Experimental results show that systems integrated with~\\textsc{DeepResearchGym} achieve performance comparable to those using commercial APIs, with performance rankings remaining consistent across evaluation metrics. A case study on short-answer search agents further demonstrates the sandbox\u0027s utility for cost-effective training, showing that models trained within the sandbox can generalize to commercial search."
+    },
+    {
+        "id":  "2505.22648",
+        "title":  "WebDancer: Towards Autonomous Information Seeking Agency",
+        "authors":  [
+                        "Jialong Wu",
+                        "Baixuan Li",
+                        "Runnan Fang",
+                        "Wenbiao Yin",
+                        "Liwen Zhang",
+                        "Zhengwei Tao",
+                        "Dingchu Zhang",
+                        "Zekun Xi",
+                        "Gang Fu",
+                        "Yong Jiang",
+                        "Pengjun Xie",
+                        "Fei Huang",
+                        "Jingren Zhou"
+                    ],
+        "published":  "2025-05-29",
+        "updated":  "2025-08-10",
+        "primary_category":  "cs.CL",
+        "url":  "https://arxiv.org/abs/2505.22648",
+        "abstract":  "Addressing intricate real-world problems necessitates in-depth information seeking and multi-step reasoning. Recent progress in agentic systems, exemplified by Deep Research, underscores the potential for autonomous multi-step research. In this work, we present a cohesive paradigm for building end-to-end agentic information seeking agents from a data-centric and training-stage perspective. Our approach consists of four key stages: (1) browsing data construction, (2) trajectories sampling, (3) supervised fine-tuning for effective cold start, and (4) reinforcement learning for enhanced generalisation. We instantiate this framework in a web agent based on the ReAct, WebDancer. Empirical evaluations on the challenging information seeking benchmarks, GAIA and WebWalkerQA, demonstrate the strong performance of WebDancer, achieving considerable results and highlighting the efficacy of our training paradigm. Further analysis of agent training provides valuable insights and actionable, systematic pathways for developing more capable agentic models. The codes and demo will be released in https://github.com/Alibaba-NLP/WebAgent."
+    },
+    {
+        "id":  "2506.06287",
+        "title":  "Deep Research Bench: Evaluating AI Web Research Agents",
+        "authors":  [
+                        " FutureSearch",
+                        " :",
+                        "Nikos I. Bosse",
+                        "Jon Evans",
+                        "Robert G. Gambee",
+                        "Daniel Hnyk",
+                        "Peter Mühlbacher",
+                        "Lawrence Phillips",
+                        "Dan Schwarz",
+                        "Jack Wildman"
+                    ],
+        "published":  "2025-05-06",
+        "updated":  "2025-05-06",
+        "primary_category":  "cs.AI",
+        "url":  "https://arxiv.org/abs/2506.06287",
+        "abstract":  "Amongst the most common use cases of modern AI is LLM chat with web search enabled. However, no direct evaluations of the quality of web research agents exist that control for the continually-changing web. We introduce Deep Research Bench, consisting of 89 multi-step web research task instances of varying difficulty across 8 diverse task categories, with the answers carefully worked out by skilled humans. We provide a \"RetroSearch\" environment with a large frozen set of scraped web pages, and demonstrate that offline \"RetroSearch\" agents perform comparably to \"live web\" agents, enabling reliable evaluations of models over time. We provide robust agent tooling and scaffolding to benchmark major LLMs as they are released, including \"thinking\" models like o3 and Gemini 2.5 Pro. We include automated evaluations of the lengthy agent traces to report progress over time in hallucinations, tool use, and forgetting. Finally, we evaluate the major web research products branded as \"Deep Research\", \"Deep Search\", \"Search\", or \"Research.\" Results are available on a public leaderboard at https://drb.futuresearch.ai/."
+    },
+    {
+        "id":  "2507.02592",
+        "title":  "WebSailor: Navigating Super-human Reasoning for Web Agent",
+        "authors":  [
+                        "Kuan Li",
+                        "Zhongwang Zhang",
+                        "Huifeng Yin",
+                        "Liwen Zhang",
+                        "Litu Ou",
+                        "Jialong Wu",
+                        "Wenbiao Yin",
+                        "Baixuan Li",
+                        "Zhengwei Tao",
+                        "Xinyu Wang",
+                        "Weizhou Shen",
+                        "Junkai Zhang",
+                        "Dingchu Zhang",
+                        "Xixi Wu",
+                        "Yong Jiang",
+                        "Ming Yan",
+                        "Pengjun Xie",
+                        "Fei Huang",
+                        "Jingren Zhou"
+                    ],
+        "published":  "2025-07-03",
+        "updated":  "2025-07-03",
+        "primary_category":  "cs.CL",
+        "url":  "https://arxiv.org/abs/2507.02592",
+        "abstract":  "Transcending human cognitive limitations represents a critical frontier in LLM training. Proprietary agentic systems like DeepResearch have demonstrated superhuman capabilities on extremely complex information-seeking benchmarks such as BrowseComp, a feat previously unattainable. We posit that their success hinges on a sophisticated reasoning pattern absent in open-source models: the ability to systematically reduce extreme uncertainty when navigating vast information landscapes. Based on this insight, we introduce WebSailor, a complete post-training methodology designed to instill this crucial capability. Our approach involves generating novel, high-uncertainty tasks through structured sampling and information obfuscation, RFT cold start, and an efficient agentic RL training algorithm, Duplicating Sampling Policy Optimization (DUPO). With this integrated pipeline, WebSailor significantly outperforms all opensource agents in complex information-seeking tasks, matching proprietary agents\u0027 performance and closing the capability gap."
+    },
+    {
+        "id":  "2507.09174",
+        "title":  "RAMA: Retrieval-Augmented Multi-Agent Framework for Misinformation Detection in Multimodal Fact-Checking",
+        "authors":  [
+                        "Shuo Yang",
+                        "Zijian Yu",
+                        "Zhenzhe Ying",
+                        "Yuqin Dai",
+                        "Guoqing Wang",
+                        "Jun Lan",
+                        "Jinfeng Xu",
+                        "Jinze Li",
+                        "Edith C. H. Ngai"
+                    ],
+        "published":  "2025-07-12",
+        "updated":  "2025-07-12",
+        "primary_category":  "cs.CL",
+        "url":  "https://arxiv.org/abs/2507.09174",
+        "abstract":  "The rapid proliferation of multimodal misinformation presents significant challenges for automated fact-checking systems, especially when claims are ambiguous or lack sufficient context. We introduce RAMA, a novel retrieval-augmented multi-agent framework designed for verifying multimedia misinformation. RAMA incorporates three core innovations: (1) strategic query formulation that transforms multimodal claims into precise web search queries; (2) cross-verification evidence aggregation from diverse, authoritative sources; and (3) a multi-agent ensemble architecture that leverages the complementary strengths of multiple multimodal large language models and prompt variants. Extensive experiments demonstrate that RAMA achieves superior performance on benchmark datasets, particularly excelling in resolving ambiguous or improbable claims by grounding verification in retrieved factual evidence. Our findings underscore the necessity of integrating web-based evidence and multi-agent reasoning for trustworthy multimedia verification, paving the way for more reliable and scalable fact-checking solutions. RAMA will be publicly available at https://github.com/kalendsyang/RAMA.git."
+    },
+    {
+        "id":  "2508.04183",
+        "title":  "Characterizing Deep Research: A Benchmark and Formal Definition",
+        "authors":  [
+                        "Abhinav Java",
+                        "Ashmit Khandelwal",
+                        "Sukruta Midigeshi",
+                        "Aaron Halfaker",
+                        "Amit Deshpande",
+                        "Navin Goyal",
+                        "Ankur Gupta",
+                        "Nagarajan Natarajan",
+                        "Amit Sharma"
+                    ],
+        "published":  "2025-08-06",
+        "updated":  "2025-08-06",
+        "primary_category":  "cs.CL",
+        "url":  "https://arxiv.org/abs/2508.04183",
+        "abstract":  "Information tasks such as writing surveys or analytical reports require complex search and reasoning, and have recently been grouped under the umbrella of \\textit{deep research} -- a term also adopted by recent models targeting these capabilities. Despite growing interest, the scope of the deep research task remains underdefined and its distinction from other reasoning-intensive problems is poorly understood. In this paper, we propose a formal characterization of the deep research (DR) task and introduce a benchmark to evaluate the performance of DR systems. We argue that the core defining feature of deep research is not the production of lengthy report-style outputs, but rather the high fan-out over concepts required during the search process, i.e., broad and reasoning-intensive exploration. To enable objective evaluation, we define DR using an intermediate output representation that encodes key claims uncovered during search-separating the reasoning challenge from surface-level report generation. Based on this formulation, we propose a diverse, challenging benchmark LiveDRBench with 100 challenging tasks over scientific topics (e.g., datasets, materials discovery, prior art search) and public interest events (e.g., flight incidents, movie awards). Across state-of-the-art DR systems, F1 score ranges between 0.02 and 0.72 for any sub-category. OpenAI\u0027s model performs the best with an overall F1 score of 0.55. Analysis of reasoning traces reveals the distribution over the number of referenced sources, branching, and backtracking events executed by current DR systems, motivating future directions for improving their search mechanisms and grounding capabilities. The benchmark is available at https://github.com/microsoft/LiveDRBench."
+    },
+    {
+        "id":  "2508.06600",
+        "title":  "BrowseComp-Plus: A More Fair and Transparent Evaluation Benchmark of Deep-Research Agent",
+        "authors":  [
+                        "Zijian Chen",
+                        "Xueguang Ma",
+                        "Shengyao Zhuang",
+                        "Ping Nie",
+                        "Kai Zou",
+                        "Andrew Liu",
+                        "Joshua Green",
+                        "Kshama Patel",
+                        "Ruoxi Meng",
+                        "Mingyi Su",
+                        "Sahel Sharifymoghaddam",
+                        "Yanxi Li",
+                        "Haoran Hong",
+                        "Xinyu Shi",
+                        "Xuye Liu",
+                        "Nandan Thakur",
+                        "Crystina Zhang",
+                        "Luyu Gao",
+                        "Wenhu Chen",
+                        "Jimmy Lin"
+                    ],
+        "published":  "2025-08-09",
+        "updated":  "2025-08-09",
+        "primary_category":  "cs.CL",
+        "url":  "https://arxiv.org/abs/2508.06600",
+        "abstract":  "Deep-Research agents, which integrate large language models (LLMs) with search tools, have shown success in improving the effectiveness of handling complex queries that require iterative search planning and reasoning over search results. Evaluations on current benchmarks like BrowseComp relies on black-box live web search APIs, have notable limitations in (1) fairness: dynamic and opaque web APIs hinder fair comparisons and reproducibility of deep research methods; (2) transparency: lack of control over the document corpus makes it difficult to isolate retriever contributions. In other words, the current evaluations may compare a complete deep research system at a given time, but they do not foster well-controlled experiments to provide insights into the capability of underlying deep research LLMs. To address these challenges, we introduce BrowseComp-Plus, a benchmark derived from BrowseComp, employing a fixed, carefully curated corpus. Each query in BrowseComp-Plus includes human-verified supporting documents and mined challenging negatives, enabling controlled experimentation. The benchmark is shown to be effective in distinguishing the performance of deep research systems. For instance, the open-source model Search-R1, when paired with the BM25 retriever, achieves 3.86% accuracy, whereas the GPT-5 achieves 55.9%. Integrating the GPT-5 with the Qwen3-Embedding-8B retriever further enhances its accuracy to 70.1% with fewer search calls. This benchmark allows comprehensive evaluation and disentangled analysis of deep research agents and retrieval methods, fostering insights into retrieval effectiveness, citation accuracy, and context engineering in Deep-Research system."
+    },
+    {
+        "id":  "2509.09172",
+        "title":  "Bridging the Gap Between Ideal and Real-world Evaluation: Benchmarking AI-Generated Image Detection in Challenging Scenarios",
+        "authors":  [
+                        "Chunxiao Li",
+                        "Xiaoxiao Wang",
+                        "Meiling Li",
+                        "Boming Miao",
+                        "Peng Sun",
+                        "Yunjian Zhang",
+                        "Xiangyang Ji",
+                        "Yao Zhu"
+                    ],
+        "published":  "2025-09-11",
+        "updated":  "2025-09-11",
+        "primary_category":  "cs.CV",
+        "url":  "https://arxiv.org/abs/2509.09172",
+        "abstract":  "With the rapid advancement of generative models, highly realistic image synthesis has posed new challenges to digital security and media credibility. Although AI-generated image detection methods have partially addressed these concerns, a substantial research gap remains in evaluating their performance under complex real-world conditions. This paper introduces the Real-World Robustness Dataset (RRDataset) for comprehensive evaluation of detection models across three dimensions: 1) Scenario Generalization: RRDataset encompasses high-quality images from seven major scenarios (War and Conflict, Disasters and Accidents, Political and Social Events, Medical and Public Health, Culture and Religion, Labor and Production, and everyday life), addressing existing dataset gaps from a content perspective. 2) Internet Transmission Robustness: examining detector performance on images that have undergone multiple rounds of sharing across various social media platforms. 3) Re-digitization Robustness: assessing model effectiveness on images altered through four distinct re-digitization methods. We benchmarked 17 detectors and 10 vision-language models (VLMs) on RRDataset and conducted a large-scale human study involving 192 participants to investigate human few-shot learning capabilities in detecting AI-generated images. The benchmarking results reveal the limitations of current AI detection methods under real-world conditions and underscore the importance of drawing on human adaptability to develop more robust detection algorithms."
+    },
+    {
+        "id":  "2510.14967",
+        "title":  "Information Gain-based Policy Optimization: A Simple and Effective Approach for Multi-Turn Search Agents",
+        "authors":  [
+                        "Guoqing Wang",
+                        "Sunhao Dai",
+                        "Guangze Ye",
+                        "Zeyu Gan",
+                        "Wei Yao",
+                        "Yong Deng",
+                        "Xiaofeng Wu",
+                        "Zhenzhe Ying"
+                    ],
+        "published":  "2025-10-17",
+        "updated":  "2026-03-24",
+        "primary_category":  "cs.CL",
+        "url":  "https://arxiv.org/abs/2510.14967",
+        "abstract":  "Large language model (LLM)-based agents are increasingly trained with reinforcement learning (RL) to enhance their ability to interact with external environments through tool use, particularly in search-based settings that require multi-turn reasoning and knowledge acquisition. However, existing approaches typically rely on outcome-based rewards that are only provided exclusively upon generating the final answer. This reward sparsity becomes particularly problematic in multi-turn settings, where long trajectories exacerbate three critical issues: (i) advantage collapse, where all rollouts receive identical rewards and provide no useful learning signals; (ii) lack of fine-grained credit assignment, where the correctness of intermediate turns is obscured, especially in long-horizon tasks; and (iii) poor sample efficiency, where each rollout yields only a single outcome signal, leading to low data utilization. In this paper, we propose Information Gain-based Policy Optimization (IGPO), a simple yet effective RL framework that provides dense and intrinsic supervision for multi-turn agent training. IGPO models each interaction turn as an incremental process of acquiring information about the ground truth, and defines turn-level rewards as the marginal increase in the policy\u0027s probability of producing the correct answer. Unlike prior process-level reward approaches that depend on external reward models or costly Monte Carlo estimation, IGPO derives intrinsic rewards directly from the model\u0027s own belief updates. These intrinsic turn-level rewards are combined with outcome-level supervision to form dense reward signals. Extensive experiments on both in-domain and out-of-domain benchmarks demonstrate that IGPO consistently outperforms strong baselines in multi-turn scenarios, achieving higher accuracy and improved data efficiency. Our code is available at https://github.com/GuoqingWang1/IGPO."
+    },
+    {
+        "id":  "2601.12369",
+        "title":  "Can Deep Research Agents Retrieve and Organize? Evaluating the Synthesis Gap with Expert Taxonomies",
+        "authors":  [
+                        "Ming Zhang",
+                        "Jiabao Zhuang",
+                        "Wenqing Jing",
+                        "Kexin Tan",
+                        "Ziyu Kong",
+                        "Jingyi Deng",
+                        "Yujiong Shen",
+                        "Yuhui Wang",
+                        "Zhenghao Xiang",
+                        "Qiyuan Peng",
+                        "Yuhang Zhao",
+                        "Ning Luo",
+                        "Renzhe Zheng",
+                        "Jiahui Lin",
+                        "Mingqi Wu",
+                        "Long Ma",
+                        "Shihan Dou",
+                        "Maxm Pan",
+                        "Tao Gui",
+                        "Qi Zhang",
+                        "Xuanjing Huang"
+                    ],
+        "published":  "2026-01-18",
+        "updated":  "2026-05-19",
+        "primary_category":  "cs.CL",
+        "url":  "https://arxiv.org/abs/2601.12369",
+        "abstract":  "Deep Research Agents increasingly automate survey generation, yet whether they match human experts at retrieving essential papers and organizing them into expert-like taxonomies remains unclear. Existing benchmarks emphasize writing quality or citation correctness, while standard clustering metrics ignore hierarchical structure. We introduce TaxoBench, a benchmark of 72 highly cited LLM surveys with expert-authored taxonomy trees and 3,815 papers mapped to paper categories. TaxoBench evaluates (1) retrieval via Recall/Precision/F1, and (2) organization at a leaf level (paper-to-category assignment) and a hierarchy level via two new metrics: Unordered Semantic Tree Edit Distance (US-TED/US-NTED) and Semantic Path Similarity (Sem-Path). Two modes are supported: Deep Research (topic-only, end-to-end) and Bottom-Up (expert paper set provided, organization-only). To distinguish disagreement with a single expert reference from genuine model failure, we explicitly partition findings into capability-based (reference-free) and alignment-based (reference-dependent) groups. Evaluating 7 Deep Research Agents and 12 frontier LLMs reveals a dual bottleneck. On the capability side, the best agent retrieves only 20.92% of expert-cited papers, and 1,000 model taxonomies show 75.9% sibling overlap, 51.2% MECE violations, and 83.4% structural imbalance, all detectable without any reference. On the alignment side, all 12 LLMs converge to Sem-Path 28-29%, well below 47-58% achieved by three independent human-annotator groups on the same paper sets. Our benchmark is publicly available at https://github.com/KongLongGeFDU/TaxoBench."
+    },
+    {
+        "id":  "2601.20975",
+        "title":  "DeepSearchQA: Bridging the Comprehensiveness Gap for Deep Research Agents",
+        "authors":  [
+                        "Nikita Gupta",
+                        "Riju Chatterjee",
+                        "Lukas Haas",
+                        "Connie Tao",
+                        "Andrew Wang",
+                        "Chang Liu",
+                        "Hidekazu Oiwa",
+                        "Elena Gribovskaya",
+                        "Jan Ackermann",
+                        "John Blitzer",
+                        "Sasha Goldshtein",
+                        "Dipanjan Das"
+                    ],
+        "published":  "2026-01-29",
+        "updated":  "2026-01-29",
+        "primary_category":  "cs.CL",
+        "url":  "https://arxiv.org/abs/2601.20975",
+        "abstract":  "We introduce DeepSearchQA, a 900-prompt benchmark for evaluating agents on difficult multi-step information-seeking tasks across 17 different fields. Unlike traditional benchmarks that target single answer retrieval or broad-spectrum factuality, DeepSearchQA features a dataset of challenging, handcrafted tasks designed to evaluate an agent\u0027s ability to execute complex search plans to generate exhaustive answer lists. This shift in design explicitly tests three critical, yet under-evaluated capabilities: 1) systematic collation of fragmented information from disparate sources, 2) de-duplication and entity resolution to ensure precision, and 3) the ability to reason about stopping criteria within an open-ended search space. Each task is structured as a causal chain, where discovering information for one step is dependent on the successful completion of the previous one, stressing long-horizon planning and context retention. All tasks are grounded in the open web with objectively verifiable answer sets. Our comprehensive evaluation of state-of-the-art agent architectures reveals significant performance limitations: even the most advanced models struggle to balance high recall with precision. We observe distinct failure modes ranging from premature stopping (under-retrieval) to hedging behaviors, where agents cast an overly wide net of low-confidence answers to artificially boost recall. These findings highlight critical headroom in current agent designs and position DeepSearchQA as an essential diagnostic tool for driving future research toward more robust, deep-research capabilities."
+    },
+    {
+        "id":  "2602.01854",
+        "title":  "Fact or Fake? Assessing the Role of Deepfake Detectors in Multimodal Misinformation Detection",
+        "authors":  [
+                        "A S M Sharifuzzaman Sagar",
+                        "Mohammed Bennamoun",
+                        "Farid Boussaid",
+                        "Naeha Sharif",
+                        "Lian Xu",
+                        "Shaaban Sahmoud",
+                        "Ali Kishk"
+                    ],
+        "published":  "2026-02-02",
+        "updated":  "2026-02-02",
+        "primary_category":  "cs.CV",
+        "url":  "https://arxiv.org/abs/2602.01854",
+        "abstract":  "In multimodal misinformation, deception usually arises not just from pixel-level manipulations in an image, but from the semantic and contextual claim jointly expressed by the image-text pair. Yet most deepfake detectors, engineered to detect pixel-level forgeries, do not account for claim-level meaning, despite their growing integration in automated fact-checking (AFC) pipelines. This raises a central scientific and practical question: Do pixel-level detectors contribute useful signal for verifying image-text claims, or do they instead introduce misleading authenticity priors that undermine evidence-based reasoning? We provide the first systematic analysis of deepfake detectors in the context of multimodal misinformation detection. Using two complementary benchmarks, MMFakeBench and DGM4, we evaluate: (1) state-of-the-art image-only deepfake detectors, (2) an evidence-driven fact-checking system that performs tool-guided retrieval via Monte Carlo Tree Search (MCTS) and engages in deliberative inference through Multi-Agent Debate (MAD), and (3) a hybrid fact-checking system that injects detector outputs as auxiliary evidence. Results across both benchmark datasets show that deepfake detectors offer limited standalone value, achieving F1 scores in the range of 0.26-0.53 on MMFakeBench and 0.33-0.49 on DGM4, and that incorporating their predictions into fact-checking pipelines consistently reduces performance by 0.04-0.08 F1 due to non-causal authenticity assumptions. In contrast, the evidence-centric fact-checking system achieves the highest performance, reaching F1 scores of approximately 0.81 on MMFakeBench and 0.55 on DGM4. Overall, our findings demonstrate that multimodal claim verification is driven primarily by semantic understanding and external evidence, and that pixel-level artifact signals do not reliably enhance reasoning over real-world image-text misinformation."
+    },
+    {
+        "id":  "2602.11221",
+        "title":  "The Automatic Verification of Image-Text Claims (AVerImaTeC) Shared Task",
+        "authors":  [
+                        "Rui Cao",
+                        "Zhenyun Deng",
+                        "Yulong Chen",
+                        "Michael Schlichtkrull",
+                        "Andreas Vlachos"
+                    ],
+        "published":  "2026-02-11",
+        "updated":  "2026-02-26",
+        "primary_category":  "cs.CL",
+        "url":  "https://arxiv.org/abs/2602.11221",
+        "abstract":  "The Automatic Verification of Image-Text Claims (AVerImaTeC) shared task aims to advance system development for retrieving evidence and verifying real-world image-text claims. Participants were allowed to either employ external knowledge sources, such as web search engines, or leverage the curated knowledge store provided by the organizers. System performance was evaluated using the AVerImaTeC score, defined as a conditional verdict accuracy in which a verdict is considered correct only when the associated evidence score exceeds a predefined threshold. The shared task attracted 14 submissions during the development phase and 6 submissions during the testing phase. All participating systems in the testing phase outperformed the baseline provided. The winning team, HUMANE, achieved an AVerImaTeC score of 0.5455. This paper provides a detailed description of the shared task, presents the complete evaluation results, and discusses key insights and lessons learned."
+    },
+    {
+        "id":  "2602.11551",
+        "title":  "SIGHT: Reinforcement Learning with Self-Evidence and Information-Gain Diverse Branching for Search Agent",
+        "authors":  [
+                        "Wenlin Zhong",
+                        "Jinluan Yang",
+                        "Yiquan Wu",
+                        "Yi Liu",
+                        "Jianhang Yao",
+                        "Kun Kuang"
+                    ],
+        "published":  "2026-02-12",
+        "updated":  "2026-02-12",
+        "primary_category":  "cs.CL",
+        "url":  "https://arxiv.org/abs/2602.11551",
+        "abstract":  "Reinforcement Learning (RL) has empowered Large Language Models (LLMs) to master autonomous search for complex question answering. However, particularly within multi-turn search scenarios, this interaction introduces a critical challenge: search results often suffer from high redundancy and low signal-to-noise ratios. Consequently, agents easily fall into \"Tunnel Vision,\" where the forced interpretation of early noisy retrievals leads to irreversible error accumulation. To address these challenges, we propose SIGHT, a framework that enhances search-based reasoning through Self-Evidence Support (SES) and Information-Gain Driven Diverse Branching. SIGHT distills search results into high-fidelity evidence via SES and calculates an Information Gain score to pinpoint pivotal states where observations maximally reduce uncertainty. This score guides Dynamic Prompting Interventions - including de-duplication, reflection, or adaptive branching - to spawn new branches with SES. Finally, by integrating SES and correctness rewards via Group Relative Policy Optimization, SIGHT internalizes robust exploration strategies without external verifiers. Experiments on single-hop and multi-hop QA benchmarks demonstrate that SIGHT significantly outperforms existing approaches, particularly in complex reasoning scenarios, using fewer search steps."
+    },
+    {
+        "id":  "2602.13855",
+        "title":  "From Fluent to Verifiable: Claim-Level Auditability for Deep Research Agents",
+        "authors":  [
+                        "Razeen A Rasheed",
+                        "Somnath Banerjee",
+                        "Animesh Mukherjee",
+                        "Rima Hazra"
+                    ],
+        "published":  "2026-02-15",
+        "updated":  "2026-02-15",
+        "primary_category":  "cs.AI",
+        "url":  "https://arxiv.org/abs/2602.13855",
+        "abstract":  "A deep research agent produces a fluent scientific report in minutes; a careful reader then tries to verify the main claims and discovers the real cost is not reading, but tracing: which sentence is supported by which passage, what was ignored, and where evidence conflicts. We argue that as research generation becomes cheap, auditability becomes the bottleneck, and the dominant risk shifts from isolated factual errors to scientifically styled outputs whose claim-evidence links are weak, missing, or misleading. This perspective proposes claim-level auditability as a first-class design and evaluation target for deep research agents, distills recurring long-horizon failure modes (objective drift, transient constraints, and unverifiable inference), and introduces the Auditable Autonomous Research (AAR) standard, a compact measurement framework that makes auditability testable via provenance coverage, provenance soundness, contradiction transparency, and audit effort. We then argue for semantic provenance with protocolized validation: persistent, queryable provenance graphs that encode claim--evidence relations (including conflicts) and integrate continuous validation during synthesis rather than after publication, with practical instrumentation patterns to support deployment at scale."
+    },
+    {
+        "id":  "2602.15190",
+        "title":  "AIC CTU@AVerImaTeC: dual-retriever RAG for image-text fact checking",
+        "authors":  [
+                        "Herbert Ullrich",
+                        "Jan Drchal"
+                    ],
+        "published":  "2026-02-17",
+        "updated":  "2026-02-17",
+        "primary_category":  "cs.CL",
+        "url":  "https://arxiv.org/abs/2602.15190",
+        "abstract":  "In this paper, we present our 3rd place system in the AVerImaTeC shared task, which combines our last year\u0027s retrieval-augmented generation (RAG) pipeline with a reverse image search (RIS) module. Despite its simplicity, our system delivers competitive performance with a single multimodal LLM call per fact-check at just $0.013 on average using GPT5.1 via OpenAI Batch API. Our system is also easy to reproduce and tweak, consisting of only three decoupled modules - a textual retrieval module based on similarity search, an image retrieval module based on API-accessed RIS, and a generation module using GPT5.1 - which is why we suggest it as an accesible starting point for further experimentation. We publish its code and prompts, as well as our vector stores and insights into the scheme\u0027s running costs and directions for further improvement."
+    },
+    {
+        "id":  "2603.04751",
+        "title":  "Evaluating the Search Agent in a Parallel World",
+        "authors":  [
+                        "Jiawei Chen",
+                        "Xintian Shen",
+                        "Lihao Zheng",
+                        "Lifu Mu",
+                        "Haoyi Sun",
+                        "Ning Mao",
+                        "Hao Ma",
+                        "Tao Wei",
+                        "Pan Zhou",
+                        "Kun Zhan"
+                    ],
+        "published":  "2026-03-05",
+        "updated":  "2026-04-27",
+        "primary_category":  "cs.AI",
+        "url":  "https://arxiv.org/abs/2603.04751",
+        "abstract":  "Integrating web search tools has significantly extended the capability of LLMs to address open-world, real-time, and long-tail problems. However, evaluating these Search Agents presents formidable challenges. First, constructing high-quality deep search benchmarks is prohibitively expensive, while unverified synthetic data often suffers from unreliable sources. Second, static benchmarks face dynamic obsolescence: as internet information evolves, complex queries requiring deep research often degrade into simple retrieval tasks due to increased popularity, and ground truths become outdated due to temporal shifts. Third, attribution ambiguity confounds evaluation, as an agent\u0027s performance is often dominated by its parametric memory rather than its actual search and reasoning capabilities. Finally, reliance on specific commercial search engines introduces variability that hampers reproducibility. To address these issues, we propose a novel framework, Mind-ParaWorld, for evaluating Search Agents in a Parallel World. Specifically, MPW samples real-world entity names to synthesize future scenarios and questions situated beyond the model\u0027s knowledge cutoff. A ParaWorld Law Model then constructs a set of indivisible Atomic Facts and a unique ground-truth for each question. During evaluation, instead of retrieving real-world results, the agent interacts with a ParaWorld Engine Model that dynamically generates SERPs grounded in these inviolable Atomic Facts. We release MPW-Bench, an interactive benchmark spanning 19 domains with 1,608 instances. Experiments across three evaluation settings show that, while search agents are strong at evidence synthesis given complete information, their performance is limited not only by evidence collection and coverage in unfamiliar search environments, but also by unreliable evidence sufficiency judgment and when-to-stop decisions-bottlenecks."
+    },
+    {
+        "id":  "2603.09130",
+        "title":  "From Verification to Amplification: Auditing Reverse Image Search as Algorithmic Gatekeeping in Visual Misinformation Fact-checking",
+        "authors":  [
+                        "Cong Lin",
+                        "Yifei Chen",
+                        "Jiangyue Chen",
+                        "Yingdan Lu",
+                        "Yilang Peng",
+                        "Cuihua Shen"
+                    ],
+        "published":  "2026-03-10",
+        "updated":  "2026-03-10",
+        "primary_category":  "cs.SI",
+        "url":  "https://arxiv.org/abs/2603.09130",
+        "abstract":  "As visual misinformation becomes increasingly prevalent, platform algorithms act as intermediaries that curate information for users\u0027 verification practices. Yet, it remains unclear how algorithmic gatekeeping tools, such as reverse image search (RIS), shape users\u0027 information exposure during fact-checking. This study systematically audits Google RIS by reversely searching newly identified misleading images over a 15-day window and analyzing 34,486 collected top-ranked search results. We find that Google RIS returns a substantial volume of irrelevant information and repeated misinformation, whereas debunking content constitutes less than 30% of search results. Debunking content faces visibility challenges in rankings amid repeated misinformation and irrelevant information. Our findings also indicate an inverted U-shaped curve of RIS results page quality over time, likely due to search engine \"data voids\" when visual falsehoods first appear. These findings contribute to scholarship of visual misinformation verification, and extend algorithmic gatekeeping research to the visual domain."
+    },
+    {
+        "id":  "2604.17143",
+        "title":  "SeekerGym: A Benchmark for Reliable Information Seeking",
+        "authors":  [
+                        "Remy Kim",
+                        "Minseung Lee",
+                        "Shuo Li",
+                        "Osbert Bastani"
+                    ],
+        "published":  "2026-04-19",
+        "updated":  "2026-04-19",
+        "primary_category":  "cs.LG",
+        "url":  "https://arxiv.org/abs/2604.17143",
+        "abstract":  "Despite their substantial successes, AI agents continue to face fundamental challenges in terms of trustworthiness. Consider deep research agents, tasked with searching for information relevant to a given topic-while AI agents can perform effective information retrieval, there is little guarantee regarding the completeness of this information. Gaps in retrieved information can leave biases that mislead users even if the information they are given is correct and relevant. We introduce SeekerGym, a benchmark designed to evaluate the completeness of information retrieved by AI agents. In addition, SeekerGym also measures how well agents quantify their uncertainty in the completeness of their information; if an agent fails to retrieve all relevant information, it is useful for it to at least quantify how much might be missing. At a high level, each task in SeekerGym is a document (e.g., a Wikipedia article), and the AI agent must issue queries to retrieve passages from that document. Intuitively, the document comprehensively covers a topic, so the ability to retrieve its sections directly measures completeness of information retrieval. In addition to Wikipedia, we also consider machine learning survey papers, where the goal is to retrieve relevant sections of a survey paper. We benchmark several models and algorithms; the best approaches retrieve 42.5% of passages on Wikipedia and 29.2% on ML Surveys, leaving substantial room for improvement."
+    },
+    {
+        "id":  "2604.19264",
+        "title":  "DR-MMSearchAgent: Deepening Reasoning in Multimodal Search Agents",
+        "authors":  [
+                        "Shengqin Wang",
+                        "Wentao Yan",
+                        "Huichi Zhou",
+                        "Yihang Chen",
+                        "Kun Shao",
+                        "Zhizhong Zhang",
+                        "Yuan Xie"
+                    ],
+        "published":  "2026-04-21",
+        "updated":  "2026-04-21",
+        "primary_category":  "cs.CV",
+        "url":  "https://arxiv.org/abs/2604.19264",
+        "abstract":  "Agentic multimodal models have garnered significant attention for their ability to leverage external tools to tackle complex tasks. However, it is observed that such agents often meet premature interaction collapse, caused by two primary reasons: 1) the terminal reward often appending on the last token prevents the advantage from distinguishing trajectories with exploratory behavior; 2) excessively redundant context hinders the agent from absorbing useful feedback. To address these issues, we propose the Deepening Reasoning MMSearchAgent, the framework leverages the structural proximity to derive advantage signals from the whole rollout trajectories in an entire batch, such that trajectories of different lengths are further encouraged to be generated, even when containing the same correct answer. Additionally, differentiated gaussian rewards are employed to dynamically calibrate interaction tolerance, thereby ensuring information reliability and reduce redundancy. To support multi-turn interaction training, we have constructed a multi-step deep-reasoning dataset including 3602 high-quality QA pair with at least 3 reasonning steps. Extensive experiments demonstrate that our method achieves state-of-the-art performance, outperforming the MMSearch-R1 by 8.4$\\%$ on FVQA-test."
+    },
+    {
+        "id":  "2604.20486",
+        "title":  "ProMMSearchAgent: A Generalizable Multimodal Search Agent Trained with Process-Oriented Rewards",
+        "authors":  [
+                        "Wentao Yan",
+                        "Shengqin Wang",
+                        "Huichi Zhou",
+                        "Yihang Chen",
+                        "Kun Shao",
+                        "Yuan Xie",
+                        "Zhizhong Zhang"
+                    ],
+        "published":  "2026-04-22",
+        "updated":  "2026-04-22",
+        "primary_category":  "cs.CV",
+        "url":  "https://arxiv.org/abs/2604.20486",
+        "abstract":  "Training multimodal agents via reinforcement learning for knowledge-intensive visual reasoning is fundamentally hindered by the extreme sparsity of outcome-based supervision and the unpredictability of live web environments. To resolve these algorithmic and environmental bottlenecks, we introduce ProMMSearchAgent, establishing a novel Sim-to-Real training paradigm for multimodal search. We decouple policy learning into a deterministic, local static sandbox. Crucially, to learn effectively within this constrained environment, we propose an introspective process-oriented reward. By probing the agent\u0027s own parametric knowledge boundaries, we generate dense behavioral metadata that explicitly rewards the correct cognitive decision, initiating a multimodal or text search only when visually or factually uncertain. Extensive experiments demonstrate that our locally-trained policy transfers zero-shot to the live Google Search API. ProMMSearchAgent achieves new SOTA performance, outperforming MMSearch-R1 by +5.1% on FVQA-test, +6.3% on InfoSeek, and +11.3% on MMSearch."
+    },
+    {
+        "id":  "2604.24978",
+        "title":  "Dont Stop Early: Scalable Enterprise Deep Research with Controlled Information Flow and Evidence-Aware Termination",
+        "authors":  [
+                        "Prafulla Kumar Choubey",
+                        "Kung-Hsiang Huang",
+                        "Pranav Narayanan Venkit",
+                        "Jiaxin Zhang",
+                        "Vaibhav Vats",
+                        "Yu Li",
+                        "Xiangyu Peng",
+                        "Chien-Sheng Wu"
+                    ],
+        "published":  "2026-04-28",
+        "updated":  "2026-04-28",
+        "primary_category":  "cs.CL",
+        "url":  "https://arxiv.org/abs/2604.24978",
+        "abstract":  "Enterprise deep research often fails to produce decision-ready reports due to uneven information coverage, context explosion, and premature stopping. We propose a scalable Enterprise Deep Research (EDR) architecture to address these failures. Our system (i) decomposes requests into coverage-driven objectives via outline generation with reflection, (ii) localizes context with dependency-guided execution and explicit information sharing, and (iii) enforces evidence-based completion criteria so agents iteratively collect information until sufficiency conditions are met. We evaluate on an internal sales enablement task and the public DeepResearch Bench benchmark, where our proposed system design achieves the strongest overall performance compared with competitive deep-research baselines. The results show that dependency-controlled context and explicit evidence sufficiency criteria reduce premature stopping and improve the consistency and depth of enterprise research outputs."
+    },
+    {
+        "id":  "2605.05185",
+        "title":  "OpenSearch-VL: An Open Recipe for Frontier Multimodal Search Agents",
+        "authors":  [
+                        "Shuang Chen",
+                        "Kaituo Feng",
+                        "Hangting Chen",
+                        "Wenxuan Huang",
+                        "Dasen Dai",
+                        "Quanxin Shou",
+                        "Yunlong Lin",
+                        "Xiangyu Yue",
+                        "Shenghua Gao",
+                        "Tianyu Pang"
+                    ],
+        "published":  "2026-05-07",
+        "updated":  "2026-05-07",
+        "primary_category":  "cs.CV",
+        "url":  "https://arxiv.org/abs/2605.05185",
+        "abstract":  "Deep search has become a crucial capability for frontier multimodal agents, enabling models to solve complex questions through active search, evidence verification, and multi-step reasoning. Despite rapid progress, top-tier multimodal search agents remain difficult to reproduce, largely due to the absence of open high-quality training data, transparent trajectory synthesis pipelines, or detailed training recipes. To this end, we introduce OpenSearch-VL, a fully open-source recipe for training frontier multimodal deep search agents with agentic reinforcement learning. First, we curated a dedicated pipeline to construct high-quality training data through Wikipedia path sampling, fuzzy entity rewriting, and source-anchor visual grounding, which jointly reduce shortcuts and one-step retrieval collapse. Based on this pipeline, we curate two training datasets, SearchVL-SFT-36k for SFT and SearchVL-RL-8k for RL. Besides, we design a diverse tool environment that unifies text search, image search, OCR, cropping, sharpening, super-resolution, and perspective correction, enabling agents to combine active perception with external knowledge acquisition. Finally, we propose a multi-turn fatal-aware GRPO training algorithm that handles cascading tool failures by masking post-failure tokens while preserving useful pre-failure reasoning through one-sided advantage clamping. Built on this recipe, OpenSearch-VL delivers substantial performance gains, with over 10-point average improvements across seven benchmarks, and achieves results comparable to proprietary commercial models on several tasks. We will release all data, code, and models to support open research on multimodal deep search agents."
+    },
+    {
+        "id":  "2605.06635",
+        "title":  "Cited but Not Verified: Parsing and Evaluating Source Attribution in LLM Deep Research Agents",
+        "authors":  [
+                        "Hailey Onweller",
+                        "Elias Lumer",
+                        "Austin Huber",
+                        "Pia Ramchandani",
+                        "Vamse Kumar Subbiah",
+                        "Corey Feld"
+                    ],
+        "published":  "2026-05-08",
+        "updated":  "2026-05-08",
+        "primary_category":  "cs.CL",
+        "url":  "https://arxiv.org/abs/2605.06635",
+        "abstract":  "Large language models (LLMs) power deep research agents that synthesize information from hundreds of web sources into cited reports, yet these citations cannot be reliably verified. Current approaches either trust models to self-cite accurately, risking bias, or employ retrieval-augmented generation (RAG) that does not validate source accessibility, relevance, or factual consistency. We introduce the first source attribution evaluation framework that uses a reproducible AST parser to extract and evaluate inline citations from LLM-generated Markdown reports at scale. Unlike methods that verify claims in isolation, our framework closes the loop by retrieving the actual cited content, enabling human or model evaluators to judge each citation against its source. Citations are evaluated along three dimensions. (1) Link Works verifies URL accessibility, (2) Relevant Content measures topical alignment, and (3) Fact Check validates factual accuracy against source content. We benchmark 14 closed-source and open-source LLMs across three evaluation dimensions using rubric-based LLM-as-a-judge evaluators calibrated through human review. Our results reveal that even the strongest frontier models maintain link validity above 94% and relevance above 80%, yet achieve only 39-77% factual accuracy, while fewer than half of open-source models successfully generate cited reports in a one-shot setting. Ablation studies on research depth show that Fact Check accuracy drops by approximately 42% on average across two frontier models as tool calls scale from 2 to 150, demonstrating that more retrieval does not produce more accurate citations. These findings reveal a critical disconnect between surface-level citation quality and factual reliability, and our framework provides the evaluation infrastructure to assess the disconnect."
+    },
+    {
+        "id":  "2605.10357",
+        "title":  "RW-Post: Auditable Evidence-Grounded Multimodal Fact-Checking in the Wild",
+        "authors":  [
+                        "Danni Xu",
+                        "Shaojing Fan",
+                        "Harry Cheng",
+                        "Mohan Kankanhalli"
+                    ],
+        "published":  "2026-05-11",
+        "updated":  "2026-05-12",
+        "primary_category":  "cs.MM",
+        "url":  "https://arxiv.org/abs/2605.10357",
+        "abstract":  "Multimodal misinformation increasingly leverages visual persuasion, where repurposed or manipulated images strengthen misleading text. We introduce \\textbf{RW-Post}, a post-aligned \\textbf{text--image benchmark} for real-world multimodal fact-checking with \\emph{auditable} annotations: each instance links the original social-media post with reasoning traces and explicitly linked evidence items derived from human fact-check articles via an LLM-assisted extraction-and-auditing pipeline. RW-Post supports controlled evaluation across closed-book, evidence-bounded, and open-web regimes, enabling systematic diagnosis of visual grounding and evidence utilization. We provide \\textbf{AgentFact} as a reference verification baseline and benchmark strong open-source LVLMs under unified protocols. Experiments show substantial headroom: current models struggle with faithful evidence grounding, while evidence-bounded evaluation improves both accuracy and faithfulness. Code and dataset will be released at https://github.com/xudanni0927/AgentFact."
+    },
+    {
+        "id":  "2605.16217",
+        "title":  "Argus: Evidence Assembly for Scalable Deep Research Agents",
+        "authors":  [
+                        "Zhen Zhang",
+                        "Liangcai Su",
+                        "Zhuo Chen",
+                        "Xiang Lin",
+                        "Haotian Xu",
+                        "Simon Shaolei Du",
+                        "Kaiyu Yang",
+                        "Bo An",
+                        "Lidong Bing",
+                        "Xinyu Wang"
+                    ],
+        "published":  "2026-05-16",
+        "updated":  "2026-05-20",
+        "primary_category":  "cs.CL",
+        "url":  "https://arxiv.org/abs/2605.16217",
+        "abstract":  "Deep research agents have achieved remarkable progress on complex information seeking tasks. Even long ReAct style rollouts explore only a single trajectory, while recent state of the art systems scale inference time compute via parallel search and aggregation. Yet deep research answers are composed of complementary pieces of evidence, which parallel rollouts often duplicate rather than complete, yielding diminishing returns while pushing the aggregation context toward the model\u0027s limit. We propose Argus, an agentic system in which a Searcher and a Navigator cooperate to treat deep research as assembling a jigsaw from complementary evidence pieces, rather than brute forcing the whole answer in parallel. The Searcher collects evidence traces for a given sub-query through ReAct-style interaction. The Navigator maintains a shared evidence graph, verifying which pieces are still missing, dispatching Searchers to gather them, and reasoning over the completed graph to produce a source-traced final answer. We train the Navigator with reinforcement learning to verify, dispatch, and synthesize, while independently training the Searcher to remain a standard ReAct agent. The resulting Navigator supports rollouts with a single Searcher or many in parallel without retraining. With both Searcher and Navigator built on a 35B-A3B MoE backbone, Argus gains 5.5 points with a single Searcher and 12.7 points with 8 parallel Searchers, averaged over eight benchmarks. With 64 Searchers it reaches 86.2 on BrowseComp, surpassing every proprietary agent we benchmark, while the Navigator\u0027s reasoning context stays under 21.5K tokens."
+    },
+    {
+        "id":  "2605.19196",
+        "title":  "Time to REFLECT: Can We Trust LLM Judges for Evidence-based Research Agents?",
+        "authors":  [
+                        "Leyao Wang",
+                        "Yanan He",
+                        "Peng Chen",
+                        "Asaf Yehudai",
+                        "Yixin Liu",
+                        "Rex Ying",
+                        "Michal Shmueli-Scheuer",
+                        "Arman Cohan"
+                    ],
+        "published":  "2026-05-19",
+        "updated":  "2026-05-19",
+        "primary_category":  "cs.CL",
+        "url":  "https://arxiv.org/abs/2605.19196",
+        "abstract":  "Deep research agents increasingly automate complex information-seeking tasks, producing evidence-grounded reports via multi-step reasoning, tool use, and synthesis. Their growing role demands scalable, reliable evaluation, positioning LLM-as-judge as a supervision paradigm for assessing factual accuracy, evidence use, and reasoning quality. Yet the reliability of these judges for deep research agents remains poorly understood, posing a critical meta-evaluation problem: before deploying LLM judges to supervise research agents, we must first evaluate the judges themselves. Existing meta-evaluations fall short in two ways: (1) reliance on coarse, subjective human-preference agreement; (2) focus on instruction-following or verifiable tasks, leaving open-ended agent executions unexplored. To address these gaps, we introduce REFLECT (REliable Fine-grained LLM judge Evaluation via Controlled inTervention), a meta-evaluation benchmark targeting fine-grained failure detection in agentic environments. REFLECT defines a detailed taxonomy of process- and outcome-level failure modes, instantiated by performing controlled and localized interventions on quality-screened agent execution traces. This yields verifiable, comprehensive, and fine-grained instances for validating the judge models. Our experiments show that current LLM judges remain unreliable: even the best-performing models achieve overall accuracies below 55% across reasoning, tool-use, and report-quality failures, with especially poor performance on evidence verification. Together, our taxonomy and findings expose systematic judge limitations, reveal tradeoffs in cost and reliability, and offer actionable guidance for building more reliable evaluation pipelines for deep research agents."
+    },
+    {
+        "id":  "2605.24245",
+        "title":  "Deep-Research Agents Can Be Poisoned via User-Generated Content",
+        "authors":  [
+                        "Tingwei Zhang",
+                        "Harold Triedman",
+                        "Vitaly Shmatikov"
+                    ],
+        "published":  "2026-05-23",
+        "updated":  "2026-05-23",
+        "primary_category":  "cs.CR",
+        "url":  "https://arxiv.org/abs/2605.24245",
+        "abstract":  "Deep-research agents, i.e., systems that rely on multi-agent pipelines to iteratively retrieve, synthesize, and cite Web content in order to produce structured reports, are rapidly replacing traditional search for both routine and complex information needs. These agents issue many related queries during a single research session. We show that for many common search topics, they repeatedly retrieve the same user-generated content (UGC) pages from platforms such as Reddit and Wikipedia. Next, we argue that this retrieval overlap creates a concentrated attack surface: an adversary who appends a short, crafted text to a single, frequently retrieved UGC page can cause the agent to cite attacker-chosen content and promote attacker-chosen entities across many related queries. We evaluate this attack on three representative deep-research systems (STORM, Co-STORM, and OmniThink) across multiple query clusters. We also study defenses at different stages of the pipeline, including source-level filtering and output-based detection. Our findings highlight a fundamental vulnerability in how deep-research agents retrieve and integrate web content."
+    },
+    {
+        "id":  "2605.26081",
+        "title":  "VeriTrace: Evolving Mental Models for Deep Research Agents",
+        "authors":  [
+                        "Haolang Zhao",
+                        "Yunbo Long",
+                        "Lukas Beckenbauer",
+                        "Alexandra Brintrup"
+                    ],
+        "published":  "2026-05-26",
+        "updated":  "2026-05-26",
+        "primary_category":  "cs.AI",
+        "url":  "https://arxiv.org/abs/2605.26081",
+        "abstract":  "Deep research agents face vast, interdependent, and pervasively uncertain information. Existing systems explore what evolving intermediate representations should look like, but leave their evolution to the LLM\u0027s implicit reasoning. Without explicit regulation, the intermediate layer is easily contaminated by mixed-quality information and propagates errors along its dependencies, so model scale often ends up substituting for absent regulation. We argue that an agent\u0027s mental model should instead evolve through explicit feedback that continuously aligns task understanding with reality, and identify three regulatory loops: interpretive update, deviation feedback, and schema revision. We realise this in VeriTrace, a cognitive-graph framework that explicitly implements the three loops. Using matched Qwen3.5-27B backbones, VeriTrace improves over the strongest matched baseline by 4.22 pp on DeepResearch Bench (DRB) Insight (1.49 pp Overall) and by 5.9 pp Overall win rate on DeepConsult. With Config-DeepSeek, it achieves the strongest reproducible open-source result on DRB."
+    },
+    {
+        "id":  "2605.30727",
+        "title":  "MosaicLeaks:Privacy Risks in Querying-in-the-Open for Deep Research Agents",
+        "authors":  [
+                        "Alexander Gurung",
+                        "Spandana Gella",
+                        "Alexandre Drouin",
+                        "Issam H. Laradji",
+                        "Perouz Taslakian",
+                        "Rafael Pardinas"
+                    ],
+        "published":  "2026-05-29",
+        "updated":  "2026-05-29",
+        "primary_category":  "cs.CL",
+        "url":  "https://arxiv.org/abs/2605.30727",
+        "abstract":  "Deep research agents increasingly combine private local documents with external tools like web retrieval, creating a privacy risk: an agent\u0027s external queries may leak sensitive information from its local context. This risk is amplified by the mosaic effect, where individual queries may appear harmless but become revealing in aggregate. We introduce MosaicLeaks, a benchmark of 1,001 multi-hop deep research tasks that chain private enterprise documents and a public web corpus, forcing agents to make external queries that depend on local information. We evaluate leakage with an adversary LLM that observes only the agent\u0027s external queries and attempts to infer private information at three levels: the agent\u0027s research intent, answers to specific private questions and verifiable claims about the enterprise documents. We find that models across families and sizes frequently leak at all three levels, that zero-shot privacy prompting reduces but does not eliminate leakage and that reinforcement learning for task performance alone worsens leakage. To address this, we propose Privacy-Aware Deep Research (PA-DR), an RL framework that combines situational rewards for task success with a learned privacy classifier to provide dense credit assignment over both per-query and mosaic-level leakage. Training Qwen3-4B-Instruct with PA-DR improves accuracy from 48.7% to 58.7% and reduces answer and full-information leakage from 34.0% to 9.9%."
+    },
+    {
+        "id":  "2606.05241",
+        "title":  "Search-Time Contamination in Deep Research Agents: Measuring Performance Inflation in Public Benchmark Evaluation",
+        "authors":  [
+                        "Yongjie Wang",
+                        "Xinyue Zhang",
+                        "Kunhong Yao",
+                        "Zhiwei Zeng",
+                        "Kaisong Song",
+                        "Jun Lin",
+                        "Zhiqi Shen"
+                    ],
+        "published":  "2026-06-03",
+        "updated":  "2026-06-03",
+        "primary_category":  "cs.CR",
+        "url":  "https://arxiv.org/abs/2606.05241",
+        "abstract":  "Public benchmarks enable fair and reproducible evaluation of LLM reasoning, but they become fragile for deep research agents that actively search the web during inference. Such agents may retrieve public benchmark metadata, question context, or even ground-truth answers via web search. This gives rise to Search-Time Contamination (STC), where external retrieval bypasses intended reasoning and inflates measured performance. We systematically study STC in deep research agent evaluation. We define three contamination types with increasing severity, namely Benchmark Metadata Leakage, Question-Context Leakage, and Explicit Answer Leakage, and develop detection algorithms to identify them and quantify their impact on agent performance. Evaluating modern deep research agents on six public benchmarks, we find that STC is widespread and can inflate performance by up to 4%. Our findings show that existing evaluations may overestimate true reasoning ability. We therefore advocate contamination-aware practices, including isolated sandboxes, transparent search trajectories, and controlled benchmark access."
+    },
+    {
+        "id":  "2606.05784",
+        "title":  "TAPO: Tool-Aware Policy Optimization via Credit Transfer for Multimodal Search Agents",
+        "authors":  [
+                        "Chengqi Dong",
+                        "Chuhuai Yue",
+                        "Hang He",
+                        "yandong liu",
+                        "Fenghe Tang",
+                        "S Kevin Zhou",
+                        "Xiaohan Wang",
+                        "Jiajun Chai",
+                        "Guojun Yin"
+                    ],
+        "published":  "2026-06-04",
+        "updated":  "2026-06-04",
+        "primary_category":  "cs.AI",
+        "url":  "https://arxiv.org/abs/2606.05784",
+        "abstract":  "We identify and formally characterize credit misassignment as a systematic failure mode of GRPO in tool-augmented multimodal search agents: its uniform broadcast of trajectory-level advantages to all tokens causes valuable tool-use steps in failing trajectories to be penalized no differently from valueless ones. We further empirically quantify the scale of this phenomenon. Over half of failing trajectories and failing tool-use actions exhibit correctable credit misassignment, demonstrating that the wasted training signal is both substantial and structurally exploitable. Building on this insight, we propose Tool-Aware Policy Optimization (TAPO), which exploits the parameter-determinism property of information-acquisition tools: similar call parameters define equivalent information-acquisition actions and should therefore share comparable action credit. TAPO constructs counterfactual witnesses within the current training batch and compensates misassigned negative credit via confidence-gated conservative advantage correction. It requires no additional annotation, models, or sampling, and introduces negligible computational overhead. Across multiple multimodal search benchmarks, TAPO delivers consistent, plug-and-play improvements over strong baselines for three mainstream RL algorithms (GRPO, GSPO, and SAPO). Our code and models will be publicly released upon acceptance."
+    },
+    {
+        "id":  "2606.15231",
+        "title":  "Visual-Seeker: Towards Visual-Native Multimodal Agentic Search via Active Visual Reasoning",
+        "authors":  [
+                        "Zhengbo Zhang",
+                        "Changtao Miao",
+                        "Jinbo Su",
+                        "Zhaowen Zhou",
+                        "Chunxia Zhang",
+                        "Xukai Wang",
+                        "Ruiqi Liu",
+                        "Kaiyuan Zheng",
+                        "Jiansheng Cai",
+                        "Bo Zhang",
+                        "Zhe Li",
+                        "Shiming Xiang",
+                        "Ying Yan"
+                    ],
+        "published":  "2026-06-13",
+        "updated":  "2026-06-13",
+        "primary_category":  "cs.AI",
+        "url":  "https://arxiv.org/abs/2606.15231",
+        "abstract":  "Multimodal large language models (MLLMs) have demonstrated impressive capabilities in many visual tasks, but they often struggle with factual grounding when confronted with complex, open-world scenarios. While recent multimodal deep search agents attempt to address this issue by utilizing external tools, the visual-native search paradigm remains underexplored. Existing methods primarily rely on simple images with explicit semantics and text-only evidence trajectories, limiting the agent\u0027s ability to perform multi-hop, cross-modal reasoning and search. To address these limitations, we propose Visual-Seeker, a visual-native multimodal deep search agent via active visual reasoning. Rather than treating vision as a static input, our agent actively attends to fine-grained visual details, dynamically harvests visual evidence throughout the search process. To unlock its visual-native potential, we design an active visual reasoning data pipeline and synthesize 5K high-quality multimodal trajectories for model training. Extensive experiments demonstrate the state-of-the-art performance across five challenging multimodal search benchmarks, even surpassing several proprietary models, validating robust visual-native reasoning and search in real-world web environments. The code and data can be accessed at: https://github.com/ZhengboZhang/Visual-Seeker."
+    },
+    {
+        "id":  "2606.16821",
+        "title":  "How Much Can We Trust LLM Search Agents? Measuring Endorsement Vulnerability to Web Content Manipulation",
+        "authors":  [
+                        "Yimeng Chen",
+                        "Zhe Ren",
+                        "Firas Laakom",
+                        "Yu Li",
+                        "Dandan Guo",
+                        "Jürgen Schmidhuber"
+                    ],
+        "published":  "2026-06-15",
+        "updated":  "2026-06-23",
+        "primary_category":  "cs.CL",
+        "url":  "https://arxiv.org/abs/2606.16821",
+        "abstract":  "Large language model (LLM)-based search agents synthesize open-web content into actionable recommendations on behalf of users, creating a risk that attacker-published pages are transformed into endorsed claims. We introduce SearchGEO, a controlled evaluation framework for measuring endorsement corruption in LLM-based web-search agents, combining a web-evidence manipulation pipeline, a five-mode attack taxonomy, and multiple output-level metrics. We evaluate 13 LLM backends on 308 cases each. Results show that vulnerability patterns vary across backends: overall attack success rate (ASR) ranges from 0.0% on Claude-Sonnet-4.6 to 31.4% on Gemini-3-Flash, the strongest attack mode differs by model family, and the same deployment scaffold could amplify or decrease ASR on different backends. An auxiliary agent-skill probe, where endorsement becomes an install command, exposes a sharp split among otherwise robust backends: Claude over-rejects while GPT over-trusts. These findings argue for treating recommendation reliability under adversarial search content as a first-class dimension of backend safety evaluation."
+    },
+    {
+        "id":  "2606.17029",
+        "title":  "DEEPRUBRIC: Evidence-Tree Rubric Supervision for Efficient Reinforcement Learning of Deep Research Agents",
+        "authors":  [
+                        "Minghang Zhu",
+                        "Chuyang Wei",
+                        "Junhao Xu",
+                        "Yilin Cheng",
+                        "Zhumin Chen",
+                        "Jiyan He"
+                    ],
+        "published":  "2026-06-16",
+        "updated":  "2026-06-16",
+        "primary_category":  "cs.CL",
+        "url":  "https://arxiv.org/abs/2606.17029",
+        "abstract":  "Deep research agents synthesize long-form reports by searching and reasoning over retrieved evidence. Reinforcement learning with rubric-based rewards improves these agents by optimizing them against checkable criteria that translate report quality into reward signals, but its efficiency depends on whether those criteria reliably capture the task scope and evidence needs. Most existing studies ask an LLM to generate rubrics for a given query, but when the model fails to infer the underlying information needs, the generated rubrics may be incomplete and reduce RL efficiency. To obtain more reliable query--rubric supervision, we introduce DeepRubric, a data construction framework that reverses this process: instead of inferring evaluation criteria for a given query, it first determines what an evidence-backed report should be evaluated on and then synthesizes aligned query--rubric pairs from those evaluation targets. Starting from a sampled seed topic, DeepRubric builds an evidence tree by recursively expanding evidence-backed sub-questions, whose leaves serve as atomic and verifiable evaluation targets. It then uses the evidence tree to synthesize the training query and rubrics, ensuring that the reward evaluates exactly the information requested by the query. Using DeepRubric, we construct 9K query--rubric supervision examples and train DeepRubric-8B with rubric-based GRPO, achieving comparable performance to prior open state-of-the-art deep research models across three benchmarks with roughly 13x fewer RL GPU-hours."
+    },
+    {
+        "id":  "2606.20122",
+        "title":  "ScaffoldAgent: Utility-Guided Dynamic Outline Optimization for Open-Ended Deep Research",
+        "authors":  [
+                        "Zhibang Yang",
+                        "Xinke Jiang",
+                        "Yuzhen Xiao",
+                        "Ruizhe Zhang",
+                        "Yue Fang",
+                        "XinFei Wan",
+                        "Zhengxing Song",
+                        "Yuxuan Liu",
+                        "Yuheng Huang",
+                        "Xu Chu",
+                        "Junfeng Zhao",
+                        "Yasha Wang"
+                    ],
+        "published":  "2026-06-18",
+        "updated":  "2026-06-18",
+        "primary_category":  "cs.AI",
+        "url":  "https://arxiv.org/abs/2606.20122",
+        "abstract":  "Open-ended deep research (OEDR) requires systems to acquire knowledge through multi-round retrieval and generate coherent long-form reports. The outline plays a central role as a structural scaffold that coordinates retrieval, evidence organization, and generation. However, existing methods either fix the outline before writing or refine it with local heuristics, leading to scaffold drift under continuous information accumulation and delayed feedback for evaluating outline modifications. We propose ScaffoldAgent, a utility-guided dynamic outline optimization framework for OEDR. ScaffoldAgent models outline evolution as a structured decision process with three operations: Expansion, Contraction, and Revision, enabling controlled updates to the report scaffold. It further introduces a utility-guided feedback mechanism that estimates the downstream value of each outline operation from retrieval gain, structural coherence, and trial-generation quality. The resulting utility signal guides node selection, operation scheduling, and termination during inference. Experiments on DeepResearch Bench and DeepResearch Gym show that ScaffoldAgent consistently improves long-form report generation and factual grounding over existing deep research agents."
+    },
+    {
+        "id":  "2606.28566",
+        "title":  "R$^2$-Searcher: Calibrating Retrieval and Reasoning Boundaries for Agentic Search",
+        "authors":  [
+                        "Sheng Zhang",
+                        "Junyi Li",
+                        "Wenlin Zhang",
+                        "Xiaowei Qian",
+                        "Yichao Wang",
+                        "Yingyi Zhang",
+                        "Maolin Wang",
+                        "Yong Liu",
+                        "Xiangyu Zhao"
+                    ],
+        "published":  "2026-06-27",
+        "updated":  "2026-06-27",
+        "primary_category":  "cs.IR",
+        "url":  "https://arxiv.org/abs/2606.28566",
+        "abstract":  "Recent search agents for multi-hop reasoning often fail by either retrieving incomplete evidence or reasoning over irrelevant portions of the retrieved content, leading to a retrieval-reasoning boundary shift. We propose R$^2$-Searcher, a novel framework that explicitly explores and calibrates the retrieval and reasoning boundaries via fine-grained, query-token-guided evidence modeling and post-retrieval reflection. Specifically, R$^2$-Searcher: (1) constructs fine-grained reasoning contexts by extracting precise facts from retrieved content based on query token semantics (e.g., subjects, actions, temporal markers, and degree modifiers), thereby guiding the attention of search agent; (2) introduces a retrieval reflection mechanism that evaluates and corrects boundary deviations after each retrieval step, guiding the generation of improved queries grounded in the extracted reasoning contexts; and (3) employs an end-to-end reasoning-reflection-guided reinforcement learning algorithm, R$^2$PO, which jointly optimizes both boundaries through a tree-based exploration of reasoning regions and reflections. Our method significantly enhances the quality of both retrieval and reasoning, establishing an iterative loop where retrieval and reasoning mutually enhance each other. Extensive experiments on seven complex multi-hop QA benchmarks demonstrate that R$^2$-Searcher significantly outperforms state-of-the-art agentic search methods in answer accuracy and retrieval-reasoning quality. Ablation studies further confirm the critical role of retrieval-reasoning boundary calibration."
+    },
+    {
+        "id":  "2606.31367",
+        "title":  "Evidence Triangulation for Multimodal Fact-Checking in the Wild",
+        "authors":  [
+                        "Stefanos-Iordanis Papadopoulos",
+                        "Zacharias Chrysidis",
+                        "Christos Koutlis",
+                        "Symeon Papadopoulos",
+                        "Panagiotis C. Petrantonakis"
+                    ],
+        "published":  "2026-06-30",
+        "updated":  "2026-06-30",
+        "primary_category":  "cs.MM",
+        "url":  "https://arxiv.org/abs/2606.31367",
+        "abstract":  "The proliferation of multimedia content on social platforms has fueled multimodal misinformation, where images are used to reinforce false claims. Consequently, Multimodal Fact-Checking (MFC) has emerged as an increasingly important research area. However, current progress is hindered by a reliance on synthetic training data and curated benchmarks that fail to capture the complexity of in-the-wild data. Furthermore, existing detection models rely on restricted intra-modality consistency or unconstrained all-to-all fusion, failing to capture nuanced relations between posts and external evidence. To address these limitations, we introduce X-POSE, a benchmark of real-world, community-annotated multimodal posts from X (formerly Twitter), augmented with full-length news articles retrieved via VLM-optimized search. Additionally, we propose TRENT, a novel MFC model that performs evidence triangulation using three parallel cross-attention streams alongside a relational fusion mechanism that explicitly models entailment and contradiction. Extensive evaluations demonstrate that TRENT consistently outperforms state-of-the-art specialized models and commercial VLMs. The code, prompt templates, and dataset are available at https://github.com/stevejpapad/evidence-triangulation"
+    },
+    {
+        "id":  "2607.04718",
+        "title":  "FORGE: Research-Trajectory Hijacking Attacks on Deep Research Agents",
+        "authors":  [
+                        "Yue Pan",
+                        "Ziheng Zhang",
+                        "Junxiang Lei",
+                        "Changhao Jia",
+                        "Qingyi Si",
+                        "Hongcheng Guo"
+                    ],
+        "published":  "2026-07-06",
+        "updated":  "2026-07-06",
+        "primary_category":  "cs.AI",
+        "url":  "https://arxiv.org/abs/2607.04718",
+        "abstract":  "Deep research agents decompose open-ended queries into subtasks, retrieve web evidence over multiple rounds, and synthesize long-form reports. This workflow creates a planning-layer poisoning surface: adversarial documents that enter the retrieval pool can steer follow-up questions and turn a local injection into report-level contamination. We present FORGE (Fabricated Orchestrated Reasoning chain for aGent Exploitation), a two-level attack that combines intra-document reasoning fabrication with inter-document chain coordination to hijack subtask planning. We further introduce the PRISM metric, which weights infected report claims by cognitive type, and Root Query Anchoring, a lightweight defense that ties recursive follow-up generation to the root query. Across 25 queries, Network FORGE reaches 26.4% PRISM with five injected documents and exhibits depth migration, in which recursive synthesis shifts poisoned content from overt framing into factual premises. On the 10-query defense subset, RQA (Root Query Anchoring) reduces PRISM from 38.5% to 18.3%."
+    },
+    {
+        "id":  "2607.05943",
+        "title":  "SearchEyes: Towards Frontier Multimodal Deep Search Intelligence via Search World Simulation",
+        "authors":  [
+                        "Zhengbo Jiao",
+                        "Yiming Cheng",
+                        "Yilei Jiang",
+                        "Kaituo Feng",
+                        "Rui Huang",
+                        "Tianyi Jiang",
+                        "Juanxi Tian",
+                        "Jiapeng li",
+                        "Qunzhong Wang",
+                        "Tailai Chen",
+                        "Qianshan Wei",
+                        "Chuan Xiao",
+                        "Shanyu Rong",
+                        "Yangfu Li",
+                        "Yanhan Zhou",
+                        "Yunpu Ma",
+                        "Yifan Zhang",
+                        "Xiangyu Yue"
+                    ],
+        "published":  "2026-07-07",
+        "updated":  "2026-07-07",
+        "primary_category":  "cs.AI",
+        "url":  "https://arxiv.org/abs/2607.05943",
+        "abstract":  "Training multimodal search agents to perform multi-hop reasoning remains challenging due to a fundamental structural disconnect: existing pipelines construct training data, search environments, and reward signals independently, causing synthesized structural metadata to be discarded, environments to rely on irreproducible external engines, and RL rewards to remain sparse at the trajectory level. We present \\textbf{SearchEyes}, which uses a typed knowledge graph as the backbone of a \\emph{simulated search world} that unifies all three components. We propose \\textbf{Perception-Knowledge Chains (PKC)} to sample constrained multi-hop paths over the visual-knowledge intersection of Wikidata5M, retaining hop-level entity metadata that simultaneously defines a self-contained search world and step-level reward anchors. We further propose \\textbf{Hop-Anchored Policy Optimization (HaPO)}, which reuses these anchors for step-level credit assignment without a separately trained process reward model. Experiments on six multimodal knowledge-intensive benchmarks show that SearchEyes achieves state-of-the-art performance among open-source multimodal search agents, with SearchEyes-27B improving over the strongest open-source baseline by 6.2 points on average.%"
+    },
+    {
+        "id":  "2607.06223",
+        "title":  "Information Gain-based Rollout Policy Optimization: An Adaptive Tree-Structured Rollout Approach for Multi-Turn LLM Agents",
+        "authors":  [
+                        "Yijun Zhang",
+                        "Fan Xu",
+                        "Jiaxin Ding",
+                        "Yule Xie",
+                        "Shiqing Gao",
+                        "Xin Ding",
+                        "Haoxiang Zhang",
+                        "Luoyi Fu",
+                        "Xinbing Wang"
+                    ],
+        "published":  "2026-07-07",
+        "updated":  "2026-07-07",
+        "primary_category":  "cs.AI",
+        "url":  "https://arxiv.org/abs/2607.06223",
+        "abstract":  "Reinforcement learning has become a promising paradigm for improving large language model (LLM) agents on long-horizon search tasks, where the agent must make a sequence of intermediate decisions before receiving a final outcome. However, existing methods still face a key limitation: the rollout budget is often allocated without explicitly assessing the utility of intermediate states. As a result, substantial computation may be spent on low-value states, even though different branches can vary drastically in their informativeness. In this paper, we propose Information Gain-based Rollout Policy Optimization (IGRPO), a policy optimization framework that treats intermediate-state informativeness as the organizing principle of rollout collection. Specifically, IGRPO performs budget-aware tree-structured rollouts by allocating expansion budget according to node-level informativeness, so that more informative branches are expanded more frequently while unpromising branches are progressively suppressed. We further demonstrate that the information gain-based rollout induces an explicit limiting teacher distribution over trajectories, which naturally yields a clear policy optimization target, thereby unifying adaptive tree-structured exploration with principled policy learning under a single framework. Experiments on seven challenging search-augmented QA benchmarks demonstrate that IGRPO consistently outperforms strong baselines under the same rollout budget constraints, validating the effectiveness of leveraging the induced teacher distribution to guide policy optimization for long-horizon search agents."
+    },
+    {
+        "id":  "2607.08700",
+        "title":  "Do You Need a Frontier Model as a Citation Verifier? Benchmarking Rubric LLMs for Deep-Research Source Attribution",
+        "authors":  [
+                        "Ethan Leung",
+                        "Elias Lumer",
+                        "Corey Feld",
+                        "Austin Huber",
+                        "Vamse Kumar Subbiah",
+                        "Kevin Paul"
+                    ],
+        "published":  "2026-07-10",
+        "updated":  "2026-07-10",
+        "primary_category":  "cs.CL",
+        "url":  "https://arxiv.org/abs/2607.08700",
+        "abstract":  "Reinforcement learning increasingly relies on an LLM judge to score each rubric criterion, and that judge acts as the reward model during training. Before such a signal can be trusted, we need to know how capable the judge must be and how biased it is. We study this calibration question for citation quality in deep-research systems, where a search-grounded LLM must support each claim it writes with a cited source. Citation quality is a structured rubric task in which each attribution-citation pair is judged along two dimensions that require an LLM, source relevance and factual support. On an adversarial long-form benchmark, we score 8 off-the-shelf LLM judges from 3 model families against gold labels over 1,248 rubric decisions, all of which were human-reviewed and 378 of which were hard cases adjudicated from judge disagreements. Cheaper judges remain competitive across both dimensions, with GPT-5-mini attaining the strongest source-relevance pass-class F1 at 0.908 ($κ$=0.636), while on factual support the judges are statistically indistinguishable (overlapping confidence intervals), so no single model dominates. At comparable F1, the judges still differ substantially in pass-rate drift, false positive rate, and false negative rate. Scalar F1 obscures this directional bias, yet it is exactly what a downstream reinforcement learning loop would reinforce. Calibrating the judge is therefore a prerequisite for using citation rubrics as reward signals, and our results show that this calibration does not require the most expensive available model."
+    }
+]
