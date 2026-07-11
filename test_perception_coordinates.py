@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from src.tools.perceive_scene import PerceiveSceneTool, normalize_entity_bbox
+from src.tools.perceive_scene import (
+    PERCEIVE_SCENE_SCHEMA,
+    PerceiveSceneTool,
+    normalize_entity_bbox,
+)
 
 
 class FakePerceptionClient:
@@ -38,3 +42,42 @@ def test_normalized_xyxy_is_preserved_and_invalid_boxes_are_rejected() -> None:
         assert "ordered" in str(exc)
     else:
         raise AssertionError("invalid bbox was accepted")
+
+
+def test_perception_schema_has_no_unbounded_entity_payload() -> None:
+    entities = PERCEIVE_SCENE_SCHEMA["properties"]["entities"]
+    entity_properties = entities["items"]["properties"]
+
+    assert entities["maxItems"] == 8
+    assert entity_properties["name"]["maxLength"] == 100
+    assert "attributes" not in entity_properties
+    assert PERCEIVE_SCENE_SCHEMA["properties"]["scene_description"]["maxLength"] == 280
+
+
+class VerboseFakePerceptionClient:
+    def create_image_json(self, **_kwargs):
+        return {
+            "entities": [
+                {
+                    "name": f"entity-{index}",
+                    "entity_type": "object",
+                    "bbox": [],
+                    "confidence": 0.8,
+                    "attributes": {"unbounded": "must be discarded"},
+                }
+                for index in range(12)
+            ],
+            "scene_description": "A bounded visual inventory.",
+            "image_type": "photo",
+        }
+
+
+def test_perception_discards_attributes_and_caps_entities() -> None:
+    tool = PerceiveSceneTool(client=VerboseFakePerceptionClient())
+
+    result = tool.call({"image_input": "not-read-by-fake.jpg"})
+
+    assert result["status"] == "success"
+    assert result["total_entities"] == 8
+    assert len(result["entities"]) == 8
+    assert all(entity["attributes"] == {} for entity in result["entities"])

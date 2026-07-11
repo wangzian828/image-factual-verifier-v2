@@ -16,10 +16,9 @@ Inspect the image carefully and return exactly one JSON object:
   "entities": [
     {
       "name": "specific entity name",
-      "entity_type": "person|object|building|text|logo|animal|scene_element",
+      "entity_type": "person|object|building|logo|animal|scene_element",
       "bbox": [x_min, y_min, x_max, y_max],
-      "confidence": 0.9,
-      "attributes": {"key": "value"}
+      "confidence": 0.9
     }
   ],
   "scene_description": "one-sentence literal description",
@@ -27,12 +26,16 @@ Inspect the image carefully and return exactly one JSON object:
 }
 
 Rules:
-1. List up to 15 important visible entities.
-2. Include readable text and logos as separate entities when visible.
+1. List at most 8 decision-relevant visible entities.
+2. Include visible logos, but do not transcribe text or describe entity attributes;
+   a separate OCR stage handles visible text.
 3. Use normalized [x_min, y_min, x_max, y_max] bounding boxes in [0,1].
    If no reliable box is available, use [].
-4. Keep scene_description literal and objective.
-5. Output JSON only.
+4. Keep every entity name under 100 characters.
+5. Keep scene_description to one literal, objective sentence under 280 characters.
+6. Do not include explanations, hidden-state reasoning, history, biographies, or
+   information that is not directly visible in the pixels.
+7. Output JSON only.
 """
 
 PERCEIVE_SCENE_SCHEMA = {
@@ -40,19 +43,28 @@ PERCEIVE_SCENE_SCHEMA = {
     "properties": {
         "entities": {
             "type": "array",
-            "maxItems": 15,
+            "maxItems": 8,
             "items": {
                 "type": "object",
                 "properties": {
-                    "name": {"type": "string", "maxLength": 160},
-                    "entity_type": {"type": "string"},
+                    "name": {"type": "string", "maxLength": 100},
+                    "entity_type": {
+                        "type": "string",
+                        "enum": [
+                            "person",
+                            "object",
+                            "building",
+                            "logo",
+                            "animal",
+                            "scene_element",
+                        ],
+                    },
                     "bbox": {"type": "array", "items": {"type": "number"}, "maxItems": 4},
                     "confidence": {"type": "number"},
-                    "attributes": {"type": "object"},
                 },
             },
         },
-        "scene_description": {"type": "string", "maxLength": 700},
+        "scene_description": {"type": "string", "maxLength": 280},
         "image_type": {
             "type": "string",
             "enum": ["photo", "screenshot", "document", "illustration", "meme"],
@@ -68,8 +80,8 @@ class PerceiveSceneTool(BaseTool):
     name: str = "perceive_scene"
     description: str = (
         "Observe the image and extract a structured list of visible entities "
-        "(people, objects, text, logos, buildings, animals), their types, approximate "
-        "positions, and attributes. Also determine the image type and provide a "
+        "(people, objects, logos, buildings, animals), their types, and approximate "
+        "positions. Also determine the image type and provide a "
         "scene description."
     )
     parameters: dict = field(
@@ -144,16 +156,16 @@ class PerceiveSceneTool(BaseTool):
                     "entity_type": str(ent.get("entity_type", "object")).strip(),
                     "bbox": bbox,
                     "confidence": float(ent.get("confidence", 0.8)),
-                    "attributes": ent.get("attributes", {}) if isinstance(ent.get("attributes"), dict) else {},
+                    "attributes": {},
                 }
             )
 
         return {
             "status": "success",
-            "entities": entities[:15],
+            "entities": entities[:8],
             "scene_description": str(parsed.get("scene_description", "")).strip(),
             "image_type": str(parsed.get("image_type", "photo")).strip(),
-            "total_entities": len(entities[:15]),
+            "total_entities": len(entities[:8]),
         }
 
 
