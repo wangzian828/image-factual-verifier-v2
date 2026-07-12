@@ -400,18 +400,26 @@ class StageRunner:
             request_previous_interaction_id = previous_interaction_id
             started = time.perf_counter()
             self.llm_api_calls += 1
-            payload = await self.llm.create_interaction(
-                input_payload=next_input,
-                system_instruction=self._build_native_system_content() + system_suffix,
-                tools=native_tools,
-                previous_interaction_id=request_previous_interaction_id,
-                response_format=self._native_response_format(),
-                store=True,
-                max_tokens=self.max_output_tokens,
-                generation_config=self.generation_config,
-            )
+            try:
+                payload = await self.llm.create_interaction(
+                    input_payload=next_input,
+                    system_instruction=self._build_native_system_content() + system_suffix,
+                    tools=native_tools,
+                    previous_interaction_id=request_previous_interaction_id,
+                    response_format=self._native_response_format(),
+                    store=True,
+                    max_tokens=self.max_output_tokens,
+                    generation_config=self.generation_config,
+                )
+            except Exception as exc:
+                self._attach_partial_steps(exc, steps)
+                raise
             duration_ms = round((time.perf_counter() - started) * 1000, 2)
-            interaction_id, interaction_status = validate_interaction_response(payload)
+            try:
+                interaction_id, interaction_status = validate_interaction_response(payload)
+            except Exception as exc:
+                self._attach_partial_steps(exc, steps)
+                raise
 
             usage = payload.get("usage", {}) if isinstance(payload.get("usage"), dict) else {}
             tokens = {
@@ -602,6 +610,11 @@ class StageRunner:
             steps=steps,
             evidence_so_far=evidence_so_far,
         )
+
+    @staticmethod
+    def _attach_partial_steps(exc: Exception, steps: List[StageStep]) -> None:
+        if steps and not hasattr(exc, "stage_steps"):
+            setattr(exc, "stage_steps", list(steps))
 
     def _build_native_system_content(self) -> str:
         prompt = re.sub(

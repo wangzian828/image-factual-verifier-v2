@@ -539,7 +539,7 @@ class Orchestrator:
                     )
                 ],
                 source_access_policy=self.source_access_policy,
-                max_output_tokens=self._stage_output_tokens("VERIFICATION", 8192),
+                max_output_tokens=self._stage_output_tokens("VERIFICATION", 16384),
             )
             context = ContextRenderer.render_for_verification(
                 state.perception or PerceptionReport(),
@@ -552,7 +552,14 @@ class Orchestrator:
                     state.plan or VerificationPlan(),
                     result,
                 )
-            parsed, iteration_steps = await runner.run(context)
+            try:
+                parsed, iteration_steps = await runner.run(context)
+            except Exception as exc:
+                partial_steps = list(getattr(exc, "stage_steps", []) or [])
+                for step in partial_steps:
+                    step.metadata["verification_iteration"] = iteration
+                self._record_stage_steps(state, partial_steps)
+                raise
             if time.time() - started > self.timeout:
                 raise TimeoutError(
                     f"Verification exceeded timeout of {self.timeout} seconds during iteration {iteration}."

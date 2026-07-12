@@ -159,6 +159,25 @@ def test_text_search_filters_before_automatic_browse_and_removes_aggregates() ->
     assert browse.urls == ["https://independent.example/report"]
 
 
+def test_text_search_rejects_query_that_targets_excluded_domain_before_provider_call() -> None:
+    class RecordingSearch:
+        called = False
+
+        def search(self, *_args, **_kwargs):
+            self.called = True
+            raise AssertionError("policy-blocked query must not reach search provider")
+
+    search = RecordingSearch()
+    tool = TextSearchTool(client=search, browse_client=BrowseClient())
+    tool.set_source_access_policy(_policy())
+
+    result = tool.search("site:factcrescendo.com Sajith Premadasa UNP")
+
+    assert result["status"] == "error"
+    assert "independent open-web sources" in result["error"]
+    assert search.called is False
+
+
 def test_direct_visit_refuses_blocked_url_without_calling_provider() -> None:
     class Provider:
         called = False

@@ -215,6 +215,10 @@ Interactions turns per iteration, and a 30-minute per-image timeout. Use
 experiment; do not reduce them merely to make a run finish. The adaptive audit can stop
 after two consecutive low-information-gain iterations when no P2 service or ReInspect
 work remains, and records whether it stopped on coverage, saturation, or the hard cap.
+The verification output budget defaults to 16,384 tokens. Interactions failures remain
+hard failures, but the error trace retains all completed native tool calls. Evaluation
+also rejects any search query that explicitly names a policy-excluded fact-check domain
+before it reaches Serper.
 
 ## Troubleshooting
 

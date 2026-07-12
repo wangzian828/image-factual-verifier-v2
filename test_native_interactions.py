@@ -456,6 +456,32 @@ def test_native_invalid_response_envelope_is_a_hard_failure(response) -> None:
         asyncio.run(runner.run("- [q1] verify"))
 
 
+def test_native_failure_exposes_completed_steps_for_error_trace() -> None:
+    backend = NativeFakeBackend(
+        [
+            _function_call_response(),
+            {"id": "interaction-incomplete", "status": "incomplete", "steps": []},
+        ]
+    )
+    runner = StageRunner(
+        llm=backend,
+        system_prompt="Investigate.",
+        tools=[RecordingTool()],
+        output_schema=VerificationResult,
+        max_rounds=2,
+        stage_name="verification",
+        attach_image=False,
+    )
+
+    with pytest.raises(RuntimeError) as captured:
+        asyncio.run(runner.run("- [q1] verify"))
+
+    partial = getattr(captured.value, "stage_steps", [])
+    assert len(partial) == 1
+    assert partial[0].action_type == "tool_call"
+    assert partial[0].metadata["function_call_id"] == "call-1"
+
+
 def test_forced_output_keeps_function_results_as_step_array() -> None:
     forced = _completed_response()
     forced["id"] = "interaction-forced"

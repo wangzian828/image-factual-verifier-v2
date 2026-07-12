@@ -208,7 +208,7 @@ TOOL_CACHE_NAMESPACE=
 
 When enabled, only successful eligible results are cached. TTL limits reuse, and namespace isolates incompatible tool contracts, models, and provider selections. The automatic namespace includes those values unless `TOOL_CACHE_NAMESPACE` overrides it. Cache arguments and results are sanitized before disk persistence.
 
-`MAX_VERIFICATION_ITERATIONS` defaults to `4`; `MIN_VERIFICATION_ITERATIONS` and `LOW_INFORMATION_GAIN_PATIENCE` default to `2`. `WorkflowConfig.max_rounds_verification` defaults to `12`. Browse concurrency and extraction controls use the `BROWSE_*` variables defined by the integrations.
+`MAX_VERIFICATION_ITERATIONS` defaults to `4`; `MIN_VERIFICATION_ITERATIONS` and `LOW_INFORMATION_GAIN_PATIENCE` default to `2`. `WorkflowConfig.max_rounds_verification` defaults to `12`, and `GEMINI_VERIFICATION_MAX_OUTPUT_TOKENS` defaults to `16384`. Browse concurrency and extraction controls use the `BROWSE_*` variables defined by the integrations.
 
 `GEMINI_VISION_MIN_OUTPUT_TOKENS` defaults to `8192`. Schema-bound Gemini image observations routed through `OpenAIVisionClient.create_image_json()` set `generation_config.thinking_level` from `GEMINI_VISION_THINKING_LEVEL`, whose default is `minimal`. These calls perform bounded visual extraction rather than planning, so the default preserves output budget for the required JSON. This setting is not a global agent thinking policy: Planning, native ReAct, Replanning, Ledger Judgment, browse passage selection, and direct Interactions tools such as reference comparison keep their own generation configuration. Invalid values or failed visual calls propagate; the runtime does not switch thinking modes, models, providers, or protocols as a fallback.
 

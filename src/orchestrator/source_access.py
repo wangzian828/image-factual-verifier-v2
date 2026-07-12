@@ -114,6 +114,18 @@ class SourceAccessPolicy:
                 return False
         return True
 
+    def blocked_query_reference(self, query: str) -> str:
+        """Return a forbidden domain explicitly named in a search query."""
+
+        if not self.active:
+            return ""
+        text = unquote(str(query or "")).lower()
+        for domain in sorted(self.excluded_domains, key=len, reverse=True):
+            pattern = rf"(?<![a-z0-9.-])(?:[a-z0-9-]+\.)*{re.escape(domain)}(?![a-z0-9.-])"
+            if re.search(pattern, text):
+                return domain
+        return ""
+
     def filter_rows(
         self,
         rows: Any,

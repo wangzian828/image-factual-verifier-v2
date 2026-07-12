@@ -69,6 +69,19 @@ class TextSearchTool(BaseTool):
             return {"status": "error", "error": "At least one non-empty search query is required."}
         responses: List[Dict[str, Any]] = []
         for query in queries:
+            blocked_domain = (
+                self.source_access_policy.blocked_query_reference(query)
+                if self.source_access_policy is not None
+                else ""
+            )
+            if blocked_domain:
+                return {
+                    "status": "error",
+                    "error": (
+                        "Search query explicitly targets a source excluded by the active "
+                        "evaluation policy. Use independent open-web sources instead."
+                    ),
+                }
             responses.append(self._run_single_query(query, gl=gl, hl=hl, goal=goal))
         return self._build_result(responses)
 
@@ -89,6 +102,23 @@ class TextSearchTool(BaseTool):
             queries = [queries]
         if not queries:
             return {"status": "error", "error": "At least one non-empty search query is required."}
+        blocked_domain = next(
+            (
+                domain
+                for query in queries
+                if self.source_access_policy is not None
+                if (domain := self.source_access_policy.blocked_query_reference(query))
+            ),
+            "",
+        )
+        if blocked_domain:
+            return {
+                "status": "error",
+                "error": (
+                    "Search query explicitly targets a source excluded by the active "
+                    "evaluation policy. Use independent open-web sources instead."
+                ),
+            }
         tasks = [
             asyncio.to_thread(self._run_single_query, query, gl=gl, hl=hl, goal=goal)
             for query in queries
