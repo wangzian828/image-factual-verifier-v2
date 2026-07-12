@@ -76,4 +76,8 @@ print(f"pydantic={pydantic.__version__}")
 print(f"requests={requests.__version__}")
 PY
 
+if [[ "${IFV_INSTALL_JUPYTER_KERNEL:-1}" == "1" ]]; then
+    bash "${SCRIPT_DIR}/install_jupyter_kernel_gpu13.sh"
+fi
+
 echo "gpu-13 environment ready: ${ENV_NAME}"

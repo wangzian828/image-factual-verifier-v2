@@ -70,11 +70,12 @@ def start_kernel(
     session: requests.Session,
     base: str,
     request_timeout: float,
+    kernel_name: str,
 ) -> str:
     response = session.post(
         f"{base}/api/kernels",
         headers={"X-XSRFToken": session.cookies.get("_xsrf", "")},
-        json={"name": "python3"},
+        json={"name": kernel_name},
         timeout=request_timeout,
     )
     response.raise_for_status()
@@ -219,6 +220,14 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", default=DEFAULT_BASE)
     parser.add_argument("--password", default=DEFAULT_PASSWORD)
+    parser.add_argument(
+        "--kernel-name",
+        default=os.environ.get("JUPYTER_REMOTE_KERNEL", "python3"),
+        help=(
+            "Jupyter kernelspec to start "
+            "(default: JUPYTER_REMOTE_KERNEL or python3)"
+        ),
+    )
     parser.add_argument("--request-timeout", type=float, default=30.0)
     parser.add_argument("--shell", "-s", action="store_true")
     parser.add_argument("--timeout", "-t", type=int, default=120)
@@ -267,7 +276,12 @@ def main() -> int:
     if args.shell:
         code = wrap_shell(code)
 
-    kernel_id = args.kernel or start_kernel(session, base, args.request_timeout)
+    kernel_id = args.kernel or start_kernel(
+        session,
+        base,
+        args.request_timeout,
+        args.kernel_name,
+    )
     started_here = args.kernel is None
     try:
         return execute_code(session, base, kernel_id, code, args.timeout)

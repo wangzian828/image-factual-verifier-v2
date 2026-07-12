@@ -31,9 +31,11 @@ Windows workstation
 ```
 
 The Jupyter endpoint returned Tornado login responses, accepted the configured
-password, exposed the `python3` kernelspec, and successfully executed a temporary
-kernel on `gpu-13`. The kernel observed Python 3.12.7 and eight NVIDIA A100-SXM4
-40 GB GPUs. The temporary kernel was deleted after the smoke test.
+password, and successfully executed a temporary kernel on `gpu-13`. The base
+`python3` kernel is only a control-plane kernel. Project work must use the
+`ifv-agent` kernel registered by `bootstrap_gpu13.sh`; it starts the isolated
+Python 3.11 environment through `ifv_agent_kernel_gpu13.sh`, which applies the
+same proxy, data-root, cache, and `OMP_NUM_THREADS=1` guard as project wrappers.
 
 The old local `9814` route belongs to the previous server workflow. On the current
 path the service behind remote `127.0.0.1:9814` was unavailable; use local `8333`.
@@ -60,12 +62,18 @@ committed client:
 ```powershell
 python -m pip install websocket-client
 $env:JUPYTER_REMOTE_BASE = "http://127.0.0.1:8333"
-python scripts/server/jupyter_remote.py --shell "hostname; id -un"
+python scripts/server/jupyter_remote.py --kernel-name ifv-agent --shell "hostname; id -un"
 ```
 
 The client prompts for the password without echo. For unattended automation, inject
 `JUPYTER_REMOTE_PASSWORD` from a secret manager for that process only; do not persist
 it in a profile or script.
+
+`jupyter_remote.py` defaults to `python3` to preserve control-plane access before
+the environment is bootstrapped. Set `--kernel-name ifv-agent` or
+`JUPYTER_REMOTE_KERNEL=ifv-agent` for every project command. The bootstrap process
+installs `ipykernel` only when missing and registers/replaces the `ifv-agent`
+kernelspec; no Jupyter server restart is required.
 
 ## Required Server Runtime Environment
 
@@ -144,7 +152,10 @@ No prior Image Factual Verifier checkout or clearly reusable Agent environment w
 found under `/gs/home/wza` during the bounded-depth audit. Existing Conda environments
 serve unrelated vision/inference projects. The deployment therefore uses the isolated
 `ifv-agent` environment with Python 3.11. The bootstrap script is idempotent and stores
-`OMP_NUM_THREADS=1` in that Conda environment as an additional guard.
+`OMP_NUM_THREADS=1` in that Conda environment as an additional guard. It also
+installs the `ifv-agent` Jupyter kernelspec, whose wrapper sources
+`gpu13_env.sh` before launching the kernel. This ensures browser notebooks and
+REST/WebSocket-launched project commands retain the same runtime environment.
 
 ## Update From GitHub
 
