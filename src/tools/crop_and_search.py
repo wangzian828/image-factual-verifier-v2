@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 from src.integrations.browse.jina_reader import JinaReaderClient
+from src.integrations.gemini import RUNTIME_METRICS_KEY, add_runtime_metrics, exception_runtime_metrics
 from src.integrations.search.serper import SerperImageSearchClient, SerperLensSearchClient
 from src.integrations.search.visual_search import VisualReverseSearchClient
 from src.integrations.vlm.factory import build_vlm_client
@@ -153,6 +154,10 @@ class CropAndSearchTool(BaseTool):
             )
             regions.append(region)
 
+        runtime_metrics: Dict[str, Any] = {}
+        for region in regions:
+            add_runtime_metrics(runtime_metrics, region.get(RUNTIME_METRICS_KEY))
+
         best_region = self._pick_best_region(regions)
         candidate_page_urls = self._merge_region_candidate_urls(regions)
         reference_image_candidates = self._merge_region_reference_candidates(regions)
@@ -190,6 +195,7 @@ class CropAndSearchTool(BaseTool):
                 "total_ms": round((time.perf_counter() - total_t0) * 1000, 2),
                 "num_regions": len(regions),
             },
+            RUNTIME_METRICS_KEY: runtime_metrics.get(RUNTIME_METRICS_KEY, {}),
         }
 
     def _process_region(
@@ -216,6 +222,8 @@ class CropAndSearchTool(BaseTool):
 
             semantic_t0 = time.perf_counter()
             semantic_query = self._generate_query(crop_path, goal)
+            query_metrics = dict(getattr(self, "_last_query_runtime_metrics", {}) or {})
+            query_error = str(getattr(self, "_last_query_error", "") or "").strip()
             semantic_results = []
             if semantic_query:
                 semantic_results = self.image_search_client.search(
@@ -254,11 +262,12 @@ class CropAndSearchTool(BaseTool):
             )
             visit_duration_ms = round((time.perf_counter() - visit_t0) * 1000, 2)
 
-            return {
+            result = {
                 "bbox": normalized_bbox,
                 "goal": goal,
                 "saved_crop_path": saved_crop_path,
                 "crop_query": semantic_query,
+                "vlm_query_error": query_error,
                 "image_url_for_search": crop_url,
                 "visual_search_provider": visual.get("provider", ""),
                 "upload": visual.get("upload", {}),
@@ -293,6 +302,9 @@ class CropAndSearchTool(BaseTool):
                     **(visit_result.get("timings", {}) if isinstance(visit_result.get("timings"), dict) else {}),
                 },
             }
+            add_runtime_metrics(result, query_metrics)
+            add_runtime_metrics(result, visit_result.get(RUNTIME_METRICS_KEY))
+            return result
         except Exception as exc:
             return {
                 "bbox": bbox,
@@ -428,6 +440,8 @@ class CropAndSearchTool(BaseTool):
         return new_x1, new_y1, max(new_x1 + 1, new_x2), max(new_y1 + 1, new_y2)
 
     def _generate_query(self, crop_path: str, goal: str) -> str:
+        self._last_query_runtime_metrics = {}
+        self._last_query_error = ""
         try:
             payload = self.vlm_client.create_image_json(
                 system_prompt=CROP_QUERY_PROMPT,
@@ -437,8 +451,14 @@ class CropAndSearchTool(BaseTool):
                 model_name=self.model_name,
                 response_schema=CROP_QUERY_SCHEMA,
             )
-        except Exception:
+        except Exception as exc:
+            self._last_query_runtime_metrics = exception_runtime_metrics(exc)
+            self._last_query_error = f"{type(exc).__name__}: {exc}"
             return ""
+
+        self._last_query_runtime_metrics = dict(
+            payload.get(RUNTIME_METRICS_KEY, {}) or {}
+        )
 
         query = str(payload.get("query", "")).strip()
         if query and not self._is_low_value_query(query):

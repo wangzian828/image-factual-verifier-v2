@@ -15,6 +15,15 @@ from .interactions import (
     messages_to_input,
 )
 from .schema import missing_required_paths, normalize_json_schema
+from .runtime_metrics import (
+    RUNTIME_METRICS_KEY,
+    add_runtime_metrics,
+    attach_runtime_metrics,
+    exception_runtime_metrics,
+    interaction_runtime_metrics,
+    require_minimal_thinking,
+    take_runtime_metrics,
+)
 
 __all__ = [
     "DEFAULT_INTERACTIONS_URL",
@@ -31,4 +40,11 @@ __all__ = [
     "messages_to_input",
     "missing_required_paths",
     "normalize_json_schema",
+    "RUNTIME_METRICS_KEY",
+    "add_runtime_metrics",
+    "attach_runtime_metrics",
+    "exception_runtime_metrics",
+    "interaction_runtime_metrics",
+    "require_minimal_thinking",
+    "take_runtime_metrics",
 ]

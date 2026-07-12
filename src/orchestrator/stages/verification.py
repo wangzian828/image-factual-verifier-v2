@@ -33,10 +33,16 @@ Rules:
   expected_property when the revisit is search-driven.
 - Prefer official, primary, or direct-source pages over mirrors, social reposts, or portals.
 - If reverse image search already found a strong trusted source, use visit or compare_with_reference instead of repeating broad searches.
+- Treat pending ReInspect as mandatory only for `image_authenticity`, `image_provenance`,
+  or `visible_content` questions. Never let a visual comparison substitute for or block
+  direct Web evidence on an `external_fact` question.
 - Repeated use of the same tool is allowed when the target is meaningfully different, such as a new URL, query, crop, or reference.
 - Before finishing an iteration, attempt every active priority-1 question and every
   priority-2 question at least once. The deterministic audit decides whether to stop,
   replan, or continue under the global investigation budget.
+- After every P1 and P2 has its initial attempt, spend follow-up calls on unresolved P1
+  claims and pending high-quality ReInspect checks. Do not keep elaborating a P2 question
+  while a P1 claim still lacks an independent direct source.
 - A priority-1 question is not resolved merely because a trusted domain was found. The source content must directly address the question.
 - Source authority affects evidence quality, never evidence direction. Determine supports/refutes/neutral from source content.
 - Respect each question's claim scope. Anomaly, consistency, crop, count, OCR, and

@@ -97,6 +97,8 @@ Constraints:
 - Preserve each unresolved question's declarative claim_text exactly; revise only
   the search question, tools, and queries.
 - Preserve `claim_scope` exactly.
+- Preserve `priority` exactly; replanning cannot promote supporting context into a
+  decisive claim or demote a decisive claim.
 - Never use `fact check`, `fact-check`, verdict labels, or a fact-checking organization
   in a query; target original statements, official records, and independent reporting.
 - Use at most 3 tools and 3 short queries per update.

@@ -33,6 +33,11 @@ def _interaction_payload(output: Any) -> dict[str, Any]:
     return {
         "id": "interaction-visual-anomaly",
         "status": "completed",
+        "usage": {
+            "total_input_tokens": 91,
+            "total_output_tokens": 23,
+            "total_thought_tokens": 0,
+        },
         "steps": [
             {
                 "type": "model_output",
@@ -93,6 +98,10 @@ def test_visual_anomaly_uses_interactions_with_exact_structured_schema(tmp_path)
         "status": "success",
         "focus_areas": ["inspect the left hand"],
         **VALID_RESPONSE,
+        "__runtime_metrics__": {
+            "llm_api_calls": 1,
+            "tokens": {"prompt": 91, "completion": 23, "thought": 0},
+        },
     }
     assert backend.legacy_calls == 0
     assert len(backend.calls) == 1
@@ -254,6 +263,7 @@ def test_visual_anomaly_rejects_invalid_structured_output(
     assert result["error"]
     assert "failed schema validation" in result["error"]
     assert expected_error in result["error"]
+    assert result["__runtime_metrics__"]["llm_api_calls"] == 1
     assert len(backend.calls) == 1
     assert backend.legacy_calls == 0
 

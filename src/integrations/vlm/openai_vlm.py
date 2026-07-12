@@ -7,8 +7,12 @@ from typing import Any, Dict, Mapping, Optional
 
 from src.integrations.gemini import (
     GeminiInteractionsClient,
+    RUNTIME_METRICS_KEY,
+    attach_runtime_metrics,
+    interaction_runtime_metrics,
     missing_required_paths,
     normalize_json_schema,
+    require_minimal_thinking,
 )
 from src.integrations.llm.openai_compatible import (
     OpenAICompatibleChatClient,
@@ -160,29 +164,34 @@ class OpenAIVisionClient:
                     generation_config={
                         "max_output_tokens": max_tokens,
                         "temperature": temperature,
-                        "thinking_level": os.getenv(
-                            "GEMINI_VISION_THINKING_LEVEL",
-                            "minimal",
-                        ).strip().lower(),
+                        "thinking_level": require_minimal_thinking(
+                            os.getenv("GEMINI_VISION_THINKING_LEVEL", "minimal"),
+                            env_name="GEMINI_VISION_THINKING_LEVEL",
+                        ),
                     },
                     background=False,
                     store=True,
                 )
-                content = client.extract_text(payload)
-                if not content.strip():
-                    raise RuntimeError("Gemini Interactions vision response was empty.")
-                parsed = parse_json_object(content)
-                if not parsed:
-                    raise RuntimeError(
-                        "Gemini Interactions vision response was not a valid JSON object: "
-                        + content[:500]
-                    )
-                missing = missing_required_paths(parsed, schema)
-                if missing:
-                    raise RuntimeError(
-                        "Gemini Interactions vision response is missing required fields: "
-                        + ", ".join(missing[:20])
-                    )
+                runtime_metrics = interaction_runtime_metrics(payload)
+                try:
+                    content = client.extract_text(payload)
+                    if not content.strip():
+                        raise RuntimeError("Gemini Interactions vision response was empty.")
+                    parsed = parse_json_object(content)
+                    if not parsed:
+                        raise RuntimeError(
+                            "Gemini Interactions vision response was not a valid JSON object: "
+                            + content[:500]
+                        )
+                    missing = missing_required_paths(parsed, schema)
+                    if missing:
+                        raise RuntimeError(
+                            "Gemini Interactions vision response is missing required fields: "
+                            + ", ".join(missing[:20])
+                        )
+                except Exception as exc:
+                    raise attach_runtime_metrics(exc, runtime_metrics)
+                parsed[RUNTIME_METRICS_KEY] = runtime_metrics
                 return parsed
 
         return self._run_async(_request())

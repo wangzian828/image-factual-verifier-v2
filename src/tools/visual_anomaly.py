@@ -9,9 +9,12 @@ from typing import Annotated, Any, Dict, Literal
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
 
 from src.integrations.gemini import (
+    RUNTIME_METRICS_KEY,
     extract_text,
+    interaction_runtime_metrics,
     messages_to_input,
     normalize_json_schema,
+    require_minimal_thinking,
     validate_interaction_response,
 )
 from src.tools.base import BaseTool
@@ -258,6 +261,7 @@ class VisualAnomalyTool(BaseTool):
                 prompt += f"\n\n## Additional Context\n{context}"
 
         try:
+            runtime_metrics: Dict[str, Any] = {}
             from src.tools.vision_utils import image_to_data_url
 
             image_data_url = image_to_data_url(self.image_path)
@@ -280,12 +284,14 @@ class VisualAnomalyTool(BaseTool):
                 max_tokens=VISUAL_ANOMALY_MAX_OUTPUT_TOKENS,
                 temperature=0.0,
                 generation_config={
-                    "thinking_level": os.getenv(
-                        "GEMINI_VISUAL_ANOMALY_THINKING_LEVEL", "minimal"
-                    ).strip().lower()
+                    "thinking_level": require_minimal_thinking(
+                        os.getenv("GEMINI_VISUAL_ANOMALY_THINKING_LEVEL", "minimal"),
+                        env_name="GEMINI_VISUAL_ANOMALY_THINKING_LEVEL",
+                    )
                 },
                 background=False,
             )
+            runtime_metrics = interaction_runtime_metrics(payload)
             _, interaction_status = validate_interaction_response(payload)
             if interaction_status != "completed":
                 raise RuntimeError(
@@ -294,15 +300,19 @@ class VisualAnomalyTool(BaseTool):
                 )
             content = extract_text(payload).strip()
         except Exception as exc:
-            return {
+            error = {
                 "status": "error",
                 "error": self._error_message("Visual anomaly Interactions request failed", exc),
             }
+            if runtime_metrics:
+                error[RUNTIME_METRICS_KEY] = runtime_metrics
+            return error
 
         if not content:
             return {
                 "status": "error",
                 "error": "Gemini Interactions visual anomaly response was empty.",
+                RUNTIME_METRICS_KEY: runtime_metrics,
             }
 
         try:
@@ -318,12 +328,14 @@ class VisualAnomalyTool(BaseTool):
                     "Gemini Interactions visual anomaly response failed schema validation: "
                     + "; ".join(details)
                 ),
+                RUNTIME_METRICS_KEY: runtime_metrics,
             }
 
         return {
             "status": "success",
             "focus_areas": focus_areas,
             **result.model_dump(mode="json", by_alias=True),
+            RUNTIME_METRICS_KEY: runtime_metrics,
         }
 
     @staticmethod

@@ -26,6 +26,11 @@ class FakeAsyncClient:
             json={
                 "id": "interaction-vlm",
                 "status": "completed",
+                "usage": {
+                    "total_input_tokens": 83,
+                    "total_output_tokens": 11,
+                    "total_thought_tokens": 0,
+                },
                 "steps": [
                     {
                         "type": "model_output",
@@ -64,7 +69,14 @@ def test_gemini_vlm_uses_interactions(monkeypatch) -> None:
         image_path.unlink(missing_ok=True)
         os.rmdir(tmp_dir)
 
-    assert result == {"scene": "test", "objects": ["square"]}
+    assert result == {
+        "scene": "test",
+        "objects": ["square"],
+        "__runtime_metrics__": {
+            "llm_api_calls": 1,
+            "tokens": {"prompt": 83, "completion": 11, "thought": 0},
+        },
+    }
     assert len(requests) == 1
     request = requests[0]
     assert request["url"].endswith("/v1beta/interactions")
@@ -107,7 +119,8 @@ def test_gemini_vlm_uses_custom_schema_and_uri(monkeypatch) -> None:
         response_schema=schema,
     )
 
-    assert result == {"scene": "test", "objects": ["square"]}
+    assert result["scene"] == "test"
+    assert result["objects"] == ["square"]
     request = requests[0]["body"]
     assert request["response_format"] == {
         "type": "text",
@@ -138,7 +151,7 @@ def test_gemini_vlm_rejects_missing_required_schema_paths(monkeypatch) -> None:
     }
 
     client = build_vlm_client(provider="gemini", model_name="gemini-test")
-    with pytest.raises(RuntimeError, match=r"\$\.details"):
+    with pytest.raises(RuntimeError, match=r"\$\.details") as error:
         client.create_image_json(
             system_prompt="Describe the image as JSON.",
             user_text="Inspect it.",
@@ -146,6 +159,7 @@ def test_gemini_vlm_rejects_missing_required_schema_paths(monkeypatch) -> None:
             max_tokens=128,
             response_schema=schema,
         )
+    assert error.value._gemini_runtime_metrics["llm_api_calls"] == 1
 
 
 def test_gemini_vlm_refuses_legacy_wire_protocol(monkeypatch) -> None:

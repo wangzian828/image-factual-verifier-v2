@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from src.integrations.browse.jina_reader import JinaReaderClient
+from src.integrations.gemini import RUNTIME_METRICS_KEY, exception_runtime_metrics
 from src.orchestrator.source_access import SourceAccessPolicy
 from src.tools.base import BaseTool
 
@@ -65,10 +66,14 @@ class VisitTool(BaseTool):
                     }
                 result = self.client.visit(str(url), goal)
         except Exception as exc:
-            return {
+            result = {
                 "status": "error",
                 "error": f"{type(exc).__name__}: {exc}",
             }
+            metrics = exception_runtime_metrics(exc)
+            if metrics:
+                result[RUNTIME_METRICS_KEY] = metrics
+            return result
 
         status = str(result.get("status", "")).strip().lower()
         visits = result.get("visits", [])

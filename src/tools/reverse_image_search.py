@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 from src.integrations.search.serper import SerperImageSearchClient, SerperLensSearchClient
 from src.integrations.search.visual_search import VisualReverseSearchClient
 from src.integrations.vlm.factory import build_vlm_client
+from src.integrations.gemini import RUNTIME_METRICS_KEY, add_runtime_metrics, exception_runtime_metrics
 from src.orchestrator.source_access import SourceAccessPolicy
 from src.tools.base import BaseTool
 
@@ -186,6 +187,8 @@ class ReverseImageSearchTool(BaseTool):
         try:
             query_t0 = time.perf_counter()
             query_payload = self._generate_query(image_input)
+            if query_payload.get(RUNTIME_METRICS_KEY):
+                payload[RUNTIME_METRICS_KEY] = query_payload[RUNTIME_METRICS_KEY]
             payload["timings"]["vlm_query_ms"] = round((time.perf_counter() - query_t0) * 1000, 2)
             query = str(query_payload.get("query", "")).strip()
             payload["vlm_query"] = query
@@ -198,6 +201,9 @@ class ReverseImageSearchTool(BaseTool):
                 payload["timings"]["semantic_search_ms"] = round((time.perf_counter() - semantic_t0) * 1000, 2)
         except Exception as exc:
             payload["vlm_error"] = f"{type(exc).__name__}: {exc}"
+            metrics = exception_runtime_metrics(exc)
+            if metrics:
+                payload[RUNTIME_METRICS_KEY] = metrics
         payload["timings"]["semantic_branch_ms"] = round((time.perf_counter() - t0) * 1000, 2)
         return payload
 
@@ -223,6 +229,7 @@ class ReverseImageSearchTool(BaseTool):
         results["semantic_results"] = payload.get("semantic_results", [])
         if payload.get("vlm_error"):
             results["vlm_error"] = payload["vlm_error"]
+        add_runtime_metrics(results, payload.get(RUNTIME_METRICS_KEY))
         timings.update(payload.get("timings", {}))
 
     def _generate_query(self, image_input: str) -> Dict[str, Any]:

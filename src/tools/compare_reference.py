@@ -8,8 +8,11 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Mapping, Optional
 
 from src.integrations.gemini import (
+    RUNTIME_METRICS_KEY,
     extract_text,
+    interaction_runtime_metrics,
     normalize_json_schema,
+    require_minimal_thinking,
     validate_interaction_response,
 )
 from src.tools.base import BaseTool
@@ -59,7 +62,6 @@ COMPARE_RESPONSE_SCHEMA: Dict[str, Any] = {
                         "type": "string",
                         "enum": list(SIGNIFICANCE_LEVELS),
                     },
-                    "is_edit_evidence": {"type": "boolean"},
                 },
             },
         },
@@ -79,7 +81,8 @@ Focus: {focus}
 Describe concrete visual relationships and differences only.
 1. Decide whether the images show the same subject, event, object, or scene.
 2. Distinguish the same original capture or a near-duplicate from different original captures.
-3. Mark edit evidence only for directly visible addition, removal, or modification.
+3. Use difference type addition, removal, or modification only for directly visible
+   edit evidence; the runtime derives the edit flag from that type.
 4. Treat crop, resizing, compression, lighting, perspective, watermark, occlusion, and
    color shifts as benign unless they clearly alter factual content.
 5. If the images are unrelated, report unrelated content without inferring manipulation.
@@ -164,6 +167,7 @@ class CompareWithReferenceTool(BaseTool):
             )
 
         try:
+            runtime_metrics: Dict[str, Any] = {}
             reference_data_url = await self._download_reference(reference_url)
             if not reference_data_url:
                 return self._error(
@@ -194,11 +198,13 @@ class CompareWithReferenceTool(BaseTool):
                 max_tokens=8192,
                 temperature=0.0,
                 generation_config={
-                    "thinking_level": os.getenv(
-                        "GEMINI_REFERENCE_COMPARE_THINKING_LEVEL", "minimal"
-                    ).strip().lower()
+                    "thinking_level": require_minimal_thinking(
+                        os.getenv("GEMINI_REFERENCE_COMPARE_THINKING_LEVEL", "minimal"),
+                        env_name="GEMINI_REFERENCE_COMPARE_THINKING_LEVEL",
+                    )
                 },
             )
+            runtime_metrics = interaction_runtime_metrics(payload)
             _, status = validate_interaction_response(payload)
             if status != "completed":
                 raise RuntimeError(
@@ -217,12 +223,20 @@ class CompareWithReferenceTool(BaseTool):
                 ) from exc
             validated = self._validate_response(parsed)
         except Exception as exc:
-            return self._error(
+            error = self._error(
                 "Gemini Interactions comparison failed: "
                 f"{type(exc).__name__}: {exc or '<no message>'}"
             )
+            if runtime_metrics:
+                error[RUNTIME_METRICS_KEY] = runtime_metrics
+            return error
 
-        return {"status": "success", "reference_url": reference_url, **validated}
+        return {
+            "status": "success",
+            "reference_url": reference_url,
+            **validated,
+            RUNTIME_METRICS_KEY: runtime_metrics,
+        }
 
     async def _download_reference(self, url: str) -> Optional[str]:
         """Download a reference image and convert it to a data URL."""
@@ -319,7 +333,7 @@ class CompareWithReferenceTool(BaseTool):
         same_capture = value["same_capture_or_near_duplicate"]
         different_capture = value["likely_different_original_capture"]
         edit_present = value["edit_evidence_present"]
-        edit_items = [item for item in validated_differences if item["is_edit_evidence"]]
+        edit_items = [item for item in validated_differences if item["type"] in EDIT_DIFFERENCE_TYPES]
 
         if same_capture and not same_subject:
             raise ValueError("same capture requires same_subject_or_scene=true")
@@ -353,7 +367,7 @@ class CompareWithReferenceTool(BaseTool):
         if not isinstance(value, dict):
             raise ValueError(f"comparison output {path} must be an object")
 
-        expected = {"region", "description", "type", "significance", "is_edit_evidence"}
+        expected = {"region", "description", "type", "significance"}
         if set(value) != expected:
             raise ValueError(f"comparison output {path} has invalid fields")
         for name in ("region", "description"):
@@ -366,20 +380,12 @@ class CompareWithReferenceTool(BaseTool):
         significance = value["significance"]
         if significance not in SIGNIFICANCE_LEVELS:
             raise ValueError(f"comparison output {path}.significance is invalid")
-        is_edit = value["is_edit_evidence"]
-        if not isinstance(is_edit, bool):
-            raise ValueError(f"comparison output {path}.is_edit_evidence must be boolean")
-        if is_edit != (difference_type in EDIT_DIFFERENCE_TYPES):
-            raise ValueError(
-                f"comparison output {path}.is_edit_evidence does not match its type"
-            )
-
         return {
             "region": value["region"].strip(),
             "description": value["description"].strip(),
             "type": difference_type,
             "significance": significance,
-            "is_edit_evidence": is_edit,
+            "is_edit_evidence": difference_type in EDIT_DIFFERENCE_TYPES,
         }
 
     @staticmethod

@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Union
 
 from src.integrations.browse.jina_reader import JinaReaderClient
+from src.integrations.gemini import RUNTIME_METRICS_KEY, add_runtime_metrics
 from src.integrations.search.serper import SerperTextSearchClient
 from src.orchestrator.source_access import SourceAccessPolicy
 from src.tools.base import BaseTool
@@ -133,6 +134,9 @@ class TextSearchTool(BaseTool):
             if str(response.get("visit_error", "")).strip()
         ]
         result: Dict[str, Any] = {"status": "success", "queries": responses}
+        for response in responses:
+            if isinstance(response, dict):
+                add_runtime_metrics(result, response.get(RUNTIME_METRICS_KEY))
         if errors:
             result.update({"status": "error", "error": "; ".join(errors)})
         return result
@@ -237,6 +241,7 @@ class TextSearchTool(BaseTool):
                 },
             }
         )
+        add_runtime_metrics(enriched, visit_result.get(RUNTIME_METRICS_KEY))
         visit_status = str(visit_result.get("status", "")).strip().lower()
         if visit_status == "error" or visit_result.get("error"):
             enriched["visit_error"] = (

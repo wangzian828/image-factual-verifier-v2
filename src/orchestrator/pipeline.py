@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence
 
 from src.orchestrator.context import ContextRenderer
+from src.integrations.gemini import take_runtime_metrics
 from src.orchestrator.evidence_policy import (
     query_targets_fact_check_answer,
     tool_can_decide_claim,
@@ -157,10 +158,10 @@ class Orchestrator:
         self.verification_tool_limits = {
             "current_time": 1,
             "ocr_with_position": 3,
-            "reverse_image_search": 3,
-            "text_search": 8,
-            "visit": 8,
-            "compare_with_reference": 4,
+            "reverse_image_search": 4,
+            "text_search": 16,
+            "visit": 16,
+            "compare_with_reference": 6,
             "crop_and_search": 4,
             "crop_and_inspect": 4,
             "check_consistency": 3,
@@ -195,6 +196,28 @@ class Orchestrator:
         )
 
     def _validate_startup_configuration(self) -> None:
+        tool_thinking_levels = {
+            "GEMINI_VERIFICATION_FINAL_THINKING_LEVEL": os.getenv(
+                "GEMINI_VERIFICATION_FINAL_THINKING_LEVEL", "minimal"
+            ),
+            "GEMINI_BROWSE_THINKING_LEVEL": os.getenv(
+                "GEMINI_BROWSE_THINKING_LEVEL", "minimal"
+            ),
+            "GEMINI_VISION_THINKING_LEVEL": os.getenv(
+                "GEMINI_VISION_THINKING_LEVEL", "minimal"
+            ),
+            "GEMINI_REFERENCE_COMPARE_THINKING_LEVEL": os.getenv(
+                "GEMINI_REFERENCE_COMPARE_THINKING_LEVEL", "minimal"
+            ),
+            "GEMINI_VISUAL_ANOMALY_THINKING_LEVEL": os.getenv(
+                "GEMINI_VISUAL_ANOMALY_THINKING_LEVEL", "minimal"
+            ),
+        }
+        for env_name, value in tool_thinking_levels.items():
+            if value.strip().lower() != "minimal":
+                raise ValueError(
+                    f"{env_name} must be 'minimal' for the active agent."
+                )
         if self.provider == "gemini" and not self.llm.api_key:
             raise RuntimeError(
                 "GEMINI_API_KEY or GOOGLE_API_KEY is required for the Gemini agent."
@@ -383,8 +406,7 @@ class Orchestrator:
             report = self._merge_ocr(report, tool_result)
         finally:
             state.stage_timings["perception"] = round(time.time() - started, 2)
-            state.all_steps.extend(steps)
-            state.total_tool_calls += len(steps)
+            self._record_stage_steps(state, steps)
         return report
 
     async def _run_planning(self, state: VerificationState, image_path: str) -> VerificationPlan:
@@ -558,9 +580,9 @@ class Orchestrator:
                     "VERIFICATION_FINAL", 32768
                 ),
                 final_output_generation_config={
-                    "thinking_level": os.getenv(
-                        "GEMINI_VERIFICATION_FINAL_THINKING_LEVEL", "minimal"
-                    ).strip().lower()
+                    "thinking_level": self._stage_thinking_level(
+                        "VERIFICATION_FINAL"
+                    )
                 },
             )
             context = ContextRenderer.render_for_verification(
@@ -605,6 +627,19 @@ class Orchestrator:
             all_verification_steps.extend(iteration_steps)
             if isinstance(parsed, VerificationResult):
                 parsed_results.append(parsed)
+            else:
+                if not any(
+                    self._tool_step_succeeded(step)
+                    for step in all_verification_steps
+                ):
+                    failures = self._summarize_tool_failures(all_verification_steps)
+                    raise RuntimeError(
+                        "Verification failed: every attempted tool call failed."
+                        + (f" Failures: {failures}" if failures else "")
+                    )
+                raise RuntimeError(
+                    "Verification iteration did not produce accepted structured output."
+                )
 
             derived = self._build_verification_result_from_steps(all_verification_steps, state)
             result = self._merge_verification_results(
@@ -700,7 +735,7 @@ class Orchestrator:
         }
         for claim in ledgers.claims:
             status = blocked_claims.get(claim.claim_id)
-            if status:
+            if status and claim.claim_scope != "external_fact":
                 claim.status = "open"
                 claim.unresolved_distinction = (
                     "A search-conditioned visual question still requires a real image observation."
@@ -711,7 +746,11 @@ class Orchestrator:
             if item.status == "exhausted"
         }
         for claim in ledgers.claims:
-            if claim.claim_id in exhausted_claims and claim.status == "open":
+            if (
+                claim.claim_scope != "external_fact"
+                and claim.claim_id in exhausted_claims
+                and claim.status == "open"
+            ):
                 claim.unresolved_distinction = (
                     "A search-conditioned reference could not be observed after two real attempts."
                 )
@@ -777,12 +816,93 @@ class Orchestrator:
             "- unverifiable_reasons: "
             + json.dumps(expected_reasons, ensure_ascii=False)
         )
+        context += "\n- claim_decisions:\n"
+        evidence_by_claim: Dict[str, List[str]] = {}
+        for evidence in state.ledgers.evidence:
+            if evidence.stance == "neutral":
+                continue
+            evidence_by_claim.setdefault(evidence.claim_id, []).append(
+                evidence.evidence_id
+            )
+        reason_by_claim = self._judgment_reason_by_claim(
+            state.ledgers,
+            stop_reason=stop_reason,
+        )
+        selected_ids: List[str] = []
+        for claim in state.ledgers.claims:
+            if claim.criticality != "decisive":
+                continue
+            decision = {
+                "supported": "support",
+                "refuted": "refute",
+            }.get(claim.status, "unresolved")
+            evidence_ids = (
+                [
+                    evidence_id
+                    for evidence_id in evidence_by_claim.get(claim.claim_id, [])
+                    if next(
+                        item.stance
+                        for item in state.ledgers.evidence
+                        if item.evidence_id == evidence_id
+                    )
+                    == decision
+                ]
+                if decision in {"support", "refute"}
+                else []
+            )
+            selected_ids.extend(evidence_ids)
+            context += "  " + json.dumps(
+                {
+                    "claim_id": claim.claim_id,
+                    "decision": decision,
+                    "evidence_ids": evidence_ids,
+                    "reason": reason_by_claim.get(claim.claim_id),
+                },
+                ensure_ascii=False,
+            ) + "\n"
+        context += "- selected_evidence_ids: " + json.dumps(
+            list(dict.fromkeys(selected_ids)),
+            ensure_ascii=False,
+        )
         parsed, steps = await runner.run(context)
         self._record_stage_steps(state, steps)
         state.stage_timings["judgment"] = round(time.time() - started, 2)
         if parsed is None:
             raise RuntimeError("Judgment stage did not produce valid structured output.")
         return self._compile_judgment_from_ledgers(parsed, state.ledgers)
+
+    @staticmethod
+    def _judgment_reason_by_claim(
+        ledgers: VerificationLedgers,
+        *,
+        stop_reason: str,
+    ) -> Dict[str, Optional[str]]:
+        failures_by_claim: Dict[str, set[str]] = {}
+        for failure in ledgers.failures:
+            if failure.claim_id:
+                failures_by_claim.setdefault(failure.claim_id, set()).add(failure.code)
+        reasons: Dict[str, Optional[str]] = {}
+        for claim in ledgers.claims:
+            if claim.criticality != "decisive" or claim.status in {"supported", "refuted"}:
+                reasons[claim.claim_id] = None
+                continue
+            if claim.status == "conflicted":
+                reasons[claim.claim_id] = "sources_conflict"
+            elif "one non-primary source family" in claim.unresolved_distinction or (
+                "source-independence policy" in claim.unresolved_distinction
+            ):
+                reasons[claim.claim_id] = "single_source_family_dependency"
+            elif "access_limited" in failures_by_claim.get(claim.claim_id, set()):
+                reasons[claim.claim_id] = "access_limited"
+            elif "could not be observed after two real attempts" in claim.unresolved_distinction:
+                reasons[claim.claim_id] = "unreadable_region"
+            elif stop_reason == "information_saturated":
+                reasons[claim.claim_id] = "search_saturated"
+            elif stop_reason == "hard_budget_exhausted":
+                reasons[claim.claim_id] = "budget_exhausted"
+            else:
+                reasons[claim.claim_id] = "decisive_evidence_absent"
+        return reasons
 
     async def _replan_verification(
         self,
@@ -1047,6 +1167,13 @@ class Orchestrator:
         )
         if changed_scopes:
             return False, "replanning cannot change immutable claim_scope: " + ", ".join(changed_scopes)
+        changed_priorities = sorted(
+            question.question_id
+            for question in parsed.question_updates
+            if question.priority != current_by_id[question.question_id].priority
+        )
+        if changed_priorities:
+            return False, "replanning cannot change immutable priority: " + ", ".join(changed_priorities)
         forbidden_queries = sorted(
             {
                 query
@@ -1460,9 +1587,42 @@ class Orchestrator:
                 loop = asyncio.get_event_loop()
                 result = await loop.run_in_executor(None, tool.call, tool_args)
         except Exception as exc:
-            raise RuntimeError(f"{tool_name} failed: {type(exc).__name__}: {exc}") from exc
+            runtime_metrics = getattr(exc, "_gemini_runtime_metrics", {})
+            serialized = json.dumps(
+                {
+                    "status": "error",
+                    "error": f"{type(exc).__name__}: {exc}",
+                },
+                ensure_ascii=False,
+            )
+            return serialized, {
+                "cache_hit": False,
+                "tool_success": False,
+                "observed_at": datetime.now(timezone.utc).isoformat(),
+                "duration_ms": round((time.perf_counter() - started) * 1000, 2),
+                "serialized_size": len(serialized),
+                "tool_exception": type(exc).__name__,
+                "tool_llm_api_calls": int(runtime_metrics.get("llm_api_calls", 0) or 0),
+                "tool_tokens": StageRunner._normalize_tool_tokens(
+                    runtime_metrics.get("tokens")
+                ),
+            }
 
-        serialized, succeeded = serialize_tool_result(result)
+        runtime_metrics = take_runtime_metrics(result)
+        try:
+            serialized, succeeded = serialize_tool_result(result)
+        except Exception as exc:
+            serialized = json.dumps(
+                {
+                    "status": "error",
+                    "error": f"{type(exc).__name__}: {exc}",
+                },
+                ensure_ascii=False,
+            )
+            succeeded = False
+            contract_exception = type(exc).__name__
+        else:
+            contract_exception = ""
         if succeeded and tool_name in self.cacheable_tools:
             self.tool_cache.put(tool_name, cache_args, serialized)
         return serialized, {
@@ -1471,6 +1631,11 @@ class Orchestrator:
             "observed_at": datetime.now(timezone.utc).isoformat(),
             "duration_ms": round((time.perf_counter() - started) * 1000, 2),
             "serialized_size": len(serialized),
+            "tool_llm_api_calls": int(runtime_metrics.get("llm_api_calls", 0) or 0),
+            "tool_tokens": StageRunner._normalize_tool_tokens(
+                runtime_metrics.get("tokens")
+            ),
+            **({"tool_exception": contract_exception} if contract_exception else {}),
         }
 
     @staticmethod
@@ -1548,22 +1713,41 @@ class Orchestrator:
             return
         state.all_steps.extend(steps)
         state.total_tool_calls += sum(1 for step in steps if step.action_type == "tool_call")
+        thought_violation: Optional[StageStep] = None
         for step in steps:
-            state.token_usage["prompt"] += step.tokens.get("prompt", 0)
-            state.token_usage["completion"] += step.tokens.get("completion", 0)
-            state.token_usage["thought"] += step.tokens.get("thought", 0)
+            tool_tokens = step.metadata.get("tool_tokens", {})
+            if not isinstance(tool_tokens, dict):
+                tool_tokens = {}
+            for name in ("prompt", "completion", "thought"):
+                state.token_usage[name] += step.tokens.get(name, 0)
+                state.token_usage[name] += int(tool_tokens.get(name, 0) or 0)
+            total_thought = step.tokens.get("thought", 0) + int(
+                tool_tokens.get("thought", 0) or 0
+            )
+            if int(step.metadata.get("tool_llm_api_calls", 0) or 0) > 0:
+                step.metadata["total_tokens"] = {
+                    name: step.tokens.get(name, 0)
+                    + int(tool_tokens.get(name, 0) or 0)
+                    for name in ("prompt", "completion", "thought")
+                }
             if (
                 self.provider == "gemini"
                 and str(self.llm.wire_api).lower() == "interactions"
-                and step.tokens.get("thought", 0) > 0
+                and total_thought > 0
             ):
-                raise RuntimeError(
-                    f"Gemini stage '{step.stage_name}' returned non-zero thought tokens "
-                    "despite the required minimal thinking policy."
-                )
+                thought_violation = thought_violation or step
         state.llm_api_calls += sum(
             1 for step in steps if step.metadata.get("llm_duration_ms") is not None
         )
+        state.llm_api_calls += sum(
+            int(step.metadata.get("tool_llm_api_calls", 0) or 0)
+            for step in steps
+        )
+        if thought_violation is not None:
+            raise RuntimeError(
+                f"Gemini stage '{thought_violation.stage_name}' returned non-zero thought tokens "
+                "despite the required minimal thinking policy."
+            )
 
     def _build_verification_result_from_steps(self, steps: List[StageStep], state: VerificationState) -> VerificationResult:
         evidence: List[EvidenceItem] = []
@@ -1612,75 +1796,95 @@ class Orchestrator:
                 key_findings.append(f"[current_time] {summary}")
                 continue
 
-            if step.tool_name in {"text_search", "visit", "reverse_image_search", "crop_and_search"}:
-                summary, excerpt, url = self._summarize_external_evidence(step.tool_name, data, step.tool_result)
-                evidence_eligible = step.tool_name in {"text_search", "visit", "crop_and_search"}
-                if summary and evidence_eligible and excerpt and url:
-                    provenance = self._find_browse_evidence_record(data, excerpt)
-                    if question is not None and self._browse_record_is_evidence_eligible(
+            if step.tool_name in {"text_search", "visit", "crop_and_search"}:
+                promoted_count = 0
+                browse_records = self._browse_evidence_records(data)
+                for provenance in browse_records:
+                    excerpt = str(provenance.get("evidence", "")).strip()
+                    url = str(
+                        provenance.get("selected_url", "")
+                        or provenance.get("url", "")
+                    ).strip()
+                    if question is None or not self._browse_record_is_evidence_eligible(
                         provenance,
                         url,
-                        claim_text=(question.claim_text if question else ""),
+                        claim_text=question.claim_text,
                     ):
-                        stance = str(provenance.get("stance", "")).strip().lower()
-                        direction = {"support": "supports", "refute": "refutes"}.get(
-                            stance,
-                            "neutral",
+                        continue
+                    policy = getattr(self, "source_access_policy", None)
+                    if policy is not None and not policy.allows(url):
+                        continue
+
+                    stance = str(provenance.get("stance", "")).strip().lower()
+                    direction = {"support": "supports", "refute": "refutes"}.get(
+                        stance,
+                        "neutral",
+                    )
+                    relevance = str(provenance.get("relevance", "")).strip().lower()
+                    quality = (
+                        "strong"
+                        if self._is_probably_trusted_url(url) and relevance == "high"
+                        else ("moderate" if relevance in {"high", "medium"} else "weak")
+                    )
+                    summary = self._clean_source_summary(
+                        str(provenance.get("summary", "")).strip(),
+                        excerpt,
+                    ) or excerpt
+                    identity = classify_source(
+                        url,
+                        injection_flags=provenance.get("injection_flags", []),
+                    )
+                    evidence.append(
+                        EvidenceItem(
+                            function_call_id=self._step_function_call_id(step),
+                            source=url,
+                            summary=excerpt[:300],
+                            raw_excerpt=excerpt[:300],
+                            direction=direction,
+                            quality=quality,
+                            tool_used=step.tool_name,
+                            related_question=self._step_question_id(step),
                         )
-                        relevance = str(provenance.get("relevance", "")).strip().lower()
-                        trusted = self._is_probably_trusted_url(url)
-                        quality = (
-                            "strong"
-                            if trusted and relevance == "high"
-                            else ("moderate" if relevance in {"high", "medium"} else "weak")
-                        )
-                        evidence.append(
-                            EvidenceItem(
-                                function_call_id=self._step_function_call_id(step),
-                                source=url,
-                                summary=excerpt[:300],
-                                raw_excerpt=excerpt[:300],
-                                direction=direction,
-                                quality=quality,
-                                tool_used=step.tool_name,
-                                related_question=self._step_question_id(step),
-                            )
-                        )
-                        key_findings.append(f"[{step.tool_name}] {summary}")
-                        source_findings.append(
-                            {
-                                "round": step.round,
-                                "function_call_id": self._step_function_call_id(step),
-                                "tool_name": step.tool_name,
-                                "finding_text": excerpt,
-                                "source": url,
-                                "artifact_sha256": provenance.get("artifact_sha256", ""),
-                                "evidence_span": provenance.get("evidence_span", {}),
-                                "retrieved_at": provenance.get("retrieved_at", ""),
-                                "injection_flags": provenance.get("injection_flags", []),
-                                "source_family": classify_source(
-                                    url,
-                                    injection_flags=provenance.get("injection_flags", []),
-                                ).source_family,
-                                "source_class": classify_source(
-                                    url,
-                                    injection_flags=provenance.get("injection_flags", []),
-                                ).source_class,
-                                "risk_flags": list(
-                                    classify_source(
-                                        url,
-                                        injection_flags=provenance.get("injection_flags", []),
-                                    ).risk_flags
-                                ),
-                            }
-                        )
-                    else:
-                        key_findings.append(
-                            f"[{step.tool_name}] Discovery result was not eligible as verdict evidence."
-                        )
-                if step.tool_name in {"reverse_image_search", "crop_and_search"}:
+                    )
+                    key_findings.append(f"[{step.tool_name}] {summary}")
+                    source_findings.append(
+                        {
+                            "round": step.round,
+                            "function_call_id": self._step_function_call_id(step),
+                            "tool_name": step.tool_name,
+                            "finding_text": excerpt,
+                            "source": url,
+                            "artifact_sha256": provenance.get("artifact_sha256", ""),
+                            "evidence_span": provenance.get("evidence_span", {}),
+                            "retrieved_at": provenance.get("retrieved_at", ""),
+                            "stance": stance,
+                            "directness": provenance.get("directness", ""),
+                            "relevance": relevance,
+                            "goal": provenance.get("goal", ""),
+                            "injection_flags": provenance.get("injection_flags", []),
+                            "source_family": identity.source_family,
+                            "source_class": identity.source_class,
+                            "risk_flags": list(identity.risk_flags),
+                        }
+                    )
+                    promoted_count += 1
+
+                if browse_records and not promoted_count:
+                    key_findings.append(
+                        f"[{step.tool_name}] Discovery results were not eligible as verdict evidence."
+                    )
+                if step.tool_name == "crop_and_search":
                     visual_evidence.append(self._visual_evidence_from_step(step, data))
-                if step.tool_name == "reverse_image_search" and summary:
+                continue
+
+            if step.tool_name == "reverse_image_search":
+                summary, _, _ = self._summarize_external_evidence(
+                    step.tool_name,
+                    data,
+                    step.tool_result,
+                )
+                visual_evidence.append(self._visual_evidence_from_step(step, data))
+                if summary:
                     key_findings.append(
                         "[reverse_image_search] Candidate discovery only; visit or compare is required before verdict evidence."
                     )
@@ -2018,6 +2222,42 @@ class Orchestrator:
 
         text = str(raw_result).strip()
         return text[:120], text[:300], ""
+
+    @classmethod
+    def _browse_evidence_records(cls, data: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Return every distinct passage record carried by a browse-backed result."""
+
+        records: List[Dict[str, Any]] = []
+        seen = set()
+
+        def visit(value: Any) -> None:
+            if isinstance(value, dict):
+                evidence = " ".join(str(value.get("evidence", "")).split())
+                url = str(value.get("selected_url", "") or value.get("url", "")).strip()
+                span = value.get("evidence_span")
+                artifact = str(value.get("artifact_sha256", "")).strip().lower()
+                retrieved_at = str(value.get("retrieved_at", "")).strip()
+                if evidence and url and isinstance(span, dict) and artifact and retrieved_at:
+                    key = (
+                        cls._canonical_url(url),
+                        artifact,
+                        span.get("start"),
+                        span.get("end"),
+                        evidence,
+                        str(value.get("stance", "")).strip().lower(),
+                        str(value.get("goal", "")).strip(),
+                    )
+                    if key not in seen:
+                        seen.add(key)
+                        records.append(value)
+                for child in value.values():
+                    visit(child)
+            elif isinstance(value, list):
+                for child in value:
+                    visit(child)
+
+        visit(data)
+        return records
 
     def _visual_evidence_from_step(self, step: StageStep, data: Dict[str, Any]) -> Dict[str, Any]:
         return {

@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
+from src.integrations.gemini import RUNTIME_METRICS_KEY, exception_runtime_metrics
 from src.tools.base import BaseTool
 
 
@@ -111,27 +112,34 @@ class CheckConsistencyTool(BaseTool):
                 response_schema=CONSISTENCY_SCHEMA,
             )
         except Exception as exc:
-            return {
+            error = {
                 "status": "error",
                 "error": f"Consistency check failed: {exc}",
             }
+            metrics = exception_runtime_metrics(exc)
+            if metrics:
+                error[RUNTIME_METRICS_KEY] = metrics
+            return error
 
         inconsistencies = parsed.get("inconsistencies", [])
         if not isinstance(inconsistencies, list):
             return {
                 "status": "error",
                 "error": "Consistency check returned invalid inconsistencies data.",
+                RUNTIME_METRICS_KEY: parsed.get(RUNTIME_METRICS_KEY, {}),
             }
         if not isinstance(parsed.get("consistent"), bool):
             return {
                 "status": "error",
                 "error": "Consistency check response is missing boolean 'consistent'.",
+                RUNTIME_METRICS_KEY: parsed.get(RUNTIME_METRICS_KEY, {}),
             }
         details = parsed.get("details")
         if not isinstance(details, str) or not details.strip():
             return {
                 "status": "error",
                 "error": "Consistency check response is missing explanatory details.",
+                RUNTIME_METRICS_KEY: parsed.get(RUNTIME_METRICS_KEY, {}),
             }
 
         return {
@@ -140,4 +148,5 @@ class CheckConsistencyTool(BaseTool):
             "aspect_checked": aspect,
             "details": details.strip(),
             "inconsistencies": inconsistencies,
+            RUNTIME_METRICS_KEY: parsed.get(RUNTIME_METRICS_KEY, {}),
         }

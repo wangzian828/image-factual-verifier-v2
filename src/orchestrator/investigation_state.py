@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Literal, Optional, Sequence
 
 from pydantic import Field, model_validator
 
+from src.orchestrator.evidence_policy import EXTERNAL_FACT
 from src.orchestrator.source_provenance import classify_source
 from src.orchestrator.state import (
     ClaimRecord,
@@ -244,6 +245,11 @@ class InvestigationReducer:
             return f"Visual question '{visual_question_id}' is already {question.status}."
         if tool_name not in VISUAL_REVISIT_TOOLS:
             return f"Tool '{tool_name}' cannot resolve a visual question."
+        if question.recommended_tools and tool_name not in question.recommended_tools:
+            return (
+                f"Tool '{tool_name}' is not allowed for visual question "
+                f"'{visual_question_id}'. Use: {', '.join(question.recommended_tools)}."
+            )
         if question.source_evidence_id and args.get("source_evidence_id") != question.source_evidence_id:
             return "source_evidence_id must match the pending visual question."
         if question.source_discovery_id and args.get("source_discovery_id") != question.source_discovery_id:
@@ -274,15 +280,24 @@ class InvestigationReducer:
             return []
         claim_id = f"claim-{question_id}"
         plan_question = next((item for item in plan.questions if item.question_id == question_id), None)
+        if plan_question is None or plan_question.claim_scope == EXTERNAL_FACT:
+            return []
         target = _target_bbox(plan_question, perception)
         created: List[VisualQuestion] = []
 
-        discovery = next(
+        already_has_reference_question = any(
+            item.claim_id == claim_id
+            and item.source_discovery_id
+            and item.status in {"pending", "resolved", "exhausted"}
+            for item in state.visual_questions
+        )
+        discovery = None if already_has_reference_question else next(
             (
                 item
                 for item in new_discoveries
                 if item.candidate_type in {"reverse_image", "visual_reference"}
                 and str(getattr(item, "reference_image_url", "")).strip()
+                and _reference_candidate_is_usable(item)
             ),
             None,
         )
@@ -518,6 +533,21 @@ def _visual_distinction(
         str(getattr(evidence, "span_start", "")),
         str(getattr(evidence, "span_end", "")),
         " ".join(str(getattr(evidence, "exact_text", "")).split())[:500],
+    )
+
+
+def _reference_candidate_is_usable(discovery: Any) -> bool:
+    reference_url = str(getattr(discovery, "reference_image_url", "") or "").strip()
+    candidate_url = str(getattr(discovery, "candidate_url", "") or "").strip()
+    title = str(getattr(discovery, "title", "") or "").strip()
+    if not reference_url or not candidate_url or not title:
+        return False
+    reference = classify_source(reference_url)
+    candidate = classify_source(candidate_url)
+    return (
+        reference.source_class != "ugc"
+        and candidate.source_class in {"official", "news"}
+        and not candidate.risk_flags
     )
 
 

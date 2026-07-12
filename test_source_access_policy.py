@@ -123,6 +123,48 @@ def test_wayback_policy_blocks_outer_and_embedded_fact_check_urls() -> None:
     assert policy.allows("https://independent.example/report")
 
 
+def test_wordpress_proxy_for_excluded_origin_is_blocked() -> None:
+    policy = _policy()
+    proxied = (
+        "https://i0.wp.com/srilanka.factcrescendo.com/wp-content/uploads/"
+        "2023/04/image.png?resize=444,447&ssl=1"
+    )
+
+    assert not policy.allows(proxied)
+
+
+def test_provider_row_naming_excluded_fact_checker_is_filtered() -> None:
+    policy = _policy()
+    rows, blocked = policy.filter_rows(
+        [
+            {
+                "title": "Fact Crescendo explains the claim",
+                "url": "https://independent.example/repost",
+                "image_url": "https://cdn.example/image.jpg",
+            },
+            {
+                "title": "Independent official statement",
+                "url": "https://independent.example/primary",
+                "image_url": "https://cdn.example/primary.jpg",
+            },
+        ]
+    )
+
+    assert blocked == 1
+    assert [row["url"] for row in rows] == ["https://independent.example/primary"]
+
+
+def test_query_naming_excluded_fact_checker_is_rejected_without_domain() -> None:
+    policy = benchmark_source_access_policy(
+        [FACT_CHECK_URL, "https://factcheck.afp.com/doc.afp.com.fixture"],
+        policy_id="fixture-eval",
+    )
+
+    assert policy.blocked_query_reference("Fact Crescendo Sajith Ceylon Newsline")
+    assert policy.blocked_query_reference("AFP fact check Sajith claim")
+    assert policy.blocked_query_reference("independent official Sajith statement") == ""
+
+
 def test_mainstream_fact_check_origin_is_exact_url_only() -> None:
     policy = benchmark_source_access_policy(
         ["https://www.newsweek.com/china-us-life-expectancy-birth-2021-fact-check-1740991"]

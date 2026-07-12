@@ -219,6 +219,129 @@ def test_nested_text_search_stance_is_bound_to_exact_excerpt() -> None:
     assert canonical.direction == "supports"
 
 
+def test_multi_query_search_promotes_each_distinct_grounded_page(tmp_path) -> None:
+    claim = "Reuters and NASA published reports about the flood image."
+
+    def record(url: str, excerpt: str, artifact: str, stance: str = "support") -> dict:
+        return {
+            "status": "success",
+            "url": url,
+            "goal": claim,
+            "evidence": excerpt,
+            "summary": excerpt,
+            "relevance": "high",
+            "stance": stance,
+            "directness": "direct",
+            "artifact_sha256": artifact * 64,
+            "evidence_span": {"start": 0, "end": len(excerpt)},
+            "retrieved_at": "2026-07-12T00:00:00+00:00",
+            "injection_flags": [],
+            "evidence_eligible": True,
+        }
+
+    reuters = record(
+        "https://www.reuters.com/world/flood-report",
+        "Reuters published a report containing the flood image.",
+        "a",
+    )
+    nasa = record(
+        "https://www.nasa.gov/earth/flood-report",
+        "NASA published satellite context for the same flood image.",
+        "b",
+    )
+    archive = record(
+        "https://archive.example.org/flood-image",
+        "The independent archive dates the flood image to 10 July.",
+        "c",
+    )
+    first_query = {
+        **reuters,
+        "query": "Reuters flood image",
+        "selected_url": reuters["url"],
+        "visited_pages": [reuters, archive],
+    }
+    second_query = {
+        **nasa,
+        "query": "NASA flood satellite image",
+        "selected_url": nasa["url"],
+        "visited_pages": [nasa],
+    }
+    step = StageStep(
+        round=1,
+        stage_name="verification",
+        action_type="tool_call",
+        tool_name="text_search",
+        tool_args={"__question_id": "q0", "queries": ["Reuters", "NASA"], "goal": claim},
+        tool_result=json.dumps(
+            {"status": "success", "queries": [first_query, second_query]}
+        ),
+        metadata={"tool_success": True, "function_call_id": "call-search-many"},
+    )
+    plan = VerificationPlan(
+        questions=[
+            InvestigationQuestion(
+                question_id="q0",
+                question="Did Reuters and NASA publish reports about the flood image?",
+                claim_text=claim,
+                related_entities=["Reuters", "NASA", "flood"],
+                claim_scope="external_fact",
+                priority=1,
+            )
+        ]
+    )
+    state = type("State", (), {"plan": plan, "perception": None})()
+
+    result = _orchestrator()._build_verification_result_from_steps([step], state)
+
+    assert len(result.evidence) == 3
+    assert {item.source for item in result.evidence} == {
+        reuters["url"],
+        nasa["url"],
+        archive["url"],
+    }
+    assert {item.function_call_id for item in result.evidence} == {"call-search-many"}
+    assert len(result.source_findings) == 3
+    assert {
+        (
+            item["source"],
+            item["artifact_sha256"],
+            item["evidence_span"]["start"],
+            item["evidence_span"]["end"],
+            item["retrieved_at"],
+            item["stance"],
+            item["directness"],
+        )
+        for item in result.source_findings
+    } == {
+        (
+            page["url"],
+            page["artifact_sha256"],
+            page["evidence_span"]["start"],
+            page["evidence_span"]["end"],
+            page["retrieved_at"],
+            page["stance"],
+            page["directness"],
+        )
+        for page in (reuters, nasa, archive)
+    }
+
+    image_path = tmp_path / "input.jpg"
+    image_path.write_bytes(b"multi-page-search-ledger")
+    ledgers = compile_runtime_ledgers(
+        build_verification_case(str(image_path), user_claim=claim),
+        plan,
+        result,
+        [step],
+    )
+    assert len(ledgers.sources) == 3
+    assert len(ledgers.evidence) == 3
+    assert {item.exact_text for item in ledgers.evidence} == {
+        reuters["evidence"],
+        nasa["evidence"],
+        archive["evidence"],
+    }
+
+
 def test_browse_evidence_without_explicit_stance_is_rejected() -> None:
     orchestrator = _orchestrator()
     step = _successful_step()

@@ -27,7 +27,6 @@ def valid_comparison() -> dict:
                 "description": "The current image has a tighter crop.",
                 "type": "crop",
                 "significance": "low",
-                "is_edit_evidence": False,
             }
         ],
         "overall_observation": "The images are near-duplicates with a benign crop.",
@@ -39,6 +38,11 @@ def interaction(output: object, *, status: str = "completed") -> dict:
     return {
         "id": "compare-interaction-1",
         "status": status,
+        "usage": {
+            "total_input_tokens": 101,
+            "total_output_tokens": 17,
+            "total_thought_tokens": 0,
+        },
         "steps": [
             {
                 "type": "model_output",
@@ -92,6 +96,10 @@ def test_compare_uses_two_interactions_content_images_and_exact_schema(tmp_path:
 
     assert result["status"] == "success"
     assert result["confidence"] == 0.94
+    assert result["__runtime_metrics__"] == {
+        "llm_api_calls": 1,
+        "tokens": {"prompt": 101, "completion": 17, "thought": 0},
+    }
     assert backend.legacy_called is False
     assert len(backend.requests) == 1
 
@@ -151,9 +159,10 @@ def test_compare_rejects_invalid_output_contract(tmp_path: Path) -> None:
 
     assert result["status"] == "error"
     assert "confidence' must be a number" in result["error"]
+    assert result["__runtime_metrics__"]["llm_api_calls"] == 1
 
 
-def test_compare_rejects_inconsistent_edit_evidence(tmp_path: Path) -> None:
+def test_compare_rejects_inconsistent_edit_summary(tmp_path: Path) -> None:
     invalid = deepcopy(valid_comparison())
     invalid["edit_evidence_present"] = True
     invalid["edit_evidence_strength"] = "strong"
@@ -166,6 +175,29 @@ def test_compare_rejects_inconsistent_edit_evidence(tmp_path: Path) -> None:
 
     assert result["status"] == "error"
     assert "must match differences marked as edit evidence" in result["error"]
+
+
+def test_compare_derives_edit_flag_from_difference_type(tmp_path: Path) -> None:
+    output = valid_comparison()
+    output["differences"] = [
+        {
+            "region": "top banner",
+            "description": "A new banner appears only in the current image.",
+            "type": "addition",
+            "significance": "high",
+        }
+    ]
+    output["edit_evidence_present"] = True
+    output["edit_evidence_strength"] = "strong"
+    backend = FakeBackend(interaction(output))
+    tool = make_tool(tmp_path, backend)
+
+    result = asyncio.run(
+        tool.call_async({"reference_url": "https://example.test/reference.jpg"})
+    )
+
+    assert result["status"] == "success"
+    assert result["differences"][0]["is_edit_evidence"] is True
 
 
 def test_compare_requires_create_interaction_without_legacy_fallback(tmp_path: Path) -> None:

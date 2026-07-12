@@ -8,6 +8,7 @@ import tempfile
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
+from src.integrations.gemini import RUNTIME_METRICS_KEY, exception_runtime_metrics
 from src.tools.base import BaseTool
 
 
@@ -131,10 +132,14 @@ class CountObjectsTool(BaseTool):
                 response_schema=COUNT_RESPONSE_SCHEMA,
             )
         except Exception as exc:
-            return {
+            error = {
                 "status": "error",
                 "error": f"Counting failed: {type(exc).__name__}: {exc or '<no message>'}",
             }
+            metrics = exception_runtime_metrics(exc)
+            if metrics:
+                error[RUNTIME_METRICS_KEY] = metrics
+            return error
         finally:
             if temporary_path:
                 try:
@@ -142,7 +147,9 @@ class CountObjectsTool(BaseTool):
                 except OSError:
                     pass
 
-        return self._validate_response(parsed, target_object)
+        result = self._validate_response(parsed, target_object)
+        result[RUNTIME_METRICS_KEY] = parsed.get(RUNTIME_METRICS_KEY, {})
+        return result
 
     @staticmethod
     def _validate_bbox(value: Any) -> tuple[float, float, float, float]:

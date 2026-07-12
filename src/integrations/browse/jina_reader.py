@@ -16,8 +16,14 @@ import requests
 
 from src.integrations.gemini import (
     GeminiInteractionsClient,
+    RUNTIME_METRICS_KEY,
+    add_runtime_metrics,
+    attach_runtime_metrics,
+    exception_runtime_metrics,
     extract_text,
+    interaction_runtime_metrics,
     normalize_json_schema,
+    require_minimal_thinking,
 )
 from src.integrations.llm.openai_compatible import (
     OpenAICompatibleChatClient,
@@ -197,6 +203,7 @@ class JinaReaderClient:
             cached = self._visit_cache.get(cache_key)
         if cached is not None:
             result = dict(cached)
+            result.pop(RUNTIME_METRICS_KEY, None)
             timings = dict(result.get("timings", {}))
             timings["cache_hit"] = True
             timings.setdefault("total_ms", round((time.perf_counter() - total_t0) * 1000, 2))
@@ -226,6 +233,7 @@ class JinaReaderClient:
             "retrieved_at": datetime.now(timezone.utc).isoformat(),
             "injection_flags": injection_flags,
             "evidence_eligible": not injection_flags,
+            RUNTIME_METRICS_KEY: extracted.get(RUNTIME_METRICS_KEY, {}),
             "timings": {
                 "fetch_ms": fetch_duration_ms,
                 "extract_ms": extract_duration_ms,
@@ -426,6 +434,9 @@ class JinaReaderClient:
                 "num_urls": len(normalized_urls),
             },
         }
+        for visit in visits:
+            if isinstance(visit, dict):
+                add_runtime_metrics(result, visit.get(RUNTIME_METRICS_KEY))
         failed = [visit for visit in visits if self._visit_failed(visit)]
         if visits and len(failed) == len(visits):
             result["status"] = "error"
@@ -437,7 +448,7 @@ class JinaReaderClient:
 
     @staticmethod
     def _build_failed_visit(url: str, goal: str, exc: Exception) -> Dict[str, Any]:
-        return {
+        result = {
             "status": "error",
             "url": url,
             "goal": goal,
@@ -456,8 +467,12 @@ class JinaReaderClient:
             "error": str(exc),
             "blocked": False,
         }
+        metrics = exception_runtime_metrics(exc)
+        if metrics:
+            result[RUNTIME_METRICS_KEY] = metrics
+        return result
 
-    def extract_goal_evidence(self, content: str, goal: str) -> Dict[str, str]:
+    def extract_goal_evidence(self, content: str, goal: str) -> Dict[str, Any]:
         evidence_document = self._prepare_evidence_document(content)
         clipped_content = evidence_document[: min(self.max_chars, self.extract_max_chars)]
         if not clipped_content.strip():
@@ -466,20 +481,24 @@ class JinaReaderClient:
         if not passages:
             raise RuntimeError("Fetched page did not contain any usable evidence passages.")
         extracted = self._extract_with_llm(self._format_evidence_passages(passages), goal)
-        passage_id = extracted.get("passage_id")
-        if not isinstance(passage_id, int) or isinstance(passage_id, bool):
-            raise RuntimeError("Evidence extractor returned invalid passage_id.")
-        if passage_id < -1 or passage_id >= len(passages):
-            raise RuntimeError("Evidence extractor returned unknown passage_id.")
-        relevance = str(extracted.get("relevance", "")).strip().lower()
-        stance = str(extracted.get("stance", "")).strip().lower()
-        directness = str(extracted.get("directness", "")).strip().lower()
-        if relevance not in {"high", "medium", "low"}:
-            raise RuntimeError("Evidence extractor returned invalid relevance.")
-        if stance not in {"support", "refute", "unclear"}:
-            raise RuntimeError("Evidence extractor returned invalid stance.")
-        if directness not in {"direct", "indirect", "none"}:
-            raise RuntimeError("Evidence extractor returned invalid directness.")
+        runtime_metrics = extracted.pop(RUNTIME_METRICS_KEY, {})
+        try:
+            passage_id = extracted.get("passage_id")
+            if not isinstance(passage_id, int) or isinstance(passage_id, bool):
+                raise RuntimeError("Evidence extractor returned invalid passage_id.")
+            if passage_id < -1 or passage_id >= len(passages):
+                raise RuntimeError("Evidence extractor returned unknown passage_id.")
+            relevance = str(extracted.get("relevance", "")).strip().lower()
+            stance = str(extracted.get("stance", "")).strip().lower()
+            directness = str(extracted.get("directness", "")).strip().lower()
+            if relevance not in {"high", "medium", "low"}:
+                raise RuntimeError("Evidence extractor returned invalid relevance.")
+            if stance not in {"support", "refute", "unclear"}:
+                raise RuntimeError("Evidence extractor returned invalid stance.")
+            if directness not in {"direct", "indirect", "none"}:
+                raise RuntimeError("Evidence extractor returned invalid directness.")
+        except Exception as exc:
+            raise attach_runtime_metrics(exc, runtime_metrics)
         if passage_id >= 0:
             passage = passages[passage_id]
             evidence = passage["text"]
@@ -495,6 +514,7 @@ class JinaReaderClient:
                 "directness": directness,
                 "artifact_sha256": hashlib.sha256(clipped_content.encode("utf-8")).hexdigest(),
                 "evidence_span": evidence_span,
+                RUNTIME_METRICS_KEY: runtime_metrics,
             }
         )
         return extracted
@@ -637,7 +657,7 @@ class JinaReaderClient:
             for passage in passages
         )
 
-    def _extract_with_llm(self, content: str, goal: str) -> Dict[str, str]:
+    def _extract_with_llm(self, content: str, goal: str) -> Dict[str, Any]:
         provider = self.extract_provider
         wire_api = resolve_model_wire_api(provider, self.extract_wire_api)
         model_name = self.extract_model
@@ -668,7 +688,7 @@ class JinaReaderClient:
                 model_name = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
 
         if provider == "gemini":
-            raw = self._run_async(
+            interaction_result = self._run_async(
                 self._extract_with_gemini_interactions(
                     model_name=model_name,
                     content=content,
@@ -676,7 +696,10 @@ class JinaReaderClient:
                     max_output_tokens=max_output_tokens,
                 )
             )
+            raw = str(interaction_result.get("text", ""))
+            runtime_metrics = interaction_result.get(RUNTIME_METRICS_KEY, {})
         else:
+            runtime_metrics = {}
             api_key = resolve_model_api_key(provider, self.extract_api_key)
             base_url = resolve_model_base_url(provider, self.extract_base_url, wire_api)
             client = OpenAICompatibleChatClient(
@@ -706,16 +729,28 @@ class JinaReaderClient:
             )
         parsed = parse_json_object(raw)
         if not parsed:
-            raise RuntimeError("Evidence extractor returned invalid JSON.")
+            raise attach_runtime_metrics(
+                RuntimeError("Evidence extractor returned invalid JSON."),
+                runtime_metrics,
+            )
         relevance = str(parsed.get("relevance", "medium")).strip().lower() or "medium"
         stance = str(parsed.get("stance", "unclear")).strip().lower() or "unclear"
         directness = str(parsed.get("directness", "none")).strip().lower() or "none"
         if relevance not in {"high", "medium", "low"}:
-            raise RuntimeError("Evidence extractor returned invalid relevance.")
+            raise attach_runtime_metrics(
+                RuntimeError("Evidence extractor returned invalid relevance."),
+                runtime_metrics,
+            )
         if stance not in {"support", "refute", "unclear"}:
-            raise RuntimeError("Evidence extractor returned invalid stance.")
+            raise attach_runtime_metrics(
+                RuntimeError("Evidence extractor returned invalid stance."),
+                runtime_metrics,
+            )
         if directness not in {"direct", "indirect", "none"}:
-            raise RuntimeError("Evidence extractor returned invalid directness.")
+            raise attach_runtime_metrics(
+                RuntimeError("Evidence extractor returned invalid directness."),
+                runtime_metrics,
+            )
         return {
             "rationale": str(parsed.get("rationale", "")).strip(),
             "passage_id": parsed.get("passage_id"),
@@ -723,6 +758,7 @@ class JinaReaderClient:
             "relevance": relevance,
             "stance": stance,
             "directness": directness,
+            RUNTIME_METRICS_KEY: runtime_metrics,
         }
 
     async def _extract_with_gemini_interactions(
@@ -732,7 +768,7 @@ class JinaReaderClient:
         content: str,
         goal: str,
         max_output_tokens: int,
-    ) -> str:
+    ) -> Dict[str, Any]:
         async with GeminiInteractionsClient(
             base_url=self.extract_base_url,
             timeout=90.0,
@@ -759,17 +795,24 @@ class JinaReaderClient:
                 generation_config={
                     "max_output_tokens": max_output_tokens,
                     "temperature": 0.0,
-                    "thinking_level": os.getenv(
-                        "GEMINI_BROWSE_THINKING_LEVEL", "minimal"
-                    ).strip().lower(),
+                    "thinking_level": require_minimal_thinking(
+                        os.getenv("GEMINI_BROWSE_THINKING_LEVEL", "minimal"),
+                        env_name="GEMINI_BROWSE_THINKING_LEVEL",
+                    ),
                 },
                 background=False,
                 store=True,
             )
             raw = extract_text(payload)
             if not raw.strip():
-                raise RuntimeError("Gemini Interactions evidence extractor returned no text.")
-            return raw
+                raise attach_runtime_metrics(
+                    RuntimeError("Gemini Interactions evidence extractor returned no text."),
+                    interaction_runtime_metrics(payload),
+                )
+            return {
+                "text": raw,
+                RUNTIME_METRICS_KEY: interaction_runtime_metrics(payload),
+            }
 
     @staticmethod
     def _run_async(coroutine):

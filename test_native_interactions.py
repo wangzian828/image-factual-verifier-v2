@@ -430,6 +430,49 @@ def test_native_tool_schema_hides_server_image_path() -> None:
     assert tool.calls == [{"image_input": "D:/private/input.png"}]
 
 
+def test_tool_internal_llm_usage_is_private_and_attached_to_step_metadata() -> None:
+    class ToolWithMetrics(RecordingTool):
+        name = "reverse_image_search"
+        parameters = {"type": "object", "properties": {}, "required": []}
+
+        def call(self, params):
+            return {
+                "status": "success",
+                "candidate_page_urls": [],
+                "__runtime_metrics__": {
+                    "llm_api_calls": 2,
+                    "tokens": {"prompt": 120, "completion": 30, "thought": 0},
+                },
+                "nested": {
+                    "__runtime_metrics__": {
+                        "llm_api_calls": 2,
+                        "tokens": {"prompt": 120, "completion": 30, "thought": 0},
+                    }
+                },
+            }
+
+    runner = StageRunner(
+        llm=NativeFakeBackend([]),
+        system_prompt="Investigate.",
+        tools=[ToolWithMetrics()],
+        output_schema=VerificationResult,
+        stage_name="verification",
+        attach_image=False,
+    )
+
+    serialized, metadata = asyncio.run(
+        runner._execute_tool("reverse_image_search", {})
+    )
+
+    assert "__runtime_metrics__" not in json.loads(serialized)
+    assert metadata["tool_llm_api_calls"] == 2
+    assert metadata["tool_tokens"] == {
+        "prompt": 120,
+        "completion": 30,
+        "thought": 0,
+    }
+
+
 def test_priority_two_can_be_resampled_after_all_required_questions_are_served() -> None:
     runner = StageRunner(
         llm=NativeFakeBackend([]),

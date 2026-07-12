@@ -507,6 +507,11 @@ def derive_unverifiable_reasons(
         reasons.append(UnverifiableReason.SINGLE_SOURCE_FAMILY)
     if any(item.code == "access_limited" for item in ledgers.failures):
         reasons.append(UnverifiableReason.ACCESS_LIMITED)
+    if any(
+        "could not be observed after two real attempts" in item.unresolved_distinction
+        for item in open_claims
+    ):
+        reasons.append(UnverifiableReason.UNREADABLE_REGION)
     if open_claims and not reasons:
         reasons.append(UnverifiableReason.DECISIVE_EVIDENCE_ABSENT)
     if open_claims:

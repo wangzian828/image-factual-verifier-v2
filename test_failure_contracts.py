@@ -24,6 +24,7 @@ from src.orchestrator.ledger import build_verification_case
 from src.orchestrator.context import ContextRenderer
 from src.orchestrator.stage_runner import StageStep
 from src.orchestrator.state import (
+    ClaimRecord,
     CoverageAudit,
     InvestigationQuestion,
     PlanRevision,
@@ -100,7 +101,7 @@ def test_verification_raises_when_every_tool_fails() -> None:
         Path(image_path).parent.rmdir()
 
 
-def test_verification_uses_runtime_observations_when_model_summary_is_rejected(
+def test_verification_rejects_missing_accepted_model_summary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     image_path = make_test_image()
@@ -160,13 +161,12 @@ def test_verification_uses_runtime_observations_when_model_summary_is_rejected(
             ),
         )
 
-        result = asyncio.run(orchestrator._run_verification(state, image_path))
+        with pytest.raises(
+            RuntimeError,
+            match="did not produce accepted structured output",
+        ):
+            asyncio.run(orchestrator._run_verification(state, image_path))
 
-        assert result.authenticity_assessment == "uncertain"
-        assert result.coverage_complete is False
-        assert result.unresolved_priority_questions == ["q0"]
-        assert state.coverage_audits[-1].investigation_complete is True
-        assert len(state.ledgers.discoveries) == 1
         assert any(step.action_type == "output_rejected" for step in state.all_steps)
     finally:
         Path(image_path).unlink(missing_ok=True)
@@ -260,6 +260,72 @@ def test_pending_visual_question_blocks_saturation() -> None:
 
     assert audit.investigation_complete is False
     assert audit.pending_visual_questions == ["vq0"]
+
+
+def test_external_fact_does_not_create_or_gate_runtime_visual_question() -> None:
+    orchestrator = object.__new__(Orchestrator)
+    plan = VerificationPlan(
+        questions=[
+            InvestigationQuestion(
+                question_id="q0",
+                question="Did the political event happen?",
+                claim_text="The political event happened.",
+                claim_scope="external_fact",
+                priority=1,
+            )
+        ]
+    )
+    discovery = type(
+        "Discovery",
+        (),
+        {
+            "candidate_type": "reverse_image",
+            "reference_image_url": "https://cdn.example/reference.jpg",
+            "candidate_url": "https://news.example/report",
+            "title": "Independent report",
+            "discovery_id": "discovery-0",
+        },
+    )()
+    step = StageStep(
+        tool_name="reverse_image_search",
+        tool_args={"__question_id": "q0"},
+    )
+    investigation = InvestigationState()
+
+    created = InvestigationReducer._create_visual_question(
+        investigation,
+        step=step,
+        new_evidence=[],
+        new_discoveries=[discovery],
+        plan=plan,
+        perception=PerceptionReport(),
+        parsed={},
+    )
+    ledgers = VerificationLedgers(
+        claims=[
+            ClaimRecord(
+                claim_id="claim-q0",
+                question_id="q0",
+                text="The political event happened.",
+                claim_scope="external_fact",
+                status="supported",
+            )
+        ]
+    )
+    investigation.visual_questions.append(
+        VisualQuestion(
+            visual_question_id="legacy-vq",
+            claim_id="claim-q0",
+            source_discovery_id="discovery-legacy",
+            reference_image_url="https://cdn.example/legacy.jpg",
+            target_bbox=[0.0, 0.0, 1.0, 1.0],
+            expected_property="Whether the images match.",
+        )
+    )
+    orchestrator._gate_claims_on_pending_visual_questions(ledgers, investigation)
+
+    assert created == []
+    assert ledgers.claims[0].status == "supported"
 
 
 def test_external_claim_plan_cannot_invent_decisive_image_authenticity() -> None:
@@ -390,6 +456,51 @@ def test_pending_reinspect_question_is_a_valid_replanning_target() -> None:
     assert "target_bbox=[0.1, 0.2, 0.9, 0.8]" in context
 
 
+def test_replanning_cannot_change_question_priority() -> None:
+    plan = VerificationPlan(
+        questions=[
+            InvestigationQuestion(
+                question_id="q0",
+                question="Did the event happen?",
+                claim_text="The event happened.",
+                suggested_tools=["text_search"],
+                priority=1,
+            ),
+            InvestigationQuestion(
+                question_id="q1",
+                question="What is the image provenance?",
+                claim_text="The image came from the claimed source.",
+                claim_scope="image_provenance",
+                suggested_tools=["reverse_image_search"],
+                priority=2,
+            ),
+        ]
+    )
+    audit = CoverageAudit(unattempted_supporting_questions=["q1"])
+    revision = PlanRevision(
+        question_updates=[
+            InvestigationQuestion(
+                question_id="q1",
+                question="What is the image provenance?",
+                claim_text="The image came from the claimed source.",
+                claim_scope="image_provenance",
+                suggested_tools=["reverse_image_search"],
+                priority=1,
+            )
+        ]
+    )
+
+    accepted, reason = Orchestrator._validate_plan_revision(
+        revision,
+        plan,
+        audit,
+        {"reverse_image_search"},
+    )
+
+    assert accepted is False
+    assert "immutable priority" in reason
+
+
 def test_compare_reinspect_requires_bound_reference_image_url() -> None:
     question = VisualQuestion(
         visual_question_id="vq0",
@@ -414,6 +525,32 @@ def test_compare_reinspect_requires_bound_reference_image_url() -> None:
     )
 
     assert "reference_url must match" in error
+
+
+def test_reinspect_requires_one_of_the_specified_tools() -> None:
+    question = VisualQuestion(
+        visual_question_id="vq0",
+        claim_id="claim-q0",
+        source_discovery_id="discovery-0",
+        reference_image_url="https://example.test/bound.jpg",
+        target_bbox=[0.0, 0.0, 1.0, 1.0],
+        expected_property="Whether the visual matches.",
+        recommended_tools=["compare_with_reference"],
+    )
+    investigation = InvestigationState(visual_questions=[question])
+
+    error = InvestigationReducer.validate_visual_call(
+        investigation,
+        "crop_and_inspect",
+        {
+            "visual_question_id": "vq0",
+            "source_discovery_id": "discovery-0",
+            "expected_property": "Whether the visual matches.",
+            "bbox": [0.0, 0.0, 1.0, 1.0],
+        },
+    )
+
+    assert "is not allowed" in error
 
 
 def test_visual_reinspect_failure_requires_two_real_attempts_to_exhaust() -> None:
@@ -607,6 +744,122 @@ def test_gemini_browse_key_cannot_substitute_for_environment_key(
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     with pytest.raises(ValueError, match="cannot authenticate Gemini"):
         JinaReaderClient()
+
+
+@pytest.mark.parametrize(
+    "env_name",
+    [
+        "GEMINI_VERIFICATION_FINAL_THINKING_LEVEL",
+        "GEMINI_BROWSE_THINKING_LEVEL",
+        "GEMINI_VISION_THINKING_LEVEL",
+        "GEMINI_REFERENCE_COMPARE_THINKING_LEVEL",
+        "GEMINI_VISUAL_ANOMALY_THINKING_LEVEL",
+    ],
+)
+def test_tool_internal_thinking_configuration_must_be_minimal(
+    monkeypatch: pytest.MonkeyPatch,
+    env_name: str,
+) -> None:
+    monkeypatch.setenv(env_name, "low")
+    orchestrator = object.__new__(Orchestrator)
+    orchestrator.provider = "openai"
+    orchestrator.vlm_provider = "openai"
+    orchestrator.llm = type("LLM", (), {"api_key": "test"})()
+    orchestrator.all_tools = {}
+
+    with pytest.raises(ValueError, match=f"{env_name} must be 'minimal'"):
+        orchestrator._validate_startup_configuration()
+
+
+def test_perception_tool_internal_usage_is_counted_and_private(tmp_path: Path) -> None:
+    class PerceptionTool(FakeTool):
+        def call(self, params):
+            return {
+                "status": "success",
+                "scene_description": "A literal scene.",
+                "image_type": "photo",
+                "entities": [],
+                "__runtime_metrics__": {
+                    "llm_api_calls": 1,
+                    "tokens": {"prompt": 45, "completion": 12, "thought": 0},
+                },
+            }
+
+    class OcrTool(FakeTool):
+        def call(self, params):
+            return {"status": "success", "text_regions": []}
+
+    image_path = tmp_path / "perception.png"
+    Image.new("RGB", (4, 4), "white").save(image_path)
+    orchestrator = object.__new__(Orchestrator)
+    orchestrator.provider = "gemini"
+    orchestrator.llm = type("LLM", (), {"wire_api": "interactions"})()
+    orchestrator.all_tools = {
+        "perceive_scene": PerceptionTool("perceive_scene", {}),
+        "ocr_with_position": OcrTool("ocr_with_position", {}),
+    }
+    orchestrator.tool_health_summary = {}
+    orchestrator.cacheable_tools = set()
+    orchestrator.tool_cache = ToolResultCache(enabled=False)
+    state = VerificationState(image_path=str(image_path))
+
+    report = asyncio.run(orchestrator._run_perception(state, str(image_path)))
+
+    assert report.scene_description == "A literal scene."
+    assert state.llm_api_calls == 1
+    assert state.token_usage == {"prompt": 45, "completion": 12, "thought": 0}
+    assert "__runtime_metrics__" not in state.all_steps[0].tool_result
+
+
+def test_tool_internal_thought_tokens_fail_the_run_accounting() -> None:
+    orchestrator = object.__new__(Orchestrator)
+    orchestrator.provider = "gemini"
+    orchestrator.llm = type("LLM", (), {"wire_api": "interactions"})()
+    state = VerificationState()
+    step = StageStep(
+        stage_name="verification",
+        action_type="tool_call",
+        tool_name="visit",
+        metadata={
+            "tool_llm_api_calls": 1,
+            "tool_tokens": {"prompt": 20, "completion": 4, "thought": 2},
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="non-zero thought tokens"):
+        orchestrator._record_stage_steps(state, [step])
+
+    assert state.token_usage == {"prompt": 20, "completion": 4, "thought": 2}
+    assert state.llm_api_calls == 1
+
+
+def test_perception_exception_is_persisted_as_failed_step(tmp_path: Path) -> None:
+    class RaisingPerceptionTool(FakeTool):
+        def call(self, params):
+            raise RuntimeError("vision endpoint failed")
+
+    image_path = tmp_path / "perception-error.png"
+    Image.new("RGB", (4, 4), "white").save(image_path)
+    orchestrator = object.__new__(Orchestrator)
+    orchestrator.provider = "gemini"
+    orchestrator.llm = type("LLM", (), {"wire_api": "interactions"})()
+    orchestrator.all_tools = {
+        "perceive_scene": RaisingPerceptionTool("perceive_scene", {}),
+    }
+    orchestrator.tool_health_summary = {}
+    orchestrator.cacheable_tools = set()
+    orchestrator.tool_cache = ToolResultCache(enabled=False)
+    state = VerificationState(image_path=str(image_path))
+
+    with pytest.raises(RuntimeError, match="perceive_scene failed"):
+        asyncio.run(orchestrator._run_perception(state, str(image_path)))
+
+    assert len(state.all_steps) == 1
+    assert state.all_steps[0].metadata["tool_exception"] == "RuntimeError"
+    assert json.loads(state.all_steps[0].tool_result) == {
+        "status": "error",
+        "error": "RuntimeError: vision endpoint failed",
+    }
 
 
 def test_upload_provider_does_not_fall_through(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

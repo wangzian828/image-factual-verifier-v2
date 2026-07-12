@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
+from src.integrations.gemini import RUNTIME_METRICS_KEY, exception_runtime_metrics
 from src.tools.base import BaseTool
 
 
@@ -140,10 +141,14 @@ class CropAndInspectTool(BaseTool):
                 response_schema=INSPECT_SCHEMA,
             )
         except Exception as exc:
-            return {
+            error = {
                 "status": "error",
                 "error": f"VLM inspection failed: {exc}",
             }
+            metrics = exception_runtime_metrics(exc)
+            if metrics:
+                error[RUNTIME_METRICS_KEY] = metrics
+            return error
         finally:
             try:
                 os.remove(tmp_path)
@@ -158,6 +163,7 @@ class CropAndInspectTool(BaseTool):
             "answer": str(parsed.get("answer", "")),
             "crop_bbox": bbox,
             "focus_question": focus_question,
+            RUNTIME_METRICS_KEY: parsed.get(RUNTIME_METRICS_KEY, {}),
         }
 
     @staticmethod

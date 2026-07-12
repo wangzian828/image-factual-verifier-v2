@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from src.tools.base import BaseTool
+from src.integrations.gemini import RUNTIME_METRICS_KEY, exception_runtime_metrics
 
 
 PERCEIVE_SCENE_PROMPT = """\
@@ -125,7 +126,7 @@ class PerceiveSceneTool(BaseTool):
                 response_schema=PERCEIVE_SCENE_SCHEMA,
             )
         except Exception as exc:
-            return {
+            error = {
                 "status": "error",
                 "error": (
                     "Scene perception failed: "
@@ -135,6 +136,10 @@ class PerceiveSceneTool(BaseTool):
                 "scene_description": "",
                 "image_type": "unknown",
             }
+            metrics = exception_runtime_metrics(exc)
+            if metrics:
+                error[RUNTIME_METRICS_KEY] = metrics
+            return error
 
         entities = []
         for ent in parsed.get("entities", []):
@@ -149,6 +154,7 @@ class PerceiveSceneTool(BaseTool):
                     "entities": [],
                     "scene_description": "",
                     "image_type": "unknown",
+                    RUNTIME_METRICS_KEY: parsed.get(RUNTIME_METRICS_KEY, {}),
                 }
             entities.append(
                 {
@@ -166,6 +172,7 @@ class PerceiveSceneTool(BaseTool):
             "scene_description": str(parsed.get("scene_description", "")).strip(),
             "image_type": str(parsed.get("image_type", "photo")).strip(),
             "total_entities": len(entities[:8]),
+            RUNTIME_METRICS_KEY: parsed.get(RUNTIME_METRICS_KEY, {}),
         }
 
 

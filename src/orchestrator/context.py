@@ -203,7 +203,7 @@ class ContextRenderer:
             resolution = resolutions.get(question.question_id)
             gap = resolution.remaining_gap if resolution else "No grounded answer."
             parts.append(
-                f"- [{question.question_id}] {question.question[:500]} | "
+                f"- [{question.question_id}] P{question.priority} | {question.question[:500]} | "
                 f"immutable claim: {question.claim_text[:500]} | "
                 f"scope: {question.claim_scope} | "
                 f"gap: {gap[:500]}"

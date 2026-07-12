@@ -18,6 +18,7 @@ from src.orchestrator.source_provenance import (
 
 POLICY_SCHEMA_VERSION = "source-access-policy-v1"
 _WAYBACK_TARGET = re.compile(r"/web/(?:[^/]+/)?(https?://.+)$", re.IGNORECASE)
+_WORDPRESS_IMAGE_PROXY_HOSTS = frozenset({"i0.wp.com", "i1.wp.com", "i2.wp.com"})
 
 FACT_CHECK_DOMAIN_MARKERS = (
     "factcheck",
@@ -47,7 +48,7 @@ FACT_CHECK_DOMAIN_MARKERS = (
 
 
 def url_variants(value: str) -> tuple[str, ...]:
-    """Return canonical outer and embedded archive URLs for policy matching."""
+    """Return canonical outer and embedded origin URLs for policy matching."""
 
     raw = unquote(str(value or "").strip())
     if not raw:
@@ -61,6 +62,12 @@ def url_variants(value: str) -> tuple[str, ...]:
         match = _WAYBACK_TARGET.search(parsed.path)
         if match:
             candidates.append(match.group(1))
+    if parsed is not None and (parsed.hostname or "").lower() in _WORDPRESS_IMAGE_PROXY_HOSTS:
+        embedded = parsed.path.lstrip("/").split("/", 1)
+        embedded_host = embedded[0].lower().rstrip(".") if embedded else ""
+        if embedded_host and "." in embedded_host:
+            embedded_path = f"/{embedded[1]}" if len(embedded) == 2 else ""
+            candidates.append(f"https://{embedded_host}{embedded_path}")
 
     canonical: list[str] = []
     for candidate in candidates:
@@ -115,7 +122,7 @@ class SourceAccessPolicy:
         return True
 
     def blocked_query_reference(self, query: str) -> str:
-        """Return a forbidden domain explicitly named in a search query."""
+        """Return a forbidden source explicitly named in a search query."""
 
         if not self.active:
             return ""
@@ -123,6 +130,21 @@ class SourceAccessPolicy:
         for domain in sorted(self.excluded_domains, key=len, reverse=True):
             pattern = rf"(?<![a-z0-9.-])(?:[a-z0-9-]+\.)*{re.escape(domain)}(?![a-z0-9.-])"
             if re.search(pattern, text):
+                return domain
+            if any(alias in _normalize_query_text(text) for alias in _query_aliases(domain)):
+                return domain
+        return ""
+
+    def blocked_content_reference(self, value: str) -> str:
+        """Return an excluded fact-check source named in provider-visible text."""
+
+        if not self.active:
+            return ""
+        normalized = _normalize_query_text(value)
+        if not normalized:
+            return ""
+        for domain in sorted(self.excluded_domains, key=len, reverse=True):
+            if any(alias in normalized for alias in _query_aliases(domain)):
                 return domain
         return ""
 
@@ -144,7 +166,15 @@ class SourceAccessPolicy:
                 continue
             urls = [str(row.get(field, "")).strip() for field in (*url_fields, *image_url_fields)]
             urls = [url for url in urls if url]
-            if urls and any(not self.allows(url) for url in urls):
+            provider_text = " ".join(
+                str(row.get(field, ""))
+                for field in ("title", "snippet", "source")
+                if row.get(field)
+            )
+            if (
+                (urls and any(not self.allows(url) for url in urls))
+                or bool(self.blocked_content_reference(provider_text))
+            ):
                 blocked += 1
                 continue
             allowed.append(dict(row))
@@ -291,3 +321,41 @@ def _fact_check_domain_scope(hostname: str) -> str:
     if any(marker in host for marker in FACT_CHECK_DOMAIN_MARKERS):
         return host
     return ""
+
+
+def _normalize_query_text(value: str) -> str:
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).split())
+
+
+def _query_aliases(domain: str) -> tuple[str, ...]:
+    """Build conservative human-readable aliases for excluded fact-check domains."""
+
+    normalized = _normalize_domain(domain)
+    labels = normalized.split(".")
+    aliases: set[str] = set()
+    joined = " ".join(labels)
+    if "factcheck" in joined or "fact check" in joined:
+        aliases.add("fact check")
+    if "factcrescendo" in joined:
+        aliases.add("fact crescendo")
+    if "fullfact" in joined:
+        aliases.add("full fact")
+    if "leadstories" in joined:
+        aliases.add("lead stories")
+    if "checkyourfact" in joined:
+        aliases.add("check your fact")
+    if "newschecker" in joined:
+        aliases.add("news checker")
+    if "vishvasnews" in joined:
+        aliases.add("vishvas news")
+    if "sochfactcheck" in joined:
+        aliases.add("soch fact check")
+    if "healthfeedback" in joined:
+        aliases.add("health feedback")
+    if "afp.com" in normalized:
+        aliases.add("afp fact check")
+    for marker in FACT_CHECK_DOMAIN_MARKERS:
+        alias = _normalize_query_text(marker)
+        if alias and alias not in {"fact check", "factcheck"} and marker in normalized:
+            aliases.add(alias)
+    return tuple(sorted(aliases, key=len, reverse=True))

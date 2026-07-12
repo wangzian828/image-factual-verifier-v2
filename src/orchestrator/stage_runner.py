@@ -18,6 +18,8 @@ from src.integrations.gemini import (
     missing_required_paths,
     normalize_json_schema,
     validate_interaction_response,
+    exception_runtime_metrics,
+    take_runtime_metrics,
 )
 from src.orchestrator.evidence_policy import query_targets_fact_check_answer
 from src.orchestrator.llm_backend import LLMBackend, LLMResponse
@@ -1312,7 +1314,35 @@ class StageRunner:
             "remaining_tool_budgets": remaining,
             "pending_visual_question_ids": self._pending_visual_question_ids(),
             "pending_visual_questions": self._pending_visual_questions(),
+            "next_action_guidance": self._next_action_guidance(
+                untouched_priority,
+                untouched_supporting,
+            ),
         }
+
+    def _next_action_guidance(
+        self,
+        untouched_priority: List[str],
+        untouched_supporting: List[str],
+    ) -> str:
+        if untouched_priority:
+            return "Attempt one untouched P1 question before resampling."
+        if untouched_supporting:
+            return "Attempt one untouched P2 question before further P1 resampling."
+        pending = self._pending_visual_questions()
+        if pending:
+            return "Resolve a pending ReInspect specification with its recommended tool."
+        unresolved_priority = [
+            item
+            for item in self.priority_question_ids
+            if item not in self._resolved_question_ids([])
+        ]
+        if unresolved_priority:
+            return (
+                "Choose the highest-value direct-source follow-up for unresolved P1: "
+                + ", ".join(unresolved_priority)
+            )
+        return "Finalize when the evidence ledger can support the required output."
 
     def _pending_visual_question_ids(self) -> List[str]:
         return [
@@ -1477,6 +1507,7 @@ class StageRunner:
                 result = await loop.run_in_executor(None, tool.call, tool_args)
         except Exception as exc:
             serialized = json.dumps({"status": "error", "error": f"{type(exc).__name__}: {exc}"}, ensure_ascii=False)
+            runtime_metrics = exception_runtime_metrics(exc)
             return serialized, {
                 "cache_hit": False,
                 "tool_success": False,
@@ -1484,8 +1515,14 @@ class StageRunner:
                 "duration_ms": round((time.perf_counter() - started) * 1000, 2),
                 "serialized_size": len(serialized),
                 "tool_exception": type(exc).__name__,
+                "tool_llm_api_calls": int(runtime_metrics.get("llm_api_calls", 0) or 0),
+                "tool_tokens": self._normalize_tool_tokens(runtime_metrics.get("tokens")),
             }
 
+        if not isinstance(result, dict):
+            runtime_metrics: Dict[str, Any] = {}
+        else:
+            runtime_metrics = take_runtime_metrics(result)
         try:
             serialized, succeeded = serialize_tool_result(result)
         except ToolResultContractError as exc:
@@ -1500,6 +1537,8 @@ class StageRunner:
                 "duration_ms": round((time.perf_counter() - started) * 1000, 2),
                 "serialized_size": len(serialized),
                 "tool_exception": "ToolResultContractError",
+                "tool_llm_api_calls": int(runtime_metrics.get("llm_api_calls", 0) or 0),
+                "tool_tokens": self._normalize_tool_tokens(runtime_metrics.get("tokens")),
             }
         if succeeded and self.source_access_policy.active:
             parsed_result, _ = parse_tool_result(serialized)
@@ -1527,6 +1566,16 @@ class StageRunner:
             "observed_at": datetime.now(timezone.utc).isoformat(),
             "duration_ms": round((time.perf_counter() - started) * 1000, 2),
             "serialized_size": len(serialized),
+            "tool_llm_api_calls": int(runtime_metrics.get("llm_api_calls", 0) or 0),
+            "tool_tokens": self._normalize_tool_tokens(runtime_metrics.get("tokens")),
+        }
+
+    @staticmethod
+    def _normalize_tool_tokens(value: Any) -> Dict[str, int]:
+        value = value if isinstance(value, dict) else {}
+        return {
+            name: int(value.get(name, 0) or 0)
+            for name in ("prompt", "completion", "thought")
         }
 
     def _build_cache_args(self, tool_name: str, tool_args: Dict[str, Any]) -> Dict[str, Any]:
@@ -1712,6 +1761,8 @@ class StageRunner:
 
         return {
             "vlm_query": data.get("vlm_query", ""),
+            "vlm_error": data.get("vlm_error", ""),
+            "lens_error": data.get("lens_error", ""),
             "candidate_page_urls": (data.get("candidate_page_urls", []) or [])[:5],
             "reference_image_url": data.get("reference_image_url", ""),
             "lens_results": _rows(data.get("lens_results", [])),
@@ -1731,6 +1782,7 @@ class StageRunner:
                         "crop_query": item.get("crop_query", ""),
                         "summary": str(item.get("summary", ""))[:180],
                         "selected_url": item.get("selected_url", ""),
+                        "vlm_query_error": item.get("vlm_query_error", ""),
                     }
                 )
         return {
