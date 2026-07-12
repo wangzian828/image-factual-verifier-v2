@@ -428,10 +428,19 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
             )
             for sample in samples
         ]
+        claim_observed_ats = [
+            (
+                str(sample["claim_observed_at"])
+                if sample.get("claim_observed_at") is not None
+                else None
+            )
+            for sample in samples
+        ]
         results = await workflow.run_batch(
             image_paths=image_paths,
             image_ids=image_ids,
             user_claims=user_claims,
+            claim_observed_ats=claim_observed_ats,
             concurrency=max(1, args.concurrency),
         )
 

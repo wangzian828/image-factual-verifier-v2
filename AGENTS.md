@@ -2,7 +2,7 @@
 
 ## Source Of Truth
 
-Read `docs/architecture.md` before changing the workflow. It documents the active runtime contract, configuration, tests, and trace format. Prefer the implementation and contract tests when a comment or an old report disagrees with that document.
+Read `docs/architecture.md` before changing the workflow. It documents the active runtime contract, configuration, tests, and trace format. Use the [Agent Prompt and Runtime Guide](docs/agent-prompt-and-runtime-guide.md) for the end-to-end flow and the boundary between model prompts, deterministic orchestration, tool-internal model calls, and validation gates. Prefer the implementation and contract tests when a comment or an old report disagrees with those documents.
 
 The supported production path is a multi-stage Gemini agent using the Gemini Interactions API. Generic backend adapters may remain for isolated tests or non-production integrations, but they are not a runtime fallback for the active workflow.
 
@@ -29,8 +29,8 @@ This is an agent, not a fixed tool script. Do not replace verification with a pr
 - Keep `VerificationCase` free of benchmark gold. `external_claim` requires runtime `user_claim`; `embedded_claim` must recover `claim_surface` from pixels/OCR. Always verify `image_sha256`, and keep `decision_policy_version` aligned with the active `reinspect-v1` validator.
 - Treat `claims`, `sources`, `evidence`, `discoveries`, and `failures` as separate machine-verifiable collections. Preserve stable IDs, exact tool-call provenance, source family/risk metadata, artifact hashes, retrieval times, and recovery links.
 - Keep discovery separate from evidence. Search snippets, result titles, reverse-image matches, and generated summaries are leads only. They cannot close a claim or be cited by Judgment.
-- Promote web evidence only from a fetched page and an existing selected passage. Require an exact span and matching offsets, canonical URL, artifact SHA-256, ISO-8601 retrieval time, directness, valid stance/relevance, `evidence_eligible=true`, and no injection flags. Never accept model-invented or merged passage text.
-- Keep ReInspect evidence-conditioned. A search-created `VisualQuestion` must identify exactly one source evidence/discovery ID, normalized target box, expected property, and allowed real visual action. Matching OCR/crop/count/reference calls resolve or fail it; while pending, the linked claim stays open.
+- Promote web evidence only from a fetched page and an existing selected passage. Require an exact span and matching offsets, canonical URL, artifact SHA-256, ISO-8601 retrieval time, directness, valid stance/relevance, `evidence_eligible=true`, and no injection flags. A multi-query, multi-page search call may promote multiple independently eligible passages, at most one selected passage per fetched page; do not collapse them into one summary. Never accept model-invented or merged passage text.
+- Keep ReInspect evidence-conditioned. A search-created `VisualQuestion` must identify exactly one source evidence/discovery ID, normalized target box, expected property, and allowed real visual action. Matching OCR/crop/count/reference calls resolve or fail it. A pending ReInspect may hold only a linked non-`external_fact` claim open; an external fact question is never ReInspect-gated and still requires eligible direct web evidence.
 - Keep coverage and judgment deterministic. Claim status depends on direct evidence and source-family independence. `LedgerJudgment` must decide every decisive claim using only matching ledger IDs; `real`, `fake`, and typed `unverifiable` follow the `reinspect-v1` policy.
 - Require an explicit `question_id` on verification function calls. Never silently assign a call to a question.
 - In benchmark evaluation, enforce the provenance-derived `SourceAccessPolicy` before search results are enriched or returned and before any direct page/reference fetch. Do not expose excluded URLs/domains or hidden gold to the model. Product mode remains unrestricted.
@@ -93,7 +93,7 @@ TOOL_CACHE_TTL_SECONDS=3600
 TOOL_CACHE_NAMESPACE=
 ```
 
-Verification defaults to 12 native ReAct turns per iteration and `MAX_VERIFICATION_ITERATIONS=4`, with `MIN_VERIFICATION_ITERATIONS=2` and `LOW_INFORMATION_GAIN_PATIENCE=2`. The outer loop stops only on decisive coverage plus required P2 service, two consecutive low-gain iterations with no pending ReInspect, or the hard cap; traces distinguish these outcomes. `GEMINI_VERIFICATION_MAX_OUTPUT_TOKENS` defaults to `16384`, and the forced schema serialization uses `GEMINI_VERIFICATION_FINAL_MAX_OUTPUT_TOKENS=32768`. Every active Gemini agent, browse, and visual Interactions call uses `thinking_level=minimal`; record thought-token usage and treat any non-zero count as a configuration defect. Do not retry a failed call by changing thinking level, model, provider, or protocol. `GEMINI_VISION_MIN_OUTPUT_TOKENS` defaults to `8192`, `GEMINI_VISION_TIMEOUT_SECONDS` to `240`, and `BROWSE_EXTRACT_MAX_OUTPUT_TOKENS` to `4096`.
+Verification defaults to 12 native ReAct turns per iteration and `MAX_VERIFICATION_ITERATIONS=4`, with `MIN_VERIFICATION_ITERATIONS=2` and `LOW_INFORMATION_GAIN_PATIENCE=2`. The outer loop stops only on decisive coverage plus required P2 service, two consecutive low-gain iterations with no pending ReInspect, or the hard cap; traces distinguish these outcomes. `GEMINI_VERIFICATION_MAX_OUTPUT_TOKENS` defaults to `16384`, and the forced schema serialization uses `GEMINI_VERIFICATION_FINAL_MAX_OUTPUT_TOKENS=32768`. Every active Gemini agent, browse, and visual Interactions call uses `thinking_level=minimal`; record thought-token usage and treat any non-zero count as a configuration defect. Gemini calls made inside tools are separate API calls and their prompt, completion, and thought tokens must be included in aggregate call/token accounting even though their private runtime metrics are removed from model-facing tool JSON. Do not retry a failed call by changing thinking level, model, provider, or protocol. `GEMINI_VISION_MIN_OUTPUT_TOKENS` defaults to `8192`, `GEMINI_VISION_TIMEOUT_SECONDS` to `240`, and `BROWSE_EXTRACT_MAX_OUTPUT_TOKENS` to `4096`.
 
 Keep all secrets environment-only even when adding controls.
 
@@ -113,6 +113,12 @@ For a real run, inspect the canonical JSON under `outputs/traces/`. Generate a s
 
 ```powershell
 python -m src.render_trace_html outputs\traces --output-dir outputs\trace_html
+```
+
+Audit a real canonical trace, including aggregate accounting and scheduler invariants, before treating it as a valid end-to-end run:
+
+```powershell
+python scripts/audit_real_trace.py outputs\traces\example.json --json --strict-scheduler
 ```
 
 Generated traces, caches, and logs are ignored. Do not place committed test fixtures under ignored output paths.

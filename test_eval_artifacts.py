@@ -19,10 +19,12 @@ class FakeWorkflow:
         image_paths: list[str],
         image_ids: list[str],
         user_claims: list[str | None],
+        claim_observed_ats: list[str | None],
         concurrency: int,
     ) -> list[dict[str, Any]]:
         assert concurrency == 1
         assert user_claims == [None]
+        assert claim_observed_ats == ["2024-01-02"]
         trace_dir = Path(self.config.output_dir)
         trace_dir.mkdir(parents=True, exist_ok=True)
         (trace_dir / f"{image_ids[0]}.json").write_text(
@@ -58,6 +60,7 @@ def test_eval_writes_compact_canonical_artifacts(
                 "bucket": "fixture",
                 "ground_truth": "real",
                 "image_path": str(tmp_path / "image.jpg"),
+                "claim_observed_at": "2024-01-02",
             }
         )
         + "\n",

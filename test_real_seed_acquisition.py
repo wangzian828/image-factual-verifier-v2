@@ -79,6 +79,9 @@ def test_candidate_manifest_keeps_gold_out_of_core_runtime_contract(tmp_path: Pa
     candidate = json.loads(
         (tmp_path / "candidates" / "candidates.jsonl").read_text(encoding="utf-8")
     )
+    evaluation = json.loads(
+        (tmp_path / "candidates" / "evaluation.jsonl").read_text(encoding="utf-8")
+    )
 
     assert summary["total_candidates"] == 1
     assert candidate["ground_truth"] == "fake"
@@ -91,6 +94,7 @@ def test_candidate_manifest_keeps_gold_out_of_core_runtime_contract(tmp_path: Pa
     ] is True
     assert candidate["claim_assets"][0]["width"] == 24
     assert candidate["claim_assets"][0]["height"] == 12
+    assert evaluation["claim_observed_at"] == row["date"]
 
 
 def test_download_resumes_existing_partial_file(tmp_path: Path) -> None:

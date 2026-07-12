@@ -24,6 +24,7 @@ os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 
 load_dotenv()
 
+from src.orchestrator.ledger import build_verification_case
 from src.orchestrator.pipeline import Orchestrator
 from src.orchestrator.state import VerificationCase
 from src.orchestrator.source_access import SourceAccessPolicy
@@ -92,6 +93,7 @@ class VerificationWorkflow:
         image_id: str = "",
         *,
         user_claim: Optional[str] = None,
+        claim_observed_at: Optional[str] = None,
         verification_case: Optional[VerificationCase] = None,
     ) -> Dict[str, Any]:
         """Run verification on a single image.
@@ -105,6 +107,13 @@ class VerificationWorkflow:
         """
         orchestrator = self._get_orchestrator()
         try:
+            if verification_case is None and claim_observed_at is not None:
+                verification_case = build_verification_case(
+                    image_path,
+                    case_id=image_id or os.path.basename(image_path) or image_path,
+                    user_claim=user_claim,
+                    claim_observed_at=claim_observed_at,
+                )
             if verification_case is None and user_claim is None:
                 result = await orchestrator.run(image_path, image_id)
             else:
@@ -146,6 +155,7 @@ class VerificationWorkflow:
         image_paths: List[str],
         image_ids: Optional[List[str]] = None,
         user_claims: Optional[List[Optional[str]]] = None,
+        claim_observed_ats: Optional[List[Optional[str]]] = None,
         concurrency: int = 1,
     ) -> List[Dict[str, Any]]:
         """Run verification on multiple images.
@@ -164,17 +174,33 @@ class VerificationWorkflow:
             user_claims = [None] * len(image_paths)
         if len(user_claims) != len(image_paths):
             raise ValueError("user_claims must match image_paths length")
+        if claim_observed_ats is None:
+            claim_observed_ats = [None] * len(image_paths)
+        if len(claim_observed_ats) != len(image_paths):
+            raise ValueError("claim_observed_ats must match image_paths length")
 
         semaphore = asyncio.Semaphore(concurrency)
         results = []
 
-        async def _verify(path: str, img_id: str, claim: Optional[str]) -> Dict[str, Any]:
+        async def _verify(
+            path: str,
+            img_id: str,
+            claim: Optional[str],
+            claim_observed_at: Optional[str],
+        ) -> Dict[str, Any]:
             async with semaphore:
-                return await self.run_single(path, img_id, user_claim=claim)
+                return await self.run_single(
+                    path,
+                    img_id,
+                    user_claim=claim,
+                    claim_observed_at=claim_observed_at,
+                )
 
         tasks = [
-            _verify(path, img_id, claim)
-            for path, img_id, claim in zip(image_paths, image_ids, user_claims)
+            _verify(path, img_id, claim, claim_observed_at)
+            for path, img_id, claim, claim_observed_at in zip(
+                image_paths, image_ids, user_claims, claim_observed_ats
+            )
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 

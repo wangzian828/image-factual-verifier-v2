@@ -19,6 +19,7 @@ from src.orchestrator.ledger import (
     build_verification_case,
     compile_runtime_ledgers,
     derive_unverifiable_reasons,
+    evidence_goal_for_case,
     verify_case_image,
 )
 from src.orchestrator.investigation_state import (
@@ -471,7 +472,8 @@ class Orchestrator:
                     list(all_verification_steps) + list(steps),
                     plan,
                     investigation_state=(state.investigation_state if active_reinspect else None),
-                    allow_incomplete_at_budget=False,
+                    allow_incomplete=True,
+                    verification_case=state.verification_case,
                 )
 
             def observation_callback(
@@ -535,6 +537,13 @@ class Orchestrator:
                     question.question_id: question.claim_text
                     for question in (state.plan or VerificationPlan()).questions
                 },
+                question_evidence_goals={
+                    question.question_id: self._evidence_goal(
+                        question.claim_text,
+                        state.verification_case,
+                    )
+                    for question in (state.plan or VerificationPlan()).questions
+                },
                 priority_question_ids=[
                     question.question_id
                     for question in (state.plan or VerificationPlan()).questions
@@ -588,6 +597,7 @@ class Orchestrator:
             context = ContextRenderer.render_for_verification(
                 state.perception or PerceptionReport(),
                 state.plan or VerificationPlan(),
+                state.verification_case,
             )
             pending_visual_specs = [
                 item.model_dump(mode="json")
@@ -647,6 +657,7 @@ class Orchestrator:
                 parsed_results,
                 all_verification_steps,
                 state.plan or VerificationPlan(),
+                state.verification_case,
             )
             state.ledgers = compile_runtime_ledgers(
                 state.verification_case or build_verification_case(image_path),
@@ -942,6 +953,8 @@ class Orchestrator:
             result,
             list(STAGE_TOOLS["verification"]),
             state.investigation_state,
+            state.ledgers,
+            state.verification_case,
         )
         revised, steps = await runner.run(context)
         self._record_stage_steps(state, steps)
@@ -955,7 +968,8 @@ class Orchestrator:
         steps: List[StageStep],
         plan: VerificationPlan,
         investigation_state: Optional[InvestigationState] = None,
-        allow_incomplete_at_budget: bool = False,
+        allow_incomplete: bool = False,
+        verification_case: Optional[VerificationCase] = None,
     ) -> tuple[bool, str]:
         successful_steps = [step for step in steps if self._tool_step_succeeded(step)]
         if not successful_steps:
@@ -963,9 +977,14 @@ class Orchestrator:
 
         questions = {question.question_id: question for question in plan.questions}
         evidence = []
-        invalid_evidence_questions = []
+        invalid_evidence: List[str] = []
         for item in parsed.evidence:
-            canonical = self._canonicalize_model_evidence(item, steps, plan)
+            canonical = self._canonicalize_model_evidence(
+                item,
+                steps,
+                plan,
+                verification_case,
+            )
             question = questions.get(item.related_question)
             if canonical is not None and question is not None and canonical.direction == "neutral":
                 continue
@@ -975,11 +994,14 @@ class Orchestrator:
             ):
                 evidence.append(canonical)
             else:
-                invalid_evidence_questions.append(item.related_question or "unknown")
-        if invalid_evidence_questions:
+                invalid_evidence.append(
+                    self._invalid_evidence_reason(item, canonical, question, steps)
+                )
+        if invalid_evidence and not (
+            allow_incomplete and parsed.authenticity_assessment == "uncertain"
+        ):
             return False, (
-                "priority questions lack grounded evidence: "
-                + ", ".join(sorted(set(invalid_evidence_questions)))
+                "invalid evidence citations: " + "; ".join(dict.fromkeys(invalid_evidence))
             )
         ungrounded_anomalies = [
             anomaly
@@ -996,12 +1018,58 @@ class Orchestrator:
         if parsed.authenticity_assessment != "uncertain" and not evidence:
             return False, "a non-uncertain assessment requires grounded evidence"
         pending = pending_visual_question_ids(investigation_state) if investigation_state else []
-        if pending and not allow_incomplete_at_budget:
+        if pending and not allow_incomplete:
             return False, (
                 "pending search-driven visual questions require a real regional OCR, crop, "
                 "count, or reference-comparison observation: " + ", ".join(pending)
             )
         return True, ""
+
+    def _invalid_evidence_reason(
+        self,
+        item: EvidenceItem,
+        canonical: Optional[EvidenceItem],
+        question: Optional[InvestigationQuestion],
+        steps: Sequence[StageStep],
+    ) -> str:
+        question_id = item.related_question or "unknown"
+        if question is None:
+            return f"{question_id} uses an unknown question id"
+        if not item.function_call_id:
+            return f"{question_id} is missing function_call_id"
+        matching = [
+            step
+            for step in steps
+            if self._step_function_call_id(step) == item.function_call_id
+        ]
+        if len(matching) != 1:
+            return f"{question_id}/{item.function_call_id} does not identify one recorded call"
+        step = matching[0]
+        if not self._tool_step_succeeded(step):
+            return f"{question_id}/{item.function_call_id} was not a successful tool call"
+        if step.tool_name != item.tool_used:
+            return (
+                f"{question_id}/{item.function_call_id} tool mismatch: "
+                f"recorded {step.tool_name}, cited {item.tool_used}"
+            )
+        if canonical is None:
+            return (
+                f"{question_id}/{item.function_call_id} is not an eligible exact passage "
+                "from that call; omit it and continue with a new official/news source"
+            )
+        return (
+            f"{question_id}/{item.function_call_id} passage does not directly answer the "
+            "immutable claim; omit it and investigate a different source"
+        )
+
+    @staticmethod
+    def _evidence_goal(
+        claim_text: str,
+        verification_case: Optional[VerificationCase],
+    ) -> str:
+        if verification_case is None:
+            return claim_text
+        return evidence_goal_for_case(claim_text, verification_case)
 
     @staticmethod
     def _validate_plan_output(
@@ -1808,7 +1876,10 @@ class Orchestrator:
                     if question is None or not self._browse_record_is_evidence_eligible(
                         provenance,
                         url,
-                        claim_text=question.claim_text,
+                        claim_text=self._evidence_goal(
+                            question.claim_text,
+                            getattr(state, "verification_case", None),
+                        ),
                     ):
                         continue
                     policy = getattr(self, "source_access_policy", None)
@@ -2090,6 +2161,7 @@ class Orchestrator:
         parsed_results: Sequence[VerificationResult],
         steps: Optional[Sequence[StageStep]] = None,
         plan: Optional[VerificationPlan] = None,
+        verification_case: Optional[VerificationCase] = None,
     ) -> VerificationResult:
         merged_evidence: List[EvidenceItem] = list(derived.evidence)
         merged_anomalies: List[VisualAnomaly] = list(derived.visual_anomalies)
@@ -2097,7 +2169,12 @@ class Orchestrator:
             for item in parsed.evidence:
                 if steps is None or plan is None:
                     continue
-                canonical = self._canonicalize_model_evidence(item, steps, plan)
+                canonical = self._canonicalize_model_evidence(
+                    item,
+                    steps,
+                    plan,
+                    verification_case,
+                )
                 question = next(
                     (
                         candidate
@@ -2484,6 +2561,7 @@ class Orchestrator:
         item: EvidenceItem,
         steps: Sequence[StageStep],
         plan: VerificationPlan,
+        verification_case: Optional[VerificationCase] = None,
     ) -> Optional[EvidenceItem]:
         if item.tool_used == "reverse_image_search":
             return None
@@ -2532,7 +2610,10 @@ class Orchestrator:
             if not self._browse_record_is_evidence_eligible(
                 provenance,
                 item.source,
-                claim_text=question.claim_text,
+                claim_text=self._evidence_goal(
+                    question.claim_text,
+                    verification_case,
+                ),
             ):
                 return None
             stance = str(provenance.get("stance", "")).strip().lower()

@@ -1,0 +1,326 @@
+from __future__ import annotations
+
+import asyncio
+import json
+from pathlib import Path
+from typing import Any
+
+import pytest
+from pydantic import ValidationError
+
+from src.orchestrator.context import ContextRenderer
+from src.orchestrator.ledger import (
+    build_verification_case,
+    compile_runtime_ledgers,
+    evidence_goal_for_case,
+)
+from src.orchestrator.stage_runner import StageStep
+from src.orchestrator.state import (
+    ClaimRecord,
+    CoverageAudit,
+    EvidenceItem,
+    EvidenceRecord,
+    InvestigationQuestion,
+    PerceptionReport,
+    SourceRecord,
+    VerificationLedgers,
+    VerificationPlan,
+    VerificationResult,
+)
+from src.workflow import VerificationWorkflow, WorkflowConfig
+
+
+CLAIM = "The event happened."
+
+
+def _case(
+    tmp_path: Path,
+    claim_observed_at: str | None = None,
+):
+    image_path = tmp_path / "image.jpg"
+    image_path.write_bytes(b"temporal-context-fixture")
+    return build_verification_case(
+        str(image_path),
+        user_claim=CLAIM,
+        claim_observed_at=claim_observed_at,
+    )
+
+
+def _plan() -> VerificationPlan:
+    return VerificationPlan(
+        questions=[
+            InvestigationQuestion(
+                question_id="q0",
+                question="Did the event happen?",
+                claim_text=CLAIM,
+                why="The event date remains unresolved.",
+                priority=1,
+            )
+        ],
+        image_intent="Report an event.",
+    )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "2024-01-02",
+        "2024-01-02T03:04Z",
+        "2024-01-02T03:04:05",
+        "2024-01-02T03:04:05.123+08:00",
+    ],
+)
+def test_claim_observed_at_accepts_iso_date_or_datetime(
+    tmp_path: Path,
+    value: str,
+) -> None:
+    assert _case(tmp_path, value).claim_observed_at == value
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "",
+        "2024/01/02",
+        "2024-01-02 03:04:05",
+        "2024-02-30",
+        " 2024-01-02",
+    ],
+)
+def test_claim_observed_at_rejects_non_iso_values(
+    tmp_path: Path,
+    value: str,
+) -> None:
+    with pytest.raises(ValidationError, match="claim_observed_at"):
+        _case(tmp_path, value)
+
+
+def test_evidence_goal_is_stable_and_preserves_current_time_semantics(
+    tmp_path: Path,
+) -> None:
+    current_case = _case(tmp_path)
+    assert evidence_goal_for_case("  current claim  ", current_case) == (
+        "  current claim  "
+    )
+
+    observed_case = _case(tmp_path, "2024-01-02")
+    assert evidence_goal_for_case(CLAIM, observed_case) == (
+        "The event happened.\n"
+        "As-of constraint: evaluate this claim as of 2024-01-02. "
+        "An event first occurring after that time cannot support or refute the claim as "
+        "it stood then. A source published later may still provide evidence about the "
+        "earlier state when its passage explicitly anchors that earlier time."
+    )
+
+
+def _browse_step(goal: str) -> StageStep:
+    excerpt = "An official record says the event happened."
+    return StageStep(
+        round=1,
+        stage_name="verification",
+        action_type="tool_call",
+        tool_name="visit",
+        tool_args={"__question_id": "q0"},
+        tool_result=json.dumps(
+            {
+                "status": "success",
+                "selected_url": "https://source.example/report",
+                "goal": goal,
+                "evidence": excerpt,
+                "summary": excerpt,
+                "relevance": "high",
+                "stance": "support",
+                "artifact_sha256": "a" * 64,
+                "evidence_span": {"start": 0, "end": len(excerpt)},
+                "retrieved_at": "2024-01-02T12:00:00Z",
+                "injection_flags": [],
+                "directness": "direct",
+                "evidence_eligible": True,
+            }
+        ),
+        metadata={"tool_success": True, "function_call_id": "call-visit-1"},
+    )
+
+
+def test_runtime_ledger_requires_case_specific_as_of_browse_goal(
+    tmp_path: Path,
+) -> None:
+    case = _case(tmp_path, "2024-01-02")
+    plan = _plan()
+    result = VerificationResult(
+        evidence=[
+            EvidenceItem(
+                function_call_id="call-visit-1",
+                source="https://source.example/report",
+                summary="An official record says the event happened.",
+                raw_excerpt="An official record says the event happened.",
+                direction="supports",
+                quality="strong",
+                tool_used="visit",
+                related_question="q0",
+            )
+        ]
+    )
+
+    old_goal = compile_runtime_ledgers(case, plan, result, [_browse_step(CLAIM)])
+    expected_goal = evidence_goal_for_case(CLAIM, case)
+    as_of_goal = compile_runtime_ledgers(
+        case,
+        plan,
+        result,
+        [_browse_step(expected_goal)],
+    )
+
+    assert old_goal.evidence == []
+    assert len(as_of_goal.evidence) == 1
+
+
+def test_stage_contexts_state_time_semantics_and_replanning_ledger(
+    tmp_path: Path,
+) -> None:
+    case = _case(tmp_path, "2024-01-02")
+    plan = _plan()
+    perception = PerceptionReport(scene_description="A public event.")
+    source = SourceRecord(
+        source_id="source-1",
+        canonical_url="https://source.example/private/full/path",
+        hostname="source.example",
+        registered_domain="source.example",
+        source_family="domain:source.example",
+        source_class="news",
+        artifact_sha256="b" * 64,
+        retrieved_at="2024-01-02T12:00:00Z",
+    )
+    ledgers = VerificationLedgers(
+        claims=[
+            ClaimRecord(
+                claim_id="claim-runtime-1",
+                text=CLAIM,
+                question_id="q0",
+                status="open",
+                unresolved_distinction="Whether the report existed by the cutoff.",
+            )
+        ],
+        sources=[source],
+        evidence=[
+            EvidenceRecord(
+                evidence_id="evidence-1",
+                claim_id="claim-runtime-1",
+                source_id=source.source_id,
+                function_call_id="call-1",
+                tool_name="visit",
+                evidence_kind="web_span",
+                exact_text="proof",
+                span_start=0,
+                span_end=5,
+                artifact_sha256=source.artifact_sha256,
+                retrieved_at=source.retrieved_at,
+                stance="refute",
+                quality="strong",
+            )
+        ],
+    )
+    audit = CoverageAudit(unresolved_priority_questions=["q0"])
+
+    planning = ContextRenderer.render_for_planning(perception, case)
+    verification = ContextRenderer.render_for_verification(perception, plan, case)
+    replanning = ContextRenderer.render_for_replanning(
+        perception,
+        plan,
+        audit,
+        VerificationResult(),
+        ledgers=ledgers,
+        verification_case=case,
+    )
+
+    for context in (planning, verification, replanning):
+        assert "evaluate as of 2024-01-02" in context
+        assert "event first occurring later" in context
+        assert "later source may report evidence about the earlier state" in context
+    assert "status=open" in replanning
+    assert "unresolved_distinction=Whether the report existed by the cutoff." in replanning
+    assert "stance=refute; source_class=news; source_family=domain:source.example" in replanning
+    assert source.canonical_url not in replanning
+
+    assert "Claim time semantics: current time." in ContextRenderer.render_for_planning(
+        perception
+    )
+    assert "Claim time semantics: current time." in ContextRenderer.render_for_verification(
+        perception, plan
+    )
+    assert "Claim time semantics: current time." in ContextRenderer.render_for_replanning(
+        perception,
+        plan,
+        audit,
+        VerificationResult(),
+    )
+
+
+def test_workflow_single_and_batch_propagate_claim_observed_at(
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "workflow.jpg"
+    image_path.write_bytes(b"workflow-temporal-fixture")
+
+    class CapturingOrchestrator:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, Any]] = []
+
+        async def run(
+            self,
+            path: str,
+            image_id: str,
+            **kwargs: Any,
+        ) -> dict[str, Any]:
+            self.calls.append({"path": path, "image_id": image_id, **kwargs})
+            return {"image_id": image_id, "image_path": path, "verdict": "uncertain"}
+
+    workflow = VerificationWorkflow(WorkflowConfig(save_traces=False))
+    orchestrator = CapturingOrchestrator()
+    workflow._orchestrator = orchestrator  # type: ignore[assignment]
+    asyncio.run(
+        workflow.run_single(
+            str(image_path),
+            "single-id",
+            user_claim=CLAIM,
+            claim_observed_at="2024-01-02",
+        )
+    )
+    assert orchestrator.calls[0]["verification_case"].claim_observed_at == "2024-01-02"
+
+    batch_calls: list[tuple[str | None, str | None]] = []
+
+    async def capture_single(
+        _path: str,
+        _image_id: str = "",
+        *,
+        user_claim: str | None = None,
+        claim_observed_at: str | None = None,
+        verification_case: Any = None,
+    ) -> dict[str, Any]:
+        batch_calls.append((user_claim, claim_observed_at))
+        return {"verdict": "uncertain"}
+
+    workflow.run_single = capture_single  # type: ignore[method-assign]
+    asyncio.run(
+        workflow.run_batch(
+            ["first.jpg", "second.jpg"],
+            image_ids=["first", "second"],
+            user_claims=["first claim", "second claim"],
+            claim_observed_ats=["2020-01-01", None],
+        )
+    )
+    assert batch_calls == [
+        ("first claim", "2020-01-01"),
+        ("second claim", None),
+    ]
+    with pytest.raises(
+        ValueError,
+        match="claim_observed_ats must match image_paths length",
+    ):
+        asyncio.run(
+            workflow.run_batch(
+                ["first.jpg"],
+                claim_observed_ats=[],
+            )
+        )

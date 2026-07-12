@@ -95,6 +95,33 @@ def test_evidence_rejects_fabricated_excerpt_even_with_real_call_id() -> None:
     assert orchestrator._evidence_item_is_grounded(evidence, [step]) is False
 
 
+def test_invalid_model_citation_is_filtered_before_merge_and_ledger(tmp_path) -> None:
+    orchestrator = _orchestrator()
+    step = _successful_step()
+    invalid = _evidence(
+        raw_excerpt="Reuters confirmed an excerpt that the tool never returned.",
+        summary="Reuters confirmed an excerpt that the tool never returned.",
+    )
+
+    merged = orchestrator._merge_verification_results(
+        VerificationResult(),
+        [VerificationResult(evidence=[invalid], authenticity_assessment="uncertain")],
+        [step],
+        _plan(),
+    )
+
+    image_path = tmp_path / "invalid-citation.jpg"
+    image_path.write_bytes(b"invalid-citation-filter")
+    ledgers = compile_runtime_ledgers(
+        build_verification_case(str(image_path)),
+        _plan(),
+        merged,
+        [step],
+    )
+    assert merged.evidence == []
+    assert ledgers.evidence == []
+
+
 def test_coverage_rejects_real_but_question_irrelevant_excerpt() -> None:
     orchestrator = _orchestrator()
     step = _successful_step()
@@ -113,7 +140,7 @@ def test_coverage_rejects_real_but_question_irrelevant_excerpt() -> None:
     accepted, reason = orchestrator._validate_verification_output(parsed, [step], _plan())
 
     assert accepted is False
-    assert "priority questions lack grounded evidence" in reason
+    assert "not an eligible exact passage" in reason
 
 
 def test_one_generic_token_does_not_make_evidence_answer_a_question() -> None:

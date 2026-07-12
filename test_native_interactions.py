@@ -278,7 +278,10 @@ def test_native_output_before_tools_is_rejected() -> None:
     assert parsed is not None
     assert steps[0].action_type == "output_rejected"
     assert "at least 1 tool calls" in steps[0].metadata["rejection_reason"]
+    assert steps[0].metadata["react_action_turn"] == 0
+    assert steps[0].metadata["protocol_corrections_used"] == 1
     assert steps[1].action_type == "tool_call"
+    assert steps[1].metadata["react_action_turn"] == 1
     assert backend.requests[1]["previous_interaction_id"] == "interaction-0"
 
 
@@ -375,6 +378,7 @@ def test_native_executes_all_parallel_calls_and_returns_all_results() -> None:
     assert parsed is not None
     assert [step.action_type for step in steps[:2]] == ["tool_call", "tool_call"]
     assert all(step.metadata["function_call_count"] == 2 for step in steps[:2])
+    assert [step.metadata["react_action_turn"] for step in steps[:2]] == [1, 1]
     assert len(backend.requests[1]["input_payload"]) == 2
     assert tool.calls == [
         {"queries": ["direct source"]},
@@ -500,9 +504,19 @@ def test_priority_two_can_be_resampled_after_all_required_questions_are_served()
     assert runner._priority_coverage_error({"__question_id": "q1"}, []) == ""
 
 
-def test_evaluation_rejects_fact_check_query_before_search_and_continues() -> None:
+@pytest.mark.parametrize(
+    "blocked_query",
+    [
+        "politician joined party fact check",
+        "politician joined party fake news",
+        "politician party claim hoax",
+    ],
+)
+def test_evaluation_rejects_fact_check_query_before_search_and_continues(
+    blocked_query: str,
+) -> None:
     rejected = _function_call_response()
-    rejected["steps"][0]["arguments"]["queries"] = ["politician joined party fact check"]
+    rejected["steps"][0]["arguments"]["queries"] = [blocked_query]
     corrected = _function_call_response()
     corrected["id"] = "interaction-corrected"
     corrected["steps"][0]["id"] = "call-corrected"
@@ -536,6 +550,39 @@ def test_evaluation_rejects_fact_check_query_before_search_and_continues() -> No
     returned = backend.requests[1]["input_payload"][0]
     assert returned["is_error"] is True
     assert "fact-check-oriented query" in returned["result"][0]["text"]
+
+
+def test_protocol_correction_exhaustion_is_a_hard_failure_without_forced_output() -> None:
+    first = _completed_response()
+    first["id"] = "interaction-rejected-1"
+    second = _completed_response()
+    second["id"] = "interaction-rejected-2"
+    backend = NativeFakeBackend([first, second])
+    runner = StageRunner(
+        llm=backend,
+        system_prompt="Investigate.",
+        tools=[RecordingTool()],
+        output_schema=VerificationResult,
+        max_rounds=1,
+        max_protocol_corrections=1,
+        stage_name="verification",
+        min_tool_calls=1,
+        attach_image=False,
+    )
+
+    with pytest.raises(RuntimeError, match="protocol correction budget") as captured:
+        asyncio.run(runner.run("- [q1] verify"))
+
+    partial = getattr(captured.value, "stage_steps", [])
+    assert len(backend.requests) == 2
+    assert [step.action_type for step in partial] == [
+        "output_rejected",
+        "output_rejected",
+    ]
+    assert partial[-1].metadata["correction_budget_exhausted"] is True
+    assert partial[-1].metadata["termination_reason"] == (
+        "protocol_correction_budget_exhausted"
+    )
 
 
 def test_native_invalid_final_schema_is_rejected() -> None:

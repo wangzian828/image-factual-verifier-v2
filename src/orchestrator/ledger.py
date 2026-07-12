@@ -39,6 +39,7 @@ def build_verification_case(
     *,
     case_id: str = "",
     user_claim: Optional[str] = None,
+    claim_observed_at: Optional[str] = None,
     claim_source_region: Optional[List[float]] = None,
     decision_policy_version: str = "reinspect-v1",
 ) -> VerificationCase:
@@ -49,9 +50,25 @@ def build_verification_case(
         image_sha256=image_sha256(path),
         claim_mode=ClaimMode.EXTERNAL if str(user_claim or "").strip() else ClaimMode.EMBEDDED,
         user_claim=str(user_claim).strip() if user_claim is not None else None,
+        claim_observed_at=claim_observed_at,
         claim_surface=None,
         claim_source_region=claim_source_region,
         decision_policy_version=decision_policy_version,
+    )
+
+
+def evidence_goal_for_case(claim_text: str, case: VerificationCase) -> str:
+    """Return the immutable browse goal for a claim under the case time semantics."""
+
+    if case.claim_observed_at is None:
+        return claim_text
+    claim = claim_text.strip()
+    return (
+        f"{claim}\n"
+        f"As-of constraint: evaluate this claim as of {case.claim_observed_at}. "
+        "An event first occurring after that time cannot support or refute the claim as "
+        "it stood then. A source published later may still provide evidence about the "
+        "earlier state when its passage explicitly anchors that earlier time."
     )
 
 
@@ -248,7 +265,8 @@ def compile_runtime_ledgers(
             record = _find_web_record(data, item.raw_excerpt, item.source)
             if record is None:
                 continue
-            if str(record.get("goal", "")).strip() != question.claim_text.strip():
+            expected_goal = evidence_goal_for_case(question.claim_text, case)
+            if str(record.get("goal", "")).strip() != expected_goal.strip():
                 continue
             identity = classify_source(
                 item.source,

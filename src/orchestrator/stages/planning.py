@@ -27,6 +27,8 @@ Guidelines:
   `image_authenticity` for generation/editing claims, `image_provenance` for source/date/
   context of the visual, or `visible_content` for literal text, objects, and attributes.
 - Prefer short, high-signal search queries.
+- Respect any supplied claim as-of date. Include date/year terms when they distinguish the
+  historical claim from later events, and do not let later developments rewrite it.
 - Each question and reason must be one short sentence.
 - Use at most 3 tools and 3 queries per question.
 - Do not include background essays, caveats, notes, alternatives, or process narration.
@@ -99,6 +101,9 @@ Constraints:
 - Preserve `claim_scope` exactly.
 - Preserve `priority` exactly; replanning cannot promote supporting context into a
   decisive claim or demote a decisive claim.
+- Use the supplied ledger status, source class/family, and unresolved distinction to seek
+  a genuinely independent source or a temporally aligned contradiction; do not repeat a
+  rejected, UGC-only, indirect, or same-family route.
 - Never use `fact check`, `fact-check`, verdict labels, or a fact-checking organization
   in a query; target original statements, official records, and independent reporting.
 - Use at most 3 tools and 3 short queries per update.

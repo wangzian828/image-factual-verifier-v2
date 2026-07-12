@@ -82,6 +82,8 @@ class StageRunner:
         supporting_question_ids: Optional[List[str]] = None,
         resolved_supporting_question_ids: Optional[List[str]] = None,
         source_access_policy: Optional[SourceAccessPolicy] = None,
+        question_evidence_goals: Optional[Dict[str, str]] = None,
+        max_protocol_corrections: int = 4,
     ):
         self.llm = llm
         self.system_prompt = system_prompt
@@ -124,6 +126,8 @@ class StageRunner:
         self.supporting_question_ids = list(dict.fromkeys(supporting_question_ids or []))
         self.resolved_supporting_question_ids = set(resolved_supporting_question_ids or [])
         self.source_access_policy = source_access_policy or SourceAccessPolicy()
+        self.question_evidence_goals = dict(question_evidence_goals or {})
+        self.max_protocol_corrections = max(0, int(max_protocol_corrections))
 
     async def run(self, input_context: str) -> Tuple[Optional[BaseModel], List[StageStep]]:
         """Run the ReAct loop."""
@@ -428,7 +432,40 @@ class StageRunner:
         native_tools = self._build_native_tool_schemas()
         system_suffix = ""
 
-        for round_num in range(1, self.max_rounds + 1):
+        action_turns = 0
+        correction_turns = 0
+        request_index = 0
+
+        def request_protocol_correction(
+            affected_steps: List[StageStep],
+            reason: str,
+        ) -> None:
+            """Reserve one correction-only request or fail without forcing output."""
+
+            nonlocal correction_turns
+            if correction_turns >= self.max_protocol_corrections:
+                for affected in affected_steps:
+                    affected.metadata["react_action_turn"] = action_turns
+                    affected.metadata["protocol_corrections_used"] = correction_turns
+                    affected.metadata["interaction_request_index"] = request_index
+                    affected.metadata["correction_budget_exhausted"] = True
+                    affected.metadata["termination_reason"] = (
+                        "protocol_correction_budget_exhausted"
+                    )
+                exc = RuntimeError(
+                    f"{self.stage_name or 'stage'} exhausted its protocol correction "
+                    f"budget ({self.max_protocol_corrections}): {reason}"
+                )
+                self._attach_partial_steps(exc, steps)
+                raise exc
+            correction_turns += 1
+            for affected in affected_steps:
+                affected.metadata["react_action_turn"] = action_turns
+                affected.metadata["protocol_corrections_used"] = correction_turns
+                affected.metadata["interaction_request_index"] = request_index
+
+        while action_turns < self.max_rounds:
+            request_index += 1
             request_previous_interaction_id = previous_interaction_id
             started = time.perf_counter()
             self.llm_api_calls += 1
@@ -476,12 +513,13 @@ class StageRunner:
                     )
 
                 function_results: List[Dict[str, Any]] = []
+                response_steps: List[StageStep] = []
                 for call_index, call in enumerate(function_calls):
                     call_id = str(call.get("id", "")).strip()
                     tool_name = str(call.get("name", "")).strip()
                     tool_args = self._coerce_native_arguments(call.get("arguments", {}))
                     step = StageStep(
-                        round=round_num,
+                        round=request_index,
                         stage_name=self.stage_name,
                         thought=thought if call_index == 0 else "",
                         tool_name=tool_name,
@@ -584,6 +622,7 @@ class StageRunner:
                             )
 
                     steps.append(step)
+                    response_steps.append(step)
                     state_update = self._record_observation_update(step, steps)
                     function_results.append(
                         self._build_native_function_result(
@@ -596,6 +635,17 @@ class StageRunner:
                         )
                     )
 
+                if any(item.action_type == "tool_call" for item in response_steps):
+                    action_turns += 1
+                else:
+                    request_protocol_correction(
+                        response_steps,
+                        "the model returned no executable function call",
+                    )
+                for item in response_steps:
+                    item.metadata["react_action_turn"] = action_turns
+                    item.metadata["protocol_corrections_used"] = correction_turns
+                    item.metadata["interaction_request_index"] = request_index
                 previous_interaction_id = interaction_id
                 next_input = function_results
                 system_suffix = ""
@@ -608,7 +658,7 @@ class StageRunner:
 
             content = self._extract_native_text(payload).strip()
             step = StageStep(
-                round=round_num,
+                round=request_index,
                 stage_name=self.stage_name,
                 thought=thought,
                 tokens=tokens,
@@ -619,6 +669,7 @@ class StageRunner:
                 step.thought = step.thought or "(empty native response)"
                 steps.append(step)
                 previous_interaction_id = interaction_id
+                request_protocol_correction([step], "the model returned an empty response")
                 next_input = "Return one valid final JSON object, or call one available function."
                 system_suffix = ""
                 continue
@@ -636,15 +687,20 @@ class StageRunner:
                     step.action_type = "output_rejected"
                     step.metadata["rejection_reason"] = reason
                     previous_interaction_id = interaction_id
+                    request_protocol_correction([step], reason)
                     next_input = f"Output rejected: {reason} Continue investigating with one function call."
                     system_suffix = ""
                     continue
-                previous_interaction_id = interaction_id
                 step.action_type = "output_rejected"
                 step.metadata["rejection_reason"] = (
                     "output schema was invalid or incomplete"
                 )
                 next_input = "The output schema was invalid. Return one valid JSON object."
+                previous_interaction_id = interaction_id
+                request_protocol_correction(
+                    [step],
+                    "the output schema was invalid or incomplete",
+                )
                 system_suffix = ""
                 continue
 
@@ -652,6 +708,10 @@ class StageRunner:
             step.metadata["native_text_preview"] = content[:500]
             steps.append(step)
             previous_interaction_id = interaction_id
+            request_protocol_correction(
+                [step],
+                "the model returned neither a function call nor valid JSON",
+            )
             next_input = "Use a native function call, or return exactly one valid final JSON object."
             system_suffix = ""
 
@@ -906,7 +966,6 @@ class StageRunner:
         state_update: Optional[Dict[str, Any]] = None,
         control_step: Optional[StageStep] = None,
     ) -> Dict[str, Any]:
-        compact = self._compact_tool_result_for_context(tool_name, result)
         recorded_step = control_step or StageStep(
             action_type="tool_call" if not self._tool_result_is_error(result) else "format_error",
             tool_name=tool_name,
@@ -918,6 +977,7 @@ class StageRunner:
             ),
         )
         self._control_steps = list(getattr(self, "_control_steps", [])) + [recorded_step]
+        compact = self._compact_tool_result_for_context(tool_name, result)
         question_id = str(tool_args.get("__question_id", "")).strip()
         content: Dict[str, Any] = {
             "function_call_id": call_id,
@@ -1118,6 +1178,9 @@ class StageRunner:
             claim_text = self.question_claims.get(question_id, "").strip()
             if claim_text:
                 tool_args["__claim_text"] = claim_text
+            evidence_goal = self.question_evidence_goals.get(question_id, "").strip()
+            if evidence_goal:
+                tool_args["__evidence_goal"] = evidence_goal
         return tool_args
 
     def _question_id_error(self, tool_args: Dict[str, Any]) -> str:
@@ -1307,6 +1370,7 @@ class StageRunner:
                 if step.action_type == "tool_call" and step.tool_name == tool_name
             )
             remaining[tool_name] = max(0, int(limit) - used)
+        claim_states = self._claim_control_states()
         return {
             "question_attempts": attempts,
             "untouched_priority_question_ids": untouched_priority,
@@ -1314,9 +1378,11 @@ class StageRunner:
             "remaining_tool_budgets": remaining,
             "pending_visual_question_ids": self._pending_visual_question_ids(),
             "pending_visual_questions": self._pending_visual_questions(),
+            "claim_states": claim_states,
             "next_action_guidance": self._next_action_guidance(
                 untouched_priority,
                 untouched_supporting,
+                claim_states,
             ),
         }
 
@@ -1324,6 +1390,7 @@ class StageRunner:
         self,
         untouched_priority: List[str],
         untouched_supporting: List[str],
+        claim_states: Optional[List[Dict[str, Any]]] = None,
     ) -> str:
         if untouched_priority:
             return "Attempt one untouched P1 question before resampling."
@@ -1338,11 +1405,45 @@ class StageRunner:
             if item not in self._resolved_question_ids([])
         ]
         if unresolved_priority:
+            unresolved_rows = [
+                item for item in (claim_states or [])
+                if item.get("question_id") in unresolved_priority
+            ]
+            if unresolved_rows:
+                details = "; ".join(
+                    f"{item['question_id']}: {item.get('remaining_gap', 'needs decisive evidence')}"
+                    for item in unresolved_rows
+                )
+                return (
+                    "Collect an independent direct official/news source for unresolved P1; "
+                    "do not resubmit rejected or UGC-only evidence. " + details
+                )
             return (
                 "Choose the highest-value direct-source follow-up for unresolved P1: "
                 + ", ".join(unresolved_priority)
             )
         return "Finalize when the evidence ledger can support the required output."
+
+    def _claim_control_states(self) -> List[Dict[str, Any]]:
+        latest: Dict[str, Dict[str, Any]] = {}
+        for step in [*self.prior_steps, *list(getattr(self, "_control_steps", []))]:
+            update = (step.metadata or {}).get("investigation_state_update", {})
+            if not isinstance(update, dict):
+                continue
+            delta = update.get("belief_delta", {})
+            if not isinstance(delta, dict):
+                continue
+            claim_id = str(delta.get("claim_id", "")).strip()
+            if not claim_id.startswith("claim-"):
+                continue
+            question_id = claim_id.removeprefix("claim-")
+            latest[question_id] = {
+                "question_id": question_id,
+                "status": str(delta.get("new_status", "open")),
+                "operation": str(delta.get("operation", "zero")),
+                "remaining_gap": str(delta.get("explanation", ""))[:500],
+            }
+        return [latest[key] for key in sorted(latest)]
 
     def _pending_visual_question_ids(self) -> List[str]:
         return [
@@ -1458,8 +1559,9 @@ class StageRunner:
         tool = self.tools[tool_name]
         tool_args.pop("__question_id", None)
         claim_text = str(tool_args.pop("__claim_text", "")).strip()
+        evidence_goal = str(tool_args.pop("__evidence_goal", "")).strip()
         if claim_text and tool_name in {"text_search", "visit", "crop_and_search"}:
-            tool_args["goal"] = claim_text
+            tool_args["goal"] = evidence_goal or claim_text
         properties = tool.parameters.get("properties", {})
         if "image_input" in properties:
             tool_args["image_input"] = self.image_path
@@ -1582,6 +1684,7 @@ class StageRunner:
         args = dict(tool_args)
         args.pop("__question_id", None)
         args.pop("__claim_text", None)
+        args.pop("__evidence_goal", None)
         if tool_name in {"compare_with_reference", "analyze_visual_anomalies"} and self.image_path:
             args["__image_input__"] = self.image_path
         return args
@@ -1651,8 +1754,7 @@ class StageRunner:
             return {"preview": raw[: self.tool_response_max_chars - 32] + "...<truncated>"}
         return str(result)[: self.tool_response_max_chars]
 
-    @staticmethod
-    def _compact_search_result(data: Any) -> Any:
+    def _compact_search_result(self, data: Any) -> Any:
         if isinstance(data, dict) and isinstance(data.get("queries"), list):
             responses = data["queries"]
         else:
@@ -1698,10 +1800,12 @@ class StageRunner:
                     "evidence_eligible": bool(item.get("evidence_eligible", False)),
                 }
             )
-        return compacted
+        return {
+            "queries": compacted,
+            "validated_claim_state": self._claim_control_states(),
+        }
 
-    @staticmethod
-    def _compact_visit_result(data: Any) -> Any:
+    def _compact_visit_result(self, data: Any) -> Any:
         if not isinstance(data, dict):
             return data
         visits = []
@@ -1737,6 +1841,7 @@ class StageRunner:
             "injection_flags": data.get("injection_flags", []),
             "evidence_eligible": bool(data.get("evidence_eligible", False)),
             "visits": visits,
+            "validated_claim_state": self._claim_control_states(),
         }
 
     @staticmethod

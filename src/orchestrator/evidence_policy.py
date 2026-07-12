@@ -56,4 +56,14 @@ def query_targets_fact_check_answer(value: str) -> bool:
     """Detect queries aimed at a ready-made fact-check verdict rather than sources."""
 
     text = re.sub(r"[-_]+", " ", str(value or "").casefold())
-    return bool(re.search(r"\bfact\s*check(?:er|ing|ed)?\b", text))
+    return bool(
+        re.search(r"\bfact\s*check(?:er|ing|ed)?\b", text)
+        or re.search(
+            r"\b(?:fake|false|misleading|debunk(?:ed|ing)?|hoax)\s+(?:news|claim|report|image|photo|video|story)\b",
+            text,
+        )
+        or re.search(
+            r"\b(?:claim|report|image|photo|video|story)\s+(?:fake|false|misleading|debunked|hoax)\b",
+            text,
+        )
+    )

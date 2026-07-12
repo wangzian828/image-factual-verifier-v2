@@ -1,14 +1,14 @@
 # Claude Project Instructions
 
-Follow `AGENTS.md` for contributor rules and `docs/architecture.md` for the active runtime contract.
+Follow `AGENTS.md` for contributor rules and `docs/architecture.md` for the active runtime contract. Read the [Agent Prompt and Runtime Guide](docs/agent-prompt-and-runtime-guide.md) for the end-to-end stage flow and the exact model/deterministic/tool boundary.
 
 The required production workflow is:
 
 `Perception -> Planning -> iterative native ReAct -> Coverage audit/Replanning loop -> Judgment`
 
-Use Gemini Interactions end to end for every active Gemini LLM and vision call. Tool-bearing stages use native `function_call` / `function_result` items linked by `previous_interaction_id`. Never switch wire protocols or providers after an error, parse native calls through prompt tags, or synthesize heuristic fallback plans or judgments. Invalid protocol responses, missing credentials, exhausted retries, and invalid required structured outputs are hard failures.
+Use Gemini Interactions end to end for every active Gemini LLM and vision call. Tool-bearing stages use native `function_call` / `function_result` items linked by `previous_interaction_id`. Gemini calls made inside tools are separate API calls; include their prompt, completion, and thought tokens in total runtime accounting after stripping private metrics from model-facing tool JSON. Never switch wire protocols or providers after an error, parse native calls through prompt tags, or synthesize heuristic fallback plans or judgments. Invalid protocol responses, missing credentials, exhausted retries, and invalid required structured outputs are hard failures.
 
-Verification evidence must come from successful recorded tool calls and map to explicit plan question IDs. Every tool result must have `status: "success"` or `status: "error"`; malformed/statusless results fail the contract. When the bounded audit/replanning budget ends with factual coverage gaps, continue to ledger-bound Judgment and return the exact typed `unverifiable` reasons. Engineering, provider, protocol, malformed-output, and all-tools-failed conditions still raise before Judgment.
+Verification evidence must come from successful recorded tool calls and map to explicit plan question IDs. A multi-query search that fetches multiple pages may promote multiple independently eligible exact passages, at most one per fetched page; snippets and merged summaries remain discovery only. Pending ReInspect may gate only non-`external_fact` claims: external fact questions are never held open by visual comparison and require eligible direct web evidence. Every tool result must have `status: "success"` or `status: "error"`; malformed/statusless results fail the contract. When the bounded audit/replanning budget ends with factual coverage gaps, continue to ledger-bound Judgment and return the exact typed `unverifiable` reasons. Engineering, provider, protocol, malformed-output, and all-tools-failed conditions still raise before Judgment.
 
 Planning must emit an immutable declarative `claim_text` for each retrieval question. Browse stance is always extracted against that claim, and Replanning cannot rewrite it. Evaluation runs must load a benchmark provenance-derived `SourceAccessPolicy`; filtering happens before automatic browsing and before blocked rows can enter results, context, discoveries, evidence, or ledgers. Never reveal the access policy or benchmark gold to the model.
 
@@ -26,3 +26,5 @@ python scripts/probe_gemini_interactions.py --model gemini-3-flash-preview
 ```
 
 Normal runs write canonical JSON traces under `outputs/traces/`. Use `python -m src.render_trace_html outputs\traces --output-dir outputs\trace_html` to generate HTML from saved JSON when needed.
+
+For a real end-to-end trace, run `python scripts/audit_real_trace.py <trace.json> --json --strict-scheduler` before accepting its accounting, scheduler behavior, and final state.

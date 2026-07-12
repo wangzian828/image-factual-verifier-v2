@@ -2,8 +2,9 @@
 """Core state models for the image verification pipeline."""
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from enum import Enum
 from typing import Annotated, Any, Dict, List, Literal, Optional
 
@@ -47,6 +48,10 @@ class VerificationCase(StrictModel):
     image_path: str = Field(min_length=1)
     image_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    claim_observed_at: Optional[str] = Field(
+        default=None,
+        description="Public claim/as-of time, distinct from runtime created_at.",
+    )
     claim_mode: ClaimMode
     user_claim: Optional[str] = Field(default=None, max_length=2000)
     claim_surface: Optional[str] = Field(default=None, max_length=4000)
@@ -59,6 +64,25 @@ class VerificationCase(StrictModel):
             datetime.fromisoformat(self.created_at.replace("Z", "+00:00"))
         except ValueError as exc:
             raise ValueError("created_at must be ISO-8601") from exc
+        if self.claim_observed_at is not None:
+            value = self.claim_observed_at
+            if value != value.strip() or not value:
+                raise ValueError("claim_observed_at must be an ISO-8601 date or datetime")
+            try:
+                if re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+                    date.fromisoformat(value)
+                elif re.fullmatch(
+                    r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}"
+                    r"(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})?",
+                    value,
+                ):
+                    datetime.fromisoformat(value.replace("Z", "+00:00"))
+                else:
+                    raise ValueError
+            except ValueError as exc:
+                raise ValueError(
+                    "claim_observed_at must be an ISO-8601 date or datetime"
+                ) from exc
         if self.claim_mode == ClaimMode.EXTERNAL and not str(self.user_claim or "").strip():
             raise ValueError("external_claim requires a non-empty user_claim")
         if self.claim_mode == ClaimMode.EMBEDDED and self.user_claim is not None:

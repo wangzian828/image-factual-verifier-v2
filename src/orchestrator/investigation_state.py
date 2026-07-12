@@ -477,7 +477,13 @@ def _delta_explanation(operation: str, claim: Optional[ClaimRecord]) -> str:
     if operation == "create":
         return "The observation created a discovery lead but did not change factual belief."
     if operation == "unknown":
-        return "The observation is relevant but insufficient under the source-independence policy."
+        detail = str(claim.unresolved_distinction if claim else "").strip()
+        return detail or (
+            "The observation is relevant but insufficient under the source-independence policy."
+        )
+    detail = str(claim.unresolved_distinction if claim else "").strip()
+    if detail:
+        return detail
     return f"No validated belief change; claim remains {(claim.status if claim else 'open')}."
 
 

@@ -15,6 +15,8 @@ Perception
        -> engineering/protocol failure: error; no Judgment
 ```
 
+See the [Agent Prompt and Runtime Guide](agent-prompt-and-runtime-guide.md) for the same end-to-end flow expanded into prompt boundaries, deterministic reducers and validators, tool-internal model calls, and correction paths.
+
 `VerificationState` retains the versioned `VerificationCase`, perception, current plan and plan history, verification output, coverage audits, machine-verifiable ledgers, incremental `InvestigationState`, final judgment, stage steps, tool health, timings, token use, and call counts.
 
 ## Runtime Case Contract
@@ -112,9 +114,9 @@ Every completed tool step records one immutable ISO-8601 `observed_at`. The orig
 
 #### Discovery And Passage Selection
 
-`reverse_image_search` results are discovery only. `text_search` and `crop_and_search` also record their search candidates as discoveries, but may separately yield evidence because they visit selected result pages. A standalone `visit` can promote a candidate URL by fetching the page and selecting a source passage.
+`reverse_image_search` results are discovery only. `text_search` and `crop_and_search` also record their search candidates as discoveries, but may separately yield evidence because they visit selected result pages. One multi-query call can therefore promote multiple independently eligible passages across multiple fetched pages; each page retains its own URL, exact text and offsets, artifact hash, retrieval time, stance, directness, relevance, and call provenance. A standalone `visit` can promote a candidate URL by fetching the page and selecting a source passage.
 
-The browse extractor normalizes page text, divides it into deterministic passages of at most 700 characters, and gives each passage an integer ID and exact character offsets. The extractor may select one existing `passage_id` or `-1`; it cannot provide, merge, edit, or invent the evidence text. The runtime copies the selected passage and computes its offsets and artifact SHA-256 itself. Unknown passage IDs, invalid relevance/stance/directness values, malformed JSON, empty responses, and failed fetches are errors rather than synthetic evidence.
+For each fetched page, the browse extractor normalizes page text, divides it into deterministic passages of at most 700 characters, and gives each passage an integer ID and exact character offsets. It may select one existing `passage_id` or `-1` for that page; it cannot provide, merge, edit, or invent the evidence text. The runtime copies every independently selected eligible passage and computes its offsets and artifact SHA-256 itself. Unknown passage IDs, invalid relevance/stance/directness values, malformed JSON, empty responses, and failed fetches are errors rather than synthetic evidence.
 
 A web record is ledger-eligible only when all of these checks pass:
 
@@ -131,9 +133,9 @@ On the production Gemini Interactions path, `InvestigationReducer` reduces each 
 
 Discovery produces a `create` delta without changing factual belief. Validated evidence may produce `support`, `refute`, or `split`; failures produce `unknown`; non-decisive or duplicate observations produce `zero`. Novel source families and repeated observations are tracked explicitly.
 
-A reverse-image candidate with a reference image can create a full-image comparison question. Web evidence for a visually discriminative claim can create a regional question. Every `VisualQuestion` is linked to exactly one `source_evidence_id` or `source_discovery_id` and carries a normalized `target_bbox`, an `expected_property`, and recommended real visual tools. A follow-up call that supplies `visual_question_id` must match that pending question's source link, expected property, target box, and allowed ReInspect tool. Success resolves it; a first real tool failure keeps it pending, while two failed attempts mark the required observation exhausted and produce typed insufficiency.
+A reverse-image candidate with a reference image can create a full-image comparison question for a non-`external_fact` claim. Web evidence for a visually discriminative non-external claim can create a regional question. Every `VisualQuestion` is linked to exactly one `source_evidence_id` or `source_discovery_id` and carries a normalized `target_bbox`, an `expected_property`, and recommended real visual tools. A follow-up call that supplies `visual_question_id` must match that pending question's source link, expected property, target box, and allowed ReInspect tool. Success resolves it; a first real tool failure keeps it pending, while two failed attempts mark the required observation exhausted and produce typed insufficiency.
 
-While such a visual question is pending, its claim is forced back to `open`; web or reverse-search output cannot stand in for the required image observation. Stopping assessments expose unresolved decisive claims, pending visual questions, source-family novelty, repeated observations, and remaining high-value actions. They are traceable state, while the deterministic Coverage Audit remains the iteration gate.
+While such a visual question is pending, its linked non-`external_fact` claim is forced back to `open`; web or reverse-search output cannot stand in for the required image observation. External fact questions are never ReInspect-gated and can resolve only through eligible direct web evidence. Stopping assessments expose unresolved decisive claims, pending visual questions, source-family novelty, repeated observations, and remaining high-value actions. They are traceable state, while the deterministic Coverage Audit remains the iteration gate.
 
 ### 4. Coverage Audit And Replanning Loop
 
@@ -214,7 +216,7 @@ When enabled, only successful eligible results are cached. TTL limits reuse, and
 
 `MAX_VERIFICATION_ITERATIONS` defaults to `4`; `MIN_VERIFICATION_ITERATIONS` and `LOW_INFORMATION_GAIN_PATIENCE` default to `2`. `WorkflowConfig.max_rounds_verification` defaults to `12`, and `GEMINI_VERIFICATION_MAX_OUTPUT_TOKENS` defaults to `16384` for ReAct turns. Planning, Verification/ReAct, Replanning, Judgment, browse extraction, schema-bound vision, visual anomaly analysis, and reference comparison all send `generation_config.thinking_level=minimal`. Stage-specific `GEMINI_<STAGE>_THINKING_LEVEL` variables may only preserve that active policy; a non-minimal value is rejected. The forced schema-only summary uses `GEMINI_VERIFICATION_FINAL_MAX_OUTPUT_TOKENS=32768` and the same minimal policy.
 
-`GEMINI_VISION_MIN_OUTPUT_TOKENS` defaults to `8192`. Every Interactions stage step records prompt, completion, and thought-token counts; any non-zero Gemini thought count is a configuration defect and terminates the run while preserving the trace. Invalid values or failed calls propagate; the runtime does not switch thinking modes, models, providers, or protocols as a fallback.
+`GEMINI_VISION_MIN_OUTPUT_TOKENS` defaults to `8192`. Every Interactions stage step records prompt, completion, and thought-token counts. Gemini calls inside browse extraction, perception, crop inspection, comparison, anomaly analysis, and query generation are separate API calls whose private runtime metrics are stripped from model-facing tool JSON and added to aggregate call and token totals. Any non-zero Gemini thought count, including inside a tool, is a configuration defect and terminates the run while preserving the trace. Invalid values or failed calls propagate; the runtime does not switch thinking modes, models, providers, or protocols as a fallback.
 
 `BROWSE_EXTRACT_MAX_OUTPUT_TOKENS` defaults to `4096`, allowing the passage selector to finish its schema-bound output. `GEMINI_VISION_TIMEOUT_SECONDS` defaults to `240` and controls each Gemini image-observation request. All of these controls are environment-overridable without changing failure semantics.
 
@@ -230,6 +232,14 @@ Re-render saved traces without rerunning verification:
 python -m src.render_trace_html outputs\traces\example.json --output-dir outputs\trace_html
 python -m src.render_trace_html outputs\traces --output-dir outputs\trace_html
 ```
+
+Audit a real canonical trace before accepting it as an end-to-end result:
+
+```powershell
+python scripts/audit_real_trace.py outputs\traces\example.json --json --strict-scheduler
+```
+
+The auditor checks terminal state, stage/iteration structure, tool and interaction provenance, evidence integrity, aggregate API/token accounting (including tool-internal Gemini calls), thought-token policy, and optional strict scheduler invariants.
 
 Do not commit generated traces or cache files.
 

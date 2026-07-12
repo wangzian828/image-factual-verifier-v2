@@ -325,7 +325,7 @@ def _candidate_record(
         "source_split": split,
         "source_index": source_index,
         "source_article_url": str(row.get("article", "")).strip(),
-        "source_fact_check_date": str(row.get("date", "")).strip(),
+        "source_claim_date": str(row.get("date", "")).strip(),
         "source_location": str(row.get("location", "")).strip(),
         "original_label": original_label,
         "ground_truth": LABEL_MAP[original_label],
@@ -377,6 +377,7 @@ def _evaluation_record(candidate: Mapping[str, Any]) -> Dict[str, Any]:
         "ground_truth": candidate["ground_truth"],
         "bucket": "averimatec_real_seed_candidate",
         "user_claim": candidate["gold_claim_text"],
+        "claim_observed_at": candidate["source_claim_date"] or None,
         "source_article_url": candidate["source_article_url"],
     }
 
