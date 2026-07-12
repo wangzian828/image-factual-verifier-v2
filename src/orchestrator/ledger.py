@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
+from src.orchestrator.evidence_policy import tool_can_decide_claim
 from src.orchestrator.source_provenance import classify_source, content_sha256
 from src.orchestrator.state import (
     ClaimMode,
@@ -184,6 +185,7 @@ def compile_runtime_ledgers(
                 claim_id=claim_id,
                 text=question.claim_text,
                 question_id=question.question_id,
+                claim_scope=question.claim_scope,
                 criticality="decisive" if question.priority == 1 else (
                     "supporting" if question.priority == 2 else "contextual"
                 ),
@@ -213,13 +215,18 @@ def compile_runtime_ledgers(
             successful_call_ids.add(call_id)
             _record_discoveries(ledger, step, parsed, claim_id)
         else:
+            metadata = getattr(step, "metadata", {}) or {}
             ledger.add_failure(
                 FailureRecord(
                     failure_id=ledger._id("failure", call_id),
                     function_call_id=call_id,
                     tool_name=tool_name,
                     claim_id=claim_id,
-                    code=_failure_code(str(parsed.get("error", ""))),
+                    code=(
+                        "protocol_error"
+                        if metadata.get("error_class") == "protocol_error"
+                        else _failure_code(str(parsed.get("error", "")))
+                    ),
                     severity="partial",
                     recoverable=True,
                     message=str(parsed.get("error", "tool call failed")),
@@ -232,15 +239,15 @@ def compile_runtime_ledgers(
         if not claim_id or step is None or item.function_call_id not in successful_call_ids:
             continue
         data, _ = parse_tool_result(getattr(step, "tool_result", ""))
+        question = next(
+            candidate
+            for candidate in plan.questions
+            if candidate.question_id == item.related_question
+        )
         if item.tool_used in {"visit", "text_search", "crop_and_search"}:
             record = _find_web_record(data, item.raw_excerpt, item.source)
             if record is None:
                 continue
-            question = next(
-                candidate
-                for candidate in plan.questions
-                if candidate.question_id == item.related_question
-            )
             if str(record.get("goal", "")).strip() != question.claim_text.strip():
                 continue
             identity = classify_source(
@@ -265,6 +272,11 @@ def compile_runtime_ledgers(
             )
             span = record["evidence_span"]
             exact_text = str(record["evidence"])
+            direction = (
+                item.direction
+                if tool_can_decide_claim(item.tool_used, question.claim_scope)
+                else "neutral"
+            )
             ledger.add_evidence(
                 EvidenceRecord(
                     evidence_id=ledger._id(
@@ -280,7 +292,7 @@ def compile_runtime_ledgers(
                     span_end=int(span["end"]),
                     artifact_sha256=artifact,
                     retrieved_at=str(record["retrieved_at"]),
-                    stance=_stance(item.direction),
+                    stance=_stance(direction),
                     quality=item.quality,
                     directness=str(record.get("directness", "direct")),
                 ),
@@ -356,6 +368,11 @@ def compile_runtime_ledgers(
                 )
             )
             region = getattr(step, "tool_args", {}).get("bbox") or [0.0, 0.0, 1.0, 1.0]
+            direction = (
+                item.direction
+                if tool_can_decide_claim(item.tool_used, question.claim_scope)
+                else "neutral"
+            )
             ledger.add_evidence(
                 EvidenceRecord(
                     evidence_id=ledger._id(
@@ -370,7 +387,7 @@ def compile_runtime_ledgers(
                     image_region=region,
                     artifact_sha256=case.image_sha256,
                     retrieved_at=observed_at,
-                    stance=_stance(item.direction),
+                    stance=_stance(direction),
                     quality=item.quality,
                 ),
                 successful_call_ids=successful_call_ids,
@@ -385,18 +402,33 @@ def _update_claim_statuses(ledgers: VerificationLedgers) -> None:
         claim_evidence = [item for item in ledgers.evidence if item.claim_id == claim.claim_id]
         supports = [item for item in claim_evidence if item.stance == "support" and item.directness == "direct"]
         refutes = [item for item in claim_evidence if item.stance == "refute" and item.directness == "direct"]
-        if supports and refutes:
+        support_is_decisive = _direction_is_decisive(
+            supports,
+            sources,
+            claim_scope=claim.claim_scope,
+        )
+        refute_is_decisive = _direction_is_decisive(
+            refutes,
+            sources,
+            claim_scope=claim.claim_scope,
+        )
+        if support_is_decisive and refute_is_decisive:
             claim.status = "conflicted"
-            claim.unresolved_distinction = "Direct supporting and refuting evidence remain in conflict."
-        elif _direction_is_decisive(refutes, sources):
+            claim.unresolved_distinction = (
+                "Decisive supporting and refuting evidence remain in conflict."
+            )
+        elif refute_is_decisive:
             claim.status = "refuted"
             claim.unresolved_distinction = ""
-        elif _direction_is_decisive(supports, sources):
+        elif support_is_decisive:
             claim.status = "supported"
             claim.unresolved_distinction = ""
         elif supports or refutes:
             claim.status = "open"
-            claim.unresolved_distinction = "Evidence depends on one non-primary source family."
+            claim.unresolved_distinction = (
+                "Evidence depends on one non-primary source family or otherwise fails "
+                "the source-independence policy."
+            )
         else:
             claim.status = "open"
 
@@ -404,10 +436,12 @@ def _update_claim_statuses(ledgers: VerificationLedgers) -> None:
 def _direction_is_decisive(
     evidence: Sequence[EvidenceRecord],
     sources: Dict[str, SourceRecord],
+    *,
+    claim_scope: str = "external_fact",
 ) -> bool:
     if not evidence:
         return False
-    if any(
+    if claim_scope != "external_fact" and any(
         item.evidence_kind == "image_region"
         and item.quality in {"strong", "moderate"}
         for item in evidence
@@ -465,7 +499,11 @@ def derive_unverifiable_reasons(
     open_claims = [item for item in ledgers.claims if item.criticality == "decisive" and item.status not in {"supported", "refuted"}]
     if any(item.status == "conflicted" for item in open_claims):
         reasons.append(UnverifiableReason.SOURCES_CONFLICT)
-    if any("one non-primary source family" in item.unresolved_distinction for item in open_claims):
+    if any(
+        "one non-primary source family" in item.unresolved_distinction
+        or "source-independence policy" in item.unresolved_distinction
+        for item in open_claims
+    ):
         reasons.append(UnverifiableReason.SINGLE_SOURCE_FAMILY)
     if any(item.code == "access_limited" for item in ledgers.failures):
         reasons.append(UnverifiableReason.ACCESS_LIMITED)
@@ -502,7 +540,21 @@ def _failure_code(message: str) -> str:
         return "access_limited"
     if "provider" in lowered or "unavailable" in lowered:
         return "provider_unavailable"
-    if "question_id" in lowered or "argument" in lowered or "unknown tool" in lowered:
+    if any(
+        token in lowered
+        for token in (
+            "question_id",
+            "argument",
+            "unknown tool",
+            "question coverage",
+            "least-attempted",
+            "already called",
+            "tool budget",
+            "search policy rejects",
+            "fact-check-oriented query",
+            "excluded by the active evaluation policy",
+        )
+    ):
         return "protocol_error"
     if "json" in lowered or "malformed" in lowered:
         return "malformed_result"

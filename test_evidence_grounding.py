@@ -4,6 +4,7 @@ import json
 
 from src.orchestrator.ledger import (
     VerificationLedger,
+    _update_claim_statuses,
     build_verification_case,
     compile_runtime_ledgers,
     _direction_is_decisive,
@@ -11,11 +12,13 @@ from src.orchestrator.ledger import (
 from src.orchestrator.pipeline import Orchestrator
 from src.orchestrator.stage_runner import StageStep
 from src.orchestrator.state import (
+    ClaimRecord,
     EvidenceItem,
     EvidenceRecord,
     InvestigationQuestion,
     SourceRecord,
     VerificationPlan,
+    VerificationLedgers,
     VerificationResult,
     VisualAnomaly,
 )
@@ -504,3 +507,95 @@ def test_browse_stance_for_search_query_instead_of_claim_is_rejected() -> None:
     )
 
     assert canonical is None
+
+
+def test_visual_anomaly_cannot_refute_external_event_claim(tmp_path) -> None:
+    image_path = tmp_path / "input.jpg"
+    image_path.write_bytes(b"external-event-visual-evidence")
+    plan = VerificationPlan(
+        questions=[
+            InvestigationQuestion(
+                question_id="q0",
+                question="Did the politician join the party?",
+                claim_text="The politician joined the party.",
+                claim_scope="external_fact",
+                priority=1,
+            )
+        ]
+    )
+    excerpt = "Commentary text was overlaid on a news screenshot."
+    step = StageStep(
+        round=1,
+        stage_name="verification",
+        action_type="tool_call",
+        tool_name="analyze_visual_anomalies",
+        tool_args={"__question_id": "q0"},
+        tool_result=json.dumps(
+            {
+                "status": "success",
+                "anomalies": [{"phenomenon": excerpt}],
+                "overall_authenticity": "likely_manipulated",
+                "notes": excerpt,
+            }
+        ),
+        metadata={
+            "tool_success": True,
+            "function_call_id": "call-anomaly-q0",
+            "observed_at": "2026-07-12T00:00:00+00:00",
+        },
+    )
+    model_item = EvidenceItem(
+        function_call_id="call-anomaly-q0",
+        source="analyze_visual_anomalies",
+        summary=excerpt,
+        raw_excerpt=excerpt,
+        direction="refutes",
+        quality="moderate",
+        tool_used="analyze_visual_anomalies",
+        related_question="q0",
+    )
+
+    canonical = _orchestrator()._canonicalize_model_evidence(model_item, [step], plan)
+    ledgers = compile_runtime_ledgers(
+        build_verification_case(str(image_path), user_claim=plan.questions[0].claim_text),
+        plan,
+        VerificationResult(evidence=[model_item]),
+        [step],
+    )
+
+    assert canonical is not None
+    assert canonical.direction == "neutral"
+    assert ledgers.evidence[0].stance == "neutral"
+    assert ledgers.claims[0].status == "open"
+
+
+def test_weak_opposing_ugc_signals_do_not_create_claim_conflict() -> None:
+    source = SourceRecord(
+        source_id="source-ugc",
+        canonical_url="https://facebook.com/post",
+        registered_domain="facebook.com",
+        source_family="domain:facebook.com",
+        source_class="ugc",
+        artifact_sha256="a" * 64,
+    )
+    support = _supporting_record(source, "ugc-support")
+    refute = support.model_copy(
+        update={"evidence_id": "ugc-refute", "function_call_id": "call-ugc-refute", "stance": "refute"}
+    )
+    ledgers = VerificationLedgers(
+        claims=[
+            ClaimRecord(
+                claim_id="claim-q0",
+                question_id="q0",
+                text="The politician joined the party.",
+                claim_scope="external_fact",
+            )
+        ],
+        sources=[source],
+        evidence=[support, refute],
+    )
+
+    _update_claim_statuses(ledgers)
+
+    assert ledgers.claims[0].status == "open"
+    assert "source-independence" in ledgers.claims[0].unresolved_distinction

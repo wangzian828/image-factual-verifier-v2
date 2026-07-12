@@ -7,7 +7,8 @@ from typing import Any, Dict, List
 import pytest
 from pydantic import BaseModel
 
-from src.orchestrator.stage_runner import StageRunner
+from src.orchestrator.source_access import SourceAccessPolicy
+from src.orchestrator.stage_runner import StageRunner, StageStep
 from src.orchestrator.state import VerificationResult
 from src.tools.base import BaseTool
 
@@ -427,6 +428,71 @@ def test_native_tool_schema_hides_server_image_path() -> None:
     )
     assert json.loads(serialized)["status"] == "success"
     assert tool.calls == [{"image_input": "D:/private/input.png"}]
+
+
+def test_priority_two_can_be_resampled_after_all_required_questions_are_served() -> None:
+    runner = StageRunner(
+        llm=NativeFakeBackend([]),
+        system_prompt="Investigate.",
+        tools=[RecordingTool()],
+        output_schema=VerificationResult,
+        stage_name="verification",
+        attach_image=False,
+        prior_steps=[
+            StageStep(
+                action_type="tool_call",
+                tool_name="text_search",
+                tool_args={"__question_id": "q0", "queries": ["primary statement"]},
+            ),
+            StageStep(
+                action_type="tool_call",
+                tool_name="text_search",
+                tool_args={"__question_id": "q1", "queries": ["image source"]},
+            ),
+        ],
+        priority_question_ids=["q0"],
+        supporting_question_ids=["q1"],
+    )
+
+    assert runner._priority_coverage_error({"__question_id": "q1"}, []) == ""
+
+
+def test_evaluation_rejects_fact_check_query_before_search_and_continues() -> None:
+    rejected = _function_call_response()
+    rejected["steps"][0]["arguments"]["queries"] = ["politician joined party fact check"]
+    corrected = _function_call_response()
+    corrected["id"] = "interaction-corrected"
+    corrected["steps"][0]["id"] = "call-corrected"
+    corrected["steps"][0]["arguments"]["queries"] = ["politician official party statement"]
+    completed = _completed_response()
+    completed["id"] = "interaction-completed"
+    backend = NativeFakeBackend([rejected, corrected, completed])
+    tool = RecordingTool()
+    runner = StageRunner(
+        llm=backend,
+        system_prompt="Investigate.",
+        tools=[tool],
+        output_schema=VerificationResult,
+        max_rounds=3,
+        stage_name="verification",
+        min_tool_calls=1,
+        attach_image=False,
+        source_access_policy=SourceAccessPolicy(
+            policy_id="evaluation",
+            excluded_domains=frozenset({"factcrescendo.com"}),
+        ),
+    )
+
+    parsed, steps = asyncio.run(runner.run("- [q1] verify the party claim"))
+
+    assert parsed is not None
+    assert steps[0].action_type == "format_error"
+    assert steps[0].metadata["error_class"] == "protocol_error"
+    assert steps[0].metadata["search_policy_rejection"] is True
+    assert tool.calls == [{"queries": ["politician official party statement"]}]
+    returned = backend.requests[1]["input_payload"][0]
+    assert returned["is_error"] is True
+    assert "fact-check-oriented query" in returned["result"][0]["text"]
 
 
 def test_native_invalid_final_schema_is_rejected() -> None:

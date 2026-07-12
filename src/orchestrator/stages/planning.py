@@ -23,6 +23,9 @@ Guidelines:
 - Ask concrete factual questions.
 - For every question, write one declarative `claim_text` that can be supported or
   refuted. The question is the retrieval task; claim_text is the immutable stance target.
+- Assign exactly one `claim_scope`: `external_fact` for events and real-world assertions,
+  `image_authenticity` for generation/editing claims, `image_provenance` for source/date/
+  context of the visual, or `visible_content` for literal text, objects, and attributes.
 - Prefer short, high-signal search queries.
 - Each question and reason must be one short sentence.
 - Use at most 3 tools and 3 queries per question.
@@ -38,6 +41,9 @@ Guidelines:
   a second decisive claim. An AI-generated or edited image is not automatically false.
 - For embedded_claim, use priority 1 only for factual assertions actually visible in the
   image; keep provenance and presentation checks supporting unless they change those assertions.
+- Never use `fact check`, `fact-check`, verdict labels, or the name of a fact-checking
+  organization in a suggested query. Search for the proposition, original statement,
+  official record, primary source, and independent reporting instead.
 
 Available tools to suggest:
 - reverse_image_search
@@ -62,6 +68,7 @@ Return exactly one JSON object:
       "question_id": "q0",
       "question": "what should be verified",
       "claim_text": "one declarative factual statement to test",
+      "claim_scope": "external_fact|image_authenticity|image_provenance|visible_content",
       "why": "why this matters",
       "suggested_tools": ["tool1", "tool2"],
       "suggested_queries": ["query 1", "query 2"],
@@ -89,6 +96,9 @@ Constraints:
 - Keep each question and reason to one short sentence.
 - Preserve each unresolved question's declarative claim_text exactly; revise only
   the search question, tools, and queries.
+- Preserve `claim_scope` exactly.
+- Never use `fact check`, `fact-check`, verdict labels, or a fact-checking organization
+  in a query; target original statements, official records, and independent reporting.
 - Use at most 3 tools and 3 short queries per update.
 - Return exactly one JSON object with question_updates and revision_reason.
 """

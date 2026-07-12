@@ -17,6 +17,12 @@ class StrictModel(BaseModel):
 
 
 ShortListText = Annotated[str, Field(max_length=200)]
+ClaimScope = Literal[
+    "external_fact",
+    "image_authenticity",
+    "image_provenance",
+    "visible_content",
+]
 
 
 class ClaimMode(str, Enum):
@@ -71,6 +77,7 @@ class ClaimRecord(StrictModel):
     claim_id: str = Field(min_length=1, max_length=100)
     text: str = Field(min_length=1, max_length=2000)
     question_id: str = Field(default="", max_length=64)
+    claim_scope: ClaimScope = "external_fact"
     criticality: Literal["decisive", "supporting", "contextual"] = "decisive"
     status: Literal["open", "supported", "refuted", "conflicted", "unverifiable"] = "open"
     unresolved_distinction: str = Field(default="", max_length=1000)
@@ -216,6 +223,7 @@ class InvestigationQuestion(StrictModel):
     question_id: str = Field(default="", max_length=64)
     question: str = Field(default="", max_length=500)
     claim_text: str = Field(min_length=1, max_length=1000)
+    claim_scope: ClaimScope = "external_fact"
     why: str = Field(default="", max_length=500)
     suggested_tools: List[ShortListText] = Field(default_factory=list, max_length=3)
     suggested_queries: List[ShortListText] = Field(default_factory=list, max_length=3)

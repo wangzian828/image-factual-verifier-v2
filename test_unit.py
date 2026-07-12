@@ -186,6 +186,7 @@ class FakeOrchestrator(Orchestrator):
       "question_id": "q0",
       "question": "Did NASA publish this launch-pad image?",
       "claim_text": "NASA published this launch-pad image.",
+      "claim_scope": "image_provenance",
       "why": "Official provenance is the strongest authenticity signal.",
       "suggested_tools": ["reverse_image_search", "visit"],
       "suggested_queries": ["NASA launch pad image"],
@@ -435,8 +436,8 @@ class ReplanningOrchestrator(FakeOrchestrator):
     def _two_question_plan() -> str:
         return """<output>{
           "questions": [
-            {"question_id":"q0","question":"Did NASA publish this image?","claim_text":"NASA published this launch-pad image.","why":"provenance","suggested_tools":["reverse_image_search"],"suggested_queries":["NASA launch image"],"related_entities":["NASA"],"priority":1},
-            {"question_id":"q1","question":"Where was the launch image captured?","claim_text":"The launch image was captured at the claimed location.","why":"location context","suggested_tools":["text_search"],"suggested_queries":["NASA launch location"],"related_entities":["launch"],"priority":1}
+            {"question_id":"q0","question":"Did NASA publish this image?","claim_text":"NASA published this launch-pad image.","claim_scope":"image_provenance","why":"provenance","suggested_tools":["reverse_image_search"],"suggested_queries":["NASA launch image"],"related_entities":["NASA"],"priority":1},
+            {"question_id":"q1","question":"Where was the launch image captured?","claim_text":"The launch image was captured at the claimed location.","claim_scope":"image_provenance","why":"location context","suggested_tools":["text_search"],"suggested_queries":["NASA launch location"],"related_entities":["launch"],"priority":1}
           ],
           "image_intent":"Show a real NASA launch.","is_trying_to_be_real":true,"risk_assessment":"event_photo","revision":0,"revision_reason":""
         }</output>"""
@@ -465,7 +466,7 @@ class ReplanningOrchestrator(FakeOrchestrator):
     def _revised_plan() -> str:
         return """<output>{
           "question_updates": [
-            {"question_id":"q1","question":"Where was the launch image captured?","claim_text":"The launch image was captured at the claimed location.","why":"location context","suggested_tools":["text_search"],"suggested_queries":["NASA launch location official archive"],"related_entities":["launch"],"priority":1}
+            {"question_id":"q1","question":"Where was the launch image captured?","claim_text":"The launch image was captured at the claimed location.","claim_scope":"image_provenance","why":"location context","suggested_tools":["text_search"],"suggested_queries":["NASA launch location official archive"],"related_entities":["launch"],"priority":1}
           ],
           "revision_reason":"Refine the unresolved location query."
         }</output>"""
@@ -610,7 +611,7 @@ def test_orchestrator_end_to_end_and_trace_export():
         steps = state["all_steps"]
         assert any(step["stage"] == "verification" and step["tool_name"] == "reverse_image_search" for step in steps)
         assert any(step["stage"] == "verification" and step["tool_name"] == "visit" for step in steps)
-        assert state["verification"]["authenticity_assessment"] == "authentic"
+        assert state["verification"]["authenticity_assessment"] == "uncertain"
         assert state["judgment"]["confidence"] > 0.9
 
         out_dir = tempfile.mkdtemp(prefix="verifier-trace-")

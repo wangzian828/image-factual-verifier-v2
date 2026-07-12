@@ -10,6 +10,10 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence
 
 from src.orchestrator.context import ContextRenderer
+from src.orchestrator.evidence_policy import (
+    query_targets_fact_check_answer,
+    tool_can_decide_claim,
+)
 from src.orchestrator.ledger import (
     build_verification_case,
     compile_runtime_ledgers,
@@ -843,6 +847,8 @@ class Orchestrator:
         for item in parsed.evidence:
             canonical = self._canonicalize_model_evidence(item, steps, plan)
             question = questions.get(item.related_question)
+            if canonical is not None and question is not None and canonical.direction == "neutral":
+                continue
             if canonical is not None and question is not None and self._evidence_answers_question(
                 canonical,
                 question,
@@ -892,6 +898,19 @@ class Orchestrator:
             return False, "all investigation questions need unique non-empty question_id values"
         if any(not question.claim_text.strip() for question in parsed.questions):
             return False, "every investigation question needs a declarative claim_text"
+        forbidden_queries = sorted(
+            {
+                query
+                for question in parsed.questions
+                for query in question.suggested_queries
+                if query_targets_fact_check_answer(query)
+            }
+        )
+        if forbidden_queries:
+            return False, (
+                "planning queries must target primary or independent sources, not a "
+                "fact-check answer: " + "; ".join(forbidden_queries)
+            )
         if (
             verification_case is not None
             and verification_case.claim_mode == ClaimMode.EXTERNAL
@@ -908,6 +927,26 @@ class Orchestrator:
                 "original",
                 "provenance",
                 "unedited",
+            }
+            visual_claim_tokens = authenticity_claim_tokens | {
+                "caption",
+                "context",
+                "depict",
+                "depicted",
+                "footage",
+                "image",
+                "photo",
+                "photograph",
+                "picture",
+                "screenshot",
+                "source",
+                "video",
+                "图片",
+                "照片",
+                "截图",
+                "视频",
+                "来源",
+                "拍摄",
             }
             user_asserts_authenticity = any(
                 token in user_claim for token in authenticity_claim_tokens
@@ -927,6 +966,20 @@ class Orchestrator:
                     "external_claim visual provenance or manipulation checks must remain "
                     "supporting unless the user claim asserts them: "
                     + ", ".join(invented_visual_claims)
+                )
+            invalid_decisive_scopes = [
+                question.question_id
+                for question in parsed.questions
+                if question.priority == 1
+                and not any(token in user_claim for token in visual_claim_tokens)
+                and question.claim_scope != "external_fact"
+            ]
+            if invalid_decisive_scopes:
+                return False, (
+                    "external_claim priority-1 questions must use external_fact scope "
+                    "unless the user claim explicitly asserts a visual property, source, "
+                    "or authenticity fact: "
+                    + ", ".join(invalid_decisive_scopes)
                 )
         available = available_tools or set()
         invalid = sorted(
@@ -987,6 +1040,26 @@ class Orchestrator:
         )
         if changed_claims:
             return False, "replanning cannot change immutable claim_text: " + ", ".join(changed_claims)
+        changed_scopes = sorted(
+            question.question_id
+            for question in parsed.question_updates
+            if question.claim_scope != current_by_id[question.question_id].claim_scope
+        )
+        if changed_scopes:
+            return False, "replanning cannot change immutable claim_scope: " + ", ".join(changed_scopes)
+        forbidden_queries = sorted(
+            {
+                query
+                for question in parsed.question_updates
+                for query in question.suggested_queries
+                if query_targets_fact_check_answer(query)
+            }
+        )
+        if forbidden_queries:
+            return False, (
+                "replanning queries must target primary or independent sources, not a "
+                "fact-check answer: " + "; ".join(forbidden_queries)
+            )
         if any(not question.suggested_tools for question in parsed.question_updates):
             return False, "every question update needs at least one suggested tool"
         available = available_tools or set()
@@ -1615,6 +1688,10 @@ class Orchestrator:
 
             if step.tool_name == "compare_with_reference":
                 signal = self._parse_compare_reference_signal(step.tool_result)
+                compatible = bool(
+                    question
+                    and tool_can_decide_claim(step.tool_name, question.claim_scope)
+                )
                 if signal["details"]:
                     evidence.append(
                         EvidenceItem(
@@ -1622,7 +1699,15 @@ class Orchestrator:
                             source=str(step.tool_args.get("reference_url", "")),
                             summary=signal["summary"],
                             raw_excerpt=signal["details"][:300],
-                            direction="refutes" if signal["refutes_authenticity"] else ("supports" if signal["supports_authenticity"] else "neutral"),
+                            direction=(
+                                "refutes"
+                                if compatible and signal["refutes_authenticity"]
+                                else (
+                                    "supports"
+                                    if compatible and signal["supports_authenticity"]
+                                    else "neutral"
+                                )
+                            ),
                             quality=signal["quality"],
                             tool_used="compare_with_reference",
                             related_question=self._step_question_id(step),
@@ -1630,9 +1715,9 @@ class Orchestrator:
                     )
                 key_findings.append(f"[compare_with_reference] {signal['summary']}")
                 visual_evidence.append(self._visual_evidence_from_step(step, data))
-                if signal["refutes_authenticity"]:
+                if compatible and signal["refutes_authenticity"]:
                     assessment = "likely_manipulated"
-                elif signal["supports_authenticity"] and assessment == "uncertain":
+                elif compatible and signal["supports_authenticity"] and assessment == "uncertain":
                     assessment = "authentic"
                 continue
 
@@ -1640,6 +1725,10 @@ class Orchestrator:
                 consistent = bool(data.get("consistent", True))
                 details = str(data.get("details", "")).strip()
                 summary = "Visual consistency looks normal." if consistent else f"Visual consistency issues found: {details or 'see tool output'}"
+                compatible = bool(
+                    question
+                    and tool_can_decide_claim(step.tool_name, question.claim_scope)
+                )
                 if details:
                     evidence.append(
                         EvidenceItem(
@@ -1647,14 +1736,14 @@ class Orchestrator:
                             source="check_consistency",
                             summary=summary,
                             raw_excerpt=details[:300],
-                            direction="neutral" if consistent else "refutes",
+                            direction="refutes" if compatible and not consistent else "neutral",
                             quality="moderate",
                             tool_used="check_consistency",
                             related_question=self._step_question_id(step),
                         )
                     )
                 key_findings.append(f"[check_consistency] {summary}")
-                if not consistent:
+                if compatible and not consistent:
                     assessment = "likely_manipulated"
                 continue
 
@@ -1687,6 +1776,10 @@ class Orchestrator:
                     exact_excerpt = notes or (
                         step_anomalies[0].phenomenon if step_anomalies else ""
                     )
+                    compatible = bool(
+                        question
+                        and tool_can_decide_claim(step.tool_name, question.claim_scope)
+                    )
                     if exact_excerpt:
                         evidence.append(
                             EvidenceItem(
@@ -1694,13 +1787,19 @@ class Orchestrator:
                                 source="analyze_visual_anomalies",
                                 summary=summary,
                                 raw_excerpt=exact_excerpt[:300],
-                                direction="refutes" if anomaly_assessment in {"likely_ai", "likely_manipulated"} and step_anomalies else "neutral",
+                                direction=(
+                                    "refutes"
+                                    if compatible
+                                    and anomaly_assessment in {"likely_ai", "likely_manipulated"}
+                                    and step_anomalies
+                                    else "neutral"
+                                ),
                                 quality="moderate",
                                 tool_used="analyze_visual_anomalies",
                                 related_question=self._step_question_id(step),
                             )
                         )
-                    if not self._should_downweight_date_only_anomaly(
+                    if compatible and not self._should_downweight_date_only_anomaly(
                         [item.model_dump() for item in step_anomalies],
                         current_date_anchor,
                     ):
@@ -1718,6 +1817,10 @@ class Orchestrator:
                     exact_excerpt = answer or (
                         str(findings[0]) if findings else (str(anomalies[0]) if anomalies else "")
                     )
+                    compatible = bool(
+                        question
+                        and tool_can_decide_claim(step.tool_name, question.claim_scope)
+                    )
                     if exact_excerpt:
                         evidence.append(
                             EvidenceItem(
@@ -1725,7 +1828,7 @@ class Orchestrator:
                                 source="crop_and_inspect",
                                 summary=summary,
                                 raw_excerpt=exact_excerpt[:300],
-                                direction="refutes" if anomalies else "neutral",
+                                direction="refutes" if compatible and anomalies else "neutral",
                                 quality="moderate",
                                 tool_used="crop_and_inspect",
                                 related_question=self._step_question_id(step),
@@ -1829,11 +1932,27 @@ class Orchestrator:
                 continue
             anomaly_seen.add(key)
             visual_anomalies.append(item)
-        if visual_anomalies or any(item.direction == "refutes" for item in evidence):
+        question_scopes = {
+            item.question_id: item.claim_scope
+            for item in (plan.questions if plan is not None else [])
+        }
+        authenticity_evidence = [
+            item
+            for item in evidence
+            if question_scopes.get(item.related_question) == "image_authenticity"
+        ]
+        authenticity_anomalies = [
+            item
+            for item in visual_anomalies
+            if question_scopes.get(item.related_question) == "image_authenticity"
+        ]
+        if authenticity_anomalies or any(
+            item.direction == "refutes" for item in authenticity_evidence
+        ):
             assessment = "likely_manipulated"
         elif any(
             item.direction == "supports" and item.quality in {"strong", "moderate"}
-            for item in evidence
+            for item in authenticity_evidence
         ):
             assessment = "authentic"
         else:
@@ -2190,6 +2309,13 @@ class Orchestrator:
             quality = "strong" if relevance == "high" and self._is_probably_trusted_url(item.source) else (
                 "moderate" if relevance in {"high", "medium"} else "weak"
             )
+        question = next(
+            candidate
+            for candidate in plan.questions
+            if candidate.question_id == item.related_question
+        )
+        if not tool_can_decide_claim(item.tool_used, question.claim_scope):
+            direction = "neutral"
         return item.model_copy(
             update={
                 "summary": item.raw_excerpt,

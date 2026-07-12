@@ -21,6 +21,9 @@ Rules:
 - You may refine the plan after each tool result; keep moving from the current strongest hypothesis to the next most useful check.
 - Prefer the plan's required tools and suggested queries first.
 - Search for both supporting and contradicting evidence.
+- Do not search for `fact check`, `fact-check`, verdict labels, or fact-checking
+  organizations. Search the claim terms, original statement, official record, primary
+  source, and independent reporting instead.
 - If one query fails, shorten it or try another tool.
 - Do not treat "no result" as proof of falsehood.
 - Use reverse image or crop search for visual-origin questions.
@@ -36,6 +39,9 @@ Rules:
   replan, or continue under the global investigation budget.
 - A priority-1 question is not resolved merely because a trusted domain was found. The source content must directly address the question.
 - Source authority affects evidence quality, never evidence direction. Determine supports/refutes/neutral from source content.
+- Respect each question's claim scope. Anomaly, consistency, crop, count, OCR, and
+  reference-comparison observations cannot support or refute an `external_fact` claim;
+  attach them as neutral context and continue to direct Web evidence for that claim.
 - When recording evidence, keep `raw_excerpt` as a verbatim source excerpt when available.
 - Every evidence item must copy the exact `function_call_id` returned with the tool result.
 - `raw_excerpt` must be a verbatim substring of that exact tool result. Never invent or paraphrase it.

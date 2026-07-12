@@ -81,6 +81,7 @@ class ContextRenderer:
             for question in plan.questions[:6]:
                 row = f"- [{question.question_id}] P{question.priority}: {question.question}"
                 row += f" | immutable claim: {question.claim_text}"
+                row += f" | scope: {question.claim_scope}"
                 if question.why:
                     row += f" | why: {question.why}"
                 if question.suggested_tools:
@@ -204,6 +205,7 @@ class ContextRenderer:
             parts.append(
                 f"- [{question.question_id}] {question.question[:500]} | "
                 f"immutable claim: {question.claim_text[:500]} | "
+                f"scope: {question.claim_scope} | "
                 f"gap: {gap[:500]}"
             )
             if question.suggested_queries:

@@ -299,6 +299,36 @@ def test_external_claim_plan_cannot_invent_decisive_image_authenticity() -> None
     Path(image_path).parent.rmdir()
 
 
+def test_external_visual_claim_can_use_decisive_provenance_scope() -> None:
+    image_path = make_test_image()
+    case = build_verification_case(
+        image_path,
+        user_claim="This photo was taken in Paris.",
+    )
+    plan = VerificationPlan(
+        questions=[
+            InvestigationQuestion(
+                question_id="q0",
+                question="Was this photo taken in Paris?",
+                claim_text="This photo was taken in Paris.",
+                claim_scope="image_provenance",
+                suggested_tools=["reverse_image_search"],
+                priority=1,
+            )
+        ]
+    )
+
+    accepted, reason = Orchestrator._validate_plan_output(
+        plan,
+        {"reverse_image_search"},
+        case,
+    )
+
+    assert accepted is True, reason
+    Path(image_path).unlink(missing_ok=True)
+    Path(image_path).parent.rmdir()
+
+
 def test_pending_reinspect_question_is_a_valid_replanning_target() -> None:
     plan = VerificationPlan(
         questions=[

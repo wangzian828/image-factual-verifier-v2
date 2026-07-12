@@ -19,6 +19,7 @@ from src.integrations.gemini import (
     normalize_json_schema,
     validate_interaction_response,
 )
+from src.orchestrator.evidence_policy import query_targets_fact_check_answer
 from src.orchestrator.llm_backend import LLMBackend, LLMResponse
 from src.orchestrator.tool_cache import ToolResultCache
 from src.orchestrator.tool_result import ToolResultContractError, parse_tool_result, serialize_tool_result
@@ -167,6 +168,7 @@ class StageRunner:
                 tool_name, tool_args = self._parse_tool_call(content)
                 if tool_name not in self.tools:
                     step.action_type = "format_error"
+                    step.metadata["error_class"] = "protocol_error"
                     step.metadata["invalid_tool_name"] = tool_name
                     steps.append(step)
                     history.append({"role": "assistant", "content": content})
@@ -174,6 +176,7 @@ class StageRunner:
                     continue
                 if self._has_duplicate_tool_call(steps, tool_name, tool_args):
                     step.action_type = "format_error"
+                    step.metadata["error_class"] = "protocol_error"
                     step.tool_name = tool_name
                     step.tool_args = tool_args
                     step.metadata["duplicate_tool_call"] = True
@@ -183,6 +186,7 @@ class StageRunner:
                     continue
                 if self._tool_budget_reached(steps, tool_name):
                     step.action_type = "format_error"
+                    step.metadata["error_class"] = "protocol_error"
                     step.tool_name = tool_name
                     step.tool_args = tool_args
                     step.metadata["tool_budget_reached"] = True
@@ -197,6 +201,7 @@ class StageRunner:
                 question_error = self._question_id_error(step.tool_args)
                 if question_error:
                     step.action_type = "format_error"
+                    step.metadata["error_class"] = "protocol_error"
                     step.metadata["invalid_question_id"] = True
                     steps.append(step)
                     history.append({"role": "assistant", "content": content})
@@ -209,10 +214,24 @@ class StageRunner:
                         }
                     )
                     continue
+                search_policy_error = self._search_policy_error(tool_name, step.tool_args)
+                if search_policy_error:
+                    step.action_type = "format_error"
+                    step.metadata["error_class"] = "protocol_error"
+                    step.metadata["search_policy_rejection"] = True
+                    step.tool_result = json.dumps(
+                        {"status": "error", "error": search_policy_error},
+                        ensure_ascii=False,
+                    )
+                    steps.append(step)
+                    history.append({"role": "assistant", "content": content})
+                    history.append({"role": "user", "content": search_policy_error})
+                    continue
                 if self.visual_call_validator is not None:
                     visual_error = self.visual_call_validator(tool_name, step.tool_args)
                     if visual_error:
                         step.action_type = "format_error"
+                        step.metadata["error_class"] = "protocol_error"
                         step.metadata["invalid_visual_question"] = True
                         step.tool_result = json.dumps(
                             {"status": "error", "error": visual_error},
@@ -225,6 +244,7 @@ class StageRunner:
                 coverage_error = self._priority_coverage_error(step.tool_args, steps)
                 if coverage_error:
                     step.action_type = "format_error"
+                    step.metadata["error_class"] = "protocol_error"
                     step.metadata["unbalanced_priority_coverage"] = True
                     step.tool_result = json.dumps(
                         {"status": "error", "error": coverage_error},
@@ -483,22 +503,27 @@ class StageRunner:
                     if tool_name not in self.tools:
                         error_message = self._unknown_tool_message(tool_name)
                         step.metadata["invalid_tool_name"] = tool_name
+                        step.metadata["error_class"] = "protocol_error"
                     else:
                         schema_error = self._validate_native_tool_args(tool_name, tool_args)
                         if schema_error:
                             error_message = schema_error
                             step.metadata["invalid_tool_arguments"] = True
+                            step.metadata["error_class"] = "protocol_error"
                     if not error_message and self._has_duplicate_tool_call(steps, tool_name, tool_args):
                         error_message = self._duplicate_tool_message(tool_name)
                         step.metadata["duplicate_tool_call"] = True
+                        step.metadata["error_class"] = "protocol_error"
                     elif not error_message and self._tool_budget_reached(steps, tool_name):
                         error_message = self._tool_budget_message(tool_name)
                         step.metadata["tool_budget_reached"] = True
+                        step.metadata["error_class"] = "protocol_error"
                     if not error_message and self.visual_call_validator is not None:
                         visual_error = self.visual_call_validator(tool_name, tool_args)
                         if visual_error:
                             error_message = visual_error
                             step.metadata["invalid_visual_question"] = True
+                            step.metadata["error_class"] = "protocol_error"
 
                     if error_message:
                         step.action_type = "format_error"
@@ -516,6 +541,7 @@ class StageRunner:
                         question_error = self._question_id_error(prepared_args)
                         if question_error:
                             step.action_type = "format_error"
+                            step.metadata["error_class"] = "protocol_error"
                             step.metadata["invalid_question_id"] = True
                             step.tool_result = json.dumps(
                                 {
@@ -524,8 +550,20 @@ class StageRunner:
                                 },
                                 ensure_ascii=False,
                             )
+                        elif search_policy_error := self._search_policy_error(
+                            tool_name,
+                            prepared_args,
+                        ):
+                            step.action_type = "format_error"
+                            step.metadata["error_class"] = "protocol_error"
+                            step.metadata["search_policy_rejection"] = True
+                            step.tool_result = json.dumps(
+                                {"status": "error", "error": search_policy_error},
+                                ensure_ascii=False,
+                            )
                         elif coverage_error := self._priority_coverage_error(prepared_args, steps):
                             step.action_type = "format_error"
+                            step.metadata["error_class"] = "protocol_error"
                             step.metadata["unbalanced_priority_coverage"] = True
                             step.tool_result = json.dumps(
                                 {"status": "error", "error": coverage_error},
@@ -1148,17 +1186,31 @@ class StageRunner:
         if untouched_supporting or not active_priority_ids:
             return ""
 
-        minimum = min(counts[item] for item in active_priority_ids)
-        least_attempted = [
-            item for item in active_priority_ids if counts[item] == minimum
-        ]
-        if question_id not in least_attempted:
-            return (
-                "Question coverage requires targeting a least-attempted active P1 "
-                "before further resampling. Least-attempted P1 ids: "
-                + ", ".join(least_attempted)
-            )
+        # After every active P1 and P2 has one real attempt, let the policy choose
+        # the highest-value follow-up. Continued round-robin P1 enforcement starves
+        # useful P2 resampling and turns ReAct into a fixed scheduler.
         return ""
+
+    def _search_policy_error(self, tool_name: str, tool_args: Dict[str, Any]) -> str:
+        if not self.source_access_policy.active or tool_name != "text_search":
+            return ""
+        queries = tool_args.get("queries", [])
+        if isinstance(queries, str):
+            queries = [queries]
+        if not isinstance(queries, list):
+            return ""
+        rejected = [
+            str(query).strip()
+            for query in queries
+            if query_targets_fact_check_answer(str(query))
+        ]
+        if not rejected:
+            return ""
+        return (
+            "Search policy rejects a fact-check-oriented query. Reformulate with the "
+            "claim terms, original statement, official record, primary source, or "
+            "independent reporting: " + "; ".join(rejected)
+        )
 
     def _resolved_question_ids(self, current_steps: List[StageStep]) -> set[str]:
         resolved = set(self.resolved_priority_question_ids)
