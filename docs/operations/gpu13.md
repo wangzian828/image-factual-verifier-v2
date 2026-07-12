@@ -155,7 +155,9 @@ serve unrelated vision/inference projects. The deployment therefore uses the iso
 `OMP_NUM_THREADS=1` in that Conda environment as an additional guard. It also
 installs the `ifv-agent` Jupyter kernelspec, whose wrapper sources
 `gpu13_env.sh` before launching the kernel. This ensures browser notebooks and
-REST/WebSocket-launched project commands retain the same runtime environment.
+REST/WebSocket-launched project commands retain the same runtime environment and
+places the `ifv-agent` binary directory first in `PATH`, so shell cells also invoke
+the project interpreter rather than the Jupyter server's base Conda Python.
 
 ## Update From GitHub
 

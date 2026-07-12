@@ -29,4 +29,6 @@ if [[ ! -x "${PYTHON_BIN}" ]]; then
     exit 2
 fi
 
+export PATH="${CONDA_BASE}/envs/${ENV_NAME}/bin:${PATH}"
+
 exec "${PYTHON_BIN}" -m ipykernel_launcher -f "$1"
