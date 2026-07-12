@@ -220,6 +220,12 @@ class StageRunner:
                         }
                     )
                     continue
+                filtered_query_count = self._sanitize_search_queries(
+                    tool_name,
+                    step.tool_args,
+                )
+                if filtered_query_count:
+                    step.metadata["policy_filtered_query_count"] = filtered_query_count
                 search_policy_error = self._search_policy_error(tool_name, step.tool_args)
                 if search_policy_error:
                     step.action_type = "format_error"
@@ -590,36 +596,45 @@ class StageRunner:
                                 },
                                 ensure_ascii=False,
                             )
-                        elif search_policy_error := self._search_policy_error(
-                            tool_name,
-                            prepared_args,
-                        ):
-                            step.action_type = "format_error"
-                            step.metadata["error_class"] = "protocol_error"
-                            step.metadata["search_policy_rejection"] = True
-                            step.tool_result = json.dumps(
-                                {"status": "error", "error": search_policy_error},
-                                ensure_ascii=False,
-                            )
-                        elif coverage_error := self._priority_coverage_error(prepared_args, steps):
-                            step.action_type = "format_error"
-                            step.metadata["error_class"] = "protocol_error"
-                            step.metadata["unbalanced_priority_coverage"] = True
-                            step.tool_result = json.dumps(
-                                {"status": "error", "error": coverage_error},
-                                ensure_ascii=False,
-                            )
                         else:
-                            step.action_type = "tool_call"
-                            serialized, tool_metadata = await self._execute_tool(
+                            filtered_query_count = self._sanitize_search_queries(
                                 tool_name,
-                                dict(prepared_args),
+                                prepared_args,
                             )
-                            step.tool_result = serialized
-                            step.metadata.update(tool_metadata)
-                            evidence_so_far.append(
-                                self._summarize_tool_result(tool_name, prepared_args, serialized)
+                            if filtered_query_count:
+                                step.metadata["policy_filtered_query_count"] = (
+                                    filtered_query_count
+                                )
+                            search_policy_error = self._search_policy_error(
+                                tool_name,
+                                prepared_args,
                             )
+                            if search_policy_error:
+                                step.action_type = "format_error"
+                                step.metadata["error_class"] = "protocol_error"
+                                step.metadata["search_policy_rejection"] = True
+                                step.tool_result = json.dumps(
+                                    {
+                                        "status": "error",
+                                        "error": search_policy_error,
+                                    },
+                                    ensure_ascii=False,
+                                )
+                            else:
+                                step.action_type = "tool_call"
+                                serialized, tool_metadata = await self._execute_tool(
+                                    tool_name,
+                                    dict(prepared_args),
+                                )
+                                step.tool_result = serialized
+                                step.metadata.update(tool_metadata)
+                                evidence_so_far.append(
+                                    self._summarize_tool_result(
+                                        tool_name,
+                                        prepared_args,
+                                        serialized,
+                                    )
+                                )
 
                     steps.append(step)
                     response_steps.append(step)
@@ -1155,8 +1170,6 @@ class StageRunner:
         tool_calls = sum(1 for step in steps if step.action_type == "tool_call")
         if tool_calls < self.min_tool_calls:
             return False, f"at least {self.min_tool_calls} tool calls are required; only {tool_calls} completed"
-        if coverage_error := self._required_question_output_error(steps):
-            return False, coverage_error
         if self.output_validator:
             accepted, reason = self.output_validator(parsed, steps)
             if not accepted:
@@ -1181,6 +1194,10 @@ class StageRunner:
             evidence_goal = self.question_evidence_goals.get(question_id, "").strip()
             if evidence_goal:
                 tool_args["__evidence_goal"] = evidence_goal
+            if tool_name in {"text_search", "visit", "crop_and_search"}:
+                immutable_goal = evidence_goal or claim_text
+                if immutable_goal:
+                    tool_args["goal"] = immutable_goal
         return tool_args
 
     def _question_id_error(self, tool_args: Dict[str, Any]) -> str:
@@ -1201,59 +1218,11 @@ class StageRunner:
         tool_args: Dict[str, Any],
         current_steps: List[StageStep],
     ) -> str:
-        if self.stage_name != "verification":
-            return ""
-        question_id = str(tool_args.get("__question_id", "")).strip()
-        if (
-            str(tool_args.get("visual_question_id", "")).strip()
-            and self._pending_visual_call_is_valid(tool_args)
-        ):
-            return ""
-        resolved = self._resolved_question_ids(current_steps)
-        active_priority_ids = [
-            item
-            for item in self.priority_question_ids
-            if item not in resolved
-        ]
-        active_supporting_ids = [
-            item
-            for item in self.supporting_question_ids
-            if item not in resolved
-        ]
-        counts = {
-            item: 0
-            for item in [*active_priority_ids, *active_supporting_ids]
-        }
-        for step in [*self.prior_steps, *current_steps]:
-            if step.action_type != "tool_call":
-                continue
-            step_question = str(step.tool_args.get("__question_id", "")).strip()
-            if step_question in counts:
-                counts[step_question] += 1
-        untouched_priority = [item for item in active_priority_ids if counts[item] == 0]
-        if untouched_priority and question_id not in untouched_priority:
-            return (
-                "Question coverage requires one attempt for every active P1 before "
-                "resampling. Untouched P1 ids: " + ", ".join(untouched_priority)
-            )
-        if untouched_priority:
-            return ""
+        """Keep ReAct tool selection free; coverage is enforced before output."""
 
-        untouched_supporting = [
-            item for item in active_supporting_ids if counts[item] == 0
-        ]
-        if untouched_supporting and question_id not in untouched_supporting:
-            return (
-                "Question coverage requires one attempt for every active P2 before "
-                "further P1 resampling. Untouched P2 ids: "
-                + ", ".join(untouched_supporting)
-            )
-        if untouched_supporting or not active_priority_ids:
-            return ""
-
-        # After every active P1 and P2 has one real attempt, let the policy choose
-        # the highest-value follow-up. Continued round-robin P1 enforcement starves
-        # useful P2 resampling and turns ReAct into a fixed scheduler.
+        # The outer Coverage Audit validates service and evidence after each iteration.
+        # Enforcing a P1/P2 call order here turns the agent into a fixed scheduler and
+        # creates avoidable rejected turns.
         return ""
 
     def _search_policy_error(self, tool_name: str, tool_args: Dict[str, Any]) -> str:
@@ -1264,18 +1233,49 @@ class StageRunner:
             queries = [queries]
         if not isinstance(queries, list):
             return ""
-        rejected = [
-            str(query).strip()
-            for query in queries
-            if query_targets_fact_check_answer(str(query))
-        ]
-        if not rejected:
+        usable = [str(query).strip() for query in queries if str(query).strip()]
+        if usable and not any(
+            query_targets_fact_check_answer(query)
+            or self.source_access_policy.blocked_query_reference(query)
+            for query in usable
+        ):
             return ""
         return (
-            "Search policy rejects a fact-check-oriented query. Reformulate with the "
-            "claim terms, original statement, official record, primary source, or "
-            "independent reporting: " + "; ".join(rejected)
+            "Search policy removed every query because it targeted a ready-made "
+            "fact-check verdict or an excluded source. Reformulate with claim terms, "
+            "an original statement, an official record, a primary source, or "
+            "independent reporting."
         )
+
+    def _sanitize_search_queries(
+        self,
+        tool_name: str,
+        tool_args: Dict[str, Any],
+    ) -> int:
+        """Drop prohibited retrieval strings without discarding usable sibling queries."""
+
+        if not self.source_access_policy.active or tool_name != "text_search":
+            return 0
+        raw_queries = tool_args.get("queries", [])
+        queries = [raw_queries] if isinstance(raw_queries, str) else raw_queries
+        if not isinstance(queries, list):
+            return 0
+        allowed: List[str] = []
+        rejected: List[str] = []
+        for raw_query in queries:
+            query = str(raw_query).strip()
+            if not query:
+                continue
+            if (
+                query_targets_fact_check_answer(query)
+                or self.source_access_policy.blocked_query_reference(query)
+            ):
+                rejected.append(query)
+            else:
+                allowed.append(query)
+        if rejected:
+            tool_args["queries"] = allowed
+        return len(rejected)
 
     def _resolved_question_ids(self, current_steps: List[StageStep]) -> set[str]:
         resolved = set(self.resolved_priority_question_ids)
@@ -1792,6 +1792,10 @@ class StageRunner:
                     "selected_url": item.get("selected_url", ""),
                     "stance": item.get("stance", "unclear"),
                     "directness": item.get("directness", "none"),
+                    "temporal_alignment": item.get(
+                        "temporal_alignment",
+                        "not_applicable",
+                    ),
                     "relevance": item.get("relevance", "low"),
                     "artifact_sha256": item.get("artifact_sha256", ""),
                     "evidence_span": item.get("evidence_span", {}),
@@ -1820,6 +1824,10 @@ class StageRunner:
                         "relevance": item.get("relevance", "low"),
                         "stance": item.get("stance", "unclear"),
                         "directness": item.get("directness", "none"),
+                        "temporal_alignment": item.get(
+                            "temporal_alignment",
+                            "not_applicable",
+                        ),
                         "artifact_sha256": item.get("artifact_sha256", ""),
                         "evidence_span": item.get("evidence_span", {}),
                         "retrieved_at": item.get("retrieved_at", ""),
@@ -1834,6 +1842,10 @@ class StageRunner:
             "evidence": "" if unsafe else str(data.get("evidence", ""))[:320],
             "stance": data.get("stance", "unclear"),
             "directness": data.get("directness", "none"),
+            "temporal_alignment": data.get(
+                "temporal_alignment",
+                "not_applicable",
+            ),
             "relevance": data.get("relevance", "low"),
             "artifact_sha256": data.get("artifact_sha256", ""),
             "evidence_span": data.get("evidence_span", {}),
@@ -1894,6 +1906,10 @@ class StageRunner:
             "regions": regions,
             "summary": str(data.get("summary", ""))[:320],
             "evidence": str(data.get("evidence", ""))[:320],
+            "temporal_alignment": data.get(
+                "temporal_alignment",
+                "not_applicable",
+            ),
         }
 
     def _validate_output(self, output_json: Dict[str, Any]) -> Optional[BaseModel]:

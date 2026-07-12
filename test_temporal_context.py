@@ -28,6 +28,7 @@ from src.orchestrator.state import (
     VerificationResult,
 )
 from src.workflow import VerificationWorkflow, WorkflowConfig
+from scripts.audit_real_trace import TraceReport, _audit_external_claims
 
 
 CLAIM = "The event happened."
@@ -113,7 +114,10 @@ def test_evidence_goal_is_stable_and_preserves_current_time_semantics(
     )
 
 
-def _browse_step(goal: str) -> StageStep:
+def _browse_step(
+    goal: str,
+    temporal_alignment: str = "before_or_at_cutoff",
+) -> StageStep:
     excerpt = "An official record says the event happened."
     return StageStep(
         round=1,
@@ -135,6 +139,7 @@ def _browse_step(goal: str) -> StageStep:
                 "retrieved_at": "2024-01-02T12:00:00Z",
                 "injection_flags": [],
                 "directness": "direct",
+                "temporal_alignment": temporal_alignment,
                 "evidence_eligible": True,
             }
         ),
@@ -173,6 +178,84 @@ def test_runtime_ledger_requires_case_specific_as_of_browse_goal(
 
     assert old_goal.evidence == []
     assert len(as_of_goal.evidence) == 1
+
+    later_event = compile_runtime_ledgers(
+        case,
+        plan,
+        result,
+        [_browse_step(expected_goal, "after_cutoff")],
+    )
+    unknown_time = compile_runtime_ledgers(
+        case,
+        plan,
+        result,
+        [_browse_step(expected_goal, "unknown")],
+    )
+    assert later_event.evidence == []
+    assert unknown_time.evidence == []
+
+
+def test_strict_auditor_uses_case_as_of_goal_and_temporal_alignment(
+    tmp_path: Path,
+) -> None:
+    case = _case(tmp_path, "2024-01-02")
+    expected_goal = evidence_goal_for_case(CLAIM, case)
+    source = SourceRecord(
+        source_id="source-temporal",
+        canonical_url="https://source.example/report",
+        hostname="source.example",
+        registered_domain="source.example",
+        source_family="domain:source.example",
+        artifact_sha256="a" * 64,
+        retrieved_at="2024-01-02T12:00:00Z",
+    )
+    evidence = EvidenceRecord(
+        evidence_id="evidence-temporal",
+        claim_id="claim-q0",
+        source_id=source.source_id,
+        function_call_id="call-visit-1",
+        tool_name="visit",
+        evidence_kind="web_span",
+        exact_text="An official record says the event happened.",
+        span_start=0,
+        span_end=43,
+        artifact_sha256=source.artifact_sha256,
+        retrieved_at=source.retrieved_at,
+        stance="support",
+        quality="moderate",
+    )
+    claim = ClaimRecord(
+        claim_id="claim-q0",
+        text=CLAIM,
+        question_id="q0",
+        claim_scope="external_fact",
+        status="supported",
+    )
+
+    def audit(alignment: str) -> TraceReport:
+        step = _browse_step(expected_goal, alignment)
+        report = TraceReport(path="temporal-fixture.json")
+        _audit_external_claims(
+            [claim.model_dump(mode="json")],
+            [source.model_dump(mode="json")],
+            [evidence.model_dump(mode="json")],
+            [
+                {
+                    "action_type": step.action_type,
+                    "tool_name": step.tool_name,
+                    "tool_result": step.tool_result,
+                    "metadata": step.metadata,
+                }
+            ],
+            report,
+            case,
+        )
+        return report
+
+    assert audit("before_or_at_cutoff").issues == []
+    assert [item.code for item in audit("after_cutoff").issues] == [
+        "EXTERNAL_FACT_MISSING_DIRECT_WEB_EVIDENCE"
+    ]
 
 
 def test_stage_contexts_state_time_semantics_and_replanning_ledger(

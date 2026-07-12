@@ -14,6 +14,7 @@ from src.integrations.gemini import take_runtime_metrics
 from src.orchestrator.evidence_policy import (
     query_targets_fact_check_answer,
     tool_can_decide_claim,
+    web_record_is_temporally_eligible,
 )
 from src.orchestrator.ledger import (
     build_verification_case,
@@ -997,9 +998,7 @@ class Orchestrator:
                 invalid_evidence.append(
                     self._invalid_evidence_reason(item, canonical, question, steps)
                 )
-        if invalid_evidence and not (
-            allow_incomplete and parsed.authenticity_assessment == "uncertain"
-        ):
+        if invalid_evidence and not allow_incomplete:
             return False, (
                 "invalid evidence citations: " + "; ".join(dict.fromkeys(invalid_evidence))
             )
@@ -1008,14 +1007,18 @@ class Orchestrator:
             for anomaly in parsed.visual_anomalies
             if not self._visual_anomaly_is_grounded(anomaly, steps)
         ]
-        if ungrounded_anomalies:
+        if ungrounded_anomalies and not allow_incomplete:
             return False, "visual anomalies must copy one successful anomaly tool result and function_call_id"
         priority_ids = {q.question_id for q in plan.questions if q.priority == 1 and q.question_id}
         covered_ids = {item.related_question for item in evidence if item.related_question}
         missing = sorted(priority_ids - covered_ids)
-        if missing and parsed.authenticity_assessment != "uncertain":
+        if missing and parsed.authenticity_assessment != "uncertain" and not allow_incomplete:
             return False, "incomplete decisive coverage requires an uncertain verification assessment"
-        if parsed.authenticity_assessment != "uncertain" and not evidence:
+        if (
+            parsed.authenticity_assessment != "uncertain"
+            and not evidence
+            and not allow_incomplete
+        ):
             return False, "a non-uncertain assessment requires grounded evidence"
         pending = pending_visual_question_ids(investigation_state) if investigation_state else []
         if pending and not allow_incomplete:
@@ -2659,6 +2662,8 @@ class Orchestrator:
         if str(record.get("directness", "")).strip().lower() != "direct":
             return False
         if not claim_text or str(record.get("goal", "")).strip() != claim_text.strip():
+            return False
+        if not web_record_is_temporally_eligible(record, claim_text):
             return False
         artifact_hash = str(record.get("artifact_sha256", "")).strip().lower()
         retrieved_at = str(record.get("retrieved_at", "")).strip()

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import re
-from typing import Final
+from typing import Any, Final, Mapping
 
 
 EXTERNAL_FACT: Final = "external_fact"
@@ -31,6 +31,8 @@ _REGION_TOOLS: Final = {
 VISUAL_OBSERVATION_TOOLS: Final = (
     _ANOMALY_TOOLS | _REFERENCE_TOOLS | _REGION_TOOLS
 )
+
+AS_OF_GOAL_MARKER: Final = "As-of constraint: evaluate this claim as of "
 
 
 def tool_can_decide_claim(tool_name: str, claim_scope: str) -> bool:
@@ -66,4 +68,23 @@ def query_targets_fact_check_answer(value: str) -> bool:
             r"\b(?:claim|report|image|photo|video|story)\s+(?:fake|false|misleading|debunked|hoax)\b",
             text,
         )
+    )
+
+
+def goal_has_as_of_constraint(goal: str) -> bool:
+    """Return whether a browse goal carries an explicit historical cutoff."""
+
+    return AS_OF_GOAL_MARKER in str(goal or "")
+
+
+def web_record_is_temporally_eligible(
+    record: Mapping[str, Any],
+    goal: str,
+) -> bool:
+    """Require explicit pre-cutoff alignment for historical claim evidence."""
+
+    if not goal_has_as_of_constraint(goal):
+        return True
+    return str(record.get("temporal_alignment", "")).strip().lower() == (
+        "before_or_at_cutoff"
     )

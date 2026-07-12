@@ -549,7 +549,44 @@ def test_evaluation_rejects_fact_check_query_before_search_and_continues(
     assert tool.calls == [{"queries": ["politician official party statement"]}]
     returned = backend.requests[1]["input_payload"][0]
     assert returned["is_error"] is True
-    assert "fact-check-oriented query" in returned["result"][0]["text"]
+    assert "removed every query" in returned["result"][0]["text"]
+
+
+def test_mixed_search_queries_execute_only_policy_eligible_subset() -> None:
+    mixed = _function_call_response()
+    mixed["steps"][0]["arguments"]["queries"] = [
+        "politician joined party fake news",
+        "politician official party statement",
+    ]
+    completed = _completed_response()
+    completed["id"] = "interaction-completed"
+    backend = NativeFakeBackend([mixed, completed])
+    tool = RecordingTool()
+    runner = StageRunner(
+        llm=backend,
+        system_prompt="Investigate.",
+        tools=[tool],
+        output_schema=VerificationResult,
+        max_rounds=2,
+        stage_name="verification",
+        min_tool_calls=1,
+        attach_image=False,
+        source_access_policy=SourceAccessPolicy(
+            policy_id="evaluation",
+            excluded_domains=frozenset({"factcrescendo.com"}),
+        ),
+    )
+
+    parsed, steps = asyncio.run(runner.run("- [q1] verify the party claim"))
+
+    assert parsed is not None
+    assert steps[0].action_type == "tool_call"
+    assert steps[0].tool_args["queries"] == [
+        "politician official party statement"
+    ]
+    assert steps[0].metadata["policy_filtered_query_count"] == 1
+    assert "fake news" not in json.dumps(steps[0].tool_args)
+    assert tool.calls == [{"queries": ["politician official party statement"]}]
 
 
 def test_protocol_correction_exhaustion_is_a_hard_failure_without_forced_output() -> None:

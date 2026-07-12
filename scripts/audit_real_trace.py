@@ -20,14 +20,16 @@ from src.orchestrator.evidence_policy import (  # noqa: E402
     VISUAL_OBSERVATION_TOOLS,
     query_targets_fact_check_answer,
     tool_can_decide_claim,
+    web_record_is_temporally_eligible,
 )
+from src.orchestrator.ledger import evidence_goal_for_case  # noqa: E402
 from src.orchestrator.source_access import (  # noqa: E402
     FACT_CHECK_DOMAIN_MARKERS,
     SourceAccessPolicy,
     benchmark_source_access_policy,
     url_variants,
 )
-from src.orchestrator.state import EvidenceRecord  # noqa: E402
+from src.orchestrator.state import EvidenceRecord, VerificationCase  # noqa: E402
 from src.orchestrator.tool_result import parse_tool_result  # noqa: E402
 
 
@@ -302,6 +304,7 @@ def _audit_external_claims(
     evidence: Sequence[Mapping[str, Any]],
     steps: Sequence[Mapping[str, Any]],
     report: TraceReport,
+    verification_case: VerificationCase | None = None,
 ) -> None:
     by_claim: dict[str, list[Mapping[str, Any]]] = {}
     for item in evidence:
@@ -331,6 +334,14 @@ def _audit_external_claims(
         decided += 1
         claim_id = str(claim.get("claim_id", claim_index)).strip()
         expected_stance = "support" if status == "supported" else "refute"
+        expected_goal = (
+            evidence_goal_for_case(
+                str(claim.get("text", "")).strip(),
+                verification_case,
+            )
+            if verification_case is not None
+            else str(claim.get("text", "")).strip()
+        )
         eligible: list[Mapping[str, Any]] = []
         for item in by_claim.get(claim_id, []):
             try:
@@ -356,7 +367,7 @@ def _audit_external_claims(
                     step,
                     evidence=validated,
                     source_url=source_url,
-                    claim_text=str(claim.get("text", "")).strip(),
+                    claim_text=expected_goal,
                 )
             ):
                 eligible.append(item)
@@ -400,6 +411,7 @@ def _tool_result_has_eligible_web_record(
                 and str(value.get("relevance", "")).strip().casefold()
                 in {"high", "medium", "low"}
                 and str(value.get("goal", "")).strip() == claim_text
+                and web_record_is_temporally_eligible(value, claim_text)
                 and str(value.get("artifact_sha256", "")).strip().casefold()
                 == evidence.artifact_sha256
                 and str(value.get("retrieved_at", "")).strip() == evidence.retrieved_at
@@ -836,6 +848,13 @@ def audit_trace(path: Path) -> TraceReport:
     sources = _rows(ledgers.get("sources"))
     evidence = _rows(ledgers.get("evidence"))
     accepted_evidence = _rows(verification.get("evidence"))
+    verification_case: VerificationCase | None = None
+    raw_case = state.get("verification_case")
+    if isinstance(raw_case, Mapping):
+        try:
+            verification_case = VerificationCase.model_validate(dict(raw_case))
+        except Exception:
+            verification_case = None
     report.stats.update(
         {
             "steps": len(steps),
@@ -880,7 +899,14 @@ def audit_trace(path: Path) -> TraceReport:
         tool_field="tool_used",
         stat_key="accepted_evidence_with_successful_call",
     )
-    _audit_external_claims(claims, sources, evidence, steps, report)
+    _audit_external_claims(
+        claims,
+        sources,
+        evidence,
+        steps,
+        report,
+        verification_case,
+    )
     _audit_visual_external_evidence(claims, evidence, report)
     _audit_leaks(payload, report)
     _audit_interaction_chains(steps, report)

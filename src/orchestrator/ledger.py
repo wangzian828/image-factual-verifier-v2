@@ -7,7 +7,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
-from src.orchestrator.evidence_policy import tool_can_decide_claim
+from src.orchestrator.evidence_policy import (
+    tool_can_decide_claim,
+    web_record_is_temporally_eligible,
+)
 from src.orchestrator.source_provenance import classify_source, content_sha256
 from src.orchestrator.state import (
     ClaimMode,
@@ -267,6 +270,8 @@ def compile_runtime_ledgers(
                 continue
             expected_goal = evidence_goal_for_case(question.claim_text, case)
             if str(record.get("goal", "")).strip() != expected_goal.strip():
+                continue
+            if not web_record_is_temporally_eligible(record, expected_goal):
                 continue
             identity = classify_source(
                 item.source,

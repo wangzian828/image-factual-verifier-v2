@@ -185,6 +185,9 @@ class CropAndSearchTool(BaseTool):
             "relevance": str(best_region.get("relevance", "low")),
             "stance": str(best_region.get("stance", "unclear")),
             "directness": str(best_region.get("directness", "none")),
+            "temporal_alignment": str(
+                best_region.get("temporal_alignment", "not_applicable")
+            ),
             "artifact_sha256": str(best_region.get("artifact_sha256", "")),
             "evidence_span": best_region.get("evidence_span", {}),
             "retrieved_at": str(best_region.get("retrieved_at", "")),
@@ -253,6 +256,7 @@ class CropAndSearchTool(BaseTool):
                     "relevance": "low",
                     "stance": "unclear",
                     "directness": "none",
+                    "temporal_alignment": "unknown",
                     "artifact_sha256": "",
                     "evidence_span": {},
                     "retrieved_at": "",
@@ -285,6 +289,10 @@ class CropAndSearchTool(BaseTool):
                 "relevance": visit_result.get("relevance", "low"),
                 "stance": visit_result.get("stance", "unclear"),
                 "directness": visit_result.get("directness", "none"),
+                "temporal_alignment": visit_result.get(
+                    "temporal_alignment",
+                    "not_applicable",
+                ),
                 "artifact_sha256": visit_result.get("artifact_sha256", ""),
                 "evidence_span": visit_result.get("evidence_span", {}),
                 "retrieved_at": visit_result.get("retrieved_at", ""),
@@ -316,6 +324,7 @@ class CropAndSearchTool(BaseTool):
                 "relevance": "low",
                 "stance": "unclear",
                 "directness": "none",
+                "temporal_alignment": "unknown",
                 "artifact_sha256": "",
                 "evidence_span": {},
                 "retrieved_at": "",

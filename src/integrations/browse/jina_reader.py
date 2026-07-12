@@ -32,6 +32,7 @@ from src.integrations.llm.openai_compatible import (
     resolve_model_wire_api,
 )
 from src.integrations.vlm.qwen_vl import parse_json_object
+from src.orchestrator.evidence_policy import web_record_is_temporally_eligible
 from src.orchestrator.source_access import SourceAccessPolicy
 
 
@@ -52,6 +53,10 @@ Return one JSON object with exactly these keys:
 - stance: one of support, refute, unclear relative to the verification goal
 - directness: direct only when the selected passage itself answers the goal;
   indirect for background or suggestive context; none when no passage is useful
+- temporal_alignment: before_or_at_cutoff when the selected passage explicitly
+  describes the claimed state at or before an as-of cutoff; after_cutoff when it
+  describes a later state or event; unknown when temporal anchoring is insufficient;
+  not_applicable only when the goal has no as-of cutoff
 
 Rules:
 1. Use the page content only.
@@ -73,6 +78,9 @@ Rules:
     unless the goal specifically claims that statement or omission.
 11. Do not use a past state to refute a later change, or a present state to refute an
     undated event. When temporal alignment is missing, use indirect or none.
+12. For an as-of goal, a later-published page may still be useful, but direct evidence
+    must explicitly anchor the described fact at or before the cutoff. A later event,
+    later state, or temporally ambiguous passage is not direct evidence for that claim.
 """
 
 EXTRACT_SCHEMA: Dict[str, Any] = {
@@ -84,6 +92,15 @@ EXTRACT_SCHEMA: Dict[str, Any] = {
         "relevance": {"type": "string", "enum": ["high", "medium", "low"]},
         "stance": {"type": "string", "enum": ["support", "refute", "unclear"]},
         "directness": {"type": "string", "enum": ["direct", "indirect", "none"]},
+        "temporal_alignment": {
+            "type": "string",
+            "enum": [
+                "before_or_at_cutoff",
+                "after_cutoff",
+                "unknown",
+                "not_applicable",
+            ],
+        },
     },
 }
 
@@ -228,11 +245,18 @@ class JinaReaderClient:
             "relevance": extracted.get("relevance", "medium"),
             "stance": extracted.get("stance", "unclear"),
             "directness": extracted.get("directness", "none"),
+            "temporal_alignment": extracted.get(
+                "temporal_alignment",
+                "not_applicable",
+            ),
             "artifact_sha256": extracted.get("artifact_sha256", ""),
             "evidence_span": extracted.get("evidence_span", {}),
             "retrieved_at": datetime.now(timezone.utc).isoformat(),
             "injection_flags": injection_flags,
-            "evidence_eligible": not injection_flags,
+            "evidence_eligible": (
+                not injection_flags
+                and web_record_is_temporally_eligible(extracted, goal)
+            ),
             RUNTIME_METRICS_KEY: extracted.get(RUNTIME_METRICS_KEY, {}),
             "timings": {
                 "fetch_ms": fetch_duration_ms,
@@ -254,6 +278,7 @@ class JinaReaderClient:
                     "relevance": "low",
                     "stance": "unclear",
                     "directness": "none",
+                    "temporal_alignment": "unknown",
                     "evidence_span": {},
                     "evidence_eligible": False,
                     "rationale": f"Blocked by anti-bot or security verification page: {blocked_reason}",
@@ -415,6 +440,10 @@ class JinaReaderClient:
             "relevance": best_visit.get("relevance", "low"),
             "stance": best_visit.get("stance", "unclear"),
             "directness": best_visit.get("directness", "none"),
+            "temporal_alignment": best_visit.get(
+                "temporal_alignment",
+                "not_applicable",
+            ),
             "artifact_sha256": best_visit.get("artifact_sha256", ""),
             "evidence_span": best_visit.get("evidence_span", {}),
             "retrieved_at": best_visit.get("retrieved_at", ""),
@@ -459,6 +488,7 @@ class JinaReaderClient:
             "relevance": "low",
             "stance": "unclear",
             "directness": "none",
+            "temporal_alignment": "unknown",
             "artifact_sha256": "",
             "evidence_span": {},
             "retrieved_at": datetime.now(timezone.utc).isoformat(),
@@ -491,12 +521,24 @@ class JinaReaderClient:
             relevance = str(extracted.get("relevance", "")).strip().lower()
             stance = str(extracted.get("stance", "")).strip().lower()
             directness = str(extracted.get("directness", "")).strip().lower()
+            temporal_alignment = str(
+                extracted.get("temporal_alignment", "not_applicable")
+            ).strip().lower()
             if relevance not in {"high", "medium", "low"}:
                 raise RuntimeError("Evidence extractor returned invalid relevance.")
             if stance not in {"support", "refute", "unclear"}:
                 raise RuntimeError("Evidence extractor returned invalid stance.")
             if directness not in {"direct", "indirect", "none"}:
                 raise RuntimeError("Evidence extractor returned invalid directness.")
+            if temporal_alignment not in {
+                "before_or_at_cutoff",
+                "after_cutoff",
+                "unknown",
+                "not_applicable",
+            }:
+                raise RuntimeError(
+                    "Evidence extractor returned invalid temporal_alignment."
+                )
         except Exception as exc:
             raise attach_runtime_metrics(exc, runtime_metrics)
         if passage_id >= 0:
@@ -512,6 +554,7 @@ class JinaReaderClient:
                 "relevance": relevance,
                 "stance": stance,
                 "directness": directness,
+                "temporal_alignment": temporal_alignment,
                 "artifact_sha256": hashlib.sha256(clipped_content.encode("utf-8")).hexdigest(),
                 "evidence_span": evidence_span,
                 RUNTIME_METRICS_KEY: runtime_metrics,
@@ -736,6 +779,9 @@ class JinaReaderClient:
         relevance = str(parsed.get("relevance", "medium")).strip().lower() or "medium"
         stance = str(parsed.get("stance", "unclear")).strip().lower() or "unclear"
         directness = str(parsed.get("directness", "none")).strip().lower() or "none"
+        temporal_alignment = str(
+            parsed.get("temporal_alignment", "not_applicable")
+        ).strip().lower() or "not_applicable"
         if relevance not in {"high", "medium", "low"}:
             raise attach_runtime_metrics(
                 RuntimeError("Evidence extractor returned invalid relevance."),
@@ -751,6 +797,16 @@ class JinaReaderClient:
                 RuntimeError("Evidence extractor returned invalid directness."),
                 runtime_metrics,
             )
+        if temporal_alignment not in {
+            "before_or_at_cutoff",
+            "after_cutoff",
+            "unknown",
+            "not_applicable",
+        }:
+            raise attach_runtime_metrics(
+                RuntimeError("Evidence extractor returned invalid temporal_alignment."),
+                runtime_metrics,
+            )
         return {
             "rationale": str(parsed.get("rationale", "")).strip(),
             "passage_id": parsed.get("passage_id"),
@@ -758,6 +814,7 @@ class JinaReaderClient:
             "relevance": relevance,
             "stance": stance,
             "directness": directness,
+            "temporal_alignment": temporal_alignment,
             RUNTIME_METRICS_KEY: runtime_metrics,
         }
 
@@ -876,6 +933,15 @@ class JinaReaderClient:
         for visit in candidates:
             relevance = str(visit.get("relevance", "low")).lower()
             score = order.get(relevance, 0)
+            temporal_alignment = str(
+                visit.get("temporal_alignment", "not_applicable")
+            ).lower()
+            if temporal_alignment == "before_or_at_cutoff":
+                score += 4
+            elif temporal_alignment == "after_cutoff":
+                score -= 4
+            elif temporal_alignment == "unknown":
+                score -= 2
             evidence = str(visit.get("evidence", ""))
             if evidence:
                 score += min(len(evidence), 500) / 500.0
