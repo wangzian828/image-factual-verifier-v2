@@ -128,6 +128,7 @@ class DiscoveryRecord(StrictModel):
     function_call_id: str = Field(min_length=1, max_length=200)
     tool_name: str = Field(min_length=1, max_length=100)
     candidate_url: str = ""
+    reference_image_url: str = ""
     title: str = ""
     snippet: str = ""
     candidate_type: Literal["serp", "reverse_image", "visual_reference"]
@@ -376,7 +377,9 @@ class VerificationState:
     stage_timings: Dict[str, float] = field(default_factory=dict)
     total_tool_calls: int = 0
     llm_api_calls: int = 0
-    token_usage: Dict[str, int] = field(default_factory=lambda: {"prompt": 0, "completion": 0})
+    token_usage: Dict[str, int] = field(
+        default_factory=lambda: {"prompt": 0, "completion": 0, "thought": 0}
+    )
     termination: str = ""
     errors: List[str] = field(default_factory=list)
     tool_health: Dict[str, Dict[str, Any]] = field(default_factory=dict)

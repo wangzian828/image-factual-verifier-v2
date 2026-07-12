@@ -113,6 +113,27 @@ def test_coverage_rejects_real_but_question_irrelevant_excerpt() -> None:
     assert "priority questions lack grounded evidence" in reason
 
 
+def test_one_generic_token_does_not_make_evidence_answer_a_question() -> None:
+    question = InvestigationQuestion(
+        question_id="q0",
+        question="Did Sajith Premadasa join the United National Party?",
+        claim_text="Sajith Premadasa joined the United National Party.",
+        priority=1,
+    )
+    evidence = EvidenceItem(
+        function_call_id="call-1",
+        source="https://example.test",
+        summary="A different politician joined another party.",
+        raw_excerpt="A different politician joined another party.",
+        direction="refutes",
+        quality="moderate",
+        tool_used="visit",
+        related_question="q0",
+    )
+
+    assert Orchestrator._evidence_answers_question(evidence, question) is False
+
+
 def test_model_cannot_insert_anomaly_without_anomaly_tool_result() -> None:
     orchestrator = _orchestrator()
     step = _successful_step()
@@ -203,7 +224,7 @@ def test_browse_evidence_without_explicit_stance_is_rejected() -> None:
     assert orchestrator._canonicalize_model_evidence(_evidence(), [step], _plan()) is None
 
 
-def test_duplicate_search_candidates_merge_before_ledger_insertion(tmp_path) -> None:
+def test_visual_and_semantic_search_candidates_keep_distinct_types(tmp_path) -> None:
     image_path = tmp_path / "input.jpg"
     image_path.write_bytes(b"bounded-ledger-fixture")
     step = StageStep(
@@ -244,10 +265,10 @@ def test_duplicate_search_candidates_merge_before_ledger_insertion(tmp_path) -> 
         [step],
     )
 
-    assert len(ledgers.discoveries) == 1
-    assert ledgers.discoveries[0].snippet == (
-        "A longer and more informative reference snippet."
-    )
+    assert len(ledgers.discoveries) == 2
+    by_type = {item.candidate_type: item for item in ledgers.discoveries}
+    assert by_type["reverse_image"].snippet == "Short snippet."
+    assert by_type["serp"].snippet == "A longer and more informative reference snippet."
 
 
 def test_visual_ledger_compilation_is_idempotent(tmp_path) -> None:

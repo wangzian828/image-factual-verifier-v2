@@ -60,6 +60,7 @@ class VisualQuestion(StrictModel):
     claim_id: str
     source_evidence_id: Optional[str] = None
     source_discovery_id: Optional[str] = None
+    reference_image_url: Optional[str] = None
     target_bbox: List[float]
     expected_property: str
     recommended_tools: List[str] = Field(default_factory=list)
@@ -71,6 +72,10 @@ class VisualQuestion(StrictModel):
     def validate_links(self) -> "VisualQuestion":
         if bool(self.source_evidence_id) == bool(self.source_discovery_id):
             raise ValueError("visual question requires exactly one evidence or discovery source id")
+        if self.source_discovery_id and not str(self.reference_image_url or "").strip():
+            raise ValueError("discovery-backed visual question requires a reference_image_url")
+        if self.source_evidence_id and self.reference_image_url is not None:
+            raise ValueError("evidence-backed visual question cannot carry a reference_image_url")
         if len(self.target_bbox) != 4:
             raise ValueError("target_bbox must be [x1,y1,x2,y2]")
         x1, y1, x2, y2 = self.target_bbox
@@ -243,6 +248,10 @@ class InvestigationReducer:
             return "source_evidence_id must match the pending visual question."
         if question.source_discovery_id and args.get("source_discovery_id") != question.source_discovery_id:
             return "source_discovery_id must match the pending visual question."
+        if tool_name == "compare_with_reference" and str(args.get("reference_url", "")).strip() != str(
+            question.reference_image_url or ""
+        ).strip():
+            return "reference_url must match the pending visual question reference_image_url."
         if str(args.get("expected_property", "")).strip() != question.expected_property:
             return "expected_property must match the pending visual question."
         if tool_name != "compare_with_reference" and list(args.get("bbox") or []) != question.target_bbox:
@@ -268,8 +277,16 @@ class InvestigationReducer:
         target = _target_bbox(plan_question, perception)
         created: List[VisualQuestion] = []
 
-        discovery = next((item for item in new_discoveries if item.candidate_type == "reverse_image"), None)
-        reference_url = str(parsed.get("reference_image_url", ""))
+        discovery = next(
+            (
+                item
+                for item in new_discoveries
+                if item.candidate_type in {"reverse_image", "visual_reference"}
+                and str(getattr(item, "reference_image_url", "")).strip()
+            ),
+            None,
+        )
+        reference_url = str(getattr(discovery, "reference_image_url", "") if discovery else "").strip()
         if discovery is not None and reference_url:
             distinction = _id(
                 "reference",
@@ -291,6 +308,7 @@ class InvestigationReducer:
                 visual_question_id=_id("vq", claim_id, distinction),
                 claim_id=claim_id,
                 source_discovery_id=discovery.discovery_id,
+                reference_image_url=reference_url,
                 target_bbox=[0.0, 0.0, 1.0, 1.0],
                 expected_property="Whether the discovered reference is the same visual and contains factual edits.",
                 recommended_tools=["compare_with_reference"],
@@ -392,7 +410,7 @@ class InvestigationReducer:
             actions.append("Record the exhausted visual revisit as typed image-region insufficiency.")
         if unresolved:
             actions.append("Collect direct evidence from a new source family for unresolved claims.")
-        can_stop = not unresolved and not pending and not exhausted_visual
+        can_stop = not unresolved and not pending
         return StoppingAssessment(
             after_function_call_id=call_id,
             can_stop=can_stop,

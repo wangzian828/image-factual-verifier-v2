@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, Mapping, Optional
 
@@ -166,7 +167,7 @@ class CompareWithReferenceTool(BaseTool):
             reference_data_url = await self._download_reference(reference_url)
             if not reference_data_url:
                 return self._error(
-                    f"Could not download reference image from {reference_url}"
+                    f"Reference image access failed for {reference_url}"
                 )
 
             from src.tools.vision_utils import image_to_data_url
@@ -192,6 +193,11 @@ class CompareWithReferenceTool(BaseTool):
                 store=True,
                 max_tokens=8192,
                 temperature=0.0,
+                generation_config={
+                    "thinking_level": os.getenv(
+                        "GEMINI_REFERENCE_COMPARE_THINKING_LEVEL", "minimal"
+                    ).strip().lower()
+                },
             )
             _, status = validate_interaction_response(payload)
             if status != "completed":

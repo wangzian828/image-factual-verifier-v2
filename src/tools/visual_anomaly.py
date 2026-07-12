@@ -2,6 +2,7 @@
 """Visual anomaly detection tool."""
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from typing import Annotated, Any, Dict, Literal
 
@@ -278,6 +279,11 @@ class VisualAnomalyTool(BaseTool):
                 store=True,
                 max_tokens=VISUAL_ANOMALY_MAX_OUTPUT_TOKENS,
                 temperature=0.0,
+                generation_config={
+                    "thinking_level": os.getenv(
+                        "GEMINI_VISUAL_ANOMALY_THINKING_LEVEL", "minimal"
+                    ).strip().lower()
+                },
                 background=False,
             )
             _, interaction_status = validate_interaction_response(payload)

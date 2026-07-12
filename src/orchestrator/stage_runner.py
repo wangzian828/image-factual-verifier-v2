@@ -39,7 +39,9 @@ class StageStep:
     tool_args: Dict[str, Any] = field(default_factory=dict)
     tool_result: str = ""
     output: Optional[Dict[str, Any]] = None
-    tokens: Dict[str, int] = field(default_factory=lambda: {"prompt": 0, "completion": 0})
+    tokens: Dict[str, int] = field(
+        default_factory=lambda: {"prompt": 0, "completion": 0, "thought": 0}
+    )
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -362,10 +364,7 @@ class StageRunner:
                 thought=self._extract_native_thought(payload),
                 action_type="output" if output_json is not None else "format_error",
                 output=output_json,
-                tokens={
-                    "prompt": int(usage.get("total_input_tokens", 0) or 0),
-                    "completion": int(usage.get("total_output_tokens", 0) or 0),
-                },
+                tokens=self._usage_tokens(usage),
                 metadata={
                     "stage": self.stage_name,
                     "native_interactions": True,
@@ -433,10 +432,7 @@ class StageRunner:
                 raise
 
             usage = payload.get("usage", {}) if isinstance(payload.get("usage"), dict) else {}
-            tokens = {
-                "prompt": int(usage.get("total_input_tokens", usage.get("input_tokens", 0)) or 0),
-                "completion": int(usage.get("total_output_tokens", usage.get("output_tokens", 0)) or 0),
-            }
+            tokens = self._usage_tokens(usage)
             common_metadata = {
                 "stage": self.stage_name,
                 "native_interactions": True,
@@ -468,7 +464,11 @@ class StageRunner:
                         thought=thought if call_index == 0 else "",
                         tool_name=tool_name,
                         tool_args=dict(tool_args),
-                        tokens=tokens if call_index == 0 else {"prompt": 0, "completion": 0},
+                        tokens=(
+                            tokens
+                            if call_index == 0
+                            else {"prompt": 0, "completion": 0, "thought": 0}
+                        ),
                         metadata={
                             **common_metadata,
                             "function_call_id": call_id,
@@ -713,27 +713,97 @@ class StageRunner:
         if missing:
             return f"Missing required argument(s) for {tool_name}: {', '.join(missing)}"
         for name, value in tool_args.items():
-            spec = properties.get(name, {})
-            expected = spec.get("type")
-            if expected == "string" and not isinstance(value, str):
-                return f"Argument '{name}' for {tool_name} must be a string."
-            if expected == "array" and not isinstance(value, list):
-                return f"Argument '{name}' for {tool_name} must be an array."
-            if expected == "object" and not isinstance(value, dict):
-                return f"Argument '{name}' for {tool_name} must be an object."
-            if expected == "number" and not isinstance(value, (int, float)):
-                return f"Argument '{name}' for {tool_name} must be a number."
-            if expected == "integer" and not isinstance(value, int):
-                return f"Argument '{name}' for {tool_name} must be an integer."
-            if expected == "boolean" and not isinstance(value, bool):
-                return f"Argument '{name}' for {tool_name} must be a boolean."
-            allowed = spec.get("enum")
-            if isinstance(allowed, list) and value not in allowed:
-                return (
-                    f"Argument '{name}' for {tool_name} must be one of: "
-                    + ", ".join(str(item) for item in allowed)
-                )
+            error = self._validate_schema_value(
+                value,
+                properties.get(name, {}),
+                path=f"Argument '{name}' for {tool_name}",
+            )
+            if error:
+                return error
         return ""
+
+    @classmethod
+    def _validate_schema_value(
+        cls,
+        value: Any,
+        spec: Dict[str, Any],
+        *,
+        path: str,
+    ) -> str:
+        expected = spec.get("type")
+        if expected == "string" and not isinstance(value, str):
+            return f"{path} must be a string."
+        if expected == "array":
+            if not isinstance(value, list):
+                return f"{path} must be an array."
+            minimum = spec.get("minItems")
+            maximum = spec.get("maxItems")
+            if isinstance(minimum, int) and len(value) < minimum:
+                return f"{path} must contain at least {minimum} items."
+            if isinstance(maximum, int) and len(value) > maximum:
+                return f"{path} must contain at most {maximum} items."
+            item_spec = spec.get("items")
+            if isinstance(item_spec, dict):
+                for index, item in enumerate(value):
+                    error = cls._validate_schema_value(
+                        item,
+                        item_spec,
+                        path=f"{path}[{index}]",
+                    )
+                    if error:
+                        return error
+        if expected == "object":
+            if not isinstance(value, dict):
+                return f"{path} must be an object."
+            properties = spec.get("properties", {}) or {}
+            unknown = (
+                sorted(set(value) - set(properties))
+                if spec.get("additionalProperties") is False
+                else []
+            )
+            if unknown:
+                return f"{path} has unknown field(s): {', '.join(unknown)}."
+            for name in spec.get("required", []) or []:
+                if name not in value:
+                    return f"{path} is missing required field '{name}'."
+            for name, child in value.items():
+                child_spec = properties.get(name)
+                if isinstance(child_spec, dict):
+                    error = cls._validate_schema_value(
+                        child,
+                        child_spec,
+                        path=f"{path}.{name}",
+                    )
+                    if error:
+                        return error
+        if expected == "number" and (
+            isinstance(value, bool) or not isinstance(value, (int, float))
+        ):
+            return f"{path} must be a number."
+        if expected == "integer" and (
+            isinstance(value, bool) or not isinstance(value, int)
+        ):
+            return f"{path} must be an integer."
+        if expected == "boolean" and not isinstance(value, bool):
+            return f"{path} must be a boolean."
+        allowed = spec.get("enum")
+        if isinstance(allowed, list) and value not in allowed:
+            return f"{path} must be one of: " + ", ".join(str(item) for item in allowed)
+        return ""
+
+    @staticmethod
+    def _usage_tokens(usage: Dict[str, Any]) -> Dict[str, int]:
+        return {
+            "prompt": int(
+                usage.get("total_input_tokens", usage.get("input_tokens", 0)) or 0
+            ),
+            "completion": int(
+                usage.get("total_output_tokens", usage.get("output_tokens", 0)) or 0
+            ),
+            "thought": int(
+                usage.get("total_thought_tokens", usage.get("thought_tokens", 0)) or 0
+            ),
+        }
 
     def _build_native_input(self, input_context: str) -> Any:
         if not (self.attach_image and self.image_path):
@@ -896,10 +966,7 @@ class StageRunner:
             "max_output_tokens": self.final_output_max_tokens,
             "thinking_level": self.final_output_generation_config.get("thinking_level"),
         }
-        tokens = {
-            "prompt": int(usage.get("total_input_tokens", usage.get("input_tokens", 0)) or 0),
-            "completion": int(usage.get("total_output_tokens", usage.get("output_tokens", 0)) or 0),
-        }
+        tokens = self._usage_tokens(usage)
         if self._extract_native_function_calls(payload):
             metadata["rejection_reason"] = "model requested another function after the tool budget ended"
             steps.append(

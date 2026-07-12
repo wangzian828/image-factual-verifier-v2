@@ -62,7 +62,11 @@ def _function_call_response() -> Dict[str, Any]:
     return {
         "id": "interaction-1",
         "status": "requires_action",
-        "usage": {"total_input_tokens": 100, "total_output_tokens": 20},
+        "usage": {
+            "total_input_tokens": 100,
+            "total_output_tokens": 20,
+            "total_thought_tokens": 0,
+        },
         "steps": [
             {
                 "id": "call-1",
@@ -131,6 +135,7 @@ def test_native_function_call_round_trip() -> None:
         runner.run("Investigation questions:\n- [q0] first question\n- [q1] second question")
     )
 
+    assert steps[0].tokens["thought"] == 0
     assert parsed is not None
     assert parsed.authenticity_assessment == "authentic"
     assert [step.action_type for step in steps] == ["tool_call", "output"]
@@ -166,6 +171,46 @@ def test_native_function_call_round_trip() -> None:
     assert returned["function_call_id"] == "call-1"
     assert "directly answers" in json.dumps(returned["result"])
     assert "is_error" not in function_result
+
+
+def test_native_schema_rejects_non_numeric_array_items() -> None:
+    tool = RecordingTool()
+    tool.parameters = {
+        "type": "object",
+        "properties": {
+            "bbox": {
+                "type": "array",
+                "items": {"type": "number"},
+                "minItems": 4,
+                "maxItems": 4,
+            }
+        },
+        "required": ["bbox"],
+    }
+    runner = StageRunner(
+        llm=NativeFakeBackend([]),
+        system_prompt="",
+        tools=[tool],
+        stage_name="verification",
+    )
+    runner.active_question_ids = ["q1"]
+
+    error = runner._validate_native_tool_args(
+        "text_search",
+        {"question_id": "q1", "bbox": ["0.1", "0.2", "0.8", "0.9"]},
+    )
+
+    assert "bbox' for text_search[0] must be a number" in error
+
+
+def test_usage_records_thought_tokens() -> None:
+    assert StageRunner._usage_tokens(
+        {
+            "total_input_tokens": 11,
+            "total_output_tokens": 7,
+            "total_thought_tokens": 3,
+        }
+    ) == {"prompt": 11, "completion": 7, "thought": 3}
 
 
 def test_native_structured_output_steps_record_request_parent_and_response_id() -> None:

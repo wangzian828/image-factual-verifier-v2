@@ -429,7 +429,6 @@ def _direction_is_decisive(
     }
     if len(eligible) < 2:
         return False
-
     parent = {source_id: source_id for source_id in eligible}
 
     def find(source_id: str) -> str:
@@ -494,7 +493,12 @@ def _failure_code(message: str) -> str:
     lowered = message.lower()
     if "timeout" in lowered:
         return "timeout"
-    if "blocked" in lowered or "access" in lowered or "captcha" in lowered:
+    if (
+        "blocked" in lowered
+        or "access" in lowered
+        or "captcha" in lowered
+        or "could not download" in lowered
+    ):
         return "access_limited"
     if "provider" in lowered or "unavailable" in lowered:
         return "provider_unavailable"
@@ -515,27 +519,79 @@ def _record_discoveries(
         return
     call_id = _step_call_id(step)
     tool_name = str(getattr(step, "tool_name", ""))
-    rows: List[tuple[str, str, str, str]] = []
+    rows: List[tuple[str, str, str, str, str]] = []
     if tool_name == "reverse_image_search":
-        for item in (data.get("lens_results", []) or []) + (data.get("semantic_results", []) or []):
+        valid_references = {
+            str(value).strip()
+            for value in data.get("reference_image_candidates", []) or []
+            if str(value).strip()
+        }
+        for item in data.get("lens_results", []) or []:
             if isinstance(item, dict):
-                rows.append((str(item.get("url", "")), str(item.get("title", "")), str(item.get("snippet", "")), "reverse_image"))
+                reference_url = str(item.get("image_url", "")).strip()
+                rows.append(
+                    (
+                        str(item.get("url", "")),
+                        str(item.get("title", "")),
+                        str(item.get("snippet", "")),
+                        "reverse_image",
+                        reference_url if reference_url in valid_references else "",
+                    )
+                )
+        for item in data.get("semantic_results", []) or []:
+            if isinstance(item, dict):
+                rows.append(
+                    (
+                        str(item.get("url", "")),
+                        str(item.get("title", "")),
+                        str(item.get("snippet", "")),
+                        "serp",
+                        "",
+                    )
+                )
     elif tool_name == "text_search":
         for query in data.get("queries", []) or []:
             if not isinstance(query, dict):
                 continue
             for item in query.get("results", []) or []:
                 if isinstance(item, dict):
-                    rows.append((str(item.get("url", "")), str(item.get("title", "")), str(item.get("snippet", "")), "serp"))
+                    rows.append((str(item.get("url", "")), str(item.get("title", "")), str(item.get("snippet", "")), "serp", ""))
     elif tool_name == "crop_and_search":
+        valid_references = {
+            str(value).strip()
+            for value in data.get("reference_image_candidates", []) or []
+            if str(value).strip()
+        }
         for region in data.get("regions", []) or []:
             if not isinstance(region, dict):
                 continue
-            for item in (region.get("lens_results", []) or []) + (region.get("semantic_results", []) or []):
+            for item in region.get("lens_results", []) or []:
                 if isinstance(item, dict):
-                    rows.append((str(item.get("url", "")), str(item.get("title", "")), str(item.get("snippet", "")), "visual_reference"))
-    for url, title, snippet, candidate_type in _merge_discovery_rows(rows):
-        discovery_id = ledger._id("discovery", call_id, url, title)
+                    reference_url = str(item.get("image_url", "")).strip()
+                    rows.append(
+                        (
+                            str(item.get("url", "")),
+                            str(item.get("title", "")),
+                            str(item.get("snippet", "")),
+                            "visual_reference",
+                            reference_url if reference_url in valid_references else "",
+                        )
+                    )
+            for item in region.get("semantic_results", []) or []:
+                if isinstance(item, dict):
+                    rows.append(
+                        (
+                            str(item.get("url", "")),
+                            str(item.get("title", "")),
+                            str(item.get("snippet", "")),
+                            "serp",
+                            "",
+                        )
+                    )
+    for url, title, snippet, candidate_type, reference_image_url in _merge_discovery_rows(rows):
+        discovery_id = ledger._id(
+            "discovery", call_id, candidate_type, url, title
+        )
         ledger.add_discovery(
             DiscoveryRecord(
                 discovery_id=discovery_id,
@@ -543,6 +599,7 @@ def _record_discoveries(
                 function_call_id=call_id,
                 tool_name=tool_name,
                 candidate_url=url,
+                reference_image_url=reference_image_url,
                 title=title,
                 snippet=snippet,
                 candidate_type=candidate_type,
@@ -551,8 +608,8 @@ def _record_discoveries(
 
 
 def _merge_discovery_rows(
-    rows: Sequence[tuple[str, str, str, str]],
-) -> List[tuple[str, str, str, str]]:
+    rows: Sequence[tuple[str, str, str, str, str]],
+) -> List[tuple[str, str, str, str, str]]:
     """Merge duplicate candidates emitted inside one immutable tool response.
 
     Search providers can return the same URL and title in multiple result groups
@@ -562,20 +619,23 @@ def _merge_discovery_rows(
     produced elsewhere.
     """
 
-    merged: Dict[tuple[str, str, str], tuple[str, str, str, str]] = {}
-    for raw_url, raw_title, raw_snippet, candidate_type in rows:
+    merged: Dict[tuple[str, str, str], tuple[str, str, str, str, str]] = {}
+    for raw_url, raw_title, raw_snippet, candidate_type, raw_reference_image_url in rows:
         url = str(raw_url or "").strip()
         title = " ".join(str(raw_title or "").split())
         snippet = " ".join(str(raw_snippet or "").split())
+        reference_image_url = str(raw_reference_image_url or "").strip()
         if not url:
             continue
         key = (url, title, candidate_type)
         existing = merged.get(key)
-        if existing is None or (len(snippet), snippet) > (
+        candidate = (url, title, snippet, candidate_type, reference_image_url)
+        if existing is None or (bool(reference_image_url), len(snippet), snippet) > (
+            bool(existing[4]),
             len(existing[2]),
             existing[2],
         ):
-            merged[key] = (url, title, snippet, candidate_type)
+            merged[key] = candidate
     return [merged[key] for key in sorted(merged)]
 
 

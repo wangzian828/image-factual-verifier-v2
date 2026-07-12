@@ -54,6 +54,8 @@ Planning receives compact perception context and returns a schema-validated `Ver
 
 Planning has no tools. For the active ledger contract, each decision-relevant question becomes an atomic `ClaimRecord` with ID `claim-<question_id>`; priority 1, 2, and 3 map to `decisive`, `supporting`, and `contextual`. `image_intent` remains a compact planning field, not a substitute for claim slots. Invalid structured output after bounded correction fails the stage; there is no heuristic plan fallback.
 
+For `external_claim`, priority-1 slots must be propositions asserted by the user claim. Image provenance, manipulation, and generation checks remain priority 2 unless the user claim itself asserts authenticity or provenance. This keeps the three-class verdict bound to the supplied claim while preserving broader visual investigation as supporting evidence. A generated or edited image is not automatically `fake`.
+
 ### 3. Iterative Native ReAct
 
 `StageRunner` exposes only the verification allowlist from `src/orchestrator/tool_registry.py`:
@@ -77,6 +79,8 @@ The active native loop is:
 4. Execute local tools and record each call or protocol error as a `StageStep`.
 5. Send `function_result` items using the returned `previous_interaction_id` chain.
 6. Continue until Gemini emits valid structured output or the round budget is exhausted.
+
+Function arguments are recursively validated against their schemas before execution. A ReInspect comparison binds `source_discovery_id` to the exact `reference_image_url` emitted by that visual-search result; the model cannot substitute an unrelated URL. Semantic image-search leads remain ordinary discoveries and do not create mandatory near-duplicate comparisons. Two real access failures exhaust that one visual branch and are recorded as typed insufficiency; they do not become evidence or masquerade as success.
 
 Verification cannot finish without a successful tool call. Premature output is rejected within the same interaction chain when required tool work or priority coverage is missing.
 
@@ -208,9 +212,9 @@ TOOL_CACHE_NAMESPACE=
 
 When enabled, only successful eligible results are cached. TTL limits reuse, and namespace isolates incompatible tool contracts, models, and provider selections. The automatic namespace includes those values unless `TOOL_CACHE_NAMESPACE` overrides it. Cache arguments and results are sanitized before disk persistence.
 
-`MAX_VERIFICATION_ITERATIONS` defaults to `4`; `MIN_VERIFICATION_ITERATIONS` and `LOW_INFORMATION_GAIN_PATIENCE` default to `2`. `WorkflowConfig.max_rounds_verification` defaults to `12`, and `GEMINI_VERIFICATION_MAX_OUTPUT_TOKENS` defaults to `16384` for ReAct turns. The forced schema-only summary after the tool budget uses `GEMINI_VERIFICATION_FINAL_MAX_OUTPUT_TOKENS=32768` and `GEMINI_VERIFICATION_FINAL_THINKING_LEVEL=minimal`, preventing hidden thought tokens from consuming the JSON budget without weakening investigation-time reasoning. Browse concurrency and extraction controls use the `BROWSE_*` variables defined by the integrations.
+`MAX_VERIFICATION_ITERATIONS` defaults to `4`; `MIN_VERIFICATION_ITERATIONS` and `LOW_INFORMATION_GAIN_PATIENCE` default to `2`. `WorkflowConfig.max_rounds_verification` defaults to `12`, and `GEMINI_VERIFICATION_MAX_OUTPUT_TOKENS` defaults to `16384` for ReAct turns. Planning, Verification/ReAct, Replanning, Judgment, browse extraction, schema-bound vision, visual anomaly analysis, and reference comparison all send `generation_config.thinking_level=minimal`. Stage-specific `GEMINI_<STAGE>_THINKING_LEVEL` variables may only preserve that active policy; a non-minimal value is rejected. The forced schema-only summary uses `GEMINI_VERIFICATION_FINAL_MAX_OUTPUT_TOKENS=32768` and the same minimal policy.
 
-`GEMINI_VISION_MIN_OUTPUT_TOKENS` defaults to `8192`. Schema-bound Gemini image observations routed through `OpenAIVisionClient.create_image_json()` set `generation_config.thinking_level` from `GEMINI_VISION_THINKING_LEVEL`, whose default is `minimal`. These calls perform bounded visual extraction rather than planning, so the default preserves output budget for the required JSON. This setting is not a global agent thinking policy: Planning, native ReAct, Replanning, Ledger Judgment, browse passage selection, and direct Interactions tools such as reference comparison keep their own generation configuration. Invalid values or failed visual calls propagate; the runtime does not switch thinking modes, models, providers, or protocols as a fallback.
+`GEMINI_VISION_MIN_OUTPUT_TOKENS` defaults to `8192`. Every Interactions stage step records prompt, completion, and thought-token counts; any non-zero Gemini thought count is a configuration defect and terminates the run while preserving the trace. Invalid values or failed calls propagate; the runtime does not switch thinking modes, models, providers, or protocols as a fallback.
 
 `BROWSE_EXTRACT_MAX_OUTPUT_TOKENS` defaults to `4096`, allowing the passage selector to finish its schema-bound output. `GEMINI_VISION_TIMEOUT_SECONDS` defaults to `240` and controls each Gemini image-observation request. All of these controls are environment-overridable without changing failure semantics.
 

@@ -114,7 +114,11 @@ def _verification_output(evidence: List[Dict[str, Any]], *, assessment: str) -> 
 
 def _build_responses(case: VerificationCase) -> List[Dict[str, Any]]:
     discovery_id = VerificationLedger._id(
-        "discovery", "call-reverse-q0", REFERENCE_PAGE, "NASA reference launch"
+        "discovery",
+        "call-reverse-q0",
+        "reverse_image",
+        REFERENCE_PAGE,
+        "NASA reference launch",
     )
     visual_question_id = investigation_id(
         "vq",
@@ -362,6 +366,7 @@ class FullNativeReferenceOrchestrator(Orchestrator):
                 {
                     "status": "success",
                     "candidate_page_urls": [REFERENCE_PAGE],
+                    "reference_image_candidates": [REFERENCE_IMAGE],
                     "reference_image_url": REFERENCE_IMAGE,
                     "lens_results": [
                         {

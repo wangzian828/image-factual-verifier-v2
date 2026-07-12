@@ -20,6 +20,7 @@ from src.integrations.search.visual_search import (
 )
 from src.integrations.vlm.qwen_vl import parse_json_object
 from src.orchestrator.pipeline import Orchestrator
+from src.orchestrator.ledger import build_verification_case
 from src.orchestrator.context import ContextRenderer
 from src.orchestrator.stage_runner import StageStep
 from src.orchestrator.state import (
@@ -238,6 +239,7 @@ def test_pending_visual_question_blocks_saturation() -> None:
                 visual_question_id="vq0",
                 claim_id="claim-q0",
                 source_discovery_id="discovery-0",
+                reference_image_url="https://example.test/reference.jpg",
                 target_bbox=[0.0, 0.0, 1.0, 1.0],
                 expected_property="Whether the visual matches.",
             )
@@ -260,6 +262,43 @@ def test_pending_visual_question_blocks_saturation() -> None:
     assert audit.pending_visual_questions == ["vq0"]
 
 
+def test_external_claim_plan_cannot_invent_decisive_image_authenticity() -> None:
+    image_path = make_test_image()
+    case = build_verification_case(
+        image_path,
+        user_claim="Sajith Premadasa joined the United National Party.",
+    )
+    plan = VerificationPlan(
+        questions=[
+            InvestigationQuestion(
+                question_id="q0",
+                question="Did Sajith Premadasa join the UNP?",
+                claim_text="Sajith Premadasa joined the United National Party.",
+                suggested_tools=["text_search"],
+                priority=1,
+            ),
+            InvestigationQuestion(
+                question_id="q1",
+                question="Is the screenshot authentic?",
+                claim_text="The screenshot is an authentic unedited image.",
+                suggested_tools=["compare_with_reference"],
+                priority=1,
+            ),
+        ]
+    )
+
+    accepted, reason = Orchestrator._validate_plan_output(
+        plan,
+        {"text_search", "compare_with_reference"},
+        case,
+    )
+
+    assert accepted is False
+    assert "must remain supporting" in reason
+    Path(image_path).unlink(missing_ok=True)
+    Path(image_path).parent.rmdir()
+
+
 def test_pending_reinspect_question_is_a_valid_replanning_target() -> None:
     plan = VerificationPlan(
         questions=[
@@ -279,6 +318,7 @@ def test_pending_reinspect_question_is_a_valid_replanning_target() -> None:
                 visual_question_id="vq0",
                 claim_id="claim-q0",
                 source_discovery_id="discovery-0",
+                reference_image_url="https://example.test/reference.jpg",
                 target_bbox=[0.1, 0.2, 0.9, 0.8],
                 expected_property="Whether the banner text matches the source template.",
                 recommended_tools=["crop_and_search"],
@@ -320,11 +360,38 @@ def test_pending_reinspect_question_is_a_valid_replanning_target() -> None:
     assert "target_bbox=[0.1, 0.2, 0.9, 0.8]" in context
 
 
+def test_compare_reinspect_requires_bound_reference_image_url() -> None:
+    question = VisualQuestion(
+        visual_question_id="vq0",
+        claim_id="claim-q0",
+        source_discovery_id="discovery-0",
+        reference_image_url="https://example.test/bound.jpg",
+        target_bbox=[0.0, 0.0, 1.0, 1.0],
+        expected_property="Whether the visual matches.",
+    )
+    investigation = InvestigationState(visual_questions=[question])
+    args = {
+        "visual_question_id": "vq0",
+        "source_discovery_id": "discovery-0",
+        "reference_url": "https://example.test/invented.jpg",
+        "expected_property": "Whether the visual matches.",
+    }
+
+    error = InvestigationReducer.validate_visual_call(
+        investigation,
+        "compare_with_reference",
+        args,
+    )
+
+    assert "reference_url must match" in error
+
+
 def test_visual_reinspect_failure_requires_two_real_attempts_to_exhaust() -> None:
     question = VisualQuestion(
         visual_question_id="vq0",
         claim_id="claim-q0",
         source_discovery_id="discovery-0",
+        reference_image_url="https://example.test/reference.jpg",
         target_bbox=[0.0, 0.0, 1.0, 1.0],
         expected_property="Whether the visual matches.",
     )
@@ -352,11 +419,60 @@ def test_visual_reinspect_failure_requires_two_real_attempts_to_exhaust() -> Non
     assert question.failed_attempts == 2
 
 
+def test_exhausted_reinspect_does_not_block_budget_stopping() -> None:
+    orchestrator = object.__new__(Orchestrator)
+    orchestrator.max_verification_iterations = 2
+    orchestrator.min_verification_iterations = 1
+    orchestrator.low_information_gain_patience = 1
+    plan = VerificationPlan(
+        questions=[
+            InvestigationQuestion(
+                question_id="q0",
+                question="Does the reference match?",
+                claim_text="The reference matches.",
+                priority=1,
+            )
+        ]
+    )
+    investigation = InvestigationState(
+        visual_questions=[
+            VisualQuestion(
+                visual_question_id="vq0",
+                claim_id="claim-q0",
+                source_discovery_id="discovery-0",
+                reference_image_url="https://example.test/reference.jpg",
+                target_bbox=[0.0, 0.0, 1.0, 1.0],
+                expected_property="Whether the visual matches.",
+                status="exhausted",
+                failed_attempts=2,
+            )
+        ]
+    )
+    ledgers = VerificationLedgers()
+    audit = orchestrator._audit_plan_coverage(
+        plan,
+        [],
+        pipeline_module.VerificationResult(),
+        iteration=2,
+        ledgers=ledgers,
+        investigation_state=investigation,
+        progress_before=orchestrator._investigation_progress_signature(
+            ledgers,
+            investigation,
+        ),
+        previous_low_information_gain_streak=1,
+    )
+
+    assert audit.investigation_complete is True
+    assert audit.pending_visual_questions == ["vq0"]
+
+
 def test_rejected_reinspect_call_does_not_consume_failure_attempt() -> None:
     question = VisualQuestion(
         visual_question_id="vq0",
         claim_id="claim-q0",
         source_discovery_id="discovery-0",
+        reference_image_url="https://example.test/reference.jpg",
         target_bbox=[0.0, 0.0, 1.0, 1.0],
         expected_property="Whether the visual matches.",
     )

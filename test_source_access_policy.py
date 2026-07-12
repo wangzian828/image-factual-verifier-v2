@@ -394,6 +394,7 @@ def test_agent_control_state_exposes_full_pending_reinspect_spec() -> None:
         "claim_id": "claim-q0",
         "source_discovery_id": "discovery-1",
         "source_evidence_id": None,
+        "reference_image_url": "https://example.test/reference.jpg",
         "target_bbox": [0.0, 0.0, 1.0, 1.0],
         "expected_property": "Whether the images match.",
         "recommended_tools": ["compare_with_reference"],

@@ -102,6 +102,7 @@ def test_visual_anomaly_uses_interactions_with_exact_structured_schema(tmp_path)
     assert request["background"] is False
     assert request["max_tokens"] == 8192
     assert request["temperature"] == 0.0
+    assert request["generation_config"] == {"thinking_level": "minimal"}
     assert request["system_instruction"].endswith(
         "return only one JSON object without markdown or commentary."
     )

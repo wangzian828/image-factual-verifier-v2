@@ -313,8 +313,16 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
         os.getenv("GEMINI_VERIFICATION_FINAL_MAX_OUTPUT_TOKENS", "32768"),
         name="verification final max output tokens",
     )
+    stage_thinking_levels = {
+        stage.lower(): os.getenv(
+            f"GEMINI_{stage}_THINKING_LEVEL",
+            os.getenv("GEMINI_AGENT_THINKING_LEVEL", "minimal"),
+        ).strip().lower()
+        for stage in ("PLANNING", "VERIFICATION", "REPLANNING", "JUDGMENT")
+    }
     verification_final_thinking_level = os.getenv(
-        "GEMINI_VERIFICATION_FINAL_THINKING_LEVEL", "minimal"
+        "GEMINI_VERIFICATION_FINAL_THINKING_LEVEL",
+        stage_thinking_levels["verification"],
     ).strip().lower()
     explicit_policy = (
         SourceAccessPolicy.load(args.source_access_policy)
@@ -377,6 +385,7 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
             "verification_final_thinking_level": (
                 verification_final_thinking_level
             ),
+            "stage_thinking_levels": stage_thinking_levels,
             "concurrency": max(1, args.concurrency),
         },
         "source_access_policy": {

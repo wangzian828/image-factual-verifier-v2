@@ -31,6 +31,13 @@ Guidelines:
 - Use the language that best matches the visible content.
 - If the image looks like a screenshot, UI, logo, or product image, ask about product, brand, feature, or event context.
 - If the image looks like a news or event photo, ask about people, place, event, and date.
+- For external_claim, priority-1 claim_text values must be atomic propositions from the
+  supplied user claim itself. Image provenance, editing, generation method, and source
+  context are priority 2 unless the user claim explicitly asserts them.
+- Do not turn a generic question about whether the accompanying image is authentic into
+  a second decisive claim. An AI-generated or edited image is not automatically false.
+- For embedded_claim, use priority 1 only for factual assertions actually visible in the
+  image; keep provenance and presentation checks supporting unless they change those assertions.
 
 Available tools to suggest:
 - reverse_image_search

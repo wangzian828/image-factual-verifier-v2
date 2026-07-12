@@ -104,6 +104,12 @@ def test_eval_writes_compact_canonical_artifacts(
     assert manifest["agent"]["verification_max_output_tokens"] == 16384
     assert manifest["agent"]["verification_final_max_output_tokens"] == 32768
     assert manifest["agent"]["verification_final_thinking_level"] == "minimal"
+    assert manifest["agent"]["stage_thinking_levels"] == {
+        "planning": "minimal",
+        "verification": "minimal",
+        "replanning": "minimal",
+        "judgment": "minimal",
+    }
     prediction = json.loads(
         (run_dir / "predictions.jsonl").read_text(encoding="utf-8").strip()
     )

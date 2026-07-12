@@ -79,9 +79,12 @@ class CropAndSearchTool(BaseTool):
                 "bbox": {
                     "type": "array",
                     "description": (
-                        "One bounding box [x1,y1,x2,y2] or a list of bounding boxes. "
+                        "One bounding box [x1,y1,x2,y2]. "
                         "Coordinates may be normalized 0-1 or absolute pixels."
                     ),
+                    "items": {"type": "number"},
+                    "minItems": 4,
+                    "maxItems": 4,
                 },
                 "goal": {
                     "type": "string",
@@ -131,7 +134,7 @@ class CropAndSearchTool(BaseTool):
         if not bboxes:
             return {
                 "status": "error",
-                "error": "bbox must be one box [x1,y1,x2,y2] or a list of boxes.",
+                "error": "bbox must be one box [x1,y1,x2,y2] with numeric coordinates.",
             }
 
         if not Path(image_input).exists():
@@ -325,16 +328,7 @@ class CropAndSearchTool(BaseTool):
             return []
         if len(raw_bbox) == 4 and all(isinstance(v, (int, float)) for v in raw_bbox):
             return [[float(v) for v in raw_bbox]]
-
-        bboxes: List[List[float]] = []
-        for item in raw_bbox:
-            if (
-                isinstance(item, list)
-                and len(item) == 4
-                and all(isinstance(v, (int, float)) for v in item)
-            ):
-                bboxes.append([float(v) for v in item])
-        return bboxes
+        return []
 
     def _crop_region(
         self,

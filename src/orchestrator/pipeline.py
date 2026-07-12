@@ -27,6 +27,7 @@ from src.orchestrator.source_provenance import canonicalize_url, classify_source
 from src.orchestrator.source_access import SourceAccessPolicy
 from src.orchestrator.stages import judgment, planning, verification
 from src.orchestrator.state import (
+    ClaimMode,
     CoverageAudit,
     Entity,
     EvidenceItem,
@@ -396,9 +397,13 @@ class Orchestrator:
             output_validator=lambda parsed, steps: self._validate_plan_output(
                 parsed,
                 set(STAGE_TOOLS["verification"]),
+                state.verification_case,
             ),
             attach_image=False,
             max_output_tokens=self._stage_output_tokens("PLANNING", 8192),
+            generation_config={
+                "thinking_level": self._stage_thinking_level("PLANNING")
+            },
         )
         context = ContextRenderer.render_for_planning(
             state.perception or PerceptionReport(),
@@ -542,6 +547,9 @@ class Orchestrator:
                 ],
                 source_access_policy=self.source_access_policy,
                 max_output_tokens=self._stage_output_tokens("VERIFICATION", 16384),
+                generation_config={
+                    "thinking_level": self._stage_thinking_level("VERIFICATION")
+                },
                 final_output_max_tokens=self._stage_output_tokens(
                     "VERIFICATION_FINAL", 32768
                 ),
@@ -611,16 +619,6 @@ class Orchestrator:
                 state.ledgers,
                 state.investigation_state,
             )
-            exhausted_visual = [
-                item.visual_question_id
-                for item in state.investigation_state.visual_questions
-                if item.status == "exhausted"
-            ]
-            if exhausted_visual:
-                raise RuntimeError(
-                    "Verification failed: required ReInspect observations failed twice: "
-                    + ", ".join(exhausted_visual)
-                )
             audit = self._audit_plan_coverage(
                 state.plan or VerificationPlan(),
                 all_verification_steps,
@@ -694,7 +692,7 @@ class Orchestrator:
         blocked_claims = {
             item.claim_id: item.status
             for item in investigation_state.visual_questions
-            if item.status in {"pending", "exhausted"}
+            if item.status == "pending"
         }
         for claim in ledgers.claims:
             status = blocked_claims.get(claim.claim_id)
@@ -702,8 +700,16 @@ class Orchestrator:
                 claim.status = "open"
                 claim.unresolved_distinction = (
                     "A search-conditioned visual question still requires a real image observation."
-                    if status == "pending"
-                    else "The required image region could not be observed after two real visual attempts."
+                )
+        exhausted_claims = {
+            item.claim_id
+            for item in investigation_state.visual_questions
+            if item.status == "exhausted"
+        }
+        for claim in ledgers.claims:
+            if claim.claim_id in exhausted_claims and claim.status == "open":
+                claim.unresolved_distinction = (
+                    "A search-conditioned reference could not be observed after two real attempts."
                 )
 
     async def _run_judgment(self, state: VerificationState, image_path: str) -> FinalJudgment:
@@ -731,9 +737,7 @@ class Orchestrator:
             attach_image=False,
             max_output_tokens=self._stage_output_tokens("JUDGMENT", 8192),
             generation_config={
-                "thinking_level": os.getenv(
-                    "GEMINI_JUDGMENT_THINKING_LEVEL", "minimal"
-                ).strip().lower()
+                    "thinking_level": self._stage_thinking_level("JUDGMENT")
             },
         )
         context = ContextRenderer.render_for_judgment(
@@ -803,6 +807,9 @@ class Orchestrator:
             ),
             attach_image=False,
             max_output_tokens=self._stage_output_tokens("REPLANNING", 8192),
+            generation_config={
+                "thinking_level": self._stage_thinking_level("REPLANNING")
+            },
         )
         context = ContextRenderer.render_for_replanning(
             state.perception or PerceptionReport(),
@@ -832,6 +839,7 @@ class Orchestrator:
 
         questions = {question.question_id: question for question in plan.questions}
         evidence = []
+        invalid_evidence_questions = []
         for item in parsed.evidence:
             canonical = self._canonicalize_model_evidence(item, steps, plan)
             question = questions.get(item.related_question)
@@ -840,6 +848,13 @@ class Orchestrator:
                 question,
             ):
                 evidence.append(canonical)
+            else:
+                invalid_evidence_questions.append(item.related_question or "unknown")
+        if invalid_evidence_questions:
+            return False, (
+                "priority questions lack grounded evidence: "
+                + ", ".join(sorted(set(invalid_evidence_questions)))
+            )
         ungrounded_anomalies = [
             anomaly
             for anomaly in parsed.visual_anomalies
@@ -866,6 +881,7 @@ class Orchestrator:
     def _validate_plan_output(
         parsed: VerificationPlan,
         available_tools: Optional[set[str]] = None,
+        verification_case: Optional[VerificationCase] = None,
     ) -> tuple[bool, str]:
         if not parsed.questions:
             return False, "the plan must contain at least one investigation question"
@@ -876,6 +892,42 @@ class Orchestrator:
             return False, "all investigation questions need unique non-empty question_id values"
         if any(not question.claim_text.strip() for question in parsed.questions):
             return False, "every investigation question needs a declarative claim_text"
+        if (
+            verification_case is not None
+            and verification_case.claim_mode == ClaimMode.EXTERNAL
+        ):
+            user_claim = str(verification_case.user_claim or "").casefold()
+            authenticity_claim_tokens = {
+                "ai-generated",
+                "authentic",
+                "edited",
+                "fabricated",
+                "genuine",
+                "generated",
+                "manipulated",
+                "original",
+                "provenance",
+                "unedited",
+            }
+            user_asserts_authenticity = any(
+                token in user_claim for token in authenticity_claim_tokens
+            )
+            invented_visual_claims = [
+                question.question_id
+                for question in parsed.questions
+                if question.priority == 1
+                and not user_asserts_authenticity
+                and any(
+                    token in question.claim_text.casefold()
+                    for token in authenticity_claim_tokens
+                )
+            ]
+            if invented_visual_claims:
+                return False, (
+                    "external_claim visual provenance or manipulation checks must remain "
+                    "supporting unless the user claim asserts them: "
+                    + ", ".join(invented_visual_claims)
+                )
         available = available_tools or set()
         invalid = sorted(
             tool
@@ -1091,6 +1143,18 @@ class Orchestrator:
             )
         return tokens
 
+    @staticmethod
+    def _stage_thinking_level(stage_name: str) -> str:
+        value = os.getenv(
+            f"GEMINI_{stage_name}_THINKING_LEVEL",
+            os.getenv("GEMINI_AGENT_THINKING_LEVEL", "minimal"),
+        ).strip().lower()
+        if value != "minimal":
+            raise ValueError(
+                f"GEMINI_{stage_name}_THINKING_LEVEL must be 'minimal' for the active agent."
+            )
+        return value
+
     def _audit_plan_coverage(
         self,
         plan: VerificationPlan,
@@ -1193,7 +1257,6 @@ class Orchestrator:
             bool(plan.questions)
             and not unresolved_priority
             and not pending_visual
-            and not exhausted_visual
         )
         complete = decisive_complete and not unattempted_supporting
         saturated = (
@@ -1201,7 +1264,6 @@ class Orchestrator:
             and iteration >= self.min_verification_iterations
             and low_information_gain_streak >= self.low_information_gain_patience
             and not pending_visual
-            and not exhausted_visual
             and not unattempted_supporting
         )
         hard_budget_exhausted = (
@@ -1416,6 +1478,16 @@ class Orchestrator:
         for step in steps:
             state.token_usage["prompt"] += step.tokens.get("prompt", 0)
             state.token_usage["completion"] += step.tokens.get("completion", 0)
+            state.token_usage["thought"] += step.tokens.get("thought", 0)
+            if (
+                self.provider == "gemini"
+                and str(self.llm.wire_api).lower() == "interactions"
+                and step.tokens.get("thought", 0) > 0
+            ):
+                raise RuntimeError(
+                    f"Gemini stage '{step.stage_name}' returned non-zero thought tokens "
+                    "despite the required minimal thinking policy."
+                )
         state.llm_api_calls += sum(
             1 for step in steps if step.metadata.get("llm_duration_ms") is not None
         )
@@ -1974,14 +2046,15 @@ class Orchestrator:
                 " ".join(question.suggested_queries),
             ]
         )
-        return bool(cls._semantic_tokens(question_text) & cls._semantic_tokens(evidence_text))
+        overlap = cls._semantic_tokens(question_text) & cls._semantic_tokens(evidence_text)
+        return len(overlap) >= 2
 
     @staticmethod
     def _semantic_tokens(value: str) -> set[str]:
         text = str(value or "").lower()
         stopwords = {
             "about", "after", "before", "could", "does", "from", "have",
-            "image", "into", "photo", "picture", "shown", "that", "this",
+            "image", "into", "join", "party", "photo", "picture", "shown", "that", "this",
             "using", "what", "when", "where", "which", "whether", "with",
         }
         tokens: set[str] = set()
