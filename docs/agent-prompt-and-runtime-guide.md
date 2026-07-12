@@ -83,7 +83,7 @@ No prompt-tag translation is used on this path. The legacy `<tool_call>` parser 
 
 ### `function_call` to `function_result`
 
-For each model `function_call`, **[deterministic code]** requires a call ID, known tool, recursively schema-valid arguments, explicit valid `question_id`, a nonduplicate target, available per-tool budget, permitted search query, fair P1/P2 service, and, when present, an exact pending ReInspect specification. The runner stores the control ID as private `__question_id` and the immutable claim as `__claim_text`; neither is forwarded as an arbitrary tool argument. For retrieval tools, `goal` is overwritten with immutable `claim_text`.
+For each model `function_call`, **[deterministic code]** requires a call ID, known tool, recursively schema-valid arguments, explicit valid `question_id`, a nonduplicate target, available per-tool budget, permitted search query, and, when present, an exact pending ReInspect specification. The runner stores the control ID as private `__question_id` and the immutable claim as `__claim_text`; neither is forwarded as an arbitrary tool argument. ReAct tool order is model-chosen; deterministic output validation later requires every unresolved P1/P2 question to have a real attempt. For retrieval tools, `goal` is overwritten with immutable `claim_text`.
 
 A valid call executes locally. Exceptions and contract violations become typed error observations during verification, not successful evidence. The returned native item is:
 
@@ -188,7 +188,7 @@ The main gates are cumulative:
 - Startup: required tools and credentials/providers exist; Gemini paths use Interactions; all active thinking levels equal `minimal`.
 - Case/perception: strict claim contract, hash equality, normalized geometry, required successful observations.
 - Plan/replan: bounded structure, immutable claims/scopes/priorities, active tool registry, source-query policy.
-- Action: valid interaction envelope/call ID/schema/question, duplicate and budget limits, source-access boundary, P1/P2 service, exact ReInspect binding.
+- Action: valid interaction envelope/call ID/schema/question, duplicate and budget limits, source-access boundary, exact ReInspect binding.
 - Observation/evidence: tool JSON status contract, successful call provenance, exact excerpts, source/artifact/time/span/directness/injection checks, scope compatibility.
 - Output/stop/judgment: successful tool work, required attempts, no pending visual, deterministic audit stop, exact ledger IDs and verdict policy.
 

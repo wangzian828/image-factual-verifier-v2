@@ -255,7 +255,7 @@ def test_reverse_search_removes_blocked_pages_and_reference_images() -> None:
     ]
 
 
-def test_priority_scheduler_requires_each_p1_before_resampling() -> None:
+def test_react_tool_selection_is_not_forced_into_priority_rotation() -> None:
     runner = StageRunner(
         llm=object(),
         system_prompt="",
@@ -275,52 +275,19 @@ def test_priority_scheduler_requires_each_p1_before_resampling() -> None:
         {"__question_id": "q0"},
         [StageStep(action_type="tool_call", tool_args={"__question_id": "q0"})],
     )
-    assert "q1" in repeated
+    assert repeated == ""
 
-    balanced = runner._priority_coverage_error(
-        {"__question_id": "q0"},
-        [
-            StageStep(action_type="tool_call", tool_args={"__question_id": "q0"}),
-            StageStep(action_type="tool_call", tool_args={"__question_id": "q1"}),
-        ],
-    )
-    assert balanced == ""
-
-    fake_reinspection = runner._priority_coverage_error(
+    pending_reinspection = runner._priority_coverage_error(
         {"__question_id": "q0", "visual_question_id": "vq-fabricated"},
         [
             StageStep(action_type="tool_call", tool_args={"__question_id": "q0"}),
             StageStep(action_type="tool_call", tool_args={"__question_id": "q0"}),
         ],
     )
-    assert "q1" in fake_reinspection
+    assert pending_reinspection == ""
 
 
-def test_resolved_p1_does_not_block_remaining_question_or_p2() -> None:
-    runner = StageRunner(
-        llm=object(),
-        system_prompt="",
-        tools=[],
-        output_schema=VerificationResult,
-        stage_name="verification",
-        priority_question_ids=["q0", "q1"],
-        resolved_priority_question_ids=["q0"],
-    )
-    assert runner._priority_coverage_error({"__question_id": "q1"}, []) == ""
-
-    all_resolved = StageRunner(
-        llm=object(),
-        system_prompt="",
-        tools=[],
-        output_schema=VerificationResult,
-        stage_name="verification",
-        priority_question_ids=["q0"],
-        resolved_priority_question_ids=["q0"],
-    )
-    assert all_resolved._priority_coverage_error({"__question_id": "q2"}, []) == ""
-
-
-def test_scheduler_attempts_p2_after_each_active_p1_is_touched() -> None:
+def test_iteration_output_requires_every_unresolved_required_question_attempt() -> None:
     from src.orchestrator.stage_runner import StageStep
 
     runner = StageRunner(
@@ -336,15 +303,13 @@ def test_scheduler_attempts_p2_after_each_active_p1_is_touched() -> None:
         StageStep(action_type="tool_call", tool_args={"__question_id": "q0"})
     ]
 
-    assert "q1" in runner._priority_coverage_error(
-        {"__question_id": "q0"},
-        touched_p1,
-    )
-    assert runner._priority_coverage_error(
-        {"__question_id": "q1"},
-        touched_p1,
-    ) == ""
     assert "q1" in runner._required_question_output_error(touched_p1)
+    assert runner._required_question_output_error(
+        [
+            *touched_p1,
+            StageStep(action_type="tool_call", tool_args={"__question_id": "q1"}),
+        ]
+    ) == ""
 
 
 def test_scheduler_does_not_count_rejected_call_as_question_attempt() -> None:
@@ -365,41 +330,7 @@ def test_scheduler_does_not_count_rejected_call_as_question_attempt() -> None:
     assert "q0" in runner._required_question_output_error(rejected)
 
 
-def test_valid_pending_reinspection_can_preempt_fairness() -> None:
-    from src.orchestrator.stage_runner import StageStep
-
-    visual_id = "vq-required"
-    prior = StageStep(
-        action_type="tool_call",
-        tool_args={"__question_id": "q0"},
-        metadata={
-            "investigation_state_update": {
-                "created_visual_questions": [
-                    {
-                        "visual_question_id": visual_id,
-                        "claim_id": "claim-q0",
-                        "status": "pending",
-                    }
-                ]
-            }
-        },
-    )
-    runner = StageRunner(
-        llm=object(),
-        system_prompt="",
-        tools=[],
-        output_schema=VerificationResult,
-        stage_name="verification",
-        priority_question_ids=["q0", "q1"],
-        prior_steps=[prior],
-    )
-    assert runner._priority_coverage_error(
-        {"__question_id": "q0", "visual_question_id": visual_id},
-        [],
-    ) == ""
-
-
-def test_newly_resolved_p1_leaves_fairness_rotation_immediately() -> None:
+def test_resolved_required_question_does_not_need_another_attempt_before_output() -> None:
     from src.orchestrator.stage_runner import StageStep
 
     resolved = StageStep(
@@ -422,9 +353,12 @@ def test_newly_resolved_p1_leaves_fairness_rotation_immediately() -> None:
         stage_name="verification",
         priority_question_ids=["q0", "q1"],
     )
-    assert runner._priority_coverage_error(
-        {"__question_id": "q1"},
-        [resolved],
+    assert "q1" in runner._required_question_output_error([resolved])
+    assert runner._required_question_output_error(
+        [
+            resolved,
+            StageStep(action_type="tool_call", tool_args={"__question_id": "q1"}),
+        ]
     ) == ""
 
 
