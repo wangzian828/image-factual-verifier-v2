@@ -3,11 +3,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from typing import Any, Dict, List, Literal, Optional, Sequence
 
 from pydantic import Field, model_validator
 
-from src.orchestrator.evidence_policy import EXTERNAL_FACT
+from src.orchestrator.evidence_policy import EXTERNAL_FACT, IMAGE_PROVENANCE
 from src.orchestrator.source_provenance import classify_source
 from src.orchestrator.state import (
     ClaimRecord,
@@ -250,9 +251,9 @@ class InvestigationReducer:
                 f"Tool '{tool_name}' is not allowed for visual question "
                 f"'{visual_question_id}'. Use: {', '.join(question.recommended_tools)}."
             )
-        if question.source_evidence_id and args.get("source_evidence_id") != question.source_evidence_id:
+        if question.source_evidence_id and str(args.get("source_evidence_id", "")).strip() != question.source_evidence_id:
             return "source_evidence_id must match the pending visual question."
-        if question.source_discovery_id and args.get("source_discovery_id") != question.source_discovery_id:
+        if question.source_discovery_id and str(args.get("source_discovery_id", "")).strip() != question.source_discovery_id:
             return "source_discovery_id must match the pending visual question."
         if tool_name == "compare_with_reference" and str(args.get("reference_url", "")).strip() != str(
             question.reference_image_url or ""
@@ -260,7 +261,9 @@ class InvestigationReducer:
             return "reference_url must match the pending visual question reference_image_url."
         if str(args.get("expected_property", "")).strip() != question.expected_property:
             return "expected_property must match the pending visual question."
-        if tool_name != "compare_with_reference" and list(args.get("bbox") or []) != question.target_bbox:
+        if tool_name in {"crop_and_inspect", "crop_and_search", "count_objects", "ocr_with_position"} and list(
+            args.get("bbox") or []
+        ) != question.target_bbox:
             return "bbox must match the pending visual question target_bbox."
         return ""
 
@@ -353,13 +356,21 @@ class InvestigationReducer:
             if existing is not None:
                 evidence = None
         if evidence is not None and any(token in claim_text for token in visual_tokens):
+            recommended_tools = ["ocr_with_position", "crop_and_inspect"]
+            if getattr(plan_question, "claim_scope", "") == IMAGE_PROVENANCE and not _question_targets_visible_text(
+                plan_question
+            ):
+                evidence = None
+            elif getattr(plan_question, "claim_scope", "") == IMAGE_PROVENANCE:
+                recommended_tools = ["ocr_with_position"]
+        if evidence is not None and any(token in claim_text for token in visual_tokens):
             visual = VisualQuestion(
                 visual_question_id=_id("vq", claim_id, distinction),
                 claim_id=claim_id,
                 source_evidence_id=evidence.evidence_id,
                 target_bbox=target,
                 expected_property=f"Whether the target image region is consistent with: {evidence.exact_text[:240]}",
-                recommended_tools=["ocr_with_position", "crop_and_inspect"],
+                recommended_tools=recommended_tools,
             )
             if _append_unique(state.visual_questions, visual, "visual_question_id"):
                 created.append(visual)
@@ -498,24 +509,91 @@ def _summary(parsed: Dict[str, Any], succeeded: bool) -> str:
 
 
 def _target_bbox(question: Any, perception: PerceptionReport) -> List[float]:
-    target_tokens = set()
+    target_tokens: set[str] = set()
+    question_text = ""
+    claim_scope = ""
     if question is not None:
-        text = " ".join(
+        question_text = " ".join(
             [question.question, question.claim_text, *question.related_entities]
         ).lower()
-        target_tokens = set(text.split())
+        claim_scope = str(getattr(question, "claim_scope", "")).strip()
+        target_tokens = {
+            token
+            for token in re.split(r"[^a-z0-9]+", question_text)
+            if len(token) >= 3
+        }
+    if not _question_targets_visible_text(question):
+        entity_matches = []
+        for entity in perception.entities:
+            if len(entity.bbox) != 4:
+                continue
+            score = _token_overlap_score(entity.name, target_tokens)
+            if target_tokens and score <= 0:
+                continue
+            area = _bbox_area(entity.bbox)
+            entity_matches.append((score, area, [float(item) for item in entity.bbox]))
+        if entity_matches:
+            entity_matches.sort(key=lambda item: (item[0], item[1]), reverse=True)
+            return entity_matches[0][2]
+        if claim_scope == IMAGE_PROVENANCE:
+            large_entities = [
+                [float(item) for item in entity.bbox]
+                for entity in perception.entities
+                if len(entity.bbox) == 4 and _bbox_area(entity.bbox) >= 0.08
+            ]
+            if large_entities:
+                large_entities.sort(key=_bbox_area, reverse=True)
+                return large_entities[0]
     for region in perception.text_regions:
-        if target_tokens and any(token in region.text.lower() for token in target_tokens if len(token) >= 3):
+        if target_tokens and any(token in region.text.lower() for token in target_tokens):
             xs = [point[0] for point in region.bbox_quad if len(point) >= 2]
             ys = [point[1] for point in region.bbox_quad if len(point) >= 2]
             if xs and ys:
                 return [round(min(xs), 4), round(min(ys), 4), round(max(xs), 4), round(max(ys), 4)]
     for entity in perception.entities:
         if len(entity.bbox) == 4 and (
-            not target_tokens or any(token in entity.name.lower() for token in target_tokens if len(token) >= 3)
+            not target_tokens or any(token in entity.name.lower() for token in target_tokens)
         ):
             return [float(item) for item in entity.bbox]
     return [0.0, 0.0, 1.0, 1.0]
+
+
+def _question_targets_visible_text(question: Any) -> bool:
+    if question is None:
+        return False
+    text = " ".join(
+        [
+            str(getattr(question, "question", "")),
+            str(getattr(question, "claim_text", "")),
+            *[str(item) for item in getattr(question, "related_entities", [])],
+        ]
+    ).lower()
+    text_cues = {
+        "text",
+        "caption",
+        "quote",
+        "headline",
+        "label",
+        "sign",
+        "logo",
+        "poster",
+        "watermark",
+        "subtitle",
+        "ocr",
+    }
+    return any(cue in text for cue in text_cues)
+
+
+def _token_overlap_score(value: str, tokens: set[str]) -> int:
+    lowered = str(value or "").lower()
+    return sum(1 for token in tokens if token in lowered)
+
+
+def _bbox_area(bbox: Sequence[float]) -> float:
+    if len(bbox) != 4:
+        return 0.0
+    x1, y1, x2, y2 = [float(item) for item in bbox]
+    return max(0.0, x2 - x1) * max(0.0, y2 - y1)
 
 
 def _visual_distinction(

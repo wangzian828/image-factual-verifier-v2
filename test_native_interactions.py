@@ -55,6 +55,34 @@ class RecordingTool(BaseTool):
         }
 
 
+class VisualInspectTool(BaseTool):
+    name = "crop_and_inspect"
+    description = "Inspect a visual crop."
+    parameters = {
+        "type": "object",
+        "properties": {
+            "bbox": {"type": "array", "items": {"type": "number"}, "minItems": 4, "maxItems": 4},
+            "focus_question": {"type": "string"},
+            "visual_question_id": {"type": "string"},
+            "source_evidence_id": {"type": "string"},
+            "expected_property": {"type": "string"},
+        },
+        "required": ["bbox", "focus_question"],
+    }
+
+    def __init__(self):
+        self.calls: List[Dict[str, Any]] = []
+
+    def call(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        self.calls.append(dict(params))
+        return {
+            "status": "success",
+            "answer": "The cropped region matches the expected property.",
+            "findings": [],
+            "anomalies": [],
+        }
+
+
 class NativeStructuredOutput(BaseModel):
     value: str
 
@@ -829,6 +857,120 @@ def test_truncated_function_result_keeps_provenance_id() -> None:
     returned = json.loads(item["result"][0]["text"])
     assert returned["function_call_id"] == "call-large"
     assert returned["question_id"] == "q1"
+
+
+def test_native_visual_question_runtime_binds_required_crop_args() -> None:
+    visual_call = {
+        "id": "interaction-visual-1",
+        "status": "requires_action",
+        "steps": [
+            {
+                "id": "call-visual-1",
+                "type": "function_call",
+                "name": "crop_and_inspect",
+                "arguments": {"question_id": "q1", "visual_question_id": "vq0"},
+            }
+        ],
+    }
+    completed = _completed_response()
+    completed["id"] = "interaction-visual-2"
+    completed["steps"][0]["content"][0]["text"] = json.dumps(
+        {
+            "evidence": [
+                {
+                    "function_call_id": "call-visual-1",
+                    "source": "crop_and_inspect",
+                    "summary": "The cropped region matches the expected property.",
+                    "raw_excerpt": "The cropped region matches the expected property.",
+                    "direction": "neutral",
+                    "quality": "moderate",
+                    "tool_used": "crop_and_inspect",
+                    "related_question": "q1",
+                }
+            ],
+            "visual_anomalies": [],
+            "authenticity_assessment": "uncertain",
+            "key_findings": ["Visual revisit completed."],
+            "source_findings": [],
+            "visual_evidence": [],
+            "world_model": {},
+            "question_resolutions": [],
+            "coverage_complete": False,
+            "unresolved_priority_questions": [],
+            "exhausted_priority_questions": [],
+            "iteration_count": 1,
+        }
+    )
+    backend = NativeFakeBackend([visual_call, completed])
+    tool = VisualInspectTool()
+    runner = StageRunner(
+        llm=backend,
+        system_prompt="Investigate.",
+        tools=[tool],
+        output_schema=VerificationResult,
+        max_rounds=2,
+        stage_name="verification",
+        min_tool_calls=1,
+        attach_image=False,
+        visual_call_validator=lambda _tool_name, _args: "",
+    )
+    runner._control_steps = [
+        StageStep(
+            action_type="tool_call",
+            tool_name="visit",
+            tool_args={"__question_id": "q1"},
+            metadata={
+                "investigation_state_update": {
+                    "created_visual_questions": [
+                        {
+                            "visual_question_id": "vq0",
+                            "claim_id": "claim-q1",
+                            "source_evidence_id": "ev-1",
+                            "target_bbox": [0.1, 0.2, 0.8, 0.9],
+                            "expected_property": "Whether the target image region is consistent with: cited text",
+                            "recommended_tools": ["crop_and_inspect"],
+                            "status": "pending",
+                        }
+                    ],
+                    "resolved_visual_questions": [],
+                }
+            },
+        )
+    ]
+
+    parsed, steps = asyncio.run(runner.run("- [q1] inspect region"))
+
+    assert parsed is not None
+    assert steps[0].action_type == "tool_call"
+    assert steps[0].tool_args["bbox"] == [0.1, 0.2, 0.8, 0.9]
+    assert steps[0].tool_args["source_evidence_id"] == "ev-1"
+    assert steps[0].tool_args["focus_question"].startswith("Whether the target image region is consistent with:")
+    assert tool.calls == [
+        {
+            "bbox": [0.1, 0.2, 0.8, 0.9],
+            "focus_question": "Whether the target image region is consistent with: cited text",
+            "visual_question_id": "vq0",
+            "source_evidence_id": "ev-1",
+            "expected_property": "Whether the target image region is consistent with: cited text",
+        }
+    ]
+
+
+def test_native_schema_allows_visual_question_without_explicit_bound_crop_fields() -> None:
+    runner = StageRunner(
+        llm=NativeFakeBackend([]),
+        system_prompt="",
+        tools=[VisualInspectTool()],
+        stage_name="verification",
+    )
+    runner.active_question_ids = ["q1"]
+
+    error = runner._validate_native_tool_args(
+        "crop_and_inspect",
+        {"question_id": "q1", "visual_question_id": "vq0"},
+    )
+
+    assert error == ""
 
 
 if __name__ == "__main__":

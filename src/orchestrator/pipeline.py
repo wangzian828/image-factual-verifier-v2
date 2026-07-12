@@ -609,9 +609,9 @@ class Orchestrator:
                 context += "\n\n## Pending ReInspect specifications\n"
                 context += json.dumps(pending_visual_specs, ensure_ascii=False, indent=2)
                 context += (
-                    "\nCopy visual_question_id, source_evidence_id or source_discovery_id, "
-                    "expected_property, and target_bbox exactly into the next recommended "
-                    "real visual tool call."
+                    "\nUse visual_question_id in the next recommended real visual tool call. "
+                    "The runtime will bind source ids, target_bbox, expected_property, and "
+                    "reference_url automatically."
                 )
             if all_verification_steps:
                 context += "\n\n## Evidence retained from earlier iterations\n"

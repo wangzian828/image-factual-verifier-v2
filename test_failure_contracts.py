@@ -26,9 +26,11 @@ from src.orchestrator.stage_runner import StageStep
 from src.orchestrator.state import (
     ClaimRecord,
     CoverageAudit,
+    Entity,
     InvestigationQuestion,
     PlanRevision,
     PerceptionReport,
+    TextRegion,
     VerificationPlan,
     VerificationState,
     VerificationLedgers,
@@ -551,6 +553,98 @@ def test_reinspect_requires_one_of_the_specified_tools() -> None:
     )
 
     assert "is not allowed" in error
+
+
+def test_visual_question_target_bbox_prefers_subject_entity_over_caption_text_for_visible_text_reinspect() -> None:
+    plan = VerificationPlan(
+        questions=[
+            InvestigationQuestion(
+                question_id="q0",
+                question="Does the caption text identify Laika correctly?",
+                claim_text="The visible caption text identifies Laika correctly.",
+                claim_scope="visible_content",
+                related_entities=["Laika"],
+                priority=1,
+            )
+        ]
+    )
+    perception = PerceptionReport(
+        entities=[
+            Entity(
+                name="Laika",
+                entity_type="dog",
+                bbox=[0.554, 0.281, 0.681, 0.979],
+            ),
+        ],
+        text_regions=[
+            TextRegion(
+                text="Laika quote caption",
+                bbox_quad=[[0.036, 0.032], [0.894, 0.032], [0.894, 0.119], [0.036, 0.119]],
+            )
+        ],
+    )
+    evidence = type(
+        "Evidence",
+        (),
+        {
+            "evidence_id": "ev-0",
+            "evidence_kind": "web_span",
+            "exact_text": "Caption says Laika training capsule.",
+        },
+    )()
+    step = StageStep(tool_name="visit", tool_args={"__question_id": "q0"})
+    investigation = InvestigationState()
+
+    created = InvestigationReducer._create_visual_question(
+        investigation,
+        step=step,
+        new_evidence=[evidence],
+        new_discoveries=[],
+        plan=plan,
+        perception=perception,
+        parsed={},
+    )
+
+    assert created
+    assert created[0].target_bbox == [0.036, 0.032, 0.894, 0.119]
+
+
+def test_provenance_question_without_visible_text_does_not_create_region_reinspect() -> None:
+    plan = VerificationPlan(
+        questions=[
+            InvestigationQuestion(
+                question_id="q0",
+                question="Did this photo originate from the claimed archival source?",
+                claim_text="This image is the claimed archival photo.",
+                claim_scope="image_provenance",
+                related_entities=["Laika"],
+                priority=1,
+            )
+        ]
+    )
+    evidence = type(
+        "Evidence",
+        (),
+        {
+            "evidence_id": "ev-0",
+            "evidence_kind": "web_span",
+            "exact_text": "Laika, aboard Sputnik 2, November 1957.",
+        },
+    )()
+    step = StageStep(tool_name="visit", tool_args={"__question_id": "q0"})
+    investigation = InvestigationState()
+
+    created = InvestigationReducer._create_visual_question(
+        investigation,
+        step=step,
+        new_evidence=[evidence],
+        new_discoveries=[],
+        plan=plan,
+        perception=PerceptionReport(),
+        parsed={},
+    )
+
+    assert created == []
 
 
 def test_visual_reinspect_failure_requires_two_real_attempts_to_exhaust() -> None:

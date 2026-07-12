@@ -49,6 +49,12 @@ def tool_can_decide_claim(tool_name: str, claim_scope: str) -> bool:
         return scope == IMAGE_AUTHENTICITY
     if tool in _REFERENCE_TOOLS:
         return scope in {IMAGE_AUTHENTICITY, IMAGE_PROVENANCE, VISIBLE_CONTENT}
+    if tool == "crop_and_inspect":
+        return scope in {IMAGE_AUTHENTICITY, VISIBLE_CONTENT}
+    if tool == "ocr_with_position":
+        return scope == VISIBLE_CONTENT
+    if tool in {"crop_and_search", "count_objects"}:
+        return scope in {IMAGE_AUTHENTICITY, VISIBLE_CONTENT}
     if tool in _REGION_TOOLS:
         return scope in {IMAGE_AUTHENTICITY, IMAGE_PROVENANCE, VISIBLE_CONTENT}
     return True

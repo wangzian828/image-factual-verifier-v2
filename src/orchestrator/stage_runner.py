@@ -180,30 +180,11 @@ class StageRunner:
                     history.append({"role": "assistant", "content": content})
                     history.append({"role": "user", "content": self._unknown_tool_message(tool_name)})
                     continue
-                if self._has_duplicate_tool_call(steps, tool_name, tool_args):
-                    step.action_type = "format_error"
-                    step.metadata["error_class"] = "protocol_error"
-                    step.tool_name = tool_name
-                    step.tool_args = tool_args
-                    step.metadata["duplicate_tool_call"] = True
-                    steps.append(step)
-                    history.append({"role": "assistant", "content": content})
-                    history.append({"role": "user", "content": self._duplicate_tool_message(tool_name)})
-                    continue
-                if self._tool_budget_reached(steps, tool_name):
-                    step.action_type = "format_error"
-                    step.metadata["error_class"] = "protocol_error"
-                    step.tool_name = tool_name
-                    step.tool_args = tool_args
-                    step.metadata["tool_budget_reached"] = True
-                    steps.append(step)
-                    history.append({"role": "assistant", "content": content})
-                    history.append({"role": "user", "content": self._tool_budget_message(tool_name)})
-                    continue
 
                 step.action_type = "tool_call"
                 step.tool_name = tool_name
                 step.tool_args = self._prepare_tool_args(tool_name, dict(tool_args), input_context)
+                step.tool_args = self._bind_pending_visual_args(tool_name, step.tool_args)
                 question_error = self._question_id_error(step.tool_args)
                 if question_error:
                     step.action_type = "format_error"
@@ -219,6 +200,22 @@ class StageRunner:
                             ),
                         }
                     )
+                    continue
+                if self._has_duplicate_tool_call(steps, tool_name, step.tool_args):
+                    step.action_type = "format_error"
+                    step.metadata["error_class"] = "protocol_error"
+                    step.metadata["duplicate_tool_call"] = True
+                    steps.append(step)
+                    history.append({"role": "assistant", "content": content})
+                    history.append({"role": "user", "content": self._duplicate_tool_message(tool_name)})
+                    continue
+                if self._tool_budget_reached(steps, tool_name):
+                    step.action_type = "format_error"
+                    step.metadata["error_class"] = "protocol_error"
+                    step.metadata["tool_budget_reached"] = True
+                    steps.append(step)
+                    history.append({"role": "assistant", "content": content})
+                    history.append({"role": "user", "content": self._tool_budget_message(tool_name)})
                     continue
                 filtered_query_count = self._sanitize_search_queries(
                     tool_name,
@@ -524,12 +521,21 @@ class StageRunner:
                     call_id = str(call.get("id", "")).strip()
                     tool_name = str(call.get("name", "")).strip()
                     tool_args = self._coerce_native_arguments(call.get("arguments", {}))
+                    native_args = self._bind_pending_visual_args(
+                        tool_name,
+                        dict(tool_args),
+                    )
+                    prepared_args = self._prepare_tool_args(
+                        tool_name,
+                        dict(native_args),
+                        input_context,
+                    )
                     step = StageStep(
                         round=request_index,
                         stage_name=self.stage_name,
                         thought=thought if call_index == 0 else "",
                         tool_name=tool_name,
-                        tool_args=dict(tool_args),
+                        tool_args=dict(prepared_args),
                         tokens=(
                             tokens
                             if call_index == 0
@@ -551,12 +557,12 @@ class StageRunner:
                         step.metadata["invalid_tool_name"] = tool_name
                         step.metadata["error_class"] = "protocol_error"
                     else:
-                        schema_error = self._validate_native_tool_args(tool_name, tool_args)
+                        schema_error = self._validate_native_tool_args(tool_name, native_args)
                         if schema_error:
                             error_message = schema_error
                             step.metadata["invalid_tool_arguments"] = True
                             step.metadata["error_class"] = "protocol_error"
-                    if not error_message and self._has_duplicate_tool_call(steps, tool_name, tool_args):
+                    if not error_message and self._has_duplicate_tool_call(steps, tool_name, prepared_args):
                         error_message = self._duplicate_tool_message(tool_name)
                         step.metadata["duplicate_tool_call"] = True
                         step.metadata["error_class"] = "protocol_error"
@@ -565,7 +571,7 @@ class StageRunner:
                         step.metadata["tool_budget_reached"] = True
                         step.metadata["error_class"] = "protocol_error"
                     if not error_message and self.visual_call_validator is not None:
-                        visual_error = self.visual_call_validator(tool_name, tool_args)
+                        visual_error = self.visual_call_validator(tool_name, prepared_args)
                         if visual_error:
                             error_message = visual_error
                             step.metadata["invalid_visual_question"] = True
@@ -578,11 +584,6 @@ class StageRunner:
                             ensure_ascii=False,
                         )
                     else:
-                        prepared_args = self._prepare_tool_args(
-                            tool_name,
-                            dict(tool_args),
-                            input_context,
-                        )
                         step.tool_args = prepared_args
                         question_error = self._question_id_error(prepared_args)
                         if question_error:
@@ -779,6 +780,9 @@ class StageRunner:
                 properties["question_id"] = question_schema
                 if "question_id" not in required:
                     required.append("question_id")
+                runtime_bound = self._runtime_bound_visual_fields(tool.name)
+                if runtime_bound:
+                    required = [name for name in required if name not in runtime_bound]
             parameters["required"] = required
             parameters["additionalProperties"] = False
             schemas.append(
@@ -1199,6 +1203,69 @@ class StageRunner:
                 if immutable_goal:
                     tool_args["goal"] = immutable_goal
         return tool_args
+
+    def _bind_pending_visual_args(
+        self,
+        tool_name: str,
+        tool_args: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        bound = dict(tool_args)
+        visual_question_id = str(bound.get("visual_question_id", "")).strip()
+        if self.stage_name != "verification" or not visual_question_id:
+            return bound
+        spec = next(
+            (
+                item
+                for item in self._pending_visual_questions()
+                if str(item.get("visual_question_id", "")).strip() == visual_question_id
+            ),
+            None,
+        )
+        if not spec:
+            return bound
+        question_id = str(bound.get("__question_id", "")).strip()
+        claim_id = str(spec.get("claim_id", "")).strip()
+        if question_id and claim_id and claim_id != f"claim-{question_id}":
+            return bound
+
+        source_evidence_id = str(spec.get("source_evidence_id", "")).strip()
+        source_discovery_id = str(spec.get("source_discovery_id", "")).strip()
+        expected_property = str(spec.get("expected_property", "")).strip()
+        target_bbox = list(spec.get("target_bbox") or [])
+        reference_url = str(spec.get("reference_image_url", "")).strip()
+
+        if source_evidence_id:
+            bound["source_evidence_id"] = source_evidence_id
+        if source_discovery_id:
+            bound["source_discovery_id"] = source_discovery_id
+        if expected_property:
+            bound["expected_property"] = expected_property
+        if target_bbox and tool_name in {"crop_and_inspect", "crop_and_search", "count_objects", "ocr_with_position"}:
+            bound["bbox"] = target_bbox
+        if reference_url and tool_name == "compare_with_reference":
+            bound["reference_url"] = reference_url
+        if expected_property:
+            if tool_name == "crop_and_inspect":
+                bound.setdefault("focus_question", expected_property)
+            elif tool_name in {"ocr_with_position", "crop_and_search"}:
+                bound.setdefault("goal", expected_property)
+            elif tool_name == "count_objects":
+                bound.setdefault("target_object", expected_property[:200])
+            elif tool_name == "compare_with_reference":
+                bound.setdefault("focus", expected_property[:400])
+        return bound
+
+    @staticmethod
+    def _runtime_bound_visual_fields(tool_name: str) -> set[str]:
+        if tool_name == "compare_with_reference":
+            return {"reference_url"}
+        if tool_name == "crop_and_inspect":
+            return {"bbox", "focus_question"}
+        if tool_name in {"ocr_with_position", "crop_and_search"}:
+            return {"bbox", "goal"}
+        if tool_name == "count_objects":
+            return {"bbox", "target_object"}
+        return set()
 
     def _question_id_error(self, tool_args: Dict[str, Any]) -> str:
         if self.stage_name != "verification":
@@ -2039,7 +2106,7 @@ class StageRunner:
 
     def _has_duplicate_tool_call(self, steps: List[StageStep], tool_name: str, tool_args: Dict[str, Any]) -> bool:
         signature = json.dumps({"tool": tool_name, "args": self._normalize_tool_args(tool_args)}, ensure_ascii=False, sort_keys=True)
-        for step in [*self.prior_steps, *steps]:
+        for step in [*steps, *list(getattr(self, "_control_steps", []))]:
             if step.action_type != "tool_call" or step.tool_name != tool_name:
                 continue
             existing = json.dumps({"tool": step.tool_name, "args": self._normalize_tool_args(step.tool_args)}, ensure_ascii=False, sort_keys=True)

@@ -246,6 +246,36 @@ def test_nested_text_search_stance_is_bound_to_exact_excerpt() -> None:
     assert canonical.direction == "supports"
 
 
+def test_image_region_evidence_is_not_decisive_for_image_provenance() -> None:
+    evidence = [
+        EvidenceRecord(
+            evidence_id="e1",
+            claim_id="claim-q0",
+            source_id="source-image",
+            function_call_id="call-1",
+            tool_name="crop_and_inspect",
+            evidence_kind="image_region",
+            exact_text="This region contains only a text caption.",
+            image_region=[0.0, 0.0, 1.0, 1.0],
+            artifact_sha256="a" * 64,
+            retrieved_at="2026-07-11T00:00:00+00:00",
+            stance="refute",
+            quality="moderate",
+        )
+    ]
+    sources = {
+        "source-image": SourceRecord(
+            source_id="source-image",
+            source_family="image:sha",
+            source_class="visual",
+            artifact_sha256="a" * 64,
+            retrieved_at="2026-07-11T00:00:00+00:00",
+        )
+    }
+
+    assert _direction_is_decisive(evidence, sources, claim_scope="image_provenance") is False
+
+
 def test_multi_query_search_promotes_each_distinct_grounded_page(tmp_path) -> None:
     claim = "Reuters and NASA published reports about the flood image."
 

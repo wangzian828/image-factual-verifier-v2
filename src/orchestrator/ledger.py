@@ -464,7 +464,7 @@ def _direction_is_decisive(
 ) -> bool:
     if not evidence:
         return False
-    if claim_scope != "external_fact" and any(
+    if claim_scope in {"image_authenticity", "visible_content"} and any(
         item.evidence_kind == "image_region"
         and item.quality in {"strong", "moderate"}
         for item in evidence
