@@ -581,6 +581,16 @@ class Orchestrator:
                 state.ledgers,
                 state.investigation_state,
             )
+            exhausted_visual = [
+                item.visual_question_id
+                for item in state.investigation_state.visual_questions
+                if item.status == "exhausted"
+            ]
+            if exhausted_visual:
+                raise RuntimeError(
+                    "Verification failed: required ReInspect observations failed twice: "
+                    + ", ".join(exhausted_visual)
+                )
             audit = self._audit_plan_coverage(
                 state.plan or VerificationPlan(),
                 all_verification_steps,
@@ -617,16 +627,6 @@ class Orchestrator:
                 "Verification failed: every attempted tool call failed."
                 + (f" Failures: {failures}" if failures else "")
             )
-        exhausted_visual = [
-            item.visual_question_id
-            for item in state.investigation_state.visual_questions
-            if item.status == "exhausted"
-        ]
-        if exhausted_visual:
-            raise RuntimeError(
-                "Verification failed: required ReInspect observations failed twice: "
-                + ", ".join(exhausted_visual)
-            )
         if not state.coverage_audits or not state.coverage_audits[-1].investigation_complete:
             unresolved = (
                 state.coverage_audits[-1].unresolved_priority_questions
@@ -637,10 +637,15 @@ class Orchestrator:
                 "Verification failed: investigation did not reach a valid stopping state"
                 + (f" ({', '.join(unresolved)})." if unresolved else ".")
             )
+        required_ids = {
+            question.question_id
+            for question in (state.plan or VerificationPlan()).questions
+            if question.priority <= 2
+        }
         never_attempted = [
             item.question_id
             for item in state.coverage_audits[-1].question_resolutions
-            if item.tool_attempts == 0 and item.question_id
+            if item.question_id in required_ids and item.tool_attempts == 0
         ]
         if never_attempted:
             raise RuntimeError(
