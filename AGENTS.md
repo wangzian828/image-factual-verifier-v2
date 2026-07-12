@@ -35,7 +35,7 @@ This is an agent, not a fixed tool script. Do not replace verification with a pr
 - Require an explicit `question_id` on verification function calls. Never silently assign a call to a question.
 - In benchmark evaluation, enforce the provenance-derived `SourceAccessPolicy` before search results are enriched or returned and before any direct page/reference fetch. Do not expose excluded URLs/domains or hidden gold to the model. Product mode remains unrestricted.
 - Reject benchmark search queries that explicitly target an excluded fact-check domain before calling the search provider; the model must reformulate toward independent open-web sources.
-- Ground browse stance to immutable `claim_text`, keep model queries as retrieval parameters only, and require every unresolved priority-1 and priority-2 question to receive one real tool attempt before an iteration can finish. ReAct tool order remains model-chosen; the deterministic coverage audit rejects incomplete iteration output rather than prescribing a fixed sequence.
+- Ground browse stance to immutable `claim_text`, keep model queries as retrieval parameters only, and require every unresolved priority-1 and priority-2 question to receive one real tool attempt before its first accepted verification output. ReAct tool order remains model-chosen; later coverage audits and replanning decide which unresolved questions need more work rather than prescribing a fixed sequence.
 - Select upload, visual-search, and browse-fetch providers explicitly. A selected provider's failure must propagate; do not fall through to another provider.
 - Sanitize credentials, secret fields, and signed-URL authentication parameters before writing traces, HTML, or cache entries.
 - Persist canonical JSON traces by default. HTML is a derived diagnostic view and is generated only through `src.render_trace_html` when requested.
@@ -115,7 +115,7 @@ For a real run, inspect the canonical JSON under `outputs/traces/`. Generate a s
 python -m src.render_trace_html outputs\traces --output-dir outputs\trace_html
 ```
 
-Audit a real canonical trace, including aggregate accounting and scheduler invariants, before treating it as a valid end-to-end run:
+Audit a real canonical trace, including aggregate accounting, initial required-question coverage, and runtime rejection checks, before treating it as a valid end-to-end run:
 
 ```powershell
 python scripts/audit_real_trace.py outputs\traces\example.json --json --strict-scheduler

@@ -828,6 +828,96 @@ def _audit_rejections(
     report.stats["protocol_rejections"] = protocol_count
 
 
+def _audit_initial_required_question_service(
+    state: Mapping[str, Any],
+    steps: Sequence[Mapping[str, Any]],
+    report: TraceReport,
+) -> None:
+    """Mirror the first-output P1/P2 attempt gate enforced by StageRunner."""
+
+    plan_history = _rows(state.get("plan_history"))
+    if not plan_history:
+        _issue(
+            report,
+            "INITIAL_PLAN_MISSING",
+            "canonical trace must retain the initial verification plan",
+            location="state.plan_history",
+        )
+        return
+    initial_questions = _rows(plan_history[0].get("questions"))
+    required_ids = [
+        str(question.get("question_id", "")).strip()
+        for question in initial_questions
+        if str(question.get("question_id", "")).strip()
+        and int(question.get("priority", 1) or 1) <= 2
+    ]
+    if not required_ids:
+        _issue(
+            report,
+            "INITIAL_REQUIRED_QUESTIONS_MISSING",
+            "initial verification plan must contain at least one priority-1/2 question",
+            location="state.plan_history[0].questions",
+        )
+        return
+
+    first_output_index = next(
+        (
+            index
+            for index, step in enumerate(steps)
+            if str(step.get("stage", "")) == "verification"
+            and str(step.get("action_type", "")) == "output"
+        ),
+        None,
+    )
+    if first_output_index is None:
+        _issue(
+            report,
+            "VERIFICATION_ACCEPTED_OUTPUT_MISSING",
+            "successful trace must contain an accepted verification output",
+            location="state.all_steps",
+        )
+        return
+
+    attempted: set[str] = set()
+    resolved: set[str] = set()
+    for step in steps[:first_output_index]:
+        if (
+            str(step.get("stage", "")) == "verification"
+            and str(step.get("action_type", "")) == "tool_call"
+        ):
+            question_id = str(
+                _mapping(step.get("tool_args")).get("__question_id", "")
+            ).strip()
+            if question_id:
+                attempted.add(question_id)
+        update = _mapping(_mapping(step.get("metadata")).get("investigation_state_update"))
+        belief_delta = _mapping(update.get("belief_delta"))
+        claim_id = str(belief_delta.get("claim_id", "")).strip()
+        if (
+            claim_id.startswith("claim-")
+            and str(belief_delta.get("new_status", "")) in {"supported", "refuted"}
+        ):
+            resolved.add(claim_id.removeprefix("claim-"))
+
+    missing = [
+        question_id
+        for question_id in required_ids
+        if question_id not in attempted and question_id not in resolved
+    ]
+    report.stats["initial_required_questions"] = len(required_ids)
+    report.stats["initial_required_questions_attempted"] = len(
+        set(required_ids) & attempted
+    )
+    if missing:
+        _issue(
+            report,
+            "INITIAL_REQUIRED_QUESTION_UNTOUCHED",
+            "first accepted verification output skipped required question ids: "
+            + ", ".join(missing),
+            location=_step_label(first_output_index, steps[first_output_index]),
+        )
+
+
 def audit_trace(path: Path) -> TraceReport:
     report = TraceReport(path=str(path))
     try:
@@ -910,6 +1000,7 @@ def audit_trace(path: Path) -> TraceReport:
     _audit_visual_external_evidence(claims, evidence, report)
     _audit_leaks(payload, report)
     _audit_interaction_chains(steps, report)
+    _audit_initial_required_question_service(state, steps, report)
     _audit_rejections(steps, report)
     return report
 
@@ -1049,7 +1140,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--strict-scheduler",
         action="store_true",
-        help="Treat scheduler and protocol rejections as failures instead of warnings.",
+        help="Treat runtime action/output rejections as failures instead of warnings.",
     )
     return parser
 

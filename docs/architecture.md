@@ -86,7 +86,7 @@ Function arguments are recursively validated against their schemas before execut
 
 Verification cannot finish without a successful tool call. Premature output is rejected within the same interaction chain when required tool work or priority coverage is missing.
 
-Each function result returns deterministic per-question attempts, untouched priority IDs, pending visual-question IDs, and remaining per-tool budgets so Gemini can react to the bounded runtime state. ReAct tool order remains model-chosen rather than following a scripted P1/P2 rotation; before iteration output is accepted, every unresolved required P1/P2 question must have received at least one real tool attempt.
+Each function result returns deterministic per-question attempts, untouched priority IDs, pending visual-question IDs, and remaining per-tool budgets so Gemini can react to the bounded runtime state. ReAct tool order remains model-chosen rather than following a scripted P1/P2 rotation; before the first accepted verification output, every unresolved required P1/P2 question must have received at least one real tool attempt.
 
 ### Evaluation Source Access
 
@@ -141,7 +141,7 @@ While such a visual question is pending, its linked non-`external_fact` claim is
 
 After each ReAct iteration, `_audit_plan_coverage()` deterministically maps claim-ledger status back to every plan question and marks it `unanswered`, `in_progress`, `resolved`, or `exhausted`. It records successful calls, distinct tools, grounded evidence counts, claim statuses, unresolved/exhausted priority IDs, and typed unverifiable reasons.
 
-If the audit is incomplete and the adaptive stopping policy allows another pass, Gemini revises the plan from the current gaps and retained evidence. Replanning preserves resolved questions, refines unresolved work, increments the revision, and starts another native ReAct iteration. Each iteration must service unresolved required P1/P2 questions before its final output is accepted, but the agent may interleave tools based on information gain, errors, and pending ReInspect work.
+If the audit is incomplete and the adaptive stopping policy allows another pass, Gemini revises the plan from the current gaps and retained evidence. Replanning preserves resolved questions, refines unresolved work, increments the revision, and starts another native ReAct iteration. The first accepted verification output must establish initial P1/P2 service; later iterations target the unresolved gaps identified by the audit, while the agent may interleave tools based on information gain, errors, and pending ReInspect work.
 
 `complete` means all priority-1 claim slots are supported or refuted, required P2 service occurred, and no visual revisit remains. `investigation_complete` means that condition is met, search saturated after consecutive low-gain iterations, or the hard iteration cap ended. These stop as `coverage_complete`, `information_saturated`, or `hard_budget_exhausted`; unresolved claim slots proceed to Ledger Judgment with matching typed insufficiency rather than a fallback. The defaults are four outer iterations, twelve native ReAct turns per iteration, at least two outer iterations before saturation, and two consecutive low-gain iterations before early stop. Every-tool-failed runs, missing accepted structured output, and other engineering failures still raise before Judgment.
 
@@ -239,7 +239,7 @@ Audit a real canonical trace before accepting it as an end-to-end result:
 python scripts/audit_real_trace.py outputs\traces\example.json --json --strict-scheduler
 ```
 
-The auditor checks terminal state, stage/iteration structure, tool and interaction provenance, evidence integrity, aggregate API/token accounting (including tool-internal Gemini calls), thought-token policy, and optional strict scheduler invariants.
+The auditor checks terminal state, stage/iteration structure, tool and interaction provenance, evidence integrity, aggregate API/token accounting (including tool-internal Gemini calls), thought-token policy, initial required-question coverage, and optional strict runtime rejection checks.
 
 Do not commit generated traces or cache files.
 

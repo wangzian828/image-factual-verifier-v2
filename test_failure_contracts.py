@@ -43,6 +43,10 @@ from src.orchestrator.tool_registry import REQUIRED_TOOLS
 from src.orchestrator.tool_result import ToolResultContractError, serialize_tool_result
 from src.redaction import REDACTED, sanitize_for_persistence
 from src.tools.compare_reference import CompareWithReferenceTool
+from scripts.audit_real_trace import (
+    TraceReport,
+    _audit_initial_required_question_service,
+)
 from test_unit import FakeLLM, FakeOrchestrator, FakeTool, make_test_image
 
 
@@ -58,6 +62,43 @@ def test_malformed_json_and_statusless_tool_results_are_rejected() -> None:
         tool_result='{"results": []}',
     )
     assert Orchestrator._tool_step_succeeded(step) is False
+
+
+def test_trace_audit_rejects_first_verification_output_that_skips_required_question() -> None:
+    report = TraceReport(path="fixture.json")
+    _audit_initial_required_question_service(
+        {
+            "plan_history": [
+                {
+                    "questions": [
+                        {"question_id": "q0", "priority": 1},
+                        {"question_id": "q1", "priority": 2},
+                    ]
+                }
+            ]
+        },
+        [
+            {
+                "stage": "verification",
+                "round": 1,
+                "action_type": "tool_call",
+                "tool_args": {"__question_id": "q0"},
+                "metadata": {},
+            },
+            {
+                "stage": "verification",
+                "round": 2,
+                "action_type": "output",
+                "metadata": {},
+            },
+        ],
+        report,
+    )
+
+    assert [issue.code for issue in report.issues] == [
+        "INITIAL_REQUIRED_QUESTION_UNTOUCHED"
+    ]
+    assert "q1" in report.issues[0].message
 
 
 def test_verification_raises_when_every_tool_fails() -> None:

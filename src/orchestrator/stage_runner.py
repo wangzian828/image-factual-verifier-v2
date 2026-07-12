@@ -1174,6 +1174,10 @@ class StageRunner:
         tool_calls = sum(1 for step in steps if step.action_type == "tool_call")
         if tool_calls < self.min_tool_calls:
             return False, f"at least {self.min_tool_calls} tool calls are required; only {tool_calls} completed"
+        required_question_error = self._required_question_output_error(steps)
+        if required_question_error:
+            suffix = " No more tool turns remain." if final_attempt else ""
+            return False, required_question_error + suffix
         if self.output_validator:
             accepted, reason = self.output_validator(parsed, steps)
             if not accepted:

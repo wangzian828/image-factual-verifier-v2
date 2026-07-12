@@ -313,6 +313,76 @@ def test_native_output_before_tools_is_rejected() -> None:
     assert backend.requests[1]["previous_interaction_id"] == "interaction-0"
 
 
+def test_native_output_requires_initial_attempt_for_each_required_question() -> None:
+    first_call = _function_call_response()
+    first_call["id"] = "interaction-q0"
+    first_call["steps"][0]["id"] = "call-q0"
+    first_call["steps"][0]["arguments"] = {
+        "question_id": "q0",
+        "queries": ["first direct source"],
+    }
+    premature = _completed_response()
+    premature["id"] = "interaction-premature"
+    premature["steps"][0]["content"][0]["text"] = json.dumps(
+        {
+            **json.loads(
+                _completed_response()["steps"][0]["content"][0]["text"]
+            ),
+            "evidence": [
+                {
+                    "function_call_id": "call-q0",
+                    "source": "https://example.org/q0",
+                    "summary": "The first source answers q0.",
+                    "raw_excerpt": "The first source answers q0.",
+                    "direction": "supports",
+                    "quality": "moderate",
+                    "tool_used": "text_search",
+                    "related_question": "q0",
+                }
+            ],
+        }
+    )
+    second_call = _function_call_response()
+    second_call["id"] = "interaction-q1"
+    second_call["steps"][0]["id"] = "call-q1"
+    second_call["steps"][0]["arguments"] = {
+        "question_id": "q1",
+        "queries": ["second direct source"],
+    }
+    completed = _completed_response()
+    completed["id"] = "interaction-complete"
+    backend = NativeFakeBackend([first_call, premature, second_call, completed])
+    tool = RecordingTool()
+    runner = StageRunner(
+        llm=backend,
+        system_prompt="Investigate with tools.",
+        tools=[tool],
+        output_schema=VerificationResult,
+        max_rounds=3,
+        stage_name="verification",
+        min_tool_calls=1,
+        attach_image=False,
+        priority_question_ids=["q0"],
+        supporting_question_ids=["q1"],
+    )
+
+    parsed, steps = asyncio.run(runner.run("- [q0] first\n- [q1] second"))
+
+    assert parsed is not None
+    assert [step.action_type for step in steps] == [
+        "tool_call",
+        "output_rejected",
+        "tool_call",
+        "output",
+    ]
+    assert "untouched P2: q1" in steps[1].metadata["rejection_reason"]
+    assert backend.requests[2]["previous_interaction_id"] == "interaction-premature"
+    assert tool.calls == [
+        {"queries": ["first direct source"]},
+        {"queries": ["second direct source"]},
+    ]
+
+
 def test_native_missing_question_id_is_not_silently_assigned() -> None:
     missing_id = _function_call_response()
     missing_id["steps"][0]["arguments"].pop("question_id")
