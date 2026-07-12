@@ -542,6 +542,14 @@ class Orchestrator:
                 ],
                 source_access_policy=self.source_access_policy,
                 max_output_tokens=self._stage_output_tokens("VERIFICATION", 16384),
+                final_output_max_tokens=self._stage_output_tokens(
+                    "VERIFICATION_FINAL", 32768
+                ),
+                final_output_generation_config={
+                    "thinking_level": os.getenv(
+                        "GEMINI_VERIFICATION_FINAL_THINKING_LEVEL", "minimal"
+                    ).strip().lower()
+                },
             )
             context = ContextRenderer.render_for_verification(
                 state.perception or PerceptionReport(),

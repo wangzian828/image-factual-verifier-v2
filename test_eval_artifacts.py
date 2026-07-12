@@ -101,6 +101,9 @@ def test_eval_writes_compact_canonical_artifacts(
     assert manifest["agent"]["max_verification_iterations"] == 4
     assert manifest["agent"]["min_verification_iterations"] == 2
     assert manifest["agent"]["low_information_gain_patience"] == 2
+    assert manifest["agent"]["verification_max_output_tokens"] == 16384
+    assert manifest["agent"]["verification_final_max_output_tokens"] == 32768
+    assert manifest["agent"]["verification_final_thinking_level"] == "minimal"
     prediction = json.loads(
         (run_dir / "predictions.jsonl").read_text(encoding="utf-8").strip()
     )
@@ -109,3 +112,23 @@ def test_eval_writes_compact_canonical_artifacts(
     assert "verification" not in prediction
     assert not list(run_dir.rglob("*.html"))
     assert not (run_dir / "failures.json").exists()
+
+
+def test_eval_cli_exits_nonzero_for_engineering_errors(
+    monkeypatch: Any,
+    capsys: Any,
+) -> None:
+    async def failed_eval(_args: argparse.Namespace) -> dict[str, Any]:
+        return {"num_samples": 1, "num_errors": 1}
+
+    monkeypatch.setattr(run_eval, "_parse_args", lambda: argparse.Namespace())
+    monkeypatch.setattr(run_eval, "_run_eval", failed_eval)
+
+    try:
+        run_eval.main()
+    except SystemExit as exc:
+        assert exc.code == 1
+    else:
+        raise AssertionError("engineering errors must produce a non-zero process exit")
+
+    assert '"num_errors": 1' in capsys.readouterr().out

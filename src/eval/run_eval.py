@@ -305,6 +305,17 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
         os.getenv("LOW_INFORMATION_GAIN_PATIENCE", "2"),
         name="low information-gain patience",
     )
+    verification_max_output_tokens = _positive_int(
+        os.getenv("GEMINI_VERIFICATION_MAX_OUTPUT_TOKENS", "16384"),
+        name="verification max output tokens",
+    )
+    verification_final_max_output_tokens = _positive_int(
+        os.getenv("GEMINI_VERIFICATION_FINAL_MAX_OUTPUT_TOKENS", "32768"),
+        name="verification final max output tokens",
+    )
+    verification_final_thinking_level = os.getenv(
+        "GEMINI_VERIFICATION_FINAL_THINKING_LEVEL", "minimal"
+    ).strip().lower()
     explicit_policy = (
         SourceAccessPolicy.load(args.source_access_policy)
         if args.source_access_policy
@@ -359,6 +370,13 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
             "min_verification_iterations": min_verification_iterations,
             "low_information_gain_patience": low_information_gain_patience,
             "max_rounds_verification": args.max_rounds_verification,
+            "verification_max_output_tokens": verification_max_output_tokens,
+            "verification_final_max_output_tokens": (
+                verification_final_max_output_tokens
+            ),
+            "verification_final_thinking_level": (
+                verification_final_thinking_level
+            ),
             "concurrency": max(1, args.concurrency),
         },
         "source_access_policy": {
@@ -443,6 +461,8 @@ def main() -> None:
     args = _parse_args()
     summary = asyncio.run(_run_eval(args))
     print(json.dumps(summary, ensure_ascii=False, indent=2))
+    if int(summary.get("num_errors", 0) or 0) > 0:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

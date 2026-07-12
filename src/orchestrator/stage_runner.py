@@ -67,6 +67,8 @@ class StageRunner:
         prior_steps: Optional[List[StageStep]] = None,
         max_output_tokens: Optional[int] = None,
         generation_config: Optional[Dict[str, Any]] = None,
+        final_output_max_tokens: Optional[int] = None,
+        final_output_generation_config: Optional[Dict[str, Any]] = None,
         observation_callback: Optional[Callable[[StageStep, List[StageStep]], Optional[Dict[str, Any]]]] = None,
         visual_call_validator: Optional[Callable[[str, Dict[str, Any]], str]] = None,
         question_claims: Optional[Dict[str, str]] = None,
@@ -98,6 +100,15 @@ class StageRunner:
             max(1, int(max_output_tokens)) if max_output_tokens is not None else None
         )
         self.generation_config = dict(generation_config or {})
+        self.final_output_max_tokens = (
+            max(1, int(final_output_max_tokens))
+            if final_output_max_tokens is not None
+            else self.max_output_tokens
+        )
+        self.final_output_generation_config = {
+            **self.generation_config,
+            **dict(final_output_generation_config or {}),
+        }
         self.active_question_ids: List[str] = []
         self.llm_api_calls = 0
         self.observation_callback = observation_callback
@@ -858,17 +869,21 @@ class StageRunner:
 
         started = time.perf_counter()
         self.llm_api_calls += 1
-        payload = await self.llm.create_interaction(
-            input_payload=forced_input,
-            system_instruction=self._build_native_system_content() + "\n\n" + directive,
-            tools=[],
-            previous_interaction_id=previous_interaction_id,
-            response_format=self._native_response_format(),
-            store=True,
-            max_tokens=self.max_output_tokens,
-            generation_config=self.generation_config,
-        )
-        interaction_id, interaction_status = validate_interaction_response(payload)
+        try:
+            payload = await self.llm.create_interaction(
+                input_payload=forced_input,
+                system_instruction=self._build_native_system_content() + "\n\n" + directive,
+                tools=[],
+                previous_interaction_id=previous_interaction_id,
+                response_format=self._native_response_format(),
+                store=True,
+                max_tokens=self.final_output_max_tokens,
+                generation_config=self.final_output_generation_config,
+            )
+            interaction_id, interaction_status = validate_interaction_response(payload)
+        except Exception as exc:
+            self._attach_partial_steps(exc, steps)
+            raise
         usage = payload.get("usage", {}) if isinstance(payload.get("usage"), dict) else {}
         metadata = {
             "stage": self.stage_name,
@@ -878,6 +893,8 @@ class StageRunner:
             "interaction_id": interaction_id,
             "interaction_status": interaction_status,
             "llm_duration_ms": round((time.perf_counter() - started) * 1000, 2),
+            "max_output_tokens": self.final_output_max_tokens,
+            "thinking_level": self.final_output_generation_config.get("thinking_level"),
         }
         tokens = {
             "prompt": int(usage.get("total_input_tokens", usage.get("input_tokens", 0)) or 0),
