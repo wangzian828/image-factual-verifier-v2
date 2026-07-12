@@ -545,6 +545,19 @@ class Orchestrator:
                 state.perception or PerceptionReport(),
                 state.plan or VerificationPlan(),
             )
+            pending_visual_specs = [
+                item.model_dump(mode="json")
+                for item in state.investigation_state.visual_questions
+                if item.status == "pending"
+            ]
+            if pending_visual_specs:
+                context += "\n\n## Pending ReInspect specifications\n"
+                context += json.dumps(pending_visual_specs, ensure_ascii=False, indent=2)
+                context += (
+                    "\nCopy visual_question_id, source_evidence_id or source_discovery_id, "
+                    "expected_property, and target_bbox exactly into the next recommended "
+                    "real visual tool call."
+                )
             if all_verification_steps:
                 context += "\n\n## Evidence retained from earlier iterations\n"
                 context += ContextRenderer.render_for_judgment(

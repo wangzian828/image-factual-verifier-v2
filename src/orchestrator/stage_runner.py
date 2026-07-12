@@ -1175,22 +1175,33 @@ class StageRunner:
             "untouched_supporting_question_ids": untouched_supporting,
             "remaining_tool_budgets": remaining,
             "pending_visual_question_ids": self._pending_visual_question_ids(),
+            "pending_visual_questions": self._pending_visual_questions(),
         }
 
     def _pending_visual_question_ids(self) -> List[str]:
+        return [
+            str(item["visual_question_id"])
+            for item in self._pending_visual_questions()
+        ]
+
+    def _pending_visual_questions(self) -> List[Dict[str, Any]]:
         pending: List[str] = []
+        specs: Dict[str, Dict[str, Any]] = {}
         for step in [*self.prior_steps, *list(getattr(self, "_control_steps", []))]:
             update = (step.metadata or {}).get("investigation_state_update", {})
             if not isinstance(update, dict):
                 continue
             for item in update.get("created_visual_questions", []) or []:
                 if isinstance(item, dict) and item.get("visual_question_id"):
-                    pending.append(str(item["visual_question_id"]))
+                    visual_id = str(item["visual_question_id"])
+                    pending.append(visual_id)
+                    specs[visual_id] = dict(item)
             for item in update.get("resolved_visual_questions", []) or []:
                 if isinstance(item, dict) and item.get("visual_question_id"):
                     resolved_id = str(item["visual_question_id"])
                     pending = [value for value in pending if value != resolved_id]
-        return list(dict.fromkeys(pending))
+                    specs.pop(resolved_id, None)
+        return [specs[value] for value in dict.fromkeys(pending) if value in specs]
 
     @staticmethod
     def _output_format_instructions() -> str:

@@ -346,6 +346,8 @@ class InvestigationReducer:
         question = next((item for item in state.visual_questions if item.visual_question_id == visual_question_id), None)
         if question is None or question.status != "pending":
             return []
+        if getattr(step, "action_type", "") != "tool_call":
+            return []
         if succeeded:
             question.status = "resolved"
         else:

@@ -289,6 +289,34 @@ def test_visual_reinspect_failure_requires_two_real_attempts_to_exhaust() -> Non
     assert question.failed_attempts == 2
 
 
+def test_rejected_reinspect_call_does_not_consume_failure_attempt() -> None:
+    question = VisualQuestion(
+        visual_question_id="vq0",
+        claim_id="claim-q0",
+        source_discovery_id="discovery-0",
+        target_bbox=[0.0, 0.0, 1.0, 1.0],
+        expected_property="Whether the visual matches.",
+    )
+    investigation = InvestigationState(visual_questions=[question])
+    rejected = StageStep(
+        action_type="format_error",
+        tool_name="compare_with_reference",
+        tool_args={"visual_question_id": "vq0"},
+        tool_result='{"status":"error","error":"expected_property must match"}',
+    )
+
+    resolved = InvestigationReducer._resolve_visual_question(
+        investigation,
+        rejected,
+        {"error": "expected_property must match"},
+        False,
+    )
+
+    assert resolved == []
+    assert question.status == "pending"
+    assert question.failed_attempts == 0
+
+
 def test_required_tool_failure_aborts_startup(monkeypatch: pytest.MonkeyPatch) -> None:
     health = {
         name: ToolHealth(available=name != "visit", error="dependency missing" if name == "visit" else "")

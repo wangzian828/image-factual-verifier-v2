@@ -386,6 +386,44 @@ def test_newly_resolved_p1_leaves_fairness_rotation_immediately() -> None:
     ) == ""
 
 
+def test_agent_control_state_exposes_full_pending_reinspect_spec() -> None:
+    from src.orchestrator.stage_runner import StageStep
+
+    spec = {
+        "visual_question_id": "vq-required",
+        "claim_id": "claim-q0",
+        "source_discovery_id": "discovery-1",
+        "source_evidence_id": None,
+        "target_bbox": [0.0, 0.0, 1.0, 1.0],
+        "expected_property": "Whether the images match.",
+        "recommended_tools": ["compare_with_reference"],
+        "status": "pending",
+        "resolution_call_id": None,
+        "failed_attempts": 0,
+    }
+    prior = StageStep(
+        action_type="tool_call",
+        metadata={
+            "investigation_state_update": {
+                "created_visual_questions": [spec],
+                "resolved_visual_questions": [],
+            }
+        },
+    )
+    runner = StageRunner(
+        llm=object(),
+        system_prompt="",
+        tools=[],
+        output_schema=VerificationResult,
+        stage_name="verification",
+        prior_steps=[prior],
+    )
+
+    control = runner._agent_control_state()
+    assert control["pending_visual_question_ids"] == ["vq-required"]
+    assert control["pending_visual_questions"] == [spec]
+
+
 def test_claim_text_replaces_model_goal_before_tool_execution() -> None:
     class Tool:
         name = "visit"
