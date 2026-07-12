@@ -69,8 +69,20 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--timeout",
         type=float,
-        default=900.0,
+        default=1800.0,
         help="Per-image timeout budget in seconds.",
+    )
+    parser.add_argument(
+        "--max-verification-iterations",
+        type=int,
+        default=None,
+        help="Optional hard cap for verification/replanning iterations (default: 4).",
+    )
+    parser.add_argument(
+        "--max-rounds-verification",
+        type=int,
+        default=12,
+        help="Gemini Interactions turns available inside each verification iteration.",
     )
     parser.add_argument(
         "--limit",
@@ -202,21 +214,25 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
         if args.source_access_policy
         else None
     )
+    looks_like_averimatec = any(
+        str(row.get("sample_id", "")).startswith("averimatec-") for row in samples
+    )
+    sibling_policy = benchmark_path.parent / "source_access_policy.json"
+    if explicit_policy is None and looks_like_averimatec and sibling_policy.exists():
+        explicit_policy = SourceAccessPolicy.load(sibling_policy)
     provenance_rows = [
         row for row in samples if str(row.get("source_article_url", "")).strip()
     ]
-    if explicit_policy is None and provenance_rows:
+    if explicit_policy is None and provenance_rows and not looks_like_averimatec:
         explicit_policy = benchmark_policy_from_rows(
             provenance_rows,
             policy_id=f"{benchmark_path.stem}-evaluation",
         )
-    looks_like_averimatec = any(
-        str(row.get("sample_id", "")).startswith("averimatec-") for row in samples
-    )
     if looks_like_averimatec and explicit_policy is None:
         raise RuntimeError(
-            "AVerImaTeC evaluation requires source_article_url provenance in the "
-            "benchmark rows or --source-access-policy. Refusing a contamination-prone run."
+            "AVerImaTeC evaluation requires the benchmark-wide sibling "
+            "source_access_policy.json or --source-access-policy. A per-subset policy "
+            "does not prevent cross-case fact-check leakage."
         )
 
     config = WorkflowConfig(
@@ -227,6 +243,12 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
         llm_wire_api=args.llm_wire_api,
         vlm_wire_api=args.vlm_wire_api,
         output_dir=str(trace_dir),
+        max_rounds_verification=max(1, args.max_rounds_verification),
+        max_verification_iterations=(
+            max(1, args.max_verification_iterations)
+            if args.max_verification_iterations is not None
+            else None
+        ),
         timeout=args.timeout,
         save_traces=True,
         source_access_policy=explicit_policy,

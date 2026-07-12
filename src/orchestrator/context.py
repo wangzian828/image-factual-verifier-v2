@@ -173,6 +173,7 @@ class ContextRenderer:
         """Render only unresolved gaps and compact evidence for plan revision."""
 
         unresolved = set(audit.unresolved_priority_questions)
+        unresolved.update(audit.unattempted_supporting_questions)
         resolutions = {
             item.question_id: item for item in audit.question_resolutions
         }

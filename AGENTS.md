@@ -34,7 +34,7 @@ This is an agent, not a fixed tool script. Do not replace verification with a pr
 - Keep coverage and judgment deterministic. Claim status depends on direct evidence and source-family independence. `LedgerJudgment` must decide every decisive claim using only matching ledger IDs; `real`, `fake`, and typed `unverifiable` follow the `reinspect-v1` policy.
 - Require an explicit `question_id` on verification function calls. Never silently assign a call to a question.
 - In benchmark evaluation, enforce the provenance-derived `SourceAccessPolicy` before search results are enriched or returned and before any direct page/reference fetch. Do not expose excluded URLs/domains or hidden gold to the model. Product mode remains unrestricted.
-- Ground browse stance to immutable `claim_text`, keep model queries as retrieval parameters only, and require every priority-1 question to receive one tool attempt before resampling a touched priority question.
+- Ground browse stance to immutable `claim_text`, keep model queries as retrieval parameters only, require every active priority-1 question to receive one tool attempt before resampling, and give every priority-2 question one real attempt before further P1 resampling or iteration output.
 - Select upload, visual-search, and browse-fetch providers explicitly. A selected provider's failure must propagate; do not fall through to another provider.
 - Sanitize credentials, secret fields, and signed-URL authentication parameters before writing traces, HTML, or cache entries.
 - Treat JSON and sibling HTML trace export as one required operation. HTML rendering or write errors propagate; export is not best-effort.
@@ -92,7 +92,7 @@ TOOL_CACHE_TTL_SECONDS=3600
 TOOL_CACHE_NAMESPACE=
 ```
 
-`MAX_VERIFICATION_ITERATIONS` defaults to `2`. `GEMINI_VISION_THINKING_LEVEL` defaults to `minimal` only for schema-bound Gemini image observations through `OpenAIVisionClient`; it is not the thinking policy for Planning, ReAct, Replanning, Judgment, browse extraction, or direct Interactions tools. Keep the default scoped this way, and do not retry a failed call by changing thinking level, model, provider, or protocol. `GEMINI_VISION_MIN_OUTPUT_TOKENS` defaults to `8192`, `GEMINI_VISION_TIMEOUT_SECONDS` to `240`, and `BROWSE_EXTRACT_MAX_OUTPUT_TOKENS` to `4096`.
+Verification defaults to 12 native ReAct turns per iteration and `MAX_VERIFICATION_ITERATIONS=4`, with `MIN_VERIFICATION_ITERATIONS=2` and `LOW_INFORMATION_GAIN_PATIENCE=2`. The outer loop stops only on decisive coverage plus required P2 service, two consecutive low-gain iterations with no pending ReInspect, or the hard cap; traces distinguish these outcomes. `GEMINI_VISION_THINKING_LEVEL` defaults to `minimal` only for schema-bound Gemini image observations through `OpenAIVisionClient`; it is not the thinking policy for Planning, ReAct, Replanning, Judgment, browse extraction, or direct Interactions tools. Keep the default scoped this way, and do not retry a failed call by changing thinking level, model, provider, or protocol. `GEMINI_VISION_MIN_OUTPUT_TOKENS` defaults to `8192`, `GEMINI_VISION_TIMEOUT_SECONDS` to `240`, and `BROWSE_EXTRACT_MAX_OUTPUT_TOKENS` to `4096`.
 
 Keep all secrets environment-only even when adding controls.
 
@@ -106,7 +106,7 @@ python test_workflow_smoke.py
 python scripts/probe_gemini_interactions.py --model gemini-3-flash-preview
 ```
 
-The tests cover multi-round tool use, exact evidence grounding and passage selection, discovery/failure exclusion, case/ledger judgment, coverage-driven replanning and typed insufficiency, ReInspect state, native function-call round trips, required question IDs, scoped `thinking_level=minimal`, environment-only credentials, retry/error behavior, and JSON/HTML trace export. `test_full_native_agent_trace.py` is the controlled full-orchestrator reference scenario: it exercises Planning, two native ReAct iterations, a rejected premature output, Coverage/Replanning, Interaction parent/call IDs, ledger Judgment, and a resolved search-driven visual question. Its generated output is a reference trace, not a real-world fact-check result.
+The focused tests cover multi-round tool use, exact evidence grounding and passage selection, discovery/failure exclusion, case/ledger judgment, coverage-driven replanning and typed insufficiency, P1/P2 service, adaptive stopping, ReInspect state, native function-call round trips, required question IDs, scoped `thinking_level=minimal`, environment-only credentials, retry/error behavior, and JSON/HTML trace export. `test_full_native_agent_trace.py` remains a controlled two-iteration fixture, not the production limit or a real-world fact-check result.
 
 For a real run, inspect both files under `outputs/traces/`. JSON is the source of truth. The sibling HTML file is a required standalone diagnostic view of judgment, coverage-relevant steps, tool inputs/results, timing, and token metadata; an HTML export failure is a run/export failure. Re-render saved traces with:
 

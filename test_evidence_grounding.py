@@ -6,11 +6,13 @@ from src.orchestrator.ledger import (
     VerificationLedger,
     build_verification_case,
     compile_runtime_ledgers,
+    _direction_is_decisive,
 )
 from src.orchestrator.pipeline import Orchestrator
 from src.orchestrator.stage_runner import StageStep
 from src.orchestrator.state import (
     EvidenceItem,
+    EvidenceRecord,
     InvestigationQuestion,
     SourceRecord,
     VerificationPlan,
@@ -415,6 +417,56 @@ def test_same_source_id_rejects_immutable_conflict() -> None:
         assert "canonical_url" in str(exc)
     else:
         raise AssertionError("immutable source conflict was merged")
+
+
+def test_same_domain_or_artifact_does_not_count_as_independent_corroboration() -> None:
+    source_a = SourceRecord(
+        source_id="source-a",
+        canonical_url="https://example.test/a",
+        registered_domain="example.test",
+        source_family="domain:example.test",
+        artifact_sha256="a" * 64,
+    )
+    source_b = SourceRecord(
+        source_id="source-b",
+        canonical_url="https://example.test/b",
+        registered_domain="example.test",
+        source_family="domain:example.test",
+        artifact_sha256="b" * 64,
+    )
+    source_c = SourceRecord(
+        source_id="source-c",
+        canonical_url="https://other.test/c",
+        registered_domain="other.test",
+        source_family="domain:other.test",
+        artifact_sha256="a" * 64,
+    )
+    records = [
+        _supporting_record(source_a, "evidence-a"),
+        _supporting_record(source_b, "evidence-b"),
+    ]
+    assert _direction_is_decisive(records, {source_a.source_id: source_a, source_b.source_id: source_b}) is False
+
+    records[1] = _supporting_record(source_c, "evidence-c")
+    assert _direction_is_decisive(records, {source_a.source_id: source_a, source_c.source_id: source_c}) is False
+
+
+def _supporting_record(source: SourceRecord, evidence_id: str) -> EvidenceRecord:
+    return EvidenceRecord(
+        evidence_id=evidence_id,
+        claim_id="claim-q0",
+        source_id=source.source_id,
+        function_call_id=f"call-{evidence_id}",
+        tool_name="visit",
+        evidence_kind="web_span",
+        exact_text="support",
+        span_start=0,
+        span_end=7,
+        artifact_sha256=source.artifact_sha256,
+        retrieved_at="2026-07-11T00:00:00+00:00",
+        stance="support",
+        quality="moderate",
+    )
 
 
 def test_browse_stance_for_search_query_instead_of_claim_is_rejected() -> None:

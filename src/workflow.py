@@ -47,8 +47,11 @@ class WorkflowConfig:
     max_tokens: int = 8192
 
     # Stage settings
-    max_rounds_verification: int = 8
-    timeout: float = 900.0
+    max_rounds_verification: int = 12
+    max_verification_iterations: Optional[int] = None
+    min_verification_iterations: Optional[int] = None
+    low_information_gain_patience: Optional[int] = None
+    timeout: float = 1800.0
 
     # Output
     output_dir: str = field(default_factory=default_trace_dir)
@@ -74,6 +77,9 @@ class VerificationWorkflow:
                 llm_wire_api=self.config.llm_wire_api,
                 vlm_wire_api=self.config.vlm_wire_api,
                 max_rounds_verification=self.config.max_rounds_verification,
+                max_verification_iterations=self.config.max_verification_iterations,
+                min_verification_iterations=self.config.min_verification_iterations,
+                low_information_gain_patience=self.config.low_information_gain_patience,
                 timeout=self.config.timeout,
                 temperature=self.config.temperature,
                 max_tokens=self.config.max_tokens,

@@ -259,6 +259,51 @@ def test_resolved_p1_does_not_block_remaining_question_or_p2() -> None:
     assert all_resolved._priority_coverage_error({"__question_id": "q2"}, []) == ""
 
 
+def test_scheduler_attempts_p2_after_each_active_p1_is_touched() -> None:
+    from src.orchestrator.stage_runner import StageStep
+
+    runner = StageRunner(
+        llm=object(),
+        system_prompt="",
+        tools=[],
+        output_schema=VerificationResult,
+        stage_name="verification",
+        priority_question_ids=["q0"],
+        supporting_question_ids=["q1"],
+    )
+    touched_p1 = [
+        StageStep(action_type="tool_call", tool_args={"__question_id": "q0"})
+    ]
+
+    assert "q1" in runner._priority_coverage_error(
+        {"__question_id": "q0"},
+        touched_p1,
+    )
+    assert runner._priority_coverage_error(
+        {"__question_id": "q1"},
+        touched_p1,
+    ) == ""
+    assert "q1" in runner._required_question_output_error(touched_p1)
+
+
+def test_scheduler_does_not_count_rejected_call_as_question_attempt() -> None:
+    from src.orchestrator.stage_runner import StageStep
+
+    runner = StageRunner(
+        llm=object(),
+        system_prompt="",
+        tools=[],
+        output_schema=VerificationResult,
+        stage_name="verification",
+        priority_question_ids=["q0", "q1"],
+    )
+    rejected = [
+        StageStep(action_type="format_error", tool_args={"__question_id": "q0"})
+    ]
+
+    assert "q0" in runner._required_question_output_error(rejected)
+
+
 def test_valid_pending_reinspection_can_preempt_fairness() -> None:
     from src.orchestrator.stage_runner import StageStep
 

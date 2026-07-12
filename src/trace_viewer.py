@@ -113,13 +113,20 @@ def _render_audits(audits: List[Any]) -> str:
         if not isinstance(audit, dict):
             continue
         complete = bool(audit.get("complete"))
+        stop_reason = str(audit.get("stop_reason", "continue"))
         resolutions = audit.get("question_resolutions", []) if isinstance(audit.get("question_resolutions"), list) else []
         rows = ''.join(
             f'<tr><td>{_e(item.get("question_id", ""))}</td><td>{_status(item.get("status", ""))}</td><td>{_e(item.get("tool_attempts", 0))}</td><td>{_e(item.get("evidence_count", 0))}</td><td>{_e(item.get("remaining_gap", ""))}</td></tr>'
             for item in resolutions if isinstance(item, dict)
         )
+        labels = {
+            "coverage_complete": "coverage complete",
+            "information_saturated": "information saturated",
+            "hard_budget_exhausted": "hard budget exhausted",
+            "continue": "replanning required",
+        }
         badge = 'ok' if complete else 'warn'
-        blocks.append(f'<div class="audit"><span class="badge {badge}">Iteration {_e(audit.get("iteration", 0))}: {"complete" if complete else "replanning required"}</span><p>{_e(audit.get("reason", ""))}</p><table><thead><tr><th>Question</th><th>Status</th><th>Attempts</th><th>Evidence</th><th>Gap</th></tr></thead><tbody>{rows}</tbody></table></div>')
+        blocks.append(f'<div class="audit"><span class="badge {badge}">Iteration {_e(audit.get("iteration", 0))}: {_e(labels.get(stop_reason, stop_reason))}</span><span class="badge">information gain: {_e(audit.get("information_gain", False))}</span><span class="badge">low-gain streak: {_e(audit.get("low_information_gain_streak", 0))}</span><p>{_e(audit.get("reason", ""))}</p><table><thead><tr><th>Question</th><th>Status</th><th>Attempts</th><th>Evidence</th><th>Gap</th></tr></thead><tbody>{rows}</tbody></table></div>')
     return f'<section class="band"><h2>Coverage Audits</h2>{"".join(blocks) or "<p>No coverage audits.</p>"}</section>'
 
 

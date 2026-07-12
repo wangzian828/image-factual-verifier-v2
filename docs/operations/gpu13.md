@@ -199,13 +199,22 @@ a content-addressed directory, and writes an audit manifest under
 `benchmarks/candidates/real_seed_v0/averimatec`. It also writes
 `source_access_policy.json` and an evaluator-private `evaluation.jsonl`, both derived
 from benchmark provenance. `src.eval.run_eval` automatically derives the policy when
-`source_article_url` is present, or accepts the generated file through
-`--source-access-policy`. It refuses AVerImaTeC rows that contain neither. The policy stays outside
+the benchmark-wide sibling policy exists, or accepts that file through
+`--source-access-policy`. It never derives an AVerImaTeC policy from only the selected
+subset because another benchmark case's fact-check page can leak the same answer. It
+refuses AVerImaTeC runs without the full policy. The policy stays outside
 the model-visible case and trace. It does not freeze any core case:
 every item remains pending until a reviewer confirms that the claim is recoverable
 from pixels and has a public evidence path. Person-identity claims are allowed, but
 must be investigated through RIS, source captions, reporting, and event context rather
 than a dedicated biometric model.
+
+Real evaluation defaults to four verification/replanning iterations, twelve native
+Interactions turns per iteration, and a 30-minute per-image timeout. Use
+`--max-verification-iterations` and `--max-rounds-verification` only for an explicit
+experiment; do not reduce them merely to make a run finish. The adaptive audit can stop
+after two consecutive low-information-gain iterations when no P2 service or ReInspect
+work remains, and records whether it stopped on coverage, saturation, or the hard cap.
 
 ## Troubleshooting
 

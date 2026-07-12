@@ -255,10 +255,11 @@ def compile_runtime_ledgers(
                     canonical_url=identity.canonical_url,
                     hostname=identity.hostname,
                     registered_domain=identity.registered_domain,
-                    source_family=(f"content:{artifact}" if artifact else identity.source_family),
+                    source_family=identity.source_family,
                     source_class=identity.source_class,
                     artifact_sha256=artifact,
                     retrieved_at=str(record.get("retrieved_at", "")),
+                    dependency_source_ids=[f"artifact:{artifact}"] if artifact else [],
                     risk_flags=list(identity.risk_flags),
                 )
             )
@@ -419,17 +420,48 @@ def _direction_is_decisive(
         for item in evidence
     ):
         return True
-    families = {
-        sources[item.source_id].source_family
+    eligible = {
+        item.source_id: sources[item.source_id]
         for item in evidence
         if item.source_id in sources
         and sources[item.source_id].source_class != "ugc"
         and not sources[item.source_id].risk_flags
     }
-    return len(families) >= 2
+    if len(eligible) < 2:
+        return False
+
+    parent = {source_id: source_id for source_id in eligible}
+
+    def find(source_id: str) -> str:
+        while parent[source_id] != source_id:
+            parent[source_id] = parent[parent[source_id]]
+            source_id = parent[source_id]
+        return source_id
+
+    def union(left: str, right: str) -> None:
+        left_root, right_root = find(left), find(right)
+        if left_root != right_root:
+            parent[right_root] = left_root
+
+    rows = list(eligible.items())
+    for index, (left_id, left) in enumerate(rows):
+        left_dependencies = set(left.dependency_source_ids)
+        for right_id, right in rows[index + 1 :]:
+            if left.source_family == right.source_family:
+                union(left_id, right_id)
+                continue
+            if left.artifact_sha256 and left.artifact_sha256 == right.artifact_sha256:
+                union(left_id, right_id)
+                continue
+            if left_dependencies & set(right.dependency_source_ids):
+                union(left_id, right_id)
+    return len({find(source_id) for source_id in eligible}) >= 2
 
 
-def derive_unverifiable_reasons(ledgers: VerificationLedgers) -> List[UnverifiableReason]:
+def derive_unverifiable_reasons(
+    ledgers: VerificationLedgers,
+    stop_reason: str = "hard_budget_exhausted",
+) -> List[UnverifiableReason]:
     reasons: List[UnverifiableReason] = []
     open_claims = [item for item in ledgers.claims if item.criticality == "decisive" and item.status not in {"supported", "refuted"}]
     if any(item.status == "conflicted" for item in open_claims):
@@ -441,7 +473,11 @@ def derive_unverifiable_reasons(ledgers: VerificationLedgers) -> List[Unverifiab
     if open_claims and not reasons:
         reasons.append(UnverifiableReason.DECISIVE_EVIDENCE_ABSENT)
     if open_claims:
-        reasons.append(UnverifiableReason.BUDGET_EXHAUSTED)
+        reasons.append(
+            UnverifiableReason.SEARCH_SATURATED
+            if stop_reason == "information_saturated"
+            else UnverifiableReason.BUDGET_EXHAUSTED
+        )
     return list(dict.fromkeys(reasons))
 
 

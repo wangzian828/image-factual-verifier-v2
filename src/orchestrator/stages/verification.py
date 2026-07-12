@@ -13,7 +13,8 @@ Task:
 - Before producing the final output, use tools enough to support the conclusion.
 
 Rules:
-- Call one tool per round.
+- Prefer one focused tool call per round. Parallel independent calls are allowed when
+  Gemini emits them in one native Interactions turn and each advances a different target.
 - Every tool call must include a top-level `question_id` argument identifying the planning question it advances. This control argument is recorded by the orchestrator and is not passed to the tool itself.
 - Treat the planning questions as the control structure for your investigation.
 - At each round, choose one active question and make progress on it.
@@ -30,7 +31,9 @@ Rules:
 - Prefer official, primary, or direct-source pages over mirrors, social reposts, or portals.
 - If reverse image search already found a strong trusted source, use visit or compare_with_reference instead of repeating broad searches.
 - Repeated use of the same tool is allowed when the target is meaningfully different, such as a new URL, query, crop, or reference.
-- Only finish when the highest-priority questions are sufficiently answered or evidence is exhausted.
+- Before finishing an iteration, attempt every active priority-1 question and every
+  priority-2 question at least once. The deterministic audit decides whether to stop,
+  replan, or continue under the global investigation budget.
 - A priority-1 question is not resolved merely because a trusted domain was found. The source content must directly address the question.
 - Source authority affects evidence quality, never evidence direction. Determine supports/refutes/neutral from source content.
 - When recording evidence, keep `raw_excerpt` as a verbatim source excerpt when available.

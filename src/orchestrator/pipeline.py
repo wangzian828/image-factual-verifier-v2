@@ -67,8 +67,11 @@ class Orchestrator:
         vlm_model: Optional[str] = None,
         llm_wire_api: Optional[str] = None,
         vlm_wire_api: Optional[str] = None,
-        max_rounds_verification: int = 8,
-        timeout: float = 900.0,
+        max_rounds_verification: int = 12,
+        max_verification_iterations: Optional[int] = None,
+        min_verification_iterations: Optional[int] = None,
+        low_information_gain_patience: Optional[int] = None,
+        timeout: float = 1800.0,
         temperature: float = 0.0,
         max_tokens: int = 8192,
         validate_startup: bool = True,
@@ -89,7 +92,33 @@ class Orchestrator:
             )
         self.max_rounds_verification = max_rounds_verification
         self.source_access_policy = source_access_policy or SourceAccessPolicy()
-        self.max_verification_iterations = max(1, int(os.getenv("MAX_VERIFICATION_ITERATIONS", "2")))
+        self.max_verification_iterations = max(
+            1,
+            int(
+                max_verification_iterations
+                if max_verification_iterations is not None
+                else os.getenv("MAX_VERIFICATION_ITERATIONS", "4")
+            ),
+        )
+        self.min_verification_iterations = min(
+            self.max_verification_iterations,
+            max(
+                1,
+                int(
+                    min_verification_iterations
+                    if min_verification_iterations is not None
+                    else os.getenv("MIN_VERIFICATION_ITERATIONS", "2")
+                ),
+            ),
+        )
+        self.low_information_gain_patience = max(
+            1,
+            int(
+                low_information_gain_patience
+                if low_information_gain_patience is not None
+                else os.getenv("LOW_INFORMATION_GAIN_PATIENCE", "2")
+            ),
+        )
         self.timeout = timeout
         cache_namespace = os.getenv("TOOL_CACHE_NAMESPACE", "").strip() or "|".join(
             [
@@ -123,15 +152,15 @@ class Orchestrator:
         self.verification_tool_limits = {
             "current_time": 1,
             "ocr_with_position": 3,
-            "reverse_image_search": 2,
-            "text_search": 4,
-            "visit": 4,
-            "compare_with_reference": 2,
-            "crop_and_search": 3,
-            "crop_and_inspect": 3,
-            "check_consistency": 2,
-            "analyze_visual_anomalies": 2,
-            "count_objects": 2,
+            "reverse_image_search": 3,
+            "text_search": 8,
+            "visit": 8,
+            "compare_with_reference": 4,
+            "crop_and_search": 4,
+            "crop_and_inspect": 4,
+            "check_consistency": 3,
+            "analyze_visual_anomalies": 3,
+            "count_objects": 3,
         }
 
         self.llm = APIBackend(
@@ -254,6 +283,10 @@ class Orchestrator:
                 state.plan or VerificationPlan(),
                 state.verification,
                 state.all_steps,
+            )
+            self._gate_claims_on_pending_visual_questions(
+                state.ledgers,
+                state.investigation_state,
             )
             self._check_timeout(started, state)
             state.judgment = await self._run_judgment(state, image_path)
@@ -385,7 +418,28 @@ class Orchestrator:
         result = VerificationResult()
 
         for iteration in range(1, self.max_verification_iterations + 1):
+            if time.time() - started > self.timeout:
+                raise TimeoutError(
+                    f"Verification exceeded timeout of {self.timeout} seconds before iteration {iteration}."
+                )
+            progress_before = self._investigation_progress_signature(
+                state.ledgers,
+                state.investigation_state,
+            )
             active_reinspect = self.provider == "gemini" and str(self.llm.wire_api).lower() == "interactions"
+
+            def interim_output_ready(
+                parsed: VerificationResult,
+                steps: List[StageStep],
+                plan: VerificationPlan = state.plan or VerificationPlan(),
+            ) -> tuple[bool, str]:
+                return self._validate_verification_output(
+                    parsed,
+                    list(all_verification_steps) + list(steps),
+                    plan,
+                    investigation_state=(state.investigation_state if active_reinspect else None),
+                    allow_incomplete_at_budget=False,
+                )
 
             def observation_callback(
                 step: StageStep,
@@ -430,13 +484,7 @@ class Orchestrator:
                 cacheable_tools=list(self.cacheable_tools),
                 tool_call_limits=self.verification_tool_limits,
                 should_stop=None,
-                output_validator=lambda parsed, steps, plan=state.plan: self._validate_verification_output(
-                    parsed,
-                    list(all_verification_steps) + list(steps),
-                    plan or VerificationPlan(),
-                    investigation_state=(state.investigation_state if active_reinspect else None),
-                    allow_incomplete_at_budget=(iteration >= self.max_verification_iterations),
-                ),
+                output_validator=interim_output_ready,
                 min_tool_calls=1,
                 attach_image=False,
                 prior_steps=list(all_verification_steps),
@@ -472,6 +520,24 @@ class Orchestrator:
                         False,
                     )
                 ],
+                supporting_question_ids=[
+                    question.question_id
+                    for question in (state.plan or VerificationPlan()).questions
+                    if question.priority == 2
+                ],
+                resolved_supporting_question_ids=[
+                    question.question_id
+                    for question in (state.plan or VerificationPlan()).questions
+                    if question.priority == 2
+                    and next(
+                        (
+                            claim.status in {"supported", "refuted"}
+                            for claim in state.ledgers.claims
+                            if claim.question_id == question.question_id
+                        ),
+                        False,
+                    )
+                ],
                 source_access_policy=self.source_access_policy,
                 max_output_tokens=self._stage_output_tokens("VERIFICATION", 8192),
             )
@@ -487,6 +553,10 @@ class Orchestrator:
                     result,
                 )
             parsed, iteration_steps = await runner.run(context)
+            if time.time() - started > self.timeout:
+                raise TimeoutError(
+                    f"Verification exceeded timeout of {self.timeout} seconds during iteration {iteration}."
+                )
             for step in iteration_steps:
                 step.metadata["verification_iteration"] = iteration
             self._record_stage_steps(state, iteration_steps)
@@ -517,6 +587,13 @@ class Orchestrator:
                 result,
                 iteration=iteration,
                 ledgers=state.ledgers,
+                investigation_state=state.investigation_state,
+                progress_before=progress_before,
+                previous_low_information_gain_streak=(
+                    state.coverage_audits[-1].low_information_gain_streak
+                    if state.coverage_audits
+                    else 0
+                ),
             )
             state.coverage_audits.append(audit)
             result.question_resolutions = audit.question_resolutions
@@ -524,7 +601,7 @@ class Orchestrator:
             result.unresolved_priority_questions = audit.unresolved_priority_questions
             result.exhausted_priority_questions = audit.exhausted_priority_questions
             result.iteration_count = iteration
-            if audit.complete:
+            if audit.investigation_complete:
                 break
             if iteration < self.max_verification_iterations:
                 state.plan = await self._replan_verification(state, result, audit, image_path)
@@ -540,6 +617,16 @@ class Orchestrator:
                 "Verification failed: every attempted tool call failed."
                 + (f" Failures: {failures}" if failures else "")
             )
+        exhausted_visual = [
+            item.visual_question_id
+            for item in state.investigation_state.visual_questions
+            if item.status == "exhausted"
+        ]
+        if exhausted_visual:
+            raise RuntimeError(
+                "Verification failed: required ReInspect observations failed twice: "
+                + ", ".join(exhausted_visual)
+            )
         if not state.coverage_audits or not state.coverage_audits[-1].investigation_complete:
             unresolved = (
                 state.coverage_audits[-1].unresolved_priority_questions
@@ -550,6 +637,16 @@ class Orchestrator:
                 "Verification failed: investigation did not reach a valid stopping state"
                 + (f" ({', '.join(unresolved)})." if unresolved else ".")
             )
+        never_attempted = [
+            item.question_id
+            for item in state.coverage_audits[-1].question_resolutions
+            if item.tool_attempts == 0 and item.question_id
+        ]
+        if never_attempted:
+            raise RuntimeError(
+                "Verification failed: the agent never executed a tool for required "
+                "question ids: " + ", ".join(never_attempted)
+            )
         return result
 
     @staticmethod
@@ -559,20 +656,28 @@ class Orchestrator:
     ) -> None:
         if investigation_state is None:
             return
-        pending_claim_ids = {
-            item.claim_id
+        blocked_claims = {
+            item.claim_id: item.status
             for item in investigation_state.visual_questions
-            if item.status == "pending"
+            if item.status in {"pending", "exhausted"}
         }
         for claim in ledgers.claims:
-            if claim.claim_id in pending_claim_ids:
+            status = blocked_claims.get(claim.claim_id)
+            if status:
                 claim.status = "open"
                 claim.unresolved_distinction = (
                     "A search-conditioned visual question still requires a real image observation."
+                    if status == "pending"
+                    else "The required image region could not be observed after two real visual attempts."
                 )
 
     async def _run_judgment(self, state: VerificationState, image_path: str) -> FinalJudgment:
         started = time.time()
+        stop_reason = (
+            state.coverage_audits[-1].stop_reason
+            if state.coverage_audits
+            else "hard_budget_exhausted"
+        )
         runner = StageRunner(
             llm=self.llm,
             system_prompt=self._sp(judgment.SYSTEM_PROMPT),
@@ -586,6 +691,7 @@ class Orchestrator:
                 parsed,
                 state.verification or VerificationResult(),
                 state.ledgers,
+                stop_reason=stop_reason,
             ),
             attach_image=False,
             max_output_tokens=self._stage_output_tokens("JUDGMENT", 8192),
@@ -616,7 +722,11 @@ class Orchestrator:
             )
         )
         expected_reasons = [
-            item.value for item in derive_unverifiable_reasons(state.ledgers)
+            item.value
+            for item in derive_unverifiable_reasons(
+                state.ledgers,
+                stop_reason=stop_reason,
+            )
         ]
         context += (
             "\n\nDeterministic policy output to copy exactly:\n"
@@ -702,13 +812,7 @@ class Orchestrator:
             return False, "visual anomalies must copy one successful anomaly tool result and function_call_id"
         priority_ids = {q.question_id for q in plan.questions if q.priority == 1 and q.question_id}
         covered_ids = {item.related_question for item in evidence if item.related_question}
-        exhausted_ids = {
-            question_id for question_id in priority_ids
-            if self._question_attempts_exhausted(question_id, steps)
-        }
         missing = sorted(priority_ids - covered_ids)
-        if missing and not allow_incomplete_at_budget:
-            return False, f"priority questions lack grounded evidence: {', '.join(missing)}"
         if missing and parsed.authenticity_assessment != "uncertain":
             return False, "incomplete decisive coverage requires an uncertain verification assessment"
         if parsed.authenticity_assessment != "uncertain" and not evidence:
@@ -754,10 +858,11 @@ class Orchestrator:
         available_tools: Optional[set[str]] = None,
     ) -> tuple[bool, str]:
         unresolved_ids = set(audit.unresolved_priority_questions)
+        unresolved_ids.update(audit.unattempted_supporting_questions)
         current_ids = {question.question_id for question in current.questions}
         update_ids = [question.question_id for question in parsed.question_updates]
         if not unresolved_ids:
-            return False, "replanning requires at least one unresolved priority question"
+            return False, "replanning requires at least one unresolved or unattempted required question"
         if any(not question_id for question_id in update_ids):
             return False, "every question update needs a non-empty question_id"
         if len(set(update_ids)) != len(update_ids):
@@ -770,7 +875,7 @@ class Orchestrator:
             return False, "resolved or exhausted questions cannot be rewritten: " + ", ".join(resolved)
         missing = sorted(unresolved_ids - set(update_ids))
         if missing:
-            return False, "all unresolved priority questions need an update: " + ", ".join(missing)
+            return False, "all unresolved or unattempted required questions need an update: " + ", ".join(missing)
         if any(not question.question.strip() for question in parsed.question_updates):
             return False, "every question update needs a concrete question"
         current_by_id = {question.question_id: question for question in current.questions}
@@ -799,9 +904,14 @@ class Orchestrator:
         parsed: FinalJudgment,
         verification_result: VerificationResult,
         ledgers: Optional[VerificationLedgers] = None,
+        stop_reason: str = "hard_budget_exhausted",
     ) -> tuple[bool, str]:
         if ledgers is not None and ledgers.claims:
-            return self._validate_ledger_judgment(parsed, ledgers)
+            return self._validate_ledger_judgment(
+                parsed,
+                ledgers,
+                stop_reason=stop_reason,
+            )
         if parsed.verdict == "real" and not verification_result.coverage_complete:
             return False, "a real verdict is not allowed while priority questions remain unresolved"
         if parsed.verdict == "real" and any(
@@ -823,6 +933,7 @@ class Orchestrator:
     def _validate_ledger_judgment(
         parsed: LedgerJudgment,
         ledgers: VerificationLedgers,
+        stop_reason: str = "hard_budget_exhausted",
     ) -> tuple[bool, str]:
         claims = {item.claim_id: item for item in ledgers.claims}
         evidence = {item.evidence_id: item for item in ledgers.evidence}
@@ -878,7 +989,9 @@ class Orchestrator:
         if expected_verdict != "unverifiable" and parsed.unverifiable_reasons:
             return False, "real/fake verdict cannot carry unverifiable reasons"
         if expected_verdict == "unverifiable":
-            expected_reasons = set(derive_unverifiable_reasons(ledgers))
+            expected_reasons = set(
+                derive_unverifiable_reasons(ledgers, stop_reason=stop_reason)
+            )
             if set(parsed.unverifiable_reasons) != expected_reasons:
                 return False, "unverifiable reasons must exactly match the deterministic ledger policy"
         return True, ""
@@ -937,11 +1050,15 @@ class Orchestrator:
         *,
         iteration: int,
         ledgers: Optional[VerificationLedgers] = None,
+        investigation_state: Optional[InvestigationState] = None,
+        progress_before: Optional[tuple[frozenset[str], frozenset[str], frozenset[str]]] = None,
+        previous_low_information_gain_streak: int = 0,
     ) -> CoverageAudit:
         successful_steps = [step for step in steps if self._tool_step_succeeded(step)]
         distinct_tools = sorted({step.tool_name for step in successful_steps if step.tool_name})
         resolutions: List[QuestionResolution] = []
         unresolved_priority: List[str] = []
+        unattempted_supporting: List[str] = []
         exhausted_priority: List[str] = []
         claim_statuses = {
             claim.question_id: claim.status
@@ -976,10 +1093,6 @@ class Orchestrator:
                 status = "in_progress"
                 conclusion = ""
                 gap = "All attempted tools failed; use another query or tool."
-            elif self._question_attempts_exhausted(question.question_id, steps):
-                status = "exhausted"
-                conclusion = "Reasonable investigation did not produce answer-bearing evidence."
-                gap = ""
             elif successful_question_steps:
                 status = "in_progress"
                 conclusion = ""
@@ -991,6 +1104,8 @@ class Orchestrator:
 
             if question.priority == 1 and status != "resolved":
                 unresolved_priority.append(question.question_id)
+            if question.priority == 2 and not question_steps and status != "resolved":
+                unattempted_supporting.append(question.question_id)
             if question.priority == 1 and status == "exhausted":
                 exhausted_priority.append(question.question_id)
             resolutions.append(
@@ -1004,37 +1119,130 @@ class Orchestrator:
                 )
             )
 
-        complete = bool(plan.questions) and not unresolved_priority
-        investigation_complete = complete or iteration >= self.max_verification_iterations
-        if not plan.questions:
-            complete = False
+        pending_visual = pending_visual_question_ids(investigation_state) if investigation_state else []
+        exhausted_visual = (
+            [
+                item.visual_question_id
+                for item in investigation_state.visual_questions
+                if item.status == "exhausted"
+            ]
+            if investigation_state
+            else []
+        )
+        progress_after = self._investigation_progress_signature(
+            ledgers or VerificationLedgers(),
+            investigation_state,
+        )
+        information_gain = progress_before is None or any(
+            after - before
+            for before, after in zip(progress_before, progress_after)
+        )
+        low_information_gain_streak = (
+            0 if information_gain else previous_low_information_gain_streak + 1
+        )
+        decisive_complete = (
+            bool(plan.questions)
+            and not unresolved_priority
+            and not pending_visual
+            and not exhausted_visual
+        )
+        complete = decisive_complete and not unattempted_supporting
+        saturated = (
+            not complete
+            and iteration >= self.min_verification_iterations
+            and low_information_gain_streak >= self.low_information_gain_patience
+            and not pending_visual
+            and not exhausted_visual
+            and not unattempted_supporting
+        )
+        hard_budget_exhausted = (
+            not complete
+            and not saturated
+            and iteration >= self.max_verification_iterations
+        )
+        investigation_complete = complete or saturated or hard_budget_exhausted
+        if saturated or hard_budget_exhausted:
+            exhausted_priority = list(unresolved_priority)
+            for resolution in resolutions:
+                if resolution.question_id not in unresolved_priority:
+                    continue
+                resolution.status = "exhausted"
+                resolution.conclusion = (
+                    "Investigation saturated without decisive evidence."
+                    if saturated
+                    else "The hard investigation budget ended without decisive evidence."
+                )
+                resolution.remaining_gap = ""
         if complete:
-            reason = "All priority-1 investigation questions have grounded evidence."
-        elif investigation_complete:
+            stop_reason = "coverage_complete"
+            reason = "All decisive questions are resolved, P2 questions were attempted, and no visual revisit remains."
+        elif saturated:
+            stop_reason = "information_saturated"
             reason = (
-                "Investigation budget completed with unresolved decisive claim slots: "
+                f"Investigation stopped after {low_information_gain_streak} consecutive "
+                "iterations without new evidence, discovery candidates, or source families."
+            )
+        elif hard_budget_exhausted:
+            stop_reason = "hard_budget_exhausted"
+            reason = (
+                "Hard investigation budget exhausted with unresolved decisive claim slots: "
                 + ", ".join(unresolved_priority or ["plan_has_no_questions"])
             )
         else:
-            reason = "Unresolved priority questions: " + ", ".join(unresolved_priority or ["plan_has_no_questions"])
+            stop_reason = "continue"
+            gaps = []
+            if unresolved_priority:
+                gaps.append("unresolved P1: " + ", ".join(unresolved_priority))
+            if unattempted_supporting:
+                gaps.append("unattempted P2: " + ", ".join(unattempted_supporting))
+            if pending_visual:
+                gaps.append("pending visual: " + ", ".join(pending_visual))
+            reason = "Investigation continues; " + "; ".join(gaps or ["additional independent evidence remains valuable"])
         return CoverageAudit(
             iteration=iteration,
             complete=complete,
             investigation_complete=investigation_complete,
             question_resolutions=resolutions,
             unresolved_priority_questions=unresolved_priority,
+            unattempted_supporting_questions=unattempted_supporting,
             exhausted_priority_questions=exhausted_priority,
+            pending_visual_questions=[*pending_visual, *exhausted_visual],
             successful_tool_calls=len(successful_steps),
             distinct_tools=distinct_tools,
             evidence_count=sum(item.evidence_count for item in resolutions),
+            information_gain=information_gain,
+            low_information_gain_streak=low_information_gain_streak,
+            stop_reason=stop_reason,
             reason=reason,
             claim_statuses=claim_statuses,
             unverifiable_reasons=(
-                derive_unverifiable_reasons(ledgers)
+                derive_unverifiable_reasons(
+                    ledgers,
+                    stop_reason=stop_reason,
+                )
                 if ledgers is not None and investigation_complete and not complete
                 else []
             ),
         )
+
+    @staticmethod
+    def _investigation_progress_signature(
+        ledgers: VerificationLedgers,
+        investigation_state: Optional[InvestigationState],
+    ) -> tuple[frozenset[str], frozenset[str], frozenset[str]]:
+        evidence = frozenset(item.evidence_id for item in ledgers.evidence)
+        discoveries = frozenset(
+            canonicalize_url(item.candidate_url) or item.candidate_url
+            for item in ledgers.discoveries
+            if item.candidate_url
+        )
+        source_families = frozenset(
+            item.source_family for item in ledgers.sources if item.source_family
+        )
+        claim_statuses = frozenset(
+            f"{item.claim_id}:{item.status}" for item in ledgers.claims
+        )
+        return evidence, discoveries | claim_statuses, source_families
 
     async def _execute_tool(self, tool_name: str, args: Dict[str, Any], image_path: str) -> tuple[str, Dict[str, Any]]:
         tool = self.all_tools[tool_name]
@@ -1687,24 +1895,6 @@ class Orchestrator:
             if not succeeded:
                 failures.append(f"{step.tool_name}: {parsed.get('error', 'unknown error')}")
         return "; ".join(failures[-8:])
-
-    def _question_attempts_exhausted(
-        self,
-        question_id: str,
-        steps: Sequence[StageStep],
-    ) -> bool:
-        attempts = [
-            step for step in steps
-            if step.action_type == "tool_call"
-            and str(step.tool_args.get("__question_id", "")) == question_id
-        ]
-        successful = [step for step in attempts if self._tool_step_succeeded(step)]
-        distinct_tools = {step.tool_name for step in successful}
-        iterations = {
-            int(step.metadata.get("verification_iteration", 1))
-            for step in attempts
-        }
-        return len(successful) >= 2 and len(distinct_tools) >= 2 and len(iterations) >= 2
 
     @classmethod
     def _evidence_answers_question(

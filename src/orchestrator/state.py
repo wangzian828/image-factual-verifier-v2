@@ -30,6 +30,7 @@ class UnverifiableReason(str, Enum):
     SINGLE_SOURCE_FAMILY = "single_source_family_dependency"
     UNREADABLE_REGION = "unreadable_region"
     ACCESS_LIMITED = "access_limited"
+    SEARCH_SATURATED = "search_saturated"
     BUDGET_EXHAUSTED = "budget_exhausted"
 
 
@@ -295,10 +296,20 @@ class CoverageAudit(StrictModel):
     investigation_complete: bool = False
     question_resolutions: List[QuestionResolution] = Field(default_factory=list)
     unresolved_priority_questions: List[str] = Field(default_factory=list)
+    unattempted_supporting_questions: List[str] = Field(default_factory=list)
     exhausted_priority_questions: List[str] = Field(default_factory=list)
+    pending_visual_questions: List[str] = Field(default_factory=list)
     successful_tool_calls: int = Field(default=0, ge=0)
     distinct_tools: List[str] = Field(default_factory=list)
     evidence_count: int = Field(default=0, ge=0)
+    information_gain: bool = False
+    low_information_gain_streak: int = Field(default=0, ge=0)
+    stop_reason: Literal[
+        "continue",
+        "coverage_complete",
+        "information_saturated",
+        "hard_budget_exhausted",
+    ] = "continue"
     reason: str = ""
     claim_statuses: Dict[str, str] = Field(default_factory=dict)
     unverifiable_reasons: List[UnverifiableReason] = Field(default_factory=list)

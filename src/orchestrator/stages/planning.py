@@ -44,8 +44,8 @@ Available tools to suggest:
 - visit
 
 Priority:
-- 1 = required
-- 2 = useful
+- 1 = required; use this for every question whose answer can change the final verdict
+- 2 = useful supporting context; it will receive at least one real tool attempt
 - 3 = optional
 
 Return exactly one JSON object:
@@ -72,12 +72,12 @@ Return exactly one JSON object:
 REPLANNING_SYSTEM_PROMPT = """\
 You revise an image-verification plan after a deterministic coverage audit.
 
-Return only a compact delta for unresolved questions. Never repeat, rewrite, or
-comment on resolved or exhausted questions. Do not narrate alternatives, debate
+Return only a compact delta for unresolved P1 questions and unattempted P2 questions.
+Never repeat, rewrite, or comment on resolved or exhausted questions. Do not narrate alternatives, debate
 your own wording, invent findings, or restate the full plan.
 
 Constraints:
-- Return exactly one update for every unresolved question id and no other id.
+- Return exactly one update for every supplied unresolved or unattempted question id and no other id.
 - Keep each question and reason to one short sentence.
 - Preserve each unresolved question's declarative claim_text exactly; revise only
   the search question, tools, and queries.

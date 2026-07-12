@@ -63,8 +63,9 @@ class VisualQuestion(StrictModel):
     target_bbox: List[float]
     expected_property: str
     recommended_tools: List[str] = Field(default_factory=list)
-    status: Literal["pending", "resolved", "failed"] = "pending"
+    status: Literal["pending", "resolved", "failed", "exhausted"] = "pending"
     resolution_call_id: Optional[str] = None
+    failed_attempts: int = Field(default=0, ge=0)
 
     @model_validator(mode="after")
     def validate_links(self) -> "VisualQuestion":
@@ -345,7 +346,11 @@ class InvestigationReducer:
         question = next((item for item in state.visual_questions if item.visual_question_id == visual_question_id), None)
         if question is None or question.status != "pending":
             return []
-        question.status = "resolved" if succeeded else "failed"
+        if succeeded:
+            question.status = "resolved"
+        else:
+            question.failed_attempts += 1
+            question.status = "exhausted" if question.failed_attempts >= 2 else "pending"
         question.resolution_call_id = _call_id(step)
         observed = _summary(parsed, succeeded)
         state.region_observations.append(
@@ -359,7 +364,7 @@ class InvestigationReducer:
                 status="success" if succeeded else "error",
             )
         )
-        return [question]
+        return [question] if question.status in {"resolved", "exhausted"} else []
 
     @staticmethod
     def _stopping_assessment(
@@ -372,18 +377,25 @@ class InvestigationReducer:
             if item.criticality == "decisive" and item.status not in {"supported", "refuted"}
         ]
         pending = [item.visual_question_id for item in state.visual_questions if item.status == "pending"]
+        exhausted_visual = [
+            item.visual_question_id
+            for item in state.visual_questions
+            if item.status == "exhausted"
+        ]
         repeated = sum(item.novelty == "duplicate" for item in state.observations)
         actions: List[str] = []
         if pending:
             actions.append("Resolve pending visual questions with their recommended real visual tools.")
+        if exhausted_visual:
+            actions.append("Record the exhausted visual revisit as typed image-region insufficiency.")
         if unresolved:
             actions.append("Collect direct evidence from a new source family for unresolved claims.")
-        can_stop = not unresolved and not pending
+        can_stop = not unresolved and not pending and not exhausted_visual
         return StoppingAssessment(
             after_function_call_id=call_id,
             can_stop=can_stop,
             unresolved_claim_ids=unresolved,
-            pending_visual_question_ids=pending,
+            pending_visual_question_ids=[*pending, *exhausted_visual],
             novel_source_families=len({item.source_family for item in ledgers.sources}),
             repeated_observations=repeated,
             remaining_high_value_actions=actions,

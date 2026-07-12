@@ -474,7 +474,7 @@ class ReplanningOrchestrator(FakeOrchestrator):
     def _both_questions_output() -> str:
         return """<output>{"evidence":[
           {"function_call_id":"legacy-verification-3-3","source":"https://www.nasa.gov/example-launch","summary":"NASA published the same image.","raw_excerpt":"NASA published the same image.","direction":"supports","quality":"strong","tool_used":"visit","related_question":"q0"},
-          {"function_call_id":"legacy-verification-1-6","source":"https://example.edu/nasa-launch-location","summary":"A university archive identifies the launch location shown in the image.","raw_excerpt":"A university archive identifies the launch location shown in the image.","direction":"supports","quality":"moderate","tool_used":"text_search","related_question":"q1"}
+          {"function_call_id":"legacy-verification-1-5","source":"https://example.edu/nasa-launch-location","summary":"A university archive identifies the launch location shown in the image.","raw_excerpt":"A university archive identifies the launch location shown in the image.","direction":"supports","quality":"moderate","tool_used":"text_search","related_question":"q1"}
         ],"visual_anomalies":[],"authenticity_assessment":"authentic","key_findings":["Both priority questions resolved"],"source_findings":[],"visual_evidence":[],"world_model":{},"question_resolutions":[],"coverage_complete":false,"unresolved_priority_questions":[],"exhausted_priority_questions":[],"iteration_count":2}</output>"""
 
     @staticmethod
@@ -484,9 +484,9 @@ class ReplanningOrchestrator(FakeOrchestrator):
           "confidence":0.92,
           "claim_decisions":[
             {"claim_id":"claim-q0","decision":"support","evidence_ids":["evidence-4c83ea687a35a9d2bc75"],"reason":null},
-            {"claim_id":"claim-q1","decision":"support","evidence_ids":["evidence-1a44c8fbb15baa6e29a5"],"reason":null}
+            {"claim_id":"claim-q1","decision":"support","evidence_ids":["evidence-c3e4da86360f861d07a5"],"reason":null}
           ],
-          "selected_evidence_ids":["evidence-4c83ea687a35a9d2bc75","evidence-1a44c8fbb15baa6e29a5"],
+          "selected_evidence_ids":["evidence-4c83ea687a35a9d2bc75","evidence-c3e4da86360f861d07a5"],
           "policy_rule_id":"reinspect-v1",
           "unverifiable_reasons":[]
         }</output>"""

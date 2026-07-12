@@ -26,7 +26,10 @@ from src.orchestrator.state import (
     PerceptionReport,
     VerificationPlan,
     VerificationState,
+    VerificationLedgers,
 )
+from src.orchestrator.investigation_state import InvestigationState, VisualQuestion
+from src.orchestrator.investigation_state import InvestigationReducer
 from src.orchestrator.tool_cache import ToolResultCache
 from src.orchestrator.tool_health import ToolHealth
 from src.orchestrator.tool_registry import REQUIRED_TOOLS
@@ -164,6 +167,126 @@ def test_verification_uses_runtime_observations_when_model_summary_is_rejected(
     finally:
         Path(image_path).unlink(missing_ok=True)
         Path(image_path).parent.rmdir()
+
+
+def test_low_information_gain_stops_only_after_patience() -> None:
+    orchestrator = object.__new__(Orchestrator)
+    orchestrator.max_verification_iterations = 4
+    orchestrator.min_verification_iterations = 2
+    orchestrator.low_information_gain_patience = 2
+    plan = VerificationPlan(
+        questions=[
+            InvestigationQuestion(
+                question_id="q0",
+                question="Where did the image originate?",
+                claim_text="The image has the claimed origin.",
+                priority=1,
+            )
+        ]
+    )
+    ledgers = VerificationLedgers()
+    signature = orchestrator._investigation_progress_signature(ledgers, InvestigationState())
+
+    second = orchestrator._audit_plan_coverage(
+        plan,
+        [],
+        pipeline_module.VerificationResult(),
+        iteration=2,
+        ledgers=ledgers,
+        investigation_state=InvestigationState(),
+        progress_before=signature,
+        previous_low_information_gain_streak=0,
+    )
+    third = orchestrator._audit_plan_coverage(
+        plan,
+        [],
+        pipeline_module.VerificationResult(),
+        iteration=3,
+        ledgers=ledgers,
+        investigation_state=InvestigationState(),
+        progress_before=signature,
+        previous_low_information_gain_streak=second.low_information_gain_streak,
+    )
+
+    assert second.investigation_complete is False
+    assert second.stop_reason == "continue"
+    assert third.investigation_complete is True
+    assert third.stop_reason == "information_saturated"
+
+
+def test_pending_visual_question_blocks_saturation() -> None:
+    orchestrator = object.__new__(Orchestrator)
+    orchestrator.max_verification_iterations = 4
+    orchestrator.min_verification_iterations = 2
+    orchestrator.low_information_gain_patience = 2
+    plan = VerificationPlan(
+        questions=[
+            InvestigationQuestion(
+                question_id="q0",
+                question="Is the visual consistent with the source?",
+                claim_text="The visual is consistent with the source.",
+                priority=1,
+            )
+        ]
+    )
+    investigation = InvestigationState(
+        visual_questions=[
+            VisualQuestion(
+                visual_question_id="vq0",
+                claim_id="claim-q0",
+                source_discovery_id="discovery-0",
+                target_bbox=[0.0, 0.0, 1.0, 1.0],
+                expected_property="Whether the visual matches.",
+            )
+        ]
+    )
+    ledgers = VerificationLedgers()
+
+    audit = orchestrator._audit_plan_coverage(
+        plan,
+        [],
+        pipeline_module.VerificationResult(),
+        iteration=3,
+        ledgers=ledgers,
+        investigation_state=investigation,
+        progress_before=orchestrator._investigation_progress_signature(ledgers, investigation),
+        previous_low_information_gain_streak=2,
+    )
+
+    assert audit.investigation_complete is False
+    assert audit.pending_visual_questions == ["vq0"]
+
+
+def test_visual_reinspect_failure_requires_two_real_attempts_to_exhaust() -> None:
+    question = VisualQuestion(
+        visual_question_id="vq0",
+        claim_id="claim-q0",
+        source_discovery_id="discovery-0",
+        target_bbox=[0.0, 0.0, 1.0, 1.0],
+        expected_property="Whether the visual matches.",
+    )
+    investigation = InvestigationState(visual_questions=[question])
+
+    for call_index in (1, 2):
+        step = StageStep(
+            action_type="tool_call",
+            tool_name="crop_and_inspect",
+            tool_args={"visual_question_id": "vq0"},
+            tool_result='{"status":"error","error":"vision endpoint unavailable"}',
+            metadata={"function_call_id": f"call-{call_index}"},
+        )
+        resolved = InvestigationReducer._resolve_visual_question(
+            investigation,
+            step,
+            {"error": "vision endpoint unavailable"},
+            False,
+        )
+        if call_index == 1:
+            assert question.status == "pending"
+            assert resolved == []
+
+    assert question.status == "exhausted"
+    assert question.failed_attempts == 2
 
 
 def test_required_tool_failure_aborts_startup(monkeypatch: pytest.MonkeyPatch) -> None:

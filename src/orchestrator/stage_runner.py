@@ -72,6 +72,8 @@ class StageRunner:
         question_claims: Optional[Dict[str, str]] = None,
         priority_question_ids: Optional[List[str]] = None,
         resolved_priority_question_ids: Optional[List[str]] = None,
+        supporting_question_ids: Optional[List[str]] = None,
+        resolved_supporting_question_ids: Optional[List[str]] = None,
         source_access_policy: Optional[SourceAccessPolicy] = None,
     ):
         self.llm = llm
@@ -103,6 +105,8 @@ class StageRunner:
         self.question_claims = dict(question_claims or {})
         self.priority_question_ids = list(dict.fromkeys(priority_question_ids or []))
         self.resolved_priority_question_ids = set(resolved_priority_question_ids or [])
+        self.supporting_question_ids = list(dict.fromkeys(supporting_question_ids or []))
+        self.resolved_supporting_question_ids = set(resolved_supporting_question_ids or [])
         self.source_access_policy = source_access_policy or SourceAccessPolicy()
 
     async def run(self, input_context: str) -> Tuple[Optional[BaseModel], List[StageStep]]:
@@ -954,6 +958,8 @@ class StageRunner:
         tool_calls = sum(1 for step in steps if step.action_type == "tool_call")
         if tool_calls < self.min_tool_calls:
             return False, f"at least {self.min_tool_calls} tool calls are required; only {tool_calls} completed"
+        if coverage_error := self._required_question_output_error(steps):
+            return False, coverage_error
         if self.output_validator:
             accepted, reason = self.output_validator(parsed, steps)
             if not accepted:
@@ -995,7 +1001,7 @@ class StageRunner:
         tool_args: Dict[str, Any],
         current_steps: List[StageStep],
     ) -> str:
-        if self.stage_name != "verification" or not self.priority_question_ids:
+        if self.stage_name != "verification":
             return ""
         question_id = str(tool_args.get("__question_id", "")).strip()
         if (
@@ -1003,32 +1009,63 @@ class StageRunner:
             and self._pending_visual_call_is_valid(tool_args)
         ):
             return ""
+        resolved = self._resolved_question_ids(current_steps)
         active_priority_ids = [
             item
             for item in self.priority_question_ids
-            if item not in self._resolved_priority_ids(current_steps)
+            if item not in resolved
         ]
-        if not active_priority_ids:
-            return ""
-        counts = {item: 0 for item in active_priority_ids}
+        active_supporting_ids = [
+            item
+            for item in self.supporting_question_ids
+            if item not in resolved
+        ]
+        counts = {
+            item: 0
+            for item in [*active_priority_ids, *active_supporting_ids]
+        }
         for step in [*self.prior_steps, *current_steps]:
             if step.action_type != "tool_call":
                 continue
             step_question = str(step.tool_args.get("__question_id", "")).strip()
             if step_question in counts:
                 counts[step_question] += 1
-        minimum = min(counts.values()) if counts else 0
-        least_attempted = [item for item in active_priority_ids if counts[item] == minimum]
+        untouched_priority = [item for item in active_priority_ids if counts[item] == 0]
+        if untouched_priority and question_id not in untouched_priority:
+            return (
+                "Question coverage requires one attempt for every active P1 before "
+                "resampling. Untouched P1 ids: " + ", ".join(untouched_priority)
+            )
+        if untouched_priority:
+            return ""
+
+        untouched_supporting = [
+            item for item in active_supporting_ids if counts[item] == 0
+        ]
+        if untouched_supporting and question_id not in untouched_supporting:
+            return (
+                "Question coverage requires one attempt for every active P2 before "
+                "further P1 resampling. Untouched P2 ids: "
+                + ", ".join(untouched_supporting)
+            )
+        if untouched_supporting or not active_priority_ids:
+            return ""
+
+        minimum = min(counts[item] for item in active_priority_ids)
+        least_attempted = [
+            item for item in active_priority_ids if counts[item] == minimum
+        ]
         if question_id not in least_attempted:
             return (
-                "Priority-question coverage requires targeting a least-attempted P1 "
-                "question before further resampling. Least-attempted P1 ids: "
+                "Question coverage requires targeting a least-attempted active P1 "
+                "before further resampling. Least-attempted P1 ids: "
                 + ", ".join(least_attempted)
             )
         return ""
 
-    def _resolved_priority_ids(self, current_steps: List[StageStep]) -> set[str]:
+    def _resolved_question_ids(self, current_steps: List[StageStep]) -> set[str]:
         resolved = set(self.resolved_priority_question_ids)
+        resolved.update(self.resolved_supporting_question_ids)
         for step in [*self.prior_steps, *current_steps, *list(getattr(self, "_control_steps", []))]:
             update = (step.metadata or {}).get("investigation_state_update", {})
             if not isinstance(update, dict):
@@ -1043,6 +1080,35 @@ class StageRunner:
             ):
                 resolved.add(claim_id.removeprefix("claim-"))
         return resolved
+
+    def _required_question_output_error(self, current_steps: List[StageStep]) -> str:
+        if self.stage_name != "verification":
+            return ""
+        resolved = self._resolved_question_ids(current_steps)
+        attempted = {
+            str(step.tool_args.get("__question_id", "")).strip()
+            for step in [*self.prior_steps, *current_steps]
+            if step.action_type == "tool_call"
+            and str(step.tool_args.get("__question_id", "")).strip()
+        }
+        missing_p1 = [
+            item
+            for item in self.priority_question_ids
+            if item not in resolved and item not in attempted
+        ]
+        missing_p2 = [
+            item
+            for item in self.supporting_question_ids
+            if item not in resolved and item not in attempted
+        ]
+        if not missing_p1 and not missing_p2:
+            return ""
+        parts = []
+        if missing_p1:
+            parts.append("untouched P1: " + ", ".join(missing_p1))
+        if missing_p2:
+            parts.append("untouched P2: " + ", ".join(missing_p2))
+        return "required investigation questions still need a tool attempt (" + "; ".join(parts) + ")"
 
     def _pending_visual_call_is_valid(self, tool_args: Dict[str, Any]) -> bool:
         visual_question_id = str(tool_args.get("visual_question_id", "")).strip()
@@ -1072,9 +1138,14 @@ class StageRunner:
             question_id = str(step.tool_args.get("__question_id", "")).strip()
             if question_id:
                 attempts[question_id] = attempts.get(question_id, 0) + 1
-        untouched = [
+        untouched_priority = [
             question_id
             for question_id in self.priority_question_ids
+            if attempts.get(question_id, 0) == 0
+        ]
+        untouched_supporting = [
+            question_id
+            for question_id in self.supporting_question_ids
             if attempts.get(question_id, 0) == 0
         ]
         remaining = {}
@@ -1087,7 +1158,8 @@ class StageRunner:
             remaining[tool_name] = max(0, int(limit) - used)
         return {
             "question_attempts": attempts,
-            "untouched_priority_question_ids": untouched,
+            "untouched_priority_question_ids": untouched_priority,
+            "untouched_supporting_question_ids": untouched_supporting,
             "remaining_tool_budgets": remaining,
             "pending_visual_question_ids": self._pending_visual_question_ids(),
         }
