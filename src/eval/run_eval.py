@@ -2,16 +2,23 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
+import os
 import statistics
+import subprocess
 from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, Iterable, List
 
 from src.workflow import VerificationWorkflow, WorkflowConfig
 from src.storage import default_eval_root
 from src.orchestrator.source_access import SourceAccessPolicy, benchmark_policy_from_rows
+from src.redaction import sanitize_for_persistence
+
+
+RUN_SCHEMA_VERSION = "ifv-eval-run-v1"
 
 
 def _parse_args() -> argparse.Namespace:
@@ -120,6 +127,74 @@ def _safe_mean(values: List[float]) -> float:
     return float(statistics.mean(values))
 
 
+def _positive_int(value: Any, *, name: str) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be an integer") from exc
+    if parsed < 1:
+        raise ValueError(f"{name} must be at least 1")
+    return parsed
+
+
+def _now_iso() -> str:
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _git_commit() -> str:
+    configured = os.getenv("GIT_COMMIT", "").strip()
+    if configured:
+        return configured
+    try:
+        completed = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=Path(__file__).resolve().parents[2],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return completed.stdout.strip()
+
+
+def _write_json(path: Path, payload: Dict[str, Any]) -> None:
+    serialized = json.dumps(
+        sanitize_for_persistence(payload),
+        ensure_ascii=False,
+        indent=2,
+    )
+    _write_text(path, serialized + "\n")
+
+
+def _write_jsonl(path: Path, rows: Iterable[Dict[str, Any]]) -> None:
+    lines = [
+        json.dumps(
+            sanitize_for_persistence(row),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        for row in rows
+    ]
+    _write_text(path, "\n".join(lines) + ("\n" if lines else ""))
+
+
+def _write_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pending = path.with_name(f".{path.name}.tmp")
+    pending.write_text(text, encoding="utf-8")
+    pending.replace(path)
+
+
 def _prediction_record(sample: Dict[str, Any], result: Dict[str, Any]) -> Dict[str, Any]:
     state = result.get("state") or {}
     return {
@@ -138,8 +213,6 @@ def _prediction_record(sample: Dict[str, Any], result: Dict[str, Any]) -> Dict[s
         "error": result.get("error"),
         "judgment": result.get("judgment"),
         "stage_timings": state.get("stage_timings", {}),
-        "plan": state.get("plan"),
-        "verification": state.get("verification"),
         "trace_path": None,
     }
 
@@ -154,6 +227,7 @@ def _compute_summary(predictions: List[Dict[str, Any]]) -> Dict[str, Any]:
     times: List[float] = []
     tool_calls: List[float] = []
     llm_calls: List[float] = []
+    errors = 0
 
     for row in predictions:
         gt = str(row.get("ground_truth", ""))
@@ -161,6 +235,8 @@ def _compute_summary(predictions: List[Dict[str, Any]]) -> Dict[str, Any]:
         bucket = str(row.get("bucket", "unknown"))
         bucket_totals[bucket] += 1
         verdict_counter[pred] += 1
+        if pred == "error":
+            errors += 1
         confusion[gt][pred] += 1
         if gt == pred:
             correct += 1
@@ -183,6 +259,8 @@ def _compute_summary(predictions: List[Dict[str, Any]]) -> Dict[str, Any]:
     return {
         "num_samples": total,
         "num_correct": correct,
+        "num_incorrect": total - correct,
+        "num_errors": errors,
         "accuracy": round(correct / total, 4) if total else 0.0,
         "bucket_metrics": bucket_metrics,
         "confusion": {gt: dict(counter) for gt, counter in confusion.items()},
@@ -206,9 +284,27 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
         else default_eval_root()
         / f"{timestamp}_{args.provider}_{args.model.replace('/', '_')}"
     )
-    trace_dir = run_dir / "traces"
-    trace_dir.mkdir(parents=True, exist_ok=True)
-
+    if run_dir.exists() and any(run_dir.iterdir()):
+        raise FileExistsError(
+            f"Evaluation output directory must be new or empty: {run_dir}"
+        )
+    max_verification_iterations = _positive_int(
+        args.max_verification_iterations
+        if args.max_verification_iterations is not None
+        else os.getenv("MAX_VERIFICATION_ITERATIONS", "4"),
+        name="max verification iterations",
+    )
+    min_verification_iterations = min(
+        max_verification_iterations,
+        _positive_int(
+            os.getenv("MIN_VERIFICATION_ITERATIONS", "2"),
+            name="minimum verification iterations",
+        ),
+    )
+    low_information_gain_patience = _positive_int(
+        os.getenv("LOW_INFORMATION_GAIN_PATIENCE", "2"),
+        name="low information-gain patience",
+    )
     explicit_policy = (
         SourceAccessPolicy.load(args.source_access_policy)
         if args.source_access_policy
@@ -235,6 +331,49 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
             "does not prevent cross-case fact-check leakage."
         )
 
+    trace_dir = run_dir / "traces"
+    trace_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = run_dir / "run_manifest.json"
+    manifest: Dict[str, Any] = {
+        "schema_version": RUN_SCHEMA_VERSION,
+        "run_id": run_dir.name,
+        "status": "running",
+        "started_at": _now_iso(),
+        "completed_at": None,
+        "git_commit": _git_commit(),
+        "benchmark": {
+            "path": str(benchmark_path.resolve()),
+            "sha256": _sha256(benchmark_path),
+            "sample_count": len(samples),
+            "limit": args.limit,
+        },
+        "agent": {
+            "provider": args.provider,
+            "model": args.model,
+            "vlm_provider": args.vlm_provider or args.provider,
+            "vlm_model": args.vlm_model or args.model,
+            "llm_wire_api": args.llm_wire_api,
+            "vlm_wire_api": args.vlm_wire_api,
+            "timeout_seconds": args.timeout,
+            "max_verification_iterations": max_verification_iterations,
+            "min_verification_iterations": min_verification_iterations,
+            "low_information_gain_patience": low_information_gain_patience,
+            "max_rounds_verification": args.max_rounds_verification,
+            "concurrency": max(1, args.concurrency),
+        },
+        "source_access_policy": {
+            "active": bool(explicit_policy and explicit_policy.active),
+            "policy_id": explicit_policy.policy_id if explicit_policy else None,
+            "cache_partition": explicit_policy.cache_partition if explicit_policy else None,
+        },
+        "artifacts": {
+            "predictions": "predictions.jsonl",
+            "summary": "summary.json",
+            "traces": "traces/",
+        },
+    }
+    _write_json(manifest_path, manifest)
+
     config = WorkflowConfig(
         provider=args.provider,
         model_name=args.model,
@@ -244,73 +383,60 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
         vlm_wire_api=args.vlm_wire_api,
         output_dir=str(trace_dir),
         max_rounds_verification=max(1, args.max_rounds_verification),
-        max_verification_iterations=(
-            max(1, args.max_verification_iterations)
-            if args.max_verification_iterations is not None
-            else None
-        ),
+        max_verification_iterations=max_verification_iterations,
+        min_verification_iterations=min_verification_iterations,
+        low_information_gain_patience=low_information_gain_patience,
         timeout=args.timeout,
         save_traces=True,
         source_access_policy=explicit_policy,
     )
-    workflow = VerificationWorkflow(config)
-
-    image_paths = [str(sample["image_path"]) for sample in samples]
-    image_ids = [str(sample["sample_id"]) for sample in samples]
-    user_claims = [
-        (
-            str(sample.get("user_claim") or sample.get("runtime_claim") or "").strip()
-            or None
+    try:
+        workflow = VerificationWorkflow(config)
+        image_paths = [str(sample["image_path"]) for sample in samples]
+        image_ids = [str(sample["sample_id"]) for sample in samples]
+        user_claims = [
+            (
+                str(sample.get("user_claim") or sample.get("runtime_claim") or "").strip()
+                or None
+            )
+            for sample in samples
+        ]
+        results = await workflow.run_batch(
+            image_paths=image_paths,
+            image_ids=image_ids,
+            user_claims=user_claims,
+            concurrency=max(1, args.concurrency),
         )
-        for sample in samples
-    ]
-    results = await workflow.run_batch(
-        image_paths=image_paths,
-        image_ids=image_ids,
-        user_claims=user_claims,
-        concurrency=max(1, args.concurrency),
-    )
 
-    predictions = []
-    failures = []
-    for sample, result in zip(samples, results):
-        record = _prediction_record(sample, result)
-        trace_path = trace_dir / f"{sample['sample_id']}.json"
-        if trace_path.exists():
-            record["trace_path"] = str(trace_path)
-        predictions.append(record)
-        if record["ground_truth"] != record["predicted_verdict"]:
-            failures.append(record)
+        predictions = []
+        for sample, result in zip(samples, results):
+            record = _prediction_record(sample, result)
+            trace_path = trace_dir / f"{sample['sample_id']}.json"
+            if trace_path.exists():
+                record["trace_path"] = trace_path.relative_to(run_dir).as_posix()
+            predictions.append(record)
 
-    summary = _compute_summary(predictions)
-    summary.update(
-        {
-            "benchmark_path": str(benchmark_path),
-            "provider": args.provider,
-            "model": args.model,
-            "vlm_provider": args.vlm_provider or args.provider,
-            "vlm_model": args.vlm_model or args.model,
-            "llm_wire_api": args.llm_wire_api,
-            "vlm_wire_api": args.vlm_wire_api,
-            "output_dir": str(run_dir),
-            "trace_dir": str(trace_dir),
-            "num_failures": len(failures),
+        summary = _compute_summary(predictions)
+        summary["run_id"] = manifest["run_id"]
+        _write_jsonl(run_dir / "predictions.jsonl", predictions)
+        _write_json(run_dir / "summary.json", summary)
+
+        manifest["status"] = (
+            "completed_with_errors" if summary["num_errors"] else "completed"
+        )
+        manifest["completed_at"] = _now_iso()
+        manifest["result"] = {
+            "num_samples": summary["num_samples"],
+            "num_errors": summary["num_errors"],
         }
-    )
-
-    (run_dir / "predictions.json").write_text(
-        json.dumps(predictions, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    (run_dir / "failures.json").write_text(
-        json.dumps(failures, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    (run_dir / "summary.json").write_text(
-        json.dumps(summary, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    return summary
+        _write_json(manifest_path, manifest)
+        return summary
+    except BaseException as exc:
+        manifest["status"] = "failed"
+        manifest["completed_at"] = _now_iso()
+        manifest["error"] = f"{type(exc).__name__}: {exc}"
+        _write_json(manifest_path, manifest)
+        raise
 
 
 def main() -> None:

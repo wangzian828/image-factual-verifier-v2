@@ -20,9 +20,12 @@ from src.integrations.search.visual_search import (
 )
 from src.integrations.vlm.qwen_vl import parse_json_object
 from src.orchestrator.pipeline import Orchestrator
+from src.orchestrator.context import ContextRenderer
 from src.orchestrator.stage_runner import StageStep
 from src.orchestrator.state import (
+    CoverageAudit,
     InvestigationQuestion,
+    PlanRevision,
     PerceptionReport,
     VerificationPlan,
     VerificationState,
@@ -255,6 +258,66 @@ def test_pending_visual_question_blocks_saturation() -> None:
 
     assert audit.investigation_complete is False
     assert audit.pending_visual_questions == ["vq0"]
+
+
+def test_pending_reinspect_question_is_a_valid_replanning_target() -> None:
+    plan = VerificationPlan(
+        questions=[
+            InvestigationQuestion(
+                question_id="q0",
+                question="Is the screenshot visually authentic?",
+                claim_text="The screenshot is visually authentic.",
+                suggested_tools=["crop_and_search"],
+                priority=1,
+            )
+        ]
+    )
+    audit = CoverageAudit(pending_visual_questions=["vq0"])
+    investigation = InvestigationState(
+        visual_questions=[
+            VisualQuestion(
+                visual_question_id="vq0",
+                claim_id="claim-q0",
+                source_discovery_id="discovery-0",
+                target_bbox=[0.1, 0.2, 0.9, 0.8],
+                expected_property="Whether the banner text matches the source template.",
+                recommended_tools=["crop_and_search"],
+            )
+        ]
+    )
+    revision = PlanRevision(
+        question_updates=[
+            InvestigationQuestion(
+                question_id="q0",
+                question="Does the specified banner region match the source template?",
+                claim_text="The screenshot is visually authentic.",
+                suggested_tools=["crop_and_search"],
+                suggested_queries=["original broadcast template"],
+                priority=1,
+            )
+        ]
+    )
+
+    accepted, reason = Orchestrator._validate_plan_revision(
+        revision,
+        plan,
+        audit,
+        {"crop_and_search"},
+        investigation,
+    )
+
+    assert accepted, reason
+    context = ContextRenderer.render_for_replanning(
+        PerceptionReport(),
+        plan,
+        audit,
+        pipeline_module.VerificationResult(),
+        ["crop_and_search"],
+        investigation,
+    )
+    assert "q0" in context
+    assert "vq0" in context
+    assert "target_bbox=[0.1, 0.2, 0.9, 0.8]" in context
 
 
 def test_visual_reinspect_failure_requires_two_real_attempts_to_exhaust() -> None:

@@ -29,7 +29,6 @@ from src.orchestrator.state import VerificationCase
 from src.orchestrator.source_access import SourceAccessPolicy
 from src.redaction import sanitize_for_persistence
 from src.storage import default_trace_dir
-from src.trace_viewer import save_trace_html
 
 
 @dataclass
@@ -195,7 +194,7 @@ class VerificationWorkflow:
         return final
 
     def _save_trace(self, result: Dict[str, Any]) -> None:
-        """Save verification trace to output directory."""
+        """Save the canonical verification trace to the output directory."""
         os.makedirs(self.config.output_dir, exist_ok=True)
 
         image_id = result.get("image_id", "unknown")
@@ -211,6 +210,3 @@ class VerificationWorkflow:
 
         with open(trace_path, "w", encoding="utf-8") as f:
             json.dump(serializable, f, ensure_ascii=False, indent=2, default=str)
-
-        html_path = os.path.splitext(trace_path)[0] + ".html"
-        save_trace_html(serializable, html_path)

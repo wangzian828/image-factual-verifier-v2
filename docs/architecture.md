@@ -216,21 +216,30 @@ When enabled, only successful eligible results are cached. TTL limits reuse, and
 
 ## Trace Persistence
 
-With tracing enabled, `VerificationWorkflow` writes sibling files under `outputs/traces/` or `--output-dir`:
+With tracing enabled, `VerificationWorkflow` writes `<image-id>.json` under `outputs/traces/` or `--output-dir`. This is the canonical machine-readable result and full state. HTML is a derived diagnostic view and is not generated during normal runs.
 
-- `<image-id>.json`: canonical machine-readable result and full state;
-- `<image-id>.html`: required standalone diagnostic rendering.
-
-Before any JSON, HTML, or cache write, persistence data is sanitized to redact credential fields and authentication parameters in signed URLs. The JSON trace is the source of truth, but HTML generation is not best-effort: rendering or write errors propagate from trace export.
+Before any JSON, HTML, or cache write, persistence data is sanitized to redact credential fields and authentication parameters in signed URLs. Generate HTML explicitly from a saved trace when a standalone human-readable view is needed:
 
 Re-render saved traces without rerunning verification:
 
 ```powershell
-python -m src.render_trace_html outputs\traces\example.json
+python -m src.render_trace_html outputs\traces\example.json --output-dir outputs\trace_html
 python -m src.render_trace_html outputs\traces --output-dir outputs\trace_html
 ```
 
 Do not commit generated traces or cache files.
+
+Benchmark evaluation runs use a compact durable layout:
+
+```text
+<run-id>/
+  run_manifest.json
+  predictions.jsonl
+  summary.json
+  traces/<sample-id>.json
+```
+
+The manifest records the Git revision, benchmark path and digest, runtime configuration, and completion status. Incorrect predictions and engineering errors can be derived by filtering `predictions.jsonl`; a duplicate failure file is not written.
 
 When `IFV_DATA_ROOT` is set, default trace, evaluation, cache, benchmark-workbench,
 and source-material paths are rooted there instead of inside the checkout. The gpu-13
@@ -257,12 +266,12 @@ python -m pytest -q test_full_native_agent_trace.py
 python test_workflow_smoke.py
 ```
 
-The focused tests cover native call chaining, tool-result status validation, case/ledger judgment, discovery and exact-span grounding, passage-ID validation, incremental ReInspect state, provider non-fallback, cache TTL and namespace, coverage-driven replanning and typed insufficiency, Gemini-only Interactions, `thinking_level=minimal` for schema-bound image observations, persistence redaction, and required JSON/HTML export. `test_full_native_agent_trace.py` runs a controlled fixture through the complete production orchestrator and exports an auditable reference trace with two verification iterations, two coverage audits, replanning, Interaction parent/call IDs, ledger evidence, and ReInspect resolution. It is explicitly not a real-world factual result.
+The focused tests cover native call chaining, tool-result status validation, case/ledger judgment, discovery and exact-span grounding, passage-ID validation, incremental ReInspect state, provider non-fallback, cache TTL and namespace, coverage-driven replanning and typed insufficiency, Gemini-only Interactions, `thinking_level=minimal` for schema-bound image observations, persistence redaction, canonical JSON persistence, and on-demand HTML rendering. `test_full_native_agent_trace.py` runs a controlled fixture through the complete production orchestrator and exports an auditable reference trace with two verification iterations, two coverage audits, replanning, Interaction parent/call IDs, ledger evidence, and ReInspect resolution. It is explicitly not a real-world factual result.
 
 ## Repository Map
 
 ```text
-src/workflow.py                         workflow and required trace export
+src/workflow.py                         workflow and canonical JSON trace export
 src/orchestrator/pipeline.py            stages, audit/replanning loop, validation
 src/orchestrator/stage_runner.py        bounded native ReAct loop
 src/orchestrator/state.py               state contracts and persistence view

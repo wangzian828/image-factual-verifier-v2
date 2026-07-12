@@ -100,8 +100,10 @@ All datasets and generated runtime artifacts live on the gpu-13 data filesystem:
   artifacts/      web pages, images, RIS/SERP snapshots, and source material
   benchmarks/     benchmark manifests and benchmark-owned assets
   cache/          Hugging Face, Torch, EasyOCR, and tool caches
-  runs/traces/    standalone JSON and HTML Agent trajectories
-  runs/eval/      benchmark predictions, summaries, and per-case traces
+  runs/
+    _logs/        background evaluation stdout and stderr logs
+    traces/       standalone JSON Agent trajectories
+    eval/         named evaluation runs with predictions, summaries, and JSON traces
   generated/      later synthetic training and diagnostic data
 ```
 
@@ -219,6 +221,39 @@ The verification output budget defaults to 16,384 tokens. Interactions failures 
 hard failures, but the error trace retains all completed native tool calls. Evaluation
 also rejects any search query that explicitly names a policy-excluded fact-check domain
 before it reaches Serper.
+
+Start a formal evaluation in the background with a unique, explicit, new output directory:
+
+```bash
+cd /gs/home/wza/projects/image-factual-verifier-v2
+run_id="averimatec-real-seed-v0-$(date -u +%Y%m%dT%H%M%SZ)"
+bash scripts/server/start_eval_gpu13.sh \
+  --benchmark "$IFV_DATA_ROOT/benchmarks/candidates/real_seed_v0/averimatec/evaluation.jsonl" \
+  --source-access-policy "$IFV_DATA_ROOT/benchmarks/candidates/real_seed_v0/averimatec/source_access_policy.json" \
+  --output-dir "$IFV_DATA_ROOT/runs/eval/$run_id" \
+  --concurrency 1
+```
+
+The launcher prints `pid`, `pid_file`, and `log_file`. Evaluation stdout and stderr
+always go to the printed path under `IFV_DATA_ROOT/runs/_logs`, never into the named
+run directory. PID files live under `/tmp/image-factual-verifier-v2` and are removed
+automatically when their worker exits. The run directory contains durable evaluation
+artifacts such as `run_manifest.json`, `predictions.jsonl`, `summary.json`, and JSON
+traces. Passing `--output-dir` is mandatory; every other argument is forwarded unchanged
+to `python -m src.eval.run_eval` in the `ifv-agent` Conda environment. A non-empty
+output directory is rejected so artifacts from separate runs cannot be mixed. Evaluation logs
+older than `IFV_LOG_RETENTION_DAYS` are removed when a new run starts; the default is
+30 days.
+
+HTML is a derived diagnostic, not a formal evaluation artifact. Generate it only when
+needed from one JSON trace or the run's trace directory:
+
+```bash
+scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
+  python -m src.render_trace_html \
+  "$IFV_DATA_ROOT/runs/eval/$run_id/traces" \
+  --output-dir "$IFV_DATA_ROOT/runs/eval/$run_id/trace_html"
+```
 
 ## Troubleshooting
 

@@ -38,14 +38,14 @@ This is an agent, not a fixed tool script. Do not replace verification with a pr
 - Ground browse stance to immutable `claim_text`, keep model queries as retrieval parameters only, require every active priority-1 question to receive one tool attempt before resampling, and give every priority-2 question one real attempt before further P1 resampling or iteration output.
 - Select upload, visual-search, and browse-fetch providers explicitly. A selected provider's failure must propagate; do not fall through to another provider.
 - Sanitize credentials, secret fields, and signed-URL authentication parameters before writing traces, HTML, or cache entries.
-- Treat JSON and sibling HTML trace export as one required operation. HTML rendering or write errors propagate; export is not best-effort.
+- Persist canonical JSON traces by default. HTML is a derived diagnostic view and is generated only through `src.render_trace_html` when requested.
 - Keep the disk tool cache opt-in. It is disabled by default and must remain bounded by TTL and namespace when enabled.
 - Read credentials only from environment variables or an untracked `.env`. Never place keys in source, configuration, prompts, traces, tests, or documentation.
 - Do not add a dedicated face detector, face embedding store, biometric recognition model, or biometric similarity tool. Person-identity claims remain in scope when investigated through reverse-image search, original-source captions, public reporting, visible non-biometric cues, and event context.
 
 ## Active Modules
 
-- `src/workflow.py`: public workflow wrapper and JSON/HTML trace export.
+- `src/workflow.py`: public workflow wrapper and canonical JSON trace export.
 - `src/orchestrator/pipeline.py`: stage ordering, verification iterations, coverage audit, replanning, and output validation.
 - `src/orchestrator/stage_runner.py`: bounded ReAct loop and native Interactions function-call round trips.
 - `src/orchestrator/state.py`: `VerificationCase`, ledger records, stage outputs, and aggregate trace state.
@@ -107,12 +107,12 @@ python test_workflow_smoke.py
 python scripts/probe_gemini_interactions.py --model gemini-3-flash-preview
 ```
 
-The focused tests cover multi-round tool use, exact evidence grounding and passage selection, discovery/failure exclusion, case/ledger judgment, coverage-driven replanning and typed insufficiency, P1/P2 service, adaptive stopping, ReInspect state, native function-call round trips, required question IDs, scoped `thinking_level=minimal`, environment-only credentials, retry/error behavior, and JSON/HTML trace export. `test_full_native_agent_trace.py` remains a controlled two-iteration fixture, not the production limit or a real-world fact-check result.
+The focused tests cover multi-round tool use, exact evidence grounding and passage selection, discovery/failure exclusion, case/ledger judgment, coverage-driven replanning and typed insufficiency, P1/P2 service, adaptive stopping, ReInspect state, native function-call round trips, required question IDs, scoped `thinking_level=minimal`, environment-only credentials, retry/error behavior, canonical JSON persistence, and on-demand HTML rendering. `test_full_native_agent_trace.py` remains a controlled two-iteration fixture, not the production limit or a real-world fact-check result.
 
-For a real run, inspect both files under `outputs/traces/`. JSON is the source of truth. The sibling HTML file is a required standalone diagnostic view of judgment, coverage-relevant steps, tool inputs/results, timing, and token metadata; an HTML export failure is a run/export failure. Re-render saved traces with:
+For a real run, inspect the canonical JSON under `outputs/traces/`. Generate a standalone HTML diagnostic view only when needed:
 
 ```powershell
-python -m src.render_trace_html outputs\traces
+python -m src.render_trace_html outputs\traces --output-dir outputs\trace_html
 ```
 
 Generated traces, caches, and logs are ignored. Do not place committed test fixtures under ignored output paths.

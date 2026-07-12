@@ -169,11 +169,24 @@ class ContextRenderer:
         audit: CoverageAudit,
         verification: VerificationResult,
         available_tools: list[str] | None = None,
+        investigation_state: Any = None,
     ) -> str:
         """Render only unresolved gaps and compact evidence for plan revision."""
 
         unresolved = set(audit.unresolved_priority_questions)
         unresolved.update(audit.unattempted_supporting_questions)
+        pending_visual = []
+        if investigation_state is not None:
+            pending_visual = [
+                item
+                for item in investigation_state.visual_questions
+                if item.status == "pending"
+            ]
+            unresolved.update(
+                item.claim_id.removeprefix("claim-")
+                for item in pending_visual
+                if item.claim_id.startswith("claim-")
+            )
         resolutions = {
             item.question_id: item for item in audit.question_resolutions
         }
@@ -199,6 +212,15 @@ class ContextRenderer:
                     + " ; ".join(query[:160] for query in question.suggested_queries[:4])
                 )
 
+        if pending_visual:
+            parts.append("Pending ReInspect specifications:")
+            for item in pending_visual:
+                parts.append(
+                    f"- [{item.visual_question_id}] claim={item.claim_id} | "
+                    f"target_bbox={item.target_bbox} | expected={item.expected_property[:500]} | "
+                    f"recommended_tools={', '.join(item.recommended_tools)}"
+                )
+
         relevant = [
             item
             for item in verification.evidence
@@ -215,6 +237,7 @@ class ContextRenderer:
             parts.append("Evidence already collected for unresolved questions: none")
 
         parts.append(
-            "Return one update for every unresolved id and no updates for any other id."
+            "Return one update for every listed unresolved or ReInspect-blocked id "
+            "and no updates for any other id."
         )
         return "\n".join(parts)

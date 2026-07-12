@@ -35,7 +35,7 @@ async def main() -> None:
         trace_json = os.path.join(output_dir, "workflow-sample.json")
         trace_html = os.path.join(output_dir, "workflow-sample.html")
         assert os.path.exists(trace_json)
-        assert os.path.exists(trace_html)
+        assert not os.path.exists(trace_html)
 
         with open(trace_json, encoding="utf-8") as f:
             saved = json.load(f)
@@ -44,7 +44,6 @@ async def main() -> None:
 
         print("Workflow smoke test passed.")
         print(trace_json)
-        print(trace_html)
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 

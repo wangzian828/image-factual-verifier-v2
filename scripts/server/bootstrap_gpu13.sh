@@ -27,6 +27,7 @@ mkdir -p \
     "${IFV_DATA_ROOT}/cache/torch" \
     "${IFV_DATA_ROOT}/cache/easyocr" \
     "${IFV_DATA_ROOT}/cache/tools" \
+    "${IFV_DATA_ROOT}/runs/_logs" \
     "${IFV_DATA_ROOT}/runs/traces" \
     "${IFV_DATA_ROOT}/runs/eval" \
     "${IFV_DATA_ROOT}/generated"

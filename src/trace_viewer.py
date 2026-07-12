@@ -113,7 +113,9 @@ def _render_audits(audits: List[Any]) -> str:
         if not isinstance(audit, dict):
             continue
         complete = bool(audit.get("complete"))
-        stop_reason = str(audit.get("stop_reason", "continue"))
+        stop_reason = str(
+            audit.get("stop_reason") or ("complete" if complete else "continue")
+        )
         resolutions = audit.get("question_resolutions", []) if isinstance(audit.get("question_resolutions"), list) else []
         rows = ''.join(
             f'<tr><td>{_e(item.get("question_id", ""))}</td><td>{_status(item.get("status", ""))}</td><td>{_e(item.get("tool_attempts", 0))}</td><td>{_e(item.get("evidence_count", 0))}</td><td>{_e(item.get("remaining_gap", ""))}</td></tr>'
@@ -121,6 +123,7 @@ def _render_audits(audits: List[Any]) -> str:
         )
         labels = {
             "coverage_complete": "coverage complete",
+            "complete": "complete",
             "information_saturated": "information saturated",
             "hard_budget_exhausted": "hard budget exhausted",
             "continue": "replanning required",

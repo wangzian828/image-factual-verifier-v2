@@ -14,7 +14,7 @@ Planning must emit an immutable declarative `claim_text` for each retrieval ques
 
 Set `IMAGE_UPLOAD_PROVIDER`, `VISUAL_SEARCH_PROVIDER`, and `BROWSE_FETCH_PROVIDER` explicitly; a selected provider never falls through to another. The disk tool cache is disabled by default and, when enabled, is bounded by `TOOL_CACHE_TTL_SECONDS` and `TOOL_CACHE_NAMESPACE`.
 
-Credentials belong only in environment variables or the untracked `.env`. Sanitize secret fields and signed URLs before any trace, HTML, or cache persistence. JSON and sibling HTML export are required; HTML rendering/write errors propagate. Dedicated face detection, embeddings, and biometric matching are absent; person-identity claims are investigated with public-source and non-biometric evidence.
+Credentials belong only in environment variables or the untracked `.env`. Sanitize secret fields and signed URLs before any trace, HTML, or cache persistence. Canonical JSON traces are persisted by default; HTML is rendered only on explicit request. Dedicated face detection, embeddings, and biometric matching are absent; person-identity claims are investigated with public-source and non-biometric evidence.
 
 Before finishing orchestration changes, run:
 
@@ -25,4 +25,4 @@ python test_workflow_smoke.py
 python scripts/probe_gemini_interactions.py --model gemini-3-flash-preview
 ```
 
-Normal runs write canonical JSON traces and sibling standalone HTML diagnostics under `outputs/traces/`. Use `python -m src.render_trace_html outputs\traces` to regenerate HTML from saved JSON.
+Normal runs write canonical JSON traces under `outputs/traces/`. Use `python -m src.render_trace_html outputs\traces --output-dir outputs\trace_html` to generate HTML from saved JSON when needed.

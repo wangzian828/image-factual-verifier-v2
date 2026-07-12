@@ -19,6 +19,7 @@ from src.orchestrator.tool_health import ToolHealth
 from src.orchestrator.state import VerificationCase, ClaimMode
 from src.tools.base import BaseTool
 from src.workflow import VerificationWorkflow, WorkflowConfig
+from src.trace_viewer import render_trace_file
 
 
 REFERENCE_PAGE = "https://www.nasa.gov/reference-launch"
@@ -519,7 +520,8 @@ def test_full_native_multistage_reference_trace(tmp_path: Path) -> None:
     assert_full_reference_trace(result)
     trace = tmp_path / "multistage-iterative-agent-reference.json"
     html = tmp_path / "multistage-iterative-agent-reference.html"
-    assert trace.is_file() and html.is_file()
+    assert trace.is_file() and not html.exists()
+    render_trace_file(str(trace), str(html))
     rendered = html.read_text(encoding="utf-8")
     for marker in (
         "Coverage Audits",
@@ -540,8 +542,11 @@ def main() -> None:
         shutil.rmtree(args.export_dir)
     result = run_reference_trace(args.export_dir)
     assert_full_reference_trace(result)
-    print(args.export_dir / "multistage-iterative-agent-reference.json")
-    print(args.export_dir / "multistage-iterative-agent-reference.html")
+    trace = args.export_dir / "multistage-iterative-agent-reference.json"
+    html = args.export_dir / "multistage-iterative-agent-reference.html"
+    render_trace_file(str(trace), str(html))
+    print(trace)
+    print(html)
 
 
 if __name__ == "__main__":

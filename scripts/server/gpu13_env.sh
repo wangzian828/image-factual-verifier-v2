@@ -16,5 +16,6 @@ export HUGGINGFACE_HUB_CACHE="${HF_HOME}/hub"
 export TORCH_HOME="${IFV_DATA_ROOT}/cache/torch"
 export EASYOCR_MODULE_PATH="${IFV_DATA_ROOT}/cache/easyocr"
 export TOOL_CACHE_DIR="${IFV_DATA_ROOT}/cache/tools"
+export IFV_LOG_RETENTION_DAYS="${IFV_LOG_RETENTION_DAYS:-30}"
 
 unset _ifv_proxy _ifv_data_root

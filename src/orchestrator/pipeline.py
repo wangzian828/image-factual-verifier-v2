@@ -416,6 +416,8 @@ class Orchestrator:
         all_verification_steps: List[StageStep] = []
         parsed_results: List[VerificationResult] = []
         result = VerificationResult()
+        if state.investigation_state is None:
+            state.investigation_state = InvestigationState()
 
         for iteration in range(1, self.max_verification_iterations + 1):
             if time.time() - started > self.timeout:
@@ -789,6 +791,7 @@ class Orchestrator:
                 current_plan,
                 audit,
                 set(STAGE_TOOLS["verification"]),
+                state.investigation_state,
             ),
             attach_image=False,
             max_output_tokens=self._stage_output_tokens("REPLANNING", 8192),
@@ -799,6 +802,7 @@ class Orchestrator:
             audit,
             result,
             list(STAGE_TOOLS["verification"]),
+            state.investigation_state,
         )
         revised, steps = await runner.run(context)
         self._record_stage_steps(state, steps)
@@ -881,13 +885,25 @@ class Orchestrator:
         current: VerificationPlan,
         audit: CoverageAudit,
         available_tools: Optional[set[str]] = None,
+        investigation_state: Optional[InvestigationState] = None,
     ) -> tuple[bool, str]:
         unresolved_ids = set(audit.unresolved_priority_questions)
         unresolved_ids.update(audit.unattempted_supporting_questions)
         current_ids = {question.question_id for question in current.questions}
+        if investigation_state is not None:
+            unresolved_ids.update(
+                item.claim_id.removeprefix("claim-")
+                for item in investigation_state.visual_questions
+                if item.status == "pending"
+                and item.claim_id.startswith("claim-")
+                and item.claim_id.removeprefix("claim-") in current_ids
+            )
         update_ids = [question.question_id for question in parsed.question_updates]
         if not unresolved_ids:
-            return False, "replanning requires at least one unresolved or unattempted required question"
+            return False, (
+                "replanning requires at least one unresolved, unattempted, or "
+                "ReInspect-blocked required question"
+            )
         if any(not question_id for question_id in update_ids):
             return False, "every question update needs a non-empty question_id"
         if len(set(update_ids)) != len(update_ids):
