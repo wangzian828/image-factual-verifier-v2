@@ -508,6 +508,14 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
                 metrics, teacher_score = score_process_trace(
                     trace,
                     evaluation_gold_index[identity],
+                    score_metadata={
+                        "process_reference_protocol": _file_descriptor(
+                            release.artifacts.process_reference_protocol
+                        ),
+                        "evaluation_gold": _file_descriptor(
+                            release.artifacts.evaluation_gold
+                        ),
+                    },
                 )
                 process_metrics.append(metrics)
                 trajectory_scores.append(teacher_score)

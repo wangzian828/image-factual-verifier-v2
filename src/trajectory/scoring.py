@@ -303,6 +303,8 @@ def _first_error(
 def score_process_trace(
     trace: Mapping[str, Any],
     gold: Mapping[str, Any],
+    *,
+    score_metadata: Mapping[str, Any] | None = None,
 ) -> tuple[Dict[str, Any], Dict[str, Any]]:
     """Score one post-rollout trace against evaluator-private references."""
 
@@ -420,6 +422,9 @@ def score_process_trace(
     basis_fact_ids = {
         str(item) for item in basis.get("fact_ids", []) or []
     }
+    basis_finding_ids = {
+        str(item) for item in basis.get("finding_ids", []) or []
+    }
     basis_evidence_ids = {
         str(item) for item in basis.get("evidence_ids", []) or []
     }
@@ -453,7 +458,7 @@ def score_process_trace(
     )
 
     valid_finding_precision = (
-        len(valid_finding_ids) / len(findings) if findings else 1.0
+        len(valid_finding_ids) / len(findings) if findings else 0.0
     )
     invalid_tasks = sum(
         not {
@@ -513,6 +518,7 @@ def score_process_trace(
     process_metrics = {
         "schema_version": "ifv-process-metrics-v1",
         "case_id": str(gold.get("case_id") or trace.get("image_id") or ""),
+        "score_metadata": dict(score_metadata or {}),
         "engineering_error": engineering_error,
         "expected_verdict": expected_verdict,
         "runtime_verdict": trace.get("verdict"),
@@ -524,6 +530,16 @@ def score_process_trace(
         "decisive_fact_alignment": round(decisive_fact_alignment, 6),
         "acceptable_evidence_hit_rate": round(
             acceptable_evidence_hit_rate, 6
+        ),
+        "unmatched_qualified_evidence_ids": sorted(
+            evidence_id
+            for evidence_id, item in evidence.items()
+            if evidence_id not in acceptable_evidence_ids
+            and str(item.get("quality", "")) in {"strong", "moderate"}
+            and str(item.get("directness", "")) == "direct"
+            and not item.get("risk_flags")
+            and str(item.get("function_call_id", "")).strip()
+            in successful_calls
         ),
         "citation_precision": round(citation_precision, 6),
         "evidence_to_vision_bridge_completion": round(
@@ -576,7 +592,19 @@ def score_process_trace(
     teacher_score = {
         "schema_version": "ifv-trajectory-score-v1",
         "case_id": process_metrics["case_id"],
+        "score_metadata": dict(score_metadata or {}),
         "components": components,
         "total": round(sum(components.values()), 6),
+        "diagnostics": {
+            "fact_matches": fact_matches,
+            "decisive_fact_ids": sorted(decisive_ids),
+            "basis_fact_ids": sorted(basis_fact_ids),
+            "basis_finding_ids": sorted(basis_finding_ids),
+            "basis_evidence_ids": sorted(basis_evidence_ids),
+            "valid_finding_ids": sorted(valid_finding_ids),
+            "acceptable_evidence_ids": sorted(acceptable_evidence_ids),
+            "engineering_error": engineering_error,
+            "first_error": first_error,
+        },
     }
     return process_metrics, teacher_score

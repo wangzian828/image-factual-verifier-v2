@@ -124,12 +124,21 @@ def test_process_scorer_matches_fact_evidence_and_basis(
         runtime_evidence["evidence_id"]
     ]
 
-    metrics, score = score_process_trace(trace, gold)
+    metrics, score = score_process_trace(
+        trace,
+        gold,
+        score_metadata={
+            "process_reference_protocol": {"sha256": "a" * 64},
+            "evaluation_gold": {"sha256": "b" * 64},
+        },
+    )
 
     assert metrics["decisive_fact_alignment"] == 1.0
     assert metrics["acceptable_evidence_hit_rate"] == 1.0
     assert metrics["citation_precision"] == 1.0
     assert metrics["evidence_to_vision_bridge_completion"] == 1.0
     assert metrics["verdict_basis_alignment"] == 1.0
+    assert metrics["score_metadata"]["evaluation_gold"]["sha256"] == "b" * 64
     assert score["components"]["result_reward"] == 1.0
+    assert score["diagnostics"]["acceptable_evidence_ids"]
     assert score["total"] > 4.0
