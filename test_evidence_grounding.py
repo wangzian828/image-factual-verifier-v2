@@ -7,6 +7,7 @@ from src.orchestrator.ledger import (
     _update_claim_statuses,
     build_verification_case,
     compile_runtime_ledgers,
+    derive_unverifiable_reasons,
     _direction_is_decisive,
 )
 from src.orchestrator.investigation_state import InvestigationState, VisualQuestion
@@ -18,6 +19,7 @@ from src.orchestrator.state import (
     EvidenceRecord,
     InvestigationQuestion,
     SourceRecord,
+    UnverifiableReason,
     VerificationPlan,
     VerificationLedgers,
     VerificationResult,
@@ -815,3 +817,7 @@ def test_exhausted_required_visual_question_reopens_web_supported_claim() -> Non
     assert "could not be observed after two real attempts" in (
         ledgers.claims[0].unresolved_distinction
     )
+
+    reasons = derive_unverifiable_reasons(ledgers, "hard_budget_exhausted")
+    assert UnverifiableReason.UNREADABLE_REGION in reasons
+    assert UnverifiableReason.BUDGET_EXHAUSTED in reasons

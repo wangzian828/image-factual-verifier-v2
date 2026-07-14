@@ -761,8 +761,8 @@ class Orchestrator:
             if (
                 claim.claim_scope != "external_fact"
                 and claim.claim_id in exhausted_claims
-                and claim.status == "open"
             ):
+                claim.status = "open"
                 claim.unresolved_distinction = (
                     "A search-conditioned reference could not be observed after two real attempts."
                 )
