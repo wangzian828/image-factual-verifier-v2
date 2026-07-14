@@ -25,7 +25,7 @@ Before finishing orchestration changes, run:
 
 ```powershell
 python -m pytest -q test_unit.py test_native_interactions.py test_gemini_interactions_contract.py
-python -m pytest -q test_scripted_agent_trajectory.py
+python -m pytest -q test_image_only_v2_trajectory.py test_audit_real_trace.py
 python scripts/probe_gemini_interactions.py --model gemini-3-flash-preview
 python scripts/run_real_canary.py --benchmark path\to\release\runtime_input\cases.jsonl --output-dir path\to\new-canary-output
 ```

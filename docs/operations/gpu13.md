@@ -215,7 +215,8 @@ scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
   test_native_interactions.py \
   test_gemini_interactions_contract.py \
   test_gemini_vlm_interactions.py \
-  test_scripted_agent_trajectory.py \
+  test_image_only_v2_trajectory.py \
+  test_audit_real_trace.py \
   test_trace_viewer.py
 ```
 

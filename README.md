@@ -59,7 +59,7 @@ python -m pytest -q `
   test_evidence_grounding.py `
   test_failure_contracts.py `
   test_native_interactions.py `
-  test_scripted_agent_trajectory.py
+  test_image_only_v2_trajectory.py
 ```
 
 These are local contract and scripted-state tests, not proof of real system

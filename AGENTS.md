@@ -117,15 +117,16 @@ Keep all secrets environment-only even when adding controls.
 Run focused local contract and scripted-state tests:
 
 ```powershell
-python -m pytest -q test_release_adapter.py test_eval_artifacts.py test_unit.py test_evidence_grounding.py test_failure_contracts.py test_provider_failure_propagation.py test_native_interactions.py test_gemini_interactions_contract.py test_gemini_vlm_interactions.py test_scripted_agent_trajectory.py test_trace_viewer.py
+python -m pytest -q test_release_adapter.py test_eval_artifacts.py test_image_only_bootstrap.py test_image_only_state_machine.py test_image_only_v2_trajectory.py test_native_interactions.py test_gemini_interactions_contract.py test_gemini_vlm_interactions.py test_audit_real_trace.py test_trace_viewer.py test_trajectory_export.py test_trajectory_dataset.py
 python scripts/probe_gemini_interactions.py --model gemini-3-flash-preview
 ```
 
 The pytest suite covers deterministic contracts and simulated failure boundaries.
-`test_scripted_agent_trajectory.py` is a controlled provider/tool script that validates
-state transitions and trace structure; it is not a real-world factual result. Passing
-pytest or the protocol probe must never be reported as proof that the complete system
-works against real providers.
+`test_image_only_v2_trajectory.py` is the controlled provider/tool trajectory for the
+supported v0.3 image-only/reinspect-v2 runtime. It validates state transitions and
+trace structure; it is not a real-world factual result. Passing pytest or the protocol
+probe must never be reported as proof that the complete system works against real
+providers.
 
 Before accepting a runtime phase, run a no-mock canary against a finalized release:
 

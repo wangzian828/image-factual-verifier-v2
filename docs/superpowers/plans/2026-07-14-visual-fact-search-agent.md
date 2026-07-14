@@ -56,8 +56,8 @@ The following work is complete on `codex/image-factual-verifier-v3`:
 - [x] `166c640`: empty private tool-runtime metrics no longer leak into tool output.
 - [x] `88f2ad7`: contract/scripted/real validation split.
 - [x] Fake smoke runners were removed.
-- [x] The controlled end-to-end test is explicitly named
-  `test_scripted_agent_trajectory.py`.
+- [x] The controlled v3 end-to-end test is
+  `test_image_only_v2_trajectory.py`.
 - [x] `scripts/run_real_canary.py` exists and fails closed on missing real-provider
   configuration.
 - [x] Pre-migration credential-free baseline: `212 passed`.

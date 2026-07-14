@@ -299,14 +299,14 @@ python -m pip install -e ".[dev]"
 python -m src path\to\image.jpg
 
 python -m pytest -q test_unit.py test_failure_contracts.py test_native_interactions.py test_gemini_interactions_contract.py test_gemini_vlm_interactions.py test_trace_viewer.py
-python -m pytest -q test_scripted_agent_trajectory.py
+python -m pytest -q test_image_only_v2_trajectory.py test_audit_real_trace.py
 ```
 
 The pytest suite covers native call chaining, tool-result status validation,
 case/ledger judgment, discovery and exact-span grounding, passage-ID validation,
 incremental ReInspect state, provider non-fallback, cache TTL and namespace,
 coverage-driven replanning and typed insufficiency, persistence redaction, and trace
-rendering. `test_scripted_agent_trajectory.py` runs deterministic provider/tool
+rendering. `test_image_only_v2_trajectory.py` runs deterministic provider/tool
 responses through the production orchestrator. It validates the state machine only.
 
 Complete runtime acceptance requires a finalized release and real providers:
