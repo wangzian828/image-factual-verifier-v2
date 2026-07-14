@@ -17,13 +17,17 @@ from src.orchestrator.pipeline import Orchestrator
 from src.orchestrator.stage_runner import StageRunner
 from src.orchestrator.stage_runner import StageStep
 from src.orchestrator.state import (
+    ClaimRecord,
     CoverageAudit,
+    DiscoveryRecord,
     Entity,
+    EvidenceRecord,
     FinalJudgment,
     InvestigationQuestion,
     PlanRevision,
     PerceptionReport,
     TextRegion,
+    VerificationLedgers,
     VerificationPlan,
     VerificationResult,
     QuestionResolution,
@@ -359,6 +363,84 @@ def test_verification_rejects_zero_tool_output():
     assert parsed is None
     assert steps[0].action_type == "output_rejected"
     assert "at least 1 tool calls" in steps[0].metadata["rejection_reason"]
+
+
+def _has_information_gain(before, after) -> bool:
+    """Mirror the pipeline's gain test: any positive delta across signature slots."""
+    return any(a - b for b, a in zip(before, after))
+
+
+def _runtime_evidence(evidence_id: str, claim_id: str = "claim-0") -> EvidenceRecord:
+    """Minimal valid EvidenceRecord (runtime_anchor needs no span/region locator)."""
+    return EvidenceRecord(
+        evidence_id=evidence_id,
+        claim_id=claim_id,
+        source_id="source-0",
+        function_call_id="fc-0",
+        tool_name="visit",
+        evidence_kind="runtime_anchor",
+        exact_text="A source anchor for the claim.",
+        artifact_sha256="a" * 64,
+        retrieved_at="2026-07-14T00:00:00+00:00",
+        stance="support",
+        quality="moderate",
+    )
+
+
+def test_new_discovery_url_is_not_substantive_information_gain():
+    signature = Orchestrator._investigation_progress_signature
+
+    before = VerificationLedgers()
+    after = VerificationLedgers(
+        discoveries=[
+            DiscoveryRecord(
+                discovery_id="d0",
+                claim_id="claim-0",
+                function_call_id="fc-0",
+                tool_name="text_search",
+                candidate_url="https://example.test/candidate-article",
+                candidate_type="serp",
+            )
+        ]
+    )
+
+    sig_before = signature(before, None)
+    sig_after = signature(after, None)
+
+    # A newly surfaced candidate URL, with nothing promoted to evidence and no
+    # claim/source movement, must not register as substantive progress.
+    assert sig_before == sig_after
+    assert not _has_information_gain(sig_before, sig_after)
+
+
+def test_new_evidence_is_substantive_information_gain():
+    signature = Orchestrator._investigation_progress_signature
+
+    before = VerificationLedgers()
+    after = VerificationLedgers(evidence=[_runtime_evidence("e0")])
+
+    sig_before = signature(before, None)
+    sig_after = signature(after, None)
+
+    assert sig_before != sig_after
+    assert _has_information_gain(sig_before, sig_after)
+
+
+def test_claim_status_transition_is_substantive_information_gain():
+    signature = Orchestrator._investigation_progress_signature
+
+    before = VerificationLedgers(
+        claims=[ClaimRecord(claim_id="claim-0", text="The claim under review.", status="open")]
+    )
+    after = VerificationLedgers(
+        claims=[ClaimRecord(claim_id="claim-0", text="The claim under review.", status="supported")]
+    )
+
+    sig_before = signature(before, None)
+    sig_after = signature(after, None)
+
+    assert sig_before != sig_after
+    assert _has_information_gain(sig_before, sig_after)
 
 
 def test_tool_error_is_not_supporting_evidence():

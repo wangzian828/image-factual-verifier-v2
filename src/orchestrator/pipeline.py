@@ -1612,19 +1612,18 @@ class Orchestrator:
         ledgers: VerificationLedgers,
         investigation_state: Optional[InvestigationState],
     ) -> tuple[frozenset[str], frozenset[str], frozenset[str]]:
+        # Raw discoveries (candidate URLs surfaced by search) are excluded from
+        # the progress signature: enumerating more candidates is not substantive
+        # investigation progress on its own. Only promoted evidence, claim status
+        # transitions, and newly reached source families count as real gain.
         evidence = frozenset(item.evidence_id for item in ledgers.evidence)
-        discoveries = frozenset(
-            canonicalize_url(item.candidate_url) or item.candidate_url
-            for item in ledgers.discoveries
-            if item.candidate_url
-        )
         source_families = frozenset(
             item.source_family for item in ledgers.sources if item.source_family
         )
         claim_statuses = frozenset(
             f"{item.claim_id}:{item.status}" for item in ledgers.claims
         )
-        return evidence, discoveries | claim_statuses, source_families
+        return evidence, claim_statuses, source_families
 
     async def _execute_tool(self, tool_name: str, args: Dict[str, Any], image_path: str) -> tuple[str, Dict[str, Any]]:
         tool = self.all_tools[tool_name]
