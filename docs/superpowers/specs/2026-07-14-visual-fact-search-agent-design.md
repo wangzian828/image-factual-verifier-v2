@@ -472,7 +472,24 @@ No view exposes full raw webpages except within the tool path that needs them. S
 4. optional final-synthesis SFT;
 5. preference optimization/RL against result and process reward.
 
-## 13. Tests and Evaluation
+## 13. Server-Based Validation
+
+All project validation runs on gpu-13, following `docs/operations/gpu13.md`. The local Windows checkout is the only source-editing location; code is committed and pushed locally, then the clean server checkout is fast-forwarded. Server source files are never edited directly.
+
+Every project command runs through `scripts/server/run_gpu13.sh` in the isolated `ifv-agent` Conda environment. This guarantees the committed proxy/data-root configuration and the mandatory `OMP_NUM_THREADS=1` guard. Datasets, caches, traces, logs, and evaluation outputs remain under `IFV_DATA_ROOT=/gsdata/home/wza/image-factual-verifier-v2-data`, outside the Git checkout.
+
+The validation ladder is:
+
+1. focused contract and state-machine tests on gpu-13 after each implementation slice;
+2. full orchestration and trace suite on gpu-13 before completing a phase;
+3. the real Gemini Interactions probe after changes to model/protocol boundaries;
+4. small frozen-real image-only regression runs with unique output directories;
+5. `scripts/audit_real_trace.py --json --strict-scheduler` on every accepted real trace;
+6. formal background evaluation only through the committed gpu-13 launcher, with explicit run IDs and concurrency controls.
+
+Remote updates must use the committed updater/bootstrap workflow. A dirty server checkout blocks installation and validation. Credentials remain in the untracked server `.env` or process environment and never enter commands, Git, traces, or this specification.
+
+## 14. Tests and Evaluation
 
 ### Required regressions
 
@@ -505,7 +522,7 @@ Process metrics:
 - decisive evidence per tool action;
 - over-investigation, cost, latency, and first-error attribution.
 
-## 14. Acceptance Criteria
+## 15. Acceptance Criteria
 
 The architecture is accepted only when:
 
