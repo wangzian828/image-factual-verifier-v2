@@ -65,6 +65,34 @@ $env:JUPYTER_REMOTE_BASE = "http://127.0.0.1:8333"
 python scripts/server/jupyter_remote.py --kernel-name ifv-agent --shell "hostname; id -un"
 ```
 
+The Windows workstation also has a local companion copy at:
+
+```text
+D:\wangza\Desktop\jupyter_remote.py
+```
+
+Treat `scripts/server/jupyter_remote.py` in the repository as the maintained source
+of truth. The desktop copy is an older convenience entry point: it starts `python3`
+when no kernel ID is supplied and does not support `--kernel-name`. Therefore:
+
+- prefer the repository client and always pass `--kernel-name ifv-agent` for project
+  work;
+- if the desktop copy must be used, first create or list an `ifv-agent` kernel with
+  the repository client, then pass that existing ID through `--kernel`;
+- never let the desktop copy create its default `python3` kernel for project tests,
+  evaluation, installation, or data work;
+- verify `hostname` prints `gpu-13`, `id -un` prints `wza`, and
+  `OMP_NUM_THREADS` is `1` before running project commands.
+
+Example using a known `ifv-agent` kernel ID:
+
+```powershell
+python "D:\wangza\Desktop\jupyter_remote.py" `
+  --kernel "<ifv-agent-kernel-id>" `
+  --shell `
+  "hostname; id -un; echo `$OMP_NUM_THREADS"
+```
+
 The client prompts for the password without echo. For unattended automation, inject
 `JUPYTER_REMOTE_PASSWORD` from a secret manager for that process only; do not persist
 it in a profile or script.
