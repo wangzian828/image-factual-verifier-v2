@@ -6,9 +6,11 @@ development direction is the VisualFact-driven, image-only search agent describe
 - `docs/superpowers/specs/2026-07-14-visual-fact-search-agent-design.md`
 - `docs/superpowers/plans/2026-07-14-visual-fact-search-agent.md`
 
-The runtime currently preserves the production `reinspect-v1` path while the
-VisualFact data layer, dynamic tasks, Reflection checkpoints, and `reinspect-v2`
-Judgment contract are introduced phase by phase.
+The benchmark runtime now targets only the v0.3 image-only release contract. Manifest
+parsing, three-field runtime cases, image hashing, private-gold isolation, and
+classification-compatible predictions are active. VisualFact bootstrap, dynamic
+tasks, Reflection checkpoints, and `reinspect-v2` Judgment are being introduced phase
+by phase; image-only execution fails explicitly until those stages are active.
 
 ## Repository boundary
 
@@ -65,7 +67,7 @@ availability. Real Gemini, search, browse, visual-tool, and trace acceptance use
 
 ```powershell
 python scripts/run_real_canary.py `
-  --benchmark path\to\release\runtime_input\cases.jsonl `
+  --benchmark path\to\v0.3-image-only-release\runtime_input\cases.jsonl `
   --output-dir path\to\new-canary-output
 ```
 

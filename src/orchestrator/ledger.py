@@ -20,6 +20,7 @@ from src.orchestrator.state import (
     EvidenceRecord,
     FailureRecord,
     SourceRecord,
+    RuntimeCase,
     VerificationCase,
     VerificationLedgers,
     VerificationPlan,
@@ -75,11 +76,11 @@ def evidence_goal_for_case(claim_text: str, case: VerificationCase) -> str:
     )
 
 
-def verify_case_image(case: VerificationCase, image_path: str) -> None:
+def verify_case_image(case: RuntimeCase, image_path: str) -> None:
     actual = image_sha256(image_path)
     if actual != case.image_sha256:
         raise ValueError(
-            f"VerificationCase image_sha256 mismatch: expected {case.image_sha256}, got {actual}."
+            f"RuntimeCase image_sha256 mismatch: expected {case.image_sha256}, got {actual}."
         )
 
 

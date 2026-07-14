@@ -24,9 +24,13 @@ os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 
 load_dotenv()
 
-from src.orchestrator.ledger import build_verification_case
+from src.orchestrator.ledger import image_sha256, verify_case_image
 from src.orchestrator.pipeline import Orchestrator
-from src.orchestrator.state import VerificationCase
+from src.orchestrator.state import (
+    ImageOnlyRuntimeCase,
+    RuntimeCase,
+    VerificationCase,
+)
 from src.orchestrator.source_access import SourceAccessPolicy
 from src.redaction import sanitize_for_persistence
 from src.storage import default_trace_dir
@@ -92,9 +96,7 @@ class VerificationWorkflow:
         image_path: str,
         image_id: str = "",
         *,
-        user_claim: Optional[str] = None,
-        claim_observed_at: Optional[str] = None,
-        verification_case: Optional[VerificationCase] = None,
+        runtime_case: Optional[RuntimeCase] = None,
     ) -> Dict[str, Any]:
         """Run verification on a single image.
 
@@ -105,24 +107,32 @@ class VerificationWorkflow:
         Returns:
             Dict with verdict, confidence, assessment, and full state.
         """
+        if runtime_case is None:
+            resolved_image_path = os.path.abspath(image_path)
+            runtime_case = ImageOnlyRuntimeCase(
+                case_id=image_id or os.path.basename(image_path) or image_path,
+                image_path=resolved_image_path,
+                image_sha256=image_sha256(resolved_image_path),
+            )
+            image_path = resolved_image_path
+
+        if isinstance(runtime_case, ImageOnlyRuntimeCase):
+            verify_case_image(runtime_case, image_path)
+            raise RuntimeError(
+                "image-only runtime input is valid, but VisualFact bootstrap and "
+                "reinspect-v2 execution are not active yet"
+            )
+
         orchestrator = self._get_orchestrator()
         try:
-            if verification_case is None and claim_observed_at is not None:
-                verification_case = build_verification_case(
-                    image_path,
-                    case_id=image_id or os.path.basename(image_path) or image_path,
-                    user_claim=user_claim,
-                    claim_observed_at=claim_observed_at,
-                )
-            if verification_case is None and user_claim is None:
-                result = await orchestrator.run(image_path, image_id)
-            else:
-                result = await orchestrator.run(
-                    image_path,
-                    image_id,
-                    verification_case=verification_case,
-                    user_claim=user_claim,
-                )
+            verification_case: VerificationCase | None = (
+                runtime_case if isinstance(runtime_case, VerificationCase) else None
+            )
+            result = await orchestrator.run(
+                image_path,
+                image_id,
+                verification_case=verification_case,
+            )
         except Exception:
             state = getattr(orchestrator, "last_state", None)
             if self.config.save_traces and state is not None:
@@ -154,9 +164,7 @@ class VerificationWorkflow:
         self,
         image_paths: List[str],
         image_ids: Optional[List[str]] = None,
-        user_claims: Optional[List[Optional[str]]] = None,
-        claim_observed_ats: Optional[List[Optional[str]]] = None,
-        verification_cases: Optional[List[Optional[VerificationCase]]] = None,
+        runtime_cases: Optional[List[Optional[RuntimeCase]]] = None,
         concurrency: int = 1,
     ) -> List[Dict[str, Any]]:
         """Run verification on multiple images.
@@ -171,18 +179,10 @@ class VerificationWorkflow:
         """
         if image_ids is None:
             image_ids = [os.path.basename(p) for p in image_paths]
-        if user_claims is None:
-            user_claims = [None] * len(image_paths)
-        if len(user_claims) != len(image_paths):
-            raise ValueError("user_claims must match image_paths length")
-        if claim_observed_ats is None:
-            claim_observed_ats = [None] * len(image_paths)
-        if len(claim_observed_ats) != len(image_paths):
-            raise ValueError("claim_observed_ats must match image_paths length")
-        if verification_cases is None:
-            verification_cases = [None] * len(image_paths)
-        if len(verification_cases) != len(image_paths):
-            raise ValueError("verification_cases must match image_paths length")
+        if runtime_cases is None:
+            runtime_cases = [None] * len(image_paths)
+        if len(runtime_cases) != len(image_paths):
+            raise ValueError("runtime_cases must match image_paths length")
 
         semaphore = asyncio.Semaphore(concurrency)
         results = []
@@ -190,27 +190,21 @@ class VerificationWorkflow:
         async def _verify(
             path: str,
             img_id: str,
-            claim: Optional[str],
-            claim_observed_at: Optional[str],
-            verification_case: Optional[VerificationCase],
+            runtime_case: Optional[RuntimeCase],
         ) -> Dict[str, Any]:
             async with semaphore:
                 return await self.run_single(
                     path,
                     img_id,
-                    user_claim=claim,
-                    claim_observed_at=claim_observed_at,
-                    verification_case=verification_case,
+                    runtime_case=runtime_case,
                 )
 
         tasks = [
-            _verify(path, img_id, claim, claim_observed_at, verification_case)
-            for path, img_id, claim, claim_observed_at, verification_case in zip(
+            _verify(path, img_id, runtime_case)
+            for path, img_id, runtime_case in zip(
                 image_paths,
                 image_ids,
-                user_claims,
-                claim_observed_ats,
-                verification_cases,
+                runtime_cases,
             )
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -223,6 +217,7 @@ class VerificationWorkflow:
                     "image_id": image_ids[i],
                     "image_path": image_paths[i],
                     "verdict": "error",
+                    "termination": "error",
                     "error": str(r),
                 })
             else:

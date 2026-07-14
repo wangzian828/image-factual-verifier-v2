@@ -12,15 +12,24 @@ import construction-pipeline modules into the runtime.
 
 The supported production path is a multi-stage Gemini agent using the Gemini Interactions API. Generic backend adapters may remain for isolated tests or non-production integrations, but they are not a runtime fallback for the active workflow.
 
+The benchmark release boundary is now v0.3 image-only only:
+`manifest.json` declares `input_mode=image_only` and
+`decision_policy_version=reinspect-v2`; public rows contain exactly `case_id`,
+`image_path`, and `image_sha256`. The old claim-driven `VerificationCase/reinspect-v1`
+pipeline remains temporarily as internal migration scaffolding for existing unit and
+scripted tests. It is not a supported benchmark-release contract and must not constrain
+the new VisualFact state model. Never convert image-only input into an external or
+embedded claim.
+
 ## Required Architecture
 
-Preserve this control flow:
+The target control flow is defined by the VisualFact plan and design:
 
-1. **Case and Perception**: construct or accept a strict `VerificationCase`, verify its image SHA-256, then run scene perception and positioned OCR to produce `PerceptionReport`.
-2. **Planning**: have Gemini produce a validated `VerificationPlan` with unique question IDs, immutable declarative `claim_text` values, and at least one priority-1 question; compile claim text, not open-ended search questions, into atomic claim slots.
-3. **Iterative native ReAct and ReInspect**: let Gemini select tools through Interactions `function_call` items, execute them locally, return `function_result` plus the deterministic observation update, and continue through `previous_interaction_id`.
-4. **Coverage Audit / Replanning loop**: audit decisive claim slots through their linked plan questions. If coverage is incomplete and budget remains, revise only unresolved questions and retain prior steps, ledgers, and evidence.
-5. **Ledger Judgment**: after either all decisive claims resolve or the bounded investigation budget ends, validate a `LedgerJudgment` against exact claim/evidence IDs. Unresolved factual slots yield typed `unverifiable`; engineering failures still raise before Judgment.
+1. **Image-only case and Perception**: accept `ImageOnlyRuntimeCase`, verify its SHA-256, and create an immutable `InvestigationBrief`.
+2. **VisualFact bootstrap**: derive image-grounded entities, text, regions, candidate facts, retrieval anchors, and at most four initial tasks.
+3. **Iterative native ReAct and ReInspect**: let Gemini choose tools through Interactions `function_call`, while deterministic reducers persist Discovery, Evidence, Finding, fact, and task state.
+4. **Periodic Reflection and Coverage**: reflect after every four real tool actions, then deterministically audit decisive facts, pending ReInspect, substantive progress, and budgets.
+5. **reinspect-v2 Judgment**: validate `real`, `fake`, or typed `unverifiable` against exact `VisualFact -> Finding -> Evidence -> tool call` chains and emit `verdict_basis`.
 
 This is an agent, not a fixed tool script. Do not replace verification with a predetermined tool sequence or a single model call. Perception is intentionally deterministic; planning, tool choice, replanning, and judgment remain model-driven within validated boundaries.
 
@@ -32,12 +41,12 @@ This is an agent, not a fixed tool script. Do not replace verification with a pr
 - Retry only the same Interactions request for documented transient HTTP statuses or transport errors. Exhaustion, malformed success payloads, missing interaction IDs, invalid required-action responses, and invalid final structured output are hard failures.
 - Reject ungrounded conclusions. Verification needs a successful tool result; evidence must map to an actual tool step and an investigation question. A tool error is not evidence.
 - Require every tool to return a JSON object whose `status` is exactly `success` or `error`; an error result also needs a non-empty `error`. Reject malformed or statusless results instead of inventing success semantics.
-- Keep `VerificationCase` free of benchmark gold. `external_claim` requires runtime `user_claim`; `embedded_claim` must recover `claim_surface` from pixels/OCR. Always verify `image_sha256`, and keep `decision_policy_version` aligned with the active `reinspect-v1` validator.
+- Keep `ImageOnlyRuntimeCase` to exactly three public fields and keep benchmark gold out of all pre-rollout runtime/model state. Always verify `image_sha256`; the active release policy is `reinspect-v2`.
 - Treat `claims`, `sources`, `evidence`, `discoveries`, and `failures` as separate machine-verifiable collections. Preserve stable IDs, exact tool-call provenance, source family/risk metadata, artifact hashes, retrieval times, and recovery links.
 - Keep discovery separate from evidence. Search snippets, result titles, reverse-image matches, and generated summaries are leads only. They cannot close a claim or be cited by Judgment.
 - Promote web evidence only from a fetched page and an existing selected passage. Require an exact span and matching offsets, canonical URL, artifact SHA-256, ISO-8601 retrieval time, directness, valid stance/relevance, `evidence_eligible=true`, and no injection flags. A multi-query, multi-page search call may promote multiple independently eligible passages, at most one selected passage per fetched page; do not collapse them into one summary. Never accept model-invented or merged passage text.
 - Keep ReInspect evidence-conditioned. A search-created `VisualQuestion` must identify exactly one source evidence/discovery ID, normalized target box, expected property, and allowed real visual action. Matching OCR/crop/count/reference calls resolve or fail it. A pending ReInspect may hold only a linked non-`external_fact` claim open; an external fact question is never ReInspect-gated and still requires eligible direct web evidence.
-- Keep coverage and judgment deterministic. Claim status depends on direct evidence and source-family independence. `LedgerJudgment` must decide every decisive claim using only matching ledger IDs; `real`, `fake`, and typed `unverifiable` follow the `reinspect-v1` policy.
+- Keep coverage and judgment deterministic. Decisive fact status depends on qualified Findings, direct Evidence, visual bridges, and source-family independence. Judgment may use only matching runtime IDs; `real`, `fake`, and typed `unverifiable` follow `reinspect-v2`.
 - Require an explicit `question_id` on verification function calls. Never silently assign a call to a question.
 - In benchmark evaluation, enforce the provenance-derived `SourceAccessPolicy` before search results are enriched or returned and before any direct page/reference fetch. Do not expose excluded URLs/domains or hidden gold to the model. Product mode remains unrestricted.
 - Reject benchmark search queries that explicitly target an excluded fact-check domain before calling the search provider; the model must reformulate toward independent open-web sources.
@@ -54,7 +63,7 @@ This is an agent, not a fixed tool script. Do not replace verification with a pr
 - `src/workflow.py`: public workflow wrapper and canonical JSON trace export.
 - `src/orchestrator/pipeline.py`: stage ordering, verification iterations, coverage audit, replanning, and output validation.
 - `src/orchestrator/stage_runner.py`: bounded ReAct loop and native Interactions function-call round trips.
-- `src/orchestrator/state.py`: `VerificationCase`, ledger records, stage outputs, and aggregate trace state.
+- `src/orchestrator/state.py`: `ImageOnlyRuntimeCase`, migration scaffolding, ledger records, stage outputs, and aggregate trace state.
 - `src/orchestrator/ledger.py`: case construction/hash checks, ledger compilation, claim status, and typed insufficiency reasons.
 - `src/orchestrator/investigation_state.py`: per-observation belief deltas, visual questions, regional observations, and stopping assessments.
 - `src/orchestrator/source_provenance.py`: URL canonicalization, source-family/class assignment, and risk flags.

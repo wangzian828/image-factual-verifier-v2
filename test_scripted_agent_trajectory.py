@@ -492,7 +492,7 @@ def run_reference_trace(output_dir: Path) -> Dict[str, Any]:
         workflow.run_single(
             str(image_path),
             case.case_id,
-            verification_case=case,
+            runtime_case=case,
         )
     )
     assert not orchestrator.llm.responses

@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from enum import Enum
-from typing import Annotated, Any, Dict, List, Literal, Optional
+from typing import Annotated, Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -95,6 +95,17 @@ class VerificationCase(StrictModel):
             if not (0 <= x1 < x2 <= 1 and 0 <= y1 < y2 <= 1):
                 raise ValueError("claim_source_region must be normalized and non-empty")
         return self
+
+
+class ImageOnlyRuntimeCase(StrictModel):
+    """Public v0.3 image-only input with no claim or evaluator-private state."""
+
+    case_id: str = Field(min_length=1, max_length=200)
+    image_path: str = Field(min_length=1)
+    image_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+RuntimeCase = Union[VerificationCase, ImageOnlyRuntimeCase]
 
 
 class ClaimRecord(StrictModel):

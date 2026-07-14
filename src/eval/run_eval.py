@@ -7,7 +7,7 @@ import json
 import os
 import statistics
 import subprocess
-from collections import Counter, defaultdict
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
@@ -15,12 +15,12 @@ from typing import Any, Dict, Iterable, List
 from src.workflow import VerificationWorkflow, WorkflowConfig
 from src.storage import default_eval_root
 from src.eval.release_adapter import (
-    release_companions,
-    require_uniform_runtime_release,
+    image_only_case_from_runtime_row,
+    load_runtime_release,
     resolve_runtime_image_path,
-    verification_case_from_runtime_row,
 )
-from src.orchestrator.source_access import SourceAccessPolicy, benchmark_policy_from_rows
+from src.orchestrator.ledger import verify_case_image
+from src.orchestrator.source_access import SourceAccessPolicy
 from src.redaction import sanitize_for_persistence
 
 
@@ -34,7 +34,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--benchmark",
         required=True,
-        help="Path to benchmark JSON or JSONL file.",
+        help="Path to a v0.3 release runtime_input/cases.jsonl.",
     )
     parser.add_argument(
         "--provider",
@@ -109,21 +109,6 @@ def _parse_args() -> argparse.Namespace:
         help=(
             "Evaluation-only JSON policy for blocking benchmark-origin sources. "
             "The policy is never added to model context or traces."
-        ),
-    )
-    parser.add_argument(
-        "--evaluator-private",
-        default=None,
-        help=(
-            "Optional evaluator-private run_eval.jsonl. For a standard release "
-            "it is inferred beside runtime_input/cases.jsonl."
-        ),
-    )
-    parser.add_argument(
-        "--evaluation-gold",
-        default=None,
-        help=(
-            "Optional evaluation_gold/gold.jsonl. It is loaded only after rollout."
         ),
     )
     return parser.parse_args()
@@ -219,32 +204,23 @@ def _write_text(path: Path, text: str) -> None:
 def _prediction_record(
     sample: Dict[str, Any],
     result: Dict[str, Any],
-    *,
-    evaluator_private: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     state = result.get("state") or {}
-    evaluator_private = evaluator_private or {}
+    judgment = result.get("judgment")
+    verdict_basis = result.get("verdict_basis")
+    if verdict_basis is None and isinstance(judgment, dict):
+        verdict_basis = judgment.get("verdict_basis")
     return {
-        "sample_id": (
-            evaluator_private.get("sample_id")
-            or sample.get("sample_id")
-            or sample.get("case_id")
-        ),
-        "bucket": evaluator_private.get("bucket") or sample.get("bucket"),
-        "ground_truth": (
-            evaluator_private.get("ground_truth") or sample.get("ground_truth")
-        ),
-        "image_path": sample.get("image_path"),
-        "predicted_verdict": result.get("verdict"),
+        "case_id": sample.get("case_id"),
+        "verdict": result.get("verdict"),
         "confidence": result.get("confidence"),
-        "overall_assessment": result.get("overall_assessment"),
+        "verdict_basis": verdict_basis,
         "termination": result.get("termination"),
         "time_taken": result.get("time_taken"),
         "total_tool_calls": result.get("total_tool_calls"),
         "llm_api_calls": result.get("llm_api_calls"),
         "token_usage": result.get("token_usage"),
         "error": result.get("error"),
-        "judgment": result.get("judgment"),
         "stage_timings": state.get("stage_timings", {}),
         "trace_path": None,
     }
@@ -252,10 +228,6 @@ def _prediction_record(
 
 def _compute_summary(predictions: List[Dict[str, Any]]) -> Dict[str, Any]:
     total = len(predictions)
-    correct = 0
-    bucket_totals: Counter[str] = Counter()
-    bucket_correct: Counter[str] = Counter()
-    confusion: Dict[str, Counter[str]] = defaultdict(Counter)
     verdict_counter: Counter[str] = Counter()
     times: List[float] = []
     tool_calls: List[float] = []
@@ -263,17 +235,14 @@ def _compute_summary(predictions: List[Dict[str, Any]]) -> Dict[str, Any]:
     errors = 0
 
     for row in predictions:
-        gt = str(row.get("ground_truth", ""))
-        pred = str(row.get("predicted_verdict", ""))
-        bucket = str(row.get("bucket", "unknown"))
-        bucket_totals[bucket] += 1
+        pred = str(row.get("verdict", ""))
         verdict_counter[pred] += 1
-        if pred == "error":
+        if (
+            pred == "error"
+            or str(row.get("termination") or "") == "error"
+            or bool(str(row.get("error") or "").strip())
+        ):
             errors += 1
-        confusion[gt][pred] += 1
-        if gt == pred:
-            correct += 1
-            bucket_correct[bucket] += 1
         if isinstance(row.get("time_taken"), (int, float)):
             times.append(float(row["time_taken"]))
         if isinstance(row.get("total_tool_calls"), (int, float)):
@@ -281,70 +250,13 @@ def _compute_summary(predictions: List[Dict[str, Any]]) -> Dict[str, Any]:
         if isinstance(row.get("llm_api_calls"), (int, float)):
             llm_calls.append(float(row["llm_api_calls"]))
 
-    bucket_metrics = {}
-    for bucket, count in bucket_totals.items():
-        bucket_metrics[bucket] = {
-            "count": count,
-            "correct": bucket_correct[bucket],
-            "accuracy": round(bucket_correct[bucket] / count, 4) if count else 0.0,
-        }
-
     return {
         "num_samples": total,
-        "num_correct": correct,
-        "num_incorrect": total - correct,
         "num_errors": errors,
-        "accuracy": round(correct / total, 4) if total else 0.0,
-        "bucket_metrics": bucket_metrics,
-        "confusion": {gt: dict(counter) for gt, counter in confusion.items()},
         "predicted_verdict_distribution": dict(verdict_counter),
         "avg_time_taken_sec": round(_safe_mean(times), 3),
         "avg_tool_calls": round(_safe_mean(tool_calls), 3),
         "avg_llm_api_calls": round(_safe_mean(llm_calls), 3),
-    }
-
-
-def _factual_status_to_verdict(value: str) -> str:
-    return {
-        "supported": "real",
-        "refuted": "fake",
-        "unverifiable": "unverifiable",
-    }.get(str(value or "").strip().lower(), "")
-
-
-def _gold_summary(
-    predictions: List[Dict[str, Any]],
-    *,
-    gold_index: Dict[str, Dict[str, Any]],
-) -> Dict[str, Any]:
-    if not gold_index:
-        return {}
-    total = 0
-    correct = 0
-    missing = 0
-    confusion: Dict[str, Counter[str]] = defaultdict(Counter)
-    for row in predictions:
-        case_id = str(row.get("sample_id") or "").strip()
-        gold = gold_index.get(case_id)
-        expected = (
-            _factual_status_to_verdict(str(gold.get("factual_status") or ""))
-            if gold is not None
-            else ""
-        )
-        if not expected:
-            missing += 1
-            continue
-        predicted = str(row.get("predicted_verdict") or "")
-        total += 1
-        confusion[expected][predicted] += 1
-        if predicted == expected:
-            correct += 1
-    return {
-        "scored_cases": total,
-        "missing_gold": missing,
-        "correct": correct,
-        "accuracy": round(correct / total, 4) if total else 0.0,
-        "confusion": {key: dict(value) for key, value in confusion.items()},
     }
 
 
@@ -372,36 +284,22 @@ def _file_descriptor(path: Path | None) -> Dict[str, Any] | None:
 
 
 async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
-    benchmark_path = Path(args.benchmark)
+    benchmark_path = Path(args.benchmark).expanduser().resolve()
+    release = load_runtime_release(benchmark_path)
     samples = _load_benchmark(benchmark_path)
     if args.limit is not None:
         samples = samples[: args.limit]
-    runtime_release = require_uniform_runtime_release(samples)
-    companions = release_companions(benchmark_path) if runtime_release else None
-    evaluator_private_arg = getattr(args, "evaluator_private", None)
-    evaluation_gold_arg = getattr(args, "evaluation_gold", None)
-    private_path = (
-        Path(evaluator_private_arg)
-        if evaluator_private_arg
-        else companions.evaluator_private
-        if companions is not None and companions.evaluator_private.is_file()
-        else None
-    )
-    gold_path = (
-        Path(evaluation_gold_arg)
-        if evaluation_gold_arg
-        else companions.evaluation_gold
-        if companions is not None and companions.evaluation_gold.is_file()
-        else None
-    )
-    if runtime_release and private_path is None:
-        raise RuntimeError(
-            "runtime release evaluation requires evaluator_private/run_eval.jsonl"
-        )
-    if runtime_release:
-        samples = [
-            resolve_runtime_image_path(sample, benchmark_path) for sample in samples
-        ]
+    samples = [
+        resolve_runtime_image_path(sample, benchmark_path) for sample in samples
+    ]
+    runtime_cases = [
+        image_only_case_from_runtime_row(sample) for sample in samples
+    ]
+    case_ids = [case.case_id for case in runtime_cases]
+    if len(case_ids) != len(set(case_ids)):
+        raise ValueError("image-only release contains duplicate case_id values")
+    for runtime_case in runtime_cases:
+        verify_case_image(runtime_case, runtime_case.image_path)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_dir = (
@@ -453,39 +351,10 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
     explicit_policy = (
         SourceAccessPolicy.load(args.source_access_policy)
         if args.source_access_policy
+        else SourceAccessPolicy.load(release.artifacts.source_access_policy)
+        if release.artifacts.source_access_policy is not None
         else None
     )
-    looks_like_averimatec = any(
-        str(row.get("sample_id", "")).startswith("averimatec-") for row in samples
-    )
-    sibling_policy = (
-        companions.source_access_policy
-        if companions is not None and companions.source_access_policy.is_file()
-        else benchmark_path.parent / "source_access_policy.json"
-    )
-    if runtime_release and explicit_policy is None:
-        if not sibling_policy.is_file():
-            raise RuntimeError(
-                "runtime release evaluation requires "
-                "evaluator_private/source_access_policy.json"
-            )
-        explicit_policy = SourceAccessPolicy.load(sibling_policy)
-    if explicit_policy is None and looks_like_averimatec and sibling_policy.exists():
-        explicit_policy = SourceAccessPolicy.load(sibling_policy)
-    provenance_rows = [
-        row for row in samples if str(row.get("source_article_url", "")).strip()
-    ]
-    if explicit_policy is None and provenance_rows and not looks_like_averimatec:
-        explicit_policy = benchmark_policy_from_rows(
-            provenance_rows,
-            policy_id=f"{benchmark_path.stem}-evaluation",
-        )
-    if looks_like_averimatec and explicit_policy is None:
-        raise RuntimeError(
-            "AVerImaTeC evaluation requires the benchmark-wide sibling "
-            "source_access_policy.json or --source-access-policy. A per-subset policy "
-            "does not prevent cross-case fact-check leakage."
-        )
 
     trace_dir = run_dir / "traces"
     trace_dir.mkdir(parents=True, exist_ok=True)
@@ -498,13 +367,24 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
         "completed_at": None,
         "git_commit": _git_commit(),
         "benchmark": {
-            "path": str(benchmark_path.resolve()),
+            "path": str(benchmark_path),
             "sha256": _sha256(benchmark_path),
             "sample_count": len(samples),
             "limit": args.limit,
-            "runtime_release": runtime_release,
-            "evaluator_private": _file_descriptor(private_path),
-            "evaluation_gold": _file_descriptor(gold_path),
+            "runtime_release": True,
+            "release_id": release.release_id,
+            "release_stage": release.release_stage,
+            "release_manifest": _file_descriptor(release.manifest_path),
+            "runtime_contract_version": release.runtime_contract_version,
+            "input_mode": release.input_mode,
+            "decision_policy_version": release.decision_policy_version,
+            "classification_protocol": _file_descriptor(
+                release.artifacts.classification_protocol
+            ),
+            "process_reference_protocol": _file_descriptor(
+                release.artifacts.process_reference_protocol
+            ),
+            "evaluation_gold": None,
         },
         "agent": {
             "provider": args.provider,
@@ -559,96 +439,44 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
     )
     try:
         workflow = VerificationWorkflow(config)
-        runtime_cases = [
-            verification_case_from_runtime_row(sample) for sample in samples
-        ]
         image_paths = [str(sample["image_path"]) for sample in samples]
-        image_ids = [
-            str(sample.get("sample_id") or sample.get("case_id") or "")
-            for sample in samples
-        ]
-        user_claims = [
-            (
-                str(sample.get("user_claim") or sample.get("runtime_claim") or "").strip()
-                or None
-            )
-            for sample in samples
-        ]
-        claim_observed_ats = [
-            (
-                str(sample["claim_observed_at"])
-                if sample.get("claim_observed_at") is not None
-                else None
-            )
-            for sample in samples
-        ]
+        image_ids = [case.case_id for case in runtime_cases]
         results = await workflow.run_batch(
             image_paths=image_paths,
             image_ids=image_ids,
-            user_claims=user_claims,
-            claim_observed_ats=claim_observed_ats,
-            verification_cases=runtime_cases,
+            runtime_cases=runtime_cases,
             concurrency=max(1, args.concurrency),
         )
 
-        evaluator_private_index: Dict[str, Dict[str, Any]] = {}
-        evaluation_gold_index: Dict[str, Dict[str, Any]] = {}
-        if private_path is not None:
-            evaluator_private_index = _private_index(
-                _load_benchmark(private_path),
-                key="sample_id",
-                name="evaluator-private",
+        evaluation_gold_index = _private_index(
+            _load_benchmark(release.artifacts.evaluation_gold),
+            key="case_id",
+            name="evaluation-gold",
+        )
+        missing_gold = [
+            case_id
+            for case_id in case_ids
+            if case_id not in evaluation_gold_index
+        ]
+        if missing_gold:
+            raise RuntimeError(
+                "evaluation-gold rows missing runtime case IDs: "
+                + ", ".join(missing_gold[:10])
             )
-        if gold_path is not None:
-            evaluation_gold_index = _private_index(
-                _load_benchmark(gold_path),
-                key="case_id",
-                name="evaluation-gold",
-            )
-        if runtime_release:
-            case_ids = [str(sample.get("case_id") or "").strip() for sample in samples]
-            missing_private = [
-                case_id
-                for case_id in case_ids
-                if case_id not in evaluator_private_index
-            ]
-            if missing_private:
-                raise RuntimeError(
-                    "evaluator-private rows missing runtime case IDs: "
-                    + ", ".join(missing_private[:10])
-                )
-            if gold_path is not None:
-                missing_gold = [
-                    case_id
-                    for case_id in case_ids
-                    if case_id not in evaluation_gold_index
-                ]
-                if missing_gold:
-                    raise RuntimeError(
-                        "evaluation-gold rows missing runtime case IDs: "
-                        + ", ".join(missing_gold[:10])
-                    )
+        manifest["benchmark"]["evaluation_gold"] = _file_descriptor(
+            release.artifacts.evaluation_gold
+        )
 
         predictions = []
         for sample, result in zip(samples, results):
-            identity = str(sample.get("case_id") or sample.get("sample_id") or "")
-            record = _prediction_record(
-                sample,
-                result,
-                evaluator_private=evaluator_private_index.get(identity),
-            )
+            identity = str(sample.get("case_id") or "")
+            record = _prediction_record(sample, result)
             trace_path = trace_dir / f"{identity}.json"
             if trace_path.exists():
                 record["trace_path"] = trace_path.relative_to(run_dir).as_posix()
             predictions.append(record)
 
         summary = _compute_summary(predictions)
-        gold_metrics = _gold_summary(
-            predictions,
-            gold_index=evaluation_gold_index,
-        )
-        if gold_metrics:
-            summary["evaluation_gold_metrics"] = gold_metrics
         summary["run_id"] = manifest["run_id"]
         _write_jsonl(run_dir / "predictions.jsonl", predictions)
         _write_json(run_dir / "summary.json", summary)

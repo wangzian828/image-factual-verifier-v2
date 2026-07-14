@@ -2,9 +2,14 @@
 
 Follow `AGENTS.md` for contributor rules and `docs/architecture.md` for the active runtime contract. Read the [Agent Prompt and Runtime Guide](docs/agent-prompt-and-runtime-guide.md) for the end-to-end stage flow and the exact model/deterministic/tool boundary.
 
-The required production workflow is:
+The active benchmark input is v0.3 image-only only. Public cases contain exactly
+`case_id`, `image_path`, and `image_sha256`; do not synthesize external or embedded
+claims. The claim-driven pipeline below is temporary migration scaffolding until the
+VisualFact phases replace it.
 
-`Perception -> Planning -> iterative native ReAct -> Coverage audit/Replanning loop -> Judgment`
+The target production workflow is:
+
+`InvestigationBrief -> VisualFact bootstrap -> native ReAct -> periodic Reflection -> decisive-fact Coverage -> reinspect-v2 Judgment`
 
 Use Gemini Interactions end to end for every active Gemini LLM and vision call. Tool-bearing stages use native `function_call` / `function_result` items linked by `previous_interaction_id`. Gemini calls made inside tools are separate API calls; include their prompt, completion, and thought tokens in total runtime accounting after stripping private metrics from model-facing tool JSON. Never switch wire protocols or providers after an error, parse native calls through prompt tags, or synthesize heuristic fallback plans or judgments. Invalid protocol responses, missing credentials, exhausted retries, and invalid required structured outputs are hard failures.
 

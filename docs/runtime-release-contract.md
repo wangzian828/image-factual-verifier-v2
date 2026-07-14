@@ -1,99 +1,142 @@
 # Runtime Release Contract
 
-This repository is the runtime and evaluation consumer. Benchmark construction,
-review, release finalization, source collection, and image generation belong to the
-separate `image-factual-verifier-data-pipeline` project.
-
-The projects communicate only through an immutable release directory. They must not
-import each other's Python modules.
+This repository consumes only immutable v0.3 image-only benchmark releases produced
+by the separate `image-factual-verifier-data-pipeline` project. It does not import
+construction-pipeline Python modules and does not maintain the old claim-mode release
+contract.
 
 ## Ownership
 
 The data project owns:
 
-- `runtime_input/cases.jsonl` and content-addressed image assets;
-- `evaluator_private/source_access_policy.json`;
-- `evaluator_private/run_eval.jsonl`;
-- `evaluation_gold/gold.jsonl`;
-- release manifests, checksums, licenses, snapshots, and construction records.
+- `manifest.json`;
+- `runtime_input/cases.jsonl` and content-addressed images;
+- optional `evaluator_private/source_access_policy.json`;
+- `evaluator_private/gold.jsonl`;
+- classification and process-reference protocols;
+- checksums, licenses, construction records, and release review.
 
-This runtime owns:
+The runtime owns:
 
-- parsing public runtime rows into `VerificationCase`;
-- resolving release-relative image paths;
-- loading the source-access policy before retrieval without exposing it to the model;
-- running the Agent and persisting canonical traces;
-- joining evaluator-private rows and gold only after rollout;
-- deriving `InvestigationBrief`, `VisualFact`, `ResearchTask`, `Finding`, Reflection,
-  coverage, and verdict-basis state.
+- strict manifest and public-row parsing;
+- release-relative path resolution and image SHA-256 verification;
+- Agent rollout and canonical traces;
+- post-rollout private-gold join validation;
+- `InvestigationBrief`, `VisualFact`, `ResearchTask`, `Finding`, Reflection,
+  coverage, and `verdict_basis`;
+- process scoring and later trajectory export.
 
-The data project must not generate runtime investigation state. Runtime state must not
-be added to `runtime_input/cases.jsonl`.
+## Required Release
 
-## Active v0.2 Contract
+The benchmark entrypoint is:
 
-Every public row must explicitly contain:
+```text
+<release-root>/runtime_input/cases.jsonl
+```
+
+The release root must contain `manifest.json` with:
+
+```json
+{
+  "schema_version": "ifv-image-only-benchmark-release-v0.3",
+  "runtime_contract_version": "ifv-image-only-runtime-v1",
+  "input_mode": "image_only",
+  "decision_policy_version": "reinspect-v2",
+  "runtime_contract": {
+    "allowed_keys": ["case_id", "image_path", "image_sha256"],
+    "private_keys_absent": true
+  }
+}
+```
+
+Every public row contains exactly:
 
 ```json
 {
   "case_id": "case_0123456789abcdef",
   "image_path": "assets/sha256/ab/abcdef.jpg",
-  "image_sha256": "abcdef...",
-  "claim_mode": "external_claim",
-  "user_claim": "A public factual proposition.",
-  "claim_surface": null,
-  "claim_source_region": null,
-  "claim_observed_at": "2024-01-02",
-  "decision_policy_version": "reinspect-v1"
+  "image_sha256": "abcdef..."
 }
 ```
 
-The active adapter accepts `external_claim` and `embedded_claim` with
-`decision_policy_version=reinspect-v1`. It rejects mixed legacy/release rows, missing
-policy versions, unknown policies, and `image_only`.
+Public rows must not contain claim placeholders, factual labels, decisive facts,
+acceptable evidence, construction metadata, source provenance, or runtime-generated
+investigation state.
 
-The runtime input must not contain labels, target claims, acceptable evidence, source
-URLs used to construct the case, intervention metadata, world IDs, or review data.
+## Manifest Artifacts
 
-## Planned v0.3 Contract
+`manifest["artifacts"]` supplies release-relative paths for:
 
-`image_only` becomes publishable only after all of the following are true:
+```text
+agent_input
+evaluation_gold
+classification_protocol
+process_reference_protocol
+licenses
+```
 
-1. the runtime `ClaimMode` supports `image_only`;
-2. the runtime projects it into an immutable `InvestigationBrief`;
-3. `reinspect-v2` Coverage and Judgment validation are active;
-4. cross-repository fixture tests pass against a finalized release;
-5. the data project removes its current image-only release gate.
+All paths must remain inside the release root. `artifacts.agent_input` must resolve to
+the exact benchmark path passed to the evaluator.
 
-The intended public row is:
+`source_access_policy.active=false` means no policy file is required. When active, the
+manifest must provide a release-relative path to an existing policy file. The policy
+is loaded before retrieval and is never exposed to the model.
+
+## Rollout Isolation
+
+Before rollout the runtime may read:
+
+- the public manifest;
+- public protocols;
+- public runtime rows;
+- image assets;
+- an active evaluator-private source-access policy.
+
+It must not read `evaluator_private/gold.jsonl` until all Agent rollouts finish.
+After rollout, gold is loaded only to validate the `case_id` join and later drive
+classification/process scoring. Gold values must not be copied into predictions or
+canonical Agent traces.
+
+## Predictions
+
+`predictions.jsonl` contains at least:
 
 ```json
-{
-  "case_id": "case_0123456789abcdef",
-  "image_path": "assets/sha256/ab/abcdef.jpg",
-  "image_sha256": "abcdef...",
-  "claim_mode": "image_only",
-  "user_claim": null,
-  "claim_surface": null,
-  "claim_source_region": null,
-  "claim_observed_at": null,
-  "decision_policy_version": "reinspect-v2"
-}
+{"case_id": "case_...", "verdict": "real"}
 ```
 
-`VisualFact`, task, Finding, Reflection, and verdict-basis records remain runtime
-outputs and do not become public release input fields.
+Allowed verdicts are:
 
-## Compatibility Matrix
+```text
+real | fake | unverifiable
+```
 
-| Release input | Decision policy | Runtime status |
-|---|---|---|
-| v0.2 external claim | `reinspect-v1` | Supported |
-| v0.2 embedded claim | `reinspect-v1` | Supported |
-| external/embedded | unknown or `reinspect-v2` | Rejected until explicitly activated |
-| image-only | `reinspect-v1` | Invalid combination |
-| planned v0.3 image-only | `reinspect-v2` | Rejected until VisualFact Phase 3 acceptance |
+Runtime diagnostics such as confidence, `verdict_basis`, trace path, termination,
+costs, and engineering error may be additive. Labels, factual status, decisive gold
+facts, and acceptable evidence are forbidden.
 
-Any interface change must first update the fixture tests in `test_release_adapter.py`
-and `test_eval_artifacts.py`. The producing data project may enable a new release mode
-only after those consumer tests are green.
+Classification scoring remains owned by the data project. The runtime's
+`summary.json` reports execution status and cost; it does not duplicate benchmark
+accuracy or Macro-F1.
+
+## Current Activation State
+
+The v0.3 release consumer is active:
+
+- manifest and row validation;
+- path-boundary validation;
+- image hash verification;
+- optional source policy;
+- post-rollout gold join;
+- scorer-compatible predictions.
+
+The image-only Agent itself is still under implementation. Until VisualFact bootstrap
+and `reinspect-v2` execution are active, the default workflow returns an explicit
+engineering error:
+
+```text
+image-only runtime input is valid, but VisualFact bootstrap and reinspect-v2
+execution are not active yet
+```
+
+It must not silently convert image-only input into an embedded or external claim.

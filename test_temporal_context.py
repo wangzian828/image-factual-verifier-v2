@@ -339,49 +339,33 @@ def test_stage_contexts_state_time_semantics_and_replanning_ledger(
     )
 
 
-def test_workflow_single_and_batch_propagate_claim_observed_at(
+def test_workflow_defaults_to_image_only_and_validates_batch_cases(
     tmp_path: Path,
 ) -> None:
     image_path = tmp_path / "workflow.jpg"
     image_path.write_bytes(b"workflow-temporal-fixture")
 
-    class CapturingOrchestrator:
-        def __init__(self) -> None:
-            self.calls: list[dict[str, Any]] = []
-
-        async def run(
-            self,
-            path: str,
-            image_id: str,
-            **kwargs: Any,
-        ) -> dict[str, Any]:
-            self.calls.append({"path": path, "image_id": image_id, **kwargs})
-            return {"image_id": image_id, "image_path": path, "verdict": "uncertain"}
-
     workflow = VerificationWorkflow(WorkflowConfig(save_traces=False))
-    orchestrator = CapturingOrchestrator()
-    workflow._orchestrator = orchestrator  # type: ignore[assignment]
-    asyncio.run(
-        workflow.run_single(
-            str(image_path),
-            "single-id",
-            user_claim=CLAIM,
-            claim_observed_at="2024-01-02",
+    with pytest.raises(
+        RuntimeError,
+        match="VisualFact bootstrap and reinspect-v2 execution are not active",
+    ):
+        asyncio.run(
+            workflow.run_single(
+                str(image_path),
+                "single-id",
+            )
         )
-    )
-    assert orchestrator.calls[0]["verification_case"].claim_observed_at == "2024-01-02"
 
-    batch_calls: list[tuple[str | None, str | None]] = []
+    batch_cases: list[Any] = []
 
     async def capture_single(
         _path: str,
         _image_id: str = "",
         *,
-        user_claim: str | None = None,
-        claim_observed_at: str | None = None,
-        verification_case: Any = None,
+        runtime_case: Any = None,
     ) -> dict[str, Any]:
-        batch_calls.append((user_claim, claim_observed_at))
+        batch_cases.append(runtime_case)
         return {"verdict": "uncertain"}
 
     workflow.run_single = capture_single  # type: ignore[method-assign]
@@ -389,21 +373,16 @@ def test_workflow_single_and_batch_propagate_claim_observed_at(
         workflow.run_batch(
             ["first.jpg", "second.jpg"],
             image_ids=["first", "second"],
-            user_claims=["first claim", "second claim"],
-            claim_observed_ats=["2020-01-01", None],
         )
     )
-    assert batch_calls == [
-        ("first claim", "2020-01-01"),
-        ("second claim", None),
-    ]
+    assert batch_cases == [None, None]
     with pytest.raises(
         ValueError,
-        match="claim_observed_ats must match image_paths length",
+        match="runtime_cases must match image_paths length",
     ):
         asyncio.run(
             workflow.run_batch(
                 ["first.jpg"],
-                claim_observed_ats=[],
+                runtime_cases=[],
             )
         )

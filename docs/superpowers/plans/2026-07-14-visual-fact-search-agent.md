@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-14
 
-**Status:** Active; baseline complete, Phase A is next
+**Status:** Active; Phase A consumer boundary complete, Phase B is next
 
 **Runtime repository:** `D:\image-factual-verifier-v2-worktrees\visual-fact-search-agent`
 
@@ -54,18 +54,20 @@ The following work is complete on `codex/image-factual-verifier-v3`:
 - [x] `1b4b49c`: isolated benchmark release consumer boundary.
 - [x] `8aac777`: benchmark construction code removed from the runtime repository.
 - [x] `166c640`: empty private tool-runtime metrics no longer leak into tool output.
-- [x] `88f2ad7`: v0.2 consumer fixtures and contract/scripted/real validation split.
+- [x] `88f2ad7`: contract/scripted/real validation split.
 - [x] Fake smoke runners were removed.
 - [x] The controlled end-to-end test is explicitly named
   `test_scripted_agent_trajectory.py`.
 - [x] `scripts/run_real_canary.py` exists and fails closed on missing real-provider
   configuration.
-- [x] Credential-free baseline: `212 passed`.
+- [x] Pre-migration credential-free baseline: `212 passed`.
+- [x] Phase A v0.3-only baseline after removing v0.2 fixtures/tests:
+  `208 passed`.
 
-The local v3 worktree was clean before this plan update. The local machine does not
-currently have the complete Gemini/search/browse/upload provider configuration, so a
-real canary has not yet passed. `212 passed` is a deterministic baseline, not evidence
-that the live system works.
+The local machine does not currently have the complete
+Gemini/search/browse/upload provider configuration, so a real canary has not yet
+passed. `208 passed` is a deterministic baseline, not evidence that the live system
+works.
 
 ## 3. Repository Boundary and Shared Interface
 
@@ -99,12 +101,13 @@ The runtime project owns:
 - process scoring against evaluator-private references after rollout;
 - trajectory export and later training-data derivation.
 
-### 3.3 Active compatibility matrix
+### 3.3 Active release contract
 
-| Release | Public input | Runtime model | Policy | Status |
-|---|---|---|---|---|
-| v0.2 | explicit external/embedded claim fields | `VerificationCase` | `reinspect-v1` | supported and unchanged |
-| v0.3 image-only | `case_id`, `image_path`, `image_sha256` only | `ImageOnlyRuntimeCase` | `reinspect-v2` from manifest | next implementation target |
+v3 consumes only the v0.3 image-only release:
+
+| Public input | Runtime model | Policy | Status |
+|---|---|---|---|
+| `case_id`, `image_path`, `image_sha256` only | `ImageOnlyRuntimeCase` | `reinspect-v2` from manifest | consumer active; Agent bootstrap next |
 
 The v0.3 public row is exactly:
 
@@ -195,21 +198,20 @@ accepted until its required real canary has run.
 
 ## 5. Phase A — Consume the v0.3 Image-Only Release
 
-**Outcome:** v3 can run the real group-001 release without inventing claim fields or
-loading private gold before rollout. The first implementation should stop at the
-existing runtime boundary if reinspect-v2 behavior is not yet active; it must not
-silently project image-only into an embedded claim.
+**Outcome:** v3 can consume the real group-001 release without inventing claim fields
+or loading private gold before rollout. Until reinspect-v2 behavior is active, the
+runtime stops at an explicit engineering boundary and never projects image-only into
+an embedded claim.
 
 ### A1. Add manifest-driven release detection
 
-- [ ] Replace row-shape-only release detection with a release descriptor loaded from
+- [x] Replace row-shape-only release detection with a release descriptor loaded from
   the release root.
-- [ ] Validate `schema_version`, `runtime_contract_version`, `input_mode`, and
+- [x] Validate `schema_version`, `runtime_contract_version`, `input_mode`, and
   `decision_policy_version`.
-- [ ] Resolve artifact paths from `manifest["artifacts"]`; do not hard-code old
+- [x] Resolve artifact paths from `manifest["artifacts"]`; do not hard-code
   companion locations.
-- [ ] Keep legacy non-release evaluation input isolated from release parsing.
-- [ ] Reject mixed, unknown, or internally inconsistent release contracts.
+- [x] Reject unknown or internally inconsistent release contracts.
 
 Primary files:
 
@@ -223,12 +225,11 @@ test_eval_artifacts.py
 
 ### A2. Introduce the image-only runtime input model
 
-- [ ] Add strict `ImageOnlyRuntimeCase` with exactly `case_id`, `image_path`, and
+- [x] Add strict `ImageOnlyRuntimeCase` with exactly `case_id`, `image_path`, and
   `image_sha256`.
-- [ ] Keep `VerificationCase` unchanged for v0.2 external/embedded inputs.
-- [ ] Use an explicit runtime-input union or release descriptor; do not add nullable
+- [x] Use an explicit runtime-input union or release descriptor; do not add nullable
   claim fields to `ImageOnlyRuntimeCase`.
-- [ ] Verify the resolved image SHA-256 before perception.
+- [x] Verify the resolved image SHA-256 before execution.
 - [ ] Ensure canonical traces identify `input_mode=image_only` and
   `decision_policy_version=reinspect-v2` without fabricating a claim.
 
@@ -243,14 +244,14 @@ src/eval/release_adapter.py
 
 ### A3. Correct release companions and rollout isolation
 
-- [ ] Treat `evaluator_private/gold.jsonl` as the v0.3 private join keyed by
+- [x] Treat `evaluator_private/gold.jsonl` as the private join keyed by
   `case_id`.
-- [ ] Remove the v0.3 dependency on `evaluator_private/run_eval.jsonl`.
-- [ ] Remove the v0.3 dependency on `evaluation_gold/gold.jsonl`.
-- [ ] Load evaluator-private gold only after all Agent rollouts finish.
-- [ ] Load source-access policy before retrieval only when the manifest declares an
+- [x] Remove dependencies on `evaluator_private/run_eval.jsonl` and
+  `evaluation_gold/gold.jsonl`.
+- [x] Load evaluator-private gold only after all Agent rollouts finish.
+- [x] Load source-access policy before retrieval only when the manifest declares an
   active policy or the caller explicitly supplies one.
-- [ ] Record the manifest, public input, optional policy, and post-rollout private
+- [x] Record the manifest, public input, optional policy, and post-rollout private
   artifact hashes in `run_manifest.json`.
 
 ### A4. Produce classification-compatible predictions
@@ -258,41 +259,41 @@ src/eval/release_adapter.py
 The classification scorer accepts rows joined by `case_id` with verdict values
 `real`, `fake`, or `unverifiable`. Optional runtime fields may remain.
 
-- [ ] Emit at least:
+- [x] Emit at least:
 
   ```json
   {"case_id": "case_...", "verdict": "fake"}
   ```
 
-- [ ] Keep confidence, verdict basis, and trace path additive.
-- [ ] Do not expose gold, factual status, decisive facts, or acceptable evidence in
+- [x] Keep confidence, verdict basis, and trace path additive.
+- [x] Do not expose gold, factual status, decisive facts, or acceptable evidence in
   `predictions.jsonl`.
-- [ ] Do not duplicate the data project's classification scorer in v3.
+- [x] Do not duplicate the data project's classification scorer in v3.
 
 ### A5. Minimal validation
 
-- [ ] Add one compact v0.3 consumer fixture shaped from the finalized release
+- [x] Add one compact v0.3 consumer fixture shaped from the finalized release
   contract.
-- [ ] Test exact three-field public rows and forbidden private fields.
-- [ ] Test v0.2 and v0.3 manifest routing.
-- [ ] Test optional policy behavior.
-- [ ] Test that private gold is first read after rollout.
-- [ ] Run v3 directly against the local group-001 release using a temporary scripted
+- [x] Test exact three-field public rows and forbidden private fields.
+- [x] Test optional policy behavior.
+- [x] Test that private gold is first read after rollout.
+- [x] Run v3 directly against the local group-001 release using a temporary scripted
   workflow to verify file/path/join/artifact behavior.
-- [ ] Preserve all v0.2 tests.
 
 ### Phase A acceptance
 
-- [ ] The actual group-001 directory is accepted as a v0.3 release.
-- [ ] Both images are hash-verified and routed as `ImageOnlyRuntimeCase`.
-- [ ] No private field reaches Agent inputs or model context.
-- [ ] The run writes `predictions.jsonl`, `summary.json`, `traces/`, and
+- [x] The actual group-001 directory is accepted as a v0.3 release.
+- [x] Both images are hash-verified and routed as `ImageOnlyRuntimeCase`.
+- [x] No private field reaches runtime inputs.
+- [x] The run writes `predictions.jsonl`, `summary.json`, `traces/`, and
   `run_manifest.json`.
-- [ ] The data-pipeline classification scorer can consume v3 predictions unchanged.
-- [ ] v0.2 external/embedded behavior remains green.
+- [x] The data-pipeline classification scorer consumes v3 predictions unchanged.
 
-Phase A is an interface milestone, not factual-quality acceptance. A real image-only
-investigation still requires Phases B through E.
+Phase A is complete as an interface milestone. A direct group-001 boundary run
+currently produces two explicit engineering errors and scorer Accuracy `0.0`, because
+VisualFact/reinspect-v2 execution is intentionally not active. It makes no Gemini
+calls and does not enter the claim-driven path. A real image-only investigation still
+requires Phases B through E.
 
 ## 6. Phase B — Bootstrap VisualFacts and Initial Tasks
 
@@ -306,7 +307,7 @@ investigation still requires Phases B through E.
   `attribute`, `relation`, `internal_consistency`, and `text_claim`.
 - [ ] Add bounded `ResearchTask`.
 - [ ] Add evidence-backed `Finding`.
-- [ ] Add additive v2 trace collections without changing v0.2 serialization.
+- [ ] Add canonical image-only trace collections.
 
 Suggested focused module:
 
@@ -408,7 +409,6 @@ NEW_DECISIVE_FACTS_PER_REFLECTION_MAX = 2
 
 ### C4. Retire fixed-question replanning only in v2 mode
 
-- [ ] Keep the current v0.2 Planning/replanning path unchanged.
 - [ ] In image-only v2 mode, let the task store plus latest Reflection determine the
   working view.
 - [ ] Do not maintain two authoritative dynamic planning states.
@@ -492,7 +492,6 @@ src/orchestrator/verdict.py
 
 - [ ] Render v2 brief, facts, tasks, Findings, Reflections, coverage, and verdict
   basis.
-- [ ] Keep v0.2 traces readable.
 - [ ] Extend `scripts/audit_real_trace.py` for image-only input and v2 invariants.
 - [ ] Make strict audit fail on private-gold leakage, broken basis chains, invalid
   Reflection cadence, impossible state transitions, or ungrounded Findings.
@@ -529,10 +528,12 @@ python scripts/run_real_canary.py `
 Then run the data-owned classification scorer:
 
 ```powershell
-python D:\image-factual-verifier-data-pipeline\scripts\benchmark\score_image_only_release.py `
+Push-Location D:\image-factual-verifier-data-pipeline
+python -m scripts.benchmark.score_image_only_release `
   --release-root $release `
   --predictions "$run\predictions.jsonl" `
   --output "$run\benchmark-score.json"
+Pop-Location
 ```
 
 And audit every trace:
@@ -719,28 +720,28 @@ hashes; do not depend on its Python package or Git worktree state.
 
 ## 13. Next Immediate Task
 
-Start with Phase A in one scoped implementation:
+Start with Phase B in one scoped implementation:
 
-1. introduce a manifest/release descriptor;
-2. add `ImageOnlyRuntimeCase`;
-3. route v0.2 and v0.3 separately;
-4. make v0.3 private gold and source policy behavior match group-001;
-5. emit `case_id` plus `verdict`;
-6. run the actual group-001 directory through the consumer/evaluation boundary;
-7. keep factual VisualFact behavior fail-closed until Phase B/D is active.
+1. add strict `InvestigationBrief`, `VisualEntity`, and candidate `VisualFact`;
+2. create the immutable brief from `ImageOnlyRuntimeCase`;
+3. run real perception/OCR on both group-001 images;
+4. reduce visible entities, text, logos, markings, regions, and relations into
+   image-grounded candidate facts;
+5. create at most four initial evidence-routable tasks;
+6. persist the new state in canonical traces;
+7. run the earliest real bootstrap checkpoint before adding Reflection.
 
-Do not begin by adding Reflection, process metrics, trajectory export, or training
-code. First make the real cross-repository boundary correct and observable.
+Do not begin with process metrics, trajectory export, or training code. First make the
+real Agent understand what is visibly present and what should be investigated.
 
 ## 14. Final Completion Checklist
 
-- [ ] v0.2 external/embedded releases still use `VerificationCase/reinspect-v1`.
-- [ ] v0.3 image-only releases use three-field
+- [x] v0.3 image-only releases use three-field
   `ImageOnlyRuntimeCase/reinspect-v2`.
-- [ ] Release routing is manifest-driven.
-- [ ] Private gold is inaccessible until rollout completes.
-- [ ] Optional inactive source policy is accepted.
-- [ ] No fabricated claim is introduced for image-only input.
+- [x] Release routing is manifest-driven.
+- [x] Private gold is inaccessible until rollout completes.
+- [x] Optional inactive source policy is accepted.
+- [x] No fabricated claim is introduced for image-only input.
 - [ ] VisualFacts and tasks are image-grounded and bounded.
 - [ ] Reflection fires only at cumulative real actions 4, 8, 12, ...
 - [ ] Discoveries never become Findings or verdict evidence without qualification.

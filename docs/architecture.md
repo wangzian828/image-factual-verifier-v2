@@ -2,7 +2,28 @@
 
 ## Runtime Contract
 
-Image Factual Verifier v2 evaluates an image's apparent factual claim against visual and external evidence. The production path is a bounded multi-stage Gemini agent with this control flow:
+The benchmark runtime accepts only the v0.3 image-only release contract documented in
+`runtime-release-contract.md`. The public input is `ImageOnlyRuntimeCase` with exactly
+`case_id`, `image_path`, and `image_sha256`; release-level policy is
+`reinspect-v2`.
+
+The existing claim-driven `VerificationCase/reinspect-v1` orchestrator described in
+the legacy sections below is migration scaffolding, not a supported benchmark-release
+contract. Phase A stops image-only execution before that scaffold and returns an
+explicit engineering error. Phases B-D replace its case, planning, coverage, and
+judgment state with the VisualFact architecture:
+
+```text
+ImageOnlyRuntimeCase
+  -> InvestigationBrief
+  -> Perception and VisualFact bootstrap
+  -> bounded ResearchTasks and native ReAct
+  -> Reflection every four real actions
+  -> decisive-fact Coverage
+  -> reinspect-v2 Judgment and verdict_basis
+```
+
+Until those phases are active, the legacy internal pipeline has this control flow:
 
 ```text
 Perception
@@ -19,9 +40,10 @@ See the [Agent Prompt and Runtime Guide](agent-prompt-and-runtime-guide.md) for 
 
 `VerificationState` retains the versioned `VerificationCase`, perception, current plan and plan history, verification output, coverage audits, machine-verifiable ledgers, incremental `InvestigationState`, final judgment, stage steps, tool health, timings, token use, and call counts.
 
-## Runtime Case Contract
+## Legacy Internal Case Scaffold
 
-Every run receives or constructs one strict `VerificationCase`:
+Old unit/scripted paths may still construct `VerificationCase` while migration is in
+progress:
 
 ```yaml
 case_id: string
@@ -37,7 +59,8 @@ decision_policy_version: string
 
 The workflow verifies `image_sha256` against the file before Perception. `created_at` is fixed once when the runtime case is constructed, so repeated incremental ledger compilation cannot change source provenance. An `external_claim` requires a non-empty `user_claim`. An `embedded_claim` forbids `user_claim`; after Perception, visible OCR text is copied into `claim_surface` for Planning. A supplied `claim_source_region` is a normalized, non-empty box.
 
-The runtime case must never contain a hidden benchmark label or gold `primary_claim`. For an embedded claim, the agent recovers the claim only from pixels, OCR, and scene observations. The active decision policy is `reinspect-v1`; versioning the field does not authorize a different policy without matching validator changes.
+This model must never be used to parse a v0.3 release row or fabricate an image-only
+claim. It will be removed or absorbed as the VisualFact path becomes authoritative.
 
 ## Stages
 
