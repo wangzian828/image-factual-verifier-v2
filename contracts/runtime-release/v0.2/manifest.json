@@ -1,0 +1,25 @@
+{
+  "schema_version": "runtime-release-contract-fixtures-v1",
+  "contract_version": "v0.2",
+  "decision_policy_version": "reinspect-v1",
+  "runtime_claim_modes": [
+    "external_claim",
+    "embedded_claim"
+  ],
+  "producer_baseline": {
+    "repository": "image-factual-verifier-data-pipeline",
+    "commit": "dc3c625"
+  },
+  "consumer_baseline": {
+    "repository": "image-factual-verifier-v3",
+    "commit": "1b4b49c",
+    "contract_path": "docs/runtime-release-contract.md"
+  },
+  "files": {
+    "embedded_claim.json": "d211f243944a123b5f9802c43345dbcd773c09c3f42538f40c722aeecbbfd5b4",
+    "evaluation_gold.json": "5e8b6ed6d88a4c4542563966a2fb46ef73c711a033869f66a022ecad4e24e46e",
+    "evaluator_private.json": "04b9522294dd31668624816781c661d4a48e0d14f257067c7da82963bd4a33f2",
+    "external_claim.json": "2540d9088fe86b751804dba507135e3f8281f3178289b4e95a0dac854abe204a",
+    "source_access_policy.json": "fe0979d2b75ef81e0e5af5903cea694ec54b0a1686d0cc0e2c815fc0fa9259c6"
+  }
+}

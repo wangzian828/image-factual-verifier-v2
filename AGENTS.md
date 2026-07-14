@@ -105,15 +105,30 @@ Keep all secrets environment-only even when adding controls.
 
 ## Validation
 
-Run the focused suite for orchestration and Gemini protocol changes:
+Run focused local contract and scripted-state tests:
 
 ```powershell
-python -m pytest -q test_unit.py test_evidence_grounding.py test_failure_contracts.py test_provider_failure_propagation.py test_native_interactions.py test_gemini_interactions_contract.py test_gemini_vlm_interactions.py test_full_native_agent_trace.py test_trace_viewer.py
-python test_workflow_smoke.py
+python -m pytest -q test_release_adapter.py test_eval_artifacts.py test_unit.py test_evidence_grounding.py test_failure_contracts.py test_provider_failure_propagation.py test_native_interactions.py test_gemini_interactions_contract.py test_gemini_vlm_interactions.py test_scripted_agent_trajectory.py test_trace_viewer.py
 python scripts/probe_gemini_interactions.py --model gemini-3-flash-preview
 ```
 
-The focused tests cover multi-round tool use, exact evidence grounding and passage selection, discovery/failure exclusion, case/ledger judgment, coverage-driven replanning and typed insufficiency, P1/P2 service, adaptive stopping, ReInspect state, native function-call round trips, required question IDs, scoped `thinking_level=minimal`, environment-only credentials, retry/error behavior, canonical JSON persistence, and on-demand HTML rendering. `test_full_native_agent_trace.py` remains a controlled two-iteration fixture, not the production limit or a real-world fact-check result.
+The pytest suite covers deterministic contracts and simulated failure boundaries.
+`test_scripted_agent_trajectory.py` is a controlled provider/tool script that validates
+state transitions and trace structure; it is not a real-world factual result. Passing
+pytest or the protocol probe must never be reported as proof that the complete system
+works against real providers.
+
+Before accepting a runtime phase, run a no-mock canary against a finalized release:
+
+```powershell
+python scripts/run_real_canary.py `
+  --benchmark path\to\release\runtime_input\cases.jsonl `
+  --output-dir path\to\new-canary-output
+```
+
+The canary must use real Gemini, search, browse, image upload/reverse search, and visual
+tools; finish without engineering errors; exercise search, visit, and visual tool
+classes; and pass `scripts/audit_real_trace.py --json --strict-scheduler`.
 
 For a real run, inspect the canonical JSON under `outputs/traces/`. Generate a standalone HTML diagnostic view only when needed:
 

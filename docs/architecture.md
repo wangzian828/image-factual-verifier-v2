@@ -276,11 +276,27 @@ python -m pip install -e ".[dev]"
 python -m src path\to\image.jpg
 
 python -m pytest -q test_unit.py test_failure_contracts.py test_native_interactions.py test_gemini_interactions_contract.py test_gemini_vlm_interactions.py test_trace_viewer.py
-python -m pytest -q test_full_native_agent_trace.py
-python test_workflow_smoke.py
+python -m pytest -q test_scripted_agent_trajectory.py
 ```
 
-The focused tests cover native call chaining, tool-result status validation, case/ledger judgment, discovery and exact-span grounding, passage-ID validation, incremental ReInspect state, provider non-fallback, cache TTL and namespace, coverage-driven replanning and typed insufficiency, Gemini-only Interactions, `thinking_level=minimal` for schema-bound image observations, persistence redaction, canonical JSON persistence, and on-demand HTML rendering. `test_full_native_agent_trace.py` runs a controlled fixture through the complete production orchestrator and exports an auditable reference trace with two verification iterations, two coverage audits, replanning, Interaction parent/call IDs, ledger evidence, and ReInspect resolution. It is explicitly not a real-world factual result.
+The pytest suite covers native call chaining, tool-result status validation,
+case/ledger judgment, discovery and exact-span grounding, passage-ID validation,
+incremental ReInspect state, provider non-fallback, cache TTL and namespace,
+coverage-driven replanning and typed insufficiency, persistence redaction, and trace
+rendering. `test_scripted_agent_trajectory.py` runs deterministic provider/tool
+responses through the production orchestrator. It validates the state machine only.
+
+Complete runtime acceptance requires a finalized release and real providers:
+
+```powershell
+python scripts/run_real_canary.py `
+  --benchmark path\to\release\runtime_input\cases.jsonl `
+  --output-dir path\to\new-canary-output
+```
+
+The canary must exercise successful search, visit, and visual-observation calls and
+pass strict canonical-trace auditing. A green pytest suite or Gemini protocol probe is
+not evidence of real factual performance.
 
 ## Repository Map
 

@@ -20,10 +20,13 @@ Before finishing orchestration changes, run:
 
 ```powershell
 python -m pytest -q test_unit.py test_native_interactions.py test_gemini_interactions_contract.py
-python -m pytest -q test_full_native_agent_trace.py
-python test_workflow_smoke.py
+python -m pytest -q test_scripted_agent_trajectory.py
 python scripts/probe_gemini_interactions.py --model gemini-3-flash-preview
+python scripts/run_real_canary.py --benchmark path\to\release\runtime_input\cases.jsonl --output-dir path\to\new-canary-output
 ```
+
+The first two commands are contract/simulated checks. The probe validates only the
+Gemini transport. Only `run_real_canary.py` is a complete no-mock runtime acceptance.
 
 Normal runs write canonical JSON traces under `outputs/traces/`. Use `python -m src.render_trace_html outputs\traces --output-dir outputs\trace_html` to generate HTML from saved JSON when needed.
 

@@ -1,0 +1,11 @@
+{
+  "schema_version": "source-access-policy-v1",
+  "policy_id": "runtime-release-v0.2-fixture",
+  "excluded_domains": [
+    "factcheck.example"
+  ],
+  "excluded_urls": [
+    "https://factcheck.example/cases/embedded-claim",
+    "https://factcheck.example/cases/external-claim"
+  ]
+}

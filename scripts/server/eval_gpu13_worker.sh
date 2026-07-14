@@ -15,7 +15,7 @@ if [[ "${job_name}" != eval-* ]] || [[ "${job_name}" == *[!A-Za-z0-9._-]* ]]; th
     exit 2
 fi
 
-pid_file="/tmp/image-factual-verifier-v2/${job_name}.pid"
+pid_file="/tmp/image-factual-verifier-v3/${job_name}.pid"
 child_pid=""
 
 cleanup() {

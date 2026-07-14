@@ -57,7 +57,18 @@ python -m pytest -q `
   test_evidence_grounding.py `
   test_failure_contracts.py `
   test_native_interactions.py `
-  test_full_native_agent_trace.py
+  test_scripted_agent_trajectory.py
 ```
 
-Real Gemini probes and gpu-13 validation follow `docs/operations/gpu13.md`.
+These are local contract and scripted-state tests, not proof of real system
+availability. Real Gemini, search, browse, visual-tool, and trace acceptance uses:
+
+```powershell
+python scripts/run_real_canary.py `
+  --benchmark path\to\release\runtime_input\cases.jsonl `
+  --output-dir path\to\new-canary-output
+```
+
+The canary refuses missing provider credentials, fake/scripted model names, engineering
+errors, failed strict trace audits, and runs that do not exercise search, page visit,
+and visual-observation tool classes. gpu-13 setup follows `docs/operations/gpu13.md`.

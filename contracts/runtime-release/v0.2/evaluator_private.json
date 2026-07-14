@@ -1,0 +1,18 @@
+[
+  {
+    "sample_id": "case_0123456789abcdef",
+    "image_path": "/private/release/runtime_input/assets/sha256/11/1111111111111111111111111111111111111111111111111111111111111111.jpg",
+    "user_claim": "The photographed ceremony took place at Example Space Center.",
+    "ground_truth": "real",
+    "bucket": "real_seed_external_claim",
+    "source_article_url": "https://factcheck.example/cases/external-claim"
+  },
+  {
+    "sample_id": "case_fedcba9876543210",
+    "image_path": "/private/release/runtime_input/assets/sha256/22/2222222222222222222222222222222222222222222222222222222222222222.png",
+    "user_claim": null,
+    "ground_truth": "fake",
+    "bucket": "t2i_worlds_embedded_claim",
+    "source_article_url": "https://factcheck.example/cases/embedded-claim"
+  }
+]

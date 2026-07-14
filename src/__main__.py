@@ -14,7 +14,7 @@ from src.storage import default_trace_dir
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Image Factual Verifier v2")
+    parser = argparse.ArgumentParser(description="Image Factual Verifier v3")
     parser.add_argument("image_path", help="Path to the image to verify")
     parser.add_argument(
         "--claim",

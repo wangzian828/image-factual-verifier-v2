@@ -20,7 +20,6 @@ RUNTIME_REQUIRED_KEYS = frozenset(
         "image_path",
         "image_sha256",
         "claim_mode",
-        "decision_policy_version",
     }
 )
 RUNTIME_CASE_KEYS = frozenset(
@@ -69,6 +68,20 @@ def verification_case_from_runtime_row(
 
     if not is_runtime_release_row(sample):
         return None
+    actual_keys = frozenset(sample)
+    missing = sorted(RUNTIME_CASE_KEYS - actual_keys)
+    unexpected = sorted(actual_keys - RUNTIME_CASE_KEYS)
+    if missing or unexpected:
+        details = []
+        if missing:
+            details.append("missing: " + ", ".join(missing))
+        if unexpected:
+            details.append("unexpected: " + ", ".join(unexpected))
+        raise ValueError(
+            "runtime release row must match the exact public field set ("
+            + "; ".join(details)
+            + ")"
+        )
     claim_mode = str(sample.get("claim_mode", "")).strip()
     decision_policy = str(sample.get("decision_policy_version", "")).strip()
     if claim_mode == "image_only":
@@ -81,8 +94,7 @@ def verification_case_from_runtime_row(
             "the active runtime accepts decision_policy_version=reinspect-v1; "
             f"received {decision_policy or '<empty>'}"
         )
-    payload = {key: sample[key] for key in RUNTIME_CASE_KEYS if key in sample}
-    return VerificationCase.model_validate(payload)
+    return VerificationCase.model_validate(sample)
 
 
 def release_companions(benchmark_path: Path) -> ReleaseCompanions | None:

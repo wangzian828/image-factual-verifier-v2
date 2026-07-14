@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+"""Scripted end-to-end trajectory test.
+
+This module exercises the production orchestrator with deterministic provider and
+tool responses. It validates state transitions and trace structure only; it is not a
+real-provider or factual-quality acceptance test.
+"""
+
 import argparse
 import asyncio
 import hashlib
@@ -523,7 +530,7 @@ def assert_full_reference_trace(result: Dict[str, Any]) -> None:
     assert investigation["stopping_assessments"][-1]["can_stop"] is True
 
 
-def test_full_native_multistage_reference_trace(tmp_path: Path) -> None:
+def test_scripted_multistage_reference_trajectory(tmp_path: Path) -> None:
     result = run_reference_trace(tmp_path)
     assert_full_reference_trace(result)
     trace = tmp_path / "multistage-iterative-agent-reference.json"
@@ -543,7 +550,9 @@ def test_full_native_multistage_reference_trace(tmp_path: Path) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Export the full native-agent reference trace.")
+    parser = argparse.ArgumentParser(
+        description="Export the scripted native-agent reference trajectory."
+    )
     parser.add_argument("--export-dir", type=Path, required=True)
     args = parser.parse_args()
     if args.export_dir.exists():

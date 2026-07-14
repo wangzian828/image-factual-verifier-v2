@@ -1,0 +1,11 @@
+{
+  "case_id": "case_0123456789abcdef",
+  "image_path": "assets/sha256/11/1111111111111111111111111111111111111111111111111111111111111111.jpg",
+  "image_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+  "claim_mode": "external_claim",
+  "user_claim": "The photographed ceremony took place at Example Space Center.",
+  "claim_surface": null,
+  "claim_source_region": null,
+  "claim_observed_at": "2024-01-02",
+  "decision_policy_version": "reinspect-v1"
+}

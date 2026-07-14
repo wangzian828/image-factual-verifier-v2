@@ -53,7 +53,7 @@ if [[ -d "${output_dir}" ]] && find "${output_dir}" -mindepth 1 -print -quit | g
 fi
 
 LOG_DIR="${IFV_DATA_ROOT}/runs/_logs"
-PID_DIR="/tmp/image-factual-verifier-v2"
+PID_DIR="/tmp/image-factual-verifier-v3"
 
 mkdir -p -- "${LOG_DIR}"
 if [[ ! "${IFV_LOG_RETENTION_DAYS}" =~ ^[0-9]+$ ]]; then

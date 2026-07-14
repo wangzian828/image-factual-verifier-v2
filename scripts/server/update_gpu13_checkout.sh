@@ -6,7 +6,7 @@ REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 # shellcheck source=gpu13_env.sh
 source "${SCRIPT_DIR}/gpu13_env.sh"
 
-BRANCH="${1:-codex/gemini-interactions-agent}"
+BRANCH="${1:-codex/image-factual-verifier-v3}"
 
 if [[ "$(hostname)" != "gpu-13" ]]; then
     echo "update_gpu13_checkout.sh must run on gpu-13" >&2

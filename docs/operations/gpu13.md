@@ -187,12 +187,12 @@ scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
   test_native_interactions.py \
   test_gemini_interactions_contract.py \
   test_gemini_vlm_interactions.py \
-  test_full_native_agent_trace.py \
+  test_scripted_agent_trajectory.py \
   test_trace_viewer.py
 ```
 
-For real Gemini and search tests, create an untracked `.env` on gpu-13 using a secure
-interactive method, then run only through the wrapper:
+These are contract and scripted-state checks. For real Gemini transport, create an
+untracked `.env` on gpu-13 using a secure interactive method, then run:
 
 ```bash
 scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
@@ -201,28 +201,9 @@ scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
 
 Keep benchmark datasets and caches under `IFV_DATA_ROOT`, outside the Git checkout.
 
-Acquire the first real-world candidate pool directly from gpu-13:
-
-```bash
-cd /gs/home/wza/projects/image-factual-verifier-v2
-scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
-  python -m scripts.benchmark.acquire_averimatec
-```
-
-The command downloads AVerImaTeC into `datasets/averimatec`, extracts the images into
-a content-addressed directory, and writes an audit manifest under
-`benchmarks/candidates/real_seed_v0/averimatec`. It also writes
-`source_access_policy.json` and an evaluator-private `evaluation.jsonl`, both derived
-from benchmark provenance. `src.eval.run_eval` automatically derives the policy when
-the benchmark-wide sibling policy exists, or accepts that file through
-`--source-access-policy`. It never derives an AVerImaTeC policy from only the selected
-subset because another benchmark case's fact-check page can leak the same answer. It
-refuses AVerImaTeC runs without the full policy. The policy stays outside
-the model-visible case and trace. It does not freeze any core case:
-every item remains pending until a reviewer confirms that the claim is recoverable
-from pixels and has a public evidence path. Person-identity claims are allowed, but
-must be investigated through RIS, source captions, reporting, and event context rather
-than a dedicated biometric model.
+Dataset acquisition, review, and release finalization now belong to the separate
+`image-factual-verifier-data-pipeline` project. Copy or mount only a finalized release
+under `IFV_DATA_ROOT`; do not run construction code from this runtime checkout.
 
 Real evaluation defaults to four verification/replanning iterations, twelve native
 Interactions turns per iteration, and a 30-minute per-image timeout. Use
@@ -237,21 +218,26 @@ hard failures, but the error trace retains all completed native tool calls. Eval
 also rejects any search query that explicitly names a policy-excluded fact-check domain
 before it reaches Serper.
 
-Start a formal evaluation in the background with a unique, explicit, new output directory:
+Run a foreground no-mock canary first. It validates provider configuration, launches
+the real evaluator, requires successful search/visit/visual tool classes, and runs the
+strict trace audit:
 
 ```bash
 cd /gs/home/wza/projects/image-factual-verifier-v2
-run_id="averimatec-real-seed-v0-$(date -u +%Y%m%dT%H%M%SZ)"
-bash scripts/server/start_eval_gpu13.sh \
-  --benchmark "$IFV_DATA_ROOT/benchmarks/candidates/real_seed_v0/averimatec/evaluation.jsonl" \
-  --source-access-policy "$IFV_DATA_ROOT/benchmarks/candidates/real_seed_v0/averimatec/source_access_policy.json" \
+run_id="runtime-canary-$(date -u +%Y%m%dT%H%M%SZ)"
+scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
+  python scripts/run_real_canary.py \
+  --benchmark "$IFV_DATA_ROOT/releases/<release-id>/runtime_input/cases.jsonl" \
   --output-dir "$IFV_DATA_ROOT/runs/eval/$run_id" \
-  --concurrency 1
+  --limit 2
 ```
 
-The launcher prints `pid`, `pid_file`, and `log_file`. Evaluation stdout and stderr
+Only after this command passes should a larger formal evaluation be launched in the
+background with `scripts/server/start_eval_gpu13.sh`.
+
+The background launcher prints `pid`, `pid_file`, and `log_file`. Evaluation stdout and stderr
 always go to the printed path under `IFV_DATA_ROOT/runs/_logs`, never into the named
-run directory. PID files live under `/tmp/image-factual-verifier-v2` and are removed
+run directory. PID files live under `/tmp/image-factual-verifier-v3` and are removed
 automatically when their worker exits. The run directory contains durable evaluation
 artifacts such as `run_manifest.json`, `predictions.jsonl`, `summary.json`, and JSON
 traces. Passing `--output-dir` is mandatory; every other argument is forwarded unchanged

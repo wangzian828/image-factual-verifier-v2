@@ -213,8 +213,8 @@ Expected: PASS.
 ### Task 3: Add native trace regression for two failed observations
 
 **Files:**
-- Modify: `test_full_native_agent_trace.py`
-- Reference: `test_full_native_agent_trace.py:451-533`
+- Modify: `test_scripted_agent_trajectory.py`
+- Reference: `test_scripted_agent_trajectory.py`
 
 - [ ] **Step 1: Add a scripted exhausted-ReInspect fixture**
 
@@ -247,7 +247,7 @@ assert "unreadable_region" in result["state"]["coverage_audits"][-1]["unverifiab
 
 ```bash
 scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
-  python -m pytest -q test_full_native_agent_trace.py
+  python -m pytest -q test_scripted_agent_trajectory.py
 ```
 
 Expected: PASS.
@@ -255,7 +255,7 @@ Expected: PASS.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add test_full_native_agent_trace.py
+git add test_scripted_agent_trajectory.py
 git commit -m "test: cover exhausted visual revisit trace"
 git push origin codex/gemini-interactions-agent
 ```
@@ -268,7 +268,7 @@ Run on gpu-13:
 scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
   python -m pytest -q \
   test_unit.py test_evidence_grounding.py test_failure_contracts.py \
-  test_native_interactions.py test_full_native_agent_trace.py
+  test_native_interactions.py test_scripted_agent_trajectory.py
 ```
 
 Accept only if all pass and the exhausted fixture produces `unverifiable`, never `real` or `fake`.
@@ -441,14 +441,24 @@ scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
   test_unit.py test_evidence_grounding.py test_failure_contracts.py \
   test_provider_failure_propagation.py test_native_interactions.py \
   test_gemini_interactions_contract.py test_gemini_vlm_interactions.py \
-  test_full_native_agent_trace.py test_trace_viewer.py
+  test_scripted_agent_trajectory.py test_trace_viewer.py
 ```
 
-Then run:
+Then run the scripted state-machine trajectory:
 
 ```bash
 scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
-  python test_workflow_smoke.py
+  python -m pytest -q test_scripted_agent_trajectory.py
+```
+
+Finally run a no-mock release canary. Phase 0 is not accepted without it:
+
+```bash
+scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
+  python scripts/run_real_canary.py \
+  --benchmark "$IFV_DATA_ROOT/releases/<release-id>/runtime_input/cases.jsonl" \
+  --output-dir "$IFV_DATA_ROOT/runs/eval/phase0-canary-<timestamp>" \
+  --limit 2
 ```
 
 ---
@@ -657,7 +667,7 @@ In `Orchestrator.run`, after perception and planning succeed, call the adapters.
 
 ```bash
 scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
-  python -m pytest -q test_unit.py test_trace_viewer.py test_full_native_agent_trace.py
+  python -m pytest -q test_unit.py test_trace_viewer.py test_scripted_agent_trajectory.py
 ```
 
 Expected: all legacy assertions remain valid; new keys are additive.
@@ -952,7 +962,7 @@ git push origin codex/gemini-interactions-agent
 - Modify: `src/orchestrator/context.py:183-296`
 - Modify: `src/orchestrator/stages/planning.py:88-107`
 - Modify: `test_unit.py:388-601`
-- Modify: `test_full_native_agent_trace.py`
+- Modify: `test_scripted_agent_trajectory.py`
 
 - [ ] **Step 1: Add dynamic-gap integration test**
 
@@ -980,13 +990,13 @@ Render active ResearchTasks and facts first; include legacy immutable question/c
 ```bash
 scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
   python -m pytest -q test_unit.py test_reflection.py \
-  test_full_native_agent_trace.py
+  test_scripted_agent_trajectory.py
 ```
 
 ```bash
 git add src/orchestrator/pipeline.py src/orchestrator/context.py \
   src/orchestrator/stages/planning.py test_unit.py \
-  test_full_native_agent_trace.py
+  test_scripted_agent_trajectory.py
 git commit -m "feat: drive dynamic investigations from Reflection tasks"
 git push origin codex/gemini-interactions-agent
 ```
@@ -999,7 +1009,7 @@ On gpu-13 run the complete suite, then the real Gemini probe:
 scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
   python -m pytest -q
 scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
-  python test_workflow_smoke.py
+  python -m pytest -q test_scripted_agent_trajectory.py
 scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
   python scripts/probe_gemini_interactions.py --model gemini-3-flash-preview
 ```
@@ -1146,7 +1156,7 @@ git push origin codex/gemini-interactions-agent
 - Modify: `src/orchestrator/context.py:112-181`
 - Modify: `src/orchestrator/pipeline.py:805-1435`
 - Modify: `test_verdict_basis.py`
-- Modify: `test_full_native_agent_trace.py`
+- Modify: `test_scripted_agent_trajectory.py`
 
 - [ ] **Step 1: Add backward-compatible fields**
 
@@ -1192,14 +1202,14 @@ Legacy `reinspect-v1` trace has empty/missing-compatible basis. Dynamic `reinspe
 
 ```bash
 scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
-  python -m pytest -q test_verdict_basis.py test_full_native_agent_trace.py \
+  python -m pytest -q test_verdict_basis.py test_scripted_agent_trajectory.py \
   test_evidence_grounding.py
 ```
 
 ```bash
 git add src/orchestrator/state.py src/orchestrator/stages/judgment.py \
   src/orchestrator/context.py src/orchestrator/pipeline.py \
-  test_verdict_basis.py test_full_native_agent_trace.py
+  test_verdict_basis.py test_scripted_agent_trajectory.py
 git commit -m "feat: validate VisualFact-driven ledger judgments"
 git push origin codex/gemini-interactions-agent
 ```
@@ -1285,7 +1295,7 @@ Replace fixed `Planning → iterative verification → Replanning` as the primar
 scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
   python -m pytest -q
 scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
-  python test_workflow_smoke.py
+  python -m pytest -q test_scripted_agent_trajectory.py
 scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
   python scripts/probe_gemini_interactions.py --model gemini-3-flash-preview
 ```
