@@ -375,11 +375,13 @@ class StageRunner:
             request_previous_interaction_id = previous_interaction_id
             started = time.perf_counter()
             self.llm_api_calls += 1
+            system_instruction = self.system_prompt
+            response_format = self._native_response_format()
             payload = await self.llm.create_interaction(
                 input_payload=next_input,
-                system_instruction=self.system_prompt,
+                system_instruction=system_instruction,
                 previous_interaction_id=request_previous_interaction_id,
-                response_format=self._native_response_format(),
+                response_format=response_format,
                 store=True,
                 max_tokens=self.max_output_tokens,
                 generation_config=self.generation_config,
@@ -410,6 +412,13 @@ class StageRunner:
                     "interaction_id": interaction_id,
                     "interaction_status": status,
                     "llm_duration_ms": round((time.perf_counter() - started) * 1000, 2),
+                    "policy_input": self._policy_input_snapshot(
+                        system_instruction=system_instruction,
+                        input_payload=next_input,
+                        tools=[],
+                        response_format=response_format,
+                    ),
+                    "policy_action": deepcopy(output_json),
                 },
             )
             steps.append(step)
@@ -480,13 +489,17 @@ class StageRunner:
             request_previous_interaction_id = previous_interaction_id
             started = time.perf_counter()
             self.llm_api_calls += 1
+            system_instruction = (
+                self._build_native_system_content() + system_suffix
+            )
+            response_format = self._native_response_format()
             try:
                 payload = await self.llm.create_interaction(
                     input_payload=next_input,
-                    system_instruction=self._build_native_system_content() + system_suffix,
+                    system_instruction=system_instruction,
                     tools=native_tools,
                     previous_interaction_id=request_previous_interaction_id,
-                    response_format=self._native_response_format(),
+                    response_format=response_format,
                     store=True,
                     max_tokens=self.max_output_tokens,
                     generation_config=self.generation_config,
@@ -510,6 +523,12 @@ class StageRunner:
                 "interaction_id": interaction_id,
                 "interaction_status": interaction_status,
                 "llm_duration_ms": duration_ms,
+                "policy_input": self._policy_input_snapshot(
+                    system_instruction=system_instruction,
+                    input_payload=next_input,
+                    tools=native_tools,
+                    response_format=response_format,
+                ),
             }
             thought = self._extract_native_thought(payload)
             function_calls = self._extract_native_function_calls(payload)
@@ -529,6 +548,10 @@ class StageRunner:
                             **common_metadata,
                             "error_class": "protocol_error",
                             "parallel_tool_calls_rejected": len(function_calls),
+                            "policy_action": {
+                                "type": "parallel_tool_calls",
+                                "calls": deepcopy(function_calls),
+                            },
                         },
                     )
                     steps.append(step)
@@ -582,6 +605,11 @@ class StageRunner:
                             "function_call_id": call_id,
                             "function_call_index": call_index,
                             "function_call_count": len(function_calls),
+                            "policy_action": {
+                                "type": "tool_call",
+                                "name": tool_name,
+                                "arguments": deepcopy(tool_args),
+                            },
                         },
                     )
                     if call_index > 0:
@@ -730,6 +758,7 @@ class StageRunner:
             if output_json is not None:
                 step.action_type = "output"
                 step.output = output_json
+                step.metadata["policy_action"] = deepcopy(output_json)
                 steps.append(step)
                 parsed = self._validate_output(output_json)
                 if parsed is not None:
@@ -1095,12 +1124,16 @@ class StageRunner:
         started = time.perf_counter()
         self.llm_api_calls += 1
         try:
+            system_instruction = (
+                self._build_native_system_content() + "\n\n" + directive
+            )
+            response_format = self._native_response_format()
             payload = await self.llm.create_interaction(
                 input_payload=forced_input,
-                system_instruction=self._build_native_system_content() + "\n\n" + directive,
+                system_instruction=system_instruction,
                 tools=[],
                 previous_interaction_id=previous_interaction_id,
-                response_format=self._native_response_format(),
+                response_format=response_format,
                 store=True,
                 max_tokens=self.final_output_max_tokens,
                 generation_config=self.final_output_generation_config,
@@ -1120,10 +1153,23 @@ class StageRunner:
             "llm_duration_ms": round((time.perf_counter() - started) * 1000, 2),
             "max_output_tokens": self.final_output_max_tokens,
             "thinking_level": self.final_output_generation_config.get("thinking_level"),
+            "policy_input": self._policy_input_snapshot(
+                system_instruction=system_instruction,
+                input_payload=forced_input,
+                tools=[],
+                response_format=response_format,
+            ),
         }
         tokens = self._usage_tokens(usage)
         if self._extract_native_function_calls(payload):
+            function_calls = self._extract_native_function_calls(payload)
             metadata["rejection_reason"] = "model requested another function after the tool budget ended"
+            metadata["policy_action"] = {
+                "type": "parallel_tool_calls"
+                if len(function_calls) > 1
+                else "tool_call",
+                "calls": deepcopy(function_calls),
+            }
             steps.append(
                 StageStep(
                     round=len(steps) + 1,
@@ -1137,6 +1183,8 @@ class StageRunner:
 
         content = self._extract_native_text(payload)
         output_json = self._extract_output(content) or self._try_parse_bare_json(content)
+        if output_json is not None:
+            metadata["policy_action"] = deepcopy(output_json)
         parsed = self._validate_output(output_json) if output_json is not None else None
         if parsed is not None:
             accepted, reason = self._accept_output(parsed, steps, final_attempt=True)
@@ -1172,6 +1220,23 @@ class StageRunner:
             "type": "text",
             "mime_type": "application/json",
             "schema": self._normalized_output_schema(),
+        }
+
+    @staticmethod
+    def _policy_input_snapshot(
+        *,
+        system_instruction: str,
+        input_payload: Any,
+        tools: List[Dict[str, Any]],
+        response_format: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """Persist the exact model-visible request without transport-only fields."""
+
+        return {
+            "system_instruction": system_instruction,
+            "input_payload": deepcopy(input_payload),
+            "tools": deepcopy(tools),
+            "response_format": deepcopy(response_format),
         }
 
     def _normalized_output_schema(self) -> Dict[str, Any]:
