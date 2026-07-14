@@ -133,8 +133,25 @@ def test_v03_eval_keeps_gold_post_rollout_and_writes_scorer_predictions(
                 json.dumps(
                     {
                         "image_id": case.case_id,
+                        "input_mode": "image_only",
+                        "decision_policy_version": "reinspect-v2",
                         "verdict": "real",
-                        "state": {"runtime_case": case.model_dump()},
+                        "termination": "success",
+                        "state": {
+                            "image_id": case.case_id,
+                            "input_mode": "image_only",
+                            "decision_policy_version": "reinspect-v2",
+                            "runtime_case": case.model_dump(),
+                            "investigation_state": {
+                                "facts": [],
+                                "tasks": [],
+                                "evidence": [],
+                                "findings": [],
+                                "decisive_fact_ids": [],
+                                "action_count": 0,
+                            },
+                            "all_steps": [],
+                        },
                     }
                 ),
                 encoding="utf-8",
@@ -182,13 +199,20 @@ def test_v03_eval_keeps_gold_post_rollout_and_writes_scorer_predictions(
     )
     assert prediction["case_id"] == "case_0123456789abcdef"
     assert prediction["verdict"] == "real"
-    assert prediction["verdict_basis"] == {"fact_ids": ["vf-1"]}
-    assert prediction["trace_path"] == (
+    assert set(prediction) == {"case_id", "verdict"}
+    run_result = json.loads(
+        (run_dir / "run_results.jsonl").read_text(encoding="utf-8").strip()
+    )
+    assert run_result["verdict_basis"] == {"fact_ids": ["vf-1"]}
+    assert run_result["trace_path"] == (
         "traces/case_0123456789abcdef.json"
     )
-    assert set(prediction).isdisjoint(
+    assert set(run_result).isdisjoint(
         {"ground_truth", "factual_status", "decisive_facts"}
     )
+    assert (run_dir / "process_metrics.jsonl").is_file()
+    assert (run_dir / "trajectory_scores.jsonl").is_file()
+    assert (run_dir / "policy_trajectories.jsonl").is_file()
     manifest = json.loads(
         (run_dir / "run_manifest.json").read_text(encoding="utf-8")
     )
@@ -198,6 +222,8 @@ def test_v03_eval_keeps_gold_post_rollout_and_writes_scorer_predictions(
     assert manifest["benchmark"]["decision_policy_version"] == "reinspect-v2"
     assert manifest["benchmark"]["evaluation_gold"]["sha256"] == _sha256(gold)
     assert manifest["source_access_policy"]["active"] is False
+    assert manifest["artifacts"]["run_results"] == "run_results.jsonl"
+    assert manifest["artifacts"]["process_metrics"] == "process_metrics.jsonl"
 
 
 def test_eval_cli_exits_nonzero_for_engineering_errors(

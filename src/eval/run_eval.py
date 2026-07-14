@@ -22,6 +22,8 @@ from src.eval.release_adapter import (
 from src.orchestrator.ledger import verify_case_image
 from src.orchestrator.source_access import SourceAccessPolicy
 from src.redaction import sanitize_for_persistence
+from src.trajectory.exporter import export_policy_examples
+from src.trajectory.scoring import score_process_trace
 
 
 RUN_SCHEMA_VERSION = "ifv-eval-run-v1"
@@ -201,7 +203,7 @@ def _write_text(path: Path, text: str) -> None:
     pending.replace(path)
 
 
-def _prediction_record(
+def _run_result_record(
     sample: Dict[str, Any],
     result: Dict[str, Any],
 ) -> Dict[str, Any]:
@@ -226,15 +228,34 @@ def _prediction_record(
     }
 
 
-def _compute_summary(predictions: List[Dict[str, Any]]) -> Dict[str, Any]:
-    total = len(predictions)
+def _classification_prediction(
+    sample: Dict[str, Any],
+    result: Dict[str, Any],
+) -> Dict[str, Any] | None:
+    """Return a scorer row only for a completed factual judgment."""
+
+    verdict = str(result.get("verdict") or "").strip()
+    if (
+        verdict not in {"real", "fake", "unverifiable"}
+        or str(result.get("termination") or "") != "success"
+        or bool(str(result.get("error") or "").strip())
+    ):
+        return None
+    return {
+        "case_id": sample.get("case_id"),
+        "verdict": verdict,
+    }
+
+
+def _compute_summary(run_results: List[Dict[str, Any]]) -> Dict[str, Any]:
+    total = len(run_results)
     verdict_counter: Counter[str] = Counter()
     times: List[float] = []
     tool_calls: List[float] = []
     llm_calls: List[float] = []
     errors = 0
 
-    for row in predictions:
+    for row in run_results:
         pred = str(row.get("verdict", ""))
         verdict_counter[pred] += 1
         if (
@@ -415,6 +436,10 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
         },
         "artifacts": {
             "predictions": "predictions.jsonl",
+            "run_results": "run_results.jsonl",
+            "process_metrics": "process_metrics.jsonl",
+            "trajectory_scores": "trajectory_scores.jsonl",
+            "policy_trajectories": "policy_trajectories.jsonl",
             "summary": "summary.json",
             "traces": "traces/",
         },
@@ -468,18 +493,70 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
             release.artifacts.evaluation_gold
         )
 
-        predictions = []
+        predictions: List[Dict[str, Any]] = []
+        run_results: List[Dict[str, Any]] = []
+        process_metrics: List[Dict[str, Any]] = []
+        trajectory_scores: List[Dict[str, Any]] = []
+        policy_trajectories: List[Dict[str, Any]] = []
         for sample, result in zip(samples, results):
             identity = str(sample.get("case_id") or "")
-            record = _prediction_record(sample, result)
+            record = _run_result_record(sample, result)
             trace_path = trace_dir / f"{identity}.json"
             if trace_path.exists():
                 record["trace_path"] = trace_path.relative_to(run_dir).as_posix()
-            predictions.append(record)
+                trace = json.loads(trace_path.read_text(encoding="utf-8"))
+                metrics, teacher_score = score_process_trace(
+                    trace,
+                    evaluation_gold_index[identity],
+                )
+                process_metrics.append(metrics)
+                trajectory_scores.append(teacher_score)
+                policy_trajectories.extend(
+                    item.model_dump(mode="json")
+                    for item in export_policy_examples(trace)
+                )
+            else:
+                process_metrics.append(
+                    {
+                        "schema_version": "ifv-process-metrics-v1",
+                        "case_id": identity,
+                        "engineering_error": True,
+                        "runtime_verdict": result.get("verdict"),
+                        "result_correct": False,
+                        "first_error": {
+                            "error": "canonical trace is missing",
+                        },
+                    }
+                )
+                trajectory_scores.append(
+                    {
+                        "schema_version": "ifv-trajectory-score-v1",
+                        "case_id": identity,
+                        "components": {
+                            "result_reward": 0.0,
+                            "grounded_finding_reward": 0.0,
+                            "gap_coverage_reward": 0.0,
+                            "bridge_reward": 0.0,
+                            "stop_calibration_reward": 0.0,
+                            "duplicate_action_penalty": 0.0,
+                            "invalid_task_penalty": 0.0,
+                            "normalized_cost_penalty": 0.0,
+                        },
+                        "total": 0.0,
+                    }
+                )
+            run_results.append(record)
+            prediction = _classification_prediction(sample, result)
+            if prediction is not None:
+                predictions.append(prediction)
 
-        summary = _compute_summary(predictions)
+        summary = _compute_summary(run_results)
         summary["run_id"] = manifest["run_id"]
         _write_jsonl(run_dir / "predictions.jsonl", predictions)
+        _write_jsonl(run_dir / "run_results.jsonl", run_results)
+        _write_jsonl(run_dir / "process_metrics.jsonl", process_metrics)
+        _write_jsonl(run_dir / "trajectory_scores.jsonl", trajectory_scores)
+        _write_jsonl(run_dir / "policy_trajectories.jsonl", policy_trajectories)
         _write_json(run_dir / "summary.json", summary)
 
         manifest["status"] = (

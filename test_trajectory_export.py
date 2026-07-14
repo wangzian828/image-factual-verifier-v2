@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from src.trajectory.exporter import export_policy_examples
+from src.trajectory.scoring import score_process_trace
 from test_image_only_v2_trajectory import (
     test_scripted_image_only_v2_complete_trajectory,
 )
@@ -80,3 +81,55 @@ def test_exporter_rejects_evaluator_private_leak(tmp_path: Path) -> None:
         assert "evaluation_gold" in str(exc)
     else:
         raise AssertionError("private evaluator data must be rejected")
+
+
+def test_process_scorer_matches_fact_evidence_and_basis(
+    tmp_path: Path,
+) -> None:
+    trace = _trace(tmp_path)
+    investigation = trace["state"]["investigation_state"]
+    runtime_fact = investigation["facts"][0]
+    runtime_evidence = investigation["evidence"][0]
+    gold = {
+        "case_id": trace["image_id"],
+        "factual_status": "supported",
+        "decisive_facts": [
+            {
+                "fact_id": "gold-fact-1",
+                "kind": runtime_fact["kind"],
+                "statement": runtime_fact["statement"],
+                "expected_status": "supported",
+                "visual_anchor": {"type": "scene"},
+                "acceptable_evidence": [
+                    {
+                        "canonical_url": runtime_evidence["source_url"],
+                        "exact_span": runtime_evidence["exact_text"],
+                        "stance": runtime_evidence["stance"],
+                        "source_family": runtime_evidence["source_family"],
+                        "artifact_sha256": (
+                            runtime_evidence["artifact_sha256"]
+                        ),
+                    }
+                ],
+            }
+        ],
+    }
+    trace["verdict_basis"]["fact_ids"] = [runtime_fact["fact_id"]]
+    trace["verdict_basis"]["finding_ids"] = [
+        finding["finding_id"]
+        for finding in investigation["findings"]
+        if runtime_fact["fact_id"] in finding["fact_ids"]
+    ]
+    trace["verdict_basis"]["evidence_ids"] = [
+        runtime_evidence["evidence_id"]
+    ]
+
+    metrics, score = score_process_trace(trace, gold)
+
+    assert metrics["decisive_fact_alignment"] == 1.0
+    assert metrics["acceptable_evidence_hit_rate"] == 1.0
+    assert metrics["citation_precision"] == 1.0
+    assert metrics["evidence_to_vision_bridge_completion"] == 1.0
+    assert metrics["verdict_basis_alignment"] == 1.0
+    assert score["components"]["result_reward"] == 1.0
+    assert score["total"] > 4.0
