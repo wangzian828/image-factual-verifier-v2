@@ -27,6 +27,7 @@ from src.orchestrator.state import (
     PlanRevision,
     PerceptionReport,
     TextRegion,
+    UnverifiableReason,
     VerificationLedgers,
     VerificationPlan,
     VerificationResult,
@@ -464,6 +465,130 @@ def test_tool_error_is_not_supporting_evidence():
     assert not result.evidence
     assert result.authenticity_assessment == "uncertain"
     assert any("excluded from evidence" in finding for finding in result.key_findings)
+
+
+def _saturation_orchestrator() -> Orchestrator:
+    """Bare orchestrator carrying only the coverage-audit tuning knobs.
+
+    We bypass __init__ (which builds LLM/tool clients) because the audit path
+    reads only these three integer bounds plus pure helper methods.
+    """
+    orchestrator = object.__new__(Orchestrator)
+    orchestrator.min_verification_iterations = 2
+    orchestrator.max_verification_iterations = 4
+    orchestrator.low_information_gain_patience = 2
+    return orchestrator
+
+
+def test_discovery_only_windows_saturate_into_unverifiable():
+    # Two consecutive verification windows that surface fresh discovery URLs but
+    # never promote evidence, move a claim status, or reach a new source family.
+    # The deterministic audit must treat both windows as zero-gain, drive
+    # low_information_gain_streak to the patience bound, stop with
+    # information_saturated, and leave the decisive claim on the unverifiable path.
+    orchestrator = _saturation_orchestrator()
+
+    plan = VerificationPlan(
+        questions=[
+            InvestigationQuestion(
+                question_id="q0",
+                question="Did the depicted event occur as claimed?",
+                claim_text="The depicted event occurred as claimed.",
+                priority=1,
+            )
+        ]
+    )
+    result = VerificationResult()  # no evidence items surfaced by either window
+    steps: list = []  # no tool step ever targets q0, so it stays unanswered
+
+    def _discovery(discovery_id: str, url: str) -> DiscoveryRecord:
+        return DiscoveryRecord(
+            discovery_id=discovery_id,
+            claim_id="claim-0",
+            function_call_id=f"fc-{discovery_id}",
+            tool_name="text_search",
+            candidate_url=url,
+            candidate_type="serp",
+        )
+
+    open_claim = ClaimRecord(
+        claim_id="claim-0",
+        text="The depicted event occurred as claimed.",
+        question_id="q0",
+        criticality="decisive",
+        status="open",
+    )
+
+    # Window 1: ledger enters with just the open decisive claim; the only delta
+    # this window is a newly discovered candidate URL.
+    ledgers_before_w1 = VerificationLedgers(claims=[open_claim])
+    progress_before_w1 = Orchestrator._investigation_progress_signature(
+        ledgers_before_w1, None
+    )
+    ledgers_after_w1 = VerificationLedgers(
+        claims=[open_claim],
+        discoveries=[_discovery("d0", "https://example.test/first-candidate")],
+    )
+    audit_w1 = orchestrator._audit_plan_coverage(
+        plan,
+        steps,
+        result,
+        iteration=1,
+        ledgers=ledgers_after_w1,
+        investigation_state=None,
+        progress_before=progress_before_w1,
+        previous_low_information_gain_streak=0,
+    )
+    # Zero substantive gain -> streak advances, but iteration 1 is below the
+    # minimum so the investigation is not yet allowed to stop.
+    assert audit_w1.information_gain is False
+    assert audit_w1.low_information_gain_streak == 1
+    assert audit_w1.stop_reason == "continue"
+    assert audit_w1.investigation_complete is False
+    assert audit_w1.unresolved_priority_questions == ["q0"]
+
+    # Window 2: another distinct discovery URL, still nothing promoted.
+    progress_before_w2 = Orchestrator._investigation_progress_signature(
+        ledgers_after_w1, None
+    )
+    ledgers_after_w2 = VerificationLedgers(
+        claims=[open_claim],
+        discoveries=[
+            _discovery("d0", "https://example.test/first-candidate"),
+            _discovery("d1", "https://example.test/second-candidate"),
+        ],
+    )
+    audit_w2 = orchestrator._audit_plan_coverage(
+        plan,
+        steps,
+        result,
+        iteration=2,
+        ledgers=ledgers_after_w2,
+        investigation_state=None,
+        progress_before=progress_before_w2,
+        previous_low_information_gain_streak=audit_w1.low_information_gain_streak,
+    )
+
+    # Second zero-gain window reaches the patience bound and, now past the
+    # minimum iteration floor, saturates the investigation.
+    assert audit_w2.information_gain is False
+    assert audit_w2.low_information_gain_streak == 2
+    assert audit_w2.stop_reason == "information_saturated"
+    assert audit_w2.investigation_complete is True
+    assert audit_w2.complete is False
+
+    # The unresolved decisive question is retired as exhausted, not resolved.
+    assert audit_w2.exhausted_priority_questions == ["q0"]
+    q0_resolution = next(
+        item for item in audit_w2.question_resolutions if item.question_id == "q0"
+    )
+    assert q0_resolution.status == "exhausted"
+    assert q0_resolution.evidence_count == 0
+
+    # Unverifiable path: decisive claim never decided + saturated search.
+    assert UnverifiableReason.SEARCH_SATURATED in audit_w2.unverifiable_reasons
+    assert UnverifiableReason.DECISIVE_EVIDENCE_ABSENT in audit_w2.unverifiable_reasons
+    assert UnverifiableReason.BUDGET_EXHAUSTED not in audit_w2.unverifiable_reasons
 
 
 class ReplanningOrchestrator(FakeOrchestrator):
