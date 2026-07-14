@@ -19,7 +19,7 @@ from src.eval.release_adapter import (
     load_runtime_release,
     resolve_runtime_image_path,
 )
-from src.orchestrator.ledger import verify_case_image
+from src.orchestrator.runtime_case import verify_case_image
 from src.orchestrator.source_access import SourceAccessPolicy
 from src.redaction import sanitize_for_persistence
 from src.trajectory.exporter import export_policy_examples
@@ -86,18 +86,6 @@ def _parse_args() -> argparse.Namespace:
         type=float,
         default=1800.0,
         help="Per-image timeout budget in seconds.",
-    )
-    parser.add_argument(
-        "--max-verification-iterations",
-        type=int,
-        default=None,
-        help="Optional hard cap for verification/replanning iterations (default: 4).",
-    )
-    parser.add_argument(
-        "--max-rounds-verification",
-        type=int,
-        default=12,
-        help="Gemini Interactions turns available inside each verification iteration.",
     )
     parser.add_argument(
         "--limit",
@@ -333,23 +321,6 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
         raise FileExistsError(
             f"Evaluation output directory must be new or empty: {run_dir}"
         )
-    max_verification_iterations = _positive_int(
-        args.max_verification_iterations
-        if args.max_verification_iterations is not None
-        else os.getenv("MAX_VERIFICATION_ITERATIONS", "4"),
-        name="max verification iterations",
-    )
-    min_verification_iterations = min(
-        max_verification_iterations,
-        _positive_int(
-            os.getenv("MIN_VERIFICATION_ITERATIONS", "2"),
-            name="minimum verification iterations",
-        ),
-    )
-    low_information_gain_patience = _positive_int(
-        os.getenv("LOW_INFORMATION_GAIN_PATIENCE", "2"),
-        name="low information-gain patience",
-    )
     verification_max_output_tokens = _positive_int(
         os.getenv("GEMINI_VERIFICATION_MAX_OUTPUT_TOKENS", "16384"),
         name="verification max output tokens",
@@ -363,7 +334,7 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
             f"GEMINI_{stage}_THINKING_LEVEL",
             os.getenv("GEMINI_AGENT_THINKING_LEVEL", "minimal"),
         ).strip().lower()
-        for stage in ("PLANNING", "VERIFICATION", "REPLANNING", "JUDGMENT")
+        for stage in ("VERIFICATION", "REFLECTION", "JUDGMENT")
     }
     verification_final_thinking_level = os.getenv(
         "GEMINI_VERIFICATION_FINAL_THINKING_LEVEL",
@@ -415,10 +386,9 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
             "llm_wire_api": args.llm_wire_api,
             "vlm_wire_api": args.vlm_wire_api,
             "timeout_seconds": args.timeout,
-            "max_verification_iterations": max_verification_iterations,
-            "min_verification_iterations": min_verification_iterations,
-            "low_information_gain_patience": low_information_gain_patience,
-            "max_rounds_verification": args.max_rounds_verification,
+            "max_tool_actions": 24,
+            "reflection_interval": 4,
+            "max_reflections": 6,
             "verification_max_output_tokens": verification_max_output_tokens,
             "verification_final_max_output_tokens": (
                 verification_final_max_output_tokens
@@ -454,10 +424,6 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
         llm_wire_api=args.llm_wire_api,
         vlm_wire_api=args.vlm_wire_api,
         output_dir=str(trace_dir),
-        max_rounds_verification=max(1, args.max_rounds_verification),
-        max_verification_iterations=max_verification_iterations,
-        min_verification_iterations=min_verification_iterations,
-        low_information_gain_patience=low_information_gain_patience,
         timeout=args.timeout,
         save_traces=True,
         source_access_policy=explicit_policy,

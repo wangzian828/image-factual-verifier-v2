@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from src.orchestrator.bootstrap import build_bootstrap_investigation
-from src.orchestrator.coverage_v2 import (
+from src.orchestrator.coverage import (
     activate_initial_decisive_facts,
     audit_coverage,
     compile_verdict_basis,

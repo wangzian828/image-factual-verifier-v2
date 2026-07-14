@@ -1,17 +1,16 @@
-# -*- coding: utf-8 -*-
-"""Core state models for the image verification pipeline."""
+"""Canonical state models for the v3 image-only runtime."""
+
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
-from datetime import date, datetime, timezone
-from enum import Enum
-from typing import Annotated, Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from src.orchestrator.investigation_models import (
     Finding,
+    ImageOnlyInvestigationState,
+    ImageOnlyJudgment,
     InvestigationBrief,
     ResearchTask,
     RetrievalAnchor,
@@ -25,204 +24,16 @@ class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-ShortListText = Annotated[str, Field(max_length=200)]
-ClaimScope = Literal[
-    "external_fact",
-    "image_authenticity",
-    "image_provenance",
-    "visible_content",
-]
-
-
-class ClaimMode(str, Enum):
-    EXTERNAL = "external_claim"
-    EMBEDDED = "embedded_claim"
-
-
-class UnverifiableReason(str, Enum):
-    DECISIVE_EVIDENCE_ABSENT = "decisive_evidence_absent"
-    SOURCES_CONFLICT = "sources_conflict"
-    SINGLE_SOURCE_FAMILY = "single_source_family_dependency"
-    UNREADABLE_REGION = "unreadable_region"
-    ACCESS_LIMITED = "access_limited"
-    SEARCH_SATURATED = "search_saturated"
-    BUDGET_EXHAUSTED = "budget_exhausted"
-
-
-class VerificationCase(StrictModel):
-    """Versioned runtime input. Hidden benchmark labels never belong here."""
-
-    case_id: str = Field(min_length=1, max_length=200)
-    image_path: str = Field(min_length=1)
-    image_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
-    claim_observed_at: Optional[str] = Field(
-        default=None,
-        description="Public claim/as-of time, distinct from runtime created_at.",
-    )
-    claim_mode: ClaimMode
-    user_claim: Optional[str] = Field(default=None, max_length=2000)
-    claim_surface: Optional[str] = Field(default=None, max_length=4000)
-    claim_source_region: Optional[List[float]] = None
-    decision_policy_version: str = Field(default="reinspect-v1", min_length=1, max_length=100)
-
-    @model_validator(mode="after")
-    def validate_claim_contract(self) -> "VerificationCase":
-        try:
-            datetime.fromisoformat(self.created_at.replace("Z", "+00:00"))
-        except ValueError as exc:
-            raise ValueError("created_at must be ISO-8601") from exc
-        if self.claim_observed_at is not None:
-            value = self.claim_observed_at
-            if value != value.strip() or not value:
-                raise ValueError("claim_observed_at must be an ISO-8601 date or datetime")
-            try:
-                if re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
-                    date.fromisoformat(value)
-                elif re.fullmatch(
-                    r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}"
-                    r"(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})?",
-                    value,
-                ):
-                    datetime.fromisoformat(value.replace("Z", "+00:00"))
-                else:
-                    raise ValueError
-            except ValueError as exc:
-                raise ValueError(
-                    "claim_observed_at must be an ISO-8601 date or datetime"
-                ) from exc
-        if self.claim_mode == ClaimMode.EXTERNAL and not str(self.user_claim or "").strip():
-            raise ValueError("external_claim requires a non-empty user_claim")
-        if self.claim_mode == ClaimMode.EMBEDDED and self.user_claim is not None:
-            raise ValueError("embedded_claim must recover the claim from visible pixels")
-        if self.claim_source_region is not None:
-            region = self.claim_source_region
-            if len(region) != 4 or not all(isinstance(value, (int, float)) for value in region):
-                raise ValueError("claim_source_region must be [x1,y1,x2,y2]")
-            x1, y1, x2, y2 = [float(value) for value in region]
-            if not (0 <= x1 < x2 <= 1 and 0 <= y1 < y2 <= 1):
-                raise ValueError("claim_source_region must be normalized and non-empty")
-        return self
-
-
 class ImageOnlyRuntimeCase(StrictModel):
-    """Public v0.3 image-only input with no claim or evaluator-private state."""
+    """The complete public v0.3 runtime input."""
 
     case_id: str = Field(min_length=1, max_length=200)
     image_path: str = Field(min_length=1)
     image_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-
-
-RuntimeCase = Union[VerificationCase, ImageOnlyRuntimeCase]
-
-
-class ClaimRecord(StrictModel):
-    claim_id: str = Field(min_length=1, max_length=100)
-    text: str = Field(min_length=1, max_length=2000)
-    question_id: str = Field(default="", max_length=64)
-    claim_scope: ClaimScope = "external_fact"
-    criticality: Literal["decisive", "supporting", "contextual"] = "decisive"
-    status: Literal["open", "supported", "refuted", "conflicted", "unverifiable"] = "open"
-    unresolved_distinction: str = Field(default="", max_length=1000)
-
-
-class SourceRecord(StrictModel):
-    source_id: str = Field(min_length=1, max_length=200)
-    canonical_url: str = ""
-    hostname: str = ""
-    registered_domain: str = ""
-    source_family: str = Field(min_length=1, max_length=200)
-    source_class: Literal["official", "news", "ugc", "visual", "runtime", "unknown"] = "unknown"
-    artifact_sha256: str = ""
-    retrieved_at: str = ""
-    dependency_source_ids: List[str] = Field(default_factory=list)
-    risk_flags: List[str] = Field(default_factory=list)
-
-
-class EvidenceRecord(StrictModel):
-    evidence_id: str = Field(min_length=1, max_length=200)
-    claim_id: str = Field(min_length=1, max_length=100)
-    source_id: str = Field(min_length=1, max_length=200)
-    function_call_id: str = Field(min_length=1, max_length=200)
-    tool_name: str = Field(min_length=1, max_length=100)
-    evidence_kind: Literal["web_span", "image_region", "runtime_anchor"]
-    exact_text: str = Field(min_length=1, max_length=8000)
-    span_start: Optional[int] = Field(default=None, ge=0)
-    span_end: Optional[int] = Field(default=None, ge=1)
-    image_region: Optional[List[float]] = None
-    artifact_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    retrieved_at: str = Field(min_length=1)
-    stance: Literal["support", "refute", "neutral"]
-    quality: Literal["strong", "moderate", "weak"]
-    directness: Literal["direct", "indirect"] = "direct"
-
-    @model_validator(mode="after")
-    def validate_locator(self) -> "EvidenceRecord":
-        if self.evidence_kind == "web_span":
-            if self.span_start is None or self.span_end is None:
-                raise ValueError("web_span evidence requires exact offsets")
-            if self.span_end <= self.span_start or self.span_end - self.span_start != len(self.exact_text):
-                raise ValueError("web_span offsets must match exact_text")
-        if self.evidence_kind == "image_region" and not self.image_region:
-            raise ValueError("image_region evidence requires a region")
-        try:
-            datetime.fromisoformat(self.retrieved_at.replace("Z", "+00:00"))
-        except ValueError as exc:
-            raise ValueError("retrieved_at must be ISO-8601") from exc
-        return self
-
-
-class DiscoveryRecord(StrictModel):
-    discovery_id: str = Field(min_length=1, max_length=200)
-    claim_id: str = Field(min_length=1, max_length=100)
-    function_call_id: str = Field(min_length=1, max_length=200)
-    tool_name: str = Field(min_length=1, max_length=100)
-    candidate_url: str = ""
-    reference_image_url: str = ""
-    title: str = ""
-    snippet: str = ""
-    candidate_type: Literal["serp", "reverse_image", "visual_reference"]
-    promoted_evidence_id: Optional[str] = None
-
-
-class FailureRecord(StrictModel):
-    failure_id: str = Field(min_length=1, max_length=200)
-    function_call_id: str = Field(min_length=1, max_length=200)
-    tool_name: str = Field(min_length=1, max_length=100)
-    claim_id: Optional[str] = None
-    code: Literal[
-        "tool_error",
-        "provider_unavailable",
-        "access_limited",
-        "malformed_result",
-        "protocol_error",
-        "timeout",
-        "no_results",
-        "budget_exhausted",
-    ] = "tool_error"
-    severity: Literal["fatal", "partial"] = "partial"
-    recoverable: bool = True
-    message: str = Field(min_length=1, max_length=4000)
-    recovery_call_id: Optional[str] = None
-
-
-class VerificationLedgers(StrictModel):
-    claims: List[ClaimRecord] = Field(default_factory=list)
-    sources: List[SourceRecord] = Field(default_factory=list)
-    evidence: List[EvidenceRecord] = Field(default_factory=list)
-    discoveries: List[DiscoveryRecord] = Field(default_factory=list)
-    failures: List[FailureRecord] = Field(default_factory=list)
-
-
-class ClaimDecision(StrictModel):
-    claim_id: str = Field(min_length=1, max_length=100)
-    decision: Literal["support", "refute", "unresolved"]
-    evidence_ids: List[str] = Field(default_factory=list)
-    reason: Optional[UnverifiableReason] = None
 
 
 class Entity(StrictModel):
-    """A visible entity detected in the image."""
+    """A literal entity reported by image perception."""
 
     name: str = ""
     entity_type: str = ""
@@ -243,7 +54,7 @@ class Entity(StrictModel):
 
 
 class TextRegion(StrictModel):
-    """A visible OCR region."""
+    """A literal OCR observation with normalized pixel geometry."""
 
     text: str = ""
     bbox_quad: List[List[float]] = Field(default_factory=list)
@@ -252,7 +63,7 @@ class TextRegion(StrictModel):
 
 
 class PerceptionReport(StrictModel):
-    """Stage 1 output."""
+    """Merged Gemini perception and deterministic OCR output."""
 
     entities: List[Entity] = Field(default_factory=list)
     text_regions: List[TextRegion] = Field(default_factory=list)
@@ -260,169 +71,16 @@ class PerceptionReport(StrictModel):
     image_type: str = "photo"
 
 
-class InvestigationQuestion(StrictModel):
-    """A question to investigate during verification."""
-
-    question_id: str = Field(default="", max_length=64)
-    question: str = Field(default="", max_length=500)
-    claim_text: str = Field(min_length=1, max_length=1000)
-    claim_scope: ClaimScope = "external_fact"
-    why: str = Field(default="", max_length=500)
-    suggested_tools: List[ShortListText] = Field(default_factory=list, max_length=3)
-    suggested_queries: List[ShortListText] = Field(default_factory=list, max_length=3)
-    related_entities: List[ShortListText] = Field(default_factory=list, max_length=8)
-    priority: int = Field(default=1, ge=1, le=3)
-
-
-class VerificationPlan(StrictModel):
-    """Stage 2 output."""
-
-    questions: List[InvestigationQuestion] = Field(default_factory=list, max_length=4)
-    image_intent: str = Field(default="", max_length=500)
-    is_trying_to_be_real: bool = True
-    risk_assessment: str = Field(default="", max_length=500)
-    revision: int = Field(default=0, ge=0)
-    revision_reason: str = Field(default="", max_length=500)
-
-
-class PlanRevision(StrictModel):
-    """A bounded delta applied to unresolved questions after coverage audit."""
-
-    question_updates: List[InvestigationQuestion] = Field(
-        default_factory=list,
-        min_length=1,
-        max_length=8,
-    )
-    revision_reason: str = Field(default="", max_length=500)
-
-
-class EvidenceItem(StrictModel):
-    """A single evidence item collected during verification."""
-
-    function_call_id: str = Field(default="", max_length=200)
-    source: str = ""
-    summary: str = ""
-    raw_excerpt: str = ""
-    direction: Literal["supports", "refutes", "neutral"] = "neutral"
-    quality: Literal["strong", "moderate", "weak"] = "moderate"
-    tool_used: str = ""
-    related_question: str = ""
-
-
-class VisualAnomaly(StrictModel):
-    """A concrete anomaly copied from one successful visual tool result."""
-
-    function_call_id: str = Field(default="", max_length=200)
-    tool_used: Literal["analyze_visual_anomalies"] = "analyze_visual_anomalies"
-    related_question: str = Field(default="", max_length=64)
-    name: str = Field(default="", max_length=200)
-    region: str = Field(default="", max_length=200)
-    phenomenon: str = Field(default="", max_length=1200)
-    reasoning: str = Field(default="", max_length=1200)
-    severity: int = Field(default=0, ge=0, le=100)
-    type: Literal[
-        "ai_generation",
-        "manipulation",
-        "physical_inconsistency",
-        "logical_inconsistency",
-    ] = "physical_inconsistency"
-    entities_involved: List[str] = Field(default_factory=list, max_length=12)
-
-
-class QuestionResolution(StrictModel):
-    """Coverage state for one investigation question."""
-
-    question_id: str = ""
-    status: Literal["unanswered", "in_progress", "resolved", "exhausted"] = "unanswered"
-    conclusion: str = ""
-    remaining_gap: str = ""
-    tool_attempts: int = Field(default=0, ge=0)
-    evidence_count: int = Field(default=0, ge=0)
-
-
-class CoverageAudit(StrictModel):
-    """Deterministic audit of whether the verification plan is covered."""
-
-    iteration: int = Field(default=0, ge=0)
-    complete: bool = False
-    investigation_complete: bool = False
-    question_resolutions: List[QuestionResolution] = Field(default_factory=list)
-    unresolved_priority_questions: List[str] = Field(default_factory=list)
-    unattempted_supporting_questions: List[str] = Field(default_factory=list)
-    exhausted_priority_questions: List[str] = Field(default_factory=list)
-    pending_visual_questions: List[str] = Field(default_factory=list)
-    successful_tool_calls: int = Field(default=0, ge=0)
-    distinct_tools: List[str] = Field(default_factory=list)
-    evidence_count: int = Field(default=0, ge=0)
-    information_gain: bool = False
-    low_information_gain_streak: int = Field(default=0, ge=0)
-    stop_reason: Literal[
-        "continue",
-        "coverage_complete",
-        "information_saturated",
-        "hard_budget_exhausted",
-    ] = "continue"
-    reason: str = ""
-    claim_statuses: Dict[str, str] = Field(default_factory=dict)
-    unverifiable_reasons: List[UnverifiableReason] = Field(default_factory=list)
-
-
-class VerificationResult(StrictModel):
-    """Stage 3 output."""
-
-    evidence: List[EvidenceItem] = Field(default_factory=list)
-    visual_anomalies: List[VisualAnomaly] = Field(default_factory=list)
-    authenticity_assessment: Literal[
-        "authentic",
-        "likely_ai",
-        "likely_manipulated",
-        "uncertain",
-    ] = "uncertain"
-    key_findings: List[str] = Field(default_factory=list)
-    source_findings: List[Dict[str, Any]] = Field(default_factory=list)
-    visual_evidence: List[Dict[str, Any]] = Field(default_factory=list)
-    world_model: Dict[str, Any] = Field(default_factory=dict)
-    question_resolutions: List[QuestionResolution] = Field(default_factory=list)
-    coverage_complete: bool = False
-    unresolved_priority_questions: List[str] = Field(default_factory=list)
-    exhausted_priority_questions: List[str] = Field(default_factory=list)
-    iteration_count: int = Field(default=0, ge=0)
-
-
-class FinalJudgment(StrictModel):
-    """Stage 4 output."""
-
-    verdict: Literal["real", "fake", "unverifiable"] = "unverifiable"
-    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
-    reasoning_chain: str = ""
-    key_evidence: List[str] = Field(default_factory=list)
-    anomalies: List[str] = Field(default_factory=list)
-    overall_assessment: str = ""
-
-
-class LedgerJudgment(StrictModel):
-    """Compact Gemini decision contract bound to immutable ledger ids."""
-
-    verdict: Literal["real", "fake", "unverifiable"]
-    confidence: float = Field(ge=0.0, le=1.0)
-    claim_decisions: List[ClaimDecision] = Field(default_factory=list)
-    selected_evidence_ids: List[str] = Field(default_factory=list)
-    policy_rule_id: str = Field(default="reinspect-v1", max_length=100)
-    unverifiable_reasons: List[UnverifiableReason] = Field(default_factory=list)
-
-
 @dataclass
 class VerificationState:
-    """Aggregate state across the full run."""
+    """Aggregate state persisted in the canonical v3 trace."""
 
     image_path: str = ""
     image_id: str = ""
-    runtime_case: Optional[RuntimeCase] = None
-    input_mode: str = ""
-    decision_policy_version: str = ""
-    verification_case: Optional[VerificationCase] = None
-    ledgers: VerificationLedgers = field(default_factory=VerificationLedgers)
-    investigation_state: Any = None
+    runtime_case: Optional[ImageOnlyRuntimeCase] = None
+    input_mode: str = "image_only"
+    decision_policy_version: str = "reinspect-v2"
+    investigation_state: Optional[ImageOnlyInvestigationState] = None
     investigation_brief: Optional[InvestigationBrief] = None
     visual_entities: List[VisualEntity] = field(default_factory=list)
     visual_facts: List[VisualFact] = field(default_factory=list)
@@ -430,9 +88,7 @@ class VerificationState:
     findings: List[Finding] = field(default_factory=list)
     retrieval_anchors: List[RetrievalAnchor] = field(default_factory=list)
     perception: Optional[PerceptionReport] = None
-    plan: Optional[VerificationPlan] = None
-    verification: Optional[VerificationResult] = None
-    judgment: Optional[FinalJudgment] = None
+    judgment: Optional[ImageOnlyJudgment] = None
     all_steps: List[Any] = field(default_factory=list)
     stage_timings: Dict[str, float] = field(default_factory=dict)
     total_tool_calls: int = 0
@@ -443,16 +99,16 @@ class VerificationState:
     termination: str = ""
     errors: List[str] = field(default_factory=list)
     tool_health: Dict[str, Dict[str, Any]] = field(default_factory=dict)
-    plan_history: List[VerificationPlan] = field(default_factory=list)
-    coverage_audits: List[CoverageAudit] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
-        """Serialize the full run state."""
         steps_data: List[Dict[str, Any]] = []
         for step in self.all_steps:
             step_dict = {
                 "round": getattr(step, "round", 0),
-                "stage": getattr(step, "stage_name", "") or getattr(step, "metadata", {}).get("stage", ""),
+                "stage": (
+                    getattr(step, "stage_name", "")
+                    or getattr(step, "metadata", {}).get("stage", "")
+                ),
                 "action_type": getattr(step, "action_type", ""),
                 "tool_name": getattr(step, "tool_name", ""),
                 "tool_args": getattr(step, "tool_args", {}),
@@ -470,51 +126,55 @@ class VerificationState:
                 step_dict["metadata"] = metadata
             steps_data.append(step_dict)
 
-        return sanitize_for_persistence({
-            "image_path": self.image_path,
-            "image_id": self.image_id,
-            "runtime_case": self.runtime_case.model_dump() if self.runtime_case else None,
-            "input_mode": self.input_mode,
-            "decision_policy_version": self.decision_policy_version,
-            "verification_case": self.verification_case.model_dump() if self.verification_case else None,
-            "ledgers": self.ledgers.model_dump(),
-            "investigation_state": (
-                self.investigation_state.model_dump(mode="json")
-                if hasattr(self.investigation_state, "model_dump")
-                else self.investigation_state
-            ),
-            "investigation_brief": (
-                self.investigation_brief.model_dump(mode="json")
-                if self.investigation_brief
-                else None
-            ),
-            "visual_entities": [
-                item.model_dump(mode="json") for item in self.visual_entities
-            ],
-            "visual_facts": [
-                item.model_dump(mode="json") for item in self.visual_facts
-            ],
-            "research_tasks": [
-                item.model_dump(mode="json") for item in self.research_tasks
-            ],
-            "findings": [
-                item.model_dump(mode="json") for item in self.findings
-            ],
-            "retrieval_anchors": [
-                item.model_dump(mode="json") for item in self.retrieval_anchors
-            ],
-            "perception": self.perception.model_dump() if self.perception else None,
-            "plan": self.plan.model_dump() if self.plan else None,
-            "plan_history": [item.model_dump() for item in self.plan_history],
-            "verification": self.verification.model_dump() if self.verification else None,
-            "coverage_audits": [item.model_dump() for item in self.coverage_audits],
-            "judgment": self.judgment.model_dump() if self.judgment else None,
-            "all_steps": steps_data,
-            "stage_timings": self.stage_timings,
-            "total_tool_calls": self.total_tool_calls,
-            "llm_api_calls": self.llm_api_calls,
-            "token_usage": self.token_usage,
-            "termination": self.termination,
-            "errors": self.errors,
-            "tool_health": self.tool_health,
-        })
+        return sanitize_for_persistence(
+            {
+                "image_path": self.image_path,
+                "image_id": self.image_id,
+                "runtime_case": (
+                    self.runtime_case.model_dump() if self.runtime_case else None
+                ),
+                "input_mode": self.input_mode,
+                "decision_policy_version": self.decision_policy_version,
+                "investigation_state": (
+                    self.investigation_state.model_dump(mode="json")
+                    if self.investigation_state
+                    else None
+                ),
+                "investigation_brief": (
+                    self.investigation_brief.model_dump(mode="json")
+                    if self.investigation_brief
+                    else None
+                ),
+                "visual_entities": [
+                    item.model_dump(mode="json") for item in self.visual_entities
+                ],
+                "visual_facts": [
+                    item.model_dump(mode="json") for item in self.visual_facts
+                ],
+                "research_tasks": [
+                    item.model_dump(mode="json") for item in self.research_tasks
+                ],
+                "findings": [
+                    item.model_dump(mode="json") for item in self.findings
+                ],
+                "retrieval_anchors": [
+                    item.model_dump(mode="json") for item in self.retrieval_anchors
+                ],
+                "perception": (
+                    self.perception.model_dump() if self.perception else None
+                ),
+                "judgment": (
+                    self.judgment.model_dump(mode="json")
+                    if self.judgment
+                    else None
+                ),
+                "all_steps": steps_data,
+                "stage_timings": self.stage_timings,
+                "total_tool_calls": self.total_tool_calls,
+                "llm_api_calls": self.llm_api_calls,
+                "token_usage": self.token_usage,
+                "termination": self.termination,
+                "errors": self.errors,
+                "tool_health": self.tool_health,
+            }
+        )

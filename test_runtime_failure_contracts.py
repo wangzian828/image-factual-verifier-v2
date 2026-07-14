@@ -1,0 +1,417 @@
+"""Focused engineering-failure contracts for the v3 image-only runtime."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
+from PIL import Image
+
+import src.orchestrator.pipeline as pipeline_module
+from src.integrations.browse.jina_reader import JinaReaderClient
+from src.integrations.llm.openai_compatible import (
+    OpenAICompatibleChatClient,
+    resolve_model_wire_api,
+)
+from src.integrations.search.visual_search import (
+    ImageUploadClient,
+    VisualReverseSearchClient,
+)
+from src.orchestrator.pipeline import Orchestrator
+from src.orchestrator.stage_runner import StageStep
+from src.orchestrator.state import VerificationState
+from src.orchestrator.tool_cache import ToolResultCache
+from src.orchestrator.tool_health import ToolHealth
+from src.orchestrator.tool_registry import REQUIRED_TOOLS
+from src.orchestrator.tool_result import (
+    ToolResultContractError,
+    serialize_tool_result,
+)
+from src.redaction import REDACTED, sanitize_for_persistence
+from src.tools.base import BaseTool
+from src.tools.compare_reference import CompareWithReferenceTool
+
+
+class StaticTool(BaseTool):
+    def __init__(self, name: str, result: dict[str, Any]) -> None:
+        self.name = name
+        self.description = name
+        self.parameters = {
+            "type": "object",
+            "properties": {"image_input": {"type": "string"}},
+            "required": ["image_input"],
+        }
+        self.result = result
+
+    def call(self, _params: dict[str, Any]) -> dict[str, Any]:
+        return dict(self.result)
+
+
+def _bare_perception_orchestrator(
+    tools: dict[str, BaseTool],
+) -> Orchestrator:
+    orchestrator = object.__new__(Orchestrator)
+    orchestrator.provider = "gemini"
+    orchestrator.llm = type("LLM", (), {"wire_api": "interactions"})()
+    orchestrator.all_tools = tools
+    orchestrator.tool_health_summary = {}
+    orchestrator.cacheable_tools = set()
+    orchestrator.tool_cache = ToolResultCache(enabled=False)
+    return orchestrator
+
+
+def test_malformed_tool_result_is_not_success() -> None:
+    with pytest.raises(ToolResultContractError, match="missing a valid status"):
+        serialize_tool_result({"results": []})
+    step = StageStep(
+        action_type="tool_call",
+        tool_name="text_search",
+        tool_result='{"results":[]}',
+    )
+    assert Orchestrator._tool_step_succeeded(step) is False
+
+
+def test_image_only_investigation_requires_a_successful_tool_result() -> None:
+    state = VerificationState(
+        all_steps=[
+            StageStep(
+                stage_name="image_only_investigation",
+                action_type="tool_call",
+                tool_name="reverse_image_search",
+                tool_result='{"status":"error","error":"provider unavailable"}',
+            )
+        ]
+    )
+    with pytest.raises(
+        RuntimeError,
+        match="every attempted image-only investigation tool call failed",
+    ):
+        Orchestrator._require_successful_image_only_investigation(state)
+
+    state.all_steps.append(
+        StageStep(
+            stage_name="image_only_investigation",
+            action_type="tool_call",
+            tool_name="visit",
+            tool_result='{"status":"success","evidence":"qualified result"}',
+        )
+    )
+    Orchestrator._require_successful_image_only_investigation(state)
+
+
+def test_required_tool_failure_aborts_startup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    health = {
+        name: ToolHealth(
+            available=name != "visit",
+            error="dependency missing" if name == "visit" else "",
+        )
+        for name in ("perceive_scene", "text_search", "visit", "reverse_image_search")
+    }
+    monkeypatch.setattr(
+        pipeline_module,
+        "build_all_tools_with_health",
+        lambda **_kwargs: ({}, health),
+    )
+    with pytest.raises(RuntimeError, match="visit: dependency missing"):
+        Orchestrator(
+            provider="lmdeploy",
+            model_name="test-model",
+            validate_startup=True,
+        )
+
+
+def test_positioned_ocr_is_required() -> None:
+    assert "ocr_with_position" in REQUIRED_TOOLS
+
+
+def test_perception_aborts_when_positioned_ocr_fails(tmp_path: Path) -> None:
+    image_path = tmp_path / "image.png"
+    Image.new("RGB", (4, 4), "white").save(image_path)
+    orchestrator = _bare_perception_orchestrator(
+        {
+            "perceive_scene": StaticTool(
+                "perceive_scene",
+                {
+                    "status": "success",
+                    "entities": [],
+                    "scene_description": "A literal scene.",
+                    "image_type": "photo",
+                },
+            ),
+            "ocr_with_position": StaticTool(
+                "ocr_with_position",
+                {"status": "error", "error": "OCR model unavailable"},
+            ),
+        }
+    )
+    state = VerificationState(image_path=str(image_path))
+    with pytest.raises(RuntimeError, match="ocr_with_position failed"):
+        asyncio.run(orchestrator._run_perception(state, str(image_path)))
+    assert [step.tool_name for step in state.all_steps] == [
+        "perceive_scene",
+        "ocr_with_position",
+    ]
+
+
+def test_perception_exception_is_persisted_as_failed_step(
+    tmp_path: Path,
+) -> None:
+    class RaisingTool(StaticTool):
+        def call(self, _params: dict[str, Any]) -> dict[str, Any]:
+            raise RuntimeError("vision endpoint failed")
+
+    image_path = tmp_path / "image.png"
+    Image.new("RGB", (4, 4), "white").save(image_path)
+    orchestrator = _bare_perception_orchestrator(
+        {"perceive_scene": RaisingTool("perceive_scene", {})}
+    )
+    state = VerificationState(image_path=str(image_path))
+    with pytest.raises(RuntimeError, match="perceive_scene failed"):
+        asyncio.run(orchestrator._run_perception(state, str(image_path)))
+    assert json.loads(state.all_steps[0].tool_result) == {
+        "status": "error",
+        "error": "RuntimeError: vision endpoint failed",
+    }
+    assert state.all_steps[0].metadata["tool_exception"] == "RuntimeError"
+
+
+def test_tool_internal_usage_is_counted_and_hidden(tmp_path: Path) -> None:
+    class PerceptionTool(StaticTool):
+        def call(self, _params: dict[str, Any]) -> dict[str, Any]:
+            return {
+                "status": "success",
+                "scene_description": "A literal scene.",
+                "image_type": "photo",
+                "entities": [],
+                "__runtime_metrics__": {
+                    "llm_api_calls": 1,
+                    "tokens": {"prompt": 45, "completion": 12, "thought": 0},
+                },
+            }
+
+    image_path = tmp_path / "image.png"
+    Image.new("RGB", (4, 4), "white").save(image_path)
+    orchestrator = _bare_perception_orchestrator(
+        {
+            "perceive_scene": PerceptionTool("perceive_scene", {}),
+            "ocr_with_position": StaticTool(
+                "ocr_with_position",
+                {"status": "success", "text_regions": []},
+            ),
+        }
+    )
+    state = VerificationState(image_path=str(image_path))
+    report = asyncio.run(orchestrator._run_perception(state, str(image_path)))
+    assert report.scene_description == "A literal scene."
+    assert state.llm_api_calls == 1
+    assert state.token_usage == {"prompt": 45, "completion": 12, "thought": 0}
+    assert "__runtime_metrics__" not in state.all_steps[0].tool_result
+
+
+def test_nonzero_thought_tokens_are_hard_failure() -> None:
+    orchestrator = object.__new__(Orchestrator)
+    orchestrator.provider = "gemini"
+    orchestrator.llm = type("LLM", (), {"wire_api": "interactions"})()
+    state = VerificationState()
+    step = StageStep(
+        stage_name="image_only_investigation",
+        action_type="tool_call",
+        tool_name="visit",
+        metadata={
+            "tool_llm_api_calls": 1,
+            "tool_tokens": {"prompt": 20, "completion": 4, "thought": 2},
+        },
+    )
+    with pytest.raises(RuntimeError, match="non-zero thought tokens"):
+        orchestrator._record_stage_steps(state, [step])
+
+
+@pytest.mark.parametrize("wire_api", ["chat_completions", "responses", "openai_compat"])
+def test_gemini_rejects_non_interactions_protocol(wire_api: str) -> None:
+    with pytest.raises(ValueError, match="requires wire_api='interactions'"):
+        resolve_model_wire_api("gemini", wire_api)
+
+
+def test_compatible_client_rejects_interactions_protocol() -> None:
+    with pytest.raises(ValueError, match="use GeminiInteractionsClient"):
+        OpenAICompatibleChatClient(
+            api_key="not-used",
+            base_url="https://example.test",
+            wire_api="interactions",
+        )
+
+
+def test_upload_provider_does_not_fall_through(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "image.png"
+    Image.new("RGB", (4, 4), "white").save(image_path)
+    client = ImageUploadClient(
+        provider="custom",
+        upload_api_url="https://upload.test",
+    )
+    called = {"oss": False}
+
+    monkeypatch.setattr(
+        client,
+        "_upload_via_http",
+        lambda _path, _url: (_ for _ in ()).throw(
+            RuntimeError("custom upload failed")
+        ),
+    )
+
+    def unexpected_oss(_path: Path) -> str:
+        called["oss"] = True
+        return "https://unexpected.test/image.png"
+
+    monkeypatch.setattr(client, "_upload_to_oss", unexpected_oss)
+    with pytest.raises(RuntimeError, match="custom upload failed"):
+        client.upload(str(image_path))
+    assert called["oss"] is False
+
+
+def test_visual_search_provider_does_not_fall_through() -> None:
+    class Upload:
+        last_upload_meta: dict[str, Any] = {}
+
+        @staticmethod
+        def upload(_path: str) -> str:
+            return "https://images.test/input.png"
+
+    class Zhipu:
+        api_key = "test-key"
+
+        @staticmethod
+        def search(_url: str, *, top_k: int) -> Any:
+            raise RuntimeError(f"zhipu failed at {top_k}")
+
+    class Serper:
+        called = False
+
+        def search(self, **_kwargs: Any) -> list[Any]:
+            self.called = True
+            return []
+
+    serper = Serper()
+    client = VisualReverseSearchClient(
+        upload_client=Upload(),
+        zhipu_client=Zhipu(),
+        serper_lens_client=serper,
+        provider="zhipu_image_search",
+    )
+    with pytest.raises(RuntimeError, match="zhipu failed"):
+        client.search("local.png")
+    assert serper.called is False
+
+
+def test_browse_provider_does_not_fall_through(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BROWSE_FETCH_PROVIDER", "jina")
+    client = JinaReaderClient()
+    called = {"direct": False}
+    monkeypatch.setattr(
+        client,
+        "_fetch_with_jina",
+        lambda _url: (_ for _ in ()).throw(RuntimeError("jina failed")),
+    )
+
+    def unexpected_direct(_url: str) -> str:
+        called["direct"] = True
+        return "unexpected"
+
+    monkeypatch.setattr(client, "_fetch_direct", unexpected_direct)
+    with pytest.raises(RuntimeError, match="jina failed"):
+        client.fetch_page_content("https://example.test")
+    assert called["direct"] is False
+
+
+def test_cache_ttl_and_namespace(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    timestamps = iter([1000.0, 1001.0, 2000.0])
+    monkeypatch.setattr(
+        "src.orchestrator.tool_cache.time.time",
+        lambda: next(timestamps),
+    )
+    cache = ToolResultCache(
+        cache_dir=str(tmp_path),
+        enabled=True,
+        ttl_seconds=60.0,
+        namespace="provider-a",
+    )
+    result = '{"status":"success","value":1}'
+    cache.put("tool", {"query": "x"}, result)
+    assert json.loads(cache.get("tool", {"query": "x"}) or "{}") == json.loads(
+        result
+    )
+    assert cache.get("tool", {"query": "x"}) is None
+    other = ToolResultCache(
+        cache_dir=str(tmp_path),
+        enabled=True,
+        ttl_seconds=60.0,
+        namespace="provider-b",
+    )
+    assert other.get("tool", {"query": "x"}) is None
+
+
+def test_compare_reference_rejects_legacy_backend(tmp_path: Path) -> None:
+    class Backend:
+        called = False
+
+        async def get_response(self, _messages: Any, **_kwargs: Any) -> Any:
+            self.called = True
+            raise AssertionError("legacy backend must not be called")
+
+    image_path = tmp_path / "image.png"
+    Image.new("RGB", (4, 4), "white").save(image_path)
+    tool = CompareWithReferenceTool(
+        vlm_backend=Backend(),
+        image_path=str(image_path),
+    )
+    result = asyncio.run(
+        tool.call_async({"reference_url": "https://example.test/ref.png"})
+    )
+    assert result["status"] == "error"
+    assert "Interactions backend not configured" in result["error"]
+    assert tool.vlm_backend.called is False
+
+
+def test_persistence_redacts_credentials_and_signed_urls() -> None:
+    signed_url = (
+        "https://bucket.example/image.jpg?OSSAccessKeyId=key-id&Expires=123"
+        "&Signature=secret-signature&keep=value"
+    )
+    sanitized = sanitize_for_persistence(
+        {
+            "api_key": "top-secret",
+            "url": signed_url,
+            "tool_result": json.dumps(
+                {"status": "success", "image_url": signed_url}
+            ),
+        }
+    )
+    assert sanitized["api_key"] == REDACTED
+    assert "key-id" not in sanitized["url"]
+    assert "secret-signature" not in sanitized["tool_result"]
+    assert "keep=value" in sanitized["url"]
+
+
+def test_face_recognition_modules_are_absent() -> None:
+    source_root = Path(__file__).parent / "src"
+    forbidden_files = {"face_detect.py", "verify_face_identity.py"}
+    assert not any(path.name in forbidden_files for path in source_root.rglob("*.py"))
+    source_text = "\n".join(
+        path.read_text(encoding="utf-8", errors="ignore")
+        for path in source_root.rglob("*.py")
+    )
+    assert "FaceDetection" not in source_text
+    assert "verify_face_identity" not in source_text

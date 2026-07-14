@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Verification workflow: the single entry point for running image verification.
+"""Image-only v3 workflow: the single entry point for factual investigation.
 
 Usage:
     from src.workflow import VerificationWorkflow, WorkflowConfig
@@ -20,13 +20,9 @@ os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("MKL_NUM_THREADS", "1")
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 
-from src.orchestrator.ledger import image_sha256, verify_case_image
+from src.orchestrator.runtime_case import image_sha256, verify_case_image
 from src.orchestrator.pipeline import Orchestrator
-from src.orchestrator.state import (
-    ImageOnlyRuntimeCase,
-    RuntimeCase,
-    VerificationCase,
-)
+from src.orchestrator.state import ImageOnlyRuntimeCase
 from src.orchestrator.source_access import SourceAccessPolicy
 from src.redaction import sanitize_for_persistence
 from src.storage import default_trace_dir
@@ -46,11 +42,7 @@ class WorkflowConfig:
     temperature: float = 0.0
     max_tokens: int = 8192
 
-    # Stage settings
-    max_rounds_verification: int = 12
-    max_verification_iterations: Optional[int] = None
-    min_verification_iterations: Optional[int] = None
-    low_information_gain_patience: Optional[int] = None
+    # Runtime settings
     timeout: float = 1800.0
 
     # Output
@@ -77,10 +69,6 @@ class VerificationWorkflow:
                 vlm_model=self.config.vlm_model,
                 llm_wire_api=self.config.llm_wire_api,
                 vlm_wire_api=self.config.vlm_wire_api,
-                max_rounds_verification=self.config.max_rounds_verification,
-                max_verification_iterations=self.config.max_verification_iterations,
-                min_verification_iterations=self.config.min_verification_iterations,
-                low_information_gain_patience=self.config.low_information_gain_patience,
                 timeout=self.config.timeout,
                 temperature=self.config.temperature,
                 max_tokens=self.config.max_tokens,
@@ -94,16 +82,12 @@ class VerificationWorkflow:
         image_path: str,
         image_id: str = "",
         *,
-        runtime_case: Optional[RuntimeCase] = None,
+        runtime_case: Optional[ImageOnlyRuntimeCase] = None,
     ) -> Dict[str, Any]:
-        """Run verification on a single image.
+        """Run one v3 image-only investigation.
 
-        Args:
-            image_path: Path to the image file.
-            image_id: Optional identifier.
-
-        Returns:
-            Dict with verdict, confidence, assessment, and full state.
+        Non-image-only runtime inputs are intentionally unsupported. When no case is
+        supplied, the workflow constructs the three-field public case locally.
         """
         if runtime_case is None:
             resolved_image_path = os.path.abspath(image_path)
@@ -113,26 +97,19 @@ class VerificationWorkflow:
                 image_sha256=image_sha256(resolved_image_path),
             )
             image_path = resolved_image_path
+        elif not isinstance(runtime_case, ImageOnlyRuntimeCase):
+            raise TypeError(
+                "v3 accepts ImageOnlyRuntimeCase only"
+            )
 
-        is_image_only = isinstance(runtime_case, ImageOnlyRuntimeCase)
-        orchestrator = self._get_orchestrator(validate_startup=not is_image_only)
+        orchestrator = self._get_orchestrator(validate_startup=False)
         try:
-            if is_image_only:
-                verify_case_image(runtime_case, image_path)
-                result = await orchestrator.run_image_only(
-                    image_path,
-                    runtime_case,
-                    decision_policy_version=self.config.decision_policy_version,
-                )
-            else:
-                verification_case: VerificationCase | None = (
-                    runtime_case if isinstance(runtime_case, VerificationCase) else None
-                )
-                result = await orchestrator.run(
-                    image_path,
-                    image_id,
-                    verification_case=verification_case,
-                )
+            verify_case_image(runtime_case, image_path)
+            result = await orchestrator.run(
+                image_path,
+                runtime_case,
+                decision_policy_version=self.config.decision_policy_version,
+            )
         except Exception as exc:
             state = getattr(orchestrator, "last_state", None)
             error_result: Optional[Dict[str, Any]] = None
@@ -183,7 +160,7 @@ class VerificationWorkflow:
         self,
         image_paths: List[str],
         image_ids: Optional[List[str]] = None,
-        runtime_cases: Optional[List[Optional[RuntimeCase]]] = None,
+        runtime_cases: Optional[List[Optional[ImageOnlyRuntimeCase]]] = None,
         concurrency: int = 1,
     ) -> List[Dict[str, Any]]:
         """Run verification on multiple images.
@@ -209,7 +186,7 @@ class VerificationWorkflow:
         async def _verify(
             path: str,
             img_id: str,
-            runtime_case: Optional[RuntimeCase],
+            runtime_case: Optional[ImageOnlyRuntimeCase],
         ) -> Dict[str, Any]:
             async with semaphore:
                 try:

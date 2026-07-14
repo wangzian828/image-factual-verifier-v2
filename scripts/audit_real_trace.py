@@ -1,4 +1,4 @@
-"""Audit canonical traces from a small set of real verification runs."""
+"""Strictly audit canonical v3 image-only traces."""
 from __future__ import annotations
 
 import argparse
@@ -16,20 +16,15 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from src.orchestrator.evidence_policy import (  # noqa: E402
-    VISUAL_OBSERVATION_TOOLS,
-    query_targets_fact_check_answer,
-    tool_can_decide_claim,
-    web_record_is_temporally_eligible,
-)
-from src.orchestrator.ledger import evidence_goal_for_case  # noqa: E402
 from src.orchestrator.source_access import (  # noqa: E402
     FACT_CHECK_DOMAIN_MARKERS,
     SourceAccessPolicy,
     benchmark_source_access_policy,
     url_variants,
 )
-from src.orchestrator.state import EvidenceRecord, VerificationCase  # noqa: E402
+from src.orchestrator.evidence_policy import (  # noqa: E402
+    query_targets_fact_check_answer,
+)
 from src.orchestrator.tool_result import parse_tool_result  # noqa: E402
 
 
@@ -298,162 +293,10 @@ def _audit_evidence_calls(
     report.stats[stat_key] = successful
 
 
-def _audit_external_claims(
-    claims: Sequence[Mapping[str, Any]],
-    sources: Sequence[Mapping[str, Any]],
-    evidence: Sequence[Mapping[str, Any]],
-    steps: Sequence[Mapping[str, Any]],
-    report: TraceReport,
-    verification_case: VerificationCase | None = None,
-) -> None:
-    by_claim: dict[str, list[Mapping[str, Any]]] = {}
-    for item in evidence:
-        by_claim.setdefault(str(item.get("claim_id", "")).strip(), []).append(item)
-    source_records = {
-        str(source.get("source_id", "")).strip(): source
-        for source in sources
-        if str(source.get("source_id", "")).strip()
-    }
-    successful_steps: dict[str, Mapping[str, Any]] = {}
-    duplicate_calls: set[str] = set()
-    for step in steps:
-        call_id = str(_mapping(step.get("metadata")).get("function_call_id", "")).strip()
-        if not call_id or not _parse_successful_tool_step(step):
-            continue
-        if call_id in successful_steps:
-            duplicate_calls.add(call_id)
-        successful_steps[call_id] = step
-
-    decided = 0
-    for claim_index, claim in enumerate(claims):
-        if str(claim.get("claim_scope", "external_fact")) != "external_fact":
-            continue
-        status = str(claim.get("status", "")).strip()
-        if status not in {"supported", "refuted"}:
-            continue
-        decided += 1
-        claim_id = str(claim.get("claim_id", claim_index)).strip()
-        expected_stance = "support" if status == "supported" else "refute"
-        expected_goal = (
-            evidence_goal_for_case(
-                str(claim.get("text", "")).strip(),
-                verification_case,
-            )
-            if verification_case is not None
-            else str(claim.get("text", "")).strip()
-        )
-        eligible: list[Mapping[str, Any]] = []
-        for item in by_claim.get(claim_id, []):
-            try:
-                validated = EvidenceRecord.model_validate(dict(item))
-            except Exception:
-                continue
-            step = successful_steps.get(validated.function_call_id)
-            source = source_records.get(validated.source_id, {})
-            source_url = str(source.get("canonical_url", "")).strip()
-            if (
-                validated.evidence_kind == "web_span"
-                and validated.directness == "direct"
-                and validated.stance == expected_stance
-                and validated.tool_name in WEB_EVIDENCE_TOOLS
-                and validated.function_call_id not in duplicate_calls
-                and step is not None
-                and str(step.get("tool_name", "")).strip() == validated.tool_name
-                and url_variants(source_url)
-                and str(source.get("artifact_sha256", "")).strip().casefold()
-                == validated.artifact_sha256
-                and tool_can_decide_claim(validated.tool_name, "external_fact")
-                and _tool_result_has_eligible_web_record(
-                    step,
-                    evidence=validated,
-                    source_url=source_url,
-                    claim_text=expected_goal,
-                )
-            ):
-                eligible.append(item)
-        if not eligible:
-            _issue(
-                report,
-                "EXTERNAL_FACT_MISSING_DIRECT_WEB_EVIDENCE",
-                f"{status} external_fact requires matching-stance direct eligible Web evidence",
-                location=_location("state.ledgers.claims", claim_id),
-            )
-    report.stats["decided_external_fact_claims"] = decided
 
 
-def _tool_result_has_eligible_web_record(
-    step: Mapping[str, Any],
-    *,
-    evidence: EvidenceRecord,
-    source_url: str,
-    claim_text: str,
-) -> bool:
-    try:
-        payload, succeeded = parse_tool_result(str(step.get("tool_result", "")))
-    except Exception:
-        return False
-    if not succeeded:
-        return False
-
-    def walk(value: Any) -> bool:
-        if isinstance(value, Mapping):
-            span = _mapping(value.get("evidence_span"))
-            record_url = str(
-                value.get("selected_url", "") or value.get("url", "")
-            ).strip()
-            record_stance = str(value.get("stance", "")).strip().casefold()
-            matches = (
-                str(value.get("evidence", "")) == evidence.exact_text
-                and bool(value.get("evidence_eligible"))
-                and not value.get("injection_flags")
-                and str(value.get("directness", "")).strip().casefold() == "direct"
-                and record_stance == evidence.stance
-                and str(value.get("relevance", "")).strip().casefold()
-                in {"high", "medium", "low"}
-                and str(value.get("goal", "")).strip() == claim_text
-                and web_record_is_temporally_eligible(value, claim_text)
-                and str(value.get("artifact_sha256", "")).strip().casefold()
-                == evidence.artifact_sha256
-                and str(value.get("retrieved_at", "")).strip() == evidence.retrieved_at
-                and span.get("start") == evidence.span_start
-                and span.get("end") == evidence.span_end
-                and bool(set(url_variants(record_url)) & set(url_variants(source_url)))
-            )
-            if matches:
-                return True
-            return any(walk(child) for child in value.values())
-        if isinstance(value, list):
-            return any(walk(child) for child in value)
-        return False
-
-    return walk(payload)
 
 
-def _audit_visual_external_evidence(
-    claims: Sequence[Mapping[str, Any]], evidence: Sequence[Mapping[str, Any]], report: TraceReport
-) -> None:
-    scopes = {
-        str(claim.get("claim_id", "")).strip(): str(
-            claim.get("claim_scope", "external_fact")
-        ).strip()
-        for claim in claims
-    }
-    for evidence_index, item in enumerate(evidence):
-        claim_id = str(item.get("claim_id", "")).strip()
-        tool_name = str(item.get("tool_name", "")).strip()
-        if scopes.get(claim_id) != "external_fact":
-            continue
-        if tool_name not in VISUAL_OBSERVATION_TOOLS and item.get("evidence_kind") != "image_region":
-            continue
-        if item.get("stance") != "neutral":
-            _issue(
-                report,
-                "VISUAL_EXTERNAL_FACT_NOT_NEUTRAL",
-                f"visual tool {tool_name!r} must record neutral ledger evidence for external_fact",
-                location=_location(
-                    "state.ledgers.evidence", item.get("evidence_id", evidence_index)
-                ),
-            )
 
 
 def _fact_check_domain(value: str) -> str:
@@ -621,148 +464,6 @@ def _audit_leaks(trace: Mapping[str, Any], report: TraceReport) -> None:
     report.stats["fact_check_query_leaks"] = query_count
 
 
-def _audit_interaction_chains(
-    steps: Sequence[Mapping[str, Any]], report: TraceReport
-) -> None:
-    groups: dict[tuple[str, int], list[tuple[int, Mapping[str, Any]]]] = {}
-    verification_steps = 0
-    native_verification_steps = 0
-    iteration_order: list[int] = []
-    for index, step in enumerate(steps):
-        metadata = _mapping(step.get("metadata"))
-        if str(step.get("stage", "")) != "verification":
-            continue
-        verification_steps += 1
-        if not metadata.get("native_interactions"):
-            _issue(
-                report,
-                "INTERACTION_METADATA_MISSING",
-                "verification step is not recorded as Gemini Interactions",
-                location=_step_label(index, step),
-            )
-            continue
-        native_verification_steps += 1
-        raw_iteration = metadata.get("verification_iteration")
-        try:
-            if isinstance(raw_iteration, bool):
-                raise ValueError
-            iteration = int(raw_iteration)
-        except (TypeError, ValueError):
-            _issue(
-                report,
-                "INTERACTION_ITERATION_MISSING",
-                "verification Interactions step needs an integer verification_iteration",
-                location=_step_label(index, step),
-            )
-            continue
-        if iteration < 1:
-            _issue(
-                report,
-                "INTERACTION_ITERATION_INVALID",
-                "verification_iteration must be a positive integer",
-                location=_step_label(index, step),
-            )
-            continue
-        groups.setdefault(("verification", iteration), []).append((index, step))
-        if not iteration_order or iteration_order[-1] != iteration:
-            iteration_order.append(iteration)
-
-    if not verification_steps:
-        _issue(
-            report,
-            "VERIFICATION_STEPS_MISSING",
-            "canonical trace contains no verification steps",
-            location="state.all_steps",
-        )
-    elif not native_verification_steps:
-        _issue(
-            report,
-            "INTERACTION_STEPS_MISSING",
-            "canonical trace contains no auditable verification Interactions steps",
-            location="state.all_steps",
-        )
-
-    iterations = sorted(iteration for _, iteration in groups)
-    expected_iterations = list(range(1, max(iterations, default=0) + 1))
-    if iterations != expected_iterations:
-        _issue(
-            report,
-            "INTERACTION_ITERATION_GAP",
-            f"verification interaction iterations must be contiguous from 1; found {iterations}",
-            location="state.all_steps",
-        )
-    if iteration_order != iterations:
-        _issue(
-            report,
-            "INTERACTION_ITERATION_INTERLEAVED",
-            f"verification interaction iterations must not interleave; observed {iteration_order}",
-            location="state.all_steps",
-        )
-
-    for (_, iteration), members in sorted(groups.items()):
-        previous_interaction: str | None = None
-        seen_interactions: dict[str, str] = {}
-        for index, step in members:
-            metadata = _mapping(step.get("metadata"))
-            interaction_id = str(metadata.get("interaction_id", "")).strip()
-            parent_recorded = "previous_interaction_id" in metadata
-            raw_parent = metadata.get("previous_interaction_id")
-            parent = "" if raw_parent is None else str(raw_parent).strip()
-            location = _step_label(index, step)
-            if not interaction_id:
-                _issue(
-                    report,
-                    "INTERACTION_ID_MISSING",
-                    f"verification iteration {iteration} has no interaction_id",
-                    location=location,
-                )
-                continue
-            if not parent_recorded:
-                _issue(
-                    report,
-                    "INTERACTION_PARENT_UNRECORDED",
-                    "previous_interaction_id is not recorded",
-                    location=location,
-                )
-
-            if interaction_id in seen_interactions:
-                if parent != seen_interactions[interaction_id]:
-                    _issue(
-                        report,
-                        "INTERACTION_CHAIN_BROKEN",
-                        f"interaction_id {interaction_id!r} was recorded with inconsistent parents",
-                        location=location,
-                    )
-                if previous_interaction != interaction_id:
-                    _issue(
-                        report,
-                        "INTERACTION_ID_REUSED",
-                        f"interaction_id {interaction_id!r} is reused non-contiguously",
-                        location=location,
-                    )
-                continue
-
-            expected = previous_interaction
-            if expected is None:
-                if parent:
-                    _issue(
-                        report,
-                        "INTERACTION_CHAIN_ROOT_INVALID",
-                        f"iteration {iteration} root must have null previous_interaction_id, got {parent!r}",
-                        location=location,
-                    )
-            elif parent != expected:
-                _issue(
-                    report,
-                    "INTERACTION_CHAIN_BROKEN",
-                    f"expected previous_interaction_id {expected!r}, got {parent!r}",
-                    location=location,
-                )
-            seen_interactions[interaction_id] = parent
-            previous_interaction = interaction_id
-
-    report.stats["verification_interaction_iterations"] = len(groups)
-    report.stats["verification_interaction_steps"] = native_verification_steps
 
 
 def _rejection_category(step: Mapping[str, Any]) -> str:
@@ -828,94 +529,6 @@ def _audit_rejections(
     report.stats["protocol_rejections"] = protocol_count
 
 
-def _audit_initial_required_question_service(
-    state: Mapping[str, Any],
-    steps: Sequence[Mapping[str, Any]],
-    report: TraceReport,
-) -> None:
-    """Mirror the first-output P1/P2 attempt gate enforced by StageRunner."""
-
-    plan_history = _rows(state.get("plan_history"))
-    if not plan_history:
-        _issue(
-            report,
-            "INITIAL_PLAN_MISSING",
-            "canonical trace must retain the initial verification plan",
-            location="state.plan_history",
-        )
-        return
-    initial_questions = _rows(plan_history[0].get("questions"))
-    required_ids = [
-        str(question.get("question_id", "")).strip()
-        for question in initial_questions
-        if str(question.get("question_id", "")).strip()
-        and int(question.get("priority", 1) or 1) <= 2
-    ]
-    if not required_ids:
-        _issue(
-            report,
-            "INITIAL_REQUIRED_QUESTIONS_MISSING",
-            "initial verification plan must contain at least one priority-1/2 question",
-            location="state.plan_history[0].questions",
-        )
-        return
-
-    first_output_index = next(
-        (
-            index
-            for index, step in enumerate(steps)
-            if str(step.get("stage", "")) == "verification"
-            and str(step.get("action_type", "")) == "output"
-        ),
-        None,
-    )
-    if first_output_index is None:
-        _issue(
-            report,
-            "VERIFICATION_ACCEPTED_OUTPUT_MISSING",
-            "successful trace must contain an accepted verification output",
-            location="state.all_steps",
-        )
-        return
-
-    attempted: set[str] = set()
-    resolved: set[str] = set()
-    for step in steps[:first_output_index]:
-        if (
-            str(step.get("stage", "")) == "verification"
-            and str(step.get("action_type", "")) == "tool_call"
-        ):
-            question_id = str(
-                _mapping(step.get("tool_args")).get("__question_id", "")
-            ).strip()
-            if question_id:
-                attempted.add(question_id)
-        update = _mapping(_mapping(step.get("metadata")).get("investigation_state_update"))
-        belief_delta = _mapping(update.get("belief_delta"))
-        claim_id = str(belief_delta.get("claim_id", "")).strip()
-        if (
-            claim_id.startswith("claim-")
-            and str(belief_delta.get("new_status", "")) in {"supported", "refuted"}
-        ):
-            resolved.add(claim_id.removeprefix("claim-"))
-
-    missing = [
-        question_id
-        for question_id in required_ids
-        if question_id not in attempted and question_id not in resolved
-    ]
-    report.stats["initial_required_questions"] = len(required_ids)
-    report.stats["initial_required_questions_attempted"] = len(
-        set(required_ids) & attempted
-    )
-    if missing:
-        _issue(
-            report,
-            "INITIAL_REQUIRED_QUESTION_UNTOUCHED",
-            "first accepted verification output skipped required question ids: "
-            + ", ".join(missing),
-            location=_step_label(first_output_index, steps[first_output_index]),
-        )
 
 
 def _unique_index(
@@ -1020,7 +633,7 @@ def _audit_image_only_interaction_chains(
     report.stats["image_only_interaction_segments"] = max(1, segment_count - 1)
 
 
-def _audit_image_only_v2(
+def _audit_image_only_trace(
     trace: Mapping[str, Any],
     state: Mapping[str, Any],
     steps: Sequence[Mapping[str, Any]],
@@ -1591,82 +1204,32 @@ def audit_trace(path: Path) -> TraceReport:
     state = _state(payload)
     report.image_id = str(payload.get("image_id", state.get("image_id", path.stem)))
     steps = _rows(state.get("all_steps"))
-    ledgers = _mapping(state.get("ledgers"))
-    verification = _mapping(state.get("verification"))
-    claims = _rows(ledgers.get("claims"))
-    sources = _rows(ledgers.get("sources"))
-    evidence = _rows(ledgers.get("evidence"))
-    accepted_evidence = _rows(verification.get("evidence"))
     is_image_only = str(
         payload.get("input_mode") or state.get("input_mode") or ""
     ) == "image_only"
-    verification_case: VerificationCase | None = None
-    raw_case = state.get("verification_case")
-    if isinstance(raw_case, Mapping):
-        try:
-            verification_case = VerificationCase.model_validate(dict(raw_case))
-        except Exception:
-            verification_case = None
     report.stats.update(
         {
             "steps": len(steps),
-            "claims": len(claims),
-            "sources": len(sources),
-            "evidence": len(evidence),
-            "accepted_evidence": len(accepted_evidence),
         }
     )
 
     if "state" not in payload or not isinstance(payload.get("state"), Mapping):
         _issue(report, "CANONICAL_STATE_MISSING", "canonical trace must contain a state object")
-    if not isinstance(state.get("ledgers"), Mapping):
-        _issue(report, "LEDGERS_MISSING", "canonical state must contain ledgers")
-    else:
-        for collection in ("claims", "sources", "evidence", "discoveries", "failures"):
-            if not isinstance(ledgers.get(collection), list):
-                _issue(
-                    report,
-                    "LEDGER_COLLECTION_INVALID",
-                    f"state.ledgers.{collection} must be an array",
-                    location=f"state.ledgers.{collection}",
-                )
     if not isinstance(state.get("all_steps"), list):
         _issue(report, "STEPS_MISSING", "canonical state must contain all_steps")
+    if not is_image_only:
+        _issue(
+            report,
+            "UNSUPPORTED_TRACE_MODE",
+            "v3 strict audit accepts input_mode=image_only only",
+            location="input_mode",
+        )
+        return report
 
     _audit_termination(payload, state, report)
     _audit_thought_tokens(payload, state, steps, report)
-    if is_image_only:
-        _audit_image_only_v2(payload, state, steps, report)
-    else:
-        _audit_evidence_calls(
-            evidence,
-            steps,
-            report,
-            location_prefix="state.ledgers.evidence",
-            tool_field="tool_name",
-            stat_key="evidence_with_successful_call",
-        )
-        _audit_evidence_calls(
-            accepted_evidence,
-            steps,
-            report,
-            location_prefix="state.verification.evidence",
-            tool_field="tool_used",
-            stat_key="accepted_evidence_with_successful_call",
-        )
-        _audit_external_claims(
-            claims,
-            sources,
-            evidence,
-            steps,
-            report,
-            verification_case,
-        )
-        _audit_visual_external_evidence(claims, evidence, report)
+    _audit_image_only_trace(payload, state, steps, report)
     _audit_leaks(payload, report)
-    if not is_image_only:
-        _audit_interaction_chains(steps, report)
-        _audit_initial_required_question_service(state, steps, report)
     _audit_rejections(steps, report)
     return report
 
@@ -1790,7 +1353,7 @@ class _ArgumentParser(argparse.ArgumentParser):
 
 def build_parser() -> argparse.ArgumentParser:
     parser = _ArgumentParser(
-        description="Audit canonical traces from a small number of real verification runs."
+        description="Strictly audit canonical v3 image-only traces."
     )
     parser.add_argument(
         "input_path",

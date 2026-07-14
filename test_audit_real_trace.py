@@ -4,17 +4,17 @@ import json
 from pathlib import Path
 
 from scripts.audit_real_trace import audit_trace
-from test_image_only_v2_trajectory import (
-    test_scripted_image_only_v2_complete_trajectory,
+from test_image_only_trajectory import (
+    test_scripted_image_only_complete_trajectory,
 )
 
 
 def _scripted_trace(tmp_path: Path) -> Path:
-    test_scripted_image_only_v2_complete_trajectory(tmp_path)
-    return tmp_path / "traces" / "case_scripted_v2.json"
+    test_scripted_image_only_complete_trajectory(tmp_path)
+    return tmp_path / "traces" / "case_scripted_v3.json"
 
 
-def test_strict_audit_accepts_complete_image_only_v2_trace(
+def test_strict_audit_accepts_complete_image_only_trace(
     tmp_path: Path,
 ) -> None:
     report = audit_trace(_scripted_trace(tmp_path))

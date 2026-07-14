@@ -5,7 +5,7 @@ import json
 from typing import Any, Dict, List
 
 from src.orchestrator.stage_runner import StageRunner
-from src.orchestrator.state import FinalJudgment
+from test_support_models import StructuredJudgmentOutput
 
 
 class StructuredFakeBackend:
@@ -55,7 +55,7 @@ def test_no_tool_stage_uses_native_json_schema() -> None:
         llm=backend,
         system_prompt="Judge the evidence.",
         tools=[],
-        output_schema=FinalJudgment,
+        output_schema=StructuredJudgmentOutput,
         max_rounds=1,
         stage_name="judgment",
         attach_image=False,
@@ -83,7 +83,7 @@ def test_stage_generation_config_is_forwarded() -> None:
         llm=backend,
         system_prompt="Judge the evidence.",
         tools=[],
-        output_schema=FinalJudgment,
+        output_schema=StructuredJudgmentOutput,
         max_rounds=1,
         stage_name="judgment",
         attach_image=False,
@@ -108,7 +108,7 @@ def test_invalid_structured_output_is_corrected_in_same_chain() -> None:
         llm=backend,
         system_prompt="Judge the evidence.",
         tools=[],
-        output_schema=FinalJudgment,
+        output_schema=StructuredJudgmentOutput,
         max_rounds=1,
         stage_name="judgment",
         attach_image=False,
@@ -130,7 +130,7 @@ def test_empty_object_cannot_become_default_judgment() -> None:
         llm=backend,
         system_prompt="Judge the evidence.",
         tools=[],
-        output_schema=FinalJudgment,
+        output_schema=StructuredJudgmentOutput,
         max_rounds=1,
         stage_name="judgment",
         attach_image=False,

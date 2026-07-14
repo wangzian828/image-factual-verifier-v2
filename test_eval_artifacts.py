@@ -98,8 +98,6 @@ def _args(benchmark: Path, run_dir: Path) -> argparse.Namespace:
         output_dir=str(run_dir),
         concurrency=1,
         timeout=30.0,
-        max_verification_iterations=None,
-        max_rounds_verification=12,
         limit=None,
         source_access_policy=None,
     )

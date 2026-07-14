@@ -5,15 +5,15 @@ from pathlib import Path
 
 from src.trajectory.exporter import export_policy_examples
 from src.trajectory.scoring import score_process_trace
-from test_image_only_v2_trajectory import (
-    test_scripted_image_only_v2_complete_trajectory,
+from test_image_only_trajectory import (
+    test_scripted_image_only_complete_trajectory,
 )
 
 
 def _trace(tmp_path: Path) -> dict:
-    test_scripted_image_only_v2_complete_trajectory(tmp_path)
+    test_scripted_image_only_complete_trajectory(tmp_path)
     return json.loads(
-        (tmp_path / "traces" / "case_scripted_v2.json").read_text(
+        (tmp_path / "traces" / "case_scripted_v3.json").read_text(
             encoding="utf-8"
         )
     )

@@ -155,10 +155,6 @@ def _require_real_run_artifacts(
             raise RuntimeError(f"trace is not image_only: {path.name}")
         if trace.get("decision_policy_version") != "reinspect-v2":
             raise RuntimeError(f"trace is not reinspect-v2: {path.name}")
-        if state.get("verification_case") is not None:
-            raise RuntimeError(
-                f"image-only trace contains a legacy VerificationCase: {path.name}"
-            )
         investigation = _mapping(state.get("investigation_state"))
         if not investigation.get("decisive_fact_ids"):
             raise RuntimeError(f"trace has no decisive VisualFacts: {path.name}")

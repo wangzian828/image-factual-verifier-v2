@@ -6,8 +6,8 @@ from pathlib import Path
 from scripts.trajectory.audit_dataset import audit_dataset
 from scripts.trajectory.export_dataset import export_dataset
 from src.trajectory.exporter import export_policy_examples
-from test_image_only_v2_trajectory import (
-    test_scripted_image_only_v2_complete_trajectory,
+from test_image_only_trajectory import (
+    test_scripted_image_only_complete_trajectory,
 )
 
 
@@ -21,8 +21,8 @@ def _write_jsonl(path: Path, rows: list[dict]) -> None:
 def _run_dir(tmp_path: Path) -> Path:
     fixture = tmp_path / "fixture"
     fixture.mkdir()
-    test_scripted_image_only_v2_complete_trajectory(fixture)
-    trace_path = fixture / "traces" / "case_scripted_v2.json"
+    test_scripted_image_only_complete_trajectory(fixture)
+    trace_path = fixture / "traces" / "case_scripted_v3.json"
     trace = json.loads(trace_path.read_text(encoding="utf-8"))
     run_dir = tmp_path / "run"
     (run_dir / "traces").mkdir(parents=True)

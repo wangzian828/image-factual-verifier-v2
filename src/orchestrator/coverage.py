@@ -1,4 +1,4 @@
-"""Deterministic Coverage and verdict-basis compilation for reinspect-v2."""
+"""Deterministic v3 Coverage and reinspect-v2 verdict-basis compilation."""
 
 from __future__ import annotations
 

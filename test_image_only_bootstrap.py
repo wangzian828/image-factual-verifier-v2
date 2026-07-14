@@ -8,7 +8,7 @@ from typing import Any, Dict
 import pytest
 
 from src.orchestrator.bootstrap import build_bootstrap_investigation
-from src.orchestrator.ledger import image_sha256
+from src.orchestrator.runtime_case import image_sha256
 from src.orchestrator.pipeline import Orchestrator
 from src.orchestrator.state import (
     Entity,
@@ -205,7 +205,6 @@ def test_image_only_workflow_persists_bootstrap_before_required_search_boundary(
         "image_path",
         "image_sha256",
     }
-    assert state["verification_case"] is None
     assert state["investigation_state"]["brief"]["case_id"] == case.case_id
     assert state["investigation_state"]["facts"]
     assert state["investigation_state"]["tasks"]
@@ -256,3 +255,19 @@ def test_batch_preserves_each_case_error_artifacts() -> None:
     assert [result["image_id"] for result in results] == ["first", "second"]
     assert [result["time_taken"] for result in results] == [1.0, 2.0]
     assert all(result["total_tool_calls"] == 2 for result in results)
+
+
+def test_workflow_rejects_non_image_only_runtime_case(tmp_path: Path) -> None:
+    image_path = tmp_path / "fixture.jpg"
+    image_path.write_bytes(b"image-only-only")
+    workflow = VerificationWorkflow(WorkflowConfig(save_traces=False))
+    with pytest.raises(
+        TypeError,
+        match="ImageOnlyRuntimeCase only",
+    ):
+        asyncio.run(
+            workflow.run_single(
+                str(image_path),
+                runtime_case=object(),  # type: ignore[arg-type]
+            )
+        )

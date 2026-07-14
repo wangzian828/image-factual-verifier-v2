@@ -8,9 +8,8 @@ from src.orchestrator.source_access import (
     url_variants,
 )
 from src.orchestrator.stage_runner import StageRunner
-from src.orchestrator.state import VerificationResult
-from src.orchestrator.state import InvestigationQuestion
 from pydantic import ValidationError
+from test_support_models import ToolStageOutput, TruthAptQuestion
 from src.tools.reverse_image_search import ReverseImageSearchTool
 from src.tools.text_search import TextSearchTool
 from src.tools.visit import VisitTool
@@ -260,7 +259,7 @@ def test_react_tool_selection_is_not_forced_into_priority_rotation() -> None:
         llm=object(),
         system_prompt="",
         tools=[],
-        output_schema=VerificationResult,
+        output_schema=ToolStageOutput,
         stage_name="verification",
         priority_question_ids=["q0", "q1"],
     )
@@ -294,7 +293,7 @@ def test_iteration_output_requires_every_unresolved_required_question_attempt() 
         llm=object(),
         system_prompt="",
         tools=[],
-        output_schema=VerificationResult,
+        output_schema=ToolStageOutput,
         stage_name="verification",
         priority_question_ids=["q0"],
         supporting_question_ids=["q1"],
@@ -319,7 +318,7 @@ def test_scheduler_does_not_count_rejected_call_as_question_attempt() -> None:
         llm=object(),
         system_prompt="",
         tools=[],
-        output_schema=VerificationResult,
+        output_schema=ToolStageOutput,
         stage_name="verification",
         priority_question_ids=["q0", "q1"],
     )
@@ -349,7 +348,7 @@ def test_resolved_required_question_does_not_need_another_attempt_before_output(
         llm=object(),
         system_prompt="",
         tools=[],
-        output_schema=VerificationResult,
+        output_schema=ToolStageOutput,
         stage_name="verification",
         priority_question_ids=["q0", "q1"],
     )
@@ -391,7 +390,7 @@ def test_agent_control_state_exposes_full_pending_reinspect_spec() -> None:
         llm=object(),
         system_prompt="",
         tools=[],
-        output_schema=VerificationResult,
+        output_schema=ToolStageOutput,
         stage_name="verification",
         prior_steps=[prior],
     )
@@ -422,7 +421,7 @@ def test_claim_text_replaces_model_goal_before_tool_execution() -> None:
         llm=object(),
         system_prompt="",
         tools=[tool],
-        output_schema=VerificationResult,
+        output_schema=ToolStageOutput,
         stage_name="verification",
         question_claims={"q0": "The immutable declarative claim."},
         attach_image=False,
@@ -461,7 +460,7 @@ def test_stage_runner_sanitizes_missed_blocked_rows_before_context_or_ledger() -
         llm=object(),
         system_prompt="",
         tools=[LeakyTool()],
-        output_schema=VerificationResult,
+        output_schema=ToolStageOutput,
         stage_name="verification",
         source_access_policy=_policy(),
         attach_image=False,
@@ -477,7 +476,7 @@ def test_stage_runner_sanitizes_missed_blocked_rows_before_context_or_ledger() -
 
 def test_investigation_question_requires_truth_apt_claim_text() -> None:
     try:
-        InvestigationQuestion(question_id="q0", question="Where did this come from?")
+        TruthAptQuestion(question_id="q0", question="Where did this come from?")
     except ValidationError:
         pass
     else:

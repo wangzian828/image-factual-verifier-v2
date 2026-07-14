@@ -7,8 +7,8 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from src.orchestrator.bootstrap import build_bootstrap_investigation
-from src.orchestrator.coverage_v2 import activate_initial_decisive_facts
-from src.orchestrator.ledger import image_sha256
+from src.orchestrator.coverage import activate_initial_decisive_facts
+from src.orchestrator.runtime_case import image_sha256
 from src.orchestrator.pipeline import Orchestrator
 from src.orchestrator.state import (
     Entity,
@@ -142,7 +142,7 @@ class AdaptiveImageOnlyBackend:
         )
 
     async def get_response(self, *_args: Any, **_kwargs: Any) -> Any:
-        raise AssertionError("image-only v2 must use Gemini Interactions")
+        raise AssertionError("image-only v3 must use Gemini Interactions")
 
 
 class StaticTool(BaseTool):
@@ -234,11 +234,11 @@ def _perception() -> PerceptionReport:
     )
 
 
-def test_scripted_image_only_v2_complete_trajectory(tmp_path: Path) -> None:
+def test_scripted_image_only_complete_trajectory(tmp_path: Path) -> None:
     image_path = tmp_path / "fixture.jpg"
-    image_path.write_bytes(b"controlled-image-only-v2")
+    image_path.write_bytes(b"controlled-image-only-v3")
     case = ImageOnlyRuntimeCase(
-        case_id="case_scripted_v2",
+        case_id="case_scripted_v3",
         image_path=str(image_path.resolve()),
         image_sha256=image_sha256(str(image_path)),
     )
@@ -257,7 +257,7 @@ def test_scripted_image_only_v2_complete_trajectory(tmp_path: Path) -> None:
 
     orchestrator = Orchestrator(
         provider="gemini",
-        model_name="controlled-image-only-v2",
+        model_name="controlled-image-only-v3",
         validate_startup=False,
     )
     orchestrator.vlm_provider = "controlled"

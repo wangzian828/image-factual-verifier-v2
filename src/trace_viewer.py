@@ -1,4 +1,4 @@
-"""Dependency-free standalone HTML renderer for verification traces."""
+"""Dependency-free standalone HTML renderer for v3 image-only traces."""
 from __future__ import annotations
 
 import base64
@@ -28,32 +28,17 @@ def _render_trace_html(trace_data: Dict[str, Any]) -> str:
     if not judgment and isinstance(state.get("judgment"), dict):
         judgment = state["judgment"]
     steps = state.get("all_steps", []) if isinstance(state.get("all_steps"), list) else []
-    plans = state.get("plan_history", []) if isinstance(state.get("plan_history"), list) else []
-    audits = state.get("coverage_audits", []) if isinstance(state.get("coverage_audits"), list) else []
-    ledgers = state.get("ledgers", {}) if isinstance(state.get("ledgers"), dict) else {}
     investigation = state.get("investigation_state", {}) if isinstance(state.get("investigation_state"), dict) else {}
-    if not audits and isinstance(investigation.get("coverage_audits"), list):
-        audits = investigation["coverage_audits"]
+    audits = investigation.get("coverage_audits", []) if isinstance(investigation.get("coverage_audits"), list) else []
     timings = state.get("stage_timings", {}) if isinstance(state.get("stage_timings"), dict) else {}
     token_usage = trace_data.get("token_usage") or state.get("token_usage") or {}
     embedded = _embed_local_image(image_path)
-    image_only = (
-        trace_data.get("input_mode") == "image_only"
-        or state.get("input_mode") == "image_only"
-    )
     stage_flow = (
         '<div class="stage">Perception / OCR</div><span class="arrow">&#8594;</span>'
         '<div class="stage">VisualFact Bootstrap</div><span class="arrow">&#8594;</span>'
         '<div class="stage">ReAct</div><span class="arrow">&#8596;</span>'
         '<div class="stage">Reflection / Coverage</div><span class="arrow">&#8594;</span>'
         '<div class="stage">reinspect-v2 Judgment</div>'
-        if image_only
-        else
-        '<div class="stage">Perception</div><span class="arrow">&#8594;</span>'
-        '<div class="stage">Planning</div><span class="arrow">&#8594;</span>'
-        '<div class="stage">Verification / ReAct</div><span class="arrow">&#8596;</span>'
-        '<div class="stage">Coverage / Replanning</div><span class="arrow">&#8594;</span>'
-        '<div class="stage">Judgment</div>'
     )
 
     return f"""<!DOCTYPE html>
@@ -80,9 +65,8 @@ table{{border-collapse:collapse;width:100%;font-size:12px}}th,td{{border:1px sol
 <body><main class="wrap">
 <section class="band"><h1>Image Verification Trace</h1>{_render_meta(trace_data, state, judgment, image_path, token_usage)}</section>
 <section class="band"><h2>Stage Flow</h2><div class="pipeline">{stage_flow}</div></section>
-<div class="two"><div>{_render_image(embedded)}{_render_judgment(judgment, trace_data)}{_render_timings(timings)}</div><div>{_render_plans(plans)}{_render_audits(audits)}</div></div>
-{_render_ledgers(ledgers)}
-{_render_investigation_state(investigation, image_only=image_only)}
+<div class="two"><div>{_render_image(embedded)}{_render_judgment(judgment, trace_data)}{_render_timings(timings)}</div><div>{_render_audits(audits)}</div></div>
+{_render_visual_fact_investigation(investigation)}
 <section class="band"><h2>Agent Trajectory</h2>{''.join(_render_step(step) for step in steps if isinstance(step, dict)) or '<p>No recorded steps.</p>'}</section>
 </main></body></html>"""
 
@@ -121,21 +105,6 @@ def _render_judgment(judgment: Dict[str, Any], trace: Dict[str, Any]) -> str:
     )
 
 
-def _render_plans(plans: List[Any]) -> str:
-    rows: List[str] = []
-    for index, plan in enumerate(plans):
-        if not isinstance(plan, dict):
-            continue
-        revision = plan.get("revision", index)
-        questions = plan.get("questions", []) if isinstance(plan.get("questions"), list) else []
-        q_rows = ''.join(
-            f'<tr><td>{_e(q.get("question_id", ""))}</td><td>P{_e(q.get("priority", ""))}</td><td>{_e(q.get("question", ""))}</td><td>{_e(", ".join(q.get("suggested_tools", []) or []))}</td></tr>'
-            for q in questions if isinstance(q, dict)
-        )
-        rows.append(f'<div class="revision"><span class="badge">Plan revision {revision}</span><p>{_e(plan.get("revision_reason", "Initial plan"))}</p><table><thead><tr><th>ID</th><th>Priority</th><th>Question</th><th>Tools</th></tr></thead><tbody>{q_rows}</tbody></table></div>')
-    return f'<section class="band"><h2>Plan History</h2>{"".join(rows) or "<p>No plan history.</p>"}</section>'
-
-
 def _render_audits(audits: List[Any]) -> str:
     blocks: List[str] = []
     for audit in audits:
@@ -165,7 +134,7 @@ def _render_audits(audits: List[Any]) -> str:
             "complete": "complete",
             "information_saturated": "information saturated",
             "hard_budget_exhausted": "hard budget exhausted",
-            "continue": "replanning required",
+            "continue": "continue investigation",
         }
         badge = 'ok' if complete else 'warn'
         iteration = audit.get("iteration", audit.get("action_count", 0))
@@ -206,57 +175,9 @@ def _render_step(step: Dict[str, Any]) -> str:
     return '<article class="step"><div>' + ''.join(labels) + '</div>' + body + '</article>'
 
 
-def _render_ledgers(ledgers: Dict[str, Any]) -> str:
-    if not ledgers:
-        return ""
-    claims = ledgers.get("claims", []) if isinstance(ledgers.get("claims"), list) else []
-    sources = ledgers.get("sources", []) if isinstance(ledgers.get("sources"), list) else []
-    evidence = ledgers.get("evidence", []) if isinstance(ledgers.get("evidence"), list) else []
-    discoveries = ledgers.get("discoveries", []) if isinstance(ledgers.get("discoveries"), list) else []
-    failures = ledgers.get("failures", []) if isinstance(ledgers.get("failures"), list) else []
-    claim_rows = ''.join(
-        f'<tr><td><code>{_e(item.get("claim_id", ""))}</code></td><td>{_e(item.get("criticality", ""))}</td><td>{_status(item.get("status", ""))}</td><td>{_e(item.get("text", ""))}</td></tr>'
-        for item in claims if isinstance(item, dict)
-    )
-    evidence_rows = ''.join(
-        f'<tr><td><code>{_e(item.get("evidence_id", ""))}</code></td><td><code>{_e(item.get("claim_id", ""))}</code></td><td>{_e(item.get("stance", ""))}/{_e(item.get("quality", ""))}</td><td><code>{_e(item.get("source_id", ""))}</code></td><td>{_e(item.get("exact_text", ""))}</td></tr>'
-        for item in evidence if isinstance(item, dict)
-    )
-    source_rows = ''.join(
-        f'<tr><td><code>{_e(item.get("source_id", ""))}</code></td><td>{_e(item.get("source_class", ""))}</td><td><code>{_e(item.get("source_family", ""))}</code></td><td>{_e(item.get("canonical_url", ""))}</td><td>{_e(", ".join(item.get("risk_flags", []) or []))}</td></tr>'
-        for item in sources if isinstance(item, dict)
-    )
-    counts = f'<p>{len(evidence)} evidence, {len(sources)} sources, {len(discoveries)} discoveries, {len(failures)} failures.</p>'
-    return (
-        '<section class="band"><h2>Verification Ledgers</h2>' + counts
-        + '<h3>Claims</h3><table><thead><tr><th>ID</th><th>Criticality</th><th>Status</th><th>Atomic Claim</th></tr></thead><tbody>' + claim_rows + '</tbody></table>'
-        + '<h3>Evidence</h3><table><thead><tr><th>ID</th><th>Claim</th><th>Stance</th><th>Source</th><th>Exact Span / Observation</th></tr></thead><tbody>' + evidence_rows + '</tbody></table>'
-        + '<h3>Sources</h3><table><thead><tr><th>ID</th><th>Class</th><th>Family</th><th>Canonical URL</th><th>Risk</th></tr></thead><tbody>' + source_rows + '</tbody></table>'
-        + _labeled_json("Discovery ledger", discoveries)
-        + _labeled_json("Failure ledger", failures)
-        + '</section>'
-    )
-
-
-def _render_investigation_state(
-    investigation: Dict[str, Any],
-    *,
-    image_only: bool = False,
-) -> str:
-    if not investigation:
-        return ""
-    if image_only:
-        return _render_visual_fact_investigation(investigation)
-    deltas = investigation.get("belief_deltas", []) if isinstance(investigation.get("belief_deltas"), list) else []
-    visual = investigation.get("visual_questions", []) if isinstance(investigation.get("visual_questions"), list) else []
-    stops = investigation.get("stopping_assessments", []) if isinstance(investigation.get("stopping_assessments"), list) else []
-    delta_rows = ''.join(
-        f'<tr><td><code>{_e(item.get("assessment_id", ""))}</code></td><td>{_e(item.get("operation", ""))}</td><td>{_e(item.get("old_status", ""))} &#8594; {_e(item.get("new_status", ""))}</td><td>{_e(item.get("explanation", ""))}</td></tr>'
-        for item in deltas if isinstance(item, dict)
-    )
-
-
 def _render_visual_fact_investigation(investigation: Dict[str, Any]) -> str:
+    if not investigation:
+        return '<section class="band"><h2>Visual Facts</h2><p>No investigation state.</p></section>'
     facts = investigation.get("facts", []) if isinstance(investigation.get("facts"), list) else []
     tasks = investigation.get("tasks", []) if isinstance(investigation.get("tasks"), list) else []
     findings = investigation.get("findings", []) if isinstance(investigation.get("findings"), list) else []
@@ -303,18 +224,6 @@ def _render_visual_fact_investigation(investigation: Dict[str, Any]) -> str:
         '<section class="band"><h2>Verdict Basis</h2>'
         + (_pre(json.dumps(investigation.get("verdict_basis"), ensure_ascii=False, indent=2))
            if investigation.get("verdict_basis") else '<p>No verdict basis.</p>')
-        + '</section>'
-    )
-    visual_rows = ''.join(
-        f'<tr><td><code>{_e(item.get("visual_question_id", ""))}</code></td><td>{_status(item.get("status", ""))}</td><td><code>{_e(item.get("claim_id", ""))}</code></td><td>{_e(item.get("target_bbox", []))}</td><td>{_e(item.get("expected_property", ""))}</td><td>{_e(", ".join(item.get("recommended_tools", []) or []))}</td></tr>'
-        for item in visual if isinstance(item, dict)
-    )
-    return (
-        '<section class="band"><h2>Incremental Belief &amp; ReInspect</h2>'
-        + '<h3>Belief Deltas</h3><table><thead><tr><th>Observation</th><th>Operation</th><th>Claim State</th><th>Why</th></tr></thead><tbody>' + delta_rows + '</tbody></table>'
-        + '<h3>Visual Questions</h3><table><thead><tr><th>ID</th><th>Status</th><th>Claim</th><th>Region</th><th>Expected Property</th><th>Tools</th></tr></thead><tbody>' + visual_rows + '</tbody></table>'
-        + _labeled_json("Region observations", investigation.get("region_observations", []))
-        + _labeled_json("Stopping assessments", stops)
         + '</section>'
     )
 
