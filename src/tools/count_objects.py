@@ -148,7 +148,9 @@ class CountObjectsTool(BaseTool):
                     pass
 
         result = self._validate_response(parsed, target_object)
-        result[RUNTIME_METRICS_KEY] = parsed.get(RUNTIME_METRICS_KEY, {})
+        runtime_metrics = parsed.get(RUNTIME_METRICS_KEY)
+        if runtime_metrics:
+            result[RUNTIME_METRICS_KEY] = runtime_metrics
         return result
 
     @staticmethod
