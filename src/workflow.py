@@ -156,6 +156,7 @@ class VerificationWorkflow:
         image_ids: Optional[List[str]] = None,
         user_claims: Optional[List[Optional[str]]] = None,
         claim_observed_ats: Optional[List[Optional[str]]] = None,
+        verification_cases: Optional[List[Optional[VerificationCase]]] = None,
         concurrency: int = 1,
     ) -> List[Dict[str, Any]]:
         """Run verification on multiple images.
@@ -178,6 +179,10 @@ class VerificationWorkflow:
             claim_observed_ats = [None] * len(image_paths)
         if len(claim_observed_ats) != len(image_paths):
             raise ValueError("claim_observed_ats must match image_paths length")
+        if verification_cases is None:
+            verification_cases = [None] * len(image_paths)
+        if len(verification_cases) != len(image_paths):
+            raise ValueError("verification_cases must match image_paths length")
 
         semaphore = asyncio.Semaphore(concurrency)
         results = []
@@ -187,6 +192,7 @@ class VerificationWorkflow:
             img_id: str,
             claim: Optional[str],
             claim_observed_at: Optional[str],
+            verification_case: Optional[VerificationCase],
         ) -> Dict[str, Any]:
             async with semaphore:
                 return await self.run_single(
@@ -194,12 +200,17 @@ class VerificationWorkflow:
                     img_id,
                     user_claim=claim,
                     claim_observed_at=claim_observed_at,
+                    verification_case=verification_case,
                 )
 
         tasks = [
-            _verify(path, img_id, claim, claim_observed_at)
-            for path, img_id, claim, claim_observed_at in zip(
-                image_paths, image_ids, user_claims, claim_observed_ats
+            _verify(path, img_id, claim, claim_observed_at, verification_case)
+            for path, img_id, claim, claim_observed_at, verification_case in zip(
+                image_paths,
+                image_ids,
+                user_claims,
+                claim_observed_ats,
+                verification_cases,
             )
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
