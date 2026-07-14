@@ -918,6 +918,665 @@ def _audit_initial_required_question_service(
         )
 
 
+def _unique_index(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    id_field: str,
+    location_prefix: str,
+    report: TraceReport,
+) -> dict[str, Mapping[str, Any]]:
+    indexed: dict[str, Mapping[str, Any]] = {}
+    for index, row in enumerate(rows):
+        identifier = str(row.get(id_field, "")).strip()
+        location = (
+            _location(location_prefix, identifier)
+            if identifier
+            else f"{location_prefix}[{index}]"
+        )
+        if not identifier:
+            _issue(
+                report,
+                "IMAGE_ONLY_ID_MISSING",
+                f"{id_field} must be non-empty",
+                location=location,
+            )
+            continue
+        if identifier in indexed:
+            _issue(
+                report,
+                "IMAGE_ONLY_ID_DUPLICATE",
+                f"duplicate {id_field} {identifier!r}",
+                location=location,
+            )
+            continue
+        indexed[identifier] = row
+    return indexed
+
+
+def _audit_image_only_interaction_chains(
+    steps: Sequence[Mapping[str, Any]],
+    report: TraceReport,
+) -> None:
+    investigation_steps = [
+        (index, step)
+        for index, step in enumerate(steps)
+        if str(step.get("stage", "")) == "image_only_investigation"
+        and _mapping(step.get("metadata")).get("native_interactions")
+    ]
+    if not investigation_steps:
+        _issue(
+            report,
+            "IMAGE_ONLY_INTERACTIONS_MISSING",
+            "image-only trace contains no native investigation interactions",
+            location="state.all_steps",
+        )
+        return
+
+    previous: str | None = None
+    segment_count = 1
+    for index, step in investigation_steps:
+        metadata = _mapping(step.get("metadata"))
+        interaction_id = str(metadata.get("interaction_id", "")).strip()
+        parent_recorded = "previous_interaction_id" in metadata
+        raw_parent = metadata.get("previous_interaction_id")
+        parent = "" if raw_parent is None else str(raw_parent).strip()
+        location = _step_label(index, step)
+        if not interaction_id:
+            _issue(
+                report,
+                "INTERACTION_ID_MISSING",
+                "image-only investigation interaction_id is missing",
+                location=location,
+            )
+            continue
+        if not parent_recorded:
+            _issue(
+                report,
+                "INTERACTION_PARENT_UNRECORDED",
+                "previous_interaction_id is not recorded",
+                location=location,
+            )
+        if previous is None:
+            if parent:
+                _issue(
+                    report,
+                    "INTERACTION_CHAIN_ROOT_INVALID",
+                    f"image-only segment root must have null parent, got {parent!r}",
+                    location=location,
+                )
+        elif parent != previous:
+            _issue(
+                report,
+                "INTERACTION_CHAIN_BROKEN",
+                f"expected previous_interaction_id {previous!r}, got {parent!r}",
+                location=location,
+            )
+        previous = interaction_id
+        if str(step.get("action_type", "")) == "output":
+            previous = None
+            segment_count += 1
+
+    report.stats["image_only_interaction_steps"] = len(investigation_steps)
+    report.stats["image_only_interaction_segments"] = max(1, segment_count - 1)
+
+
+def _audit_image_only_v2(
+    trace: Mapping[str, Any],
+    state: Mapping[str, Any],
+    steps: Sequence[Mapping[str, Any]],
+    report: TraceReport,
+) -> None:
+    if str(
+        trace.get("decision_policy_version")
+        or state.get("decision_policy_version")
+        or ""
+    ) != "reinspect-v2":
+        _issue(
+            report,
+            "IMAGE_ONLY_POLICY_MISMATCH",
+            "image-only canonical trace must use decision_policy_version=reinspect-v2",
+            location="decision_policy_version",
+        )
+
+    investigation = _mapping(state.get("investigation_state"))
+    if not investigation:
+        _issue(
+            report,
+            "IMAGE_ONLY_STATE_MISSING",
+            "image-only trace must contain state.investigation_state",
+            location="state.investigation_state",
+        )
+        return
+
+    collection_names = (
+        "entities",
+        "facts",
+        "tasks",
+        "retrieval_anchors",
+        "discoveries",
+        "evidence",
+        "findings",
+        "failures",
+        "reflections",
+        "coverage_audits",
+    )
+    for name in collection_names:
+        if not isinstance(investigation.get(name), list):
+            _issue(
+                report,
+                "IMAGE_ONLY_COLLECTION_INVALID",
+                f"state.investigation_state.{name} must be an array",
+                location=f"state.investigation_state.{name}",
+            )
+
+    entities = _rows(investigation.get("entities"))
+    facts = _rows(investigation.get("facts"))
+    tasks = _rows(investigation.get("tasks"))
+    anchors = _rows(investigation.get("retrieval_anchors"))
+    discoveries = _rows(investigation.get("discoveries"))
+    evidence = _rows(investigation.get("evidence"))
+    findings = _rows(investigation.get("findings"))
+    failures = _rows(investigation.get("failures"))
+    reflections = _rows(investigation.get("reflections"))
+    coverage_audits = _rows(investigation.get("coverage_audits"))
+
+    entity_by_id = _unique_index(
+        entities,
+        id_field="entity_id",
+        location_prefix="state.investigation_state.entities",
+        report=report,
+    )
+    fact_by_id = _unique_index(
+        facts,
+        id_field="fact_id",
+        location_prefix="state.investigation_state.facts",
+        report=report,
+    )
+    task_by_id = _unique_index(
+        tasks,
+        id_field="task_id",
+        location_prefix="state.investigation_state.tasks",
+        report=report,
+    )
+    anchor_by_id = _unique_index(
+        anchors,
+        id_field="anchor_id",
+        location_prefix="state.investigation_state.retrieval_anchors",
+        report=report,
+    )
+    discovery_by_id = _unique_index(
+        discoveries,
+        id_field="discovery_id",
+        location_prefix="state.investigation_state.discoveries",
+        report=report,
+    )
+    evidence_by_id = _unique_index(
+        evidence,
+        id_field="evidence_id",
+        location_prefix="state.investigation_state.evidence",
+        report=report,
+    )
+    finding_by_id = _unique_index(
+        findings,
+        id_field="finding_id",
+        location_prefix="state.investigation_state.findings",
+        report=report,
+    )
+    failure_by_id = _unique_index(
+        failures,
+        id_field="failure_id",
+        location_prefix="state.investigation_state.failures",
+        report=report,
+    )
+    _unique_index(
+        reflections,
+        id_field="reflection_id",
+        location_prefix="state.investigation_state.reflections",
+        report=report,
+    )
+    _unique_index(
+        coverage_audits,
+        id_field="audit_id",
+        location_prefix="state.investigation_state.coverage_audits",
+        report=report,
+    )
+
+    successful_calls = {
+        str(_mapping(step.get("metadata")).get("function_call_id", "")).strip()
+        for step in steps
+        if _parse_successful_tool_step(step)
+        and str(_mapping(step.get("metadata")).get("function_call_id", "")).strip()
+    }
+    all_known_origins = {
+        *entity_by_id,
+        *fact_by_id,
+        *task_by_id,
+        *anchor_by_id,
+        *discovery_by_id,
+        *evidence_by_id,
+        *finding_by_id,
+        *failure_by_id,
+        str(_mapping(investigation.get("brief")).get("brief_id", "")).strip(),
+        str(_mapping(investigation.get("brief")).get("case_id", "")).strip(),
+    }
+    all_known_origins.discard("")
+
+    for fact_id, fact in fact_by_id.items():
+        location = _location("state.investigation_state.facts", fact_id)
+        subject = str(fact.get("subject_entity_id", "")).strip()
+        object_id = str(fact.get("object_entity_id", "") or "").strip()
+        if subject not in entity_by_id:
+            _issue(
+                report,
+                "VISUAL_FACT_ENTITY_UNKNOWN",
+                f"subject_entity_id {subject!r} does not exist",
+                location=location,
+            )
+        if object_id and object_id not in entity_by_id:
+            _issue(
+                report,
+                "VISUAL_FACT_ENTITY_UNKNOWN",
+                f"object_entity_id {object_id!r} does not exist",
+                location=location,
+            )
+        unknown_basis = sorted(
+            set(str(item) for item in fact.get("basis_ids", []) or [])
+            - set(all_known_origins)
+        )
+        if unknown_basis:
+            _issue(
+                report,
+                "VISUAL_FACT_BASIS_UNKNOWN",
+                "unknown fact basis ids: " + ", ".join(unknown_basis),
+                location=location,
+            )
+
+    failures_by_task: dict[str, list[str]] = {}
+    for failure_id, failure in failure_by_id.items():
+        task_id = str(failure.get("task_id", "")).strip()
+        failures_by_task.setdefault(task_id, []).append(failure_id)
+        if task_id not in task_by_id:
+            _issue(
+                report,
+                "FAILURE_TASK_UNKNOWN",
+                f"failure references unknown task {task_id!r}",
+                location=_location("state.investigation_state.failures", failure_id),
+            )
+
+    for task_id, task in task_by_id.items():
+        location = _location("state.investigation_state.tasks", task_id)
+        unknown_facts = sorted(
+            set(str(item) for item in task.get("fact_ids", []) or [])
+            - set(fact_by_id)
+        )
+        if unknown_facts:
+            _issue(
+                report,
+                "RESEARCH_TASK_FACT_UNKNOWN",
+                "task references unknown facts: " + ", ".join(unknown_facts),
+                location=location,
+            )
+        parent_id = str(task.get("parent_task_id", "") or "").strip()
+        if parent_id and parent_id not in task_by_id:
+            _issue(
+                report,
+                "RESEARCH_TASK_PARENT_UNKNOWN",
+                f"parent_task_id {parent_id!r} does not exist",
+                location=location,
+            )
+        unknown_origins = sorted(
+            set(str(item) for item in task.get("origin_ids", []) or [])
+            - all_known_origins
+        )
+        if unknown_origins:
+            _issue(
+                report,
+                "RESEARCH_TASK_ORIGIN_UNKNOWN",
+                "task references unknown origins: " + ", ".join(unknown_origins),
+                location=location,
+            )
+        task_findings = [
+            str(item) for item in task.get("finding_ids", []) or []
+        ]
+        if str(task.get("status", "")) == "resolved" and not task_findings:
+            _issue(
+                report,
+                "RESOLVED_TASK_WITHOUT_FINDING",
+                "resolved ResearchTask must reference a Finding",
+                location=location,
+            )
+        if str(task.get("status", "")) in {"blocked", "exhausted"} and not failures_by_task.get(task_id):
+            _issue(
+                report,
+                "BLOCKED_TASK_WITHOUT_FAILURE",
+                "blocked/exhausted ResearchTask must reference a recorded Failure",
+                location=location,
+            )
+        for finding_id in task_findings:
+            if finding_id not in finding_by_id:
+                _issue(
+                    report,
+                    "RESEARCH_TASK_FINDING_UNKNOWN",
+                    f"task references unknown Finding {finding_id!r}",
+                    location=location,
+                )
+
+    for discovery_id, discovery in discovery_by_id.items():
+        location = _location(
+            "state.investigation_state.discoveries", discovery_id
+        )
+        task_id = str(discovery.get("task_id", "")).strip()
+        if task_id not in task_by_id:
+            _issue(
+                report,
+                "DISCOVERY_TASK_UNKNOWN",
+                f"Discovery references unknown task {task_id!r}",
+                location=location,
+            )
+        if str(discovery.get("promoted_evidence_id", "") or "").strip():
+            _issue(
+                report,
+                "DISCOVERY_PROMOTED_IN_PLACE",
+                "Discovery must remain separate from Evidence",
+                location=location,
+            )
+
+    _audit_evidence_calls(
+        evidence,
+        steps,
+        report,
+        location_prefix="state.investigation_state.evidence",
+        tool_field="tool_name",
+        stat_key="image_only_evidence_with_successful_call",
+    )
+    for evidence_id, item in evidence_by_id.items():
+        location = _location("state.investigation_state.evidence", evidence_id)
+        task_id = str(item.get("task_id", "")).strip()
+        if task_id not in task_by_id:
+            _issue(
+                report,
+                "EVIDENCE_TASK_UNKNOWN",
+                f"Evidence references unknown task {task_id!r}",
+                location=location,
+            )
+        unknown_facts = sorted(
+            set(str(value) for value in item.get("fact_ids", []) or [])
+            - set(fact_by_id)
+        )
+        if unknown_facts:
+            _issue(
+                report,
+                "EVIDENCE_FACT_UNKNOWN",
+                "Evidence references unknown facts: " + ", ".join(unknown_facts),
+                location=location,
+            )
+
+    findings_by_fact: dict[str, list[str]] = {}
+    for finding_id, finding in finding_by_id.items():
+        location = _location("state.investigation_state.findings", finding_id)
+        task_id = str(finding.get("task_id", "")).strip()
+        task = task_by_id.get(task_id)
+        if task is None:
+            _issue(
+                report,
+                "FINDING_TASK_UNKNOWN",
+                f"Finding references unknown task {task_id!r}",
+                location=location,
+            )
+            continue
+        finding_facts = {
+            str(item) for item in finding.get("fact_ids", []) or []
+        }
+        if not finding_facts <= {
+            str(item) for item in task.get("fact_ids", []) or []
+        }:
+            _issue(
+                report,
+                "FINDING_FACT_OWNERSHIP_INVALID",
+                "Finding fact_ids must be owned by its ResearchTask",
+                location=location,
+            )
+        for fact_id in finding_facts:
+            findings_by_fact.setdefault(fact_id, []).append(finding_id)
+        for evidence_id in finding.get("evidence_ids", []) or []:
+            evidence_record = evidence_by_id.get(str(evidence_id))
+            if evidence_record is None:
+                _issue(
+                    report,
+                    "FINDING_EVIDENCE_UNKNOWN",
+                    f"Finding references unknown Evidence {evidence_id!r}",
+                    location=location,
+                )
+            elif str(evidence_record.get("task_id", "")).strip() != task_id:
+                _issue(
+                    report,
+                    "FINDING_EVIDENCE_OWNERSHIP_INVALID",
+                    "Finding and Evidence must belong to the same ResearchTask",
+                    location=location,
+                )
+
+    investigation_tool_steps = [
+        step
+        for step in steps
+        if str(step.get("stage", "")) == "image_only_investigation"
+        and str(step.get("action_type", "")) == "tool_call"
+    ]
+    action_count = int(investigation.get("action_count", 0) or 0)
+    if action_count != len(investigation_tool_steps):
+        _issue(
+            report,
+            "IMAGE_ONLY_ACTION_COUNT_MISMATCH",
+            f"action_count={action_count}, but trace records {len(investigation_tool_steps)} investigation tool calls",
+            location="state.investigation_state.action_count",
+        )
+    if action_count > 24:
+        _issue(
+            report,
+            "IMAGE_ONLY_ACTION_BUDGET_EXCEEDED",
+            f"image-only investigation used {action_count} actions; maximum is 24",
+            location="state.investigation_state.action_count",
+        )
+    for index, step in enumerate(investigation_tool_steps):
+        count = _mapping(step.get("metadata")).get("function_call_count")
+        if count is not None and int(count or 0) != 1:
+            _issue(
+                report,
+                "IMAGE_ONLY_PARALLEL_TOOL_CALL",
+                "each image-only action turn must contain exactly one tool call",
+                location=f"image_only_tool_steps[{index}]",
+            )
+
+    reflection_counts = [
+        int(item.get("action_count", 0) or 0) for item in reflections
+    ]
+    expected_reflections = list(range(4, action_count + 1, 4))
+    if reflection_counts != expected_reflections:
+        _issue(
+            report,
+            "IMAGE_ONLY_REFLECTION_CADENCE_INVALID",
+            f"Reflection action counts must be {expected_reflections}, found {reflection_counts}",
+            location="state.investigation_state.reflections",
+        )
+
+    decisive_ids = [
+        str(item)
+        for item in investigation.get("decisive_fact_ids", []) or []
+    ]
+    if not decisive_ids:
+        _issue(
+            report,
+            "DECISIVE_FACTS_MISSING",
+            "image-only judgment requires at least one decisive VisualFact",
+            location="state.investigation_state.decisive_fact_ids",
+        )
+    unknown_decisive = sorted(set(decisive_ids) - set(fact_by_id))
+    if unknown_decisive:
+        _issue(
+            report,
+            "DECISIVE_FACT_UNKNOWN",
+            "unknown decisive fact ids: " + ", ".join(unknown_decisive),
+            location="state.investigation_state.decisive_fact_ids",
+        )
+
+    statuses = {
+        fact_id: str(fact_by_id.get(fact_id, {}).get("status", ""))
+        for fact_id in decisive_ids
+    }
+    if any(status == "refuted" for status in statuses.values()):
+        expected_verdict = "fake"
+        expected_basis_facts = {
+            fact_id for fact_id, status in statuses.items() if status == "refuted"
+        }
+    elif statuses and all(status == "supported" for status in statuses.values()):
+        expected_verdict = "real"
+        expected_basis_facts = set(decisive_ids)
+    else:
+        expected_verdict = "unverifiable"
+        expected_basis_facts = {
+            fact_id
+            for fact_id, status in statuses.items()
+            if status not in {"supported", "refuted"}
+        }
+
+    verdict = str(trace.get("verdict", "")).strip()
+    if verdict != expected_verdict:
+        _issue(
+            report,
+            "IMAGE_ONLY_VERDICT_STATE_MISMATCH",
+            f"decisive fact states require verdict={expected_verdict}, got {verdict!r}",
+            location="verdict",
+        )
+
+    basis = _mapping(
+        trace.get("verdict_basis") or investigation.get("verdict_basis")
+    )
+    judgment = _mapping(trace.get("judgment") or state.get("judgment"))
+    if str(basis.get("policy_rule_id", "")) != "reinspect-v2":
+        _issue(
+            report,
+            "VERDICT_BASIS_POLICY_INVALID",
+            "verdict_basis.policy_rule_id must be reinspect-v2",
+            location="verdict_basis.policy_rule_id",
+        )
+    basis_facts = {str(item) for item in basis.get("fact_ids", []) or []}
+    basis_findings = {
+        str(item) for item in basis.get("finding_ids", []) or []
+    }
+    basis_evidence = {
+        str(item) for item in basis.get("evidence_ids", []) or []
+    }
+    if basis_facts != expected_basis_facts:
+        _issue(
+            report,
+            "VERDICT_BASIS_FACT_SET_INVALID",
+            f"expected basis facts {sorted(expected_basis_facts)}, found {sorted(basis_facts)}",
+            location="verdict_basis.fact_ids",
+        )
+    if basis_evidence & set(discovery_by_id):
+        _issue(
+            report,
+            "DISCOVERY_USED_AS_VERDICT_EVIDENCE",
+            "Discovery ids cannot appear in verdict_basis.evidence_ids",
+            location="verdict_basis.evidence_ids",
+        )
+    unknown_basis_findings = sorted(basis_findings - set(finding_by_id))
+    unknown_basis_evidence = sorted(basis_evidence - set(evidence_by_id))
+    if unknown_basis_findings:
+        _issue(
+            report,
+            "VERDICT_BASIS_FINDING_UNKNOWN",
+            "unknown basis Finding ids: " + ", ".join(unknown_basis_findings),
+            location="verdict_basis.finding_ids",
+        )
+    if unknown_basis_evidence:
+        _issue(
+            report,
+            "VERDICT_BASIS_EVIDENCE_UNKNOWN",
+            "unknown basis Evidence ids: " + ", ".join(unknown_basis_evidence),
+            location="verdict_basis.evidence_ids",
+        )
+    for fact_id in basis_facts:
+        selected_findings = set(findings_by_fact.get(fact_id, [])) & basis_findings
+        if not selected_findings:
+            _issue(
+                report,
+                "VERDICT_FACT_WITHOUT_FINDING",
+                f"basis fact {fact_id!r} has no selected Finding",
+                location="verdict_basis",
+            )
+            continue
+        selected_evidence = {
+            str(evidence_id)
+            for finding_id in selected_findings
+            for evidence_id in finding_by_id[finding_id].get("evidence_ids", []) or []
+        } & basis_evidence
+        if not selected_evidence:
+            _issue(
+                report,
+                "VERDICT_FINDING_WITHOUT_EVIDENCE",
+                f"basis fact {fact_id!r} has no selected Evidence",
+                location="verdict_basis",
+            )
+        for evidence_id in selected_evidence:
+            call_id = str(
+                evidence_by_id[evidence_id].get("function_call_id", "")
+            ).strip()
+            if call_id not in successful_calls:
+                _issue(
+                    report,
+                    "VERDICT_EVIDENCE_CALL_NOT_SUCCESSFUL",
+                    f"basis Evidence {evidence_id!r} lacks a successful tool call",
+                    location="verdict_basis",
+                )
+
+    judgment_sets = (
+        (
+            {str(item) for item in judgment.get("selected_fact_ids", []) or []},
+            basis_facts,
+            "fact",
+        ),
+        (
+            {str(item) for item in judgment.get("selected_finding_ids", []) or []},
+            basis_findings,
+            "finding",
+        ),
+        (
+            {str(item) for item in judgment.get("selected_evidence_ids", []) or []},
+            basis_evidence,
+            "evidence",
+        ),
+    )
+    if str(judgment.get("verdict", "")) != verdict:
+        _issue(
+            report,
+            "JUDGMENT_VERDICT_MISMATCH",
+            "Judgment verdict must match the canonical trace verdict",
+            location="judgment.verdict",
+        )
+    for selected, compiled, name in judgment_sets:
+        if selected != compiled:
+            _issue(
+                report,
+                "JUDGMENT_BASIS_MISMATCH",
+                f"Judgment selected {name} ids do not match verdict_basis",
+                location=f"judgment.selected_{name}_ids",
+            )
+
+    report.stats.update(
+        {
+            "visual_facts": len(facts),
+            "research_tasks": len(tasks),
+            "discoveries": len(discoveries),
+            "image_only_evidence": len(evidence),
+            "findings": len(findings),
+            "reflections": len(reflections),
+            "decisive_facts": len(decisive_ids),
+            "image_only_actions": action_count,
+        }
+    )
+    _audit_image_only_interaction_chains(steps, report)
+
+
 def audit_trace(path: Path) -> TraceReport:
     report = TraceReport(path=str(path))
     try:
@@ -938,6 +1597,9 @@ def audit_trace(path: Path) -> TraceReport:
     sources = _rows(ledgers.get("sources"))
     evidence = _rows(ledgers.get("evidence"))
     accepted_evidence = _rows(verification.get("evidence"))
+    is_image_only = str(
+        payload.get("input_mode") or state.get("input_mode") or ""
+    ) == "image_only"
     verification_case: VerificationCase | None = None
     raw_case = state.get("verification_case")
     if isinstance(raw_case, Mapping):
@@ -973,34 +1635,38 @@ def audit_trace(path: Path) -> TraceReport:
 
     _audit_termination(payload, state, report)
     _audit_thought_tokens(payload, state, steps, report)
-    _audit_evidence_calls(
-        evidence,
-        steps,
-        report,
-        location_prefix="state.ledgers.evidence",
-        tool_field="tool_name",
-        stat_key="evidence_with_successful_call",
-    )
-    _audit_evidence_calls(
-        accepted_evidence,
-        steps,
-        report,
-        location_prefix="state.verification.evidence",
-        tool_field="tool_used",
-        stat_key="accepted_evidence_with_successful_call",
-    )
-    _audit_external_claims(
-        claims,
-        sources,
-        evidence,
-        steps,
-        report,
-        verification_case,
-    )
-    _audit_visual_external_evidence(claims, evidence, report)
+    if is_image_only:
+        _audit_image_only_v2(payload, state, steps, report)
+    else:
+        _audit_evidence_calls(
+            evidence,
+            steps,
+            report,
+            location_prefix="state.ledgers.evidence",
+            tool_field="tool_name",
+            stat_key="evidence_with_successful_call",
+        )
+        _audit_evidence_calls(
+            accepted_evidence,
+            steps,
+            report,
+            location_prefix="state.verification.evidence",
+            tool_field="tool_used",
+            stat_key="accepted_evidence_with_successful_call",
+        )
+        _audit_external_claims(
+            claims,
+            sources,
+            evidence,
+            steps,
+            report,
+            verification_case,
+        )
+        _audit_visual_external_evidence(claims, evidence, report)
     _audit_leaks(payload, report)
-    _audit_interaction_chains(steps, report)
-    _audit_initial_required_question_service(state, steps, report)
+    if not is_image_only:
+        _audit_interaction_chains(steps, report)
+        _audit_initial_required_question_service(state, steps, report)
     _audit_rejections(steps, report)
     return report
 
