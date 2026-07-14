@@ -304,13 +304,11 @@ src/render_trace_html.py                JSON-to-HTML CLI
 
 The active tool set comes from `src/orchestrator/tool_registry.py`, not from every module under `src/tools/`.
 
-Dataset image generation also uses `GeminiInteractionsClient`. Image requests set
-`response_format.type=image`, `aspect_ratio`, and `image_size`, and deliberately omit
-`delivery`: the current image endpoint rejects both `inline` and `uri` delivery modes
-in the tested configuration and returns image content inline when the interaction
-completes. `scripts/generate_gpt_image_samples.py` defaults to the Gemini provider;
-another provider is used only when explicitly selected and never as a failure fallback.
-Video generation keeps its separate URI delivery contract.
+Benchmark construction and dataset image generation live in the separate
+`image-factual-verifier-data-pipeline` project. This runtime consumes only the frozen
+release interface documented in `docs/runtime-release-contract.md`. The generic
+Gemini Interactions transport may retain image-generation support for shared protocol
+compatibility, but no dataset production workflow belongs in this repository.
 
 ## Server Operations
 

@@ -1,8 +1,14 @@
-# Image Factual Verifier v2 Contributor Guide
+# Image Factual Verifier v3 Contributor Guide
 
 ## Source Of Truth
 
 Read `docs/architecture.md` before changing the workflow. It documents the active runtime contract, configuration, tests, and trace format. Use the [Agent Prompt and Runtime Guide](docs/agent-prompt-and-runtime-guide.md) for the end-to-end flow and the boundary between model prompts, deterministic orchestration, tool-internal model calls, and validation gates. Prefer the implementation and contract tests when a comment or an old report disagrees with those documents.
+
+Benchmark construction lives in the separate `image-factual-verifier-data-pipeline`
+project. This repository consumes immutable releases only. Read
+`docs/runtime-release-contract.md` before changing runtime input, evaluator-private
+joins, source-access policy loading, claim modes, or decision-policy versions. Never
+import construction-pipeline modules into the runtime.
 
 The supported production path is a multi-stage Gemini agent using the Gemini Interactions API. Generic backend adapters may remain for isolated tests or non-production integrations, but they are not a runtime fallback for the active workflow.
 
