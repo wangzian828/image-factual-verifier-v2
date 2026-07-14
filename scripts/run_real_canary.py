@@ -15,16 +15,15 @@ import sys
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-from dotenv import load_dotenv
-
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from src import load_project_dotenv  # noqa: E402
+from src.eval.release_adapter import load_runtime_release  # noqa: E402
 from scripts.audit_real_trace import audit_trace, discover_trace_files  # noqa: E402
 
-load_dotenv(REPO_ROOT / ".env")
+load_project_dotenv(REPO_ROOT)
 
 
 SEARCH_TOOLS = frozenset({"reverse_image_search", "text_search", "crop_and_search"})
@@ -114,8 +113,6 @@ def _accepted_tools(trace: Mapping[str, Any]) -> set[str]:
 
 def _require_real_run_artifacts(
     run_dir: Path,
-    *,
-    required_claim_modes: set[str],
 ) -> dict[str, Any]:
     manifest_path = run_dir / "run_manifest.json"
     summary_path = run_dir / "summary.json"
@@ -125,6 +122,7 @@ def _require_real_run_artifacts(
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
     agent = _mapping(manifest.get("agent"))
+    benchmark = _mapping(manifest.get("benchmark"))
     model = str(agent.get("model", "")).lower()
     if str(agent.get("provider", "")).lower() != "gemini":
         raise RuntimeError("real canary must use provider=gemini")
@@ -134,12 +132,17 @@ def _require_real_run_artifacts(
         raise RuntimeError(f"real canary run status is {manifest.get('status')!r}")
     if int(summary.get("num_errors", 0) or 0):
         raise RuntimeError("real canary contains engineering errors")
+    if benchmark.get("input_mode") != "image_only":
+        raise RuntimeError("real canary requires benchmark input_mode=image_only")
+    if benchmark.get("decision_policy_version") != "reinspect-v2":
+        raise RuntimeError(
+            "real canary requires decision_policy_version=reinspect-v2"
+        )
 
     trace_files = discover_trace_files(trace_dir)
     if not trace_files:
         raise RuntimeError("real canary produced no canonical traces")
     tools: set[str] = set()
-    observed_claim_modes: set[str] = set()
     for path in trace_files:
         report = audit_trace(path)
         failures = report.failures(strict_scheduler=True)
@@ -148,10 +151,20 @@ def _require_real_run_artifacts(
             raise RuntimeError(f"strict trace audit failed for {path.name}: {rendered}")
         trace = json.loads(path.read_text(encoding="utf-8"))
         state = _mapping(trace.get("state"))
-        verification_case = _mapping(state.get("verification_case"))
-        claim_mode = str(verification_case.get("claim_mode", "")).strip()
-        if claim_mode:
-            observed_claim_modes.add(claim_mode)
+        if trace.get("input_mode") != "image_only":
+            raise RuntimeError(f"trace is not image_only: {path.name}")
+        if trace.get("decision_policy_version") != "reinspect-v2":
+            raise RuntimeError(f"trace is not reinspect-v2: {path.name}")
+        if state.get("verification_case") is not None:
+            raise RuntimeError(
+                f"image-only trace contains a legacy VerificationCase: {path.name}"
+            )
+        investigation = _mapping(state.get("investigation_state"))
+        if not investigation.get("decisive_fact_ids"):
+            raise RuntimeError(f"trace has no decisive VisualFacts: {path.name}")
+        if not _mapping(trace.get("verdict_basis")).get("fact_ids"):
+            if trace.get("verdict") != "unverifiable":
+                raise RuntimeError(f"trace has no verdict basis facts: {path.name}")
         if trace.get("termination") != "success":
             raise RuntimeError(f"trace did not terminate successfully: {path.name}")
         if int(trace.get("llm_api_calls", 0) or 0) <= 0:
@@ -172,17 +185,12 @@ def _require_real_run_artifacts(
             "real canary did not exercise required tool classes: "
             + ", ".join(missing_classes)
         )
-    missing_modes = sorted(required_claim_modes - observed_claim_modes)
-    if missing_modes:
-        raise RuntimeError(
-            "real canary did not exercise required claim modes: "
-            + ", ".join(missing_modes)
-        )
     return {
         "passed": True,
         "run_dir": str(run_dir.resolve()),
         "trace_count": len(trace_files),
-        "claim_modes": sorted(observed_claim_modes),
+        "input_mode": "image_only",
+        "decision_policy_version": "reinspect-v2",
         "successful_tools": sorted(tools),
         "summary": summary,
     }
@@ -212,10 +220,6 @@ def _command(args: argparse.Namespace) -> list[str]:
     ]
     if args.source_access_policy:
         command.extend(["--source-access-policy", str(args.source_access_policy)])
-    if args.evaluator_private:
-        command.extend(["--evaluator-private", str(args.evaluator_private)])
-    if args.evaluation_gold:
-        command.extend(["--evaluation-gold", str(args.evaluation_gold)])
     return command
 
 
@@ -228,18 +232,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model", default="gemini-3.5-flash")
     parser.add_argument("--limit", type=int, default=2)
     parser.add_argument("--source-access-policy", type=Path)
-    parser.add_argument("--evaluator-private", type=Path)
-    parser.add_argument("--evaluation-gold", type=Path)
-    parser.add_argument(
-        "--required-claim-mode",
-        action="append",
-        choices=["external_claim", "embedded_claim"],
-        default=[],
-        help=(
-            "Claim mode that must appear in successful traces. Repeat as needed. "
-            "Defaults to requiring both external_claim and embedded_claim."
-        ),
-    )
     return parser
 
 
@@ -251,17 +243,16 @@ def main(argv: Iterable[str] | None = None) -> int:
         raise FileExistsError(
             f"real canary output directory must be new or empty: {args.output_dir}"
         )
+    release = load_runtime_release(args.benchmark)
+    if release.input_mode != "image_only":
+        raise RuntimeError("real canary accepts image-only v0.3 releases only")
+    if release.decision_policy_version != "reinspect-v2":
+        raise RuntimeError("real canary accepts reinspect-v2 releases only")
     _validate_provider_environment()
     completed = subprocess.run(_command(args), cwd=REPO_ROOT, check=False)
     if completed.returncode:
         return completed.returncode
-    required_claim_modes = set(
-        args.required_claim_mode or ["external_claim", "embedded_claim"]
-    )
-    result = _require_real_run_artifacts(
-        args.output_dir,
-        required_claim_modes=required_claim_modes,
-    )
+    result = _require_real_run_artifacts(args.output_dir)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
 
