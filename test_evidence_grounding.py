@@ -9,6 +9,7 @@ from src.orchestrator.ledger import (
     compile_runtime_ledgers,
     _direction_is_decisive,
 )
+from src.orchestrator.investigation_state import InvestigationState, VisualQuestion
 from src.orchestrator.pipeline import Orchestrator
 from src.orchestrator.stage_runner import StageStep
 from src.orchestrator.state import (
@@ -779,3 +780,38 @@ def test_weak_opposing_ugc_signals_do_not_create_claim_conflict() -> None:
 
     assert ledgers.claims[0].status == "open"
     assert "source-independence" in ledgers.claims[0].unresolved_distinction
+
+
+def test_exhausted_required_visual_question_reopens_web_supported_claim() -> None:
+    ledgers = VerificationLedgers(
+        claims=[
+            ClaimRecord(
+                claim_id="claim-q0",
+                question_id="q0",
+                text="The visible banner reads X.",
+                claim_scope="visible_content",
+                status="supported",
+            )
+        ]
+    )
+    investigation = InvestigationState(
+        visual_questions=[
+            VisualQuestion(
+                visual_question_id="vq-q0",
+                claim_id="claim-q0",
+                source_evidence_id="e-web",
+                target_bbox=[0.1, 0.1, 0.9, 0.4],
+                expected_property="Whether the banner reads X",
+                recommended_tools=["ocr_with_position"],
+                status="exhausted",
+                failed_attempts=2,
+            )
+        ]
+    )
+
+    Orchestrator._gate_claims_on_pending_visual_questions(ledgers, investigation)
+
+    assert ledgers.claims[0].status == "open"
+    assert "could not be observed after two real attempts" in (
+        ledgers.claims[0].unresolved_distinction
+    )
