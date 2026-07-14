@@ -1,38 +1,44 @@
 # Claude Project Instructions
 
-Follow `AGENTS.md` for contributor rules and `docs/architecture.md` for the active runtime contract. Read the [Agent Prompt and Runtime Guide](docs/agent-prompt-and-runtime-guide.md) for the end-to-end stage flow and the exact model/deterministic/tool boundary.
+Follow `AGENTS.md` and `docs/architecture.md`.
 
-The active benchmark input is v0.3 image-only only. Public cases contain exactly
-`case_id`, `image_path`, and `image_sha256`; do not synthesize external or embedded
-claims. The claim-driven pipeline below is temporary migration scaffolding until the
-VisualFact phases replace it.
+This repository supports only v0.3 image-only input:
 
-The target production workflow is:
-
-`InvestigationBrief -> VisualFact bootstrap -> native ReAct -> periodic Reflection -> decisive-fact Coverage -> reinspect-v2 Judgment`
-
-Use Gemini Interactions end to end for every active Gemini LLM and vision call. Tool-bearing stages use native `function_call` / `function_result` items linked by `previous_interaction_id`. Gemini calls made inside tools are separate API calls; include their prompt, completion, and thought tokens in total runtime accounting after stripping private metrics from model-facing tool JSON. Never switch wire protocols or providers after an error, parse native calls through prompt tags, or synthesize heuristic fallback plans or judgments. Invalid protocol responses, missing credentials, exhausted retries, and invalid required structured outputs are hard failures.
-
-Verification evidence must come from successful recorded tool calls and map to explicit plan question IDs. A multi-query search that fetches multiple pages may promote multiple independently eligible exact passages, at most one per fetched page; snippets and merged summaries remain discovery only. Pending ReInspect may gate only non-`external_fact` claims: external fact questions are never held open by visual comparison and require eligible direct web evidence. Every tool result must have `status: "success"` or `status: "error"`; malformed/statusless results fail the contract. When the bounded audit/replanning budget ends with factual coverage gaps, continue to ledger-bound Judgment and return the exact typed `unverifiable` reasons. Engineering, provider, protocol, malformed-output, and all-tools-failed conditions still raise before Judgment.
-
-Planning must emit an immutable declarative `claim_text` for each retrieval question. Browse stance is always extracted against that claim, and Replanning cannot rewrite it. Evaluation runs must load a benchmark provenance-derived `SourceAccessPolicy`; filtering happens before automatic browsing and before blocked rows can enter results, context, discoveries, evidence, or ledgers. Never reveal the access policy or benchmark gold to the model.
-
-Set `IMAGE_UPLOAD_PROVIDER`, `VISUAL_SEARCH_PROVIDER`, and `BROWSE_FETCH_PROVIDER` explicitly; a selected provider never falls through to another. The disk tool cache is disabled by default and, when enabled, is bounded by `TOOL_CACHE_TTL_SECONDS` and `TOOL_CACHE_NAMESPACE`.
-
-Credentials belong only in environment variables or the untracked `.env`. Sanitize secret fields and signed URLs before any trace, HTML, or cache persistence. Canonical JSON traces are persisted by default; HTML is rendered only on explicit request. Dedicated face detection, embeddings, and biometric matching are absent; person-identity claims are investigated with public-source and non-biometric evidence.
-
-Before finishing orchestration changes, run:
-
-```powershell
-python -m pytest -q test_unit.py test_native_interactions.py test_gemini_interactions_contract.py
-python -m pytest -q test_image_only_v2_trajectory.py test_audit_real_trace.py
-python scripts/probe_gemini_interactions.py --model gemini-3-flash-preview
-python scripts/run_real_canary.py --benchmark path\to\release\runtime_input\cases.jsonl --output-dir path\to\new-canary-output
+```text
+case_id + image_path + image_sha256
 ```
 
-The first two commands are contract/simulated checks. The probe validates only the
-Gemini transport. Only `run_real_canary.py` is a complete no-mock runtime acceptance.
+The runtime is:
 
-Normal runs write canonical JSON traces under `outputs/traces/`. Use `python -m src.render_trace_html outputs\traces --output-dir outputs\trace_html` to generate HTML from saved JSON when needed.
+```text
+Gemini perception + EasyOCR
+-> deterministic VisualFact/task bootstrap
+-> native Interactions ReAct
+-> Reflection every four real actions
+-> decisive-fact Coverage
+-> reinspect-v2 Judgment
+```
 
-For a real end-to-end trace, run `python scripts/audit_real_trace.py <trace.json> --json --strict-scheduler` before accepting its accounting, scheduler behavior, and final state.
+Do not restore claim modes, claim-ledger planning, fixed replanning, or
+`reinspect-v1`. `reinspect-v2` is the current v3 verdict-policy identifier.
+
+Evidence must be grounded in successful tool calls. Discovery is never Evidence.
+Every verdict basis must trace through `VisualFact -> Finding -> Evidence -> successful
+tool call`. Provider, protocol, malformed-output, all-tools-failed, and configuration
+failures are engineering errors and must not become `unverifiable`.
+
+Gold and source-access exclusions are evaluator-private. Gold is loaded only after all
+rollouts; blocked sources are filtered before model-visible results.
+
+Use Gemini Interactions end to end, one accepted tool call per action turn, and keep
+credentials environment-only. Canonical JSON is the source trace; HTML is derived.
+
+Before finishing runtime changes:
+
+```powershell
+python -m pytest -q
+python -m compileall -q src scripts
+git diff --check
+```
+
+Only a no-mock real canary plus strict trace audit proves live acceptance.

@@ -157,7 +157,7 @@ manifests only.
 Push the desired branch from the local repository first:
 
 ```powershell
-git push -u origin codex/gemini-interactions-agent
+git push -u origin codex/image-factual-verifier-v3
 ```
 
 Then execute the following on gpu-13 through Jupyter or an approved terminal. The
@@ -170,7 +170,7 @@ export OMP_NUM_THREADS=1
 
 mkdir -p /gs/home/wza/projects
 cd /gs/home/wza/projects
-git clone --branch codex/gemini-interactions-agent \
+git clone --branch codex/image-factual-verifier-v3 \
   https://github.com/wangzian828/image-factual-verifier-v2.git
 cd image-factual-verifier-v2
 bash scripts/server/bootstrap_gpu13.sh
@@ -193,7 +193,7 @@ After each local commit and push:
 
 ```bash
 cd /gs/home/wza/projects/image-factual-verifier-v2
-bash scripts/server/update_gpu13_checkout.sh codex/gemini-interactions-agent
+bash scripts/server/update_gpu13_checkout.sh codex/image-factual-verifier-v3
 bash scripts/server/bootstrap_gpu13.sh
 ```
 
@@ -207,17 +207,7 @@ Run focused contract tests without credentials first:
 ```bash
 cd /gs/home/wza/projects/image-factual-verifier-v2
 scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
-  python -m pytest -q \
-  test_unit.py \
-  test_evidence_grounding.py \
-  test_failure_contracts.py \
-  test_provider_failure_propagation.py \
-  test_native_interactions.py \
-  test_gemini_interactions_contract.py \
-  test_gemini_vlm_interactions.py \
-  test_image_only_v2_trajectory.py \
-  test_audit_real_trace.py \
-  test_trace_viewer.py
+  python -m pytest -q
 ```
 
 These are contract and scripted-state checks. For real Gemini transport, create an
@@ -234,18 +224,14 @@ Dataset acquisition, review, and release finalization now belong to the separate
 `image-factual-verifier-data-pipeline` project. Copy or mount only a finalized release
 under `IFV_DATA_ROOT`; do not run construction code from this runtime checkout.
 
-Real evaluation defaults to four verification/replanning iterations, twelve native
-Interactions turns per iteration, and a 30-minute per-image timeout. Use
-`--max-verification-iterations` and `--max-rounds-verification` only for an explicit
-experiment; do not reduce them merely to make a run finish. The adaptive audit can stop
-after two consecutive low-information-gain iterations when no P2 service or ReInspect
-work remains, and records whether it stopped on coverage, saturation, or the hard cap.
-Open-ended verification turns use a 16,384-token output budget. The final schema-only
-summary after the tool budget uses 32,768 tokens with minimal thinking, while all ReAct
-tool decisions retain normal investigation-time reasoning. Interactions failures remain
-hard failures, but the error trace retains all completed native tool calls. Evaluation
-also rejects any search query that explicitly names a policy-excluded fact-check domain
-before it reaches Serper.
+The v3 runtime allows at most 24 real tool actions. The initial reverse-image search
+counts as action 1; structured Reflection runs after actions 4, 8, 12, 16, 20, and 24.
+Coverage can stop earlier when all decisive facts resolve or after two consecutive
+low-gain Reflection intervals with no unattempted priority-1 task. Open-ended ReAct
+turns use a 16,384-token output budget; Reflection and Judgment use 8,192. All active
+Gemini stages require minimal thinking. Interactions failures remain hard failures,
+and the error trace retains completed calls. Evaluation also rejects queries that
+explicitly target policy-excluded fact-check domains before Serper.
 
 Run a foreground no-mock canary first. It validates provider configuration, launches
 the real evaluator, requires successful search/visit/visual tool classes, and runs the

@@ -1,40 +1,40 @@
 # Runtime Release Contract
 
-This repository consumes only immutable v0.3 image-only benchmark releases produced
-by the separate `image-factual-verifier-data-pipeline` project. It does not import
-construction-pipeline Python modules and does not maintain the old claim-mode release
-contract.
+This repository consumes only immutable v0.3 image-only releases produced by the
+separate data-pipeline repository.
 
 ## Ownership
 
 The data project owns:
 
+- release construction, review, and content-addressed images;
 - `manifest.json`;
-- `runtime_input/cases.jsonl` and content-addressed images;
-- optional `evaluator_private/source_access_policy.json`;
-- `evaluator_private/gold.jsonl`;
+- `runtime_input/cases.jsonl`;
+- optional evaluator-private source-access policy;
+- evaluator-private gold and acceptable evidence;
 - classification and process-reference protocols;
-- checksums, licenses, construction records, and release review.
+- classification scorer, checksums, licenses, and source snapshots.
 
-The runtime owns:
+The v3 runtime owns:
 
-- strict manifest and public-row parsing;
-- release-relative path resolution and image SHA-256 verification;
+- strict release and row parsing;
+- path and image-hash validation;
 - Agent rollout and canonical traces;
-- post-rollout private-gold join validation;
-- `InvestigationBrief`, `VisualFact`, `ResearchTask`, `Finding`, Reflection,
-  coverage, and `verdict_basis`;
-- process scoring and later trajectory export.
+- VisualFacts, tasks, Findings, Reflection, Coverage, and verdict basis;
+- post-rollout process scoring;
+- policy trajectory and dataset export/audit.
 
-## Required Release
+The repositories do not import each other.
 
-The benchmark entrypoint is:
+## Required manifest
+
+The evaluator entrypoint is:
 
 ```text
 <release-root>/runtime_input/cases.jsonl
 ```
 
-The release root must contain `manifest.json` with:
+`manifest.json` must declare:
 
 ```json
 {
@@ -49,23 +49,10 @@ The release root must contain `manifest.json` with:
 }
 ```
 
-Every public row contains exactly:
+`reinspect-v2` is the current v3 verdict policy. It does not mean the repository
+supports a v2 runtime.
 
-```json
-{
-  "case_id": "case_0123456789abcdef",
-  "image_path": "assets/sha256/ab/abcdef.jpg",
-  "image_sha256": "abcdef..."
-}
-```
-
-Public rows must not contain claim placeholders, factual labels, decisive facts,
-acceptable evidence, construction metadata, source provenance, or runtime-generated
-investigation state.
-
-## Manifest Artifacts
-
-`manifest["artifacts"]` supplies release-relative paths for:
+The manifest `artifacts` object supplies release-relative paths for:
 
 ```text
 agent_input
@@ -75,68 +62,98 @@ process_reference_protocol
 licenses
 ```
 
-All paths must remain inside the release root. `artifacts.agent_input` must resolve to
-the exact benchmark path passed to the evaluator.
+When `source_access_policy.active=true`, it also supplies an existing release-relative
+policy path. When inactive, no path may be declared.
 
-`source_access_policy.active=false` means no policy file is required. When active, the
-manifest must provide a release-relative path to an existing policy file. The policy
-is loaded before retrieval and is never exposed to the model.
+All artifact paths must remain inside the release root. `artifacts.agent_input` must
+equal the evaluator entrypoint.
 
-## Rollout Isolation
+## Public cases
 
-Before rollout the runtime may read:
-
-- the public manifest;
-- public protocols;
-- public runtime rows;
-- image assets;
-- an active evaluator-private source-access policy.
-
-It must not read `evaluator_private/gold.jsonl` until all Agent rollouts finish.
-After rollout, gold is loaded only to validate the `case_id` join and later drive
-classification/process scoring. Gold values must not be copied into predictions or
-canonical Agent traces.
-
-## Predictions
-
-`predictions.jsonl` contains at least:
+Every JSONL row has exactly:
 
 ```json
-{"case_id": "case_...", "verdict": "real"}
+{
+  "case_id": "case_0123456789abcdef",
+  "image_path": "assets/sha256/ab/abcdef.jpg",
+  "image_sha256": "abcdef..."
+}
 ```
 
-Allowed verdicts are:
+Forbidden public content includes:
+
+- factual labels or gold;
+- decisive facts or acceptable evidence;
+- source provenance and construction metadata;
+- runtime VisualFacts, tasks, Findings, trajectories, or scores;
+- any extra or nullable placeholder field.
+
+`image_path` is relative to `runtime_input/`, cannot escape that directory, and is
+re-hashed before execution.
+
+## Rollout isolation
+
+Before rollout, v3 may read:
+
+- public manifest and protocols;
+- public cases and images;
+- an active evaluator-private source-access policy.
+
+It must not read `evaluator_private/gold.jsonl`.
+
+After all rollouts, v3 loads gold, validates the one-to-one `case_id` join, computes
+process metrics and trajectory scores, and records the gold artifact hash. Gold is
+never copied into model inputs, predictions, or canonical Agent state.
+
+## Evaluation artifacts
+
+### `predictions.jsonl`
+
+Contains successful classifications only:
+
+```json
+{"case_id": "case_...", "verdict": "fake"}
+```
+
+The field set is exactly `case_id` and `verdict`; verdict is
+`real|fake|unverifiable`.
+
+Engineering-error cases are absent from this file. The data-owned classification
+scorer treats the missing case as wrong.
+
+### `run_results.jsonl`
+
+Contains runtime diagnostics:
 
 ```text
-real | fake | unverifiable
+case_id, verdict/error, confidence, verdict_basis, termination,
+time/call/token accounting, stage timings, trace_path
 ```
 
-Runtime diagnostics such as confidence, `verdict_basis`, trace path, termination,
-costs, and engineering error may be additive. Labels, factual status, decisive gold
-facts, and acceptable evidence are forbidden.
+`error` is an execution status, not a classification verdict.
 
-Classification scoring remains owned by the data project. The runtime's
-`summary.json` reports execution status and cost; it does not duplicate benchmark
-accuracy or Macro-F1.
-
-## Current Activation State
-
-The v0.3 release consumer is active:
-
-- manifest and row validation;
-- path-boundary validation;
-- image hash verification;
-- optional source policy;
-- post-rollout gold join;
-- scorer-compatible predictions.
-
-The image-only Agent itself is still under implementation. Until VisualFact bootstrap
-and `reinspect-v2` execution are active, the default workflow returns an explicit
-engineering error:
+### Process and trajectory outputs
 
 ```text
-image-only runtime input is valid, but VisualFact bootstrap and reinspect-v2
-execution are not active yet
+process_metrics.jsonl
+trajectory_scores.jsonl
+policy_trajectories.jsonl
 ```
 
-It must not silently convert image-only input into an embedded or external claim.
+These are post-rollout evaluator/training artifacts. They are never model-visible.
+
+### Other outputs
+
+```text
+run_manifest.json
+summary.json
+traces/*.json
+```
+
+`run_manifest.json` records public artifact hashes before rollout and private gold hash
+only after rollout.
+
+## Compatibility policy
+
+The consumer fails closed on any schema, input mode, runtime contract, or decision
+policy other than the values above. There is no v0.2 or claim-mode fallback.

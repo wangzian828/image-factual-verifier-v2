@@ -1,162 +1,104 @@
 # Image Factual Verifier v3 Contributor Guide
 
-## Source Of Truth
+## Source of truth
 
-Read `docs/architecture.md` before changing the workflow. It documents the active runtime contract, configuration, tests, and trace format. Use the [Agent Prompt and Runtime Guide](docs/agent-prompt-and-runtime-guide.md) for the end-to-end flow and the boundary between model prompts, deterministic orchestration, tool-internal model calls, and validation gates. Prefer the implementation and contract tests when a comment or an old report disagrees with those documents.
+Read these active documents before changing the runtime:
 
-Benchmark construction lives in the separate `image-factual-verifier-data-pipeline`
-project. This repository consumes immutable releases only. Read
-`docs/runtime-release-contract.md` before changing runtime input, evaluator-private
-joins, source-access policy loading, claim modes, or decision-policy versions. Never
-import construction-pipeline modules into the runtime.
+- `docs/architecture.md`
+- `docs/agent-prompt-and-runtime-guide.md`
+- `docs/runtime-release-contract.md`
+- `docs/superpowers/plans/2026-07-14-visual-fact-search-agent.md`
 
-The supported production path is a multi-stage Gemini agent using the Gemini Interactions API. Generic backend adapters may remain for isolated tests or non-production integrations, but they are not a runtime fallback for the active workflow.
+The implementation and contract tests win when an old research note disagrees.
 
-The benchmark release boundary is now v0.3 image-only only:
-`manifest.json` declares `input_mode=image_only` and
-`decision_policy_version=reinspect-v2`; public rows contain exactly `case_id`,
-`image_path`, and `image_sha256`. The old claim-driven `VerificationCase/reinspect-v1`
-pipeline remains temporarily as internal migration scaffolding for existing unit and
-scripted tests. It is not a supported benchmark-release contract and must not constrain
-the new VisualFact state model. Never convert image-only input into an external or
-embedded claim.
+## Supported boundary
 
-## Required Architecture
+The only supported benchmark path is v0.3 `image_only` with
+`decision_policy_version=reinspect-v2`.
 
-The target control flow is defined by the VisualFact plan and design:
+Public rows contain exactly `case_id`, `image_path`, and `image_sha256`.
+Do not add claim fields, claim modes, nullable placeholders, construction metadata, or
+gold. Do not restore the removed claim-driven runtime.
 
-1. **Image-only case and Perception**: accept `ImageOnlyRuntimeCase`, verify its SHA-256, and create an immutable `InvestigationBrief`.
-2. **VisualFact bootstrap**: derive image-grounded entities, text, regions, candidate facts, retrieval anchors, and at most four initial tasks.
-3. **Iterative native ReAct and ReInspect**: let Gemini choose tools through Interactions `function_call`, while deterministic reducers persist Discovery, Evidence, Finding, fact, and task state.
-4. **Periodic Reflection and Coverage**: reflect after every four real tool actions, then deterministically audit decisive facts, pending ReInspect, substantive progress, and budgets.
-5. **reinspect-v2 Judgment**: validate `real`, `fake`, or typed `unverifiable` against exact `VisualFact -> Finding -> Evidence -> tool call` chains and emit `verdict_basis`.
+`reinspect-v2` is the current v3 decision-policy name, not compatibility with an older
+project version.
 
-This is an agent, not a fixed tool script. Do not replace verification with a predetermined tool sequence or a single model call. Perception is intentionally deterministic; planning, tool choice, replanning, and judgment remain model-driven within validated boundaries.
+## Required control flow
 
-## Non-Negotiable Invariants
+1. Validate and hash-check `ImageOnlyRuntimeCase`.
+2. Run Gemini `perceive_scene` and EasyOCR `ocr_with_position`.
+3. Deterministically build an immutable `InvestigationBrief`, pixel-grounded
+   `VisualEntity`/`VisualFact` records, retrieval anchors, and at most four initial
+   `ResearchTask` records.
+4. Run one initial reverse-image search as Discovery only.
+5. Let Gemini choose one native Interactions function call per action turn.
+6. Deterministically reduce each real action into separate Discovery, Evidence,
+   Finding, Failure, task, and fact state.
+7. Run structured Reflection after cumulative actions 4, 8, 12, 16, 20, and 24.
+8. Audit decisive facts and stop on coverage, two low-gain Reflection intervals, or
+   the 24-action cap.
+9. Compile the only allowed verdict and basis, then require Gemini Judgment to match
+   them exactly.
 
-- Use Gemini Interactions for the active Gemini LLM and vision path. Gemini vision must fail when the configured wire protocol is not `interactions`.
-- Use native Interactions function calling in tool-bearing agent stages. Send tool schemas on the first interaction, execute returned calls, send `function_result`, and preserve the chain with `previous_interaction_id`.
-- Do not translate native calls into prompt tags, silently switch to Chat Completions or Responses, change providers, or synthesize a heuristic plan/judgment after a protocol failure.
-- Retry only the same Interactions request for documented transient HTTP statuses or transport errors. Exhaustion, malformed success payloads, missing interaction IDs, invalid required-action responses, and invalid final structured output are hard failures.
-- Reject ungrounded conclusions. Verification needs a successful tool result; evidence must map to an actual tool step and an investigation question. A tool error is not evidence.
-- Require every tool to return a JSON object whose `status` is exactly `success` or `error`; an error result also needs a non-empty `error`. Reject malformed or statusless results instead of inventing success semantics.
-- Keep `ImageOnlyRuntimeCase` to exactly three public fields and keep benchmark gold out of all pre-rollout runtime/model state. Always verify `image_sha256`; the active release policy is `reinspect-v2`.
-- Treat `claims`, `sources`, `evidence`, `discoveries`, and `failures` as separate machine-verifiable collections. Preserve stable IDs, exact tool-call provenance, source family/risk metadata, artifact hashes, retrieval times, and recovery links.
-- Keep discovery separate from evidence. Search snippets, result titles, reverse-image matches, and generated summaries are leads only. They cannot close a claim or be cited by Judgment.
-- Promote web evidence only from a fetched page and an existing selected passage. Require an exact span and matching offsets, canonical URL, artifact SHA-256, ISO-8601 retrieval time, directness, valid stance/relevance, `evidence_eligible=true`, and no injection flags. A multi-query, multi-page search call may promote multiple independently eligible passages, at most one selected passage per fetched page; do not collapse them into one summary. Never accept model-invented or merged passage text.
-- Keep ReInspect evidence-conditioned. A search-created `VisualQuestion` must identify exactly one source evidence/discovery ID, normalized target box, expected property, and allowed real visual action. Matching OCR/crop/count/reference calls resolve or fail it. A pending ReInspect may hold only a linked non-`external_fact` claim open; an external fact question is never ReInspect-gated and still requires eligible direct web evidence.
-- Keep coverage and judgment deterministic. Decisive fact status depends on qualified Findings, direct Evidence, visual bridges, and source-family independence. Judgment may use only matching runtime IDs; `real`, `fake`, and typed `unverifiable` follow `reinspect-v2`.
-- Require an explicit `question_id` on verification function calls. Never silently assign a call to a question.
-- In benchmark evaluation, enforce the provenance-derived `SourceAccessPolicy` before search results are enriched or returned and before any direct page/reference fetch. Do not expose excluded URLs/domains or hidden gold to the model. Product mode remains unrestricted.
-- Reject benchmark search queries that explicitly target an excluded fact-check domain before calling the search provider; the model must reformulate toward independent open-web sources.
-- Ground browse stance to immutable `claim_text`, keep model queries as retrieval parameters only, and require every unresolved priority-1 and priority-2 question to receive one real tool attempt before its first accepted verification output. ReAct tool order remains model-chosen; later coverage audits and replanning decide which unresolved questions need more work rather than prescribing a fixed sequence.
-- Select upload, visual-search, and browse-fetch providers explicitly. A selected provider's failure must propagate; do not fall through to another provider.
-- Sanitize credentials, secret fields, and signed-URL authentication parameters before writing traces, HTML, or cache entries.
-- Persist canonical JSON traces by default. HTML is a derived diagnostic view and is generated only through `src.render_trace_html` when requested.
-- Keep the disk tool cache opt-in. It is disabled by default and must remain bounded by TTL and namespace when enabled.
-- Read credentials only from environment variables or an untracked `.env`. Never place keys in source, configuration, prompts, traces, tests, or documentation.
-- Do not add a dedicated face detector, face embedding store, biometric recognition model, or biometric similarity tool. Person-identity claims remain in scope when investigated through reverse-image search, original-source captions, public reporting, visible non-biometric cues, and event context.
+## Non-negotiable invariants
 
-## Active Modules
+- Gemini LLM and vision use the Interactions API. Never switch wire protocols or
+  providers after an error.
+- Tool-bearing turns use native `function_call` / `function_result` with
+  `previous_interaction_id`; at most one tool call is accepted per v3 action turn.
+- Gemini sees the image in `perceive_scene`. EasyOCR is a separate deterministic OCR
+  tool. Manual image inspection is not part of the runtime.
+- A tool result is a JSON object with `status=success|error`. Tool errors and malformed
+  output are not Evidence.
+- Search snippets, titles, reverse-image matches, and generated summaries are
+  Discovery only.
+- Web Evidence requires a fetched exact span, offsets, canonical URL, artifact SHA-256,
+  retrieval time, directness, stance, and successful function-call provenance.
+- A Finding must link one ResearchTask and owned fact/evidence IDs.
+- A verdict basis must follow
+  `VisualFact -> Finding -> Evidence -> successful tool call`.
+- `fake` requires a decisive refuted fact; `real` requires every decisive fact to be
+  supported; all other valid factual outcomes are `unverifiable`.
+- If all investigation tools fail, or a provider/protocol/runtime boundary fails, stop
+  with an engineering error before Judgment.
+- Keep evaluator-private gold out of runtime/model state. Load it only after all
+  rollouts for scoring.
+- Apply `SourceAccessPolicy` before blocked rows or pages can enter tool output or model
+  context.
+- Persist redacted canonical JSON. HTML is derived diagnostics only.
+- Keep credentials in environment variables or untracked `.env` files.
+- Do not add face detection, embeddings, biometric matching, or a face-identity store.
 
-- `src/workflow.py`: public workflow wrapper and canonical JSON trace export.
-- `src/orchestrator/pipeline.py`: stage ordering, verification iterations, coverage audit, replanning, and output validation.
-- `src/orchestrator/stage_runner.py`: bounded ReAct loop and native Interactions function-call round trips.
-- `src/orchestrator/state.py`: `ImageOnlyRuntimeCase`, migration scaffolding, ledger records, stage outputs, and aggregate trace state.
-- `src/orchestrator/ledger.py`: case construction/hash checks, ledger compilation, claim status, and typed insufficiency reasons.
-- `src/orchestrator/investigation_state.py`: per-observation belief deltas, visual questions, regional observations, and stopping assessments.
-- `src/orchestrator/source_provenance.py`: URL canonicalization, source-family/class assignment, and risk flags.
-- `src/orchestrator/context.py`: compact context passed between stages.
-- `src/orchestrator/tool_registry.py`: active stage-to-tool allowlists and tool health.
-- `src/integrations/gemini/interactions.py`: environment-authenticated Interactions REST contract and retry policy.
-- `src/integrations/browse/jina_reader.py`: selected fetch provider, deterministic passage candidates, exact-span extraction, and injection gating.
-- `src/trace_viewer.py` and `src/render_trace_html.py`: standalone trace rendering.
+## Active modules
 
-Do not infer the active tool set from every file under `src/tools/`; use `STAGE_TOOLS` in `src/orchestrator/tool_registry.py`.
+- `src/workflow.py`: v3-only public workflow and trace persistence.
+- `src/orchestrator/pipeline.py`: perception, ReAct, Reflection, Coverage, Judgment.
+- `src/orchestrator/state.py`: canonical v3 runtime state.
+- `src/orchestrator/investigation_models.py`: strict VisualFact state schemas.
+- `src/orchestrator/bootstrap.py`: deterministic brief/fact/task bootstrap.
+- `src/orchestrator/task_store.py`: action reducer and bounded Reflection transitions.
+- `src/orchestrator/coverage.py`: decisive-fact coverage and verdict basis.
+- `src/orchestrator/stage_runner.py`: native Interactions protocol and tool execution.
+- `src/eval/release_adapter.py`: immutable v0.3 release consumer.
+- `src/eval/run_eval.py`: rollout, post-rollout scoring, and artifacts.
+- `src/trajectory/`: policy export and process scoring.
+- `scripts/audit_real_trace.py`: strict image-only trace audit.
 
-## Configuration And Credentials
+Use `STAGE_TOOLS` in `src/orchestrator/tool_registry.py` as the active tool registry.
 
-The normal local setup is:
+## Validation discipline
 
-```powershell
-python -m pip install -e ".[dev]"
-$env:GEMINI_API_KEY = "..."
-$env:SERPER_API_KEY = "..."
-python -m src path\to\image.jpg
-```
-
-`GOOGLE_API_KEY` is accepted as the Gemini credential alias. `GEMINI_WIRE_API` should be unset or `interactions`; `AGENT_LLM_WIRE_API` and `VISION_LLM_WIRE_API` must not redirect the active Gemini path to another protocol. `GEMINI_INTERACTIONS_URL` may override the endpoint for a compatible deployment. Search and browsing integrations may require `SERPER_API_KEY` and `JINA_API_KEY`; proxy settings come from `HTTPS_PROXY` / `HTTP_PROXY`.
-
-Set the integration selectors explicitly in deployed environments:
-
-```dotenv
-IMAGE_UPLOAD_PROVIDER=oss
-VISUAL_SEARCH_PROVIDER=serper_lens
-BROWSE_FETCH_PROVIDER=jina
-```
-
-Accepted values are `oss|custom|temp`, `serper_lens|zhipu_image_search`, and `jina|direct`, respectively. The defaults shown above preserve local defaults but do not permit provider fallback.
-
-The disk cache is off unless explicitly enabled:
-
-```dotenv
-TOOL_CACHE_ENABLED=0
-TOOL_CACHE_DIR=.cache/tool_results
-TOOL_CACHE_TTL_SECONDS=3600
-# Optional override; otherwise the namespace includes the tool contract, models, and provider selectors.
-TOOL_CACHE_NAMESPACE=
-```
-
-Verification defaults to 12 native ReAct turns per iteration and `MAX_VERIFICATION_ITERATIONS=4`, with `MIN_VERIFICATION_ITERATIONS=2` and `LOW_INFORMATION_GAIN_PATIENCE=2`. The outer loop stops only on decisive coverage plus required P2 service, two consecutive low-gain iterations with no pending ReInspect, or the hard cap; traces distinguish these outcomes. `GEMINI_VERIFICATION_MAX_OUTPUT_TOKENS` defaults to `16384`, and the forced schema serialization uses `GEMINI_VERIFICATION_FINAL_MAX_OUTPUT_TOKENS=32768`. Every active Gemini agent, browse, and visual Interactions call uses `thinking_level=minimal`; record thought-token usage and treat any non-zero count as a configuration defect. Gemini calls made inside tools are separate API calls and their prompt, completion, and thought tokens must be included in aggregate call/token accounting even though their private runtime metrics are removed from model-facing tool JSON. Do not retry a failed call by changing thinking level, model, provider, or protocol. `GEMINI_VISION_MIN_OUTPUT_TOKENS` defaults to `8192`, `GEMINI_VISION_TIMEOUT_SECONDS` to `240`, and `BROWSE_EXTRACT_MAX_OUTPUT_TOKENS` to `4096`.
-
-Keep all secrets environment-only even when adding controls.
-
-## Validation
-
-Run focused local contract and scripted-state tests:
+Run focused tests while editing, then:
 
 ```powershell
-python -m pytest -q test_release_adapter.py test_eval_artifacts.py test_image_only_bootstrap.py test_image_only_state_machine.py test_image_only_v2_trajectory.py test_native_interactions.py test_gemini_interactions_contract.py test_gemini_vlm_interactions.py test_audit_real_trace.py test_trace_viewer.py test_trajectory_export.py test_trajectory_dataset.py
-python scripts/probe_gemini_interactions.py --model gemini-3-flash-preview
+python -m pytest -q
+python -m compileall -q src scripts
+git diff --check
 ```
 
-The pytest suite covers deterministic contracts and simulated failure boundaries.
-`test_image_only_v2_trajectory.py` is the controlled provider/tool trajectory for the
-supported v0.3 image-only/reinspect-v2 runtime. It validates state transitions and
-trace structure; it is not a real-world factual result. Passing pytest or the protocol
-probe must never be reported as proof that the complete system works against real
-providers.
+Pytest and scripted trajectories are not live acceptance. Runtime acceptance requires
+`scripts/run_real_canary.py` with real Gemini/search/upload/browse/visual providers and
+`scripts/audit_real_trace.py --strict-scheduler`.
 
-Before accepting a runtime phase, run a no-mock canary against a finalized release:
-
-```powershell
-python scripts/run_real_canary.py `
-  --benchmark path\to\release\runtime_input\cases.jsonl `
-  --output-dir path\to\new-canary-output
-```
-
-The canary must use real Gemini, search, browse, image upload/reverse search, and visual
-tools; finish without engineering errors; exercise search, visit, and visual tool
-classes; and pass `scripts/audit_real_trace.py --json --strict-scheduler`.
-
-For a real run, inspect the canonical JSON under `outputs/traces/`. Generate a standalone HTML diagnostic view only when needed:
-
-```powershell
-python -m src.render_trace_html outputs\traces --output-dir outputs\trace_html
-```
-
-Audit a real canonical trace, including aggregate accounting, initial required-question coverage, and runtime rejection checks, before treating it as a valid end-to-end run:
-
-```powershell
-python scripts/audit_real_trace.py outputs\traces\example.json --json --strict-scheduler
-```
-
-Generated traces, caches, and logs are ignored. Do not place committed test fixtures under ignored output paths.
-
-## Change Discipline
-
-- Keep changes scoped and preserve concurrent work already present in the worktree.
-- Add or update tests whenever stage contracts, function schemas, evidence validation, coverage logic, or trace serialization changes.
-- Propagate failures with enough context to diagnose the failing endpoint, interaction, stage, or tool. Do not hide them behind an `unverifiable` result.
-- Keep `AGENTS.md`, `CLAUDE.md`, and `docs/architecture.md` aligned with the active contract.
+Preserve unrelated user changes, keep commits scoped, and never modify the separate
+data-pipeline repository from this worktree.

@@ -1,4 +1,4 @@
-"""Prompts and compact context renderers for the image-only v2 runtime."""
+"""Prompts and compact context renderers for the v3 image-only runtime."""
 
 from __future__ import annotations
 
