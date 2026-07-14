@@ -513,7 +513,23 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
                 trajectory_scores.append(teacher_score)
                 policy_trajectories.extend(
                     item.model_dump(mode="json")
-                    for item in export_policy_examples(trace)
+                    for item in export_policy_examples(
+                        trace,
+                        source_metadata={
+                            "source_run_id": manifest["run_id"],
+                            "runtime_commit": manifest["git_commit"],
+                            "release_id": release.release_id,
+                            "runtime_contract_version": (
+                                release.runtime_contract_version
+                            ),
+                            "process_reference_protocol_version": (
+                                release.manifest.get(
+                                    "process_reference_protocol_version",
+                                    "",
+                                )
+                            ),
+                        },
+                    )
                 )
             else:
                 process_metrics.append(

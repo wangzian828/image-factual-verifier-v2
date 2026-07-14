@@ -118,6 +118,7 @@ def export_policy_examples(
     trace: Mapping[str, Any],
     *,
     tokenizer: TokenizerAdapter | None = None,
+    source_metadata: Mapping[str, Any] | None = None,
 ) -> List[PolicyExample]:
     """Export actual model-visible requests/actions from one canonical trace."""
 
@@ -134,6 +135,7 @@ def export_policy_examples(
         raise ValueError("policy exporter accepts reinspect-v2 traces only")
 
     tokenizer = tokenizer or Utf8ByteTokenizer()
+    source_metadata = source_metadata or {}
     episode_id = str(
         trace.get("image_id") or state.get("image_id") or ""
     ).strip()
@@ -185,6 +187,18 @@ def export_policy_examples(
                 tokenizer_id=tokenizer.tokenizer_id,
                 episode_id=episode_id,
                 step_id=step_id,
+                source_run_id=str(source_metadata.get("source_run_id", "")),
+                runtime_commit=str(source_metadata.get("runtime_commit", "")),
+                release_id=str(source_metadata.get("release_id", "")),
+                runtime_contract_version=str(
+                    source_metadata.get("runtime_contract_version", "")
+                ),
+                process_reference_protocol_version=str(
+                    source_metadata.get(
+                        "process_reference_protocol_version",
+                        "",
+                    )
+                ),
                 example_type=example_type,
                 runtime_observation_refs=_observation_refs(policy_input),
                 policy_input=policy_input,

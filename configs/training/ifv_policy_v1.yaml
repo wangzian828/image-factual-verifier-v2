@@ -1,0 +1,23 @@
+dataset_version: ifv-policy-dataset-v1
+trajectory_version: ifv-policy-v1
+tokenizer_adapter: utf8-byte-v1
+split:
+  train: 0.8
+  validation: 0.1
+  test: 0.1
+grouping:
+  - episode_id
+  - source_family
+required_audits:
+  - no_evaluator_private_leakage
+  - runtime_references_resolvable
+  - loss_masks_aligned
+  - episodes_do_not_cross_splits
+  - source_families_do_not_cross_splits
+training_scope:
+  stage_1: react
+  stage_2: planning_and_react
+  stage_3: reflection
+  stage_4: optional_judgment
+  stage_5: preference_or_rl_after_sft
+training_enabled: false

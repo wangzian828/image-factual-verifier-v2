@@ -16,6 +16,14 @@ class PolicyExample(StrictModel):
     tokenizer_id: str = Field(min_length=1, max_length=200)
     episode_id: str = Field(min_length=1, max_length=200)
     step_id: str = Field(min_length=1, max_length=300)
+    source_run_id: str = Field(default="", max_length=300)
+    runtime_commit: str = Field(default="", max_length=100)
+    release_id: str = Field(default="", max_length=300)
+    runtime_contract_version: str = Field(default="", max_length=200)
+    process_reference_protocol_version: str = Field(
+        default="",
+        max_length=200,
+    )
     example_type: Literal["planning", "react", "reflection", "judgment"]
     runtime_observation_refs: List[str] = Field(default_factory=list, max_length=64)
     policy_input: Dict[str, Any]
@@ -38,3 +46,13 @@ class PolicyExample(StrictModel):
         if any(value not in {0, 1} for value in self.policy_action_loss_mask):
             raise ValueError("policy_action_loss_mask values must be 0 or 1")
         return self
+
+
+class DatasetExample(PolicyExample):
+    dataset_version: Literal["ifv-policy-dataset-v1"] = (
+        "ifv-policy-dataset-v1"
+    )
+    split: Literal["train", "validation", "test"]
+    split_group_id: str = Field(min_length=1, max_length=100)
+    source_family_keys: List[str] = Field(default_factory=list, max_length=100)
+    teacher_score: float = 0.0
