@@ -436,6 +436,7 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
         timeout=args.timeout,
         save_traces=True,
         source_access_policy=explicit_policy,
+        decision_policy_version=release.decision_policy_version,
     )
     try:
         workflow = VerificationWorkflow(config)

@@ -11,6 +11,12 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from src.orchestrator.context import ContextRenderer
 from src.integrations.gemini import take_runtime_metrics
+from src.orchestrator.bootstrap import build_bootstrap_investigation
+from src.orchestrator.coverage_v2 import (
+    activate_initial_decisive_facts,
+    audit_coverage,
+    compile_verdict_basis,
+)
 from src.orchestrator.evidence_policy import (
     query_targets_fact_check_answer,
     tool_can_decide_claim,
@@ -28,6 +34,20 @@ from src.orchestrator.investigation_state import (
     InvestigationState,
     pending_visual_question_ids,
 )
+from src.orchestrator.image_only_prompts import (
+    JUDGMENT_SYSTEM_PROMPT as IMAGE_ONLY_JUDGMENT_PROMPT,
+    REACT_SYSTEM_PROMPT as IMAGE_ONLY_REACT_PROMPT,
+    REFLECTION_SYSTEM_PROMPT as IMAGE_ONLY_REFLECTION_PROMPT,
+    render_judgment_context as render_image_only_judgment_context,
+    render_react_context as render_image_only_react_context,
+    render_reflection_context as render_image_only_reflection_context,
+)
+from src.orchestrator.investigation_models import (
+    ImageOnlyInvestigationState,
+    ImageOnlyJudgment,
+    InvestigationSegmentOutput,
+    ReflectionOutput,
+)
 from src.orchestrator.llm_backend import APIBackend
 from src.orchestrator.stage_runner import StageRunner, StageStep
 from src.orchestrator.source_provenance import canonicalize_url, classify_source
@@ -41,6 +61,7 @@ from src.orchestrator.state import (
     FinalJudgment,
     LedgerJudgment,
     InvestigationQuestion,
+    ImageOnlyRuntimeCase,
     PlanRevision,
     PerceptionReport,
     QuestionResolution,
@@ -61,6 +82,15 @@ from src.orchestrator.tool_registry import (
     build_stage_tools,
 )
 from src.orchestrator.tool_result import parse_tool_result, serialize_tool_result
+from src.orchestrator.task_store import (
+    MAX_TOOL_ACTIONS,
+    REFLECTION_INTERVAL,
+    apply_reflection,
+    apply_segment_output,
+    record_tool_observation,
+    stable_id,
+    state_from_bootstrap,
+)
 from src.storage import default_tool_cache_dir
 
 
@@ -282,6 +312,9 @@ class Orchestrator:
         state = VerificationState(
             image_path=image_path,
             image_id=image_id or os.path.basename(image_path) or image_path,
+            runtime_case=runtime_case,
+            input_mode=runtime_case.claim_mode.value,
+            decision_policy_version=runtime_case.decision_policy_version,
             verification_case=runtime_case,
             tool_health=self.tool_health_summary,
         )
@@ -333,6 +366,8 @@ class Orchestrator:
         return {
             "image_id": state.image_id,
             "image_path": state.image_path,
+            "input_mode": state.input_mode,
+            "decision_policy_version": state.decision_policy_version,
             "judgment": state.judgment.model_dump(),
             "verdict": state.judgment.verdict,
             "confidence": state.judgment.confidence,
@@ -345,6 +380,525 @@ class Orchestrator:
             "llm_api_calls": state.llm_api_calls,
             "error": " | ".join(state.errors) if state.errors else None,
         }
+
+    async def run_image_only(
+        self,
+        image_path: str,
+        runtime_case: ImageOnlyRuntimeCase,
+        *,
+        decision_policy_version: str = "reinspect-v2",
+    ) -> Dict[str, Any]:
+        """Run the complete image-only reinspect-v2 investigation path."""
+
+        verify_case_image(runtime_case, image_path)
+        state = VerificationState(
+            image_path=image_path,
+            image_id=runtime_case.case_id,
+            runtime_case=runtime_case,
+            input_mode="image_only",
+            decision_policy_version=decision_policy_version,
+            tool_health=self.tool_health_summary,
+        )
+        self.last_state = state
+        started = time.time()
+        try:
+            if decision_policy_version != "reinspect-v2":
+                raise RuntimeError(
+                    "image-only runtime requires decision_policy_version=reinspect-v2"
+                )
+            self._validate_image_only_bootstrap_configuration()
+            state.perception = await self._run_perception(state, image_path)
+            bootstrap = build_bootstrap_investigation(
+                runtime_case,
+                state.perception,
+            )
+            investigation = state_from_bootstrap(bootstrap)
+            state.investigation_state = investigation
+            self._sync_image_only_state(state, investigation)
+            activate_initial_decisive_facts(investigation)
+            await self._run_image_only_bootstrap_search(
+                state,
+                investigation,
+                image_path,
+                runtime_case,
+            )
+            await self._run_image_only_investigation(
+                state,
+                investigation,
+                image_path,
+                runtime_case,
+            )
+            coverage = (
+                investigation.coverage_audits[-1]
+                if investigation.coverage_audits
+                else audit_coverage(investigation)
+            )
+            compiled_verdict, basis = compile_verdict_basis(investigation)
+            judgment = await self._run_image_only_judgment(
+                state,
+                investigation,
+                coverage,
+                compiled_verdict,
+                basis,
+            )
+            investigation.judgment = judgment
+            state.judgment = judgment  # type: ignore[assignment]
+            state.termination = "success"
+            self._sync_image_only_state(state, investigation)
+        except Exception as exc:
+            state.termination = "error"
+            state.errors.append(f"{type(exc).__name__}: {exc}")
+            raise
+        finally:
+            state.stage_timings["total"] = round(time.time() - started, 2)
+
+        return {
+            "image_id": state.image_id,
+            "image_path": state.image_path,
+            "input_mode": state.input_mode,
+            "decision_policy_version": state.decision_policy_version,
+            "judgment": judgment.model_dump(mode="json"),
+            "verdict": judgment.verdict,
+            "confidence": judgment.confidence,
+            "overall_assessment": judgment.overall_assessment,
+            "verdict_basis": basis.model_dump(mode="json"),
+            "state": state.to_dict(),
+            "termination": state.termination,
+            "time_taken": state.stage_timings["total"],
+            "token_usage": state.token_usage,
+            "total_tool_calls": state.total_tool_calls,
+            "llm_api_calls": state.llm_api_calls,
+            "error": None,
+        }
+
+    def _validate_image_only_bootstrap_configuration(self) -> None:
+        """Validate only providers exercised by the Phase-B bootstrap."""
+
+        if self.vlm_provider == "gemini" and not (
+            os.getenv("GEMINI_API_KEY", "").strip()
+            or os.getenv("GOOGLE_API_KEY", "").strip()
+        ):
+            raise RuntimeError(
+                "GEMINI_API_KEY or GOOGLE_API_KEY is required for Gemini perception."
+            )
+        for tool_name in ("perceive_scene", "ocr_with_position"):
+            if tool_name not in self.all_tools:
+                raise RuntimeError(
+                    f"Required image-only bootstrap tool '{tool_name}' is unavailable: "
+                    + str(
+                        self.tool_health_summary.get(tool_name, {}).get(
+                            "error",
+                            "not registered",
+                        )
+                    )
+                )
+
+    async def _run_image_only_bootstrap_search(
+        self,
+        state: VerificationState,
+        investigation: ImageOnlyInvestigationState,
+        image_path: str,
+        runtime_case: ImageOnlyRuntimeCase,
+    ) -> None:
+        """Always run one initial reverse-image search as Discovery only."""
+
+        if "reverse_image_search" not in self.all_tools:
+            raise RuntimeError(
+                "Required image-only tool 'reverse_image_search' is unavailable."
+            )
+        provenance_task = next(
+            (
+                task
+                for task in investigation.tasks
+                if "earliest verifiable public context" in task.question
+            ),
+            investigation.tasks[0] if investigation.tasks else None,
+        )
+        if provenance_task is None:
+            raise RuntimeError("image-only bootstrap produced no ResearchTask")
+        serialized, metadata = await self._execute_tool(
+            "reverse_image_search",
+            {"image_input": image_path},
+            image_path,
+        )
+        step = StageStep(
+            round=1,
+            stage_name="image_only_investigation",
+            action_type="tool_call",
+            tool_name="reverse_image_search",
+            tool_args={
+                "image_input": image_path,
+                "task_id": provenance_task.task_id,
+                "__question_id": provenance_task.task_id,
+            },
+            tool_result=serialized,
+            metadata={
+                "stage": "image_only_investigation",
+                "bootstrap_discovery": True,
+                "function_call_id": stable_id(
+                    "call",
+                    runtime_case.case_id,
+                    "bootstrap-reverse-image-search",
+                ),
+                **metadata,
+            },
+        )
+        update = record_tool_observation(
+            investigation,
+            step,
+            image_sha256=runtime_case.image_sha256,
+        )
+        step.metadata["investigation_state_update"] = update
+        self._record_stage_steps(state, [step])
+        self._sync_image_only_state(state, investigation)
+
+    async def _run_image_only_investigation(
+        self,
+        state: VerificationState,
+        investigation: ImageOnlyInvestigationState,
+        image_path: str,
+        runtime_case: ImageOnlyRuntimeCase,
+    ) -> None:
+        started = time.time()
+        prior_evidence_count = len(investigation.evidence)
+        prior_finding_count = len(investigation.findings)
+        prior_fact_signature = self._image_only_fact_signature(investigation)
+        while not investigation.stop_reason:
+            self._check_timeout(started, state)
+            if investigation.action_count >= MAX_TOOL_ACTIONS:
+                audit_coverage(investigation)
+                break
+            if not any(
+                task.status in {"active", "pending"}
+                for task in investigation.tasks
+            ):
+                audit_coverage(investigation)
+                if not investigation.stop_reason:
+                    investigation.stop_reason = "information_saturated"
+                break
+
+            remaining_to_reflection = (
+                REFLECTION_INTERVAL
+                - (investigation.action_count % REFLECTION_INTERVAL)
+            )
+            segment_rounds = min(
+                remaining_to_reflection,
+                MAX_TOOL_ACTIONS - investigation.action_count,
+            )
+            task_claims = self._image_only_task_claims(investigation)
+
+            def observation_callback(
+                step: StageStep,
+                _steps: List[StageStep],
+            ) -> Dict[str, Any]:
+                update = record_tool_observation(
+                    investigation,
+                    step,
+                    image_sha256=runtime_case.image_sha256,
+                )
+                self._sync_image_only_state(state, investigation)
+                return update
+
+            runner = StageRunner(
+                llm=self.llm,
+                system_prompt=self._sp(IMAGE_ONLY_REACT_PROMPT),
+                tools=build_stage_tools("verification", self.all_tools),
+                output_schema=InvestigationSegmentOutput,
+                max_rounds=max(1, segment_rounds),
+                image_path=image_path,
+                stage_name="verification",
+                recent_rounds_to_keep=3,
+                tool_cache=self.tool_cache,
+                cacheable_tools=list(self.cacheable_tools),
+                tool_call_limits=self.verification_tool_limits,
+                should_stop=lambda _steps: (
+                    investigation.action_count % REFLECTION_INTERVAL == 0
+                    or investigation.action_count >= MAX_TOOL_ACTIONS
+                ),
+                output_validator=lambda parsed, _steps: (
+                    self._validate_image_only_segment_output(
+                        investigation,
+                        parsed,
+                    )
+                ),
+                min_tool_calls=1,
+                attach_image=False,
+                prior_steps=[
+                    step
+                    for step in state.all_steps
+                    if getattr(step, "stage_name", "")
+                    == "image_only_investigation"
+                    or getattr(step, "stage_name", "") == "verification"
+                ],
+                max_output_tokens=self._stage_output_tokens(
+                    "VERIFICATION",
+                    16384,
+                ),
+                generation_config={
+                    "thinking_level": self._stage_thinking_level("VERIFICATION")
+                },
+                observation_callback=observation_callback,
+                question_claims=task_claims,
+                question_evidence_goals=task_claims,
+                # Dynamic image-only investigation is not a fixed-question
+                # scheduler. Task IDs remain schema-validated, while Reflection
+                # and decisive-fact Coverage decide which open task must run next.
+                priority_question_ids=[],
+                supporting_question_ids=[],
+                source_access_policy=self.source_access_policy,
+                max_protocol_corrections=4,
+                max_tool_calls_per_turn=1,
+            )
+            parsed, steps = await runner.run(
+                render_image_only_react_context(investigation)
+            )
+            for step in steps:
+                if step.stage_name == "verification":
+                    step.stage_name = "image_only_investigation"
+                    step.metadata["stage"] = "image_only_investigation"
+            self._record_stage_steps(state, steps)
+            if parsed is None:
+                raise RuntimeError(
+                    "image-only ReAct segment did not produce valid structured output"
+                )
+            apply_segment_output(investigation, parsed)
+            self._sync_image_only_state(state, investigation)
+
+            if (
+                investigation.action_count % REFLECTION_INTERVAL == 0
+                and not investigation.stop_reason
+            ):
+                evidence_gain = len(investigation.evidence) > prior_evidence_count
+                decision_gain = (
+                    len(investigation.findings) > prior_finding_count
+                    or self._image_only_fact_signature(investigation)
+                    != prior_fact_signature
+                )
+                await self._run_image_only_reflection(
+                    state,
+                    investigation,
+                    evidence_gain=evidence_gain,
+                    decision_gain=decision_gain,
+                )
+                audit_coverage(investigation)
+                prior_evidence_count = len(investigation.evidence)
+                prior_finding_count = len(investigation.findings)
+                prior_fact_signature = self._image_only_fact_signature(
+                    investigation
+                )
+                self._sync_image_only_state(state, investigation)
+
+    async def _run_image_only_reflection(
+        self,
+        state: VerificationState,
+        investigation: ImageOnlyInvestigationState,
+        *,
+        evidence_gain: bool,
+        decision_gain: bool,
+    ) -> None:
+        runner = StageRunner(
+            llm=self.llm,
+            system_prompt=self._sp(IMAGE_ONLY_REFLECTION_PROMPT),
+            tools=[],
+            output_schema=ReflectionOutput,
+            max_rounds=1,
+            stage_name="image_only_reflection",
+            attach_image=False,
+            output_validator=lambda parsed, _steps: (
+                self._validate_image_only_reflection(
+                    investigation,
+                    parsed,
+                    evidence_gain=evidence_gain,
+                    decision_gain=decision_gain,
+                )
+            ),
+            max_output_tokens=self._stage_output_tokens("REPLANNING", 8192),
+            generation_config={
+                "thinking_level": self._stage_thinking_level("REPLANNING")
+            },
+        )
+        parsed, steps = await runner.run(
+            render_image_only_reflection_context(investigation)
+        )
+        self._record_stage_steps(state, steps)
+        if parsed is None:
+            investigation.reflection_failure_streak += 1
+            if investigation.reflection_failure_streak >= 2:
+                raise RuntimeError(
+                    "two consecutive image-only Reflection calls failed"
+                )
+            return
+        apply_reflection(
+            investigation,
+            parsed,
+            evidence_gain=evidence_gain,
+            decision_gain=decision_gain,
+        )
+
+    async def _run_image_only_judgment(
+        self,
+        state: VerificationState,
+        investigation: ImageOnlyInvestigationState,
+        coverage: Any,
+        compiled_verdict: str,
+        basis: Any,
+    ) -> ImageOnlyJudgment:
+        runner = StageRunner(
+            llm=self.llm,
+            system_prompt=self._sp(IMAGE_ONLY_JUDGMENT_PROMPT),
+            tools=[],
+            output_schema=ImageOnlyJudgment,
+            max_rounds=1,
+            stage_name="image_only_judgment",
+            attach_image=False,
+            output_validator=lambda parsed, _steps: (
+                self._validate_image_only_judgment(
+                    parsed,
+                    compiled_verdict=compiled_verdict,
+                    basis=basis,
+                )
+            ),
+            max_output_tokens=self._stage_output_tokens("JUDGMENT", 8192),
+            generation_config={
+                "thinking_level": self._stage_thinking_level("JUDGMENT")
+            },
+        )
+        parsed, steps = await runner.run(
+            render_image_only_judgment_context(
+                investigation,
+                coverage,
+                compiled_verdict,
+                basis,
+            )
+        )
+        self._record_stage_steps(state, steps)
+        if parsed is None:
+            raise RuntimeError(
+                "image-only Judgment did not produce a valid reinspect-v2 output"
+            )
+        return parsed
+
+    @staticmethod
+    def _validate_image_only_segment_output(
+        investigation: ImageOnlyInvestigationState,
+        parsed: InvestigationSegmentOutput,
+    ) -> tuple[bool, str]:
+        candidate = investigation.model_copy(deep=True)
+        result = apply_segment_output(candidate, parsed)
+        if parsed.finding_proposals and not result["accepted_finding_ids"]:
+            return False, "; ".join(result["rejected_reasons"]) or (
+                "no Finding proposal was backed by eligible runtime Evidence"
+            )
+        return True, ""
+
+    @staticmethod
+    def _validate_image_only_reflection(
+        investigation: ImageOnlyInvestigationState,
+        parsed: ReflectionOutput,
+        *,
+        evidence_gain: bool,
+        decision_gain: bool,
+    ) -> tuple[bool, str]:
+        candidate = investigation.model_copy(deep=True)
+        record = apply_reflection(
+            candidate,
+            parsed,
+            evidence_gain=evidence_gain,
+            decision_gain=decision_gain,
+        )
+        proposed_changes = bool(
+            parsed.task_updates
+            or parsed.new_tasks
+            or parsed.proposed_decisive_fact_ids
+        )
+        accepted_changes = bool(
+            record.accepted_task_update_ids
+            or record.accepted_new_task_ids
+            or record.accepted_decisive_fact_ids
+        )
+        if proposed_changes and not accepted_changes:
+            return False, "; ".join(record.rejected_reasons) or (
+                "Reflection proposed no valid state transition"
+            )
+        return True, ""
+
+    @staticmethod
+    def _validate_image_only_judgment(
+        parsed: ImageOnlyJudgment,
+        *,
+        compiled_verdict: str,
+        basis: Any,
+    ) -> tuple[bool, str]:
+        if parsed.verdict != compiled_verdict:
+            return False, (
+                f"verdict must be {compiled_verdict}, received {parsed.verdict}"
+            )
+        if parsed.policy_rule_id != "reinspect-v2":
+            return False, "policy_rule_id must be reinspect-v2"
+        checks = (
+            (
+                set(parsed.selected_fact_ids),
+                set(basis.fact_ids),
+                "fact",
+            ),
+            (
+                set(parsed.selected_finding_ids),
+                set(basis.finding_ids),
+                "finding",
+            ),
+            (
+                set(parsed.selected_evidence_ids),
+                set(basis.evidence_ids),
+                "evidence",
+            ),
+        )
+        for selected, allowed, name in checks:
+            if selected != allowed:
+                return False, (
+                    f"selected {name} ids must exactly match the compiled basis"
+                )
+        if parsed.unresolved_gaps != basis.unresolved_gaps:
+            return False, "unresolved_gaps must match the compiled basis"
+        return True, ""
+
+    @staticmethod
+    def _image_only_task_claims(
+        investigation: ImageOnlyInvestigationState,
+    ) -> Dict[str, str]:
+        facts = {fact.fact_id: fact for fact in investigation.facts}
+        return {
+            task.task_id: " | ".join(
+                facts[fact_id].statement
+                for fact_id in task.fact_ids
+                if fact_id in facts
+            )[:1800]
+            for task in investigation.tasks
+            if task.status in {"active", "pending"}
+        }
+
+    @staticmethod
+    def _image_only_fact_signature(
+        investigation: ImageOnlyInvestigationState,
+    ) -> tuple[tuple[str, str], ...]:
+        return tuple(
+            sorted(
+                (fact.fact_id, fact.status)
+                for fact in investigation.facts
+            )
+        )
+
+    @staticmethod
+    def _sync_image_only_state(
+        state: VerificationState,
+        investigation: ImageOnlyInvestigationState,
+    ) -> None:
+        state.investigation_state = investigation
+        state.investigation_brief = investigation.brief
+        state.visual_entities = list(investigation.entities)
+        state.visual_facts = list(investigation.facts)
+        state.research_tasks = list(investigation.tasks)
+        state.findings = list(investigation.findings)
+        state.retrieval_anchors = list(investigation.retrieval_anchors)
 
     async def _run_perception(self, state: VerificationState, image_path: str) -> PerceptionReport:
         started = time.time()
@@ -376,8 +930,6 @@ class Orchestrator:
             if not self._tool_step_succeeded(step):
                 raise RuntimeError(f"perceive_scene failed: {tool_result[:1000]}")
             report = self._parse_perception_result(tool_result)
-            if not report.scene_description and not report.entities:
-                raise RuntimeError("perceive_scene returned no scene description or visible entities")
 
             if "ocr_with_position" not in self.all_tools:
                 raise RuntimeError(
@@ -406,6 +958,14 @@ class Orchestrator:
             if not self._tool_step_succeeded(step):
                 raise RuntimeError(f"ocr_with_position failed: {tool_result[:1000]}")
             report = self._merge_ocr(report, tool_result)
+            if (
+                not report.scene_description
+                and not report.entities
+                and not report.text_regions
+            ):
+                raise RuntimeError(
+                    "perception and OCR returned no visible scene, entity, or text"
+                )
         finally:
             state.stage_timings["perception"] = round(time.time() - started, 2)
             self._record_stage_steps(state, steps)

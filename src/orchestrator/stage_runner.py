@@ -84,6 +84,7 @@ class StageRunner:
         source_access_policy: Optional[SourceAccessPolicy] = None,
         question_evidence_goals: Optional[Dict[str, str]] = None,
         max_protocol_corrections: int = 4,
+        max_tool_calls_per_turn: Optional[int] = None,
     ):
         self.llm = llm
         self.system_prompt = system_prompt
@@ -128,6 +129,11 @@ class StageRunner:
         self.source_access_policy = source_access_policy or SourceAccessPolicy()
         self.question_evidence_goals = dict(question_evidence_goals or {})
         self.max_protocol_corrections = max(0, int(max_protocol_corrections))
+        self.max_tool_calls_per_turn = (
+            max(1, int(max_tool_calls_per_turn))
+            if max_tool_calls_per_turn is not None
+            else None
+        )
 
     async def run(self, input_context: str) -> Tuple[Optional[BaseModel], List[StageStep]]:
         """Run the ReAct loop."""
@@ -136,7 +142,9 @@ class StageRunner:
         ).lower() != "interactions":
             raise RuntimeError("Gemini stages require wire_api='interactions'.")
         self.active_question_ids = list(
-            dict.fromkeys(re.findall(r"\[(q[^\]]+)\]", input_context))
+            dict.fromkeys(
+                re.findall(r"\[((?:q[^\]]*)|(?:task-[^\]]+))\]", input_context)
+            )
         )
         if self._uses_native_interactions():
             return await self._run_native_interactions(input_context)
@@ -507,6 +515,34 @@ class StageRunner:
             function_calls = self._extract_native_function_calls(payload)
 
             if function_calls:
+                if (
+                    self.max_tool_calls_per_turn is not None
+                    and len(function_calls) > self.max_tool_calls_per_turn
+                ):
+                    step = StageStep(
+                        round=request_index,
+                        stage_name=self.stage_name,
+                        thought=thought,
+                        action_type="format_error",
+                        tokens=tokens,
+                        metadata={
+                            **common_metadata,
+                            "error_class": "protocol_error",
+                            "parallel_tool_calls_rejected": len(function_calls),
+                        },
+                    )
+                    steps.append(step)
+                    previous_interaction_id = interaction_id
+                    request_protocol_correction(
+                        [step],
+                        "only one tool call is allowed per image-only action turn",
+                    )
+                    next_input = (
+                        "Choose exactly one current task and invoke exactly one "
+                        "function for the next action."
+                    )
+                    system_suffix = ""
+                    continue
                 missing_call_ids = [
                     call for call in function_calls if not str(call.get("id", "")).strip()
                 ]

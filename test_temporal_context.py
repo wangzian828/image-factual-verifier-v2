@@ -341,14 +341,19 @@ def test_stage_contexts_state_time_semantics_and_replanning_ledger(
 
 def test_workflow_defaults_to_image_only_and_validates_batch_cases(
     tmp_path: Path,
+    monkeypatch: Any,
 ) -> None:
     image_path = tmp_path / "workflow.jpg"
     image_path.write_bytes(b"workflow-temporal-fixture")
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
 
     workflow = VerificationWorkflow(WorkflowConfig(save_traces=False))
     with pytest.raises(
         RuntimeError,
-        match="VisualFact bootstrap and reinspect-v2 execution are not active",
+        match=(
+            "GEMINI_API_KEY or GOOGLE_API_KEY is required for Gemini perception"
+        ),
     ):
         asyncio.run(
             workflow.run_single(

@@ -15,14 +15,10 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from dotenv import load_dotenv
-
 # Limit thread usage to prevent memory explosion
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("MKL_NUM_THREADS", "1")
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
-
-load_dotenv()
 
 from src.orchestrator.ledger import image_sha256, verify_case_image
 from src.orchestrator.pipeline import Orchestrator
@@ -61,6 +57,7 @@ class WorkflowConfig:
     output_dir: str = field(default_factory=default_trace_dir)
     save_traces: bool = True
     source_access_policy: Optional[SourceAccessPolicy] = None
+    decision_policy_version: str = "reinspect-v2"
 
 
 class VerificationWorkflow:
@@ -70,7 +67,7 @@ class VerificationWorkflow:
         self.config = config or WorkflowConfig()
         self._orchestrator: Optional[Orchestrator] = None
 
-    def _get_orchestrator(self) -> Orchestrator:
+    def _get_orchestrator(self, *, validate_startup: bool = True) -> Orchestrator:
         """Lazy init orchestrator."""
         if self._orchestrator is None:
             self._orchestrator = Orchestrator(
@@ -88,6 +85,7 @@ class VerificationWorkflow:
                 temperature=self.config.temperature,
                 max_tokens=self.config.max_tokens,
                 source_access_policy=self.config.source_access_policy,
+                validate_startup=validate_startup,
             )
         return self._orchestrator
 
@@ -116,30 +114,49 @@ class VerificationWorkflow:
             )
             image_path = resolved_image_path
 
-        if isinstance(runtime_case, ImageOnlyRuntimeCase):
-            verify_case_image(runtime_case, image_path)
-            raise RuntimeError(
-                "image-only runtime input is valid, but VisualFact bootstrap and "
-                "reinspect-v2 execution are not active yet"
-            )
-
-        orchestrator = self._get_orchestrator()
+        is_image_only = isinstance(runtime_case, ImageOnlyRuntimeCase)
+        orchestrator = self._get_orchestrator(validate_startup=not is_image_only)
         try:
-            verification_case: VerificationCase | None = (
-                runtime_case if isinstance(runtime_case, VerificationCase) else None
-            )
-            result = await orchestrator.run(
-                image_path,
-                image_id,
-                verification_case=verification_case,
-            )
-        except Exception:
+            if is_image_only:
+                verify_case_image(runtime_case, image_path)
+                result = await orchestrator.run_image_only(
+                    image_path,
+                    runtime_case,
+                    decision_policy_version=self.config.decision_policy_version,
+                )
+            else:
+                verification_case: VerificationCase | None = (
+                    runtime_case if isinstance(runtime_case, VerificationCase) else None
+                )
+                result = await orchestrator.run(
+                    image_path,
+                    image_id,
+                    verification_case=verification_case,
+                )
+        except Exception as exc:
             state = getattr(orchestrator, "last_state", None)
+            error_result: Optional[Dict[str, Any]] = None
+            if state is not None:
+                error_result = {
+                    "image_id": state.image_id,
+                    "image_path": state.image_path,
+                    "verdict": "error",
+                    "confidence": 0.0,
+                    "termination": state.termination or "error",
+                    "error": " | ".join(state.errors) or str(exc),
+                    "time_taken": state.stage_timings.get("total", 0.0),
+                    "total_tool_calls": state.total_tool_calls,
+                    "llm_api_calls": state.llm_api_calls,
+                    "token_usage": state.token_usage,
+                    "state": state.to_dict(),
+                }
             if self.config.save_traces and state is not None:
                 self._save_trace(
                     {
                         "image_id": state.image_id,
                         "image_path": state.image_path,
+                        "input_mode": state.input_mode,
+                        "decision_policy_version": state.decision_policy_version,
                         "verdict": "error",
                         "confidence": 0.0,
                         "overall_assessment": "Verification terminated with an engineering error.",
@@ -152,6 +169,8 @@ class VerificationWorkflow:
                         "error": " | ".join(state.errors),
                     }
                 )
+            if error_result is not None:
+                setattr(exc, "_ifv_result", error_result)
             raise
 
         # Save trace if configured
@@ -193,11 +212,17 @@ class VerificationWorkflow:
             runtime_case: Optional[RuntimeCase],
         ) -> Dict[str, Any]:
             async with semaphore:
-                return await self.run_single(
-                    path,
-                    img_id,
-                    runtime_case=runtime_case,
-                )
+                try:
+                    return await self.run_single(
+                        path,
+                        img_id,
+                        runtime_case=runtime_case,
+                    )
+                except Exception as exc:
+                    error_result = getattr(exc, "_ifv_result", None)
+                    if isinstance(error_result, dict):
+                        return error_result
+                    raise
 
         tasks = [
             _verify(path, img_id, runtime_case)

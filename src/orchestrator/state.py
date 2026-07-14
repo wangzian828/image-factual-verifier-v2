@@ -10,6 +10,14 @@ from typing import Annotated, Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from src.orchestrator.investigation_models import (
+    Finding,
+    InvestigationBrief,
+    ResearchTask,
+    RetrievalAnchor,
+    VisualEntity,
+    VisualFact,
+)
 from src.redaction import sanitize_for_persistence
 
 
@@ -409,9 +417,18 @@ class VerificationState:
 
     image_path: str = ""
     image_id: str = ""
+    runtime_case: Optional[RuntimeCase] = None
+    input_mode: str = ""
+    decision_policy_version: str = ""
     verification_case: Optional[VerificationCase] = None
     ledgers: VerificationLedgers = field(default_factory=VerificationLedgers)
     investigation_state: Any = None
+    investigation_brief: Optional[InvestigationBrief] = None
+    visual_entities: List[VisualEntity] = field(default_factory=list)
+    visual_facts: List[VisualFact] = field(default_factory=list)
+    research_tasks: List[ResearchTask] = field(default_factory=list)
+    findings: List[Finding] = field(default_factory=list)
+    retrieval_anchors: List[RetrievalAnchor] = field(default_factory=list)
     perception: Optional[PerceptionReport] = None
     plan: Optional[VerificationPlan] = None
     verification: Optional[VerificationResult] = None
@@ -456,6 +473,9 @@ class VerificationState:
         return sanitize_for_persistence({
             "image_path": self.image_path,
             "image_id": self.image_id,
+            "runtime_case": self.runtime_case.model_dump() if self.runtime_case else None,
+            "input_mode": self.input_mode,
+            "decision_policy_version": self.decision_policy_version,
             "verification_case": self.verification_case.model_dump() if self.verification_case else None,
             "ledgers": self.ledgers.model_dump(),
             "investigation_state": (
@@ -463,6 +483,26 @@ class VerificationState:
                 if hasattr(self.investigation_state, "model_dump")
                 else self.investigation_state
             ),
+            "investigation_brief": (
+                self.investigation_brief.model_dump(mode="json")
+                if self.investigation_brief
+                else None
+            ),
+            "visual_entities": [
+                item.model_dump(mode="json") for item in self.visual_entities
+            ],
+            "visual_facts": [
+                item.model_dump(mode="json") for item in self.visual_facts
+            ],
+            "research_tasks": [
+                item.model_dump(mode="json") for item in self.research_tasks
+            ],
+            "findings": [
+                item.model_dump(mode="json") for item in self.findings
+            ],
+            "retrieval_anchors": [
+                item.model_dump(mode="json") for item in self.retrieval_anchors
+            ],
             "perception": self.perception.model_dump() if self.perception else None,
             "plan": self.plan.model_dump() if self.plan else None,
             "plan_history": [item.model_dump() for item in self.plan_history],
