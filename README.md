@@ -18,6 +18,8 @@ ImageOnlyRuntimeCase
 `reinspect-v2` is the current v3 verdict-policy identifier. It is not support for an
 older project version. Claim-mode inputs and `reinspect-v1` are unsupported.
 
+快速图解：[Agent 五步工作流](docs/agent-overview.html)。
+
 ## Repository boundary
 
 This repository owns the Agent runtime, tools, canonical traces, strict trace audit,
