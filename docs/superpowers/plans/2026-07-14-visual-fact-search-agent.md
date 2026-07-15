@@ -4,8 +4,7 @@
 
 **Updated:** 2026-07-15
 
-**Status:** Runtime and committed-head real acceptance complete; gpu-13 replication
-pending Jupyter authentication
+**Status:** Runtime, committed-head real acceptance, and gpu-13 replication complete
 
 **Repository:** `D:\image-factual-verifier-v2-worktrees\visual-fact-search-agent`
 
@@ -246,6 +245,33 @@ at Johnson Space Center rather than Kennedy Space Center. The real case used act
 `compare_with_reference` calls and found a same-capture/near-duplicate reference for
 NOAA Ship Henry B. Bigelow.
 
+Accepted gpu-13 replication:
+
+```text
+checkout:
+/gs/home/wza/projects/image-factual-verifier-v3
+
+runtime commit:
+abb7db553cd4d3e8046faed3c43dac3dce67e328
+
+run:
+/gsdata/home/wza/image-factual-verifier-v2-data/runs/eval/
+group-001-v3-gpu13-20260715-01
+
+predictions:
+case_509704a5a1034b2c -> fake
+case_58720a90e3ef438a -> real
+
+server tests:
+165 passed
+
+trace audit:
+2 passed
+0 scheduler rejections
+0 protocol rejections
+thought tokens = 0
+```
+
 Local failed runs:
 
 ```text
@@ -263,12 +289,12 @@ This is a local proxy-exit restriction, not a factual Agent result. The trace co
 records an engineering error, `predictions.jsonl` is empty, and classification scoring
 returns zero rather than accepting fake `unverifiable` rows.
 
-### gpu-13 replication command
+### gpu-13 accepted replication
 
 After pushing the branch and securely authenticating the existing Jupyter endpoint:
 
 ```bash
-cd /gs/home/wza/projects/image-factual-verifier-v2
+cd /gs/home/wza/projects/image-factual-verifier-v3
 bash scripts/server/update_gpu13_checkout.sh codex/image-factual-verifier-v3
 bash scripts/server/bootstrap_gpu13.sh
 scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
@@ -292,10 +318,9 @@ scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
   --json --strict-scheduler
 ```
 
-Phase E runtime acceptance is complete. gpu-13 execution remains an operational
-replication task, not a substitute for the accepted local no-mock run. Do not claim
-server replication until `jupyter_remote.py` authenticates, reports `hostname=gpu-13`,
-and runs the committed branch there.
+Phase E is complete locally and on gpu-13. The server release was downloaded by
+gpu-13 through temporary object storage rather than through the SSH control endpoint;
+the transfer object was deleted after archive and release SHA-256 verification.
 
 ## 8. Phase F — process evaluation
 
@@ -351,6 +376,9 @@ Accepted dataset:
 
 ```text
 D:\image-factual-verifier-runs\group-001-v3-canary-20260715-19\policy_dataset
+
+/gsdata/home/wza/image-factual-verifier-v2-data/runs/eval/
+group-001-v3-gpu13-20260715-01/policy_dataset
 ```
 
 It contains 48 examples from two real episodes:
@@ -362,7 +390,8 @@ judgment = 2
 invalid actions = 0
 fatal boundaries = 0
 strict audit errors = 0
-source runtime commit = fd305d712626a1c189433fe37a1e286f30238365
+local source runtime commit = fd305d712626a1c189433fe37a1e286f30238365
+gpu-13 source runtime commit = abb7db553cd4d3e8046faed3c43dac3dce67e328
 ```
 
 Because group-001 is one source-family group and only two cases, this artifact proves
@@ -436,5 +465,5 @@ fd305d7 fix: validate real image-only investigation routes
 - [x] Claim-driven runtime and redundant legacy tests removed.
 - [x] Committed-head real two-case canary passes.
 - [x] Real teacher dataset is frozen from accepted traces.
-- [ ] Replicate the accepted commit on gpu-13 after Jupyter authentication is
-  available.
+- [x] Replicate the accepted commit on gpu-13 through the authenticated Jupyter
+  control path.

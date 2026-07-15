@@ -97,11 +97,10 @@ The client prompts for the password without echo. For unattended automation, inj
 `JUPYTER_REMOTE_PASSWORD` from a secret manager for that process only; do not persist
 it in a profile or script.
 
-As of 2026-07-15, the local `8333` tunnel was reachable but no
-`JUPYTER_REMOTE_PASSWORD` was present in the process, user, or machine environment.
-That state is not a completed gpu-13 deployment. Authenticate interactively or inject
-the credential for one process, then verify the hostname and kernel before claiming a
-server test or canary.
+On 2026-07-15, the `8333` path was authenticated and verified with
+`hostname=gpu-13`, `id -un=wza`, and the `ifv-agent` kernel. Credentials were supplied
+only to the controlling process and were not written to the checkout, logs, or this
+document.
 
 `jupyter_remote.py` defaults to `python3` to preserve control-plane access before
 the environment is bootstrapped. Set `--kernel-name ifv-agent` or
@@ -244,7 +243,7 @@ the real evaluator, requires successful search/visit/visual tool classes, and ru
 strict trace audit:
 
 ```bash
-cd /gs/home/wza/projects/image-factual-verifier-v2
+cd /gs/home/wza/projects/image-factual-verifier-v3
 run_id="runtime-canary-$(date -u +%Y%m%dT%H%M%SZ)"
 scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
   python scripts/run_real_canary.py \
@@ -256,17 +255,36 @@ scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
 Only after this command passes should a larger formal evaluation be launched in the
 background with `scripts/server/start_eval_gpu13.sh`.
 
-The committed runtime was independently accepted with a local no-mock Gemini run at
-commit `fd305d7`:
+The committed runtime was accepted both locally and on gpu-13:
 
 ```text
+local commit:
+fd305d712626a1c189433fe37a1e286f30238365
+
+local run:
 D:\image-factual-verifier-runs\group-001-v3-canary-20260715-19
+
+gpu-13 commit:
+abb7db553cd4d3e8046faed3c43dac3dce67e328
+
+gpu-13 checkout:
+/gs/home/wza/projects/image-factual-verifier-v3
+
+gpu-13 run:
+/gsdata/home/wza/image-factual-verifier-v2-data/runs/eval/
+group-001-v3-gpu13-20260715-01
 ```
 
-That run produced the expected `fake` and `real` classifications and passed strict
-trace audit. It validates runtime/provider behavior, but it does not prove gpu-13
-deployment. Repeat the same release and commit through the commands above once the
-Jupyter control path is authenticated.
+Both runs produced the expected `fake` and `real` classifications. The gpu-13 run
+passed 165 repository tests, strict two-trace audit, the data-owned classification
+scorer, and strict policy-dataset audit.
+
+The older `/gs/home/wza/projects/image-factual-verifier-v2` checkout contained staged
+server-side changes and was deliberately left untouched. A fresh GitHub clone was
+used instead. The group-001 release was downloaded by gpu-13 through temporary object
+storage, verified against the archive hash and all release SHA-256 entries, and the
+temporary transfer object was then deleted. No dataset bytes passed through
+`47.104.232.153`.
 
 The background launcher prints `pid`, `pid_file`, and `log_file`. Evaluation stdout and stderr
 always go to the printed path under `IFV_DATA_ROOT/runs/_logs`, never into the named
