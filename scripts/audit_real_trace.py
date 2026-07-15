@@ -1108,39 +1108,47 @@ def _audit_image_only_trace(
             "unknown basis Evidence ids: " + ", ".join(unknown_basis_evidence),
             location="verdict_basis.evidence_ids",
         )
-    for fact_id in basis_facts:
-        selected_findings = set(findings_by_fact.get(fact_id, [])) & basis_findings
-        if not selected_findings:
-            _issue(
-                report,
-                "VERDICT_FACT_WITHOUT_FINDING",
-                f"basis fact {fact_id!r} has no selected Finding",
-                location="verdict_basis",
+    if expected_verdict != "unverifiable":
+        for fact_id in basis_facts:
+            selected_findings = (
+                set(findings_by_fact.get(fact_id, [])) & basis_findings
             )
-            continue
-        selected_evidence = {
-            str(evidence_id)
-            for finding_id in selected_findings
-            for evidence_id in finding_by_id[finding_id].get("evidence_ids", []) or []
-        } & basis_evidence
-        if not selected_evidence:
-            _issue(
-                report,
-                "VERDICT_FINDING_WITHOUT_EVIDENCE",
-                f"basis fact {fact_id!r} has no selected Evidence",
-                location="verdict_basis",
-            )
-        for evidence_id in selected_evidence:
-            call_id = str(
-                evidence_by_id[evidence_id].get("function_call_id", "")
-            ).strip()
-            if call_id not in successful_calls:
+            if not selected_findings:
                 _issue(
                     report,
-                    "VERDICT_EVIDENCE_CALL_NOT_SUCCESSFUL",
-                    f"basis Evidence {evidence_id!r} lacks a successful tool call",
+                    "VERDICT_FACT_WITHOUT_FINDING",
+                    f"basis fact {fact_id!r} has no selected Finding",
                     location="verdict_basis",
                 )
+                continue
+            selected_evidence = {
+                str(evidence_id)
+                for finding_id in selected_findings
+                for evidence_id in finding_by_id[finding_id].get(
+                    "evidence_ids",
+                    [],
+                )
+                or []
+            } & basis_evidence
+            if not selected_evidence:
+                _issue(
+                    report,
+                    "VERDICT_FINDING_WITHOUT_EVIDENCE",
+                    f"basis fact {fact_id!r} has no selected Evidence",
+                    location="verdict_basis",
+                )
+            for evidence_id in selected_evidence:
+                call_id = str(
+                    evidence_by_id[evidence_id].get("function_call_id", "")
+                ).strip()
+                if call_id not in successful_calls:
+                    _issue(
+                        report,
+                        "VERDICT_EVIDENCE_CALL_NOT_SUCCESSFUL",
+                        f"basis Evidence {evidence_id!r} lacks a successful "
+                        "tool call",
+                        location="verdict_basis",
+                    )
 
     judgment_sets = (
         (

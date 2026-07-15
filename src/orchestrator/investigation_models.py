@@ -242,37 +242,20 @@ class InvestigationFailure(StrictModel):
 class TaskUpdate(StrictModel):
     task_id: str = Field(min_length=1, max_length=100)
     priority: Optional[int] = Field(default=None, ge=1, le=3)
-    status: Optional[
-        Literal["pending", "active", "resolved", "blocked", "exhausted"]
-    ] = None
-    basis_ids: List[str] = Field(default_factory=list, max_length=20)
     reason: str = Field(default="", max_length=800)
 
 
 class ReflectionOutput(StrictModel):
-    task_updates: List[TaskUpdate] = Field(default_factory=list, max_length=12)
-    new_tasks: List[ResearchTask] = Field(default_factory=list, max_length=3)
-    proposed_decisive_fact_ids: List[str] = Field(default_factory=list, max_length=2)
-    recommended_next_task_ids: List[str] = Field(default_factory=list, max_length=4)
-    remaining_gaps: List[str] = Field(default_factory=list, max_length=8)
+    task_updates: List[TaskUpdate] = Field(default_factory=list)
+    new_tasks: List[ResearchTask] = Field(default_factory=list)
+    proposed_decisive_fact_ids: List[str] = Field(default_factory=list)
+    recommended_next_task_ids: List[str] = Field(default_factory=list)
+    remaining_gaps: List[str] = Field(default_factory=list)
     ready_to_finish: bool = False
-
-
-class FindingProposal(StrictModel):
-    task_id: str = Field(min_length=1, max_length=100)
-    fact_ids: List[str] = Field(min_length=1, max_length=6)
-    statement: str = Field(min_length=1, max_length=1200)
-    stance: Literal["support", "refute", "neutral"]
-    evidence_ids: List[str] = Field(min_length=1, max_length=20)
-    quality: Literal["decisive", "supporting", "contextual"] = "supporting"
 
 
 class InvestigationSegmentOutput(StrictModel):
     segment_summary: str = Field(default="", max_length=1200)
-    finding_proposals: List[FindingProposal] = Field(
-        default_factory=list,
-        max_length=12,
-    )
     ready_for_reflection: bool = True
 
 

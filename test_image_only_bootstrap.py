@@ -105,14 +105,17 @@ def test_image_only_bootstrap_is_deterministic_grounded_and_bounded(
     assert "OOUOHUEUIRUU" not in serialized
     fact_ids = {fact.fact_id for fact in first.facts}
     assert all(set(task.fact_ids) <= fact_ids for task in first.tasks)
-    joint_text_task = next(
+    provenance_task = next(
         task
         for task in first.tasks
-        if "jointly indicated" in task.question
+        if "earliest verifiable public context" in task.question
     )
-    assert len(joint_text_task.fact_ids) == 4
-    assert "HENRY B. BIGELOW" in joint_text_task.question
-    assert "R 225" in joint_text_task.question
+    assert "HENRY B. BIGELOW R 225" in provenance_task.suggested_queries
+    assert '"HENRY B. BIGELOW"' in provenance_task.suggested_queries
+    assert not any(
+        "jointly indicated" in task.question
+        for task in first.tasks
+    )
     assert all(task.origin_ids for task in first.tasks)
     assert not first.findings
 

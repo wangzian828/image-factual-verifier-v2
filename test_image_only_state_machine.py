@@ -14,6 +14,7 @@ from src.orchestrator.investigation_models import (
     ReflectionOutput,
     TaskUpdate,
 )
+from src.orchestrator.image_only_prompts import render_react_context
 from src.orchestrator.state import (
     Entity,
     ImageOnlyRuntimeCase,
@@ -22,7 +23,6 @@ from src.orchestrator.state import (
 )
 from src.orchestrator.task_store import (
     apply_reflection,
-    apply_segment_output,
     record_tool_observation,
     state_from_bootstrap,
 )
@@ -83,7 +83,7 @@ def _step(
     )
 
 
-def test_discovery_is_not_evidence_and_reflection_requires_real_basis() -> None:
+def test_discovery_is_not_evidence_and_reflection_only_reprioritizes() -> None:
     case, state = _runtime_state()
     provenance = state.tasks[0]
     step = _step(
@@ -109,24 +109,199 @@ def test_discovery_is_not_evidence_and_reflection_requires_real_basis() -> None:
     assert not update["created_evidence_ids"]
     assert not state.evidence
     assert not state.findings
-    invalid = ReflectionOutput(
+    reflection = ReflectionOutput(
         task_updates=[
             TaskUpdate(
                 task_id=provenance.task_id,
-                status="resolved",
-                basis_ids=update["created_discovery_ids"],
-                reason="A discovery is not a Finding.",
+                priority=2,
+                reason="Reprioritize without changing reducer-owned status.",
             )
         ]
     )
     record = apply_reflection(
         state,
-        invalid,
+        reflection,
         evidence_gain=False,
         decision_gain=False,
     )
-    assert not record.accepted_task_update_ids
-    assert "resolved without Finding" in record.rejected_reasons[0]
+    assert record.accepted_task_update_ids == [provenance.task_id]
+    assert provenance.priority == 2
+    assert provenance.status == "active"
+    assert "status" not in TaskUpdate.model_json_schema()["properties"]
+    assert "basis_ids" not in TaskUpdate.model_json_schema()["properties"]
+
+
+def test_semantic_reverse_match_preserves_reference_and_is_rendered() -> None:
+    case, state = _runtime_state()
+    provenance = state.tasks[0]
+    reference_url = "https://www.noaa.gov/media/ship.jpg"
+    result = {
+        "status": "success",
+        "reference_image_candidates": [reference_url],
+        "lens_results": [],
+        "semantic_results": [
+            {
+                "title": "Official ship image",
+                "url": "https://www.noaa.gov/ship",
+                "snippet": "",
+                "image_url": reference_url,
+            }
+        ],
+    }
+    import json
+
+    record_tool_observation(
+        state,
+        _step(
+            task_id=provenance.task_id,
+            call_id="call-semantic-ris",
+            tool_name="reverse_image_search",
+            result=json.dumps(result),
+        ),
+        image_sha256=case.image_sha256,
+    )
+
+    discovery = next(
+        item for item in state.discoveries if item.candidate_url.endswith("/ship")
+    )
+    assert discovery.reference_image_url == reference_url
+    rendered = render_react_context(state)
+    assert "Untested reference images" in rendered
+    assert reference_url in rendered
+    assert '"source_class": "official"' in rendered
+
+
+def test_supporting_finding_does_not_close_unresolved_decisive_task() -> None:
+    case, state = _runtime_state()
+    target_task = next(
+        task
+        for task in state.tasks
+        if any(fact_id in state.decisive_fact_ids for fact_id in task.fact_ids)
+    )
+    statement = "An independent page identifies a possible vessel context."
+    result = {
+        "status": "success",
+        "selected_url": "https://example.org/possible-context",
+        "url": "https://example.org/possible-context",
+        "evidence": statement,
+        "summary": statement,
+        "relevance": "high",
+        "stance": "support",
+        "directness": "direct",
+        "temporal_alignment": "not_applicable",
+        "artifact_sha256": "c" * 64,
+        "evidence_span": {"start": 0, "end": len(statement)},
+        "retrieved_at": datetime.now(timezone.utc).isoformat(),
+        "injection_flags": [],
+        "evidence_eligible": True,
+    }
+    import json
+
+    update = record_tool_observation(
+        state,
+        _step(
+            task_id=target_task.task_id,
+            call_id="call-supporting-visit",
+            tool_name="visit",
+            result=json.dumps(result),
+        ),
+        image_sha256=case.image_sha256,
+    )
+
+    fact = next(item for item in state.facts if item.fact_id in target_task.fact_ids)
+    assert update["created_finding_ids"]
+    assert fact.status == "active"
+    assert target_task.status == "active"
+    assert target_task.finding_ids == update["created_finding_ids"]
+
+
+def test_scene_reference_requires_near_duplicate_not_only_same_subject() -> None:
+    case, state = _runtime_state()
+    scene_task = next(
+        task
+        for task in state.tasks
+        if any(
+            fact.fact_id in task.fact_ids and fact.predicate == "appears_to_depict"
+            for fact in state.facts
+        )
+    )
+    result = {
+        "status": "success",
+        "reference_url": "https://www.noaa.gov/media/different-capture.jpg",
+        "same_subject_or_scene": True,
+        "same_capture_or_near_duplicate": False,
+        "likely_different_original_capture": True,
+        "edit_evidence_present": False,
+        "edit_evidence_strength": "none",
+        "differences": [],
+        "overall_observation": (
+            "The same vessel appears in a different original capture and setting."
+        ),
+        "confidence": 0.95,
+    }
+    import json
+
+    update = record_tool_observation(
+        state,
+        _step(
+            task_id=scene_task.task_id,
+            call_id="call-different-capture",
+            tool_name="compare_with_reference",
+            result=json.dumps(result),
+        ),
+        image_sha256=case.image_sha256,
+    )
+
+    scene_fact = next(
+        fact for fact in state.facts if fact.fact_id in scene_task.fact_ids
+    )
+    assert update["created_evidence_ids"]
+    assert not update["created_finding_ids"]
+    assert scene_fact.status == "active"
+    assert scene_task.status == "active"
+
+
+def test_official_near_duplicate_resolves_scene_task() -> None:
+    case, state = _runtime_state()
+    scene_task = next(
+        task
+        for task in state.tasks
+        if any(
+            fact.fact_id in task.fact_ids and fact.predicate == "appears_to_depict"
+            for fact in state.facts
+        )
+    )
+    result = {
+        "status": "success",
+        "reference_url": "https://www.noaa.gov/media/matching-capture.jpg",
+        "same_subject_or_scene": True,
+        "same_capture_or_near_duplicate": True,
+        "likely_different_original_capture": False,
+        "edit_evidence_present": False,
+        "edit_evidence_strength": "none",
+        "differences": [],
+        "overall_observation": "The images are the same original capture.",
+        "confidence": 0.99,
+    }
+    import json
+
+    update = record_tool_observation(
+        state,
+        _step(
+            task_id=scene_task.task_id,
+            call_id="call-near-duplicate",
+            tool_name="compare_with_reference",
+            result=json.dumps(result),
+        ),
+        image_sha256=case.image_sha256,
+    )
+
+    scene_fact = next(
+        fact for fact in state.facts if fact.fact_id in scene_task.fact_ids
+    )
+    assert update["created_finding_ids"]
+    assert scene_fact.status == "supported"
+    assert scene_task.status == "resolved"
 
 
 def test_official_direct_evidence_can_resolve_decisive_fact_and_compile_real() -> None:
@@ -175,14 +350,10 @@ def test_official_direct_evidence_can_resolve_decisive_fact_and_compile_real() -
     assert update["created_evidence_ids"]
     assert update["created_finding_ids"]
     assert target_task.status == "resolved"
-    segment = apply_segment_output(
-        state,
-        InvestigationSegmentOutput(
-            segment_summary="Official evidence was recorded.",
-            finding_proposals=[],
-        ),
+    segment = InvestigationSegmentOutput(
+        segment_summary="Official evidence was recorded.",
     )
-    assert not segment["rejected_reasons"]
+    assert segment.ready_for_reflection is True
 
     for fact_id in state.decisive_fact_ids:
         if next(fact for fact in state.facts if fact.fact_id == fact_id).status != "supported":

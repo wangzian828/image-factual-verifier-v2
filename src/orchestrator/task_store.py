@@ -14,7 +14,6 @@ from src.orchestrator.investigation_models import (
     InvestigationDiscovery,
     InvestigationEvidence,
     InvestigationFailure,
-    InvestigationSegmentOutput,
     ReflectionOutput,
     ReflectionRecord,
     ResearchTask,
@@ -162,10 +161,17 @@ def record_tool_observation(
         )
 
     _refresh_fact_states(state)
-    if finding_ids:
+    if finding_ids and not _task_has_unresolved_decisive_fact(state, task):
         task.finding_ids = list(dict.fromkeys([*task.finding_ids, *finding_ids]))
         task.status = "resolved"
-    elif failure_ids and task.attempt_count >= 3:
+    elif finding_ids:
+        task.finding_ids = list(dict.fromkeys([*task.finding_ids, *finding_ids]))
+        task.status = "active"
+    elif (
+        failure_ids
+        and task.attempt_count >= 3
+        and not _task_owns_scene_fact(state, task)
+    ):
         task.status = "exhausted"
 
     return {
@@ -181,82 +187,6 @@ def record_tool_observation(
             for fact in state.facts
             if fact.fact_id in task.fact_ids
         },
-    }
-
-
-def apply_segment_output(
-    state: ImageOnlyInvestigationState,
-    output: InvestigationSegmentOutput,
-) -> Dict[str, Any]:
-    """Accept only Finding proposals backed by owned runtime evidence."""
-
-    task_by_id = {task.task_id: task for task in state.tasks}
-    fact_ids = {fact.fact_id for fact in state.facts}
-    evidence_by_id = {item.evidence_id: item for item in state.evidence}
-    accepted: List[str] = []
-    rejected: List[str] = []
-    for proposal in output.finding_proposals:
-        task = task_by_id.get(proposal.task_id)
-        if task is None:
-            rejected.append(f"unknown task {proposal.task_id}")
-            continue
-        if not set(proposal.fact_ids) <= set(task.fact_ids) or not set(
-            proposal.fact_ids
-        ) <= fact_ids:
-            rejected.append(f"{proposal.task_id} proposed unrelated facts")
-            continue
-        owned = [
-            evidence_by_id.get(evidence_id)
-            for evidence_id in proposal.evidence_ids
-        ]
-        if any(item is None for item in owned):
-            rejected.append(f"{proposal.task_id} proposed unknown evidence")
-            continue
-        evidence = [item for item in owned if item is not None]
-        if any(item.task_id != proposal.task_id for item in evidence):
-            rejected.append(f"{proposal.task_id} proposed foreign evidence")
-            continue
-        allowed_stances = {item.stance for item in evidence}
-        if (
-            proposal.stance != "neutral"
-            and proposal.stance not in allowed_stances
-        ):
-            rejected.append(f"{proposal.task_id} stance disagrees with evidence")
-            continue
-        source_families = list(
-            dict.fromkeys(item.source_family for item in evidence)
-        )
-        finding_id = stable_id(
-            "finding",
-            proposal.task_id,
-            proposal.fact_ids,
-            proposal.stance,
-            proposal.evidence_ids,
-            proposal.statement,
-        )
-        if finding_id not in {item.finding_id for item in state.findings}:
-            state.findings.append(
-                Finding(
-                    finding_id=finding_id,
-                    task_id=proposal.task_id,
-                    fact_ids=list(proposal.fact_ids),
-                    statement=proposal.statement,
-                    stance=proposal.stance,
-                    evidence_ids=list(proposal.evidence_ids),
-                    source_family_ids=source_families,
-                    quality=proposal.quality,
-                )
-            )
-        accepted.append(finding_id)
-        task.finding_ids = list(
-            dict.fromkeys([*task.finding_ids, finding_id])
-        )
-        if proposal.stance in {"support", "refute"}:
-            task.status = "resolved"
-    _refresh_fact_states(state)
-    return {
-        "accepted_finding_ids": accepted,
-        "rejected_reasons": rejected,
     }
 
 
@@ -290,32 +220,58 @@ def apply_reflection(
     accepted_decisive: List[str] = []
     rejected: List[str] = []
 
-    for update in output.task_updates:
+    if len(output.task_updates) > 12:
+        rejected.append("task update budget truncated to 12")
+    if len(output.new_tasks) > NEW_TASKS_PER_REFLECTION_MAX:
+        rejected.append(
+            f"new task budget truncated to {NEW_TASKS_PER_REFLECTION_MAX}"
+        )
+    if (
+        len(output.proposed_decisive_fact_ids)
+        > NEW_DECISIVE_FACTS_PER_REFLECTION_MAX
+    ):
+        rejected.append(
+            "decisive fact proposal budget truncated to "
+            f"{NEW_DECISIVE_FACTS_PER_REFLECTION_MAX}"
+        )
+    if len(output.recommended_next_task_ids) > 4:
+        rejected.append("recommended task budget truncated to 4")
+    if len(output.remaining_gaps) > 8:
+        rejected.append("remaining gap budget truncated to 8")
+    bounded_output = output.model_copy(
+        update={
+            "task_updates": output.task_updates[:12],
+            "new_tasks": output.new_tasks[:NEW_TASKS_PER_REFLECTION_MAX],
+            "proposed_decisive_fact_ids": output.proposed_decisive_fact_ids[
+                :NEW_DECISIVE_FACTS_PER_REFLECTION_MAX
+            ],
+            "recommended_next_task_ids": output.recommended_next_task_ids[:4],
+            "remaining_gaps": output.remaining_gaps[:8],
+        }
+    )
+
+    for update in bounded_output.task_updates:
         task = task_by_id.get(update.task_id)
         if task is None:
             rejected.append(f"unknown task update {update.task_id}")
             continue
-        if update.status == "resolved" and not (
-            set(update.basis_ids) & finding_ids
-        ):
-            rejected.append(f"{update.task_id} resolved without Finding")
+        if update.priority is None:
+            rejected.append(f"{update.task_id} proposed no priority change")
             continue
-        if update.status in {"blocked", "exhausted"} and not (
-            set(update.basis_ids) & failure_ids
-        ):
-            rejected.append(f"{update.task_id} blocked without Failure")
-            continue
-        if update.priority is not None:
-            task.priority = update.priority
-        if update.status is not None:
-            task.status = update.status
+        task.priority = update.priority
         accepted_updates.append(update.task_id)
 
     semantic_keys = {
         _semantic_task_key(task.question): task.task_id
         for task in state.tasks
     }
-    for task in output.new_tasks[:NEW_TASKS_PER_REFLECTION_MAX]:
+    unresolved_decisive = {
+        fact_id
+        for fact_id in state.decisive_fact_ids
+        if fact_by_id.get(fact_id) is not None
+        and fact_by_id[fact_id].status not in {"supported", "refuted"}
+    }
+    for task in bounded_output.new_tasks:
         if len(state.tasks) >= TOTAL_TASKS_MAX:
             rejected.append("total task budget exhausted")
             break
@@ -324,6 +280,13 @@ def apply_reflection(
             continue
         if not set(task.fact_ids) <= set(fact_by_id):
             rejected.append(f"{task.task_id} cites unknown facts")
+            continue
+        if unresolved_decisive and not (
+            set(task.fact_ids) & unresolved_decisive
+        ):
+            rejected.append(
+                f"{task.task_id} does not own an unresolved decisive fact"
+            )
             continue
         if not set(task.origin_ids) <= origin_ids:
             rejected.append(f"{task.task_id} cites unknown origins")
@@ -340,9 +303,7 @@ def apply_reflection(
         semantic_keys[key] = task.task_id
         accepted_new.append(task.task_id)
 
-    for fact_id in output.proposed_decisive_fact_ids[
-        :NEW_DECISIVE_FACTS_PER_REFLECTION_MAX
-    ]:
+    for fact_id in bounded_output.proposed_decisive_fact_ids:
         if len(state.decisive_fact_ids) >= DECISIVE_FACTS_MAX:
             rejected.append("decisive fact budget exhausted")
             break
@@ -361,12 +322,21 @@ def apply_reflection(
         state.decisive_fact_ids.append(fact_id)
         accepted_decisive.append(fact_id)
 
-    state.recommended_next_task_ids = [
+    scene_task_ids = [
+        task.task_id
+        for task in state.tasks
+        if task.status in {"active", "pending"}
+        and _task_owns_scene_fact(state, task)
+    ]
+    model_recommendations = [
         task_id
-        for task_id in output.recommended_next_task_ids
+        for task_id in bounded_output.recommended_next_task_ids
         if task_id in task_by_id
         and task_by_id[task_id].status in {"active", "pending"}
-    ][:4]
+    ]
+    state.recommended_next_task_ids = list(
+        dict.fromkeys([*scene_task_ids, *model_recommendations])
+    )[:4]
     record = ReflectionRecord(
         reflection_id=stable_id(
             "reflection",
@@ -375,7 +345,7 @@ def apply_reflection(
             len(state.reflections) + 1,
         ),
         action_count=state.action_count,
-        output=output,
+        output=bounded_output,
         accepted_task_update_ids=accepted_updates,
         accepted_new_task_ids=accepted_new,
         accepted_decisive_fact_ids=accepted_decisive,
@@ -417,13 +387,14 @@ def _record_discoveries(
                 )
         for item in data.get("semantic_results", []) or []:
             if isinstance(item, Mapping):
+                reference = str(item.get("image_url", "")).strip()
                 rows.append(
                     (
                         str(item.get("url", "")),
                         str(item.get("title", "")),
                         str(item.get("snippet", "")),
                         "serp",
-                        "",
+                        reference if reference in valid_references else "",
                     )
                 )
     elif tool_name == "text_search":
@@ -464,13 +435,14 @@ def _record_discoveries(
                     )
             for item in region.get("semantic_results", []) or []:
                 if isinstance(item, Mapping):
+                    reference = str(item.get("image_url", "")).strip()
                     rows.append(
                         (
                             str(item.get("url", "")),
                             str(item.get("title", "")),
                             str(item.get("snippet", "")),
                             "serp",
-                            "",
+                            reference if reference in valid_references else "",
                         )
                     )
 
@@ -634,6 +606,7 @@ def _record_evidence_and_findings(
                 finding_ids.append(finding_id)
 
     visual = _visual_evidence_record(
+        state=state,
         task=task,
         function_call_id=function_call_id,
         tool_name=tool_name,
@@ -660,6 +633,7 @@ def _record_evidence_and_findings(
 
 def _visual_evidence_record(
     *,
+    state: ImageOnlyInvestigationState,
     task: ResearchTask,
     function_call_id: str,
     tool_name: str,
@@ -679,6 +653,9 @@ def _visual_evidence_record(
         kind = "reference_comparison"
         if bool(data.get("edit_evidence_present", False)):
             stance = "refute"
+        elif _task_owns_scene_fact(state, task):
+            if bool(data.get("same_capture_or_near_duplicate", False)):
+                stance = "support"
         elif bool(data.get("same_subject_or_scene", False)):
             stance = "support"
     elif tool_name == "crop_and_inspect":
@@ -971,4 +948,29 @@ def _fact_has_executable_route(
         and task.status in {"active", "pending", "resolved"}
         and bool(task.suggested_tools)
         for task in state.tasks
+    )
+
+
+def _task_has_unresolved_decisive_fact(
+    state: ImageOnlyInvestigationState,
+    task: ResearchTask,
+) -> bool:
+    facts = {fact.fact_id: fact for fact in state.facts}
+    return any(
+        fact_id in state.decisive_fact_ids
+        and facts.get(fact_id) is not None
+        and facts[fact_id].status not in {"supported", "refuted"}
+        for fact_id in task.fact_ids
+    )
+
+
+def _task_owns_scene_fact(
+    state: ImageOnlyInvestigationState,
+    task: ResearchTask,
+) -> bool:
+    facts = {fact.fact_id: fact for fact in state.facts}
+    return any(
+        facts.get(fact_id) is not None
+        and facts[fact_id].predicate == "appears_to_depict"
+        for fact_id in task.fact_ids
     )

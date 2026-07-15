@@ -10,6 +10,7 @@ from src.orchestrator.investigation_models import (
     ImageOnlyInvestigationState,
     VerdictBasis,
 )
+from src.orchestrator.source_provenance import classify_source
 
 
 REACT_SYSTEM_PROMPT = """\
@@ -27,10 +28,15 @@ Rules:
 3. Avoid exact duplicate routes.
 4. Prefer priority-1 unresolved tasks, then recommended tasks.
 5. For text_search and visit, the immutable verification goal is supplied by runtime.
-6. If a source discovery suggests a near-duplicate, use visit or
-   compare_with_reference before drawing a conclusion.
-7. Return Finding proposals only with Evidence ids present in the runtime state.
-8. Do not write a verdict. Return only the segment output schema.
+6. If a Discovery has a non-empty reference_image_url, use
+   compare_with_reference to test the visual match. Visiting only the surrounding
+   page text does not validate that the current image matches the reference.
+7. Prefer an untested official reference image when one is available. Use visit
+   separately when the surrounding source text is needed for event/place context.
+8. Discovery, Evidence, Finding, task, and fact state are reduced by the runtime.
+   Do not propose or invent state transitions in the segment output.
+9. Do not write a verdict. Return only the segment summary and
+   ready_for_reflection flag.
 """
 
 
@@ -42,8 +48,9 @@ You may reprioritize tasks, add up to three grounded tasks, propose at most two
 decisive facts, recommend next tasks, and identify remaining gaps.
 
 You may not create Evidence or Findings, write a verdict, modify the immutable
-brief, delete history, cite unknown ids, or resolve/block a task without real
-Finding/Failure ids. Return exactly one JSON object matching the schema.
+brief, delete history, cite unknown ids, or change task status. Task status is
+owned by the deterministic Finding/Failure reducer. Return exactly one JSON
+object matching the schema.
 """
 
 
@@ -86,6 +93,43 @@ def render_react_context(state: ImageOnlyInvestigationState) -> str:
             f"suggested_tools={task.suggested_tools}; "
             f"suggested_queries={task.suggested_queries}"
         )
+    attempted_reference_urls: set[str] = set()
+    for route in state.attempted_routes:
+        try:
+            parsed_route = json.loads(route)
+        except (TypeError, ValueError):
+            continue
+        if str(parsed_route.get("tool", "")).strip() != "compare_with_reference":
+            continue
+        args = parsed_route.get("args")
+        if isinstance(args, dict):
+            reference_url = str(args.get("reference_url", "")).strip()
+            if reference_url:
+                attempted_reference_urls.add(reference_url)
+    active_task_ids = {task.task_id for task in active}
+    pending_references = [
+        {
+            "discovery_id": item.discovery_id,
+            "task_id": item.task_id,
+            "source_class": classify_source(
+                item.reference_image_url
+            ).source_class,
+            "page_url": item.candidate_url,
+            "reference_image_url": item.reference_image_url,
+            "title": item.title,
+        }
+        for item in state.discoveries
+        if item.task_id in active_task_ids
+        and item.reference_image_url
+        and item.reference_image_url not in attempted_reference_urls
+    ]
+    pending_references.sort(
+        key=lambda item: (
+            item["source_class"] != "official",
+            item["task_id"],
+            item["discovery_id"],
+        )
+    )
     discoveries = [
         {
             "discovery_id": item.discovery_id,
@@ -127,6 +171,8 @@ def render_react_context(state: ImageOnlyInvestigationState) -> str:
         + ("\n".join(task_lines) or "- none")
         + "\n\nRecent Discoveries (not Evidence):\n"
         + json.dumps(discoveries, ensure_ascii=False, indent=2)
+        + "\n\nUntested reference images (compare visually before relying on them):\n"
+        + json.dumps(pending_references[:8], ensure_ascii=False, indent=2)
         + "\n\nEligible Evidence:\n"
         + json.dumps(evidence, ensure_ascii=False, indent=2)
         + "\n\nFindings:\n"

@@ -85,6 +85,7 @@ class StageRunner:
         question_evidence_goals: Optional[Dict[str, str]] = None,
         max_protocol_corrections: int = 4,
         max_tool_calls_per_turn: Optional[int] = None,
+        force_tool_each_round: bool = False,
     ):
         self.llm = llm
         self.system_prompt = system_prompt
@@ -134,6 +135,7 @@ class StageRunner:
             if max_tool_calls_per_turn is not None
             else None
         )
+        self.force_tool_each_round = bool(force_tool_each_round)
 
     async def run(self, input_context: str) -> Tuple[Optional[BaseModel], List[StageStep]]:
         """Run the ReAct loop."""
@@ -492,7 +494,15 @@ class StageRunner:
             system_instruction = (
                 self._build_native_system_content() + system_suffix
             )
-            response_format = self._native_response_format()
+            # Gemini Interactions rejects requests that combine native function
+            # tools with a structured ``response_format``. Keep tool-bearing
+            # ReAct turns unconstrained at the transport layer and validate any
+            # completed JSON locally. The forced no-tool output turn below still
+            # uses the exact structured response schema.
+            response_format = None
+            request_generation_config = dict(self.generation_config)
+            if self.force_tool_each_round or action_turns < self.min_tool_calls:
+                request_generation_config["tool_choice"] = "any"
             try:
                 payload = await self.llm.create_interaction(
                     input_payload=next_input,
@@ -502,7 +512,7 @@ class StageRunner:
                     response_format=response_format,
                     store=True,
                     max_tokens=self.max_output_tokens,
-                    generation_config=self.generation_config,
+                    generation_config=request_generation_config,
                 )
             except Exception as exc:
                 self._attach_partial_steps(exc, steps)
@@ -750,7 +760,18 @@ class StageRunner:
                 steps.append(step)
                 previous_interaction_id = interaction_id
                 request_protocol_correction([step], "the model returned an empty response")
-                next_input = "Return one valid final JSON object, or call one available function."
+                next_input = (
+                    "Do not return final output yet. Invoke exactly one available "
+                    "function for an active task."
+                    if (
+                        self.force_tool_each_round
+                        or action_turns < self.min_tool_calls
+                    )
+                    else (
+                        "Return one valid final JSON object, or call one available "
+                        "function."
+                    )
+                )
                 system_suffix = ""
                 continue
 
@@ -776,7 +797,19 @@ class StageRunner:
                 step.metadata["rejection_reason"] = (
                     "output schema was invalid or incomplete"
                 )
-                next_input = "The output schema was invalid. Return one valid JSON object."
+                next_input = (
+                    "The output schema was invalid, and this segment has not yet "
+                    "completed its required tool action. Do not return output. "
+                    "Invoke exactly one available function for an active task."
+                    if (
+                        self.force_tool_each_round
+                        or action_turns < self.min_tool_calls
+                    )
+                    else (
+                        "The output schema was invalid. Return one valid JSON "
+                        "object."
+                    )
+                )
                 previous_interaction_id = interaction_id
                 request_protocol_correction(
                     [step],
@@ -793,7 +826,18 @@ class StageRunner:
                 [step],
                 "the model returned neither a function call nor valid JSON",
             )
-            next_input = "Use a native function call, or return exactly one valid final JSON object."
+            next_input = (
+                "Do not return final output yet. Invoke exactly one available "
+                "function for an active task."
+                if (
+                    self.force_tool_each_round
+                    or action_turns < self.min_tool_calls
+                )
+                else (
+                    "Use a native function call, or return exactly one valid final "
+                    "JSON object."
+                )
+            )
             system_suffix = ""
 
         return await self._force_native_output(
@@ -819,6 +863,19 @@ class StageRunner:
             + "\n\nNative Gemini Interactions protocol:\n"
             + "- Invoke tools through native function calls. Never write <tool_call> markup.\n"
             + "- You may invoke multiple independent functions in one turn; every call will be executed and returned.\n"
+            + (
+                f"- Before final output, this segment requires at least "
+                f"{self.min_tool_calls} executable function call(s).\n"
+                if self.min_tool_calls
+                else ""
+            )
+            + (
+                "- Every action turn in this segment must invoke exactly one "
+                "function. Final JSON is requested separately after the action "
+                "budget.\n"
+                if self.force_tool_each_round
+                else ""
+            )
             + "- When the investigation is complete, return exactly one JSON object. "
             + "Do not wrap it in markdown.\n"
             + "- Tool failures are observations to react to, not successful evidence."
@@ -1121,96 +1178,139 @@ class StageRunner:
         else:
             forced_input = f"{pending_input}\n\n{directive}" if pending_input else directive
 
-        started = time.perf_counter()
-        self.llm_api_calls += 1
-        try:
-            system_instruction = (
-                self._build_native_system_content() + "\n\n" + directive
+        system_instruction = (
+            self._build_native_system_content() + "\n\n" + directive
+        )
+        response_format = self._native_response_format()
+        request_input: Any = forced_input
+        request_parent = previous_interaction_id
+
+        for correction_index in range(2):
+            started = time.perf_counter()
+            self.llm_api_calls += 1
+            try:
+                payload = await self.llm.create_interaction(
+                    input_payload=request_input,
+                    system_instruction=system_instruction,
+                    tools=[],
+                    previous_interaction_id=request_parent,
+                    response_format=response_format,
+                    store=True,
+                    max_tokens=self.final_output_max_tokens,
+                    generation_config=self.final_output_generation_config,
+                )
+                interaction_id, interaction_status = (
+                    validate_interaction_response(payload)
+                )
+            except Exception as exc:
+                self._attach_partial_steps(exc, steps)
+                raise
+            usage = (
+                payload.get("usage", {})
+                if isinstance(payload.get("usage"), dict)
+                else {}
             )
-            response_format = self._native_response_format()
-            payload = await self.llm.create_interaction(
-                input_payload=forced_input,
-                system_instruction=system_instruction,
-                tools=[],
-                previous_interaction_id=previous_interaction_id,
-                response_format=response_format,
-                store=True,
-                max_tokens=self.final_output_max_tokens,
-                generation_config=self.final_output_generation_config,
-            )
-            interaction_id, interaction_status = validate_interaction_response(payload)
-        except Exception as exc:
-            self._attach_partial_steps(exc, steps)
-            raise
-        usage = payload.get("usage", {}) if isinstance(payload.get("usage"), dict) else {}
-        metadata = {
-            "stage": self.stage_name,
-            "native_interactions": True,
-            "forced_output": True,
-            "previous_interaction_id": previous_interaction_id,
-            "interaction_id": interaction_id,
-            "interaction_status": interaction_status,
-            "llm_duration_ms": round((time.perf_counter() - started) * 1000, 2),
-            "max_output_tokens": self.final_output_max_tokens,
-            "thinking_level": self.final_output_generation_config.get("thinking_level"),
-            "policy_input": self._policy_input_snapshot(
-                system_instruction=system_instruction,
-                input_payload=forced_input,
-                tools=[],
-                response_format=response_format,
-            ),
-        }
-        tokens = self._usage_tokens(usage)
-        if self._extract_native_function_calls(payload):
-            function_calls = self._extract_native_function_calls(payload)
-            metadata["rejection_reason"] = "model requested another function after the tool budget ended"
-            metadata["policy_action"] = {
-                "type": "parallel_tool_calls"
-                if len(function_calls) > 1
-                else "tool_call",
-                "calls": deepcopy(function_calls),
+            metadata = {
+                "stage": self.stage_name,
+                "native_interactions": True,
+                "forced_output": True,
+                "forced_output_correction": correction_index > 0,
+                "previous_interaction_id": request_parent,
+                "interaction_id": interaction_id,
+                "interaction_status": interaction_status,
+                "llm_duration_ms": round(
+                    (time.perf_counter() - started) * 1000,
+                    2,
+                ),
+                "max_output_tokens": self.final_output_max_tokens,
+                "thinking_level": self.final_output_generation_config.get(
+                    "thinking_level"
+                ),
+                "policy_input": self._policy_input_snapshot(
+                    system_instruction=system_instruction,
+                    input_payload=request_input,
+                    tools=[],
+                    response_format=response_format,
+                ),
             }
+            tokens = self._usage_tokens(usage)
+            if self._extract_native_function_calls(payload):
+                function_calls = self._extract_native_function_calls(payload)
+                reason = (
+                    "model requested another function after the tool budget ended"
+                )
+                metadata["rejection_reason"] = reason
+                metadata["policy_action"] = {
+                    "type": (
+                        "parallel_tool_calls"
+                        if len(function_calls) > 1
+                        else "tool_call"
+                    ),
+                    "calls": deepcopy(function_calls),
+                }
+                output_json = None
+                parsed = None
+            else:
+                content = self._extract_native_text(payload)
+                output_json = (
+                    self._extract_output(content)
+                    or self._try_parse_bare_json(content)
+                )
+                if output_json is not None:
+                    metadata["policy_action"] = deepcopy(output_json)
+                parsed = (
+                    self._validate_output(output_json)
+                    if output_json is not None
+                    else None
+                )
+                if parsed is not None:
+                    accepted, reason = self._accept_output(
+                        parsed,
+                        steps,
+                        final_attempt=True,
+                    )
+                    if accepted:
+                        steps.append(
+                            StageStep(
+                                round=len(steps) + 1,
+                                stage_name=self.stage_name,
+                                action_type="output",
+                                output=parsed.model_dump(),
+                                tokens=tokens,
+                                metadata=metadata,
+                            )
+                        )
+                        return parsed, steps
+                    metadata["rejection_reason"] = reason
+                else:
+                    reason = (
+                        "output schema was invalid or incomplete"
+                        if output_json is not None
+                        else "model returned no structured output"
+                    )
+                    metadata["rejection_reason"] = reason
+
             steps.append(
                 StageStep(
                     round=len(steps) + 1,
                     stage_name=self.stage_name,
-                    action_type="output_rejected",
+                    action_type=(
+                        "output_rejected"
+                        if output_json is not None
+                        else "format_error"
+                    ),
+                    output=output_json,
                     tokens=tokens,
                     metadata=metadata,
                 )
             )
-            return None, steps
-
-        content = self._extract_native_text(payload)
-        output_json = self._extract_output(content) or self._try_parse_bare_json(content)
-        if output_json is not None:
-            metadata["policy_action"] = deepcopy(output_json)
-        parsed = self._validate_output(output_json) if output_json is not None else None
-        if parsed is not None:
-            accepted, reason = self._accept_output(parsed, steps, final_attempt=True)
-            if accepted:
-                steps.append(
-                    StageStep(
-                        round=len(steps) + 1,
-                        stage_name=self.stage_name,
-                        action_type="output",
-                        output=parsed.model_dump(),
-                        tokens=tokens,
-                        metadata=metadata,
-                    )
+            if correction_index == 0:
+                request_parent = interaction_id
+                request_input = (
+                    f"Output rejected: {reason}. Return a corrected JSON object. "
+                    "Use only fields allowed by the response schema and do not "
+                    "invent runtime ids or state transitions."
                 )
-                return parsed, steps
-            metadata["rejection_reason"] = reason
-        steps.append(
-            StageStep(
-                round=len(steps) + 1,
-                stage_name=self.stage_name,
-                action_type="output_rejected" if output_json is not None else "format_error",
-                output=output_json,
-                tokens=tokens,
-                metadata=metadata,
-            )
-        )
         return None, steps
 
     def _native_response_format(self) -> Optional[Dict[str, Any]]:
@@ -1219,7 +1319,29 @@ class StageRunner:
         return {
             "type": "text",
             "mime_type": "application/json",
-            "schema": self._normalized_output_schema(),
+            "schema": self._gemini_response_schema(
+                self._normalized_output_schema()
+            ),
+        }
+
+    @classmethod
+    def _gemini_response_schema(cls, schema: Any) -> Any:
+        """Remove response-schema keywords rejected by Gemini Interactions.
+
+        ``maxItems`` is accepted in tool schemas and some direct media requests,
+        but Gemini rejects it in a structured response schema that continues a
+        native function-call interaction. Pydantic still enforces the original
+        list bounds after the response is returned.
+        """
+
+        if isinstance(schema, list):
+            return [cls._gemini_response_schema(item) for item in schema]
+        if not isinstance(schema, dict):
+            return schema
+        return {
+            key: cls._gemini_response_schema(value)
+            for key, value in schema.items()
+            if key != "maxItems"
         }
 
     @staticmethod

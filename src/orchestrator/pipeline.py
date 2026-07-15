@@ -52,7 +52,6 @@ from src.orchestrator.task_store import (
     MAX_TOOL_ACTIONS,
     REFLECTION_INTERVAL,
     apply_reflection,
-    apply_segment_output,
     record_tool_observation,
     stable_id,
     state_from_bootstrap,
@@ -465,12 +464,6 @@ class Orchestrator:
                     investigation.action_count % REFLECTION_INTERVAL == 0
                     or investigation.action_count >= MAX_TOOL_ACTIONS
                 ),
-                output_validator=lambda parsed, _steps: (
-                    self._validate_image_only_segment_output(
-                        investigation,
-                        parsed,
-                    )
-                ),
                 min_tool_calls=1,
                 attach_image=False,
                 prior_steps=[
@@ -498,10 +491,22 @@ class Orchestrator:
                 source_access_policy=self.source_access_policy,
                 max_protocol_corrections=4,
                 max_tool_calls_per_turn=1,
+                force_tool_each_round=True,
             )
-            parsed, steps = await runner.run(
-                render_image_only_react_context(investigation)
-            )
+            try:
+                parsed, steps = await runner.run(
+                    render_image_only_react_context(investigation)
+                )
+            except Exception as exc:
+                partial_steps = list(
+                    getattr(exc, "stage_steps", []) or []
+                )
+                for step in partial_steps:
+                    if step.stage_name == "verification":
+                        step.stage_name = "image_only_investigation"
+                        step.metadata["stage"] = "image_only_investigation"
+                self._record_stage_steps(state, partial_steps)
+                raise
             for step in steps:
                 if step.stage_name == "verification":
                     step.stage_name = "image_only_investigation"
@@ -511,7 +516,6 @@ class Orchestrator:
                 raise RuntimeError(
                     "image-only ReAct segment did not produce valid structured output"
                 )
-            apply_segment_output(investigation, parsed)
             self._sync_image_only_state(state, investigation)
 
             if (
@@ -629,19 +633,6 @@ class Orchestrator:
         return parsed
 
     @staticmethod
-    def _validate_image_only_segment_output(
-        investigation: ImageOnlyInvestigationState,
-        parsed: InvestigationSegmentOutput,
-    ) -> tuple[bool, str]:
-        candidate = investigation.model_copy(deep=True)
-        result = apply_segment_output(candidate, parsed)
-        if parsed.finding_proposals and not result["accepted_finding_ids"]:
-            return False, "; ".join(result["rejected_reasons"]) or (
-                "no Finding proposal was backed by eligible runtime Evidence"
-            )
-        return True, ""
-
-    @staticmethod
     def _validate_image_only_reflection(
         investigation: ImageOnlyInvestigationState,
         parsed: ReflectionOutput,
@@ -716,15 +707,22 @@ class Orchestrator:
         investigation: ImageOnlyInvestigationState,
     ) -> Dict[str, str]:
         facts = {fact.fact_id: fact for fact in investigation.facts}
-        return {
-            task.task_id: " | ".join(
+        claims: Dict[str, str] = {}
+        for task in investigation.tasks:
+            if task.status not in {"active", "pending"}:
+                continue
+            scene_claims = [
                 facts[fact_id].statement
                 for fact_id in task.fact_ids
                 if fact_id in facts
+                and facts[fact_id].predicate == "appears_to_depict"
+            ]
+            claims[task.task_id] = (
+                " | ".join(scene_claims)
+                if scene_claims
+                else f"Question to resolve: {task.question}"
             )[:1800]
-            for task in investigation.tasks
-            if task.status in {"active", "pending"}
-        }
+        return claims
 
     @staticmethod
     def _image_only_fact_signature(

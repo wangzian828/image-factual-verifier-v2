@@ -5,7 +5,7 @@ import json
 from typing import Any, Dict, List
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from src.orchestrator.source_access import SourceAccessPolicy
 from src.orchestrator.stage_runner import StageRunner, StageStep
@@ -85,6 +85,10 @@ class VisualInspectTool(BaseTool):
 
 class NativeStructuredOutput(BaseModel):
     value: str
+
+
+class BoundedNativeOutput(BaseModel):
+    values: List[str] = Field(default_factory=list, max_length=2)
 
 
 def _function_call_response() -> Dict[str, Any]:
@@ -188,8 +192,10 @@ def test_native_function_call_round_trip() -> None:
     assert second_request["previous_interaction_id"] == steps[1].metadata["previous_interaction_id"]
     assert second_request["tools"] == first_request["tools"]
     assert second_request["system_instruction"] == first_request["system_instruction"]
-    assert second_request["response_format"]["mime_type"] == "application/json"
-    assert "evidence" in second_request["response_format"]["schema"]["properties"]
+    assert first_request["response_format"] is None
+    assert second_request["response_format"] is None
+    assert first_request["generation_config"]["tool_choice"] == "any"
+    assert "tool_choice" not in second_request["generation_config"]
 
     function_result = second_request["input_payload"][0]
     assert function_result["type"] == "function_result"
@@ -230,6 +236,20 @@ def test_native_schema_rejects_non_numeric_array_items() -> None:
     )
 
     assert "bbox' for text_search[0] must be a number" in error
+
+
+def test_native_response_schema_drops_max_items_but_local_validation_keeps_it() -> None:
+    runner = StageRunner(
+        llm=NativeFakeBackend([]),
+        system_prompt="",
+        tools=[],
+        output_schema=BoundedNativeOutput,
+        stage_name="reflection",
+    )
+
+    assert "maxItems" in json.dumps(runner._normalized_output_schema())
+    assert "maxItems" not in json.dumps(runner._native_response_format())
+    assert runner._validate_output({"values": ["a", "b", "c"]}) is None
 
 
 def test_usage_records_thought_tokens() -> None:
@@ -311,6 +331,99 @@ def test_native_output_before_tools_is_rejected() -> None:
     assert steps[1].action_type == "tool_call"
     assert steps[1].metadata["react_action_turn"] == 1
     assert backend.requests[1]["previous_interaction_id"] == "interaction-0"
+
+
+def test_invalid_output_before_required_tool_gets_tool_only_correction() -> None:
+    invalid = {
+        "id": "interaction-invalid",
+        "status": "completed",
+        "steps": [
+            {
+                "type": "model_output",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": '{"not_the_required_schema":true}',
+                    }
+                ],
+            }
+        ],
+    }
+    call = _function_call_response()
+    call["id"] = "interaction-tool"
+    completed = _completed_response()
+    completed["id"] = "interaction-complete"
+    backend = NativeFakeBackend([invalid, call, completed])
+    runner = StageRunner(
+        llm=backend,
+        system_prompt="Investigate with tools.",
+        tools=[RecordingTool()],
+        output_schema=ToolStageOutput,
+        max_rounds=2,
+        stage_name="verification",
+        min_tool_calls=1,
+        attach_image=False,
+    )
+
+    parsed, steps = asyncio.run(runner.run("- [q1] verify"))
+
+    assert parsed is not None
+    assert [step.action_type for step in steps] == [
+        "output_rejected",
+        "tool_call",
+        "output",
+    ]
+    assert "Do not return output" in backend.requests[1]["input_payload"]
+    assert "Invoke exactly one available function" in (
+        backend.requests[1]["input_payload"]
+    )
+    assert "requires at least 1 executable function call" in (
+        backend.requests[0]["system_instruction"]
+    )
+
+
+def test_force_tool_each_round_defers_output_to_forced_request() -> None:
+    second_call = _function_call_response()
+    second_call["id"] = "interaction-2"
+    second_call["steps"][0]["id"] = "call-2"
+    second_call["steps"][0]["arguments"] = {
+        "question_id": "q0",
+        "queries": ["another direct source"],
+    }
+    forced = _completed_response()
+    forced["id"] = "interaction-forced"
+    backend = NativeFakeBackend(
+        [_function_call_response(), second_call, forced]
+    )
+    runner = StageRunner(
+        llm=backend,
+        system_prompt="Investigate with tools.",
+        tools=[RecordingTool()],
+        output_schema=ToolStageOutput,
+        max_rounds=2,
+        stage_name="verification",
+        min_tool_calls=1,
+        attach_image=False,
+        force_tool_each_round=True,
+    )
+
+    parsed, steps = asyncio.run(
+        runner.run("- [q0] first\n- [q1] second")
+    )
+
+    assert parsed is not None
+    assert [step.action_type for step in steps] == [
+        "tool_call",
+        "tool_call",
+        "output",
+    ]
+    assert backend.requests[0]["generation_config"]["tool_choice"] == "any"
+    assert backend.requests[1]["generation_config"]["tool_choice"] == "any"
+    assert "tool_choice" not in backend.requests[2]["generation_config"]
+    assert backend.requests[2]["tools"] == []
+    assert "Final JSON is requested separately" in (
+        backend.requests[0]["system_instruction"]
+    )
 
 
 def test_native_output_requires_initial_attempt_for_each_required_question() -> None:
@@ -849,7 +962,10 @@ def test_forced_output_keeps_function_results_as_step_array() -> None:
     assert forced_request["previous_interaction_id"] == steps[-1].metadata["previous_interaction_id"]
     assert forced_request["tools"] == []
     assert backend.requests[0]["max_tokens"] == 16384
-    assert backend.requests[0]["generation_config"] == {"temperature": 0.0}
+    assert backend.requests[0]["generation_config"] == {
+        "temperature": 0.0,
+        "tool_choice": "any",
+    }
     assert forced_request["max_tokens"] == 32768
     assert forced_request["generation_config"] == {
         "temperature": 0.0,
@@ -862,6 +978,57 @@ def test_forced_output_keeps_function_results_as_step_array() -> None:
         item["type"] == "function_result"
         for item in forced_request["input_payload"]
     )
+
+
+def test_forced_output_rejection_gets_one_structured_correction() -> None:
+    rejected = _completed_response()
+    rejected["id"] = "interaction-rejected"
+    corrected = _completed_response()
+    corrected["id"] = "interaction-corrected"
+    corrected_payload = json.loads(
+        corrected["steps"][0]["content"][0]["text"]
+    )
+    corrected_payload["coverage_complete"] = True
+    corrected["steps"][0]["content"][0]["text"] = json.dumps(
+        corrected_payload
+    )
+    backend = NativeFakeBackend(
+        [_function_call_response(), rejected, corrected]
+    )
+    runner = StageRunner(
+        llm=backend,
+        system_prompt="Investigate.",
+        tools=[RecordingTool()],
+        output_schema=ToolStageOutput,
+        max_rounds=1,
+        stage_name="verification",
+        min_tool_calls=1,
+        attach_image=False,
+        output_validator=lambda parsed, _steps: (
+            parsed.coverage_complete,
+            "coverage is incomplete",
+        ),
+    )
+
+    parsed, steps = asyncio.run(runner.run("- [q1] verify"))
+
+    assert parsed is not None
+    assert parsed.coverage_complete is True
+    assert [step.action_type for step in steps] == [
+        "tool_call",
+        "output_rejected",
+        "output",
+    ]
+    correction_request = backend.requests[2]
+    assert correction_request["previous_interaction_id"] == (
+        "interaction-rejected"
+    )
+    assert isinstance(correction_request["input_payload"], str)
+    assert "Output rejected: coverage is incomplete" in (
+        correction_request["input_payload"]
+    )
+    assert steps[1].metadata["forced_output_correction"] is False
+    assert steps[2].metadata["forced_output_correction"] is True
 
 
 def test_forced_output_failure_preserves_completed_tool_steps() -> None:

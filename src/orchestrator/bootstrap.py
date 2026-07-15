@@ -274,6 +274,23 @@ def build_bootstrap_investigation(
     anchors = _unique_by_value(anchors)
     tasks: List[ResearchTask] = []
 
+    ranked_text = sorted(
+        _unique_by_value(text_anchors),
+        key=_text_score,
+        reverse=True,
+    )
+    selected_text = ranked_text[:3]
+    quoted_values = [
+        anchor.value.replace('"', "'")
+        for anchor in selected_text
+    ]
+    suggested_text_queries: List[str] = []
+    if quoted_values:
+        suggested_text_queries.append(" ".join(quoted_values))
+        suggested_text_queries.extend(
+            f'"{value}"' for value in quoted_values[:2]
+        )
+
     scene_fact = next(
         (fact for fact in facts if fact.predicate == "appears_to_depict"),
         None,
@@ -293,18 +310,17 @@ def build_bootstrap_investigation(
                 ),
                 priority=1,
                 origin_ids=list(scene_fact.basis_ids),
-                suggested_tools=["reverse_image_search", "text_search", "visit"],
-                suggested_queries=[],
+                suggested_tools=[
+                    "reverse_image_search",
+                    "compare_with_reference",
+                    "text_search",
+                    "visit",
+                ],
+                suggested_queries=suggested_text_queries[:3],
             )
         )
 
-    ranked_text = sorted(
-        _unique_by_value(text_anchors),
-        key=_text_score,
-        reverse=True,
-    )
-    selected_text = ranked_text[:3]
-    if selected_text:
+    if selected_text and scene_fact is None:
         text_facts: List[VisualFact] = []
         relation_facts: List[VisualFact] = []
         for anchor in selected_text:
@@ -314,10 +330,6 @@ def build_bootstrap_investigation(
                 text_facts.append(fact)
             if relation_fact is not None:
                 relation_facts.append(relation_fact)
-        quoted_values = [
-            anchor.value.replace('"', "'")
-            for anchor in selected_text
-        ]
         fact_ids = [
             fact.fact_id
             for fact in [*text_facts, *relation_facts]
@@ -329,11 +341,6 @@ def build_bootstrap_investigation(
                 for origin_id in fact.basis_ids
             )
         )[:12]
-        combined_query = " ".join(quoted_values)
-        suggested_queries = [combined_query]
-        suggested_queries.extend(
-            f'"{value}"' for value in quoted_values[:2]
-        )
         tasks.append(
             ResearchTask(
                 task_id=_id("task", case.case_id, "joint-text-context", fact_ids),
@@ -350,8 +357,13 @@ def build_bootstrap_investigation(
                 ),
                 priority=1,
                 origin_ids=origin_ids,
-                suggested_tools=["text_search", "reverse_image_search", "visit"],
-                suggested_queries=suggested_queries[:3],
+                suggested_tools=[
+                    "text_search",
+                    "reverse_image_search",
+                    "compare_with_reference",
+                    "visit",
+                ],
+                suggested_queries=suggested_text_queries[:3],
             )
         )
 
@@ -386,7 +398,12 @@ def build_bootstrap_investigation(
                 ),
                 priority=2,
                 origin_ids=list(fact.basis_ids),
-                suggested_tools=["reverse_image_search", "text_search", "visit"],
+                suggested_tools=[
+                    "reverse_image_search",
+                    "compare_with_reference",
+                    "text_search",
+                    "visit",
+                ],
                 suggested_queries=[quoted],
             )
         )
@@ -404,7 +421,12 @@ def build_bootstrap_investigation(
                 purpose="Turn an image-grounded observation into a checkable target.",
                 priority=1,
                 origin_ids=list(fact.basis_ids),
-                suggested_tools=["reverse_image_search", "text_search", "visit"],
+                suggested_tools=[
+                    "reverse_image_search",
+                    "compare_with_reference",
+                    "text_search",
+                    "visit",
+                ],
             )
         )
 

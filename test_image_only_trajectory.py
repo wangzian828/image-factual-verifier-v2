@@ -116,7 +116,6 @@ class AdaptiveImageOnlyBackend:
                 interaction_id,
                 {
                     "segment_summary": "Controlled investigation segment completed.",
-                    "finding_proposals": [],
                     "ready_for_reflection": True,
                 },
             )
@@ -136,7 +135,6 @@ class AdaptiveImageOnlyBackend:
             interaction_id,
             {
                 "segment_summary": "No additional action is required.",
-                "finding_proposals": [],
                 "ready_for_reflection": True,
             },
         )
