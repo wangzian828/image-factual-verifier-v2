@@ -136,11 +136,18 @@ time/call/token accounting, stage timings, trace_path
 
 ```text
 process_metrics.jsonl
+reference_chain_metrics.jsonl
 trajectory_scores.jsonl
 policy_trajectories.jsonl
 ```
 
 These are post-rollout evaluator/training artifacts. They are never model-visible.
+`reference_chain_metrics.jsonl` contains exactly five metrics: fact recovery recall,
+complete chain recovery recall, frozen-exact evidence recall, semantic evidence
+recall, and final-basis reference precision. It only evaluates the decisive facts and
+acceptable evidence retained in evaluator-private gold. Off-chain material is neutral
+unless it enters the final verdict basis. These scores do not override classification
+or teacher eligibility.
 
 ### Other outputs
 

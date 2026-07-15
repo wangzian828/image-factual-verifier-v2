@@ -252,6 +252,7 @@ run_manifest.json
 predictions.jsonl
 run_results.jsonl
 process_metrics.jsonl
+reference_chain_metrics.jsonl
 trajectory_scores.jsonl
 policy_trajectories.jsonl
 summary.json
@@ -263,6 +264,14 @@ componentized; it reports fact alignment, acceptable-evidence hits, citation
 precision, actual visual binding, verdict-basis alignment/minimality, conflict
 resolution, semantic duplicates, post-determination actions, low-value actions, cost,
 and first error.
+
+Reference-chain recovery is emitted separately with five metrics. It measures only
+the frozen private chain from decisive fact through visual binding and acceptable
+evidence. Exact snapshot recovery remains visible, while conservative semantic
+matching recognizes same-source page versions and official same-capture image assets.
+An optional LLM judge is restricted to qualified unresolved edges and cannot invent
+new evaluation targets. Off-chain material is neutral unless selected into the final
+verdict basis.
 
 `ifv-policy-v1` exports actual ReAct, Reflection, and Judgment request/action
 boundaries. Bootstrap is deterministic, so no fictional Planning example is emitted.

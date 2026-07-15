@@ -76,6 +76,9 @@ The run writes:
   `case_id + verdict`;
 - `run_results.jsonl`: diagnostics, costs, trace paths, and engineering errors;
 - `process_metrics.jsonl`: deterministic per-case process metrics;
+- `reference_chain_metrics.jsonl`: five evaluator-private reference-chain recovery
+  metrics, with frozen-exact and conservative semantic evidence matching kept
+  separate;
 - `trajectory_scores.jsonl`: componentized teacher scores and diagnostics;
 - `policy_trajectories.jsonl`: model-visible request/action examples;
 - `summary.json`, `run_manifest.json`, and canonical `traces/*.json`.
@@ -84,6 +87,17 @@ An engineering failure never becomes factual `unverifiable`. It produces no
 classification prediction, so the data-owned scorer counts that case as missing and
 wrong.
 
+Saved runs can be rescored without rerunning the Agent:
+
+```powershell
+python -m src.eval.score_reference_chain --run-dir path\to\existing-run
+```
+
+Add `--semantic-judge` to let an LLM inspect only qualified fact/evidence edges that
+remain unresolved after deterministic matching. Extra investigation material is not
+penalized unless it enters the final verdict basis. Reference-chain scores do not
+override classification and are not a training-admission gate.
+
 ## Validation
 
 ```powershell
@@ -91,7 +105,7 @@ python -m pytest -q
 python scripts/audit_real_trace.py path\to\traces --json --strict-scheduler
 ```
 
-The active suite contains 156 contract and scripted-state tests. They validate code
+The active suite contains 179 contract and scripted-state tests. They validate code
 boundaries, not live provider availability.
 
 No-mock acceptance requires:
@@ -103,6 +117,5 @@ python scripts/run_real_canary.py `
   --limit 2
 ```
 
-The local image canary is currently blocked by the local proxy exit returning Gemini
-HTTP 400: `This API is not available in your current location.` The required live
-acceptance must be completed on gpu-13 using `docs/operations/gpu13.md`.
+The accepted no-mock group-001 run and post-rollout reference-chain replay are
+recorded in `docs/operations/gpu13.md`.

@@ -481,6 +481,8 @@ c20948d fix: separate route control from protocol failures
 - [x] Filter teacher episodes through explicit trajectory-quality gates.
 - [x] Complete gpu-13 Phase H canary, classification, process scoring, and dataset
   audit.
+- [x] Add evaluator-private reference-chain recovery with exact and semantic evidence
+  metrics, without changing classification or training gates.
 
 ## 13. Phase H - trajectory-quality remediation
 
@@ -653,3 +655,95 @@ strict dataset audit errors = 0
 ```
 
 Phase H acceptance: complete.
+
+## 14. Phase I - evaluator-private reference-chain recovery
+
+The original acceptable-evidence diagnostic required one runtime Evidence object to
+match the frozen canonical URL, span, stance, source family, and artifact SHA-256.
+That remains useful as an exact snapshot-recovery signal, but it reports zero for an
+equivalent official page version or the official image asset associated with a frozen
+source-page caption.
+
+Phase I adds a separate evaluator artifact rather than changing classification,
+teacher eligibility, or the data-pipeline contract:
+
+```text
+reference_chain_metrics.jsonl
+```
+
+It is deliberately limited to five metrics:
+
+```text
+fact_recovery_recall
+chain_recovery_recall
+evidence_exact_recall
+evidence_semantic_recall
+basis_reference_precision
+```
+
+The evaluated scope is only:
+
+```text
+visual_anchor
+  -> decisive_fact
+  -> expected_status
+  -> acceptable_evidence
+  -> source artifact
+```
+
+Semantic matching first applies conservative deterministic rules for a same-source
+page/span version and an official same-capture image asset. An optional LLM judge may
+inspect only qualified, direct, risk-free Evidence edges that remain unresolved. The
+judge receives the already selected gold fact and acceptable references; it cannot
+invent a new evaluation target. Unrelated evidence outside the final verdict basis is
+neither rewarded nor penalized. Off-chain basis evidence lowers only
+`basis_reference_precision`.
+
+Implementation:
+
+- [x] Emit deterministic `reference_chain_metrics.jsonl` from every new evaluation.
+- [x] Add a standalone scorer for existing runs.
+- [x] Keep frozen-exact and semantic recovery visible as separate metrics.
+- [x] Add bounded optional LLM matching for unresolved qualified edges.
+- [x] Keep the artifact out of classification overrides and training-admission gates.
+- [x] Verify that off-chain evidence is neutral until selected into the verdict basis.
+- [x] Replay both accepted group-001 traces on gpu-13.
+
+Accepted implementation commits:
+
+```text
+b4f9641 feat: score frozen reference-chain recovery
+eb5842a fix: recover reference spans from longer source text
+```
+
+Validation:
+
+```text
+local tests = 179 passed
+gpu-13 tests = 179 passed
+```
+
+Accepted replay:
+
+```text
+/gsdata/home/wza/image-factual-verifier-v2-data/runs/eval/
+group-001-v3-quality-20260715-07/reference_chain_metrics.jsonl
+```
+
+Both cases produced:
+
+```text
+fact_recovery_recall = 1.0
+chain_recovery_recall = 1.0
+evidence_exact_recall = 0.0
+evidence_semantic_recall = 1.0
+basis_reference_precision = 1.0
+```
+
+The Artemis trace recovered the frozen NASA chain through a same-source official page
+version with a longer body span. The NOAA trace recovered it through the official
+same-capture image asset. Neither required an LLM call, which keeps obvious matches
+deterministic; the LLM fallback remains available for genuinely unresolved qualified
+alternatives.
+
+Phase I acceptance: complete.

@@ -312,6 +312,23 @@ The accepted fake trajectory used 7 actions and the accepted real trajectory use
 Both had complete visual binding, aligned minimal verdict bases, no semantic duplicate
 execution, no post-determination actions, and no low-value actions.
 
+Reference-chain recovery was added and replayed on the same accepted traces at commit
+`eb5842a`:
+
+```bash
+run=/gsdata/home/wza/image-factual-verifier-v2-data/runs/eval/group-001-v3-quality-20260715-07
+scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
+  python -m src.eval.score_reference_chain --run-dir "$run"
+```
+
+The server suite passed `179` tests. Both cases scored `1.0` for fact recovery,
+complete chain recovery, semantic evidence recovery, and basis reference precision.
+Frozen-exact evidence recovery remained `0.0`, correctly preserving the distinction
+between byte/snapshot identity and equivalent official evidence. Artemis matched a
+same-source NASA page version; NOAA matched the official same-capture image asset.
+The optional LLM fallback made zero calls because deterministic matching resolved both
+edges.
+
 The older `/gs/home/wza/projects/image-factual-verifier-v2` checkout contained staged
 server-side changes and was deliberately left untouched. A fresh GitHub clone was
 used instead. The group-001 release was downloaded by gpu-13 through temporary object
