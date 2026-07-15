@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -457,6 +458,104 @@ def test_official_evidence_supports_promoted_attribution_fact() -> None:
     assert basis.fact_ids == [specific_id]
 
 
+def test_single_unknown_source_cannot_resolve_promoted_attribution() -> None:
+    case, state = _runtime_state()
+    parent_fact_id = state.decisive_fact_ids[0]
+    provenance = state.tasks[0]
+    comparison = record_tool_observation(
+        state,
+        _step(
+            task_id=provenance.task_id,
+            call_id="call-unknown-attribution-comparison",
+            tool_name="compare_with_reference",
+            result=json.dumps(
+                {
+                    "status": "success",
+                    "reference_url": "https://example.org/artwork.jpg",
+                    "resolved_reference_url": "https://example.org/artwork.jpg",
+                    "source_page_url": "https://example.org/artwork",
+                    "same_subject_or_scene": True,
+                    "same_capture_or_near_duplicate": True,
+                    "likely_different_original_capture": False,
+                    "edit_evidence_present": False,
+                    "overall_observation": (
+                        "The input and reference show the same artwork capture."
+                    ),
+                    "confidence": 0.99,
+                }
+            ),
+        ),
+        image_sha256=case.image_sha256,
+    )
+    statement = (
+        'An art blog identifies "Reservation Scene" as a 1992 Navajo '
+        "pictorial weaving by Louise Nez."
+    )
+    assertion = record_tool_observation(
+        state,
+        _step(
+            task_id=provenance.task_id,
+            call_id="call-unknown-attribution-assertion",
+            tool_name="visit",
+            result=json.dumps(
+                {
+                    "status": "success",
+                    "selected_url": "https://example.org/artwork",
+                    "url": "https://example.org/artwork",
+                    "evidence": statement,
+                    "summary": statement,
+                    "relevance": "high",
+                    "stance": "support",
+                    "directness": "direct",
+                    "temporal_alignment": "not_applicable",
+                    "artifact_sha256": "e" * 64,
+                    "evidence_span": {
+                        "start": 0,
+                        "end": len(statement),
+                    },
+                    "retrieved_at": datetime.now(
+                        timezone.utc
+                    ).isoformat(),
+                    "injection_flags": [],
+                    "evidence_eligible": True,
+                }
+            ),
+        ),
+        image_sha256=case.image_sha256,
+    )
+    applied = apply_attribution(
+        state,
+        AttributionOutput(
+            proposals=[
+                AttributionFactProposal(
+                    statement=(
+                        'The image depicts the Navajo pictorial weaving '
+                        '"Reservation Scene" created by Louise Nez in 1992.'
+                    ),
+                    predicate="identified_as",
+                    parent_fact_ids=[parent_fact_id],
+                    evidence_ids=(
+                        comparison["created_evidence_ids"]
+                        + assertion["created_evidence_ids"]
+                    ),
+                    finding_ids=(
+                        comparison["created_finding_ids"]
+                        + assertion["created_finding_ids"]
+                    ),
+                )
+            ]
+        ),
+    )
+
+    specific = next(
+        fact
+        for fact in state.facts
+        if fact.fact_id == applied["accepted_fact_ids"][0]
+    )
+    assert specific.status == "active"
+    assert applied["created_task_ids"]
+
+
 def test_attribution_rejects_unknown_or_ungrounded_records() -> None:
     case, state = _runtime_state()
     provenance = state.tasks[0]
@@ -505,6 +604,48 @@ def test_attribution_rejects_unknown_or_ungrounded_records() -> None:
     assert "unknown discovery/evidence/finding" in unknown["rejected_reasons"][0]
     assert not ungrounded["accepted_fact_ids"]
     assert "not grounded" in ungrounded["rejected_reasons"][0]
+
+
+def test_decisive_attribution_rejects_negated_image_claim() -> None:
+    case, state = _runtime_state()
+    provenance = state.tasks[0]
+    parent_fact_id = state.decisive_fact_ids[0]
+    update = record_tool_observation(
+        state,
+        _step(
+            task_id=provenance.task_id,
+            call_id="call-negative-attribution",
+            tool_name="text_search",
+            result=(
+                '{"status":"success","queries":[{"results":['
+                '{"title":"NOAA Ship Henry B. Bigelow",'
+                '"url":"https://www.noaa.gov/ship",'
+                '"snippet":"The vessel is not located in Antarctica."}]}]}'
+            ),
+        ),
+        image_sha256=case.image_sha256,
+    )
+
+    applied = apply_attribution(
+        state,
+        AttributionOutput(
+            proposals=[
+                AttributionFactProposal(
+                    statement=(
+                        "NOAA Ship Henry B. Bigelow is not located in "
+                        "Antarctica."
+                    ),
+                    predicate="located_at",
+                    parent_fact_ids=[parent_fact_id],
+                    discovery_ids=update["created_discovery_ids"],
+                    decision_relevance="decisive",
+                )
+            ]
+        ),
+    )
+
+    assert not applied["accepted_fact_ids"]
+    assert "positive image claim" in applied["rejected_reasons"][0]
 
 
 def test_duplicate_attribution_updates_existing_fact() -> None:
@@ -1476,6 +1617,90 @@ def test_visual_integrity_refutation_does_not_hide_unresolved_world_fact() -> No
         integrity.fact_id: "refuted",
         world_fact.fact_id: "unresolved",
     }
+
+
+def test_pixel_anomaly_cannot_refute_external_location_fact() -> None:
+    fact = VisualFact(
+        fact_id="fact-external-location",
+        kind="relation",
+        statement="Monarch butterflies naturally occur in Antarctica.",
+        subject_entity_id="entity-butterfly",
+        predicate="located_at",
+        status="active",
+        basis_ids=["anchor-location"],
+        decision_relevance="decisive",
+        origin=FactOrigin(
+            type="input_image",
+            origin_ids=["anchor-location"],
+        ),
+    )
+    evidence = InvestigationEvidence(
+        evidence_id="evidence-pixel-anomaly",
+        task_id="task-location",
+        fact_ids=[fact.fact_id],
+        function_call_id="call-pixel-anomaly",
+        tool_name="analyze_visual_anomalies",
+        evidence_kind="image_region",
+        source_url="",
+        source_family="visual:location",
+        source_class="visual",
+        exact_text="The scene has synthetic-looking edges.",
+        image_region=[0.0, 0.0, 1.0, 1.0],
+        artifact_sha256="a" * 64,
+        retrieved_at=datetime.now(timezone.utc).isoformat(),
+        stance="refute",
+        quality="strong",
+        directness="direct",
+        claim_binding="pixel_observation",
+    )
+    finding = Finding(
+        finding_id="finding-pixel-anomaly",
+        task_id="task-location",
+        fact_ids=[fact.fact_id],
+        statement="The scene has synthetic-looking edges.",
+        stance="refute",
+        evidence_ids=[evidence.evidence_id],
+        source_family_ids=[evidence.source_family],
+    )
+
+    assessment = assess_fact(
+        fact,
+        [finding],
+        {evidence.evidence_id: evidence},
+        all_fact_evidence=[evidence],
+    )
+
+    assert assessment.status == "active"
+    assert assessment.refute.score == 0.0
+
+
+def test_task_exhausts_after_five_attempts_without_resolution() -> None:
+    case, state = _runtime_state()
+    task = next(
+        item
+        for item in state.tasks
+        if any(
+            fact_id in state.decisive_fact_ids
+            for fact_id in item.fact_ids
+        )
+    )
+    for index in range(5):
+        record_tool_observation(
+            state,
+            _step(
+                task_id=task.task_id,
+                call_id=f"call-empty-{index}",
+                tool_name="text_search",
+                result=(
+                    '{"status":"success","queries":['
+                    '{"query":"controlled","results":[]}]}'
+                ),
+            ),
+            image_sha256=case.image_sha256,
+        )
+
+    assert task.attempt_count == 5
+    assert task.status == "exhausted"
 
 
 def test_conflict_requires_discriminating_evidence_before_resolution() -> None:

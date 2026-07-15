@@ -133,7 +133,7 @@ class Orchestrator:
         self.verification_tool_limits = {
             "current_time": 1,
             "ocr_with_position": 3,
-            "reverse_image_search": 4,
+            "reverse_image_search": 1,
             "text_search": 16,
             "visit": 16,
             "compare_with_reference": 6,
@@ -385,6 +385,14 @@ class Orchestrator:
         parsed, steps = await runner.run(
             render_image_only_target_planning_context(investigation)
         )
+        for step in steps:
+            if step.action_type != "output_rejected":
+                continue
+            step.action_type = "planning_revision"
+            step.metadata["planning_revision_reason"] = step.metadata.get(
+                "rejection_reason",
+                "",
+            )
         self._record_stage_steps(state, steps)
         if parsed is None:
             raise RuntimeError(
@@ -457,6 +465,10 @@ class Orchestrator:
                 self._sync_image_only_state(state, investigation)
                 return update
 
+            reverse_attempted = any(
+                self._attempted_image_only_tool(route, "reverse_image_search")
+                for route in investigation.attempted_routes
+            )
             runner = StageRunner(
                 llm=self.llm,
                 system_prompt=self._sp(IMAGE_ONLY_REACT_PROMPT),
@@ -467,6 +479,10 @@ class Orchestrator:
                         self.all_tools,
                     )
                     if tool.name != "current_time"
+                    and not (
+                        reverse_attempted
+                        and tool.name == "reverse_image_search"
+                    )
                 ],
                 output_schema=InvestigationSegmentOutput,
                 max_rounds=max(1, segment_rounds),
@@ -837,6 +853,14 @@ class Orchestrator:
                 for fact in investigation.facts
             )
         )
+
+    @staticmethod
+    def _attempted_image_only_tool(route: str, tool_name: str) -> bool:
+        try:
+            parsed = json.loads(route)
+        except (TypeError, ValueError):
+            return False
+        return str(parsed.get("tool", "")).strip() == tool_name
 
     @staticmethod
     def _image_only_has_refuted_decisive_fact(

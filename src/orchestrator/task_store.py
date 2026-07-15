@@ -38,6 +38,7 @@ NEW_TASKS_PER_REFLECTION_MAX = 3
 DECISIVE_FACTS_MAX = 6
 NEW_DECISIVE_FACTS_PER_REFLECTION_MAX = 2
 ATTRIBUTION_FACTS_PER_PASS_MAX = 2
+MAX_ATTEMPTS_PER_TASK = 5
 
 
 def stable_id(prefix: str, *parts: object) -> str:
@@ -182,6 +183,11 @@ def record_tool_observation(
         failure_ids
         and task.attempt_count >= 3
         and not _task_owns_scene_fact(state, task)
+    ):
+        task.status = "exhausted"
+    if (
+        task.status == "active"
+        and task.attempt_count >= MAX_ATTEMPTS_PER_TASK
     ):
         task.status = "exhausted"
 
@@ -761,10 +767,6 @@ def attribution_planning_needed(
         "reads",
         "context_suggested_by_text",
         "provenance_matches",
-        "identified_as",
-        "located_at",
-        "dated_as",
-        "depicts_event",
     }
     if any(
         fact.fact_id in affected_fact_ids
@@ -786,13 +788,7 @@ def attribution_planning_needed(
         for fact in state.facts
     ):
         return True
-    decisive_lineage = {
-        origin_id
-        for fact in decisive
-        if fact.origin.type == "web_discovery"
-        for origin_id in fact.origin.origin_ids
-    }
-    return bool(affected_fact_ids & decisive_lineage)
+    return False
 
 
 def apply_attribution(
@@ -889,6 +885,26 @@ def apply_attribution(
             )
             continue
         statement = re.sub(r"\s+", " ", proposal.statement).strip()
+        if (
+            proposal.decision_relevance == "decisive"
+            and proposal.predicate
+            in {
+                "identified_as",
+                "attributed_as",
+                "created_by",
+                "dated_as",
+                "located_at",
+                "occurred_at",
+                "depicts_event",
+            }
+            and _attribution_statement_is_negative(statement)
+        ):
+            rejected_reasons.append(
+                "decisive attribution must preserve the positive image claim; "
+                "attach refuting evidence to that claim instead of promoting "
+                "a negated world fact"
+            )
+            continue
         if not _attribution_statement_is_grounded(
             statement,
             discoveries,
@@ -1170,6 +1186,30 @@ def _contains_fabrication_attribution(value: str) -> bool:
             "synthetic image",
             "fabricated image",
             "physically impossible",
+        )
+    )
+
+
+def _attribution_statement_is_negative(value: str) -> bool:
+    lowered = f" {' '.join(str(value or '').casefold().split())} "
+    return any(
+        phrase in lowered
+        for phrase in (
+            " do not ",
+            " does not ",
+            " did not ",
+            " are not ",
+            " is not ",
+            " was not ",
+            " were not ",
+            " cannot ",
+            " can't ",
+            " never ",
+            " no real-world ",
+            " except antarctica ",
+            " absent from ",
+            " not found ",
+            " not naturally ",
         )
     )
 

@@ -150,7 +150,11 @@ Rules:
    scene, promote that relation itself (for example subject-to-place or
    subject-to-event). Do not replace it with the broader claim that the pixels are
    a digital creation, synthetic, impossible, edited, composite, or AI-generated.
-10. Do not write a verdict. Return exactly one JSON object matching the schema.
+10. Preserve positive image-claim polarity. If sources say the depicted relation is
+    false, keep the fact as the positive relation that would make the image real and
+    let Evidence refute it. Never promote "does not", "is not", "cannot", "never",
+    or "except Antarctica" as the decisive image fact.
+11. Do not write a verdict. Return exactly one JSON object matching the schema.
 """
 
 

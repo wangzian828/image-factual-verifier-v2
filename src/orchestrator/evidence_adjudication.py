@@ -367,7 +367,24 @@ def _attribution_support_pair(
     ]
     if not captures or not assertions:
         return []
-    return [captures[0], assertions[0]]
+    authoritative = [
+        row
+        for row in assertions
+        if row[1].source_class in {"official", "news"}
+    ]
+    if authoritative:
+        return [captures[0], authoritative[0]]
+    independent: list[tuple[float, InvestigationEvidence, str]] = []
+    families: set[str] = set()
+    for row in assertions:
+        family = row[1].source_family
+        if family in families:
+            continue
+        families.add(family)
+        independent.append(row)
+        if len(independent) == 2:
+            return [captures[0], *independent]
+    return []
 
 
 def _evidence_score(
@@ -383,6 +400,17 @@ def _evidence_score(
         and set(evidence.risk_flags) <= {"user_generated_content"}
     )
     if evidence.risk_flags and not allowed_first_party_record:
+        return 0.0
+    if (
+        evidence.claim_binding == "pixel_observation"
+        and fact.predicate
+        not in {
+            "visual_integrity",
+            "appears_to_depict",
+            "visible_in",
+            "reads",
+        }
+    ):
         return 0.0
     if (
         stance == "support"
