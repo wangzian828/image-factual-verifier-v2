@@ -570,13 +570,16 @@ def _audit_image_only_interaction_chains(
     steps: Sequence[Mapping[str, Any]],
     report: TraceReport,
 ) -> None:
-    investigation_steps = [
+    stage_steps = [
         (index, step)
         for index, step in enumerate(steps)
         if str(step.get("stage", "")) == "image_only_investigation"
-        and _mapping(step.get("metadata")).get("native_interactions")
     ]
-    if not investigation_steps:
+    native_step_count = sum(
+        bool(_mapping(step.get("metadata")).get("native_interactions"))
+        for _, step in stage_steps
+    )
+    if not native_step_count:
         _issue(
             report,
             "IMAGE_ONLY_INTERACTIONS_MISSING",
@@ -586,9 +589,15 @@ def _audit_image_only_interaction_chains(
         return
 
     previous: str | None = None
-    segment_count = 1
-    for index, step in investigation_steps:
+    segment_count = 0
+    for index, step in stage_steps:
         metadata = _mapping(step.get("metadata"))
+        if metadata.get("deterministic_segment_boundary"):
+            previous = None
+            segment_count += 1
+            continue
+        if not metadata.get("native_interactions"):
+            continue
         interaction_id = str(metadata.get("interaction_id", "")).strip()
         parent_recorded = "previous_interaction_id" in metadata
         raw_parent = metadata.get("previous_interaction_id")
@@ -629,8 +638,8 @@ def _audit_image_only_interaction_chains(
             previous = None
             segment_count += 1
 
-    report.stats["image_only_interaction_steps"] = len(investigation_steps)
-    report.stats["image_only_interaction_segments"] = max(1, segment_count - 1)
+    report.stats["image_only_interaction_steps"] = native_step_count
+    report.stats["image_only_interaction_segments"] = max(1, segment_count)
 
 
 def _audit_image_only_trace(

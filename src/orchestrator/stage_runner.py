@@ -88,6 +88,7 @@ class StageRunner:
         max_tool_calls_per_turn: Optional[int] = None,
         force_tool_each_round: bool = False,
         question_is_active: Optional[Callable[[str], bool]] = None,
+        stop_output_factory: Optional[Callable[[], BaseModel]] = None,
     ):
         self.llm = llm
         self.system_prompt = system_prompt
@@ -139,6 +140,7 @@ class StageRunner:
         )
         self.force_tool_each_round = bool(force_tool_each_round)
         self.question_is_active = question_is_active
+        self.stop_output_factory = stop_output_factory
 
     async def run(self, input_context: str) -> Tuple[Optional[BaseModel], List[StageStep]]:
         """Run the ReAct loop."""
@@ -304,6 +306,21 @@ class StageRunner:
                 )
 
                 if self.should_stop and self.should_stop(steps):
+                    if self.stop_output_factory is not None:
+                        parsed = self.stop_output_factory()
+                        steps.append(
+                            StageStep(
+                                round=round_num + 1,
+                                stage_name=self.stage_name,
+                                action_type="output",
+                                output=parsed.model_dump(),
+                                metadata={
+                                    "stage": self.stage_name,
+                                    "deterministic_segment_boundary": True,
+                                },
+                            )
+                        )
+                        return parsed, steps
                     break
                 continue
 
@@ -743,6 +760,24 @@ class StageRunner:
                 next_input = function_results
                 system_suffix = ""
                 if self.should_stop and self.should_stop(steps):
+                    if self.stop_output_factory is not None:
+                        parsed = self.stop_output_factory()
+                        steps.append(
+                            StageStep(
+                                round=request_index + 1,
+                                stage_name=self.stage_name,
+                                action_type="output",
+                                output=parsed.model_dump(),
+                                metadata={
+                                    "stage": self.stage_name,
+                                    "deterministic_segment_boundary": True,
+                                    "previous_interaction_id": (
+                                        previous_interaction_id
+                                    ),
+                                },
+                            )
+                        )
+                        return parsed, steps
                     return await self._force_native_output(
                         previous_interaction_id=previous_interaction_id,
                         pending_input=next_input,

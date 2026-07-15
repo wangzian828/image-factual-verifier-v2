@@ -512,6 +512,12 @@ class Orchestrator:
                     and task.status in {"active", "pending"}
                     for task in investigation.tasks
                 ),
+                stop_output_factory=lambda: InvestigationSegmentOutput(
+                    segment_summary=(
+                        "The deterministic action or verdict boundary was reached."
+                    ),
+                    ready_for_reflection=True,
+                ),
             )
             try:
                 parsed, steps = await runner.run(
