@@ -76,9 +76,9 @@ The run writes:
   `case_id + verdict`;
 - `run_results.jsonl`: diagnostics, costs, trace paths, and engineering errors;
 - `process_metrics.jsonl`: deterministic per-case process metrics;
-- `reference_chain_metrics.jsonl`: five evaluator-private reference-chain recovery
-  metrics, with frozen-exact and conservative semantic evidence matching kept
-  separate;
+- `reference_chain_metrics.jsonl`: four evaluator-private reference-chain recovery
+  metrics covering facts, recovered evidence, complete chains, and final-basis
+  precision;
 - `trajectory_scores.jsonl`: componentized teacher scores and diagnostics;
 - `policy_trajectories.jsonl`: model-visible request/action examples;
 - `summary.json`, `run_manifest.json`, and canonical `traces/*.json`.

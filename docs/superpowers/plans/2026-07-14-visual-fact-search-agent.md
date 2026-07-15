@@ -325,11 +325,10 @@ the transfer object was deleted after archive and release SHA-256 verification.
 ## 8. Phase F — process evaluation
 
 - [x] Implement decisive-fact matching and status alignment.
-- [x] Implement acceptable-evidence hit rate.
-- [x] Implement citation precision.
+- [x] Separate reference-chain recovery from general process scoring.
 - [x] Implement evidence-to-vision bridge completion.
 - [x] Implement verdict-basis alignment.
-- [x] Report unmatched qualified Evidence for review.
+- [x] Keep unrelated Evidence neutral unless it enters the verdict basis.
 - [x] Report valid-Finding precision, invalid tasks/activations, duplicate actions,
   premature finish, cost, latency, and first error.
 - [x] Emit separate `process_metrics.jsonl` and `trajectory_scores.jsonl`.
@@ -339,8 +338,9 @@ the transfer object was deleted after archive and release SHA-256 verification.
 - [x] Score missing/engineering-error traces explicitly.
 
 Acceptance: complete. The accepted run emitted process metrics and componentized
-teacher scores for both cases. Exact acceptable-evidence hit rate remains a diagnostic
-against frozen evaluator snapshots; it is not used to overwrite classification.
+teacher scores for both cases. Snapshot-identity metrics were subsequently removed
+from runtime scoring; URL, span, artifact, and SHA identity remain data-pipeline audit
+properties.
 
 ## 9. Phase G — trajectories and training preparation
 
@@ -481,8 +481,8 @@ c20948d fix: separate route control from protocol failures
 - [x] Filter teacher episodes through explicit trajectory-quality gates.
 - [x] Complete gpu-13 Phase H canary, classification, process scoring, and dataset
   audit.
-- [x] Add evaluator-private reference-chain recovery with exact and semantic evidence
-  metrics, without changing classification or training gates.
+- [x] Add evaluator-private reference-chain recovery without changing classification
+  or training gates.
 
 ## 13. Phase H - trajectory-quality remediation
 
@@ -660,9 +660,9 @@ Phase H acceptance: complete.
 
 The original acceptable-evidence diagnostic required one runtime Evidence object to
 match the frozen canonical URL, span, stance, source family, and artifact SHA-256.
-That remains useful as an exact snapshot-recovery signal, but it reports zero for an
-equivalent official page version or the official image asset associated with a frozen
-source-page caption.
+Those fields are useful for data construction and release auditing, but they do not
+measure whether the Agent recovered the intended factual evidence chain. Runtime
+scoring therefore does not expose a separate snapshot-reproduction metric.
 
 Phase I adds a separate evaluator artifact rather than changing classification,
 teacher eligibility, or the data-pipeline contract:
@@ -671,13 +671,12 @@ teacher eligibility, or the data-pipeline contract:
 reference_chain_metrics.jsonl
 ```
 
-It is deliberately limited to five metrics:
+It is deliberately limited to four metrics:
 
 ```text
 fact_recovery_recall
 chain_recovery_recall
-evidence_exact_recall
-evidence_semantic_recall
+evidence_recovery_recall
 basis_reference_precision
 ```
 
@@ -703,7 +702,9 @@ Implementation:
 
 - [x] Emit deterministic `reference_chain_metrics.jsonl` from every new evaluation.
 - [x] Add a standalone scorer for existing runs.
-- [x] Keep frozen-exact and semantic recovery visible as separate metrics.
+- [x] Remove URL/span/snapshot/SHA reproduction from runtime quality metrics.
+- [x] Remove the old strict acceptable-evidence and citation fields from process
+  scoring.
 - [x] Add bounded optional LLM matching for unresolved qualified edges.
 - [x] Keep the artifact out of classification overrides and training-admission gates.
 - [x] Verify that off-chain evidence is neutral until selected into the verdict basis.
@@ -714,6 +715,7 @@ Accepted implementation commits:
 ```text
 b4f9641 feat: score frozen reference-chain recovery
 eb5842a fix: recover reference spans from longer source text
+65a5507 refactor: keep only reference-chain recovery metrics
 ```
 
 Validation:
@@ -735,8 +737,7 @@ Both cases produced:
 ```text
 fact_recovery_recall = 1.0
 chain_recovery_recall = 1.0
-evidence_exact_recall = 0.0
-evidence_semantic_recall = 1.0
+evidence_recovery_recall = 1.0
 basis_reference_precision = 1.0
 ```
 
