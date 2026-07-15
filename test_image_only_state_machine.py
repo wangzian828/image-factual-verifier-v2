@@ -308,7 +308,7 @@ def test_discovery_attribution_creates_specific_fact_and_verification_task() -> 
     )
 
     assert len(applied["accepted_fact_ids"]) == 1
-    assert len(applied["created_task_ids"]) == 1
+    assert not applied["created_task_ids"]
     specific = next(
         fact
         for fact in state.facts
@@ -321,13 +321,6 @@ def test_discovery_attribution_creates_specific_fact_and_verification_task() -> 
     assert next(
         fact for fact in state.facts if fact.fact_id == parent_fact_id
     ).decision_relevance == "decisive"
-    verification_task = next(
-        task
-        for task in state.tasks
-        if task.task_id == applied["created_task_ids"][0]
-    )
-    assert verification_task.fact_ids == [specific.fact_id]
-    assert verification_task.priority == 1
 
 
 def test_official_evidence_supports_promoted_attribution_fact() -> None:

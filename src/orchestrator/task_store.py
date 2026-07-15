@@ -1081,7 +1081,20 @@ def apply_attribution(
         if fact.status not in {"supported", "refuted"}:
             task_id = stable_id("task", fact_id, "verify-attribution")
             task = task_by_id.get(task_id)
-            if task is None and len(state.tasks) < TOTAL_TASKS_MAX:
+            candidate_is_actionable = bool(
+                visual_bridge_present
+                or evidence_rows
+                or findings
+                or any(
+                    discovery.reference_image_url
+                    for discovery in discoveries
+                )
+            )
+            if (
+                task is None
+                and candidate_is_actionable
+                and len(state.tasks) < TOTAL_TASKS_MAX
+            ):
                 task = ResearchTask(
                     task_id=task_id,
                     fact_ids=[fact_id],
