@@ -743,9 +743,11 @@ class StageRunner:
                 next_input = function_results
                 system_suffix = ""
                 if self.should_stop and self.should_stop(steps):
-                    system_suffix = (
-                        "\n\nThe stopping condition is met. Do not call another tool; "
-                        "produce the final JSON output now."
+                    return await self._force_native_output(
+                        previous_interaction_id=previous_interaction_id,
+                        pending_input=next_input,
+                        steps=steps,
+                        evidence_so_far=evidence_so_far,
                     )
                 continue
 

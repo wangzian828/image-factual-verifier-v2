@@ -1002,7 +1002,16 @@ def _audit_image_only_trace(
     reflection_counts = [
         int(item.get("action_count", 0) or 0) for item in reflections
     ]
-    expected_reflections = list(range(4, action_count + 1, 4))
+    terminal_stop = str(investigation.get("stop_reason", "")) in {
+        "coverage_complete",
+        "verdict_determined",
+    }
+    reflection_limit = (
+        action_count - 1
+        if terminal_stop and action_count % 4 == 0
+        else action_count
+    )
+    expected_reflections = list(range(4, reflection_limit + 1, 4))
     if reflection_counts != expected_reflections:
         _issue(
             report,

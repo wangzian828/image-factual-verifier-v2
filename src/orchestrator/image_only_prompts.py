@@ -169,6 +169,12 @@ def render_react_context(state: ImageOnlyInvestigationState) -> str:
         item.model_dump(mode="json")
         for item in state.failures[-10:]
     ]
+    attempted_routes = []
+    for route in state.attempted_routes[-16:]:
+        try:
+            attempted_routes.append(json.loads(route))
+        except (TypeError, ValueError):
+            continue
     return (
         f"Investigation brief: {state.brief.objective}\n"
         f"Real tool actions used: {state.action_count}/24\n"
@@ -186,6 +192,8 @@ def render_react_context(state: ImageOnlyInvestigationState) -> str:
         + json.dumps(findings, ensure_ascii=False, indent=2)
         + "\n\nFailures:\n"
         + json.dumps(failures, ensure_ascii=False, indent=2)
+        + "\n\nAttempted semantic routes (do not repeat):\n"
+        + json.dumps(attempted_routes, ensure_ascii=False, indent=2)
     )
 
 

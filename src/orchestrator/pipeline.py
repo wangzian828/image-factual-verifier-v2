@@ -457,7 +457,14 @@ class Orchestrator:
             runner = StageRunner(
                 llm=self.llm,
                 system_prompt=self._sp(IMAGE_ONLY_REACT_PROMPT),
-                tools=build_stage_tools("verification", self.all_tools),
+                tools=[
+                    tool
+                    for tool in build_stage_tools(
+                        "verification",
+                        self.all_tools,
+                    )
+                    if tool.name != "current_time"
+                ],
                 output_schema=InvestigationSegmentOutput,
                 max_rounds=max(1, segment_rounds),
                 image_path=image_path,
