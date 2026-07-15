@@ -748,90 +748,96 @@ svg {
 html&gt;body{padding:0}&lt;/style&gt;
 &lt;/head&gt;
 &lt;body&gt;
-&lt;div id=&quot;ifv-agent-design&quot; aria-label=&quot;Image factual verifier loop and design principles&quot;&gt;
+&lt;div id=&quot;ifv-agent-example&quot; aria-label=&quot;Image factual verifier stages with Artemis example&quot;&gt;
   &lt;style&gt;
-    #ifv-agent-design {
+    #ifv-agent-example {
       color: var(--foreground);
       display: grid;
       gap: 1rem;
     }
 
-    #ifv-agent-design .ifv-meta,
-    #ifv-agent-design .ifv-flow,
-    #ifv-agent-design .ifv-loop-main,
-    #ifv-agent-design .ifv-guardrails,
-    #ifv-agent-design .ifv-principles,
-    #ifv-agent-design .ifv-chain,
-    #ifv-agent-design .ifv-lane {
+    #ifv-agent-example .ifv-meta,
+    #ifv-agent-example .ifv-flow,
+    #ifv-agent-example .ifv-loop-main,
+    #ifv-agent-example .ifv-guardrails,
+    #ifv-agent-example .ifv-principles,
+    #ifv-agent-example .ifv-chain,
+    #ifv-agent-example .ifv-lane,
+    #ifv-agent-example .ifv-example-head {
       display: flex;
       align-items: center;
       flex-wrap: wrap;
       gap: 0.5rem;
     }
 
-    #ifv-agent-design .ifv-flow,
-    #ifv-agent-design .ifv-chain {
+    #ifv-agent-example .ifv-flow,
+    #ifv-agent-example .ifv-chain {
       justify-content: center;
     }
 
-    #ifv-agent-design .ifv-loop {
+    #ifv-agent-example .ifv-loop {
       display: grid;
       justify-items: center;
       gap: 0.35rem;
     }
 
-    #ifv-agent-design .ifv-loop-return,
-    #ifv-agent-design .ifv-arrow,
-    #ifv-agent-design .ifv-guard,
-    #ifv-agent-design .ifv-chain,
-    #ifv-agent-design .ifv-lane-copy {
+    #ifv-agent-example .ifv-loop-return,
+    #ifv-agent-example .ifv-arrow,
+    #ifv-agent-example .ifv-secondary,
+    #ifv-agent-example .ifv-chain,
+    #ifv-agent-example .ifv-lane-copy {
       color: var(--muted-foreground);
     }
 
-    #ifv-agent-design .ifv-detail-grid {
+    #ifv-agent-example .ifv-detail-grid {
       display: grid;
       grid-template-columns: auto minmax(0, 1fr);
       gap: 0.75rem;
       align-items: start;
     }
 
-    #ifv-agent-design .ifv-detail-icon {
+    #ifv-agent-example .ifv-detail-icon {
       padding-top: 0.15rem;
     }
 
-    #ifv-agent-design .ifv-detail-copy,
-    #ifv-agent-design .ifv-ownership {
+    #ifv-agent-example .ifv-detail-copy,
+    #ifv-agent-example .ifv-ownership {
       display: grid;
       gap: 0.45rem;
       min-width: 0;
     }
 
-    #ifv-agent-design .ifv-detail-copy p {
+    #ifv-agent-example .ifv-detail-copy p {
       margin: 0;
     }
 
-    #ifv-agent-design .ifv-lane-label {
-      min-width: 4.5rem;
-    }
-
-    #ifv-agent-design .ifv-chain code {
+    #ifv-agent-example .ifv-state code,
+    #ifv-agent-example .ifv-chain code {
       color: var(--foreground);
     }
 
+    #ifv-agent-example .ifv-example {
+      color: var(--foreground);
+    }
+
+    #ifv-agent-example .ifv-lane-label {
+      min-width: 4.5rem;
+    }
+
     @media (max-width: 620px) {
-      #ifv-agent-design .ifv-flow {
+      #ifv-agent-example .ifv-flow {
         justify-content: flex-start;
       }
 
-      #ifv-agent-design .ifv-arrow {
+      #ifv-agent-example .ifv-arrow {
         display: none;
       }
 
-      #ifv-agent-design .ifv-loop {
+      #ifv-agent-example .ifv-loop {
         justify-items: start;
       }
 
-      #ifv-agent-design .ifv-lane {
+      #ifv-agent-example .ifv-lane {
         align-items: flex-start;
       }
     }
@@ -842,6 +848,11 @@ html&gt;body{padding:0}&lt;/style&gt;
     &lt;span class=&quot;viz-badge&quot;&gt;开放网络调查&lt;/span&gt;
     &lt;span class=&quot;viz-badge&quot;&gt;状态可审计&lt;/span&gt;
     &lt;span class=&quot;viz-badge&quot;&gt;三分类输出&lt;/span&gt;
+  &lt;/div&gt;
+
+  &lt;div class=&quot;ifv-example-head&quot; aria-label=&quot;Example context&quot;&gt;
+    &lt;span class=&quot;viz-badge&quot;&gt;贯穿示例&lt;/span&gt;
+    &lt;span class=&quot;ifv-secondary&quot;&gt;四名蓝色飞行服人员植树；牌子写着 KENNEDY SPACE CENTER 和 APOLLO 14 MOON TREE&lt;/span&gt;
   &lt;/div&gt;
 
   &lt;div class=&quot;ifv-flow&quot; role=&quot;group&quot; aria-label=&quot;选择 Agent 阶段&quot;&gt;
@@ -881,14 +892,15 @@ html&gt;body{padding:0}&lt;/style&gt;
   &lt;section class=&quot;card&quot; aria-live=&quot;polite&quot;&gt;
     &lt;div class=&quot;ifv-detail-grid&quot;&gt;
       &lt;div class=&quot;ifv-detail-icon&quot; aria-hidden=&quot;true&quot;&gt;
-        &lt;span id=&quot;ifv-design-detail-icon&quot;&gt;
+        &lt;span id=&quot;ifv-example-detail-icon&quot;&gt;
           &lt;i data-lucide=&quot;scan-eye&quot;&gt;&lt;/i&gt;
         &lt;/span&gt;
       &lt;/div&gt;
       &lt;div class=&quot;ifv-detail-copy&quot;&gt;
-        &lt;strong id=&quot;ifv-design-detail-label&quot;&gt;把像素变成结构化观察&lt;/strong&gt;
-        &lt;p id=&quot;ifv-design-detail-action&quot;&gt;Gemini 描述场景；EasyOCR 单独读取文字、位置和置信度。&lt;/p&gt;
-        &lt;p class=&quot;ifv-guard&quot; id=&quot;ifv-design-detail-guard&quot;&gt;观察只是候选线索，不直接成为事实结论。&lt;/p&gt;
+        &lt;strong id=&quot;ifv-example-detail-label&quot;&gt;把像素变成结构化观察&lt;/strong&gt;
+        &lt;p id=&quot;ifv-example-detail-action&quot;&gt;调用 Gemini 场景感知和 EasyOCR；记录物体、人物、文字、位置与检索锚点。&lt;/p&gt;
+        &lt;p class=&quot;ifv-state&quot;&gt;&lt;span class=&quot;ifv-secondary&quot;&gt;写入：&lt;/span&gt;&lt;code id=&quot;ifv-example-detail-state&quot;&gt;PerceptionReport · VisualEntity · TextRegion · RetrievalAnchor&lt;/code&gt;&lt;/p&gt;
+        &lt;p class=&quot;ifv-example&quot;&gt;&lt;span class=&quot;viz-badge&quot;&gt;例&lt;/span&gt; &lt;span id=&quot;ifv-example-detail-example&quot;&gt;读到 KENNEDY SPACE CENTER 和 APOLLO 14 MOON TREE；看到四人、树苗和铁锹。&lt;/span&gt;&lt;/p&gt;
       &lt;/div&gt;
     &lt;/div&gt;
   &lt;/section&gt;
@@ -905,10 +917,11 @@ html&gt;body{padding:0}&lt;/style&gt;
   &lt;/div&gt;
 
   &lt;div class=&quot;ifv-principles&quot; aria-label=&quot;Design principles&quot;&gt;
+    &lt;span class=&quot;viz-badge&quot;&gt;观察 ≠ 证据&lt;/span&gt;
     &lt;span class=&quot;viz-badge&quot;&gt;Discovery ≠ Evidence&lt;/span&gt;
     &lt;span class=&quot;viz-badge&quot;&gt;冲突 ≠ unverifiable&lt;/span&gt;
     &lt;span class=&quot;viz-badge&quot;&gt;工程错误 ≠ factual verdict&lt;/span&gt;
-    &lt;span class=&quot;viz-badge&quot;&gt;只保留最小充分证据链&lt;/span&gt;
+    &lt;span class=&quot;viz-badge&quot;&gt;最小充分证据链&lt;/span&gt;
   &lt;/div&gt;
 
   &lt;div class=&quot;ifv-guardrails&quot; aria-label=&quot;Investigation limits&quot;&gt;
@@ -930,59 +943,66 @@ html&gt;body{padding:0}&lt;/style&gt;
     &lt;span aria-hidden=&quot;true&quot;&gt;→&lt;/span&gt;
     &lt;code&gt;verdict_basis&lt;/code&gt;
     &lt;span aria-hidden=&quot;true&quot;&gt;→&lt;/span&gt;
-    &lt;strong&gt;real / fake / unverifiable&lt;/strong&gt;
+    &lt;strong&gt;fake&lt;/strong&gt;
   &lt;/div&gt;
 
   &lt;script&gt;
     (() =&gt; {
-      const root = document.getElementById(&quot;ifv-agent-design&quot;);
+      const root = document.getElementById(&quot;ifv-agent-example&quot;);
       if (!root) return;
 
       const stages = [
         {
           icon: &quot;scan-eye&quot;,
           label: &quot;把像素变成结构化观察&quot;,
-          action: &quot;Gemini 描述场景；EasyOCR 单独读取文字、位置和置信度。&quot;,
-          guard: &quot;观察只是候选线索，不直接成为事实结论。&quot;
+          action: &quot;调用 Gemini 场景感知和 EasyOCR；记录物体、人物、文字、位置与检索锚点。&quot;,
+          state: &quot;PerceptionReport · VisualEntity · TextRegion · RetrievalAnchor&quot;,
+          example: &quot;读到 KENNEDY SPACE CENTER 和 APOLLO 14 MOON TREE；看到四人、树苗和铁锹。&quot;
         },
         {
           icon: &quot;list-tree&quot;,
           label: &quot;确定性建立初始调查状态&quot;,
-          action: &quot;生成 VisualFact、检索锚点和最多 4 个可执行 ResearchTask。&quot;,
-          guard: &quot;Bootstrap 不生成 Evidence、Finding 或 verdict。&quot;
+          action: &quot;从观察生成 VisualFact，选择中心事实，并建立最多 4 个可执行 ResearchTask。&quot;,
+          state: &quot;InvestigationBrief · VisualFact · decisive_fact_ids · ResearchTask&quot;,
+          example: &quot;中心事实：图像似乎描绘 Artemis II crew 在 Kennedy 举行 Moon Tree dedication；任务是寻找原始事件和地点。&quot;
         },
         {
           icon: &quot;search&quot;,
-          label: &quot;模型一次只选择一个调查动作&quot;,
-          action: &quot;从反向搜图、文本搜索、访问网页、裁图搜索和参考图对比中选择一个工具。&quot;,
-          guard: &quot;SERP 或视觉候选先是 Discovery，不能直接支撑结论。&quot;
+          label: &quot;围绕一个任务执行一个真实工具动作&quot;,
+          action: &quot;模型在反向搜图、文本搜索、访问网页、裁图搜索和参考图对比中选择一个工具。&quot;,
+          state: &quot;Discovery 或原始工具结果；成功调用 ID 和来源信息&quot;,
+          example: &quot;反向搜图找到相关 Moon Tree 图片；随后访问 NASA 候选页，取得 Johnson Space Center 的原文。&quot;
         },
         {
           icon: &quot;refresh-cw&quot;,
-          label: &quot;Runtime 把工具结果变成可信状态&quot;,
-          action: &quot;归约 Evidence、Finding 或 Failure，裁决支持/反驳冲突并运行 Coverage。&quot;,
-          guard: &quot;未解决时 Reflection 只能提出受限状态增量，然后回到 ReAct。&quot;
+          label: &quot;Runtime 归约、裁冲突并检查覆盖&quot;,
+          action: &quot;验证来源和调用链，生成 Evidence、Finding 或 Failure；裁决支持/反驳冲突并运行 Coverage。&quot;,
+          state: &quot;Evidence · Finding · fact.status · FactCoverage · ReflectionRecord&quot;,
+          example: &quot;NASA 官方直接说明真实仪式在 Johnson Space Center，反驳 Kennedy 地点；决定性事实变为 refuted，Coverage 已足够判 fake。&quot;
         },
         {
           icon: &quot;badge-check&quot;,
-          label: &quot;退出循环后才允许形成结论&quot;,
-          action: &quot;确定性编译最小 verdict_basis；Gemini Judgment 必须复述同一组事实和证据 ID。&quot;,
-          guard: &quot;结论确定、信息饱和或达到预算才退出；工程错误不转成 unverifiable。&quot;
+          label: &quot;退出循环后编译最小结论依据&quot;,
+          action: &quot;确定性选择最强且最少的事实、Finding 和 Evidence；Gemini Judgment 必须复述同一组 ID。&quot;,
+          state: &quot;verdict_target · verdict_basis · ImageOnlyJudgment · termination&quot;,
+          example: &quot;只保留 1 个 VisualFact、1 个 Finding 和 1 条 NASA Evidence；第 7 个动作后输出 fake 并立即停止。&quot;
         }
       ];
 
-      const label = root.querySelector(&quot;#ifv-design-detail-label&quot;);
-      const action = root.querySelector(&quot;#ifv-design-detail-action&quot;);
-      const guard = root.querySelector(&quot;#ifv-design-detail-guard&quot;);
-      const icon = root.querySelector(&quot;#ifv-design-detail-icon&quot;);
+      const label = root.querySelector(&quot;#ifv-example-detail-label&quot;);
+      const action = root.querySelector(&quot;#ifv-example-detail-action&quot;);
+      const state = root.querySelector(&quot;#ifv-example-detail-state&quot;);
+      const example = root.querySelector(&quot;#ifv-example-detail-example&quot;);
+      const icon = root.querySelector(&quot;#ifv-example-detail-icon&quot;);
       const buttons = [...root.querySelectorAll(&quot;.ifv-stage&quot;)];
 
       const selectStage = (index) =&gt; {
         const stage = stages[index];
-        if (!stage || !label || !action || !guard || !icon) return;
+        if (!stage || !label || !action || !state || !example || !icon) return;
         label.textContent = stage.label;
         action.textContent = stage.action;
-        guard.textContent = stage.guard;
+        state.textContent = stage.state;
+        example.textContent = stage.example;
         icon.innerHTML = `&lt;i data-lucide=&quot;${stage.icon}&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;`;
         buttons.forEach((button, buttonIndex) =&gt; {
           button.setAttribute(
