@@ -20,7 +20,7 @@ def test_strict_audit_accepts_complete_image_only_trace(
     report = audit_trace(_scripted_trace(tmp_path))
 
     assert not report.failures(strict_scheduler=True)
-    assert report.stats["image_only_actions"] == 3
+    assert report.stats["image_only_actions"] == 2
     assert report.stats["reflections"] == 0
     assert report.stats["decisive_facts"] == 1
 

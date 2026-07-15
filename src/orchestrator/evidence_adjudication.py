@@ -226,10 +226,23 @@ def _assess_direction(
         if stance == "support" and fact.predicate == "appears_to_depict"
         else []
     )
+    official_exact_capture = (
+        rows[0]
+        if (
+            stance == "support"
+            and fact.predicate == "appears_to_depict"
+            and rows[0][1].claim_binding == "same_capture"
+            and rows[0][1].source_class == "official"
+            and rows[0][0] >= 90.0
+        )
+        else None
+    )
     scene_support_requires_pair = (
         stance == "support" and fact.predicate == "appears_to_depict"
     )
-    if scene_support_pair:
+    if official_exact_capture is not None:
+        selected = [official_exact_capture]
+    elif scene_support_pair:
         selected = scene_support_pair
     elif (
         not scene_support_requires_pair
@@ -249,7 +262,8 @@ def _assess_direction(
             if len(selected) == 2:
                 break
     decisive = bool(selected) and (
-        bool(scene_support_pair)
+        official_exact_capture is not None
+        or bool(scene_support_pair)
         or selected[0][0] >= DECISIVE_SINGLE_EVIDENCE_SCORE
         or len(selected) >= 2
     )

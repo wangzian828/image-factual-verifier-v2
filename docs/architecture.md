@@ -125,9 +125,10 @@ Eligible web Evidence requires:
 
 One official direct source can refute an exact event/place/identity slot. Supporting
 a proposition about what the input image depicts additionally requires visual
-binding. A full scene proposition needs both a same-capture comparison and a fetched
-direct source assertion. Generic pages about a logo, landmark, or entity cannot
-independently prove that it is present in the input pixels.
+binding. An exact same-capture match on an original official source can directly bind
+the scene; a match on a non-original or unknown host also needs a fetched direct
+source assertion. Generic pages about a logo, landmark, or entity cannot independently
+prove that it is present in the input pixels.
 
 ### Visual Evidence
 

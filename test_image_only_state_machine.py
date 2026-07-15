@@ -288,7 +288,7 @@ def test_scene_support_requires_near_duplicate_and_source_assertion() -> None:
     )
     result = {
         "status": "success",
-        "reference_url": "https://www.noaa.gov/media/matching-capture.jpg",
+        "reference_url": "https://images.example.org/matching-capture.jpg",
         "same_subject_or_scene": True,
         "same_capture_or_near_duplicate": True,
         "likely_different_original_capture": False,

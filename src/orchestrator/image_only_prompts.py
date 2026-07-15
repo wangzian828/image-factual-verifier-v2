@@ -34,10 +34,11 @@ Rules:
    source_page_url so the tool can recover an expired or hotlink-blocked image.
    Visiting only the surrounding page text does not validate that the current image
    matches the reference.
-7. Prefer an untested official reference image when one is available. Use visit
-   separately to fetch the surrounding caption or event/place context. Supporting a
-   full scene proposition requires both a same-capture comparison and a direct source
-   assertion; either one alone is incomplete.
+7. Prefer an untested official reference image when one is available. An exact
+   same-capture match hosted by an original official source can bind the scene
+   directly. For non-original, unknown, news, or UGC image hosts, also use visit to
+   fetch a direct caption or event/place assertion; the image match alone is
+   incomplete.
 8. Discovery, Evidence, Finding, task, and fact state are reduced by the runtime.
    Do not propose or invent state transitions in the segment output.
 9. Do not write a verdict. Return only the segment summary and

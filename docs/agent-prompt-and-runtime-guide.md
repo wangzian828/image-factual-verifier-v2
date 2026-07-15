@@ -109,8 +109,9 @@ A Finding proposal is accepted only if:
 - its stance agrees with owned Evidence;
 - source-family provenance is retained.
 
-Direct official evidence can refute an exact event/place/identity slot. Supporting a
-full scene proposition requires a same-capture/near-duplicate comparison plus a
+Direct official evidence can refute an exact event/place/identity slot. An exact
+same-capture/near-duplicate hosted by an original official source can bind a full
+scene proposition. A non-original or unknown image host additionally requires a
 fetched direct source assertion. The same subject in a different capture is neutral,
 and a generic official identity page does not prove visible presence in the input.
 
