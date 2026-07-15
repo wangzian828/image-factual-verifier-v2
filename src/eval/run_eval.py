@@ -537,15 +537,14 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
                 )
                 reference_chain_metrics.append(
                     {
-                        "schema_version": "ifv-reference-chain-metrics-v1",
+                        "schema_version": "ifv-reference-chain-metrics-v2",
                         "case_id": identity,
                         "engineering_error": True,
                         "error": "canonical trace is missing",
                         "metrics": {
                             "fact_recovery_recall": 0.0,
                             "chain_recovery_recall": 0.0,
-                            "evidence_exact_recall": 0.0,
-                            "evidence_semantic_recall": 0.0,
+                            "evidence_recovery_recall": 0.0,
                             "basis_reference_precision": 0.0,
                         },
                     }

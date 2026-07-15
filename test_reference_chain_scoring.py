@@ -58,8 +58,7 @@ def test_semantic_recovery_accepts_same_source_capture_without_exact_snapshot(
     assert metrics["metrics"] == {
         "fact_recovery_recall": 1.0,
         "chain_recovery_recall": 1.0,
-        "evidence_exact_recall": 0.0,
-        "evidence_semantic_recall": 1.0,
+        "evidence_recovery_recall": 1.0,
         "basis_reference_precision": 1.0,
     }
     match = metrics["reference_facts"][0]["evidence_matches"][0]
@@ -113,8 +112,7 @@ def test_semantic_recovery_accepts_same_source_page_version(
 
     metrics = asyncio.run(score_reference_chain_trace(trace, gold))
 
-    assert metrics["metrics"]["evidence_exact_recall"] == 0.0
-    assert metrics["metrics"]["evidence_semantic_recall"] == 1.0
+    assert metrics["metrics"]["evidence_recovery_recall"] == 1.0
     assert metrics["metrics"]["chain_recovery_recall"] == 1.0
     assert metrics["reference_facts"][0]["evidence_matches"][0]["method"] == (
         "same_source_text_equivalent"
@@ -230,8 +228,7 @@ def test_llm_matcher_only_handles_unresolved_qualified_edge(
     )
 
     assert matcher.calls == 1
-    assert metrics["metrics"]["evidence_exact_recall"] == 0.0
-    assert metrics["metrics"]["evidence_semantic_recall"] == 1.0
+    assert metrics["metrics"]["evidence_recovery_recall"] == 1.0
     assert metrics["metrics"]["chain_recovery_recall"] == 1.0
     assert metrics["metrics"]["basis_reference_precision"] == 1.0
     assert metrics["reference_facts"][0]["evidence_matches"][0]["method"] == (

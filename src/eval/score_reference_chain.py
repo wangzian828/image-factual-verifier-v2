@@ -207,7 +207,7 @@ async def _run(args: argparse.Namespace) -> Dict[str, Any]:
             if not trace_path.is_file():
                 rows.append(
                     {
-                        "schema_version": "ifv-reference-chain-metrics-v1",
+                        "schema_version": "ifv-reference-chain-metrics-v2",
                         "case_id": case_id,
                         "score_metadata": score_metadata,
                         "engineering_error": True,
@@ -215,8 +215,7 @@ async def _run(args: argparse.Namespace) -> Dict[str, Any]:
                         "metrics": {
                             "fact_recovery_recall": 0.0,
                             "chain_recovery_recall": 0.0,
-                            "evidence_exact_recall": 0.0,
-                            "evidence_semantic_recall": 0.0,
+                            "evidence_recovery_recall": 0.0,
                             "basis_reference_precision": 0.0,
                         },
                     }

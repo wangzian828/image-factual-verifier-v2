@@ -456,9 +456,6 @@ def score_process_trace(
         for item in fact_matches
         if item["runtime_fact_id"] is not None
     }
-    acceptable_hits = 0
-    acceptable_total = 0
-    acceptable_evidence_ids: set[str] = set()
     bridge_hits = 0
     runtime_fact_by_id = {
         str(item.get("fact_id", "")): item for item in decisive_facts
@@ -466,8 +463,6 @@ def score_process_trace(
     for gold_fact in gold_facts:
         gold_fact_id = str(gold_fact.get("fact_id", ""))
         runtime_fact_id = matched_runtime_by_gold.get(gold_fact_id)
-        references = _rows(gold_fact.get("acceptable_evidence"))
-        acceptable_total += 1
         if runtime_fact_id is None:
             continue
         related_findings = [
@@ -483,17 +478,6 @@ def score_process_trace(
             for evidence_id in finding.get("evidence_ids", []) or []
             if str(evidence_id) in evidence
         ]
-        hit_ids = {
-            str(item.get("evidence_id", ""))
-            for item in related_evidence
-            if any(
-                _evidence_matches_reference(item, reference)
-                for reference in references
-            )
-        }
-        if hit_ids:
-            acceptable_hits += 1
-            acceptable_evidence_ids.update(hit_ids)
         runtime_fact = runtime_fact_by_id.get(runtime_fact_id, {})
         if (
             gold_fact.get("visual_anchor")
@@ -504,9 +488,6 @@ def score_process_trace(
         ):
             bridge_hits += 1
 
-    acceptable_evidence_hit_rate = (
-        acceptable_hits / acceptable_total if acceptable_total else 1.0
-    )
     bridge_completion = (
         bridge_hits / len(gold_facts) if gold_facts else 1.0
     )
@@ -574,13 +555,6 @@ def score_process_trace(
         if basis_minimality_precision + basis_minimality_recall
         else 0.0
     )
-    citation_precision = (
-        len(basis_evidence_ids & acceptable_evidence_ids)
-        / len(basis_evidence_ids)
-        if basis_evidence_ids
-        else 0.0
-    )
-
     valid_finding_precision = (
         len(valid_finding_ids) / len(findings) if findings else 0.0
     )
@@ -677,20 +651,6 @@ def score_process_trace(
         "decisive_fact_discovery_rate": round(discovery_rate, 6),
         "decisive_fact_status_accuracy": round(status_accuracy, 6),
         "decisive_fact_alignment": round(decisive_fact_alignment, 6),
-        "acceptable_evidence_hit_rate": round(
-            acceptable_evidence_hit_rate, 6
-        ),
-        "unmatched_qualified_evidence_ids": sorted(
-            evidence_id
-            for evidence_id, item in evidence.items()
-            if evidence_id not in acceptable_evidence_ids
-            and str(item.get("quality", "")) in {"strong", "moderate"}
-            and str(item.get("directness", "")) == "direct"
-            and not item.get("risk_flags")
-            and str(item.get("function_call_id", "")).strip()
-            in successful_calls
-        ),
-        "citation_precision": round(citation_precision, 6),
         "evidence_to_vision_bridge_completion": round(
             bridge_completion, 6
         ),
@@ -811,7 +771,6 @@ def score_process_trace(
             "basis_finding_ids": sorted(basis_finding_ids),
             "basis_evidence_ids": sorted(basis_evidence_ids),
             "valid_finding_ids": sorted(valid_finding_ids),
-            "acceptable_evidence_ids": sorted(acceptable_evidence_ids),
             "expected_minimal_evidence_ids": sorted(
                 expected_minimal_evidence_ids
             ),

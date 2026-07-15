@@ -30,7 +30,7 @@ from src.trajectory.scoring import (
 )
 
 
-REFERENCE_CHAIN_SCHEMA_VERSION = "ifv-reference-chain-metrics-v1"
+REFERENCE_CHAIN_SCHEMA_VERSION = "ifv-reference-chain-metrics-v2"
 SEMANTIC_TEXT_MATCH_THRESHOLD = 0.72
 DEFAULT_MAX_LLM_CANDIDATES_PER_FACT = 3
 
@@ -378,8 +378,7 @@ async def score_reference_chain_trace(
     }
 
     reference_fact_rows: List[Dict[str, Any]] = []
-    semantic_evidence_ids: set[str] = set()
-    exact_evidence_ids: set[str] = set()
+    recovered_evidence_ids: set[str] = set()
     matcher_errors: List[Dict[str, Any]] = []
     llm_candidate_count = 0
 
@@ -405,8 +404,7 @@ async def score_reference_chain_trace(
         ]
 
         match_records: List[Dict[str, Any]] = []
-        fact_exact_ids: set[str] = set()
-        fact_semantic_ids: set[str] = set()
+        fact_recovered_evidence_ids: set[str] = set()
         for evidence in related_evidence:
             evidence_id = str(evidence.get("evidence_id", ""))
             exact_reference = next(
@@ -418,13 +416,12 @@ async def score_reference_chain_trace(
                 None,
             )
             if exact_reference is not None:
-                fact_exact_ids.add(evidence_id)
-                fact_semantic_ids.add(evidence_id)
+                fact_recovered_evidence_ids.add(evidence_id)
                 match_records.append(
                     _match_record(
                         evidence_id=evidence_id,
                         reference=exact_reference,
-                        method="frozen_exact",
+                        method="canonical_reference",
                         confidence=1.0,
                     )
                 )
@@ -442,7 +439,7 @@ async def score_reference_chain_trace(
                 if deterministic is None:
                     continue
                 method, confidence = deterministic
-                fact_semantic_ids.add(evidence_id)
+                fact_recovered_evidence_ids.add(evidence_id)
                 match_records.append(
                     _match_record(
                         evidence_id=evidence_id,
@@ -457,7 +454,8 @@ async def score_reference_chain_trace(
             unresolved_candidates = [
                 evidence
                 for evidence in related_evidence
-                if str(evidence.get("evidence_id", "")) not in fact_semantic_ids
+                if str(evidence.get("evidence_id", ""))
+                not in fact_recovered_evidence_ids
                 and _qualified_semantic_candidate(evidence, successful_calls)
                 and any(
                     _stance_matches(evidence, reference)
@@ -488,7 +486,7 @@ async def score_reference_chain_trace(
                 if str(item.get("evidence_id", "")) not in basis_evidence_ids
             ]
             selected_candidates = list(basis_candidates)
-            if not fact_semantic_ids:
+            if not fact_recovered_evidence_ids:
                 remaining = max(
                     0,
                     max_llm_candidates_per_fact - len(selected_candidates),
@@ -496,7 +494,7 @@ async def score_reference_chain_trace(
                 selected_candidates.extend(non_basis_candidates[:remaining])
             for evidence in selected_candidates:
                 if (
-                    fact_semantic_ids
+                    fact_recovered_evidence_ids
                     and str(evidence.get("evidence_id", ""))
                     not in basis_evidence_ids
                 ):
@@ -527,7 +525,7 @@ async def score_reference_chain_trace(
                 if not decision.match or decision.reference_index is None:
                     continue
                 reference = compatible_references[decision.reference_index]
-                fact_semantic_ids.add(evidence_id)
+                fact_recovered_evidence_ids.add(evidence_id)
                 match_records.append(
                     _match_record(
                         evidence_id=evidence_id,
@@ -538,8 +536,7 @@ async def score_reference_chain_trace(
                     )
                 )
 
-        exact_evidence_ids.update(fact_exact_ids)
-        semantic_evidence_ids.update(fact_semantic_ids)
+        recovered_evidence_ids.update(fact_recovered_evidence_ids)
         fact_recovered = bool(runtime_fact_id)
         status_match = bool(fact_match.get("status_match", False))
         visual_anchor_recovered = bool(
@@ -549,7 +546,7 @@ async def score_reference_chain_trace(
                 or _has_actual_visual_bridge(runtime_fact, related_evidence)
             )
         )
-        semantic_evidence_recovered = bool(fact_semantic_ids)
+        evidence_recovered = bool(fact_recovered_evidence_ids)
         reference_fact_rows.append(
             {
                 "gold_fact_id": gold_fact_id,
@@ -565,15 +562,16 @@ async def score_reference_chain_trace(
                 ),
                 "status_match": status_match,
                 "visual_anchor_recovered": visual_anchor_recovered,
-                "exact_evidence_ids": sorted(fact_exact_ids),
-                "semantic_evidence_ids": sorted(fact_semantic_ids),
+                "recovered_evidence_ids": sorted(
+                    fact_recovered_evidence_ids
+                ),
                 "evidence_matches": match_records,
                 "chain_recovered": all(
                     (
                         fact_recovered,
                         status_match,
                         visual_anchor_recovered,
-                        semantic_evidence_recovered,
+                        evidence_recovered,
                     )
                 ),
             }
@@ -592,20 +590,17 @@ async def score_reference_chain_trace(
         if denominator
         else 1.0
     )
-    evidence_exact_recall = (
-        sum(bool(item["exact_evidence_ids"]) for item in reference_fact_rows)
-        / denominator
-        if denominator
-        else 1.0
-    )
-    evidence_semantic_recall = (
-        sum(bool(item["semantic_evidence_ids"]) for item in reference_fact_rows)
+    evidence_recovery_recall = (
+        sum(
+            bool(item["recovered_evidence_ids"])
+            for item in reference_fact_rows
+        )
         / denominator
         if denominator
         else 1.0
     )
     basis_reference_precision = (
-        len(basis_evidence_ids & semantic_evidence_ids)
+        len(basis_evidence_ids & recovered_evidence_ids)
         / len(basis_evidence_ids)
         if basis_evidence_ids
         else (1.0 if not gold_facts else 0.0)
@@ -617,9 +612,8 @@ async def score_reference_chain_trace(
         "metrics": {
             "fact_recovery_recall": round(fact_recovery_recall, 6),
             "chain_recovery_recall": round(chain_recovery_recall, 6),
-            "evidence_exact_recall": round(evidence_exact_recall, 6),
-            "evidence_semantic_recall": round(
-                evidence_semantic_recall,
+            "evidence_recovery_recall": round(
+                evidence_recovery_recall,
                 6,
             ),
             "basis_reference_precision": round(
@@ -630,7 +624,7 @@ async def score_reference_chain_trace(
         "reference_facts": reference_fact_rows,
         "basis_evidence_ids": sorted(basis_evidence_ids),
         "off_reference_chain_basis_evidence_ids": sorted(
-            basis_evidence_ids - semantic_evidence_ids
+            basis_evidence_ids - recovered_evidence_ids
         ),
         "semantic_matcher": {
             "enabled": semantic_matcher is not None,
