@@ -819,7 +819,13 @@ class Orchestrator:
                 if fact_id in facts
                 and (
                     facts[fact_id].origin.type == "web_discovery"
-                    or facts[fact_id].predicate == "visual_integrity"
+                    or facts[fact_id].predicate
+                    not in {
+                        "appears_to_depict",
+                        "visible_in",
+                        "reads",
+                        "context_suggested_by_text",
+                    }
                 )
             ]
             scene_claims = [

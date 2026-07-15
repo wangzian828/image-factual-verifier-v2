@@ -176,7 +176,21 @@ def audit_coverage(
         for task in state.tasks
     )
     determined_verdict = _coverage_verdict(coverages)
-    if determined_verdict == "fake" and not complete:
+    unresolved_non_integrity = any(
+        item.status not in {"supported", "refuted"}
+        and fact_by_id[item.fact_id].predicate != "visual_integrity"
+        for item in coverages
+    )
+    refuted_non_integrity = any(
+        item.status == "refuted"
+        and fact_by_id[item.fact_id].predicate != "visual_integrity"
+        for item in coverages
+    )
+    if (
+        determined_verdict == "fake"
+        and not complete
+        and (refuted_non_integrity or not unresolved_non_integrity)
+    ):
         stop_reason = "verdict_determined"
         reason = (
             "At least one decisive proposition is refuted after evidence-conflict "

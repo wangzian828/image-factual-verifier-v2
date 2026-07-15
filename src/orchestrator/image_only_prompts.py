@@ -99,8 +99,24 @@ Rules:
    at least one distinctive visible text anchor; a generic "this post is real"
    proposition is too weakly bound.
 6. Avoid generic targets that merely restate "an image is visible."
-7. Do not use model memory, public-web facts, evaluator data, or a verdict.
-8. Return exactly one JSON object matching the schema.
+7. The fact statement must express the proposition that the question will resolve.
+   Do not ask for a creator, title, place, event, date, or source while leaving that
+   slot out of the fact statement. If the slot is not yet known, state it as a
+   bounded attribution proposition about the depicted central subject, rather than
+   prematurely asserting only a broad scene description.
+8. Prefer a checkable depicted-world relation when the pixels visibly combine a
+   subject with a place, event, date, or public-record context. A visual_integrity
+   target may be added when useful, but it is not a substitute for checking whether
+   the depicted-world relation is factually possible or correctly attributed.
+   Mark visual_integrity decisive only when pixel alteration itself is the central
+   factual issue; otherwise keep it supporting.
+9. Frame every target as the positive proposition whose truth would make the image
+   real. In particular, a visual_integrity fact should say that the relevant pixels
+   are authentic, coherent, or unmodified. Never state that the image is fake,
+   manipulated, synthetic, AI-generated, or impossible as the target proposition;
+   anomaly Evidence may refute the positive integrity proposition.
+10. Do not use model memory, public-web facts, evaluator data, or a verdict.
+11. Return exactly one JSON object matching the schema.
 """
 
 
@@ -124,7 +140,15 @@ Rules:
 7. A decisive proposal must descend from a current decisive fact or its existing
    attribution lineage. Do not promote profile pictures, replies, side objects, or
    unrelated discoveries merely because they are recent.
-8. Do not write a verdict. Return exactly one JSON object matching the schema.
+8. Preserve the investigation question's factual slots. If a task asks for a title,
+   creator, place, event, date, or source and a Discovery names that slot, promote
+   the named candidate into the fact statement before allowing the broad parent fact
+   to resolve.
+9. When public context identifies the real-world relation behind a visibly anomalous
+   scene, promote that relation itself (for example subject-to-place or
+   subject-to-event). Do not replace it with the broader claim that the pixels are
+   synthetic, impossible, edited, or AI-generated.
+10. Do not write a verdict. Return exactly one JSON object matching the schema.
 """
 
 

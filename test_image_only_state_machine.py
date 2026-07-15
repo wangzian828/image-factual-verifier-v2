@@ -545,6 +545,112 @@ def test_peripheral_discovery_does_not_trigger_decisive_attribution() -> None:
     ][0]
 
 
+def test_provenance_discovery_triggers_specific_attribution_planning() -> None:
+    case, state = _runtime_state()
+    parent_fact_id = state.decisive_fact_ids[0]
+    planned = apply_target_planning(
+        state,
+        TargetPlanningOutput(
+            proposals=[
+                TargetFactProposal(
+                    statement=(
+                        "The marked research vessel has a specific public "
+                        "provenance and identity."
+                    ),
+                    predicate="provenance_matches",
+                    parent_fact_ids=[parent_fact_id],
+                    question=(
+                        "What is the vessel's specific identity and public "
+                        "source provenance?"
+                    ),
+                    purpose=(
+                        "Promote a discovered name or source into a checkable "
+                        "fact before resolving the broad scene."
+                    ),
+                    suggested_tools=[
+                        "reverse_image_search",
+                        "text_search",
+                        "visit",
+                    ],
+                    suggested_queries=[
+                        '"HENRY B. BIGELOW" "R 225"'
+                    ],
+                    decision_relevance="supporting",
+                )
+            ]
+        ),
+    )
+    planned_fact_id = planned["accepted_fact_ids"][0]
+    assert planned_fact_id not in state.decisive_fact_ids
+    planned_task = next(
+        task
+        for task in state.tasks
+        if planned_fact_id in task.fact_ids
+    )
+    update = record_tool_observation(
+        state,
+        _step(
+            task_id=planned_task.task_id,
+            call_id="call-provenance-discovery",
+            tool_name="reverse_image_search",
+            result=(
+                '{"status":"success","lens_results":['
+                '{"title":"NOAA Ship Henry B. Bigelow",'
+                '"url":"https://www.noaa.gov/ship",'
+                '"snippet":"Official vessel profile.",'
+                '"image_url":"https://www.noaa.gov/ship.jpg"}]}'
+            ),
+        ),
+        image_sha256=case.image_sha256,
+    )
+
+    assert attribution_planning_needed(state, update)
+
+
+def test_target_planning_rejects_negative_integrity_and_slotless_provenance() -> None:
+    _, state = _runtime_state()
+    parent_fact_id = state.decisive_fact_ids[0]
+    negative_integrity = apply_target_planning(
+        state.model_copy(deep=True),
+        TargetPlanningOutput(
+            proposals=[
+                TargetFactProposal(
+                    statement="The image is AI-generated and physically impossible.",
+                    kind="internal_consistency",
+                    predicate="visual_integrity",
+                    parent_fact_ids=[parent_fact_id],
+                    question="Is the image visually authentic?",
+                    purpose="Check pixel integrity.",
+                    suggested_tools=["analyze_visual_anomalies"],
+                )
+            ]
+        ),
+    )
+    slotless_provenance = apply_target_planning(
+        state.model_copy(deep=True),
+        TargetPlanningOutput(
+            proposals=[
+                TargetFactProposal(
+                    statement="The image shows a marked research vessel.",
+                    predicate="provenance_matches",
+                    parent_fact_ids=[parent_fact_id],
+                    question="What is the vessel's title, creator, and source?",
+                    purpose="Recover the specific identity and provenance.",
+                    suggested_tools=["reverse_image_search", "visit"],
+                    suggested_queries=['"HENRY B. BIGELOW"'],
+                )
+            ]
+        ),
+    )
+
+    assert not negative_integrity["accepted_fact_ids"]
+    assert "positive authenticity proposition" in negative_integrity[
+        "rejected_reasons"
+    ][0]
+    assert not slotless_provenance["accepted_fact_ids"]
+    assert "omits the identity" in slotless_provenance["rejected_reasons"][0]
+
+
 def test_original_social_post_can_support_its_own_source_record_match() -> None:
     import json
 
@@ -1248,6 +1354,82 @@ def test_direct_official_refutation_resolves_scene_and_compiles_fake() -> None:
     assert verdict == "fake"
     assert basis.fact_ids == state.decisive_fact_ids
     assert basis.evidence_ids == update["created_evidence_ids"]
+
+
+def test_visual_integrity_refutation_does_not_hide_unresolved_world_fact() -> None:
+    _, state = _runtime_state()
+    subject_id = state.facts[0].subject_entity_id
+    integrity = VisualFact(
+        fact_id="fact-visual-integrity",
+        kind="internal_consistency",
+        statement="The image is an unmodified authentic photograph.",
+        subject_entity_id=subject_id,
+        predicate="visual_integrity",
+        status="active",
+        basis_ids=["anchor-integrity"],
+        decision_relevance="decisive",
+        origin=FactOrigin(
+            type="input_image",
+            origin_ids=["anchor-integrity"],
+        ),
+    )
+    world_fact = VisualFact(
+        fact_id="fact-world-location",
+        kind="relation",
+        statement="The depicted subject is located at the visible polar place.",
+        subject_entity_id=subject_id,
+        predicate="located_at",
+        status="active",
+        basis_ids=["anchor-location"],
+        decision_relevance="decisive",
+        origin=FactOrigin(
+            type="input_image",
+            origin_ids=["anchor-location"],
+        ),
+    )
+    evidence = InvestigationEvidence(
+        evidence_id="evidence-integrity-refute",
+        task_id="task-integrity",
+        fact_ids=[integrity.fact_id],
+        function_call_id="call-integrity",
+        tool_name="analyze_visual_anomalies",
+        evidence_kind="image_region",
+        source_url="",
+        source_family="visual:integrity",
+        source_class="visual",
+        exact_text="Direct pixel anomalies refute photographic integrity.",
+        image_region=[0.0, 0.0, 1.0, 1.0],
+        artifact_sha256="f" * 64,
+        retrieved_at=datetime.now(timezone.utc).isoformat(),
+        stance="refute",
+        quality="strong",
+        directness="direct",
+        claim_binding="pixel_observation",
+    )
+    finding = Finding(
+        finding_id="finding-integrity-refute",
+        task_id="task-integrity",
+        fact_ids=[integrity.fact_id],
+        statement="Direct pixel anomalies refute photographic integrity.",
+        stance="refute",
+        evidence_ids=[evidence.evidence_id],
+        source_family_ids=[evidence.source_family],
+    )
+    state.facts.extend([integrity, world_fact])
+    state.decisive_fact_ids = [integrity.fact_id, world_fact.fact_id]
+    state.evidence.append(evidence)
+    state.findings.append(finding)
+
+    coverage = audit_coverage(state)
+
+    assert coverage.stop_reason == "continue"
+    assert state.stop_reason == ""
+    assert {
+        item.fact_id: item.status for item in coverage.facts
+    } == {
+        integrity.fact_id: "refuted",
+        world_fact.fact_id: "unresolved",
+    }
 
 
 def test_conflict_requires_discriminating_evidence_before_resolution() -> None:
