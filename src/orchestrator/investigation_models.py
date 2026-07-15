@@ -411,6 +411,7 @@ class ImageOnlyCoverage(StrictModel):
         "information_saturated",
         "hard_budget_exhausted",
     ] = "continue"
+    reflection_checkpoint: bool = False
     substantive_gain: bool = False
     low_gain_intervals: int = Field(default=0, ge=0)
     reason: str = Field(default="", max_length=1200)

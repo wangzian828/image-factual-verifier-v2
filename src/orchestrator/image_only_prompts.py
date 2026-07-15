@@ -105,13 +105,17 @@ Rules:
    bounded attribution proposition about the depicted central subject, rather than
    prematurely asserting only a broad scene description.
 8. Prefer a checkable depicted-world relation when the pixels visibly combine a
-   subject with a place, event, date, or public-record context. A visual_integrity
-   target may be added when useful, but it is not a substitute for checking whether
-   the depicted-world relation is factually possible or correctly attributed.
-   Mark visual_integrity decisive only when pixel alteration itself is the central
-   factual issue; otherwise keep it supporting. If the integrity proposition itself
-   says that subjects coexist, occur, or are located in a real-world place or event,
-   you must also propose that relation as a separate decisive fact.
+   subject with a place, event, date, or public-record context. Keep that relation
+   atomic: prefer one salient subject and one decisive place/event/identity slot over
+   a conjunction of every visible object. Its question must be answerable by a source
+   about that subject or relation; do not require one webpage to discuss the entire
+   input image. A visual_integrity target may be added when useful, but it is not a
+   substitute for checking whether the depicted-world relation is factually possible
+   or correctly attributed. Mark visual_integrity decisive only when pixel alteration
+   itself is the central factual issue; otherwise keep it supporting. If the integrity
+   proposition itself says that subjects coexist, occur, or are located in a
+   real-world place or event, you must also propose that relation as a separate
+   decisive fact.
 9. Frame every target as the positive proposition whose truth would make the image
    real. In particular, a visual_integrity fact should say that the relevant pixels
    are authentic, coherent, or unmodified. Never state that the image is fake,
@@ -168,20 +172,43 @@ fact-specific gaps.
 """
 
 
-def render_react_context(state: ImageOnlyInvestigationState) -> str:
+def select_react_tasks(
+    state: ImageOnlyInvestigationState,
+) -> List[Any]:
+    """Expose verdict-blocking tasks before optional supporting investigation."""
+
     active = [
         task
         for task in state.tasks
         if task.status in {"active", "pending"}
     ]
+    facts = {fact.fact_id: fact for fact in state.facts}
+    unresolved_decisive_ids = {
+        fact_id
+        for fact_id in state.decisive_fact_ids
+        if fact_id in facts
+        and facts[fact_id].status not in {"supported", "refuted"}
+    }
+    blocking = [
+        task
+        for task in active
+        if set(task.fact_ids) & unresolved_decisive_ids
+    ]
+    if blocking:
+        active = blocking
     active.sort(
         key=lambda task: (
-            task.task_id not in state.recommended_next_task_ids,
             task.priority,
+            task.task_id not in state.recommended_next_task_ids,
             task.attempt_count,
             task.task_id,
         )
     )
+    return active
+
+
+def render_react_context(state: ImageOnlyInvestigationState) -> str:
+    active = select_react_tasks(state)
     facts = {fact.fact_id: fact for fact in state.facts}
     task_lines: List[str] = []
     for task in active[:8]:

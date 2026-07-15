@@ -14,6 +14,7 @@ from src.orchestrator.investigation_models import (
 )
 from src.orchestrator.task_store import (
     DECISIVE_FACTS_MAX,
+    MAX_ATTEMPTS_PER_TASK,
     MAX_TOOL_ACTIONS,
     stable_id,
 )
@@ -76,6 +77,8 @@ def activate_initial_decisive_facts(
 
 def audit_coverage(
     state: ImageOnlyInvestigationState,
+    *,
+    reflection_checkpoint: bool = False,
 ) -> ImageOnlyCoverage:
     decisive_ids = list(state.decisive_fact_ids[:DECISIVE_FACTS_MAX])
     fact_by_id = {fact.fact_id: fact for fact in state.facts}
@@ -136,12 +139,21 @@ def audit_coverage(
         for item in coverages
     )
     previous = state.coverage_audits[-1] if state.coverage_audits else None
+    previous_checkpoint = next(
+        (
+            item
+            for item in reversed(state.coverage_audits)
+            if item.reflection_checkpoint
+        ),
+        None,
+    )
+    comparison = previous_checkpoint or previous
     previous_signature = (
         {
             (item.fact_id, item.status)
-            for item in previous.facts
+            for item in comparison.facts
         }
-        if previous
+        if comparison
         else set()
     )
     current_signature = {
@@ -151,10 +163,10 @@ def audit_coverage(
     previous_evidence = (
         {
             evidence_id
-            for item in previous.facts
+            for item in comparison.facts
             for evidence_id in item.evidence_ids
         }
-        if previous
+        if comparison
         else set()
     )
     current_evidence = {
@@ -166,13 +178,30 @@ def audit_coverage(
         current_signature != previous_signature
         or not current_evidence <= previous_evidence
     )
-    low_gain = 0 if substantive_gain else (
-        (previous.low_gain_intervals if previous else 0) + 1
+    prior_low_gain = (
+        previous_checkpoint.low_gain_intervals
+        if previous_checkpoint
+        else 0
     )
+    low_gain = (
+        0 if substantive_gain else prior_low_gain + 1
+    ) if reflection_checkpoint else prior_low_gain
     open_high_priority = any(
         task.status in {"active", "pending"}
         and task.priority == 1
         and task.attempt_count == 0
+        for task in state.tasks
+    )
+    unresolved_decisive_ids = {
+        item.fact_id
+        for item in coverages
+        if item.status not in {"supported", "refuted"}
+    }
+    open_decisive_route = any(
+        task.status in {"active", "pending"}
+        and task.attempt_count < MAX_ATTEMPTS_PER_TASK
+        and bool(task.suggested_tools)
+        and bool(set(task.fact_ids) & unresolved_decisive_ids)
         for task in state.tasks
     )
     determined_verdict = _coverage_verdict(coverages)
@@ -202,7 +231,12 @@ def audit_coverage(
     elif state.action_count >= MAX_TOOL_ACTIONS:
         stop_reason = "hard_budget_exhausted"
         reason = "The image-only tool action budget is exhausted."
-    elif low_gain >= 2 and not open_high_priority:
+    elif (
+        reflection_checkpoint
+        and low_gain >= 2
+        and not open_high_priority
+        and not open_decisive_route
+    ):
         stop_reason = "information_saturated"
         reason = (
             "Two consecutive Reflection intervals produced no evidence or "
@@ -223,6 +257,7 @@ def audit_coverage(
         facts=coverages,
         complete=complete,
         stop_reason=stop_reason,
+        reflection_checkpoint=reflection_checkpoint,
         substantive_gain=substantive_gain,
         low_gain_intervals=low_gain,
         reason=reason,

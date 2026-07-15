@@ -1592,7 +1592,7 @@ def apply_reflection(
         and task_by_id[task_id].status in {"active", "pending"}
     ]
     state.recommended_next_task_ids = list(
-        dict.fromkeys([*scene_task_ids, *model_recommendations])
+        dict.fromkeys([*model_recommendations, *scene_task_ids])
     )[:4]
     record = ReflectionRecord(
         reflection_id=stable_id(

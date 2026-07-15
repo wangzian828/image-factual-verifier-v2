@@ -144,3 +144,43 @@ def test_blocked_duplicate_route_is_a_warning_not_a_protocol_failure(
     assert {item.code for item in warnings} == {
         "ROUTE_CONTROL_REJECTION"
     }
+
+
+def test_successful_planning_revision_is_not_a_protocol_rejection(
+    tmp_path: Path,
+) -> None:
+    trace_path = _scripted_trace(tmp_path)
+    trace = json.loads(trace_path.read_text(encoding="utf-8"))
+    trace["state"]["all_steps"].insert(
+        2,
+        {
+            "round": 1,
+            "stage": "image_only_planning",
+            "action_type": "planning_revision",
+            "tool_name": "",
+            "tool_args": {},
+            "tool_result": "",
+            "output": {
+                "proposals": [],
+                "remaining_target_gaps": [],
+            },
+            "metadata": {
+                "stage": "image_only_planning",
+                "rejection_reason": (
+                    "propose the depicted-world relation separately"
+                ),
+                "planning_revision_reason": (
+                    "propose the depicted-world relation separately"
+                ),
+            },
+        },
+    )
+    trace_path.write_text(
+        json.dumps(trace, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    report = audit_trace(trace_path)
+
+    assert not report.failures(strict_scheduler=True)
+    assert report.stats["protocol_rejections"] == 0

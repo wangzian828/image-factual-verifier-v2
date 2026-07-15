@@ -26,7 +26,10 @@ from src.orchestrator.investigation_models import (
     VisualFact,
 )
 from src.orchestrator.pipeline import Orchestrator
-from src.orchestrator.image_only_prompts import render_react_context
+from src.orchestrator.image_only_prompts import (
+    render_react_context,
+    select_react_tasks,
+)
 from src.orchestrator.state import (
     Entity,
     ImageOnlyRuntimeCase,
@@ -209,6 +212,64 @@ def test_next_action_boundary_advances_after_reflection() -> None:
     assert next_action_boundary(8) == 12
     assert next_action_boundary(23) == 24
     assert next_action_boundary(24) == 24
+
+
+def test_web_evidence_goal_uses_task_question_not_full_image_claim() -> None:
+    _, state = _runtime_state()
+    task = next(
+        item
+        for item in state.tasks
+        if set(item.fact_ids) & set(state.decisive_fact_ids)
+    )
+    fact = next(
+        item for item in state.facts if item.fact_id in task.fact_ids
+    )
+    fact.statement = (
+        "The monarch butterfly shown in the image naturally occurs in Antarctica."
+    )
+    task.question = (
+        "Does the natural distribution of monarch butterflies include Antarctica?"
+    )
+
+    claims = Orchestrator._image_only_task_claims(state)
+    goals = Orchestrator._image_only_task_evidence_goals(state)
+
+    assert claims[task.task_id] == fact.statement
+    assert goals[task.task_id] == task.question
+    assert goals[task.task_id] != claims[task.task_id]
+
+
+def test_react_exposes_only_tasks_blocking_unresolved_decisive_facts() -> None:
+    _, state = _runtime_state()
+    blocking = select_react_tasks(state)
+
+    assert blocking
+    assert all(
+        set(task.fact_ids) & set(state.decisive_fact_ids)
+        for task in blocking
+    )
+    assert any(
+        not (set(task.fact_ids) & set(state.decisive_fact_ids))
+        for task in state.tasks
+        if task.status in {"active", "pending"}
+    )
+
+
+def test_non_reflection_coverage_does_not_advance_low_gain_streak() -> None:
+    _, state = _runtime_state()
+
+    audit_coverage(state, reflection_checkpoint=True)
+    first_low_gain = audit_coverage(
+        state,
+        reflection_checkpoint=True,
+    )
+    between_reflections = audit_coverage(state)
+
+    assert first_low_gain.low_gain_intervals == 1
+    assert first_low_gain.reflection_checkpoint is True
+    assert between_reflections.low_gain_intervals == 1
+    assert between_reflections.reflection_checkpoint is False
+    assert between_reflections.stop_reason == "continue"
 
 
 def test_discovery_is_not_evidence_and_reflection_only_reprioritizes() -> None:

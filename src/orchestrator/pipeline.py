@@ -28,6 +28,7 @@ from src.orchestrator.image_only_prompts import (
     render_react_context as render_image_only_react_context,
     render_reflection_context as render_image_only_reflection_context,
     render_target_planning_context as render_image_only_target_planning_context,
+    select_react_tasks as select_image_only_react_tasks,
 )
 from src.orchestrator.investigation_models import (
     AttributionOutput,
@@ -437,7 +438,16 @@ class Orchestrator:
                 remaining_to_reflection,
                 MAX_TOOL_ACTIONS - investigation.action_count,
             )
-            task_claims = self._image_only_task_claims(investigation)
+            react_tasks = select_image_only_react_tasks(investigation)
+            react_task_ids = {task.task_id for task in react_tasks}
+            task_claims = self._image_only_task_claims(
+                investigation,
+                task_ids=react_task_ids,
+            )
+            task_evidence_goals = self._image_only_task_evidence_goals(
+                investigation,
+                task_ids=react_task_ids,
+            )
 
             def observation_callback(
                 step: StageStep,
@@ -524,7 +534,7 @@ class Orchestrator:
                 },
                 observation_callback=observation_callback,
                 question_claims=task_claims,
-                question_evidence_goals=task_claims,
+                question_evidence_goals=task_evidence_goals,
                 # Dynamic image-only investigation is not a fixed-question
                 # scheduler. Task IDs remain schema-validated, while Reflection
                 # and decisive-fact Coverage decide which open task must run next.
@@ -593,7 +603,10 @@ class Orchestrator:
                     evidence_gain=evidence_gain,
                     decision_gain=decision_gain,
                 )
-                audit_coverage(investigation)
+                audit_coverage(
+                    investigation,
+                    reflection_checkpoint=True,
+                )
                 prior_evidence_count = len(investigation.evidence)
                 prior_finding_count = len(investigation.findings)
                 prior_fact_signature = self._image_only_fact_signature(
@@ -818,11 +831,15 @@ class Orchestrator:
     @staticmethod
     def _image_only_task_claims(
         investigation: ImageOnlyInvestigationState,
+        *,
+        task_ids: set[str] | None = None,
     ) -> Dict[str, str]:
         facts = {fact.fact_id: fact for fact in investigation.facts}
         claims: Dict[str, str] = {}
         for task in investigation.tasks:
             if task.status not in {"active", "pending"}:
+                continue
+            if task_ids is not None and task.task_id not in task_ids:
                 continue
             specific_claims = [
                 facts[fact_id].statement
@@ -851,6 +868,21 @@ class Orchestrator:
                 else f"Question to resolve: {task.question}"
             )[:1800]
         return claims
+
+    @staticmethod
+    def _image_only_task_evidence_goals(
+        investigation: ImageOnlyInvestigationState,
+        *,
+        task_ids: set[str] | None = None,
+    ) -> Dict[str, str]:
+        """Use the source-answerable task question, not the whole image claim."""
+
+        return {
+            task.task_id: task.question[:1800]
+            for task in investigation.tasks
+            if task.status in {"active", "pending"}
+            and (task_ids is None or task.task_id in task_ids)
+        }
 
     @staticmethod
     def _image_only_fact_signature(
