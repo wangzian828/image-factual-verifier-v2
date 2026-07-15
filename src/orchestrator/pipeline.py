@@ -597,12 +597,6 @@ class Orchestrator:
             max_rounds=1,
             stage_name="image_only_attribution_planning",
             attach_image=False,
-            output_validator=lambda parsed, _steps: (
-                self._validate_image_only_attribution(
-                    investigation,
-                    parsed,
-                )
-            ),
             max_output_tokens=self._stage_output_tokens("PLANNING", 8192),
             generation_config={
                 "thinking_level": self._stage_thinking_level("PLANNING")
@@ -611,11 +605,16 @@ class Orchestrator:
         parsed, steps = await runner.run(
             render_image_only_attribution_context(investigation)
         )
-        self._record_stage_steps(state, steps)
         if parsed is None:
+            self._record_stage_steps(state, steps)
             self._sync_image_only_state(state, investigation)
             return
-        apply_attribution(investigation, parsed)
+        update = apply_attribution(investigation, parsed)
+        for step in reversed(steps):
+            if step.action_type == "output":
+                step.metadata["attribution_state_update"] = update
+                break
+        self._record_stage_steps(state, steps)
         self._sync_image_only_state(state, investigation)
 
     async def _run_image_only_reflection(
@@ -749,19 +748,6 @@ class Orchestrator:
         if parsed.proposals and not update["accepted_fact_ids"]:
             return False, "; ".join(update["rejected_reasons"]) or (
                 "target planning proposed no valid state transition"
-            )
-        return True, ""
-
-    @staticmethod
-    def _validate_image_only_attribution(
-        investigation: ImageOnlyInvestigationState,
-        parsed: AttributionOutput,
-    ) -> tuple[bool, str]:
-        candidate = investigation.model_copy(deep=True)
-        update = apply_attribution(candidate, parsed)
-        if parsed.proposals and not update["accepted_fact_ids"]:
-            return False, "; ".join(update["rejected_reasons"]) or (
-                "attribution planning proposed no valid state transition"
             )
         return True, ""
 

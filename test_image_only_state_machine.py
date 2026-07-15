@@ -334,6 +334,38 @@ def test_official_evidence_supports_promoted_attribution_fact() -> None:
     case, state = _runtime_state()
     parent_fact_id = state.decisive_fact_ids[0]
     provenance = state.tasks[0]
+    comparison = record_tool_observation(
+        state,
+        _step(
+            task_id=provenance.task_id,
+            call_id="call-attribution-comparison",
+            tool_name="compare_with_reference",
+            result=json.dumps(
+                {
+                    "status": "success",
+                    "reference_url": (
+                        "https://www.si.edu/object/reservation-scene.jpg"
+                    ),
+                    "resolved_reference_url": (
+                        "https://www.si.edu/object/reservation-scene.jpg"
+                    ),
+                    "source_page_url": (
+                        "https://www.si.edu/object/reservation-scene"
+                    ),
+                    "same_subject_or_scene": True,
+                    "same_capture_or_near_duplicate": True,
+                    "likely_different_original_capture": False,
+                    "edit_evidence_present": False,
+                    "overall_observation": (
+                        "The input image and museum reference show the same "
+                        "original artwork capture."
+                    ),
+                    "confidence": 0.99,
+                }
+            ),
+        ),
+        image_sha256=case.image_sha256,
+    )
     statement = (
         'The Smithsonian collection record identifies "Reservation Scene" as '
         "a 1992 Navajo pictorial weaving by Louise Nez."
@@ -383,8 +415,14 @@ def test_official_evidence_supports_promoted_attribution_fact() -> None:
                     ),
                     predicate="identified_as",
                     parent_fact_ids=[parent_fact_id],
-                    evidence_ids=update["created_evidence_ids"],
-                    finding_ids=update["created_finding_ids"],
+                    evidence_ids=(
+                        comparison["created_evidence_ids"]
+                        + update["created_evidence_ids"]
+                    ),
+                    finding_ids=(
+                        comparison["created_finding_ids"]
+                        + update["created_finding_ids"]
+                    ),
                 )
             ]
         ),
@@ -399,12 +437,20 @@ def test_official_evidence_supports_promoted_attribution_fact() -> None:
     assert all(
         specific_id in item.fact_ids
         for item in state.evidence
-        if item.evidence_id in update["created_evidence_ids"]
+        if item.evidence_id
+        in (
+            comparison["created_evidence_ids"]
+            + update["created_evidence_ids"]
+        )
     )
     assert all(
         specific_id in item.fact_ids
         for item in state.findings
-        if item.finding_id in update["created_finding_ids"]
+        if item.finding_id
+        in (
+            comparison["created_finding_ids"]
+            + update["created_finding_ids"]
+        )
     )
     verdict, basis = compile_verdict_basis(state)
     assert verdict == "real"

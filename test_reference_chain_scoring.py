@@ -35,16 +35,30 @@ def _gold_for_trace(trace: Mapping[str, Any]) -> dict[str, Any]:
                 },
                 "acceptable_evidence": [
                     {
-                        "source_id": "source-noaa",
+                        "source_id": "source-noaa-capture",
                         "canonical_url": (
-                            "https://www.noaa.gov/news/example-source-page"
+                            "https://www.noaa.gov/controlled-reference.jpg"
                         ),
                         "exact_span": (
-                            "The NOAA research vessel is shown on the water."
+                            "Official reference image of NOAA Ship Henry B. "
+                            "Bigelow underway."
                         ),
                         "stance": "support",
                         "source_family": "noaa",
                         "artifact_sha256": "a" * 64,
+                    },
+                    {
+                        "source_id": "source-noaa-record",
+                        "canonical_url": (
+                            "https://www.noaa.gov/controlled-reference"
+                        ),
+                        "exact_span": (
+                            "NOAA official record confirms: The image shows "
+                            "NOAA Ship Henry B. Bigelow."
+                        ),
+                        "stance": "support",
+                        "source_family": "noaa",
+                        "artifact_sha256": "b" * 64,
                     }
                 ],
             }
@@ -66,8 +80,11 @@ def test_semantic_recovery_accepts_same_source_capture_without_exact_snapshot(
         "evidence_recovery_recall": 1.0,
         "basis_reference_precision": 1.0,
     }
-    match = metrics["reference_facts"][0]["evidence_matches"][0]
-    assert match["method"] == "same_source_same_capture"
+    methods = {
+        item["method"]
+        for item in metrics["reference_facts"][0]["evidence_matches"]
+    }
+    assert "same_source_same_capture" in methods
     assert metrics["semantic_matcher"]["enabled"] is False
 
 
@@ -185,7 +202,10 @@ def test_off_chain_evidence_only_hurts_when_added_to_basis(
 
     trace["verdict_basis"]["evidence_ids"].append("evidence-off-chain")
     with_basis_pollution = asyncio.run(score_reference_chain_trace(trace, gold))
-    assert with_basis_pollution["metrics"]["basis_reference_precision"] == 0.5
+    assert (
+        with_basis_pollution["metrics"]["basis_reference_precision"]
+        == 0.666667
+    )
     assert with_basis_pollution[
         "off_reference_chain_basis_evidence_ids"
     ] == ["evidence-off-chain"]
@@ -211,7 +231,7 @@ class _AcceptingMatcher:
         assert gold_fact["fact_id"] == "rf-ship"
         assert runtime_fact["status"] == "supported"
         assert evidence["evidence_id"]
-        assert len(references) == 1
+        assert len(references) == 2
         return SemanticMatchDecision(
             match=True,
             confidence=0.92,
@@ -248,6 +268,7 @@ def test_llm_matcher_only_handles_unresolved_qualified_edge(
     assert metrics["metrics"]["evidence_recovery_recall"] == 1.0
     assert metrics["metrics"]["chain_recovery_recall"] == 1.0
     assert metrics["metrics"]["basis_reference_precision"] == 1.0
-    assert metrics["reference_facts"][0]["evidence_matches"][0]["method"] == (
-        "llm_semantic"
-    )
+    assert "llm_semantic" in {
+        item["method"]
+        for item in metrics["reference_facts"][0]["evidence_matches"]
+    }

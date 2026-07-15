@@ -228,6 +228,11 @@ def _assess_direction(
         if stance == "support" and fact.predicate == "appears_to_depict"
         else []
     )
+    attribution_support_pair = (
+        _attribution_support_pair(rows)
+        if stance == "support" and _requires_attribution_support_pair(fact)
+        else []
+    )
     official_exact_capture = (
         rows[0]
         if (
@@ -242,16 +247,22 @@ def _assess_direction(
     scene_support_requires_pair = (
         stance == "support" and fact.predicate == "appears_to_depict"
     )
+    attribution_support_requires_pair = (
+        stance == "support" and _requires_attribution_support_pair(fact)
+    )
     if official_exact_capture is not None:
         selected = [official_exact_capture]
     elif scene_support_pair:
         selected = scene_support_pair
+    elif attribution_support_pair:
+        selected = attribution_support_pair
     elif (
         not scene_support_requires_pair
+        and not attribution_support_requires_pair
         and rows[0][0] >= DECISIVE_SINGLE_EVIDENCE_SCORE
     ):
         selected = [rows[0]]
-    elif not scene_support_requires_pair:
+    elif not scene_support_requires_pair and not attribution_support_requires_pair:
         families: set[str] = set()
         for row in rows:
             score, evidence, _ = row
@@ -266,6 +277,7 @@ def _assess_direction(
     decisive = bool(selected) and (
         official_exact_capture is not None
         or bool(scene_support_pair)
+        or bool(attribution_support_pair)
         or selected[0][0] >= DECISIVE_SINGLE_EVIDENCE_SCORE
         or len(selected) >= 2
     )
@@ -284,6 +296,10 @@ def _assess_direction(
         score = scene_support_pair[0][0] + (
             0.25 * scene_support_pair[1][0]
         )
+    if attribution_support_pair:
+        score = attribution_support_pair[0][0] + (
+            0.25 * attribution_support_pair[1][0]
+        )
     if decisive and len(families) > 1:
         score += min(10.0, 5.0 * (len(families) - 1))
     return DirectionAssessment(
@@ -299,6 +315,42 @@ def _assess_direction(
 
 
 def _scene_support_pair(
+    rows: Sequence[tuple[float, InvestigationEvidence, str]],
+) -> list[tuple[float, InvestigationEvidence, str]]:
+    captures = [
+        row
+        for row in rows
+        if row[1].claim_binding == "same_capture"
+        and row[0] >= 65.0
+    ]
+    assertions = [
+        row
+        for row in rows
+        if row[1].claim_binding == "source_assertion"
+        and row[0] >= 45.0
+    ]
+    if not captures or not assertions:
+        return []
+    return [captures[0], assertions[0]]
+
+
+def _requires_attribution_support_pair(fact: VisualFact) -> bool:
+    return (
+        fact.origin.type == "web_discovery"
+        and fact.predicate
+        in {
+            "identified_as",
+            "attributed_as",
+            "created_by",
+            "dated_as",
+            "located_at",
+            "occurred_at",
+            "depicts_event",
+        }
+    )
+
+
+def _attribution_support_pair(
     rows: Sequence[tuple[float, InvestigationEvidence, str]],
 ) -> list[tuple[float, InvestigationEvidence, str]]:
     captures = [

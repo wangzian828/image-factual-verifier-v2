@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -196,6 +197,10 @@ class AdaptiveImageOnlyBackend:
                     },
                 )
             if self.pending_phase == "visit":
+                raw = kwargs.get("input_payload", "")
+                text = raw if isinstance(raw, str) else json.dumps(raw)
+                active_task_ids = re.findall(r"\[(task-[^\]]+)\]", text)
+                task_id = active_task_ids[0] if active_task_ids else task_id
                 self.pending_task_ids.pop(0)
                 self.pending_phase = "reverse"
                 return _call(
@@ -631,7 +636,7 @@ def test_scripted_image_only_complete_trajectory(tmp_path: Path) -> None:
     assert result["verdict"] == "real"
     assert result["verdict_basis"]["policy_rule_id"] == "reinspect-v2"
     state = result["state"]["investigation_state"]
-    assert state["action_count"] == 2
+    assert state["action_count"] == 3
     assert len(state["reflections"]) == 0
     assert state["coverage_audits"][-1]["stop_reason"] == "coverage_complete"
     assert state["discoveries"]

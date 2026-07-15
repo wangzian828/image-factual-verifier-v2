@@ -109,7 +109,9 @@ Rules:
    target may be added when useful, but it is not a substitute for checking whether
    the depicted-world relation is factually possible or correctly attributed.
    Mark visual_integrity decisive only when pixel alteration itself is the central
-   factual issue; otherwise keep it supporting.
+   factual issue; otherwise keep it supporting. If the integrity proposition itself
+   says that subjects coexist, occur, or are located in a real-world place or event,
+   you must also propose that relation as a separate decisive fact.
 9. Frame every target as the positive proposition whose truth would make the image
    real. In particular, a visual_integrity fact should say that the relevant pixels
    are authentic, coherent, or unmodified. Never state that the image is fake,
@@ -147,7 +149,7 @@ Rules:
 9. When public context identifies the real-world relation behind a visibly anomalous
    scene, promote that relation itself (for example subject-to-place or
    subject-to-event). Do not replace it with the broader claim that the pixels are
-   synthetic, impossible, edited, or AI-generated.
+   a digital creation, synthetic, impossible, edited, composite, or AI-generated.
 10. Do not write a verdict. Return exactly one JSON object matching the schema.
 """
 
