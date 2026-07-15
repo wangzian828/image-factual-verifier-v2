@@ -608,6 +608,10 @@ def score_process_trace(
         invalid_activations / len(decisive_ids) if decisive_ids else 1.0
     )
     duplicate_action_rate, duplicate_action_count = _duplicate_action_rate(steps)
+    blocked_duplicate_route_count = sum(
+        bool(_mapping(step.get("metadata")).get("duplicate_tool_call"))
+        for step in steps
+    )
     unresolved_decisive = [
         fact_id
         for fact_id in decisive_ids
@@ -700,6 +704,7 @@ def score_process_trace(
         "false_activation_rate": round(false_activation_rate, 6),
         "duplicate_action_rate": round(duplicate_action_rate, 6),
         "duplicate_action_count": duplicate_action_count,
+        "blocked_duplicate_route_count": blocked_duplicate_route_count,
         "resolved_conflict_count": resolved_conflict_count,
         "unresolved_conflict_count": unresolved_conflict_count,
         "post_determination_action_count": post_determination_action_count,
@@ -741,6 +746,10 @@ def score_process_trace(
         training_exclusion_reasons.append("verdict_basis_not_minimal")
     if duplicate_action_count:
         training_exclusion_reasons.append("semantic_duplicate_actions")
+    if blocked_duplicate_route_count:
+        training_exclusion_reasons.append(
+            "blocked_semantic_duplicate_routes"
+        )
     if post_determination_action_count:
         training_exclusion_reasons.append(
             "actions_after_verdict_determined"
@@ -773,6 +782,10 @@ def score_process_trace(
             else 0.0
         ),
         "duplicate_action_penalty": round(-duplicate_action_rate, 6),
+        "blocked_duplicate_route_penalty": round(
+            -min(1.0, blocked_duplicate_route_count / 4.0),
+            6,
+        ),
         "low_value_action_penalty": round(
             -low_value_action_rate,
             6,
@@ -808,6 +821,9 @@ def score_process_trace(
                 post_determination_action_count
             ),
             "low_value_action_count": low_value_action_count,
+            "blocked_duplicate_route_count": (
+                blocked_duplicate_route_count
+            ),
             "engineering_error": engineering_error,
             "first_error": first_error,
         },

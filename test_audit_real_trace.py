@@ -98,3 +98,49 @@ def test_unverifiable_basis_does_not_require_finding_chain(
 
     assert "VERDICT_FACT_WITHOUT_FINDING" not in codes
     assert "VERDICT_FINDING_WITHOUT_EVIDENCE" not in codes
+
+
+def test_blocked_duplicate_route_is_a_warning_not_a_protocol_failure(
+    tmp_path: Path,
+) -> None:
+    trace_path = _scripted_trace(tmp_path)
+    trace = json.loads(trace_path.read_text(encoding="utf-8"))
+    trace["state"]["all_steps"].append(
+        {
+            "round": 99,
+            "stage": "image_only_investigation",
+            "action_type": "format_error",
+            "tool_name": "visit",
+            "tool_args": {
+                "__question_id": "task-duplicate",
+                "url": ["https://example.org/already-visited"],
+            },
+            "tool_result": json.dumps(
+                {
+                    "status": "error",
+                    "error": (
+                        "You already called 'visit' with essentially the "
+                        "same target."
+                    ),
+                }
+            ),
+            "metadata": {
+                "stage": "image_only_investigation",
+                "duplicate_tool_call": True,
+                "function_call_id": "call-duplicate",
+            },
+        }
+    )
+    trace_path.write_text(
+        json.dumps(trace, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    report = audit_trace(trace_path)
+    warnings = report.warnings(strict_scheduler=True)
+
+    assert not report.failures(strict_scheduler=True)
+    assert report.stats["route_control_rejections"] == 1
+    assert {item.code for item in warnings} == {
+        "ROUTE_CONTROL_REJECTION"
+    }

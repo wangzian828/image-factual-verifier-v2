@@ -31,6 +31,7 @@ from src.orchestrator.tool_result import parse_tool_result  # noqa: E402
 HARD = "hard"
 SCHEDULER = "scheduler"
 PROTOCOL = "protocol"
+ROUTE_CONTROL = "route_control"
 REJECTION_ACTIONS = frozenset({"format_error", "output_rejected"})
 WEB_EVIDENCE_TOOLS = frozenset({"visit", "text_search", "crop_and_search"})
 KNOWN_FACT_CHECK_QUERY_POLICY = SourceAccessPolicy(
@@ -498,6 +499,7 @@ def _audit_rejections(
 ) -> None:
     scheduler_count = 0
     protocol_count = 0
+    route_control_count = 0
     for index, step in enumerate(steps):
         metadata = _mapping(step.get("metadata"))
         rejected = (
@@ -506,11 +508,6 @@ def _audit_rejections(
         )
         if not rejected:
             continue
-        category = _rejection_category(step)
-        if category == SCHEDULER:
-            scheduler_count += 1
-        else:
-            protocol_count += 1
         reason = str(metadata.get("rejection_reason", "")).strip()
         if not reason:
             try:
@@ -518,15 +515,35 @@ def _audit_rejections(
                 reason = str(_mapping(payload).get("error", "")).strip()
             except (TypeError, json.JSONDecodeError):
                 reason = ""
+        route_control = bool(metadata.get("duplicate_tool_call")) or (
+            bool(metadata.get("invalid_question_id"))
+            and "already resolved" in reason.casefold()
+        )
+        category = (
+            ROUTE_CONTROL if route_control else _rejection_category(step)
+        )
+        if category == ROUTE_CONTROL:
+            route_control_count += 1
+        elif category == SCHEDULER:
+            scheduler_count += 1
+        else:
+            protocol_count += 1
         _issue(
             report,
-            "SCHEDULER_REJECTION" if category == SCHEDULER else "PROTOCOL_REJECTION",
+            (
+                "ROUTE_CONTROL_REJECTION"
+                if category == ROUTE_CONTROL
+                else "SCHEDULER_REJECTION"
+                if category == SCHEDULER
+                else "PROTOCOL_REJECTION"
+            ),
             reason or f"{step.get('action_type', 'rejected')} step",
             category=category,
             location=_step_label(index, step),
         )
     report.stats["scheduler_rejections"] = scheduler_count
     report.stats["protocol_rejections"] = protocol_count
+    report.stats["route_control_rejections"] = route_control_count
 
 
 
@@ -1328,7 +1345,8 @@ def _print_human(reports: Sequence[TraceReport], *, strict_scheduler: bool) -> N
             f"claims={report.stats.get('claims', 0)} "
             f"evidence={report.stats.get('evidence', 0)} "
             f"scheduler_rejections={report.stats.get('scheduler_rejections', 0)} "
-            f"protocol_rejections={report.stats.get('protocol_rejections', 0)}"
+            f"protocol_rejections={report.stats.get('protocol_rejections', 0)} "
+            f"route_control_rejections={report.stats.get('route_control_rejections', 0)}"
         )
         failure_set = set(failures)
         for issue in report.issues:
@@ -1348,11 +1366,16 @@ def _print_human(reports: Sequence[TraceReport], *, strict_scheduler: bool) -> N
     protocol_rejections = sum(
         report.stats.get("protocol_rejections", 0) for report in reports
     )
+    route_control_rejections = sum(
+        report.stats.get("route_control_rejections", 0)
+        for report in reports
+    )
     print(
         f"Audited {len(reports)} trace(s): {len(reports) - failed} passed, "
         f"{failed} failed, {warnings} warning(s), "
         f"{scheduler_rejections} scheduler rejection(s), "
-        f"{protocol_rejections} protocol rejection(s)."
+        f"{protocol_rejections} protocol rejection(s), "
+        f"{route_control_rejections} route-control rejection(s)."
     )
 
 
@@ -1376,6 +1399,10 @@ def _json_summary(
         ),
         "protocol_rejections": sum(
             report.stats.get("protocol_rejections", 0) for report in reports
+        ),
+        "route_control_rejections": sum(
+            report.stats.get("route_control_rejections", 0)
+            for report in reports
         ),
         "traces": [
             report.to_dict(strict_scheduler=strict_scheduler) for report in reports

@@ -99,6 +99,10 @@ known active task ID as `question_id`; deterministic code validates schemas, sou
 policy, semantic route duplicates across segments, budgets, and provider selection
 before execution.
 
+Blocked duplicate or already-resolved route proposals are retained as route-control
+warnings rather than executed tool actions. They do not invalidate a factual canary,
+but any episode containing them fails the teacher-data quality gate.
+
 Every real tool call is reduced into separate collections:
 
 | Collection | Meaning |
