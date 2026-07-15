@@ -9,10 +9,15 @@ from src.orchestrator.coverage import (
     audit_coverage,
     compile_verdict_basis,
 )
+from src.orchestrator.evidence_adjudication import assess_fact
 from src.orchestrator.investigation_models import (
+    FactOrigin,
+    Finding,
+    InvestigationEvidence,
     InvestigationSegmentOutput,
     ReflectionOutput,
     TaskUpdate,
+    VisualFact,
 )
 from src.orchestrator.image_only_prompts import render_react_context
 from src.orchestrator.state import (
@@ -261,7 +266,7 @@ def test_scene_reference_requires_near_duplicate_not_only_same_subject() -> None
     assert scene_task.status == "active"
 
 
-def test_official_near_duplicate_resolves_scene_task() -> None:
+def test_scene_support_requires_near_duplicate_and_source_assertion() -> None:
     case, state = _runtime_state()
     scene_task = next(
         task
@@ -300,11 +305,59 @@ def test_official_near_duplicate_resolves_scene_task() -> None:
         fact for fact in state.facts if fact.fact_id in scene_task.fact_ids
     )
     assert update["created_finding_ids"]
+    assert scene_fact.status == "active"
+    assert scene_task.status == "active"
+
+    statement = (
+        "NOAA's source page identifies this exact image as NOAA Ship Henry B. "
+        "Bigelow underway."
+    )
+    source_update = record_tool_observation(
+        state,
+        _step(
+            task_id=scene_task.task_id,
+            call_id="call-source-assertion",
+            tool_name="visit",
+            result=json.dumps(
+                {
+                    "status": "success",
+                    "selected_url": "https://www.noaa.gov/media/ship-page",
+                    "url": "https://www.noaa.gov/media/ship-page",
+                    "evidence": statement,
+                    "summary": statement,
+                    "relevance": "high",
+                    "stance": "support",
+                    "directness": "direct",
+                    "temporal_alignment": "not_applicable",
+                    "artifact_sha256": "a" * 64,
+                    "evidence_span": {
+                        "start": 0,
+                        "end": len(statement),
+                    },
+                    "retrieved_at": datetime.now(
+                        timezone.utc
+                    ).isoformat(),
+                    "injection_flags": [],
+                    "evidence_eligible": True,
+                }
+            ),
+        ),
+        image_sha256=case.image_sha256,
+    )
+
     assert scene_fact.status == "supported"
     assert scene_task.status == "resolved"
+    coverage = audit_coverage(state)
+    verdict, basis = compile_verdict_basis(state)
+    assert verdict == "real"
+    assert set(basis.evidence_ids) == set(
+        update["created_evidence_ids"]
+        + source_update["created_evidence_ids"]
+    )
+    assert coverage.facts[0].winning_evidence_ids == basis.evidence_ids
 
 
-def test_official_direct_evidence_can_resolve_decisive_fact_and_compile_real() -> None:
+def test_generic_official_support_cannot_resolve_scene_without_visual_bridge() -> None:
     case, state = _runtime_state()
     for task in state.tasks:
         for fact_id in task.fact_ids:
@@ -349,27 +402,181 @@ def test_official_direct_evidence_can_resolve_decisive_fact_and_compile_real() -
 
     assert update["created_evidence_ids"]
     assert update["created_finding_ids"]
-    assert target_task.status == "resolved"
+    assert target_task.status == "active"
     segment = InvestigationSegmentOutput(
         segment_summary="Official evidence was recorded.",
     )
     assert segment.ready_for_reflection is True
 
-    for fact_id in state.decisive_fact_ids:
-        if next(fact for fact in state.facts if fact.fact_id == fact_id).status != "supported":
-            next(
-                fact for fact in state.facts if fact.fact_id == fact_id
-            ).decision_relevance = "supporting"
-    state.decisive_fact_ids = [
-        fact_id
-        for fact_id in state.decisive_fact_ids
-        if next(fact for fact in state.facts if fact.fact_id == fact_id).status
-        == "supported"
-    ]
+    coverage = audit_coverage(state)
+    verdict, basis = compile_verdict_basis(state)
+
+    assert coverage.complete is False
+    assert verdict == "unverifiable"
+    assert basis.fact_ids == state.decisive_fact_ids
+    assert basis.evidence_ids == update["created_evidence_ids"]
+
+
+def test_direct_official_refutation_resolves_scene_and_compiles_fake() -> None:
+    case, state = _runtime_state()
+    target_task = next(
+        task
+        for task in state.tasks
+        if any(
+            fact_id in state.decisive_fact_ids
+            for fact_id in task.fact_ids
+        )
+    )
+    statement = (
+        "NASA's event record states that this ceremony took place at Johnson "
+        "Space Center, not Kennedy Space Center."
+    )
+    result = {
+        "status": "success",
+        "selected_url": "https://www.nasa.gov/official-event-record",
+        "url": "https://www.nasa.gov/official-event-record",
+        "evidence": statement,
+        "summary": statement,
+        "relevance": "high",
+        "stance": "refute",
+        "directness": "direct",
+        "temporal_alignment": "not_applicable",
+        "artifact_sha256": "d" * 64,
+        "evidence_span": {"start": 0, "end": len(statement)},
+        "retrieved_at": datetime.now(timezone.utc).isoformat(),
+        "injection_flags": [],
+        "evidence_eligible": True,
+    }
+    import json
+
+    update = record_tool_observation(
+        state,
+        _step(
+            task_id=target_task.task_id,
+            call_id="call-official-refute",
+            tool_name="visit",
+            result=json.dumps(result),
+        ),
+        image_sha256=case.image_sha256,
+    )
+
+    assert target_task.status == "resolved"
     coverage = audit_coverage(state)
     verdict, basis = compile_verdict_basis(state)
 
     assert coverage.complete is True
-    assert verdict == "real"
+    assert verdict == "fake"
     assert basis.fact_ids == state.decisive_fact_ids
     assert basis.evidence_ids == update["created_evidence_ids"]
+
+
+def test_conflict_requires_discriminating_evidence_before_resolution() -> None:
+    fact = VisualFact(
+        fact_id="fact-conflict",
+        kind="attribute",
+        statement="The input image visibly contains the marked object.",
+        subject_entity_id="entity-1",
+        predicate="visible_in",
+        status="active",
+        basis_ids=["entity-1"],
+        decision_relevance="decisive",
+        origin=FactOrigin(type="input_image", origin_ids=["entity-1"]),
+    )
+    common = {
+        "task_id": "task-conflict",
+        "fact_ids": [fact.fact_id],
+        "function_call_id": "call-conflict",
+        "tool_name": "crop_and_inspect",
+        "evidence_kind": "image_region",
+        "source_url": "",
+        "source_class": "visual",
+        "exact_text": "A direct pixel observation.",
+        "image_region": [0.0, 0.0, 1.0, 1.0],
+        "artifact_sha256": "e" * 64,
+        "retrieved_at": datetime.now(timezone.utc).isoformat(),
+        "quality": "moderate",
+        "directness": "direct",
+        "claim_binding": "pixel_observation",
+    }
+    support = InvestigationEvidence(
+        evidence_id="evidence-support",
+        source_family="visual:support",
+        stance="support",
+        **common,
+    )
+    refute = InvestigationEvidence(
+        evidence_id="evidence-refute",
+        source_family="visual:refute",
+        stance="refute",
+        **common,
+    )
+    findings = [
+        Finding(
+            finding_id="finding-support",
+            task_id="task-conflict",
+            fact_ids=[fact.fact_id],
+            statement="Pixel evidence supports the object.",
+            stance="support",
+            evidence_ids=[support.evidence_id],
+            source_family_ids=[support.source_family],
+        ),
+        Finding(
+            finding_id="finding-refute",
+            task_id="task-conflict",
+            fact_ids=[fact.fact_id],
+            statement="Pixel evidence refutes the object.",
+            stance="refute",
+            evidence_ids=[refute.evidence_id],
+            source_family_ids=[refute.source_family],
+        ),
+    ]
+
+    tied = assess_fact(
+        fact,
+        findings,
+        {
+            support.evidence_id: support,
+            refute.evidence_id: refute,
+        },
+        all_fact_evidence=[support, refute],
+    )
+
+    assert tied.status == "conflicted"
+    assert (
+        tied.conflict_resolution
+        == "needs_discriminating_evidence"
+    )
+
+    decisive_refute = refute.model_copy(
+        update={
+            "evidence_id": "evidence-refute-official",
+            "source_family": "domain:official.example",
+            "source_class": "official",
+            "quality": "strong",
+        }
+    )
+    findings.append(
+        Finding(
+            finding_id="finding-refute-official",
+            task_id="task-conflict",
+            fact_ids=[fact.fact_id],
+            statement="An original direct observation refutes the object.",
+            stance="refute",
+            evidence_ids=[decisive_refute.evidence_id],
+            source_family_ids=[decisive_refute.source_family],
+            quality="decisive",
+        )
+    )
+    resolved = assess_fact(
+        fact,
+        findings,
+        {
+            support.evidence_id: support,
+            refute.evidence_id: refute,
+            decisive_refute.evidence_id: decisive_refute,
+        },
+        all_fact_evidence=[support, refute, decisive_refute],
+    )
+
+    assert resolved.status == "refuted"
+    assert resolved.conflict_resolution == "refute_wins"

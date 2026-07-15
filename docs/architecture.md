@@ -23,12 +23,14 @@ ImageOnlyRuntimeCase
   -> EasyOCR ocr_with_position
   -> deterministic InvestigationBrief / VisualEntity / VisualFact bootstrap
   -> deterministic initial ResearchTasks (maximum 4)
+  -> smallest central decisive-fact set
   -> initial reverse-image search (Discovery only)
   -> native Gemini Interactions ReAct
        one accepted tool call per action turn
        deterministic observation reducer after every real action
        structured Reflection at actions 4, 8, 12, 16, 20, 24
-       deterministic Coverage after Reflection
+       deterministic evidence adjudication after every action
+       Coverage after Reflection and when a verdict becomes determined
   -> deterministic verdict and verdict_basis compiler
   -> constrained Gemini Judgment
   -> real | fake | unverifiable
@@ -93,8 +95,9 @@ fact resolution, or verdict.
 | Runtime context | `current_time` |
 
 Gemini chooses the active task and tool. Each native `function_call` must contain a
-known task ID as `question_id`; deterministic code validates schemas, source policy,
-duplicates, budgets, and provider selection before execution.
+known active task ID as `question_id`; deterministic code validates schemas, source
+policy, semantic route duplicates across segments, budgets, and provider selection
+before execution.
 
 Every real tool call is reduced into separate collections:
 
@@ -120,14 +123,22 @@ Eligible web Evidence requires:
 - no prompt-injection flags;
 - a successful immutable `function_call_id`.
 
-One official direct source can decide a direction. Otherwise, two independent
-moderate/strong non-UGC, non-risky source families are required.
+One official direct source can refute an exact event/place/identity slot. Supporting
+a proposition about what the input image depicts additionally requires visual
+binding. A full scene proposition needs both a same-capture comparison and a fetched
+direct source assertion. Generic pages about a logo, landmark, or entity cannot
+independently prove that it is present in the input pixels.
 
 ### Visual Evidence
 
 Eligible visual Evidence records the successful visual tool call, image region or
 reference comparison, image/reference artifact hash, retrieval time, stance, and
 source family. A neutral observation remains Evidence but does not resolve a fact.
+
+When qualified support and refute evidence coexist, the reducer compares claim/scene
+binding, source originality, directness, source risk, temporal alignment, and
+independence. `conflicted` means more discriminating evidence is required; it is not
+itself a final reason for `unverifiable`.
 
 ## 6. Reflection and deterministic state transitions
 
@@ -170,6 +181,8 @@ URLs and task churn do not count.
 
 Stop states:
 
+- `verdict_determined`: a decisive refutation has survived conflict adjudication, so
+  unrelated supporting facts cannot change the `fake` result;
 - `coverage_complete`: every decisive fact is supported or refuted;
 - `information_saturated`: two consecutive Reflection intervals without substantive
   gain and no unattempted priority-1 task;
@@ -181,9 +194,10 @@ The verdict compiler is deterministic:
 - all decisive facts supported -> `real`;
 - otherwise -> `unverifiable` with fact-specific gaps.
 
-It compiles `VerdictBasis` containing exact fact, Finding, and Evidence IDs. The final
-Gemini `ImageOnlyJudgment` must return the same verdict, policy, ID sets, and unresolved
-gaps. Model prose cannot add facts or citations.
+It compiles `VerdictBasis` from the smallest sufficient winning
+fact/Finding/Evidence chain. A fake basis contains one strongest decisive refutation.
+The final Gemini `ImageOnlyJudgment` must return the same verdict, policy, ID sets,
+and unresolved gaps. Model prose cannot add facts or citations.
 
 The strict chain is:
 
@@ -240,15 +254,18 @@ traces/*.json
 ```
 
 Classification remains data-pipeline-owned. Process scoring is post-rollout and
-componentized; it reports fact alignment, acceptable-evidence hits, citation precision,
-evidence-to-vision bridge, verdict-basis alignment, invalid tasks, duplicate actions,
-cost, and first error.
+componentized; it reports fact alignment, acceptable-evidence hits, citation
+precision, actual visual binding, verdict-basis alignment/minimality, conflict
+resolution, semantic duplicates, post-determination actions, low-value actions, cost,
+and first error.
 
 `ifv-policy-v1` exports actual ReAct, Reflection, and Judgment request/action
 boundaries. Bootstrap is deterministic, so no fictional Planning example is emitted.
 The schema reserves `planning` for a future real policy stage.
 
-The default tokenizer adapter is `utf8-byte-v1`; model tokenizers can be injected.
+Only episodes that pass the explicit trajectory-quality gate are included in the
+policy dataset. Excluded episodes and reasons are preserved as metadata. The default
+tokenizer adapter is `utf8-byte-v1`; model tokenizers can be injected.
 Fatal-boundary actions receive zero loss mask. Dataset export groups episodes sharing a
 source family into one split and audits leakage, references, duplicates, masks, and
 split isolation.

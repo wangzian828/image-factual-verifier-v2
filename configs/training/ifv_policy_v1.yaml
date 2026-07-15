@@ -1,4 +1,4 @@
-dataset_version: ifv-policy-dataset-v1
+dataset_version: ifv-policy-dataset-v2
 trajectory_version: ifv-policy-v1
 tokenizer_adapter: utf8-byte-v1
 split:
@@ -14,6 +14,17 @@ required_audits:
   - loss_masks_aligned
   - episodes_do_not_cross_splits
   - source_families_do_not_cross_splits
+quality_gate:
+  require_correct_result: true
+  require_complete_visual_bridge: true
+  minimum_verdict_basis_alignment: 0.8
+  require_minimal_verdict_basis: true
+  maximum_semantic_duplicate_actions: 0
+  maximum_post_determination_actions: 0
+  maximum_low_value_actions: 1
+  require_valid_findings: true
+  maximum_unresolved_evidence_conflicts: 0
+  preserve_excluded_episode_metadata: true
 training_scope:
   stage_1: react
   stage_2: planning_and_react

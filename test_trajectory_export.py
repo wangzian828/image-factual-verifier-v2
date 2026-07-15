@@ -28,8 +28,6 @@ def test_exporter_uses_actual_policy_boundaries_and_aligned_masks(
         "react",
         "react",
         "react",
-        "react",
-        "reflection",
         "judgment",
     ]
     assert not any(item.example_type == "planning" for item in examples)
@@ -44,8 +42,9 @@ def test_exporter_uses_actual_policy_boundaries_and_aligned_masks(
     assert first_action["type"] == "tool_call"
     assert set(first_action["arguments"]) == {
         "question_id",
-        "url",
-        "goal",
+        "reference_url",
+        "source_page_url",
+        "focus",
     }
     assert "__claim_text" not in json.dumps(first_action)
     assert examples[-1].terminated is True

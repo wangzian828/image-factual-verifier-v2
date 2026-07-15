@@ -14,6 +14,7 @@ from src.orchestrator.coverage import (
     activate_initial_decisive_facts,
     audit_coverage,
     compile_verdict_basis,
+    verdict_is_determined,
 )
 from src.orchestrator.runtime_case import verify_case_image
 from src.orchestrator.image_only_prompts import (
@@ -445,6 +446,11 @@ class Orchestrator:
                     step,
                     image_sha256=runtime_case.image_sha256,
                 )
+                if (
+                    not investigation.stop_reason
+                    and verdict_is_determined(investigation)
+                ):
+                    audit_coverage(investigation)
                 self._sync_image_only_state(state, investigation)
                 return update
 
@@ -461,6 +467,8 @@ class Orchestrator:
                 cacheable_tools=list(self.cacheable_tools),
                 tool_call_limits=self.verification_tool_limits,
                 should_stop=lambda _steps: (
+                    bool(investigation.stop_reason)
+                    or
                     investigation.action_count % REFLECTION_INTERVAL == 0
                     or investigation.action_count >= MAX_TOOL_ACTIONS
                 ),
@@ -492,6 +500,11 @@ class Orchestrator:
                 max_protocol_corrections=4,
                 max_tool_calls_per_turn=1,
                 force_tool_each_round=True,
+                question_is_active=lambda task_id: any(
+                    task.task_id == task_id
+                    and task.status in {"active", "pending"}
+                    for task in investigation.tasks
+                ),
             )
             try:
                 parsed, steps = await runner.run(

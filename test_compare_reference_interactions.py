@@ -220,3 +220,22 @@ def test_compare_requires_create_interaction_without_legacy_fallback(tmp_path: P
         "status": "error",
         "error": "Gemini Interactions backend not configured for image comparison.",
     }
+
+
+def test_reference_download_builds_transform_and_page_image_fallbacks() -> None:
+    variants = CompareWithReferenceTool._reference_url_variants(
+        "https://example.org/photo.jpg?width=1600&quality=70"
+    )
+    extracted = CompareWithReferenceTool._extract_page_image_urls(
+        (
+            '<html><head><meta property="og:image" '
+            'content="/media/original.jpg"></head></html>'
+        ),
+        base_url="https://example.org/article",
+    )
+
+    assert variants == (
+        "https://example.org/photo.jpg?width=1600&quality=70",
+        "https://example.org/photo.jpg",
+    )
+    assert extracted == ("https://example.org/media/original.jpg",)

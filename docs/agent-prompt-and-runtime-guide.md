@@ -58,7 +58,8 @@ The ReAct prompt tells Gemini to:
 - treat snippets and reverse matches as Discovery;
 - use fetched pages or successful visual observations for Evidence;
 - compare a Discovery's `reference_image_url` directly before treating it as a visual
-  match, preferring an untested official reference when available;
+  match, pass the surrounding page as a fallback, and fetch its direct caption or
+  context separately;
 - propose Findings only with existing Evidence IDs;
 - avoid duplicate routes;
 - never output a verdict.
@@ -108,11 +109,16 @@ A Finding proposal is accepted only if:
 - its stance agrees with owned Evidence;
 - source-family provenance is retained.
 
-Direct official or visual evidence can resolve a fact. Otherwise, two independent
-qualified source families are required. A reference comparison supports a
-scene-provenance fact only when it reports the same original capture or a
-near-duplicate; the same subject in a different capture is neutral for that scene
-fact.
+Direct official evidence can refute an exact event/place/identity slot. Supporting a
+full scene proposition requires a same-capture/near-duplicate comparison plus a
+fetched direct source assertion. The same subject in a different capture is neutral,
+and a generic official identity page does not prove visible presence in the input.
+
+If support and refute both qualify, deterministic adjudication compares visual
+binding, source originality, directness, independence, source risk, and temporal
+alignment. A tie remains `conflicted` only while the Agent seeks discriminating
+evidence. If bounded search cannot break the tie, the final gap is insufficient
+evidence, not “conflict means unverifiable.”
 
 A task may own Findings while remaining active. It becomes resolved only when those
 Findings are sufficient to resolve every owned decisive fact; a weak Finding must not
@@ -145,12 +151,14 @@ hard_budget_exhausted
 continue
 ```
 
-`information_saturated` requires two consecutive low-gain Reflection intervals and no
-unattempted priority-1 task. Discovery-only progress does not reset the counter.
+`verdict_determined` may stop before a Reflection boundary when a decisive refutation
+has survived adjudication. `information_saturated` requires two consecutive low-gain
+Reflection intervals and no unattempted priority-1 task. Discovery-only progress does
+not reset the counter.
 
 ## Judgment prompt
 
-The runtime first compiles:
+The runtime first compiles the smallest sufficient winning chain:
 
 - exact verdict;
 - exact fact/Finding/Evidence ID sets;
@@ -210,3 +218,8 @@ Exporter behavior:
 - masks invalid/fatal-boundary actions with zero;
 - records runtime commit, release ID, and protocol versions;
 - emits no fake Planning examples.
+
+Dataset export excludes episodes that fail correctness, visual binding, basis
+minimality, semantic-duplicate, post-determination, low-value-action, Finding
+validity, or unresolved-conflict gates. Excluded episode IDs and reasons remain in a
+separate metadata artifact.

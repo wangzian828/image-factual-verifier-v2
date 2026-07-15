@@ -508,7 +508,7 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
             else:
                 process_metrics.append(
                     {
-                        "schema_version": "ifv-process-metrics-v1",
+                        "schema_version": "ifv-process-metrics-v2",
                         "case_id": identity,
                         "engineering_error": True,
                         "runtime_verdict": result.get("verdict"),
@@ -520,7 +520,7 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
                 )
                 trajectory_scores.append(
                     {
-                        "schema_version": "ifv-trajectory-score-v1",
+                        "schema_version": "ifv-trajectory-score-v2",
                         "case_id": identity,
                         "components": {
                             "result_reward": 0.0,

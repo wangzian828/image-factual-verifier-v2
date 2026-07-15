@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, Mapping, Optional
+from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 from src.integrations.gemini import (
     RUNTIME_METRICS_KEY,
@@ -119,6 +121,13 @@ class CompareWithReferenceTool(BaseTool):
                     "'number of windows', 'person on the left', or 'banner text'."
                 ),
             },
+            "source_page_url": {
+                "type": "string",
+                "description": (
+                    "Optional surrounding page URL used only to recover a blocked "
+                    "or expired direct image URL."
+                ),
+            },
             "visual_question_id": {"type": "string"},
             "source_evidence_id": {"type": "string"},
             "source_discovery_id": {"type": "string"},
@@ -153,12 +162,21 @@ class CompareWithReferenceTool(BaseTool):
     async def call_async(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Download the reference and compare both images through Interactions."""
         reference_url = str(params.get("reference_url", "")).strip()
+        source_page_url = str(params.get("source_page_url", "")).strip()
         focus = str(params.get("focus", "general comparison")).strip() or "general comparison"
 
         if not reference_url:
             return self._error("reference_url is required.")
         if self.source_access_policy is not None and not self.source_access_policy.allows(reference_url):
             return self._error("Reference URL blocked by the active source access policy.")
+        if (
+            source_page_url
+            and self.source_access_policy is not None
+            and not self.source_access_policy.allows(source_page_url)
+        ):
+            return self._error(
+                "Reference source-page URL blocked by the active source access policy."
+            )
         if self.vlm_backend is None:
             return self._error("VLM backend not configured for image comparison.")
         if not callable(getattr(self.vlm_backend, "create_interaction", None)):
@@ -168,11 +186,32 @@ class CompareWithReferenceTool(BaseTool):
 
         try:
             runtime_metrics: Dict[str, Any] = {}
-            reference_data_url = await self._download_reference(reference_url)
+            download = (
+                await self._download_reference(
+                    reference_url,
+                    source_page_url=source_page_url,
+                )
+                if source_page_url
+                else await self._download_reference(reference_url)
+            )
+            if isinstance(download, str):
+                download = {
+                    "data_url": download,
+                    "resolved_url": reference_url,
+                    "download_method": "direct",
+                    "attempted_urls": [reference_url],
+                }
+            reference_data_url = str(
+                (download or {}).get("data_url", "")
+            ).strip()
             if not reference_data_url:
-                return self._error(
+                error = self._error(
                     f"Reference image access failed for {reference_url}"
                 )
+                error["attempted_urls"] = list(
+                    (download or {}).get("attempted_urls", [])
+                )
+                return error
 
             from src.tools.vision_utils import image_to_data_url
 
@@ -234,40 +273,212 @@ class CompareWithReferenceTool(BaseTool):
         return {
             "status": "success",
             "reference_url": reference_url,
+            "resolved_reference_url": str(
+                (download or {}).get("resolved_url", reference_url)
+            ),
+            "source_page_url": source_page_url,
+            "download_method": str(
+                (download or {}).get("download_method", "direct")
+            ),
+            "attempted_urls": list(
+                (download or {}).get("attempted_urls", [reference_url])
+            ),
             **validated,
             RUNTIME_METRICS_KEY: runtime_metrics,
         }
 
-    async def _download_reference(self, url: str) -> Optional[str]:
-        """Download a reference image and convert it to a data URL."""
+    async def _download_reference(
+        self,
+        url: str,
+        *,
+        source_page_url: str = "",
+    ) -> Optional[Dict[str, Any]]:
+        """Download a reference image through direct, URL, and page fallbacks."""
         import base64
 
         import httpx
 
+        attempted: list[str] = []
+        pending = list(self._reference_url_variants(url))
+        if source_page_url:
+            pending.append(source_page_url)
+        seen: set[str] = set()
         try:
-            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-                response = await client.get(url)
-                if response.status_code != 200:
-                    return None
-                if self.source_access_policy is not None:
-                    for redirect in response.history:
-                        if not self.source_access_policy.allows(str(redirect.url)):
-                            raise PermissionError(
-                                "Reference redirect hop blocked by the active source access policy."
-                            )
-                if self.source_access_policy is not None and not self.source_access_policy.allows(str(response.url)):
-                    raise PermissionError(
-                        "Reference redirect target blocked by the active source access policy."
+            async with httpx.AsyncClient(
+                timeout=30,
+                follow_redirects=True,
+                headers={
+                    "User-Agent": (
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/126.0 Safari/537.36"
+                    ),
+                    "Accept": (
+                        "image/avif,image/webp,image/apng,image/svg+xml,"
+                        "image/*,*/*;q=0.8"
+                    ),
+                    "Accept-Language": "en-US,en;q=0.8",
+                },
+            ) as client:
+                while pending and len(attempted) < 12:
+                    candidate = str(pending.pop(0) or "").strip()
+                    if not candidate or candidate in seen:
+                        continue
+                    seen.add(candidate)
+                    if (
+                        self.source_access_policy is not None
+                        and not self.source_access_policy.allows(candidate)
+                    ):
+                        continue
+                    attempted.append(candidate)
+                    headers = {}
+                    if source_page_url and candidate != source_page_url:
+                        headers["Referer"] = source_page_url
+                    try:
+                        response = await client.get(candidate, headers=headers)
+                    except httpx.HTTPError:
+                        continue
+                    self._validate_download_redirects(response)
+                    if response.status_code != 200 or not response.content:
+                        continue
+                    content_type = response.headers.get(
+                        "content-type",
+                        "",
+                    ).split(";", 1)[0].strip().lower()
+                    image_mime = (
+                        content_type
+                        if content_type.startswith("image/")
+                        else self._sniff_image_mime(response.content)
                     )
-
-                content_type = response.headers.get("content-type", "image/jpeg")
-                content_type = content_type.split(";", 1)[0].strip().lower()
-                if not content_type.startswith("image/"):
-                    return None
-                encoded = base64.b64encode(response.content).decode("ascii")
-                return f"data:{content_type};base64,{encoded}"
+                    if image_mime:
+                        encoded = base64.b64encode(response.content).decode(
+                            "ascii"
+                        )
+                        return {
+                            "data_url": (
+                                f"data:{image_mime};base64,{encoded}"
+                            ),
+                            "resolved_url": str(response.url),
+                            "download_method": (
+                                "direct"
+                                if candidate == url
+                                else "url_or_page_fallback"
+                            ),
+                            "attempted_urls": attempted,
+                        }
+                    if "html" not in content_type:
+                        continue
+                    html = response.text[:2_000_000]
+                    for image_url in self._extract_page_image_urls(
+                        html,
+                        base_url=str(response.url),
+                    ):
+                        if image_url not in seen:
+                            pending.append(image_url)
         except Exception:
-            return None
+            pass
+        return {
+            "data_url": "",
+            "resolved_url": "",
+            "download_method": "",
+            "attempted_urls": attempted,
+        }
+
+    def _validate_download_redirects(self, response: Any) -> None:
+        if self.source_access_policy is None:
+            return
+        for redirect in response.history:
+            if not self.source_access_policy.allows(str(redirect.url)):
+                raise PermissionError(
+                    "Reference redirect hop blocked by the active source access policy."
+                )
+        if not self.source_access_policy.allows(str(response.url)):
+            raise PermissionError(
+                "Reference redirect target blocked by the active source access policy."
+            )
+
+    @staticmethod
+    def _reference_url_variants(url: str) -> tuple[str, ...]:
+        raw = str(url or "").strip()
+        if not raw:
+            return ()
+        variants = [raw]
+        try:
+            parsed = urlsplit(raw)
+        except ValueError:
+            return tuple(variants)
+        filtered_query = urlencode(
+            [
+                (key, value)
+                for key, value in parse_qsl(
+                    parsed.query,
+                    keep_blank_values=True,
+                )
+                if key.casefold()
+                not in {
+                    "width",
+                    "height",
+                    "quality",
+                    "resize",
+                    "crop",
+                    "format",
+                    "w",
+                    "h",
+                }
+            ]
+        )
+        without_transform = urlunsplit(
+            (
+                parsed.scheme,
+                parsed.netloc,
+                parsed.path,
+                filtered_query,
+                "",
+            )
+        )
+        if without_transform != raw:
+            variants.append(without_transform)
+        match = re.search(
+            r"^(?P<prefix>.+?/commons)/thumb/(?P<rest>.+?)/"
+            r"(?P<size>\d+px-[^/?#]+)$",
+            without_transform,
+        )
+        if match:
+            variants.append(
+                f"{match.group('prefix')}/{match.group('rest')}"
+            )
+        return tuple(dict.fromkeys(variants))
+
+    @staticmethod
+    def _extract_page_image_urls(
+        html: str,
+        *,
+        base_url: str,
+    ) -> tuple[str, ...]:
+        patterns = (
+            r"""<meta[^>]+(?:property|name)=["'](?:og:image|twitter:image|twitter:image:src)["'][^>]+content=["']([^"']+)""",
+            r"""<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["'](?:og:image|twitter:image|twitter:image:src)["']""",
+            r"""<img[^>]+src=["']([^"']+)""",
+        )
+        urls: list[str] = []
+        for pattern in patterns:
+            for value in re.findall(pattern, html, flags=re.IGNORECASE):
+                candidate = urljoin(base_url, value.strip())
+                if candidate.startswith(("http://", "https://")):
+                    urls.append(candidate)
+        return tuple(dict.fromkeys(urls[:20]))
+
+    @staticmethod
+    def _sniff_image_mime(content: bytes) -> str:
+        if content.startswith(b"\xff\xd8\xff"):
+            return "image/jpeg"
+        if content.startswith(b"\x89PNG\r\n\x1a\n"):
+            return "image/png"
+        if content.startswith((b"GIF87a", b"GIF89a")):
+            return "image/gif"
+        if content.startswith(b"RIFF") and content[8:12] == b"WEBP":
+            return "image/webp"
+        return ""
 
     @staticmethod
     def _data_url_to_image_content(data_url: str) -> Dict[str, Any]:

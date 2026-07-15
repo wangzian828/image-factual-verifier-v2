@@ -4,7 +4,7 @@
 
 **Updated:** 2026-07-15
 
-**Status:** Runtime, committed-head real acceptance, and gpu-13 replication complete
+**Status:** Runtime baseline complete; trajectory-quality remediation in progress
 
 **Repository:** `D:\image-factual-verifier-v2-worktrees\visual-fact-search-agent`
 
@@ -467,3 +467,120 @@ fd305d7 fix: validate real image-only investigation routes
 - [x] Real teacher dataset is frozen from accepted traces.
 - [x] Replicate the accepted commit on gpu-13 through the authenticated Jupyter
   control path.
+
+## 13. Phase H - trajectory-quality remediation
+
+The two-case baseline proves that the runtime, provider protocol, classification
+path, trace audit, and dataset export execute end to end. It does not prove that the
+resulting trajectories are efficient, visually grounded, or suitable as teacher
+data.
+
+Manual review of the accepted local and gpu-13 traces found:
+
+- a decisive scene refutation did not stop later low-value work;
+- generic pages about a landmark, logo, or entity could support a fact about what is
+  present in the input pixels;
+- qualified support and refute evidence became a terminal `conflicted` status, which
+  later collapsed to `unverifiable` without source-quality adjudication;
+- duplicate detection compared exact tool arguments rather than semantic routes;
+- failed reference-image downloads did not try a page/image fallback chain;
+- verdict basis compilation retained weak and redundant evidence rather than a
+  minimal sufficient subset;
+- `evidence_to_vision_bridge_completion` measured structural linkage rather than an
+  actual pixel/reference bridge;
+- every successful episode was exportable as teacher data regardless of trajectory
+  quality.
+
+### H1. Research-derived design constraints
+
+The remediation follows mechanisms shared by mature research agents and primary
+literature:
+
+- ReAct and WebGPT keep search actions and cited evidence explicit rather than
+  treating model memory or snippets as proof.
+- RARR and ALCE separate attribution correctness from answer correctness and require
+  evidence to entail the exact supported statement.
+- Self-RAG and CRAG use explicit critique/correction states when retrieved evidence is
+  insufficient or unreliable.
+- DeepResearcher trains against real web interaction rather than retrieval-only
+  simulation.
+- Deep Research Bench evaluates both the final answer and the research process,
+  including citation correctness, completeness, source quality, and trace behavior.
+- OpenAI deep research and Anthropic's research system both expose sources and retain
+  a dedicated citation/verification pass instead of hiding evidence selection inside
+  final prose.
+
+These references motivate the implementation but do not replace real image-only
+acceptance.
+
+### H2. Correct evidence-conflict semantics
+
+`conflicted` is an intermediate investigation state, not a verdict rule:
+
+```text
+qualified support + qualified refute
+  -> conflict_resolution_required
+  -> compare exact claim/scene binding, source originality, directness,
+     independence, source risk, and temporal/event/place scope
+  -> support wins -> supported
+  -> refute wins -> refuted
+  -> no discriminating evidence after bounded search -> evidence insufficient
+  -> unverifiable
+```
+
+Evidence conflict itself must never be described as “unverifiable.” The final
+`unverifiable` outcome means that the available qualified evidence is insufficient to
+resolve the decisive proposition.
+
+### H3. Implementation tasks
+
+- [x] Add deterministic support/refute assessment with source and visual-binding
+  strength.
+- [x] Preserve conflict diagnostics and resolve a conflict when one direction has
+  materially stronger, more direct, or better-bound evidence.
+- [x] Require a real pixel/reference bridge before web evidence can support a
+  proposition about what the input image contains.
+- [x] Keep direct contradiction of an exact decisive event/place/identity slot
+  eligible to refute that proposition.
+- [x] Activate the smallest central decisive-fact set; do not make incidental logos,
+  objects, or landmarks mandatory when a scene proposition already subsumes them.
+- [x] Stop when the verdict is deterministically established after conflict
+  adjudication; do not wait for unrelated supporting facts.
+- [x] Block calls for tasks that became resolved during the current ReAct segment.
+- [x] Canonicalize semantic routes for search queries, URLs, reference images, crops,
+  and task targets; reject meaning-equivalent repeats.
+- [x] Add browser-like image download headers, redirect validation, source-page image
+  extraction, and URL-variant fallback for reference comparison.
+- [x] Compile a minimal sufficient verdict basis from the strongest winning evidence.
+- [x] Replace structural bridge scoring with actual same-capture or
+  pixel-plus-source binding.
+- [x] Add conflict-resolution, wasted-route, basis-minimality, and semantic-duplicate
+  diagnostics.
+- [x] Mark episodes training-eligible only when explicit trajectory-quality gates
+  pass; preserve excluded episodes and reasons in dataset metadata.
+
+### H4. Acceptance
+
+Deterministic validation:
+
+```powershell
+python -m pytest -q
+python -m compileall -q src scripts
+git diff --check
+```
+
+Real acceptance must then rerun both group-001 cases and manually verify:
+
+- correct `fake` and `real` classifications;
+- no generic web page independently supports a pixel-presence fact;
+- any support/refute conflict has an explicit adjudication reason;
+- the fake case stops after the decisive refutation is established and adjudicated;
+- no semantic duplicate route is executed;
+- reference comparison either succeeds through a recorded fallback or records all
+  attempted access paths without retrying the same route;
+- every verdict basis is a minimal sufficient fact/Finding/Evidence chain;
+- bridge and basis metrics agree with manual trace inspection;
+- only quality-gate-passing episodes enter the policy dataset.
+
+The same committed head must pass on gpu-13. Phase H is incomplete until both traces
+are manually inspected after that run.

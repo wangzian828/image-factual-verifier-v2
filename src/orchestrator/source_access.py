@@ -203,6 +203,7 @@ class SourceAccessPolicy:
             "selected_url",
             "reference_url",
             "reference_image_url",
+            "source_page_url",
             "image_url",
             "imageUrl",
             "thumbnailUrl",

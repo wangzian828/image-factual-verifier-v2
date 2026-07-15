@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Dict, List
 
+from src.orchestrator.evidence_adjudication import assess_fact
 from src.orchestrator.investigation_models import (
     FactCoverage,
     Finding,
@@ -52,7 +53,11 @@ def activate_initial_decisive_facts(
             fact.fact_id,
         )
     )
-    for fact in candidates[:3]:
+    scene_candidates = [
+        fact for fact in candidates if fact.predicate == "appears_to_depict"
+    ]
+    selected = scene_candidates[:1] or candidates[:3]
+    for fact in selected:
         fact.decision_relevance = "decisive"
         if fact.status == "candidate":
             fact.status = "active"
@@ -70,22 +75,25 @@ def audit_coverage(
         for fact_id in finding.fact_ids:
             findings_by_fact.setdefault(fact_id, []).append(finding)
     evidence_ids = {item.evidence_id for item in state.evidence}
+    evidence_by_id = {item.evidence_id: item for item in state.evidence}
     coverages: List[FactCoverage] = []
     for fact_id in decisive_ids:
         fact = fact_by_id[fact_id]
         findings = findings_by_fact.get(fact_id, [])
-        status = (
-            fact.status
-            if fact.status
-            in {
-                "supported",
-                "refuted",
-                "conflicted",
-                "blocked",
-                "exhausted",
-            }
-            else "unresolved"
+        assessment = assess_fact(
+            fact,
+            findings,
+            evidence_by_id,
+            all_fact_evidence=[
+                item for item in state.evidence if fact_id in item.fact_ids
+            ],
         )
+        if assessment.status in {"supported", "refuted", "conflicted"}:
+            status = assessment.status
+        elif fact.status in {"blocked", "exhausted"}:
+            status = fact.status
+        else:
+            status = "unresolved"
         finding_ids = [item.finding_id for item in findings]
         owned_evidence = list(
             dict.fromkeys(
@@ -101,7 +109,16 @@ def audit_coverage(
                 status=status,
                 finding_ids=finding_ids,
                 evidence_ids=owned_evidence,
-                reason=_fact_reason(status, fact.statement),
+                winning_finding_ids=list(assessment.winning_finding_ids),
+                winning_evidence_ids=list(assessment.winning_evidence_ids),
+                support_score=assessment.support.score,
+                refute_score=assessment.refute.score,
+                conflict_resolution=assessment.conflict_resolution,
+                reason=(
+                    assessment.reason
+                    if status in {"supported", "refuted", "conflicted"}
+                    else _fact_reason(status, fact.statement)
+                ),
             )
         )
 
@@ -149,7 +166,14 @@ def audit_coverage(
         and task.attempt_count == 0
         for task in state.tasks
     )
-    if complete:
+    determined_verdict = _coverage_verdict(coverages)
+    if determined_verdict == "fake" and not complete:
+        stop_reason = "verdict_determined"
+        reason = (
+            "At least one decisive proposition is refuted after evidence-conflict "
+            "adjudication; remaining supporting facts cannot change the fake verdict."
+        )
+    elif complete:
         stop_reason = "coverage_complete"
         reason = "Every active decisive fact is supported or refuted."
     elif state.action_count >= MAX_TOOL_ACTIONS:
@@ -199,7 +223,16 @@ def compile_verdict_basis(
     fact_by_id = {fact.fact_id: fact for fact in state.facts}
     if refuted:
         verdict = "fake"
-        selected = refuted
+        selected = [
+            sorted(
+                refuted,
+                key=lambda item: (
+                    -item.refute_score,
+                    len(item.winning_evidence_ids),
+                    item.fact_id,
+                ),
+            )[0]
+        ]
         mechanism = _infer_mechanism(
             [fact_by_id[item.fact_id].statement for item in selected]
         )
@@ -228,14 +261,22 @@ def compile_verdict_basis(
             dict.fromkeys(
                 finding_id
                 for item in selected
-                for finding_id in item.finding_ids
+                for finding_id in (
+                    item.winning_finding_ids
+                    if item.winning_finding_ids
+                    else item.finding_ids
+                )
             )
         ),
         evidence_ids=list(
             dict.fromkeys(
                 evidence_id
                 for item in selected
-                for evidence_id in item.evidence_ids
+                for evidence_id in (
+                    item.winning_evidence_ids
+                    if item.winning_evidence_ids
+                    else item.evidence_ids
+                )
             )
         ),
         mechanism=mechanism,
@@ -243,6 +284,29 @@ def compile_verdict_basis(
     )
     state.verdict_basis = basis
     return verdict, basis
+
+
+def verdict_is_determined(state: ImageOnlyInvestigationState) -> bool:
+    """Return whether current adjudicated fact state fixes real/fake already."""
+
+    decisive = [
+        fact
+        for fact in state.facts
+        if fact.fact_id in state.decisive_fact_ids
+    ]
+    if not decisive:
+        return False
+    if any(fact.status == "refuted" for fact in decisive):
+        return True
+    return all(fact.status == "supported" for fact in decisive)
+
+
+def _coverage_verdict(facts: List[FactCoverage]) -> str:
+    if any(item.status == "refuted" for item in facts):
+        return "fake"
+    if facts and all(item.status == "supported" for item in facts):
+        return "real"
+    return ""
 
 
 def _fact_reason(status: str, statement: str) -> str:

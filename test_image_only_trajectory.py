@@ -70,6 +70,7 @@ class AdaptiveImageOnlyBackend:
 
     def __init__(self, task_ids: List[str]) -> None:
         self.pending_task_ids = list(task_ids)
+        self.pending_phase = "compare"
         self.requests: List[Dict[str, Any]] = []
         self.counter = 0
 
@@ -120,15 +121,38 @@ class AdaptiveImageOnlyBackend:
                 },
             )
         if self.pending_task_ids:
-            task_id = self.pending_task_ids.pop(0)
+            task_id = self.pending_task_ids[0]
+            if self.pending_phase == "visit":
+                self.pending_task_ids.pop(0)
+                self.pending_phase = "compare"
+                return _call(
+                    interaction_id,
+                    f"call-{self.counter}",
+                    "visit",
+                    {
+                        "question_id": task_id,
+                        "url": [
+                            "https://www.noaa.gov/controlled-reference"
+                        ],
+                        "goal": (
+                            f"Resolve the controlled scene fact for {task_id}."
+                        ),
+                    },
+                )
+            self.pending_phase = "visit"
             return _call(
                 interaction_id,
                 f"call-{self.counter}",
-                "visit",
+                "compare_with_reference",
                 {
                     "question_id": task_id,
-                    "url": ["https://www.noaa.gov/controlled-reference"],
-                    "goal": f"Resolve the controlled decisive fact for {task_id}.",
+                    "reference_url": (
+                        "https://www.noaa.gov/controlled-reference.jpg"
+                    ),
+                    "source_page_url": (
+                        "https://www.noaa.gov/controlled-reference"
+                    ),
+                    "focus": f"Resolve the controlled scene fact for {task_id}.",
                 },
             )
         return _completed(
@@ -200,6 +224,48 @@ class ControlledVisitTool(StaticTool):
         }
 
 
+class ControlledCompareTool(StaticTool):
+    def __init__(self) -> None:
+        super().__init__(
+            "compare_with_reference",
+            {
+                "status": "success",
+                "reference_url": (
+                    "https://www.noaa.gov/controlled-reference.jpg"
+                ),
+                "resolved_reference_url": (
+                    "https://www.noaa.gov/controlled-reference.jpg"
+                ),
+                "source_page_url": (
+                    "https://www.noaa.gov/controlled-reference"
+                ),
+                "download_method": "direct",
+                "attempted_urls": [
+                    "https://www.noaa.gov/controlled-reference.jpg"
+                ],
+                "same_subject_or_scene": True,
+                "same_capture_or_near_duplicate": True,
+                "likely_different_original_capture": False,
+                "edit_evidence_present": False,
+                "edit_evidence_strength": "none",
+                "differences": [],
+                "overall_observation": (
+                    "The reference and current image are the same original capture."
+                ),
+                "confidence": 0.99,
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "reference_url": {"type": "string"},
+                    "source_page_url": {"type": "string"},
+                    "focus": {"type": "string"},
+                },
+                "required": ["reference_url"],
+            },
+        )
+
+
 def _perception() -> PerceptionReport:
     return PerceptionReport(
         scene_description="A marked research vessel is visible on the water.",
@@ -251,7 +317,7 @@ def test_scripted_image_only_complete_trajectory(tmp_path: Path) -> None:
             for fact_id in task.fact_ids
         )
     ]
-    assert len(react_task_ids) == 3
+    assert len(react_task_ids) == 1
 
     orchestrator = Orchestrator(
         provider="gemini",
@@ -260,7 +326,6 @@ def test_scripted_image_only_complete_trajectory(tmp_path: Path) -> None:
     )
     orchestrator.vlm_provider = "controlled"
     orchestrator.llm = AdaptiveImageOnlyBackend(react_task_ids)
-    visit = ControlledVisitTool()
     orchestrator.all_tools = {
         "perceive_scene": StaticTool(
             "perceive_scene",
@@ -327,7 +392,8 @@ def test_scripted_image_only_complete_trajectory(tmp_path: Path) -> None:
                 "required": ["image_input"],
             },
         ),
-        "visit": visit,
+        "compare_with_reference": ControlledCompareTool(),
+        "visit": ControlledVisitTool(),
     }
     orchestrator.tool_health_summary = {
         name: {"available": True, "error": ""}
@@ -353,9 +419,8 @@ def test_scripted_image_only_complete_trajectory(tmp_path: Path) -> None:
     assert result["verdict"] == "real"
     assert result["verdict_basis"]["policy_rule_id"] == "reinspect-v2"
     state = result["state"]["investigation_state"]
-    assert state["action_count"] == 4
-    assert len(state["reflections"]) == 1
-    assert state["reflections"][0]["action_count"] == 4
+    assert state["action_count"] == 3
+    assert len(state["reflections"]) == 0
     assert state["coverage_audits"][-1]["stop_reason"] == "coverage_complete"
     assert state["discoveries"]
     assert state["evidence"]

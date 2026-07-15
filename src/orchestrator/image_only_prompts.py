@@ -11,6 +11,7 @@ from src.orchestrator.investigation_models import (
     VerdictBasis,
 )
 from src.orchestrator.source_provenance import classify_source
+from src.orchestrator.source_provenance import canonicalize_url
 
 
 REACT_SYSTEM_PROMPT = """\
@@ -29,10 +30,14 @@ Rules:
 4. Prefer priority-1 unresolved tasks, then recommended tasks.
 5. For text_search and visit, the immutable verification goal is supplied by runtime.
 6. If a Discovery has a non-empty reference_image_url, use
-   compare_with_reference to test the visual match. Visiting only the surrounding
-   page text does not validate that the current image matches the reference.
+   compare_with_reference to test the visual match and pass its page_url as
+   source_page_url so the tool can recover an expired or hotlink-blocked image.
+   Visiting only the surrounding page text does not validate that the current image
+   matches the reference.
 7. Prefer an untested official reference image when one is available. Use visit
-   separately when the surrounding source text is needed for event/place context.
+   separately to fetch the surrounding caption or event/place context. Supporting a
+   full scene proposition requires both a same-capture comparison and a direct source
+   assertion; either one alone is incomplete.
 8. Discovery, Evidence, Finding, task, and fact state are reduced by the runtime.
    Do not propose or invent state transitions in the segment output.
 9. Do not write a verdict. Return only the segment summary and
@@ -102,10 +107,11 @@ def render_react_context(state: ImageOnlyInvestigationState) -> str:
         if str(parsed_route.get("tool", "")).strip() != "compare_with_reference":
             continue
         args = parsed_route.get("args")
-        if isinstance(args, dict):
+        reference_url = str(parsed_route.get("reference_url", "")).strip()
+        if not reference_url and isinstance(args, dict):
             reference_url = str(args.get("reference_url", "")).strip()
-            if reference_url:
-                attempted_reference_urls.add(reference_url)
+        if reference_url:
+            attempted_reference_urls.add(canonicalize_url(reference_url))
     active_task_ids = {task.task_id for task in active}
     pending_references = [
         {
@@ -121,7 +127,8 @@ def render_react_context(state: ImageOnlyInvestigationState) -> str:
         for item in state.discoveries
         if item.task_id in active_task_ids
         and item.reference_image_url
-        and item.reference_image_url not in attempted_reference_urls
+        and canonicalize_url(item.reference_image_url)
+        not in attempted_reference_urls
     ]
     pending_references.sort(
         key=lambda item: (

@@ -54,6 +54,9 @@ def _private_paths(value: Any, path: str = "") -> Iterable[str]:
 def audit_dataset(dataset_dir: Path) -> Dict[str, Any]:
     root = dataset_dir.expanduser().resolve()
     metadata_rows = _load_jsonl(root / "episode_metadata.jsonl")
+    excluded_metadata_rows = _load_jsonl(
+        root / "excluded_episode_metadata.jsonl"
+    )
     metadata_by_episode = {
         str(row.get("episode_id", "")): row for row in metadata_rows
     }
@@ -129,6 +132,23 @@ def audit_dataset(dataset_dir: Path) -> Dict[str, Any]:
                     }
                 )
                 continue
+            if not bool(metadata.get("training_eligible", False)):
+                errors.append(
+                    {
+                        "code": "TRAINING_QUALITY_GATE_FAILED",
+                        "location": location,
+                        "message": ", ".join(
+                            str(item)
+                            for item in metadata.get(
+                                "training_exclusion_reasons",
+                                [],
+                            )
+                            or []
+                        )
+                        or "episode is not marked training eligible",
+                    }
+                )
+                continue
             runtime_ids = {
                 str(item) for item in metadata.get("runtime_ids", []) or []
             }
@@ -164,6 +184,20 @@ def audit_dataset(dataset_dir: Path) -> Dict[str, Any]:
             )
 
     scores = [float(item.teacher_score) for item in examples]
+    excluded_ids = {
+        str(item.get("episode_id", ""))
+        for item in excluded_metadata_rows
+        if str(item.get("episode_id", ""))
+    }
+    included_ids = set(episode_splits)
+    for episode_id in sorted(excluded_ids & included_ids):
+        errors.append(
+            {
+                "code": "EXCLUDED_EPISODE_INCLUDED",
+                "location": episode_id,
+                "message": "quality-gate-excluded episode appears in a split",
+            }
+        )
     example_types = Counter(item.example_type for item in examples)
     verdicts = Counter(
         str(item.policy_action.get("verdict", ""))
@@ -178,6 +212,7 @@ def audit_dataset(dataset_dir: Path) -> Dict[str, Any]:
         "errors": errors,
         "example_count": len(examples),
         "episode_count": len(episode_splits),
+        "excluded_episode_count": len(excluded_ids),
         "split_counts": dict(
             Counter(item.split for item in examples)
         ),

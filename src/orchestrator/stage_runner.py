@@ -23,6 +23,7 @@ from src.integrations.gemini import (
 )
 from src.orchestrator.evidence_policy import query_targets_fact_check_answer
 from src.orchestrator.llm_backend import LLMBackend, LLMResponse
+from src.orchestrator.route_policy import routes_semantically_equivalent
 from src.orchestrator.tool_cache import ToolResultCache
 from src.orchestrator.tool_result import ToolResultContractError, parse_tool_result, serialize_tool_result
 from src.orchestrator.source_access import SourceAccessPolicy
@@ -86,6 +87,7 @@ class StageRunner:
         max_protocol_corrections: int = 4,
         max_tool_calls_per_turn: Optional[int] = None,
         force_tool_each_round: bool = False,
+        question_is_active: Optional[Callable[[str], bool]] = None,
     ):
         self.llm = llm
         self.system_prompt = system_prompt
@@ -136,6 +138,7 @@ class StageRunner:
             else None
         )
         self.force_tool_each_round = bool(force_tool_each_round)
+        self.question_is_active = question_is_active
 
     async def run(self, input_context: str) -> Tuple[Optional[BaseModel], List[StageStep]]:
         """Run the ReAct loop."""
@@ -1505,6 +1508,14 @@ class StageRunner:
                 f"Unknown question_id '{question_id}'. Valid ids: "
                 + ", ".join(self.active_question_ids)
             )
+        if (
+            self.question_is_active is not None
+            and not self.question_is_active(question_id)
+        ):
+            return (
+                f"Task '{question_id}' is already resolved, blocked, or exhausted. "
+                "Choose a currently active task."
+            )
         return ""
 
     def _priority_coverage_error(
@@ -2332,12 +2343,19 @@ class StageRunner:
         return None, metadata
 
     def _has_duplicate_tool_call(self, steps: List[StageStep], tool_name: str, tool_args: Dict[str, Any]) -> bool:
-        signature = json.dumps({"tool": tool_name, "args": self._normalize_tool_args(tool_args)}, ensure_ascii=False, sort_keys=True)
-        for step in [*steps, *list(getattr(self, "_control_steps", []))]:
-            if step.action_type != "tool_call" or step.tool_name != tool_name:
+        for step in [
+            *self.prior_steps,
+            *steps,
+            *list(getattr(self, "_control_steps", [])),
+        ]:
+            if step.action_type != "tool_call":
                 continue
-            existing = json.dumps({"tool": step.tool_name, "args": self._normalize_tool_args(step.tool_args)}, ensure_ascii=False, sort_keys=True)
-            if signature == existing:
+            if routes_semantically_equivalent(
+                step.tool_name,
+                self._normalize_tool_args(step.tool_args),
+                tool_name,
+                self._normalize_tool_args(tool_args),
+            ):
                 return True
         return False
 

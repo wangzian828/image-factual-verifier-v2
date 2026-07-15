@@ -204,6 +204,19 @@ class InvestigationEvidence(StrictModel):
     stance: Literal["support", "refute", "neutral"]
     quality: Literal["strong", "moderate", "weak"]
     directness: Literal["direct", "indirect"] = "direct"
+    claim_binding: Literal[
+        "none",
+        "source_assertion",
+        "pixel_observation",
+        "same_subject",
+        "same_capture",
+    ] = "none"
+    same_subject_or_scene: Optional[bool] = None
+    same_capture_or_near_duplicate: Optional[bool] = None
+    likely_different_original_capture: Optional[bool] = None
+    edit_evidence_present: Optional[bool] = None
+    confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    temporal_alignment: str = Field(default="", max_length=100)
     risk_flags: List[str] = Field(default_factory=list, max_length=12)
 
     @model_validator(mode="after")
@@ -283,6 +296,16 @@ class FactCoverage(StrictModel):
     ]
     finding_ids: List[str] = Field(default_factory=list, max_length=20)
     evidence_ids: List[str] = Field(default_factory=list, max_length=40)
+    winning_finding_ids: List[str] = Field(default_factory=list, max_length=20)
+    winning_evidence_ids: List[str] = Field(default_factory=list, max_length=40)
+    support_score: float = Field(default=0.0, ge=0.0)
+    refute_score: float = Field(default=0.0, ge=0.0)
+    conflict_resolution: Literal[
+        "not_applicable",
+        "support_wins",
+        "refute_wins",
+        "needs_discriminating_evidence",
+    ] = "not_applicable"
     reason: str = Field(default="", max_length=1200)
 
 
@@ -294,6 +317,7 @@ class ImageOnlyCoverage(StrictModel):
     complete: bool = False
     stop_reason: Literal[
         "continue",
+        "verdict_determined",
         "coverage_complete",
         "information_saturated",
         "hard_budget_exhausted",
@@ -369,6 +393,7 @@ class ImageOnlyInvestigationState(StrictModel):
     judgment: Optional[ImageOnlyJudgment] = None
     stop_reason: Literal[
         "",
+        "verdict_determined",
         "coverage_complete",
         "information_saturated",
         "hard_budget_exhausted",

@@ -35,8 +35,9 @@ project version.
 6. Deterministically reduce each real action into separate Discovery, Evidence,
    Finding, Failure, task, and fact state.
 7. Run structured Reflection after cumulative actions 4, 8, 12, 16, 20, and 24.
-8. Audit decisive facts and stop on coverage, two low-gain Reflection intervals, or
-   the 24-action cap.
+8. Adjudicate support/refute conflicts after every action and stop when the verdict is
+   determined, on full coverage, after two low-gain Reflection intervals, or at the
+   24-action cap.
 9. Compile the only allowed verdict and basis, then require Gemini Judgment to match
    them exactly.
 
@@ -57,8 +58,9 @@ project version.
 - A Finding must link one ResearchTask and owned fact/evidence IDs.
 - A verdict basis must follow
   `VisualFact -> Finding -> Evidence -> successful tool call`.
-- `fake` requires a decisive refuted fact; `real` requires every decisive fact to be
-  supported; all other valid factual outcomes are `unverifiable`.
+- `fake` requires a decisive refuted fact after conflict adjudication; `real` requires
+  every decisive fact to be supported with required visual binding; all other valid
+  factual outcomes are `unverifiable` because evidence is insufficient.
 - If all investigation tools fail, or a provider/protocol/runtime boundary fails, stop
   with an engineering error before Judgment.
 - Keep evaluator-private gold out of runtime/model state. Load it only after all

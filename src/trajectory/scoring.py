@@ -7,6 +7,7 @@ import re
 from typing import Any, Dict, Iterable, List, Mapping, Sequence
 from urllib.parse import urlsplit, urlunsplit
 
+from src.orchestrator.route_policy import semantic_duplicate_count
 from src.orchestrator.tool_result import parse_tool_result
 
 
@@ -217,34 +218,22 @@ def _valid_findings(
     return valid
 
 
-def _route_key(step: Mapping[str, Any]) -> str:
-    args = {
-        key: value
-        for key, value in sorted(_mapping(step.get("tool_args")).items())
-        if key not in {"image_input", "__claim_text", "__evidence_goal"}
-    }
-    return json.dumps(
-        {
-            "tool": str(step.get("tool_name", "")),
-            "args": args,
-        },
-        sort_keys=True,
-        ensure_ascii=False,
-        default=str,
-    )
-
-
 def _duplicate_action_rate(
     steps: Sequence[Mapping[str, Any]],
 ) -> tuple[float, int]:
-    routes: List[str] = []
+    routes: List[tuple[str, Mapping[str, Any]]] = []
     for step in steps:
         if (
             str(step.get("stage", "")) == "image_only_investigation"
             and str(step.get("action_type", "")) == "tool_call"
         ):
-            routes.append(_route_key(step))
-    duplicate_count = len(routes) - len(set(routes))
+            routes.append(
+                (
+                    str(step.get("tool_name", "")),
+                    _mapping(step.get("tool_args")),
+                )
+            )
+    duplicate_count = semantic_duplicate_count(routes)
     return (
         duplicate_count / len(routes) if routes else 0.0,
         duplicate_count,
@@ -300,6 +289,103 @@ def _first_error(
     return None
 
 
+def _has_actual_visual_bridge(
+    fact: Mapping[str, Any],
+    related_evidence: Sequence[Mapping[str, Any]],
+) -> bool:
+    predicate = str(fact.get("predicate", ""))
+    status = str(fact.get("status", ""))
+    bindings = {
+        str(item.get("claim_binding", ""))
+        for item in related_evidence
+        if not item.get("risk_flags")
+    }
+    if status == "supported" and predicate == "appears_to_depict":
+        return "same_capture" in bindings
+    if status == "supported" and predicate in {"visible_in", "reads"}:
+        return bool(bindings & {"pixel_observation", "same_capture"})
+    if status == "refuted":
+        return any(
+            str(item.get("claim_binding", ""))
+            in {"pixel_observation", "same_capture", "source_assertion"}
+            and str(item.get("directness", "")) == "direct"
+            and str(item.get("quality", "")) in {"strong", "moderate"}
+            and not item.get("risk_flags")
+            for item in related_evidence
+        )
+    return bool(bindings & {"pixel_observation", "same_capture"})
+
+
+def _post_determination_actions(
+    steps: Sequence[Mapping[str, Any]],
+    *,
+    verdict: str,
+    basis_fact_ids: set[str],
+) -> int:
+    determination_index: int | None = None
+    seen_supported: set[str] = set()
+    for index, step in enumerate(steps):
+        if str(step.get("action_type", "")) != "tool_call":
+            continue
+        update = _mapping(
+            _mapping(step.get("metadata")).get(
+                "investigation_state_update"
+            )
+        )
+        statuses = _mapping(update.get("fact_statuses"))
+        if verdict == "fake" and any(
+            fact_id in basis_fact_ids and str(status) == "refuted"
+            for fact_id, status in statuses.items()
+        ):
+            determination_index = index
+            break
+        if verdict == "real":
+            seen_supported.update(
+                str(fact_id)
+                for fact_id, status in statuses.items()
+                if fact_id in basis_fact_ids and str(status) == "supported"
+            )
+            if basis_fact_ids and basis_fact_ids <= seen_supported:
+                determination_index = index
+                break
+    if determination_index is None:
+        return 0
+    return sum(
+        str(step.get("action_type", "")) == "tool_call"
+        for step in steps[determination_index + 1 :]
+    )
+
+
+def _low_value_action_count(
+    steps: Sequence[Mapping[str, Any]],
+) -> int:
+    count = 0
+    for step in steps:
+        if (
+            str(step.get("stage", "")) != "image_only_investigation"
+            or str(step.get("action_type", "")) != "tool_call"
+        ):
+            continue
+        if str(step.get("tool_name", "")) == "current_time":
+            count += 1
+            continue
+        update = _mapping(
+            _mapping(step.get("metadata")).get(
+                "investigation_state_update"
+            )
+        )
+        if not any(
+            update.get(key)
+            for key in (
+                "created_discovery_ids",
+                "created_evidence_ids",
+                "created_finding_ids",
+            )
+        ):
+            count += 1
+    return count
+
+
 def score_process_trace(
     trace: Mapping[str, Any],
     gold: Mapping[str, Any],
@@ -333,6 +419,15 @@ def score_process_trace(
         str(item.get("finding_id", "")): item
         for item in findings
         if str(item.get("finding_id", ""))
+    }
+    coverage_audits = _rows(investigation.get("coverage_audits"))
+    final_coverage = (
+        _mapping(coverage_audits[-1]) if coverage_audits else {}
+    )
+    coverage_by_fact = {
+        str(item.get("fact_id", "")): item
+        for item in _rows(final_coverage.get("facts"))
+        if str(item.get("fact_id", ""))
     }
     steps = _rows(state.get("all_steps"))
     successful_calls = _successful_call_ids(steps)
@@ -400,12 +495,12 @@ def score_process_trace(
             acceptable_hits += 1
             acceptable_evidence_ids.update(hit_ids)
         runtime_fact = runtime_fact_by_id.get(runtime_fact_id, {})
-        origin_type = str(_mapping(runtime_fact.get("origin")).get("type", ""))
         if (
             gold_fact.get("visual_anchor")
-            and origin_type in {"input_image", "ocr"}
-            and related_findings
-            and related_evidence
+            and _has_actual_visual_bridge(
+                runtime_fact,
+                related_evidence,
+            )
         ):
             bridge_hits += 1
 
@@ -448,6 +543,35 @@ def score_process_trace(
     verdict_basis_alignment = (
         2 * basis_precision * basis_recall / (basis_precision + basis_recall)
         if basis_precision + basis_recall
+        else 0.0
+    )
+    expected_minimal_evidence_ids = {
+        str(evidence_id)
+        for fact_id in basis_fact_ids
+        for evidence_id in _mapping(
+            coverage_by_fact.get(fact_id)
+        ).get("winning_evidence_ids", [])
+        or []
+    }
+    minimal_basis_overlap = len(
+        basis_evidence_ids & expected_minimal_evidence_ids
+    )
+    basis_minimality_precision = (
+        minimal_basis_overlap / len(basis_evidence_ids)
+        if basis_evidence_ids
+        else 0.0
+    )
+    basis_minimality_recall = (
+        minimal_basis_overlap / len(expected_minimal_evidence_ids)
+        if expected_minimal_evidence_ids
+        else (1.0 if not basis_evidence_ids else 0.0)
+    )
+    basis_minimality = (
+        2
+        * basis_minimality_precision
+        * basis_minimality_recall
+        / (basis_minimality_precision + basis_minimality_recall)
+        if basis_minimality_precision + basis_minimality_recall
         else 0.0
     )
     citation_precision = (
@@ -514,9 +638,30 @@ def score_process_trace(
         and str(trace.get("verdict", "")) == expected_verdict
     )
     first_error = _first_error(trace, steps)
+    conflict_resolutions = [
+        str(item.get("conflict_resolution", "not_applicable"))
+        for item in coverage_by_fact.values()
+    ]
+    resolved_conflict_count = sum(
+        item in {"support_wins", "refute_wins"}
+        for item in conflict_resolutions
+    )
+    unresolved_conflict_count = sum(
+        item == "needs_discriminating_evidence"
+        for item in conflict_resolutions
+    )
+    post_determination_action_count = _post_determination_actions(
+        steps,
+        verdict=str(trace.get("verdict", "")),
+        basis_fact_ids=basis_fact_ids,
+    )
+    low_value_action_count = _low_value_action_count(steps)
+    low_value_action_rate = (
+        low_value_action_count / action_count if action_count else 0.0
+    )
 
     process_metrics = {
-        "schema_version": "ifv-process-metrics-v1",
+        "schema_version": "ifv-process-metrics-v2",
         "case_id": str(gold.get("case_id") or trace.get("image_id") or ""),
         "score_metadata": dict(score_metadata or {}),
         "engineering_error": engineering_error,
@@ -546,11 +691,20 @@ def score_process_trace(
             bridge_completion, 6
         ),
         "verdict_basis_alignment": round(verdict_basis_alignment, 6),
+        "basis_minimality": round(basis_minimality, 6),
+        "expected_minimal_evidence_ids": sorted(
+            expected_minimal_evidence_ids
+        ),
         "valid_finding_precision": round(valid_finding_precision, 6),
         "false_task_rate": round(false_task_rate, 6),
         "false_activation_rate": round(false_activation_rate, 6),
         "duplicate_action_rate": round(duplicate_action_rate, 6),
         "duplicate_action_count": duplicate_action_count,
+        "resolved_conflict_count": resolved_conflict_count,
+        "unresolved_conflict_count": unresolved_conflict_count,
+        "post_determination_action_count": post_determination_action_count,
+        "low_value_action_count": low_value_action_count,
+        "low_value_action_rate": round(low_value_action_rate, 6),
         "premature_finish": premature_finish,
         "decisive_evidence_per_tool_action": round(
             decisive_evidence_per_tool_action, 6
@@ -572,17 +726,57 @@ def score_process_trace(
     }
 
     normalized_cost = min(1.0, action_count / 24.0)
+    training_exclusion_reasons: List[str] = []
+    if not result_correct:
+        training_exclusion_reasons.append("incorrect_result")
+    if engineering_error:
+        training_exclusion_reasons.append("engineering_error")
+    if premature_finish:
+        training_exclusion_reasons.append("premature_finish")
+    if bridge_completion < 1.0:
+        training_exclusion_reasons.append("visual_bridge_incomplete")
+    if verdict_basis_alignment < 0.8:
+        training_exclusion_reasons.append("verdict_basis_misaligned")
+    if basis_minimality < 1.0:
+        training_exclusion_reasons.append("verdict_basis_not_minimal")
+    if duplicate_action_count:
+        training_exclusion_reasons.append("semantic_duplicate_actions")
+    if post_determination_action_count:
+        training_exclusion_reasons.append(
+            "actions_after_verdict_determined"
+        )
+    if low_value_action_count > 1:
+        training_exclusion_reasons.append("excess_low_value_actions")
+    if valid_finding_precision < 1.0:
+        training_exclusion_reasons.append("invalid_findings")
+    if unresolved_conflict_count:
+        training_exclusion_reasons.append("unresolved_evidence_conflict")
+    training_eligible = not training_exclusion_reasons
+    process_metrics["training_eligible"] = training_eligible
+    process_metrics["training_exclusion_reasons"] = (
+        training_exclusion_reasons
+    )
+
     components = {
         "result_reward": 1.0 if result_correct else 0.0,
         "grounded_finding_reward": round(valid_finding_precision, 6),
         "gap_coverage_reward": round(decisive_fact_alignment, 6),
         "bridge_reward": round(bridge_completion, 6),
+        "basis_minimality_reward": round(basis_minimality, 6),
         "stop_calibration_reward": (
             1.0
-            if not engineering_error and not premature_finish
+            if (
+                not engineering_error
+                and not premature_finish
+                and post_determination_action_count == 0
+            )
             else 0.0
         ),
         "duplicate_action_penalty": round(-duplicate_action_rate, 6),
+        "low_value_action_penalty": round(
+            -low_value_action_rate,
+            6,
+        ),
         "invalid_task_penalty": round(
             -max(false_task_rate, false_activation_rate),
             6,
@@ -590,11 +784,13 @@ def score_process_trace(
         "normalized_cost_penalty": round(-0.25 * normalized_cost, 6),
     }
     teacher_score = {
-        "schema_version": "ifv-trajectory-score-v1",
+        "schema_version": "ifv-trajectory-score-v2",
         "case_id": process_metrics["case_id"],
         "score_metadata": dict(score_metadata or {}),
         "components": components,
         "total": round(sum(components.values()), 6),
+        "training_eligible": training_eligible,
+        "training_exclusion_reasons": training_exclusion_reasons,
         "diagnostics": {
             "fact_matches": fact_matches,
             "decisive_fact_ids": sorted(decisive_ids),
@@ -603,6 +799,15 @@ def score_process_trace(
             "basis_evidence_ids": sorted(basis_evidence_ids),
             "valid_finding_ids": sorted(valid_finding_ids),
             "acceptable_evidence_ids": sorted(acceptable_evidence_ids),
+            "expected_minimal_evidence_ids": sorted(
+                expected_minimal_evidence_ids
+            ),
+            "resolved_conflict_count": resolved_conflict_count,
+            "unresolved_conflict_count": unresolved_conflict_count,
+            "post_determination_action_count": (
+                post_determination_action_count
+            ),
+            "low_value_action_count": low_value_action_count,
             "engineering_error": engineering_error,
             "first_error": first_error,
         },

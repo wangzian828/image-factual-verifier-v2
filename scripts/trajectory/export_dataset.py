@@ -163,7 +163,7 @@ def export_dataset(
 
     examples_by_episode: Dict[str, List[PolicyExample]] = defaultdict(list)
     episode_metadata: Dict[str, Dict[str, Any]] = {}
-    score_by_episode: Dict[str, float] = {}
+    score_by_episode: Dict[str, Dict[str, Any]] = {}
     source_runs: List[Dict[str, Any]] = []
     for raw_run_dir in run_dirs:
         run_dir = raw_run_dir.expanduser().resolve()
@@ -179,9 +179,7 @@ def export_dataset(
             }
         )
         for row in _load_jsonl(run_dir / "trajectory_scores.jsonl"):
-            score_by_episode[str(row.get("case_id", ""))] = float(
-                row.get("total", 0.0) or 0.0
-            )
+            score_by_episode[str(row.get("case_id", ""))] = dict(row)
         for row in _load_jsonl(run_dir / "policy_trajectories.jsonl"):
             example = PolicyExample.model_validate(row)
             examples_by_episode[example.episode_id].append(example)
@@ -190,13 +188,27 @@ def export_dataset(
             episode_id = str(
                 trace.get("image_id") or trace_path.stem
             ).strip()
+            score = score_by_episode.get(episode_id, {})
+            training_eligible = bool(score.get("training_eligible", False))
+            exclusion_reasons = [
+                str(item)
+                for item in score.get(
+                    "training_exclusion_reasons",
+                    ["missing_training_quality_score"],
+                )
+                or []
+            ]
+            if not score:
+                exclusion_reasons = ["missing_training_quality_score"]
             episode_metadata[episode_id] = {
                 "episode_id": episode_id,
                 "source_run_id": manifest.get("run_id"),
                 "source_trace": str(trace_path),
                 "source_family_keys": _source_families(trace),
                 "runtime_ids": sorted(_collect_runtime_ids(trace)),
-                "teacher_score": score_by_episode.get(episode_id, 0.0),
+                "teacher_score": float(score.get("total", 0.0) or 0.0),
+                "training_eligible": training_eligible,
+                "training_exclusion_reasons": exclusion_reasons,
             }
 
     unknown_metadata = sorted(set(examples_by_episode) - set(episode_metadata))
@@ -206,7 +218,20 @@ def export_dataset(
             + ", ".join(unknown_metadata)
         )
 
-    episodes = sorted(examples_by_episode)
+    all_episodes = sorted(examples_by_episode)
+    episodes = [
+        episode_id
+        for episode_id in all_episodes
+        if episode_metadata[episode_id]["training_eligible"]
+    ]
+    excluded_episode_rows = [
+        {
+            **episode_metadata[episode_id],
+            "example_count": len(examples_by_episode[episode_id]),
+        }
+        for episode_id in all_episodes
+        if episode_id not in episodes
+    ]
     union = _UnionFind(episodes)
     family_episodes: Dict[str, List[str]] = defaultdict(list)
     for episode_id in episodes:
@@ -282,9 +307,14 @@ def export_dataset(
         _write_jsonl(output_dir / f"{split}.jsonl", rows)
     metadata_rows.sort(key=lambda item: item["episode_id"])
     _write_jsonl(output_dir / "episode_metadata.jsonl", metadata_rows)
+    excluded_episode_rows.sort(key=lambda item: item["episode_id"])
+    _write_jsonl(
+        output_dir / "excluded_episode_metadata.jsonl",
+        excluded_episode_rows,
+    )
     manifest = {
-        "schema_version": "ifv-policy-dataset-manifest-v1",
-        "dataset_version": "ifv-policy-dataset-v1",
+        "schema_version": "ifv-policy-dataset-manifest-v2",
+        "dataset_version": "ifv-policy-dataset-v2",
         "trajectory_version": "ifv-policy-v1",
         "seed": seed,
         "split_ratios": {
@@ -294,6 +324,8 @@ def export_dataset(
         },
         "source_runs": source_runs,
         "episode_count": len(episodes),
+        "candidate_episode_count": len(all_episodes),
+        "excluded_episode_count": len(excluded_episode_rows),
         "group_count": len(components),
         "example_counts": {
             split: len(rows) for split, rows in split_rows.items()
@@ -303,6 +335,9 @@ def export_dataset(
             "validation": "validation.jsonl",
             "test": "test.jsonl",
             "episode_metadata": "episode_metadata.jsonl",
+            "excluded_episode_metadata": (
+                "excluded_episode_metadata.jsonl"
+            ),
         },
     }
     _write_json(output_dir / "manifest.json", manifest)

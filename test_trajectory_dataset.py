@@ -64,6 +64,8 @@ def _run_dir(tmp_path: Path) -> Path:
                 "case_id": trace["image_id"],
                 "total": 4.75,
                 "components": {},
+                "training_eligible": True,
+                "training_exclusion_reasons": [],
             }
         ],
     )
@@ -82,9 +84,9 @@ def test_dataset_export_is_episode_and_source_family_split_safe(
     assert manifest["episode_count"] == 1
     assert manifest["example_counts"]["train"] + (
         manifest["example_counts"]["validation"]
-    ) + manifest["example_counts"]["test"] == 6
+    ) + manifest["example_counts"]["test"] == 4
     assert report["passed"] is True
-    assert report["example_count"] == 6
+    assert report["example_count"] == 4
     assert report["episode_count"] == 1
     assert report["teacher_score_distribution"]["mean"] == 4.75
 
@@ -117,3 +119,34 @@ def test_dataset_audit_rejects_private_policy_input(
 
     assert report["passed"] is False
     assert "PRIVATE_DATA_LEAK" in codes
+
+
+def test_dataset_export_excludes_quality_gate_failures(
+    tmp_path: Path,
+) -> None:
+    run_dir = _run_dir(tmp_path)
+    _write_jsonl(
+        run_dir / "trajectory_scores.jsonl",
+        [
+            {
+                "case_id": "case_scripted_v3",
+                "total": 2.0,
+                "components": {},
+                "training_eligible": False,
+                "training_exclusion_reasons": [
+                    "semantic_duplicate_actions"
+                ],
+            }
+        ],
+    )
+    output = tmp_path / "dataset"
+
+    manifest = export_dataset([run_dir], output)
+    report = audit_dataset(output)
+
+    assert manifest["candidate_episode_count"] == 1
+    assert manifest["episode_count"] == 0
+    assert manifest["excluded_episode_count"] == 1
+    assert report["passed"] is True
+    assert report["example_count"] == 0
+    assert report["excluded_episode_count"] == 1

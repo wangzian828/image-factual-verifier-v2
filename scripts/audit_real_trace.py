@@ -1078,7 +1078,19 @@ def _audit_image_only_trace(
     basis_evidence = {
         str(item) for item in basis.get("evidence_ids", []) or []
     }
-    if basis_facts != expected_basis_facts:
+    if expected_verdict == "fake":
+        if len(basis_facts) != 1 or not basis_facts <= expected_basis_facts:
+            _issue(
+                report,
+                "VERDICT_BASIS_FACT_SET_INVALID",
+                (
+                    "fake verdict basis must select exactly one decisive refuted "
+                    f"fact from {sorted(expected_basis_facts)}, found "
+                    f"{sorted(basis_facts)}"
+                ),
+                location="verdict_basis.fact_ids",
+            )
+    elif basis_facts != expected_basis_facts:
         _issue(
             report,
             "VERDICT_BASIS_FACT_SET_INVALID",

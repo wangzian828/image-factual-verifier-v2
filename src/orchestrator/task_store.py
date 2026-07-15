@@ -19,6 +19,8 @@ from src.orchestrator.investigation_models import (
     ResearchTask,
     VisualFact,
 )
+from src.orchestrator.evidence_adjudication import assess_fact
+from src.orchestrator.route_policy import route_signature
 from src.orchestrator.source_provenance import classify_source
 from src.orchestrator.tool_result import parse_tool_result
 
@@ -93,15 +95,7 @@ def record_tool_observation(
     task.attempt_count += 1
     task.status = "active"
     route = json.dumps(
-        {
-            "task_id": task_id,
-            "tool": tool_name,
-            "args": {
-                key: value
-                for key, value in sorted(tool_args.items())
-                if key not in {"image_input"}
-            },
-        },
+        route_signature(tool_name, tool_args),
         ensure_ascii=False,
         sort_keys=True,
         default=str,
@@ -312,6 +306,19 @@ def apply_reflection(
             rejected.append(f"unknown decisive fact {fact_id}")
             continue
         if fact_id in state.decisive_fact_ids:
+            continue
+        if (
+            fact.predicate in {"visible_in", "reads"}
+            and any(
+                item.fact_id in state.decisive_fact_ids
+                and item.predicate == "appears_to_depict"
+                for item in state.facts
+            )
+        ):
+            rejected.append(
+                f"{fact_id} is incidental and already subsumed by the "
+                "central scene proposition"
+            )
             continue
         if not _fact_has_executable_route(state, fact_id):
             rejected.append(f"{fact_id} has no executable route")
@@ -574,6 +581,10 @@ def _record_evidence_and_findings(
                         == "direct"
                         else "indirect"
                     ),
+                    claim_binding="source_assertion",
+                    temporal_alignment=str(
+                        record.get("temporal_alignment", "")
+                    ).strip(),
                     risk_flags=list(identity.risk_flags),
                 )
             )
@@ -645,19 +656,32 @@ def _visual_evidence_record(
     statement = ""
     stance = "neutral"
     kind = "image_region"
+    claim_binding = "pixel_observation"
     source_url = ""
     region = data.get("crop_bbox") or data.get("bbox") or [0.0, 0.0, 1.0, 1.0]
     if tool_name == "compare_with_reference":
         statement = str(data.get("overall_observation", "")).strip()
-        source_url = str(data.get("reference_url", "")).strip()
+        source_url = str(
+            data.get("resolved_reference_url")
+            or data.get("reference_url", "")
+        ).strip()
         kind = "reference_comparison"
         if bool(data.get("edit_evidence_present", False)):
             stance = "refute"
+            claim_binding = "pixel_observation"
         elif _task_owns_scene_fact(state, task):
             if bool(data.get("same_capture_or_near_duplicate", False)):
                 stance = "support"
+                claim_binding = "same_capture"
+            elif bool(data.get("same_subject_or_scene", False)):
+                claim_binding = "same_subject"
         elif bool(data.get("same_subject_or_scene", False)):
             stance = "support"
+            claim_binding = (
+                "same_capture"
+                if bool(data.get("same_capture_or_near_duplicate", False))
+                else "same_subject"
+            )
     elif tool_name == "crop_and_inspect":
         statement = str(
             data.get("answer", "") or data.get("description", "")
@@ -729,6 +753,33 @@ def _visual_evidence_record(
         stance=stance,
         quality="moderate",
         directness="direct",
+        claim_binding=claim_binding,
+        same_subject_or_scene=(
+            bool(data.get("same_subject_or_scene", False))
+            if tool_name == "compare_with_reference"
+            else None
+        ),
+        same_capture_or_near_duplicate=(
+            bool(data.get("same_capture_or_near_duplicate", False))
+            if tool_name == "compare_with_reference"
+            else None
+        ),
+        likely_different_original_capture=(
+            bool(data.get("likely_different_original_capture", False))
+            if tool_name == "compare_with_reference"
+            else None
+        ),
+        edit_evidence_present=(
+            bool(data.get("edit_evidence_present", False))
+            if tool_name == "compare_with_reference"
+            else None
+        ),
+        confidence=(
+            float(data["confidence"])
+            if tool_name == "compare_with_reference"
+            and isinstance(data.get("confidence"), (int, float))
+            else None
+        ),
         risk_flags=list(identity.risk_flags) if identity is not None else [],
     )
     finding = None
@@ -797,59 +848,21 @@ def _refresh_fact_states(state: ImageOnlyInvestigationState) -> None:
             findings_by_fact.setdefault(fact_id, []).append(finding)
     for fact in state.facts:
         fact_findings = findings_by_fact.get(fact.fact_id, [])
-        supports = [
-            item for item in fact_findings if item.stance == "support"
+        fact_evidence = [
+            item
+            for item in state.evidence
+            if fact.fact_id in item.fact_ids
         ]
-        refutes = [
-            item for item in fact_findings if item.stance == "refute"
-        ]
-        support_decisive = _direction_is_decisive(
-            supports,
+        assessment = assess_fact(
+            fact,
+            fact_findings,
             evidence_by_id,
+            all_fact_evidence=fact_evidence,
         )
-        refute_decisive = _direction_is_decisive(
-            refutes,
-            evidence_by_id,
-        )
-        if support_decisive and refute_decisive:
-            fact.status = "conflicted"
-        elif refute_decisive:
-            fact.status = "refuted"
-        elif support_decisive:
-            fact.status = "supported"
+        if assessment.status in {"supported", "refuted", "conflicted"}:
+            fact.status = assessment.status
         elif fact.fact_id in state.decisive_fact_ids:
             fact.status = "active"
-
-
-def _direction_is_decisive(
-    findings: Sequence[Finding],
-    evidence_by_id: Mapping[str, InvestigationEvidence],
-) -> bool:
-    if not findings:
-        return False
-    families: set[str] = set()
-    for finding in findings:
-        for evidence_id in finding.evidence_ids:
-            evidence = evidence_by_id.get(evidence_id)
-            if evidence is None or evidence.directness != "direct":
-                continue
-            if evidence.source_class == "official" and evidence.quality in {
-                "strong",
-                "moderate",
-            }:
-                return True
-            if (
-                evidence.source_class == "visual"
-                and evidence.quality in {"strong", "moderate"}
-            ):
-                return True
-            if (
-                evidence.source_class not in {"ugc"}
-                and not evidence.risk_flags
-                and evidence.quality in {"strong", "moderate"}
-            ):
-                families.add(evidence.source_family)
-    return len(families) >= 2
 
 
 def _task_by_id(

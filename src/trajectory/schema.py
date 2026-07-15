@@ -49,8 +49,8 @@ class PolicyExample(StrictModel):
 
 
 class DatasetExample(PolicyExample):
-    dataset_version: Literal["ifv-policy-dataset-v1"] = (
-        "ifv-policy-dataset-v1"
+    dataset_version: Literal["ifv-policy-dataset-v2"] = (
+        "ifv-policy-dataset-v2"
     )
     split: Literal["train", "validation", "test"]
     split_group_id: str = Field(min_length=1, max_length=100)

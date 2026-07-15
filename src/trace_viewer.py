@@ -131,6 +131,7 @@ def _render_audits(audits: List[Any]) -> str:
             )
         labels = {
             "coverage_complete": "coverage complete",
+            "verdict_determined": "verdict determined",
             "complete": "complete",
             "information_saturated": "information saturated",
             "hard_budget_exhausted": "hard budget exhausted",
