@@ -748,93 +748,100 @@ svg {
 html&gt;body{padding:0}&lt;/style&gt;
 &lt;/head&gt;
 &lt;body&gt;
-&lt;div id=&quot;ifv-agent-loop&quot; aria-label=&quot;Image factual verifier investigation loop&quot;&gt;
+&lt;div id=&quot;ifv-agent-design&quot; aria-label=&quot;Image factual verifier loop and design principles&quot;&gt;
   &lt;style&gt;
-    #ifv-agent-loop {
+    #ifv-agent-design {
       color: var(--foreground);
       display: grid;
       gap: 1rem;
     }
 
-    #ifv-agent-loop .ifv-meta,
-    #ifv-agent-loop .ifv-flow,
-    #ifv-agent-loop .ifv-loop-main,
-    #ifv-agent-loop .ifv-guardrails,
-    #ifv-agent-loop .ifv-chain {
+    #ifv-agent-design .ifv-meta,
+    #ifv-agent-design .ifv-flow,
+    #ifv-agent-design .ifv-loop-main,
+    #ifv-agent-design .ifv-guardrails,
+    #ifv-agent-design .ifv-principles,
+    #ifv-agent-design .ifv-chain,
+    #ifv-agent-design .ifv-lane {
       display: flex;
       align-items: center;
       flex-wrap: wrap;
       gap: 0.5rem;
     }
 
-    #ifv-agent-loop .ifv-flow,
-    #ifv-agent-loop .ifv-chain {
+    #ifv-agent-design .ifv-flow,
+    #ifv-agent-design .ifv-chain {
       justify-content: center;
     }
 
-    #ifv-agent-loop .ifv-loop {
+    #ifv-agent-design .ifv-loop {
       display: grid;
       justify-items: center;
       gap: 0.35rem;
     }
 
-    #ifv-agent-loop .ifv-loop-return {
+    #ifv-agent-design .ifv-loop-return,
+    #ifv-agent-design .ifv-arrow,
+    #ifv-agent-design .ifv-guard,
+    #ifv-agent-design .ifv-chain,
+    #ifv-agent-design .ifv-lane-copy {
       color: var(--muted-foreground);
     }
 
-    #ifv-agent-loop .ifv-arrow {
-      color: var(--muted-foreground);
-    }
-
-    #ifv-agent-loop .ifv-detail-grid {
+    #ifv-agent-design .ifv-detail-grid {
       display: grid;
       grid-template-columns: auto minmax(0, 1fr);
       gap: 0.75rem;
       align-items: start;
     }
 
-    #ifv-agent-loop .ifv-detail-icon {
+    #ifv-agent-design .ifv-detail-icon {
       padding-top: 0.15rem;
     }
 
-    #ifv-agent-loop .ifv-detail-copy {
+    #ifv-agent-design .ifv-detail-copy,
+    #ifv-agent-design .ifv-ownership {
       display: grid;
       gap: 0.45rem;
       min-width: 0;
     }
 
-    #ifv-agent-loop .ifv-detail-copy p {
+    #ifv-agent-design .ifv-detail-copy p {
       margin: 0;
     }
 
-    #ifv-agent-loop .ifv-guard,
-    #ifv-agent-loop .ifv-chain {
-      color: var(--muted-foreground);
+    #ifv-agent-design .ifv-lane-label {
+      min-width: 4.5rem;
     }
 
-    #ifv-agent-loop .ifv-chain code {
+    #ifv-agent-design .ifv-chain code {
       color: var(--foreground);
     }
 
     @media (max-width: 620px) {
-      #ifv-agent-loop .ifv-flow {
+      #ifv-agent-design .ifv-flow {
         justify-content: flex-start;
       }
 
-      #ifv-agent-loop .ifv-arrow {
+      #ifv-agent-design .ifv-arrow {
         display: none;
       }
 
-      #ifv-agent-loop .ifv-loop {
+      #ifv-agent-design .ifv-loop {
         justify-items: start;
+      }
+
+      #ifv-agent-design .ifv-lane {
+        align-items: flex-start;
       }
     }
   &lt;/style&gt;
 
   &lt;div class=&quot;ifv-meta&quot; aria-label=&quot;Agent characteristics&quot;&gt;
     &lt;span class=&quot;viz-badge&quot;&gt;图片输入&lt;/span&gt;
-    &lt;span class=&quot;viz-badge&quot;&gt;循环调查&lt;/span&gt;
-    &lt;span class=&quot;viz-badge&quot;&gt;证据可追溯&lt;/span&gt;
+    &lt;span class=&quot;viz-badge&quot;&gt;开放网络调查&lt;/span&gt;
+    &lt;span class=&quot;viz-badge&quot;&gt;状态可审计&lt;/span&gt;
+    &lt;span class=&quot;viz-badge&quot;&gt;三分类输出&lt;/span&gt;
   &lt;/div&gt;
 
   &lt;div class=&quot;ifv-flow&quot; role=&quot;group&quot; aria-label=&quot;选择 Agent 阶段&quot;&gt;
@@ -858,10 +865,10 @@ html&gt;body{padding:0}&lt;/style&gt;
         &lt;span class=&quot;ifv-arrow&quot; aria-hidden=&quot;true&quot;&gt;→&lt;/span&gt;
         &lt;button class=&quot;btn ifv-stage&quot; type=&quot;button&quot; data-stage=&quot;3&quot; aria-pressed=&quot;false&quot;&gt;
           &lt;i data-lucide=&quot;refresh-cw&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;
-          4 裁决 / Coverage
+          4 归约 / Coverage
         &lt;/button&gt;
       &lt;/div&gt;
-      &lt;span class=&quot;viz-badge ifv-loop-return&quot;&gt;未决定：Reflection 后 ↺ 回到 ReAct&lt;/span&gt;
+      &lt;span class=&quot;viz-badge ifv-loop-return&quot;&gt;未决定：Reflection 调整状态后 ↺ 回到 ReAct&lt;/span&gt;
     &lt;/div&gt;
 
     &lt;span class=&quot;ifv-arrow&quot; aria-hidden=&quot;true&quot;&gt;→&lt;/span&gt;
@@ -874,17 +881,35 @@ html&gt;body{padding:0}&lt;/style&gt;
   &lt;section class=&quot;card&quot; aria-live=&quot;polite&quot;&gt;
     &lt;div class=&quot;ifv-detail-grid&quot;&gt;
       &lt;div class=&quot;ifv-detail-icon&quot; aria-hidden=&quot;true&quot;&gt;
-        &lt;span id=&quot;ifv-loop-detail-icon&quot;&gt;
+        &lt;span id=&quot;ifv-design-detail-icon&quot;&gt;
           &lt;i data-lucide=&quot;scan-eye&quot;&gt;&lt;/i&gt;
         &lt;/span&gt;
       &lt;/div&gt;
       &lt;div class=&quot;ifv-detail-copy&quot;&gt;
-        &lt;strong id=&quot;ifv-loop-detail-label&quot;&gt;先观察，不下结论&lt;/strong&gt;
-        &lt;p id=&quot;ifv-loop-detail-action&quot;&gt;Gemini 描述场景；OCR 单独读取文字和位置。&lt;/p&gt;
-        &lt;p class=&quot;ifv-guard&quot; id=&quot;ifv-loop-detail-guard&quot;&gt;感知只产生线索。&lt;/p&gt;
+        &lt;strong id=&quot;ifv-design-detail-label&quot;&gt;把像素变成结构化观察&lt;/strong&gt;
+        &lt;p id=&quot;ifv-design-detail-action&quot;&gt;Gemini 描述场景；EasyOCR 单独读取文字、位置和置信度。&lt;/p&gt;
+        &lt;p class=&quot;ifv-guard&quot; id=&quot;ifv-design-detail-guard&quot;&gt;观察只是候选线索，不直接成为事实结论。&lt;/p&gt;
       &lt;/div&gt;
     &lt;/div&gt;
   &lt;/section&gt;
+
+  &lt;div class=&quot;ifv-ownership&quot; aria-label=&quot;Model and runtime responsibilities&quot;&gt;
+    &lt;div class=&quot;ifv-lane&quot;&gt;
+      &lt;span class=&quot;viz-badge ifv-lane-label&quot;&gt;模型负责提议&lt;/span&gt;
+      &lt;span class=&quot;ifv-lane-copy&quot;&gt;感知 · 选择工具 · Reflection 提议 · Judgment 表述&lt;/span&gt;
+    &lt;/div&gt;
+    &lt;div class=&quot;ifv-lane&quot;&gt;
+      &lt;span class=&quot;viz-badge ifv-lane-label&quot;&gt;Runtime 负责裁决&lt;/span&gt;
+      &lt;span class=&quot;ifv-lane-copy&quot;&gt;协议校验 · 状态归约 · 冲突裁决 · Coverage · basis 编译&lt;/span&gt;
+    &lt;/div&gt;
+  &lt;/div&gt;
+
+  &lt;div class=&quot;ifv-principles&quot; aria-label=&quot;Design principles&quot;&gt;
+    &lt;span class=&quot;viz-badge&quot;&gt;Discovery ≠ Evidence&lt;/span&gt;
+    &lt;span class=&quot;viz-badge&quot;&gt;冲突 ≠ unverifiable&lt;/span&gt;
+    &lt;span class=&quot;viz-badge&quot;&gt;工程错误 ≠ factual verdict&lt;/span&gt;
+    &lt;span class=&quot;viz-badge&quot;&gt;只保留最小充分证据链&lt;/span&gt;
+  &lt;/div&gt;
 
   &lt;div class=&quot;ifv-guardrails&quot; aria-label=&quot;Investigation limits&quot;&gt;
     &lt;span class=&quot;viz-badge&quot;&gt;每回合 1 个工具调用&lt;/span&gt;
@@ -901,6 +926,8 @@ html&gt;body{padding:0}&lt;/style&gt;
     &lt;span aria-hidden=&quot;true&quot;&gt;→&lt;/span&gt;
     &lt;code&gt;Evidence&lt;/code&gt;
     &lt;span aria-hidden=&quot;true&quot;&gt;→&lt;/span&gt;
+    &lt;code&gt;successful tool call&lt;/code&gt;
+    &lt;span aria-hidden=&quot;true&quot;&gt;→&lt;/span&gt;
     &lt;code&gt;verdict_basis&lt;/code&gt;
     &lt;span aria-hidden=&quot;true&quot;&gt;→&lt;/span&gt;
     &lt;strong&gt;real / fake / unverifiable&lt;/strong&gt;
@@ -908,46 +935,46 @@ html&gt;body{padding:0}&lt;/style&gt;
 
   &lt;script&gt;
     (() =&gt; {
-      const root = document.getElementById(&quot;ifv-agent-loop&quot;);
+      const root = document.getElementById(&quot;ifv-agent-design&quot;);
       if (!root) return;
 
       const stages = [
         {
           icon: &quot;scan-eye&quot;,
-          label: &quot;先观察，不下结论&quot;,
-          action: &quot;Gemini 描述场景；OCR 单独读取文字和位置。&quot;,
-          guard: &quot;感知只产生线索。&quot;
+          label: &quot;把像素变成结构化观察&quot;,
+          action: &quot;Gemini 描述场景；EasyOCR 单独读取文字、位置和置信度。&quot;,
+          guard: &quot;观察只是候选线索，不直接成为事实结论。&quot;
         },
         {
           icon: &quot;list-tree&quot;,
-          label: &quot;把线索建成调查状态&quot;,
-          action: &quot;生成 VisualFact，并建立最多 4 个 ResearchTask。&quot;,
-          guard: &quot;Bootstrap 不生成 Evidence 或 verdict。&quot;
+          label: &quot;确定性建立初始调查状态&quot;,
+          action: &quot;生成 VisualFact、检索锚点和最多 4 个可执行 ResearchTask。&quot;,
+          guard: &quot;Bootstrap 不生成 Evidence、Finding 或 verdict。&quot;
         },
         {
           icon: &quot;search&quot;,
-          label: &quot;一次只调查一个任务&quot;,
-          action: &quot;模型选择一个工具；runtime 把结果归约成 Evidence、Finding 或 Failure。&quot;,
-          guard: &quot;完成一次动作后立刻进入裁决与 Coverage。&quot;
+          label: &quot;模型一次只选择一个调查动作&quot;,
+          action: &quot;从反向搜图、文本搜索、访问网页、裁图搜索和参考图对比中选择一个工具。&quot;,
+          guard: &quot;SERP 或视觉候选先是 Discovery，不能直接支撑结论。&quot;
         },
         {
           icon: &quot;refresh-cw&quot;,
-          label: &quot;检查是否够下结论&quot;,
-          action: &quot;裁决证据冲突并运行 Coverage；每 4 个动作可由 Reflection 调整任务。&quot;,
-          guard: &quot;未解决就回到 ReAct；有冲突不自动等于 unverifiable。&quot;
+          label: &quot;Runtime 把工具结果变成可信状态&quot;,
+          action: &quot;归约 Evidence、Finding 或 Failure，裁决支持/反驳冲突并运行 Coverage。&quot;,
+          guard: &quot;未解决时 Reflection 只能提出受限状态增量，然后回到 ReAct。&quot;
         },
         {
           icon: &quot;badge-check&quot;,
-          label: &quot;循环退出后编译最小证据链&quot;,
-          action: &quot;结论确定、信息饱和或达到预算后，编译 verdict_basis 并执行 Judgment。&quot;,
-          guard: &quot;输出三分类结论；工程错误不会伪装成 unverifiable。&quot;
+          label: &quot;退出循环后才允许形成结论&quot;,
+          action: &quot;确定性编译最小 verdict_basis；Gemini Judgment 必须复述同一组事实和证据 ID。&quot;,
+          guard: &quot;结论确定、信息饱和或达到预算才退出；工程错误不转成 unverifiable。&quot;
         }
       ];
 
-      const label = root.querySelector(&quot;#ifv-loop-detail-label&quot;);
-      const action = root.querySelector(&quot;#ifv-loop-detail-action&quot;);
-      const guard = root.querySelector(&quot;#ifv-loop-detail-guard&quot;);
-      const icon = root.querySelector(&quot;#ifv-loop-detail-icon&quot;);
+      const label = root.querySelector(&quot;#ifv-design-detail-label&quot;);
+      const action = root.querySelector(&quot;#ifv-design-detail-action&quot;);
+      const guard = root.querySelector(&quot;#ifv-design-detail-guard&quot;);
+      const icon = root.querySelector(&quot;#ifv-design-detail-icon&quot;);
       const buttons = [...root.querySelectorAll(&quot;.ifv-stage&quot;)];
 
       const selectStage = (index) =&gt; {
