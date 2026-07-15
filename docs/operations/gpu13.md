@@ -279,6 +279,39 @@ Both runs produced the expected `fake` and `real` classifications. The gpu-13 ru
 passed 165 repository tests, strict two-trace audit, the data-owned classification
 scorer, and strict policy-dataset audit.
 
+The trajectory-quality remediation was accepted on 2026-07-15:
+
+```text
+runtime commit:
+c20948d8dc4230c45e4c2f25707e0c52fc31bd80
+
+gpu-13 run:
+/gsdata/home/wza/image-factual-verifier-v2-data/runs/eval/
+group-001-v3-quality-20260715-07
+
+server tests:
+175 passed
+
+classification:
+2/2 correct
+
+strict trace audit:
+2 passed
+0 scheduler rejections
+0 protocol rejections
+0 route-control rejections
+
+policy dataset:
+2 eligible episodes
+11 examples
+0 excluded episodes
+0 strict audit errors
+```
+
+The accepted fake trajectory used 7 actions and the accepted real trajectory used 3.
+Both had complete visual binding, aligned minimal verdict bases, no semantic duplicate
+execution, no post-determination actions, and no low-value actions.
+
 The older `/gs/home/wza/projects/image-factual-verifier-v2` checkout contained staged
 server-side changes and was deliberately left untouched. A fresh GitHub clone was
 used instead. The group-001 release was downloaded by gpu-13 through temporary object

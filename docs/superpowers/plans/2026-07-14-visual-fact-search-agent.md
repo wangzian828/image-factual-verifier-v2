@@ -4,7 +4,7 @@
 
 **Updated:** 2026-07-15
 
-**Status:** Runtime baseline complete; trajectory-quality remediation in progress
+**Status:** Runtime baseline and trajectory-quality remediation complete
 
 **Repository:** `D:\image-factual-verifier-v2-worktrees\visual-fact-search-agent`
 
@@ -425,7 +425,7 @@ git diff --check
 Current active suite:
 
 ```text
-165 passed
+175 passed
 ```
 
 This suite intentionally removed the old claim-ledger, fixed-replanning, and
@@ -449,6 +449,12 @@ acc4e4f feat: audit image-only VisualFact traces
 36c6036 refactor: remove claim-driven runtime
 11a097a docs: finalize v3 runtime contract
 fd305d7 fix: validate real image-only investigation routes
+ca74e7e fix: improve image-only trajectory quality
+52b8454 fix: finalize image-only segments deterministically
+459a6f2 fix: make investigation boundaries deterministic
+55db562 fix: advance image-only reflection boundaries
+86d73c0 fix: trust exact official image provenance
+c20948d fix: separate route control from protocol failures
 ```
 
 ## 12. Final completion checklist
@@ -457,7 +463,8 @@ fd305d7 fix: validate real image-only investigation routes
 - [x] Gemini image perception and positioned OCR.
 - [x] Image-grounded VisualFacts and bounded tasks.
 - [x] One native tool call per action turn.
-- [x] Reflection at cumulative actions 4, 8, 12, 16, 20, 24.
+- [x] Reflection at cumulative actions 4, 8, 12, 16, 20, 24 unless a
+  deterministically complete verdict terminates on that action.
 - [x] Discovery never directly becomes verdict Evidence.
 - [x] Deterministic decisive-fact Coverage and verdict basis.
 - [x] Engineering errors produce no classification prediction.
@@ -467,6 +474,13 @@ fd305d7 fix: validate real image-only investigation routes
 - [x] Real teacher dataset is frozen from accepted traces.
 - [x] Replicate the accepted commit on gpu-13 through the authenticated Jupyter
   control path.
+- [x] Adjudicate qualified support/refute conflicts before final verdict.
+- [x] Require exact visual binding for positive scene support.
+- [x] Reject semantic duplicate routes across ReAct segments.
+- [x] Compile minimal sufficient verdict bases.
+- [x] Filter teacher episodes through explicit trajectory-quality gates.
+- [x] Complete gpu-13 Phase H canary, classification, process scoring, and dataset
+  audit.
 
 ## 13. Phase H - trajectory-quality remediation
 
@@ -584,3 +598,58 @@ Real acceptance must then rerun both group-001 cases and manually verify:
 
 The same committed head must pass on gpu-13. Phase H is incomplete until both traces
 are manually inspected after that run.
+
+### H5. Accepted result
+
+Accepted runtime commit:
+
+```text
+c20948d8dc4230c45e4c2f25707e0c52fc31bd80
+```
+
+Accepted gpu-13 run:
+
+```text
+/gsdata/home/wza/image-factual-verifier-v2-data/runs/eval/
+group-001-v3-quality-20260715-07
+```
+
+Result:
+
+```text
+case_509704a5a1034b2c -> fake
+case_58720a90e3ef438a -> real
+Accuracy = 1.0
+observed-class Macro-F1 = 1.0
+fixed three-class Macro-F1 = 0.666667
+engineering errors = 0
+strict trace audit = 2/2
+scheduler rejections = 0
+protocol rejections = 0
+route-control rejections = 0
+```
+
+Manual trajectory review:
+
+- the fake case used 7 actions, stopped immediately after direct NASA evidence
+  established Johnson Space Center, and compiled one fact, one Finding, and one
+  official direct Evidence record as the basis;
+- the real case used 3 actions, stopped on an exact same-capture NOAA official image,
+  and compiled one fact, one Finding, and one reference-comparison Evidence record;
+- neither case executed a semantic duplicate, continued after verdict determination,
+  or used `current_time`;
+- actual visual bridge completion, verdict-basis alignment, and basis minimality are
+  all `1.0` for both cases;
+- both cases pass the training-quality gate.
+
+The v2 policy dataset export contains 2 episodes and 11 examples:
+
+```text
+react = 8
+reflection = 1
+judgment = 2
+excluded episodes = 0
+strict dataset audit errors = 0
+```
+
+Phase H acceptance: complete.
