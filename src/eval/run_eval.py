@@ -23,6 +23,7 @@ from src.orchestrator.runtime_case import verify_case_image
 from src.orchestrator.source_access import SourceAccessPolicy
 from src.redaction import sanitize_for_persistence
 from src.trajectory.exporter import export_policy_examples
+from src.trajectory.reference_chain import score_reference_chain_trace
 from src.trajectory.scoring import score_process_trace
 
 
@@ -408,6 +409,7 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
             "predictions": "predictions.jsonl",
             "run_results": "run_results.jsonl",
             "process_metrics": "process_metrics.jsonl",
+            "reference_chain_metrics": "reference_chain_metrics.jsonl",
             "trajectory_scores": "trajectory_scores.jsonl",
             "policy_trajectories": "policy_trajectories.jsonl",
             "summary": "summary.json",
@@ -462,6 +464,7 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
         predictions: List[Dict[str, Any]] = []
         run_results: List[Dict[str, Any]] = []
         process_metrics: List[Dict[str, Any]] = []
+        reference_chain_metrics: List[Dict[str, Any]] = []
         trajectory_scores: List[Dict[str, Any]] = []
         policy_trajectories: List[Dict[str, Any]] = []
         for sample, result in zip(samples, results):
@@ -484,6 +487,20 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
                     },
                 )
                 process_metrics.append(metrics)
+                reference_chain_metrics.append(
+                    await score_reference_chain_trace(
+                        trace,
+                        evaluation_gold_index[identity],
+                        score_metadata={
+                            "process_reference_protocol": _file_descriptor(
+                                release.artifacts.process_reference_protocol
+                            ),
+                            "evaluation_gold": _file_descriptor(
+                                release.artifacts.evaluation_gold
+                            ),
+                        },
+                    )
+                )
                 trajectory_scores.append(teacher_score)
                 policy_trajectories.extend(
                     item.model_dump(mode="json")
@@ -518,6 +535,21 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
                         },
                     }
                 )
+                reference_chain_metrics.append(
+                    {
+                        "schema_version": "ifv-reference-chain-metrics-v1",
+                        "case_id": identity,
+                        "engineering_error": True,
+                        "error": "canonical trace is missing",
+                        "metrics": {
+                            "fact_recovery_recall": 0.0,
+                            "chain_recovery_recall": 0.0,
+                            "evidence_exact_recall": 0.0,
+                            "evidence_semantic_recall": 0.0,
+                            "basis_reference_precision": 0.0,
+                        },
+                    }
+                )
                 trajectory_scores.append(
                     {
                         "schema_version": "ifv-trajectory-score-v2",
@@ -545,6 +577,10 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
         _write_jsonl(run_dir / "predictions.jsonl", predictions)
         _write_jsonl(run_dir / "run_results.jsonl", run_results)
         _write_jsonl(run_dir / "process_metrics.jsonl", process_metrics)
+        _write_jsonl(
+            run_dir / "reference_chain_metrics.jsonl",
+            reference_chain_metrics,
+        )
         _write_jsonl(run_dir / "trajectory_scores.jsonl", trajectory_scores)
         _write_jsonl(run_dir / "policy_trajectories.jsonl", policy_trajectories)
         _write_json(run_dir / "summary.json", summary)

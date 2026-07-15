@@ -209,6 +209,7 @@ def test_v03_eval_keeps_gold_post_rollout_and_writes_scorer_predictions(
         {"ground_truth", "factual_status", "decisive_facts"}
     )
     assert (run_dir / "process_metrics.jsonl").is_file()
+    assert (run_dir / "reference_chain_metrics.jsonl").is_file()
     assert (run_dir / "trajectory_scores.jsonl").is_file()
     assert (run_dir / "policy_trajectories.jsonl").is_file()
     manifest = json.loads(
@@ -222,6 +223,9 @@ def test_v03_eval_keeps_gold_post_rollout_and_writes_scorer_predictions(
     assert manifest["source_access_policy"]["active"] is False
     assert manifest["artifacts"]["run_results"] == "run_results.jsonl"
     assert manifest["artifacts"]["process_metrics"] == "process_metrics.jsonl"
+    assert manifest["artifacts"]["reference_chain_metrics"] == (
+        "reference_chain_metrics.jsonl"
+    )
 
 
 def test_eval_cli_exits_nonzero_for_engineering_errors(
