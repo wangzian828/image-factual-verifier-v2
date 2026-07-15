@@ -403,6 +403,16 @@ Student training is outside this runtime plan. Do not start it until real traces
 accepted and a separate training plan fixes model, tokenizer, hardware, trainer, and
 evaluation baselines.
 
+The separate implementation plan is:
+
+```text
+docs/superpowers/plans/2026-07-15-qwen-vl-student-training-infrastructure.md
+```
+
+It freezes Gemini as the teacher/regression baseline, makes Qwen-VL the eventual
+perception and policy student, isolates training from the runtime environment, and
+defines the SFT/GRPO, checkpoint, serving, and dual-provider compatibility contracts.
+
 ## 10. Validation policy
 
 Validation layers are independent:
