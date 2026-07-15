@@ -97,6 +97,12 @@ The client prompts for the password without echo. For unattended automation, inj
 `JUPYTER_REMOTE_PASSWORD` from a secret manager for that process only; do not persist
 it in a profile or script.
 
+As of 2026-07-15, the local `8333` tunnel was reachable but no
+`JUPYTER_REMOTE_PASSWORD` was present in the process, user, or machine environment.
+That state is not a completed gpu-13 deployment. Authenticate interactively or inject
+the credential for one process, then verify the hostname and kernel before claiming a
+server test or canary.
+
 `jupyter_remote.py` defaults to `python3` to preserve control-plane access before
 the environment is bootstrapped. Set `--kernel-name ifv-agent` or
 `JUPYTER_REMOTE_KERNEL=ifv-agent` for every project command. The bootstrap process
@@ -249,6 +255,18 @@ scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
 
 Only after this command passes should a larger formal evaluation be launched in the
 background with `scripts/server/start_eval_gpu13.sh`.
+
+The committed runtime was independently accepted with a local no-mock Gemini run at
+commit `fd305d7`:
+
+```text
+D:\image-factual-verifier-runs\group-001-v3-canary-20260715-19
+```
+
+That run produced the expected `fake` and `real` classifications and passed strict
+trace audit. It validates runtime/provider behavior, but it does not prove gpu-13
+deployment. Repeat the same release and commit through the commands above once the
+Jupyter control path is authenticated.
 
 The background launcher prints `pid`, `pid_file`, and `log_file`. Evaluation stdout and stderr
 always go to the printed path under `IFV_DATA_ROOT/runs/_logs`, never into the named

@@ -57,6 +57,8 @@ The ReAct prompt tells Gemini to:
 - prefer unresolved priority-1 work and recommended tasks;
 - treat snippets and reverse matches as Discovery;
 - use fetched pages or successful visual observations for Evidence;
+- compare a Discovery's `reference_image_url` directly before treating it as a visual
+  match, preferring an untested official reference when available;
 - propose Findings only with existing Evidence IDs;
 - avoid duplicate routes;
 - never output a verdict.
@@ -107,22 +109,29 @@ A Finding proposal is accepted only if:
 - source-family provenance is retained.
 
 Direct official or visual evidence can resolve a fact. Otherwise, two independent
-qualified source families are required.
+qualified source families are required. A reference comparison supports a
+scene-provenance fact only when it reports the same original capture or a
+near-duplicate; the same subject in a different capture is neutral for that scene
+fact.
+
+A task may own Findings while remaining active. It becomes resolved only when those
+Findings are sufficient to resolve every owned decisive fact; a weak Finding must not
+remove the task from future scheduling.
 
 ## Reflection prompt
 
 At actions 4, 8, 12, 16, 20, and 24, Reflection receives the full bounded state. It may
 return:
 
-- task priority/status updates;
+- task priority updates;
 - up to three new grounded tasks;
 - up to two decisive-fact proposals;
 - recommended next tasks;
 - remaining gaps and readiness signal.
 
-Deterministic validation rejects unknown IDs, duplicate tasks, unresolved tasks marked
-resolved without Findings, blocked tasks without Failures, and decisive facts with no
-executable route.
+Deterministic validation rejects unknown IDs, duplicate tasks, unsupported task-state
+mutation, and decisive facts with no executable route. Task status is reducer-owned;
+Reflection cannot mark a task resolved, blocked, or exhausted.
 
 ## Coverage and stop
 

@@ -4,7 +4,8 @@
 
 **Updated:** 2026-07-15
 
-**Status:** Runtime implementation complete; real gpu-13 acceptance pending
+**Status:** Runtime and committed-head real acceptance complete; gpu-13 replication
+pending Jupyter authentication
 
 **Repository:** `D:\image-factual-verifier-v2-worktrees\visual-fact-search-agent`
 
@@ -90,6 +91,9 @@ Acceptance: complete.
 - [x] Create at most four initial evidence-routable tasks.
 - [x] Activate up to three central routed decisive facts.
 - [x] Run initial reverse-image search as Discovery only.
+- [x] Preserve both Lens and semantic-search reference-image URLs.
+- [x] Expose untested official reference images to ReAct without turning them into
+  Evidence.
 - [x] Persist bootstrap state before later provider failures.
 
 Real perception was completed locally for both development images. Re-feeding those
@@ -99,13 +103,15 @@ outputs through the current bootstrap produced:
 - Bigelow: decisive vessel-identity facts tied to visible NOAA/name/registration
   markings.
 
-Acceptance: implementation complete; final live end-to-end acceptance remains Phase E.
+Acceptance: complete, including live end-to-end acceptance in Phase E.
 
 ## 5. Phase C — Dynamic tasks and Reflection
 
 - [x] Implement deterministic fact/task/Finding/Failure reducer.
 - [x] Keep task/fact history append-only through stable IDs.
 - [x] Resolve tasks only through qualified Findings.
+- [x] Keep a task active when its Finding is not yet strong enough to resolve an owned
+  decisive fact.
 - [x] Block/exhaust tasks only through recorded failures.
 - [x] Run Reflection at cumulative actions 4, 8, 12, 16, 20, and 24.
 - [x] Count successful, failed, blocked, and empty real tool calls as actions.
@@ -137,6 +143,9 @@ Acceptance: implementation complete.
   directness, risk, and access-policy checks.
 - [x] Keep Discovery out of Findings and verdict basis.
 - [x] Qualify official/visual evidence or independent source-family corroboration.
+- [x] Require same-capture/near-duplicate comparison before a reference image can
+  support a scene-provenance fact; same subject in a different capture remains
+  neutral for that fact.
 - [x] Audit decisive facts as supported, refuted, conflicted, blocked, exhausted, or
   unresolved.
 - [x] Exclude Discovery/task churn from substantive gain.
@@ -199,11 +208,43 @@ And run the data-owned classification scorer against `predictions.jsonl`.
 - [x] Local canary preserves provider failures as engineering errors.
 - [x] Failed cases produce no classification prediction.
 - [x] Data scorer counts missing predictions as wrong.
-- [ ] Both current-code cases complete without engineering error.
-- [ ] Both predictions are correct.
-- [ ] Both strict trace audits pass.
-- [ ] Required search, reverse-image/upload, visit, and visual tool classes succeed.
-- [ ] Canonical traces are manually inspected.
+- [x] Both committed-head cases complete without engineering error.
+- [x] Both predictions are correct.
+- [x] Both strict trace audits pass.
+- [x] Required search, reverse-image/upload, visit, and visual tool classes succeed.
+- [x] Canonical traces are manually inspected.
+
+Accepted committed-head run:
+
+```text
+run:
+D:\image-factual-verifier-runs\group-001-v3-canary-20260715-19
+
+runtime commit:
+fd305d712626a1c189433fe37a1e286f30238365
+
+predictions:
+case_509704a5a1034b2c -> fake
+case_58720a90e3ef438a -> real
+
+classification:
+2/2 correct
+Accuracy = 1.0
+Macro-F1 over observed classes = 1.0
+Fixed three-class Macro-F1 = 0.666667 because this development subset has no
+unverifiable case
+
+trace audit:
+2 passed
+0 scheduler rejections
+0 protocol rejections
+thought tokens = 0
+```
+
+The fake case reached `wrong_place` using direct NASA evidence that the ceremony was
+at Johnson Space Center rather than Kennedy Space Center. The real case used actual
+`compare_with_reference` calls and found a same-capture/near-duplicate reference for
+NOAA Ship Henry B. Bigelow.
 
 Local failed runs:
 
@@ -222,7 +263,7 @@ This is a local proxy-exit restriction, not a factual Agent result. The trace co
 records an engineering error, `predictions.jsonl` is empty, and classification scoring
 returns zero rather than accepting fake `unverifiable` rows.
 
-### gpu-13 completion command
+### gpu-13 replication command
 
 After pushing the branch and securely authenticating the existing Jupyter endpoint:
 
@@ -251,7 +292,10 @@ scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
   --json --strict-scheduler
 ```
 
-Phase E is the only runtime acceptance item still open.
+Phase E runtime acceptance is complete. gpu-13 execution remains an operational
+replication task, not a substitute for the accepted local no-mock run. Do not claim
+server replication until `jupyter_remote.py` authenticates, reports `hostname=gpu-13`,
+and runs the committed branch there.
 
 ## 8. Phase F — process evaluation
 
@@ -269,7 +313,9 @@ Phase E is the only runtime acceptance item still open.
 - [x] Include concrete fact/basis/evidence diagnostics in teacher scores.
 - [x] Score missing/engineering-error traces explicitly.
 
-Acceptance: implementation complete. Real group-001 metric acceptance follows Phase E.
+Acceptance: complete. The accepted run emitted process metrics and componentized
+teacher scores for both cases. Exact acceptable-evidence hit rate remains a diagnostic
+against frozen evaluator snapshots; it is not used to overwrite classification.
 
 ## 9. Phase G — trajectories and training preparation
 
@@ -298,11 +344,29 @@ Acceptance: implementation complete. Real group-001 metric acceptance follows Ph
 - [x] Record componentized teacher score and episode metadata.
 - [x] Add `configs/training/ifv_policy_v1.yaml`.
 - [x] Keep `training_enabled: false`.
-- [ ] Freeze a real teacher dataset from accepted live traces.
+- [x] Freeze and strictly audit a real teacher dataset from accepted live traces.
 - [ ] Demonstrate stable real canaries beyond group-001.
 
-The exporter/auditor implementation is complete. Dataset freeze remains blocked by
-Phase E and is not replaced by scripted trajectories.
+Accepted dataset:
+
+```text
+D:\image-factual-verifier-runs\group-001-v3-canary-20260715-19\policy_dataset
+```
+
+It contains 48 examples from two real episodes:
+
+```text
+react = 38
+reflection = 8
+judgment = 2
+invalid actions = 0
+fatal boundaries = 0
+strict audit errors = 0
+source runtime commit = fd305d712626a1c189433fe37a1e286f30238365
+```
+
+Because group-001 is one source-family group and only two cases, this artifact proves
+the export/audit path; it is not yet a statistically useful Student training corpus.
 
 ### G3. Student training
 
@@ -332,7 +396,7 @@ git diff --check
 Current active suite:
 
 ```text
-156 passed
+165 passed
 ```
 
 This suite intentionally removed the old claim-ledger, fixed-replanning, and
@@ -354,6 +418,8 @@ acc4e4f feat: audit image-only VisualFact traces
 3fb775a chore: retire claim-driven scripted acceptance
 2e64f50 feat: enrich process score provenance
 36c6036 refactor: remove claim-driven runtime
+11a097a docs: finalize v3 runtime contract
+fd305d7 fix: validate real image-only investigation routes
 ```
 
 ## 12. Final completion checklist
@@ -368,5 +434,7 @@ acc4e4f feat: audit image-only VisualFact traces
 - [x] Engineering errors produce no classification prediction.
 - [x] Process scoring, policy trajectories, and dataset audit.
 - [x] Claim-driven runtime and redundant legacy tests removed.
-- [ ] gpu-13 real two-case canary passes.
-- [ ] Real teacher dataset is frozen from accepted traces.
+- [x] Committed-head real two-case canary passes.
+- [x] Real teacher dataset is frozen from accepted traces.
+- [ ] Replicate the accepted commit on gpu-13 after Jupyter authentication is
+  available.
