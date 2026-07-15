@@ -313,8 +313,10 @@ scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
 Only after the canary passes should all 20 cases be launched with
 `scripts/server/start_eval_gpu13.sh`.
 
-The v3 runtime allows at most 24 real tool actions. The initial reverse-image search
-counts as action 1; structured Reflection runs after actions 4, 8, 12, 16, 20, and 24.
+The v3 runtime allows at most 24 real tool actions. Initial target Planning chooses
+the evidence target, and ReAct selects the first tool route; there is no fixed initial
+reverse-image call. Structured Reflection runs after accepted actions 4, 8, 12, 16,
+20, and 24.
 Coverage can stop earlier when all decisive facts resolve or after two consecutive
 low-gain Reflection intervals with no unattempted priority-1 task. Open-ended ReAct
 turns use a 16,384-token output budget; Reflection and Judgment use 8,192. All active

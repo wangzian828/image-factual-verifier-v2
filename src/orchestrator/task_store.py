@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, Iterator, List, Mapping, Sequence
 
 from src.orchestrator.investigation_models import (
+    AttributionOutput,
     BootstrapInvestigation,
+    FactOrigin,
     Finding,
     ImageOnlyInvestigationState,
     InvestigationDiscovery,
@@ -17,6 +20,7 @@ from src.orchestrator.investigation_models import (
     ReflectionOutput,
     ReflectionRecord,
     ResearchTask,
+    TargetPlanningOutput,
     VisualFact,
 )
 from src.orchestrator.evidence_adjudication import assess_fact
@@ -33,6 +37,7 @@ TOTAL_TASKS_MAX = 12
 NEW_TASKS_PER_REFLECTION_MAX = 3
 DECISIVE_FACTS_MAX = 6
 NEW_DECISIVE_FACTS_PER_REFLECTION_MAX = 2
+ATTRIBUTION_FACTS_PER_PASS_MAX = 2
 
 
 def stable_id(prefix: str, *parts: object) -> str:
@@ -194,6 +199,815 @@ def record_tool_observation(
             if fact.fact_id in task.fact_ids
         },
     }
+
+
+def apply_target_planning(
+    state: ImageOnlyInvestigationState,
+    output: TargetPlanningOutput,
+) -> Dict[str, Any]:
+    """Apply image-grounded investigation targets without a media-type pipeline."""
+
+    fact_by_id = {fact.fact_id: fact for fact in state.facts}
+    anchor_text = " ".join(
+        anchor.value for anchor in state.retrieval_anchors
+    )
+    accepted_fact_ids: List[str] = []
+    accepted_task_ids: List[str] = []
+    rejected_reasons: List[str] = []
+
+    for proposal in output.proposals[:3]:
+        parent_ids = list(dict.fromkeys(proposal.parent_fact_ids))
+        parents = [
+            fact_by_id[fact_id]
+            for fact_id in parent_ids
+            if fact_id in fact_by_id
+        ]
+        if len(parents) != len(parent_ids):
+            rejected_reasons.append(
+                "target proposal cites unknown parent facts"
+            )
+            continue
+        if any(
+            parent.origin.type not in {"input_image", "ocr"}
+            for parent in parents
+        ):
+            rejected_reasons.append(
+                "initial targets must be grounded in image or OCR facts"
+            )
+            continue
+        if (
+            proposal.predicate == "source_record_matches"
+            and _contains_visual_integrity_scope(
+                " ".join(
+                    (
+                        proposal.statement,
+                        proposal.question,
+                        proposal.purpose,
+                    )
+                )
+            )
+        ):
+            rejected_reasons.append(
+                "source_record_matches must test source existence/content only; "
+                "propose visual_integrity separately for pixel alteration"
+            )
+            continue
+        if (
+            proposal.predicate == "source_record_matches"
+            and not _source_record_target_preserves_visible_text(
+                proposal.statement,
+                parents,
+            )
+        ):
+            rejected_reasons.append(
+                "source_record_matches must preserve at least one distinctive "
+                "visible text anchor in the fact statement"
+            )
+            continue
+        grounding_text = " ".join(
+            [
+                *(parent.statement for parent in parents),
+                anchor_text,
+            ]
+        )
+        if not _target_text_is_grounded(
+            proposal.statement,
+            grounding_text,
+            predicate=proposal.predicate,
+        ):
+            rejected_reasons.append(
+                "target statement is not grounded in visible facts or anchors"
+            )
+            continue
+        if not _target_queries_are_grounded(
+            proposal.suggested_queries,
+            grounding_text,
+        ):
+            rejected_reasons.append(
+                "target search query introduces terms absent from visible anchors"
+            )
+            continue
+        existing = _matching_planned_target(
+            state,
+            proposal.statement,
+            proposal.predicate,
+        )
+        if existing is None:
+            if len(state.facts) >= 72:
+                rejected_reasons.append("VisualFact budget exhausted")
+                break
+            parent = parents[0]
+            basis_ids = list(
+                dict.fromkeys(
+                    [
+                        *parent_ids,
+                        *[
+                            basis_id
+                            for item in parents
+                            for basis_id in item.basis_ids
+                        ],
+                    ]
+                )
+            )[:12]
+            origin_type = (
+                "ocr"
+                if any(item.origin.type == "ocr" for item in parents)
+                else "input_image"
+            )
+            fact = VisualFact(
+                fact_id=stable_id(
+                    "vf",
+                    state.brief.case_id,
+                    "target",
+                    proposal.predicate,
+                    proposal.statement.casefold(),
+                ),
+                kind=proposal.kind,
+                statement=re.sub(
+                    r"\s+",
+                    " ",
+                    proposal.statement,
+                ).strip(),
+                subject_entity_id=parent.subject_entity_id,
+                predicate=proposal.predicate,
+                object_entity_id=parent.object_entity_id,
+                status="active",
+                basis_ids=basis_ids,
+                decision_relevance=proposal.decision_relevance,
+                origin=FactOrigin(
+                    type=origin_type,
+                    origin_ids=parent_ids[:8],
+                ),
+            )
+            state.facts.append(fact)
+            fact_by_id[fact.fact_id] = fact
+        else:
+            fact = existing
+            if proposal.decision_relevance == "decisive":
+                fact.decision_relevance = "decisive"
+
+        if proposal.decision_relevance == "decisive":
+            state.decisive_fact_ids = list(
+                dict.fromkeys(
+                    [*state.decisive_fact_ids, fact.fact_id]
+                )
+            )[:DECISIVE_FACTS_MAX]
+        task_id = stable_id(
+            "task",
+            fact.fact_id,
+            "initial-target",
+        )
+        task = next(
+            (item for item in state.tasks if item.task_id == task_id),
+            None,
+        )
+        if task is None:
+            if len(state.tasks) >= TOTAL_TASKS_MAX:
+                rejected_reasons.append("total task budget exhausted")
+                continue
+            task = ResearchTask(
+                task_id=task_id,
+                fact_ids=[fact.fact_id],
+                question=proposal.question,
+                purpose=proposal.purpose,
+                priority=1,
+                status="active",
+                parent_task_id=None,
+                origin_ids=list(
+                    dict.fromkeys([fact.fact_id, *parent_ids])
+                )[:12],
+                suggested_tools=list(
+                    dict.fromkeys(proposal.suggested_tools)
+                )[:4],
+                suggested_queries=list(
+                    dict.fromkeys(
+                        query.strip()
+                        for query in proposal.suggested_queries
+                        if query.strip()
+                    )
+                )[:3],
+            )
+            state.tasks.append(task)
+        accepted_fact_ids.append(fact.fact_id)
+        accepted_task_ids.append(task.task_id)
+
+    state.recommended_next_task_ids = list(
+        dict.fromkeys(
+            [
+                *accepted_task_ids,
+                *state.recommended_next_task_ids,
+            ]
+        )
+    )[:4]
+    return {
+        "accepted_fact_ids": list(dict.fromkeys(accepted_fact_ids)),
+        "accepted_task_ids": list(dict.fromkeys(accepted_task_ids)),
+        "rejected_reasons": rejected_reasons,
+        "remaining_target_gaps": output.remaining_target_gaps[:4],
+    }
+
+
+def _target_text_is_grounded(
+    statement: str,
+    grounding_text: str,
+    *,
+    predicate: str,
+) -> bool:
+    target = _attribution_tokens(statement)
+    grounding = _attribution_tokens(grounding_text)
+    if not target or not grounding:
+        return False
+    overlap = target & grounding
+    minimum = 1 if predicate == "visual_integrity" else 2
+    minimum_ratio = 0.05 if predicate == "visual_integrity" else 0.12
+    return len(overlap) >= minimum and (
+        len(overlap) / len(target) >= minimum_ratio
+    )
+
+
+def _contains_visual_integrity_scope(value: str) -> bool:
+    lowered = str(value or "").casefold()
+    return any(
+        token in lowered
+        for token in (
+            "unmodified",
+            "not modified",
+            "unaltered",
+            "not altered",
+            "fabricated",
+            "edited image",
+            "image is edited",
+            "image was edited",
+            "digitally fabricated",
+            "digitally manipulated",
+            "pixel manipulation",
+            "edit seam",
+            "compositing",
+        )
+    )
+
+
+def _source_record_target_preserves_visible_text(
+    statement: str,
+    parents: Sequence[VisualFact],
+) -> bool:
+    visible_anchors: list[str] = []
+    for parent in parents:
+        for value in re.findall(r'"([^"]+)"', parent.statement):
+            compact = _compact_visible_text(value)
+            if _is_distinctive_visible_text(compact):
+                visible_anchors.append(compact)
+    if not visible_anchors:
+        return True
+    rendered = _compact_visible_text(statement)
+    return any(anchor in rendered for anchor in visible_anchors)
+
+
+def _compact_visible_text(value: str) -> str:
+    return "".join(
+        char.casefold()
+        for char in str(value or "")
+        if char.isalnum() or char in {"@", "_"}
+    )
+
+
+def _is_distinctive_visible_text(value: str) -> bool:
+    if len(value) < 8:
+        return False
+    if value.startswith("@"):
+        return False
+    if re.fullmatch(r"\d+", value):
+        return False
+    return value not in {
+        "showtranslation",
+        "viewquotes",
+        "relevant",
+        "pinned",
+    }
+
+
+def _target_queries_are_grounded(
+    queries: Sequence[str],
+    grounding_text: str,
+) -> bool:
+    grounding = _attribution_tokens(grounding_text)
+    for query in queries:
+        query_tokens = _attribution_tokens(query)
+        if query_tokens and not query_tokens & grounding:
+            return False
+    return True
+
+
+def _matching_planned_target(
+    state: ImageOnlyInvestigationState,
+    statement: str,
+    predicate: str,
+) -> VisualFact | None:
+    target = _attribution_tokens(statement)
+    for fact in state.facts:
+        if fact.predicate != predicate:
+            continue
+        tokens = _attribution_tokens(fact.statement)
+        if not target or not tokens:
+            continue
+        overlap = len(target & tokens)
+        union = len(target | tokens)
+        if union and overlap / union >= 0.7:
+            return fact
+    return None
+
+
+def attribution_planning_needed(
+    state: ImageOnlyInvestigationState,
+    update: Mapping[str, Any],
+) -> bool:
+    """Return whether new public evidence may warrant a specific attribution fact."""
+
+    created_ids = {
+        str(item)
+        for key in (
+            "created_discovery_ids",
+            "created_evidence_ids",
+            "created_finding_ids",
+        )
+        for item in update.get(key, []) or []
+    }
+    if not created_ids:
+        return False
+    affected_fact_ids = {
+        fact_id
+        for item in [
+            *state.discoveries,
+            *state.evidence,
+            *state.findings,
+        ]
+        if (
+            getattr(item, "discovery_id", "")
+            or getattr(item, "evidence_id", "")
+            or getattr(item, "finding_id", "")
+        )
+        in created_ids
+        for fact_id in item.fact_ids
+    }
+    facts = {fact.fact_id: fact for fact in state.facts}
+    if affected_fact_ids and all(
+        facts.get(fact_id) is not None
+        and facts[fact_id].predicate == "visual_integrity"
+        for fact_id in affected_fact_ids
+    ):
+        return False
+    decisive = [
+        fact
+        for fact in state.facts
+        if fact.fact_id in state.decisive_fact_ids
+    ]
+    if any(fact.status == "refuted" for fact in decisive):
+        return False
+    generic_predicates = {
+        "appears_to_depict",
+        "visible_in",
+        "reads",
+        "context_suggested_by_text",
+    }
+    if any(
+        fact.fact_id in affected_fact_ids
+        and fact.predicate in generic_predicates
+        for fact in decisive
+    ):
+        return True
+    decisive_lineage = {
+        origin_id
+        for fact in decisive
+        if fact.origin.type == "web_discovery"
+        for origin_id in fact.origin.origin_ids
+    }
+    return bool(affected_fact_ids & decisive_lineage)
+
+
+def apply_attribution(
+    state: ImageOnlyInvestigationState,
+    output: AttributionOutput,
+) -> Dict[str, Any]:
+    """Validate and apply evidence-grounded web attribution fact proposals."""
+
+    fact_by_id = {fact.fact_id: fact for fact in state.facts}
+    task_by_id = {task.task_id: task for task in state.tasks}
+    discovery_by_id = {
+        item.discovery_id: item for item in state.discoveries
+    }
+    evidence_by_id = {
+        item.evidence_id: item for item in state.evidence
+    }
+    finding_by_id = {
+        item.finding_id: item for item in state.findings
+    }
+    accepted_fact_ids: List[str] = []
+    created_task_ids: List[str] = []
+    linked_evidence_ids: List[str] = []
+    linked_finding_ids: List[str] = []
+    rejected_reasons: List[str] = []
+
+    for proposal in output.proposals[:ATTRIBUTION_FACTS_PER_PASS_MAX]:
+        parent_ids = list(dict.fromkeys(proposal.parent_fact_ids))
+        parent_facts = [
+            fact_by_id[fact_id]
+            for fact_id in parent_ids
+            if fact_id in fact_by_id
+        ]
+        if len(parent_facts) != len(parent_ids):
+            rejected_reasons.append(
+                "attribution proposal cites unknown parent facts"
+            )
+            continue
+        discoveries = [
+            discovery_by_id[item]
+            for item in dict.fromkeys(proposal.discovery_ids)
+            if item in discovery_by_id
+        ]
+        evidence_rows = [
+            evidence_by_id[item]
+            for item in dict.fromkeys(proposal.evidence_ids)
+            if item in evidence_by_id
+        ]
+        findings = [
+            finding_by_id[item]
+            for item in dict.fromkeys(proposal.finding_ids)
+            if item in finding_by_id
+        ]
+        if (
+            len(discoveries) != len(set(proposal.discovery_ids))
+            or len(evidence_rows) != len(set(proposal.evidence_ids))
+            or len(findings) != len(set(proposal.finding_ids))
+        ):
+            rejected_reasons.append(
+                "attribution proposal cites unknown discovery/evidence/finding"
+            )
+            continue
+        if not discoveries and not evidence_rows and not findings:
+            rejected_reasons.append(
+                "attribution proposal has no public grounding records"
+            )
+            continue
+        central_lineage = {
+            *state.decisive_fact_ids,
+            *[
+                origin_id
+                for fact in state.facts
+                if fact.fact_id in state.decisive_fact_ids
+                and fact.origin.type == "web_discovery"
+                for origin_id in fact.origin.origin_ids
+            ],
+        }
+        if (
+            proposal.decision_relevance == "decisive"
+            and not set(parent_ids) & central_lineage
+        ):
+            rejected_reasons.append(
+                "decisive attribution must descend from the current central "
+                "fact lineage"
+            )
+            continue
+        if not _attribution_records_own_parents(
+            parent_ids,
+            discoveries,
+            evidence_rows,
+            findings,
+        ):
+            rejected_reasons.append(
+                "attribution records do not belong to the proposed parent facts"
+            )
+            continue
+        statement = re.sub(r"\s+", " ", proposal.statement).strip()
+        if not _attribution_statement_is_grounded(
+            statement,
+            discoveries,
+            evidence_rows,
+            findings,
+        ):
+            rejected_reasons.append(
+                "attribution statement is not grounded in cited public records"
+            )
+            continue
+
+        existing = _matching_attribution_fact(state, statement)
+        target_fact_id = existing.fact_id if existing is not None else ""
+        if not _attribution_link_capacity_available(
+            target_fact_id,
+            task_by_id,
+            evidence_by_id,
+            evidence_rows,
+            findings,
+        ):
+            rejected_reasons.append(
+                "attribution records have no remaining fact-link capacity"
+            )
+            continue
+        origin_ids = list(
+            dict.fromkeys(
+                [
+                    *parent_ids,
+                    *proposal.discovery_ids,
+                    *proposal.evidence_ids,
+                    *proposal.finding_ids,
+                ]
+            )
+        )
+        if existing is None:
+            if len(state.facts) >= 72:
+                rejected_reasons.append("VisualFact budget exhausted")
+                break
+            parent = parent_facts[0]
+            fact_id = stable_id(
+                "vf",
+                state.brief.case_id,
+                "attribution",
+                statement.casefold(),
+            )
+            fact = VisualFact(
+                fact_id=fact_id,
+                kind=proposal.kind,
+                statement=statement,
+                subject_entity_id=parent.subject_entity_id,
+                predicate=proposal.predicate,
+                object_entity_id=parent.object_entity_id,
+                status="active",
+                basis_ids=origin_ids[:12],
+                decision_relevance=proposal.decision_relevance,
+                origin=FactOrigin(
+                    type="web_discovery",
+                    origin_ids=origin_ids[:8],
+                ),
+            )
+            state.facts.append(fact)
+            fact_by_id[fact_id] = fact
+        else:
+            fact = existing
+            fact_id = fact.fact_id
+            fact.basis_ids = list(
+                dict.fromkeys([*fact.basis_ids, *origin_ids])
+            )[:12]
+            fact.origin.origin_ids = list(
+                dict.fromkeys([*fact.origin.origin_ids, *origin_ids])
+            )[:8]
+            if proposal.decision_relevance == "decisive":
+                fact.decision_relevance = "decisive"
+
+        owned_task_ids: set[str] = set()
+        for evidence in evidence_rows:
+            if fact_id not in evidence.fact_ids:
+                evidence.fact_ids.append(fact_id)
+                evidence.fact_ids = evidence.fact_ids[:6]
+            owned_task_ids.add(evidence.task_id)
+            linked_evidence_ids.append(evidence.evidence_id)
+        for finding in findings:
+            if fact_id not in finding.fact_ids:
+                finding.fact_ids.append(fact_id)
+                finding.fact_ids = finding.fact_ids[:6]
+            owned_task_ids.add(finding.task_id)
+            linked_finding_ids.append(finding.finding_id)
+            for evidence_id in finding.evidence_ids:
+                evidence = evidence_by_id.get(evidence_id)
+                if evidence is not None and fact_id not in evidence.fact_ids:
+                    evidence.fact_ids.append(fact_id)
+                    evidence.fact_ids = evidence.fact_ids[:6]
+                    linked_evidence_ids.append(evidence.evidence_id)
+        for task_id in owned_task_ids:
+            task = task_by_id.get(task_id)
+            if task is not None and fact_id not in task.fact_ids:
+                task.fact_ids.append(fact_id)
+                task.fact_ids = task.fact_ids[:6]
+
+        if proposal.decision_relevance == "decisive":
+            _replace_generic_decisive_parents(
+                state,
+                parent_facts,
+                fact,
+            )
+        _refresh_fact_states(state)
+        if fact.status not in {"supported", "refuted"}:
+            task_id = stable_id("task", fact_id, "verify-attribution")
+            task = task_by_id.get(task_id)
+            if task is None and len(state.tasks) < TOTAL_TASKS_MAX:
+                task = ResearchTask(
+                    task_id=task_id,
+                    fact_ids=[fact_id],
+                    question=(
+                        "What reliable original or direct source verifies or "
+                        f"refutes this image attribution: {statement}"
+                    ),
+                    purpose=(
+                        "Resolve the specific identity, event, place, creator, "
+                        "or date discovered from public source context."
+                    ),
+                    priority=1,
+                    status="active",
+                    parent_task_id=None,
+                    origin_ids=list(
+                        dict.fromkeys([fact_id, *origin_ids])
+                    )[:12],
+                    suggested_tools=[
+                        "visit",
+                        "text_search",
+                        "compare_with_reference",
+                        "reverse_image_search",
+                    ],
+                    suggested_queries=(
+                        list(dict.fromkeys(proposal.suggested_queries))[:3]
+                        or [statement[:500]]
+                    ),
+                )
+                state.tasks.append(task)
+                task_by_id[task_id] = task
+                created_task_ids.append(task_id)
+            if task is not None:
+                state.recommended_next_task_ids = list(
+                    dict.fromkeys(
+                        [task.task_id, *state.recommended_next_task_ids]
+                    )
+                )[:4]
+        else:
+            for task_id in owned_task_ids:
+                task = task_by_id.get(task_id)
+                if task is None:
+                    continue
+                task.finding_ids = list(
+                    dict.fromkeys(
+                        [
+                            *task.finding_ids,
+                            *[
+                                finding.finding_id
+                                for finding in findings
+                                if finding.task_id == task_id
+                            ],
+                        ]
+                    )
+                )[:20]
+        accepted_fact_ids.append(fact_id)
+
+    return {
+        "accepted_fact_ids": list(dict.fromkeys(accepted_fact_ids)),
+        "created_task_ids": list(dict.fromkeys(created_task_ids)),
+        "linked_evidence_ids": list(dict.fromkeys(linked_evidence_ids)),
+        "linked_finding_ids": list(dict.fromkeys(linked_finding_ids)),
+        "rejected_reasons": rejected_reasons,
+        "remaining_attribution_gaps": output.remaining_attribution_gaps[:4],
+    }
+
+
+def _attribution_records_own_parents(
+    parent_ids: Sequence[str],
+    discoveries: Sequence[InvestigationDiscovery],
+    evidence_rows: Sequence[InvestigationEvidence],
+    findings: Sequence[Finding],
+) -> bool:
+    parent_set = set(parent_ids)
+    records = [*discoveries, *evidence_rows, *findings]
+    return all(parent_set & set(item.fact_ids) for item in records)
+
+
+def _attribution_tokens(value: str) -> set[str]:
+    text = str(value or "").casefold()
+    tokens = {
+        token
+        for token in re.findall(r"[a-z0-9_@.-]+", text)
+        if token
+        not in {
+            "the",
+            "a",
+            "an",
+            "is",
+            "are",
+            "at",
+            "in",
+            "of",
+            "to",
+            "this",
+            "image",
+            "photo",
+            "photograph",
+            "shows",
+            "depicts",
+        }
+    }
+    for sequence in re.findall(r"[\u3400-\u9fff]+", text):
+        if len(sequence) == 1:
+            tokens.add(sequence)
+            continue
+        tokens.update(
+            sequence[index : index + 2]
+            for index in range(len(sequence) - 1)
+        )
+    return tokens
+
+
+def _attribution_statement_is_grounded(
+    statement: str,
+    discoveries: Sequence[InvestigationDiscovery],
+    evidence_rows: Sequence[InvestigationEvidence],
+    findings: Sequence[Finding],
+) -> bool:
+    source_text = " ".join(
+        [
+            *[
+                " ".join((item.title, item.snippet))
+                for item in discoveries
+            ],
+            *[
+                item.exact_text
+                for item in evidence_rows
+            ],
+            *[item.statement for item in findings],
+        ]
+    )
+    statement_tokens = _attribution_tokens(statement)
+    source_tokens = _attribution_tokens(source_text)
+    if not statement_tokens or not source_tokens:
+        return False
+    overlap = statement_tokens & source_tokens
+    return len(overlap) >= 2 and (
+        len(overlap) / len(statement_tokens) >= 0.25
+    )
+
+
+def _attribution_link_capacity_available(
+    target_fact_id: str,
+    task_by_id: Mapping[str, ResearchTask],
+    evidence_by_id: Mapping[str, InvestigationEvidence],
+    evidence_rows: Sequence[InvestigationEvidence],
+    findings: Sequence[Finding],
+) -> bool:
+    linked_evidence = [
+        evidence_by_id[evidence_id]
+        for finding in findings
+        for evidence_id in finding.evidence_ids
+        if evidence_id in evidence_by_id
+    ]
+    records = [
+        *evidence_rows,
+        *linked_evidence,
+        *findings,
+    ]
+    for item in records:
+        if target_fact_id and target_fact_id in item.fact_ids:
+            continue
+        if len(item.fact_ids) >= 6:
+            return False
+        task = task_by_id.get(item.task_id)
+        if task is None:
+            return False
+        if target_fact_id and target_fact_id in task.fact_ids:
+            continue
+        if len(task.fact_ids) >= 6:
+            return False
+    return True
+
+
+def _matching_attribution_fact(
+    state: ImageOnlyInvestigationState,
+    statement: str,
+) -> VisualFact | None:
+    target = _attribution_tokens(statement)
+    for fact in state.facts:
+        if fact.origin.type != "web_discovery":
+            continue
+        tokens = _attribution_tokens(fact.statement)
+        if not target or not tokens:
+            continue
+        overlap = len(target & tokens)
+        union = len(target | tokens)
+        if union and overlap / union >= 0.7:
+            return fact
+    return None
+
+
+def _replace_generic_decisive_parents(
+    state: ImageOnlyInvestigationState,
+    parent_facts: Sequence[VisualFact],
+    attribution_fact: VisualFact,
+) -> None:
+    parent_ids = {
+        fact.fact_id
+        for fact in parent_facts
+        if fact.predicate
+        in {
+            "appears_to_depict",
+            "visible_in",
+            "reads",
+            "context_suggested_by_text",
+        }
+    }
+    retained = [
+        fact_id
+        for fact_id in state.decisive_fact_ids
+        if fact_id not in parent_ids
+    ]
+    for fact in parent_facts:
+        if fact.fact_id in parent_ids:
+            fact.decision_relevance = "supporting"
+    attribution_fact.decision_relevance = "decisive"
+    state.decisive_fact_ids = list(
+        dict.fromkeys([*retained, attribution_fact.fact_id])
+    )[:DECISIVE_FACTS_MAX]
 
 
 def apply_reflection(
@@ -702,12 +1516,35 @@ def _visual_evidence_record(
         statement = str(data.get("details", "")).strip()
         if data.get("consistent") is False:
             stance = "refute"
+        elif data.get("consistent") is True:
+            stance = "support"
     elif tool_name == "analyze_visual_anomalies":
         statement = str(data.get("notes", "")).strip()
+        if not statement:
+            statement = "; ".join(
+                str(
+                    item.get("phenomenon")
+                    or item.get("reasoning")
+                    or item.get("name", "")
+                ).strip()
+                for item in data.get("anomalies", []) or []
+                if isinstance(item, Mapping)
+            ).strip()
+        if not statement and str(data.get("overall_authenticity", "")).strip():
+            statement = (
+                "The targeted visual scan reported overall_authenticity="
+                + str(data.get("overall_authenticity", "")).strip()
+                + "."
+            )
         if data.get("anomalies") and str(
             data.get("overall_authenticity", "")
         ) in {"likely_ai", "likely_manipulated"}:
             stance = "refute"
+        elif (
+            not data.get("anomalies")
+            and str(data.get("overall_authenticity", "")) == "authentic"
+        ):
+            stance = "support"
     elif tool_name == "ocr_with_position":
         statement = str(data.get("full_text", "")).strip()
     else:

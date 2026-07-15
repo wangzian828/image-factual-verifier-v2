@@ -11,14 +11,20 @@ from src.orchestrator.coverage import (
 )
 from src.orchestrator.evidence_adjudication import assess_fact
 from src.orchestrator.investigation_models import (
+    AttributionFactProposal,
+    AttributionOutput,
     FactOrigin,
     Finding,
     InvestigationEvidence,
     InvestigationSegmentOutput,
+    ImageOnlyJudgment,
     ReflectionOutput,
+    TargetFactProposal,
+    TargetPlanningOutput,
     TaskUpdate,
     VisualFact,
 )
+from src.orchestrator.pipeline import Orchestrator
 from src.orchestrator.image_only_prompts import render_react_context
 from src.orchestrator.state import (
     Entity,
@@ -27,7 +33,10 @@ from src.orchestrator.state import (
     TextRegion,
 )
 from src.orchestrator.task_store import (
+    apply_attribution,
     apply_reflection,
+    apply_target_planning,
+    attribution_planning_needed,
     next_action_boundary,
     record_tool_observation,
     state_from_bootstrap,
@@ -65,6 +74,109 @@ def _runtime_state():
     )
     state = state_from_bootstrap(
         build_bootstrap_investigation(case, perception)
+    )
+    activate_initial_decisive_facts(state)
+    return case, state
+
+
+def _screenshot_runtime_state():
+    case = ImageOnlyRuntimeCase(
+        case_id="case-screenshot-state-machine",
+        image_path="screenshot.jpg",
+        image_sha256="b" * 64,
+    )
+    perception = PerceptionReport(
+        scene_description="A screenshot of an X post and a reply.",
+        image_type="screenshot",
+        text_regions=[
+            TextRegion(
+                text="Major Tom @dingzhen47",
+                bbox_quad=[
+                    [0.1, 0.1],
+                    [0.5, 0.1],
+                    [0.5, 0.2],
+                    [0.1, 0.2],
+                ],
+                confidence=0.99,
+            ),
+            TextRegion(
+                text="学生用AI写，学校用AI查",
+                bbox_quad=[
+                    [0.1, 0.25],
+                    [0.9, 0.25],
+                    [0.9, 0.4],
+                    [0.1, 0.4],
+                ],
+                confidence=0.99,
+                language="zh",
+            ),
+            TextRegion(
+                text="5/18/25",
+                bbox_quad=[
+                    [0.1, 0.45],
+                    [0.3, 0.45],
+                    [0.3, 0.5],
+                    [0.1, 0.5],
+                ],
+                confidence=0.98,
+            ),
+        ],
+    )
+    state = state_from_bootstrap(
+        build_bootstrap_investigation(case, perception)
+    )
+    scene_fact = next(
+        fact
+        for fact in state.facts
+        if fact.predicate == "appears_to_depict"
+    )
+    text_facts = [
+        fact for fact in state.facts if fact.predicate == "reads"
+    ]
+    apply_target_planning(
+        state,
+        TargetPlanningOutput(
+            proposals=[
+                TargetFactProposal(
+                    statement=(
+                        "The visible Major Tom @dingzhen47 post text "
+                        "学生用AI写，学校用AI查 dated 5/18/25 matches an "
+                        "original public source record."
+                    ),
+                    predicate="source_record_matches",
+                    parent_fact_ids=[
+                        fact.fact_id for fact in text_facts[:3]
+                    ],
+                    question=(
+                        "Does an original public record match the visible account, "
+                        "text, date, and reply relation?"
+                    ),
+                    purpose="Resolve the visible public-record attribution.",
+                    suggested_tools=["text_search", "visit"],
+                    suggested_queries=[
+                        '"学生用AI写，学校用AI查" @dingzhen47'
+                    ],
+                ),
+                TargetFactProposal(
+                    statement=(
+                        "The visible post layout has no material manipulation "
+                        "affecting its displayed account, text, date, or reply."
+                    ),
+                    kind="internal_consistency",
+                    predicate="visual_integrity",
+                    parent_fact_ids=[scene_fact.fact_id],
+                    question=(
+                        "Are visible account, text, date, or reply elements "
+                        "materially manipulated?"
+                    ),
+                    purpose="Inspect the salient visual integrity property.",
+                    suggested_tools=[
+                        "analyze_visual_anomalies",
+                        "check_consistency",
+                    ],
+                ),
+            ]
+        ),
     )
     activate_initial_decisive_facts(state)
     return case, state
@@ -144,6 +256,664 @@ def test_discovery_is_not_evidence_and_reflection_only_reprioritizes() -> None:
     assert provenance.status == "active"
     assert "status" not in TaskUpdate.model_json_schema()["properties"]
     assert "basis_ids" not in TaskUpdate.model_json_schema()["properties"]
+
+
+def test_discovery_attribution_creates_specific_fact_and_verification_task() -> None:
+    case, state = _runtime_state()
+    parent_fact_id = state.decisive_fact_ids[0]
+    provenance = state.tasks[0]
+    update = record_tool_observation(
+        state,
+        _step(
+            task_id=provenance.task_id,
+            call_id="call-attribution-discovery",
+            tool_name="reverse_image_search",
+            result=(
+                '{"status":"success","candidate_page_urls":'
+                '["https://www.si.edu/object/reservation-scene"],'
+                '"reference_image_candidates":[],'
+                '"lens_results":[{"title":"Reservation Scene by Louise Nez, 1992",'
+                '"url":"https://www.si.edu/object/reservation-scene",'
+                '"snippet":"The Navajo pictorial weaving Reservation Scene was '
+                'created by Louise Nez in 1992.","image_url":""}],'
+                '"semantic_results":[]}'
+            ),
+        ),
+        image_sha256=case.image_sha256,
+    )
+    discovery_id = update["created_discovery_ids"][0]
+
+    applied = apply_attribution(
+        state,
+        AttributionOutput(
+            proposals=[
+                AttributionFactProposal(
+                    statement=(
+                        'The image depicts the Navajo pictorial weaving '
+                        '"Reservation Scene" created by Louise Nez in 1992.'
+                    ),
+                    predicate="identified_as",
+                    parent_fact_ids=[parent_fact_id],
+                    discovery_ids=[discovery_id],
+                    suggested_queries=[
+                        '"Reservation Scene" "Louise Nez" 1992'
+                    ],
+                )
+            ],
+            remaining_attribution_gaps=[
+                "Fetch the original collection record."
+            ],
+        ),
+    )
+
+    assert len(applied["accepted_fact_ids"]) == 1
+    assert len(applied["created_task_ids"]) == 1
+    specific = next(
+        fact
+        for fact in state.facts
+        if fact.fact_id == applied["accepted_fact_ids"][0]
+    )
+    assert specific.origin.type == "web_discovery"
+    assert specific.status == "active"
+    assert state.decisive_fact_ids == [specific.fact_id]
+    assert next(
+        fact for fact in state.facts if fact.fact_id == parent_fact_id
+    ).decision_relevance == "supporting"
+    verification_task = next(
+        task
+        for task in state.tasks
+        if task.task_id == applied["created_task_ids"][0]
+    )
+    assert verification_task.fact_ids == [specific.fact_id]
+    assert verification_task.priority == 1
+
+
+def test_official_evidence_supports_promoted_attribution_fact() -> None:
+    import json
+
+    case, state = _runtime_state()
+    parent_fact_id = state.decisive_fact_ids[0]
+    provenance = state.tasks[0]
+    statement = (
+        'The Smithsonian collection record identifies "Reservation Scene" as '
+        "a 1992 Navajo pictorial weaving by Louise Nez."
+    )
+    update = record_tool_observation(
+        state,
+        _step(
+            task_id=provenance.task_id,
+            call_id="call-attribution-evidence",
+            tool_name="visit",
+            result=json.dumps(
+                {
+                    "status": "success",
+                    "selected_url": (
+                        "https://www.si.edu/object/reservation-scene"
+                    ),
+                    "url": "https://www.si.edu/object/reservation-scene",
+                    "evidence": statement,
+                    "summary": statement,
+                    "relevance": "high",
+                    "stance": "support",
+                    "directness": "direct",
+                    "temporal_alignment": "not_applicable",
+                    "artifact_sha256": "f" * 64,
+                    "evidence_span": {
+                        "start": 0,
+                        "end": len(statement),
+                    },
+                    "retrieved_at": datetime.now(
+                        timezone.utc
+                    ).isoformat(),
+                    "injection_flags": [],
+                    "evidence_eligible": True,
+                }
+            ),
+        ),
+        image_sha256=case.image_sha256,
+    )
+    applied = apply_attribution(
+        state,
+        AttributionOutput(
+            proposals=[
+                AttributionFactProposal(
+                    statement=(
+                        'The image depicts the Navajo pictorial weaving '
+                        '"Reservation Scene" created by Louise Nez in 1992.'
+                    ),
+                    predicate="identified_as",
+                    parent_fact_ids=[parent_fact_id],
+                    evidence_ids=update["created_evidence_ids"],
+                    finding_ids=update["created_finding_ids"],
+                )
+            ]
+        ),
+    )
+
+    specific_id = applied["accepted_fact_ids"][0]
+    specific = next(
+        fact for fact in state.facts if fact.fact_id == specific_id
+    )
+    assert specific.status == "supported"
+    assert state.decisive_fact_ids == [specific_id]
+    assert all(
+        specific_id in item.fact_ids
+        for item in state.evidence
+        if item.evidence_id in update["created_evidence_ids"]
+    )
+    assert all(
+        specific_id in item.fact_ids
+        for item in state.findings
+        if item.finding_id in update["created_finding_ids"]
+    )
+    verdict, basis = compile_verdict_basis(state)
+    assert verdict == "real"
+    assert basis.fact_ids == [specific_id]
+
+
+def test_attribution_rejects_unknown_or_ungrounded_records() -> None:
+    case, state = _runtime_state()
+    provenance = state.tasks[0]
+    update = record_tool_observation(
+        state,
+        _step(
+            task_id=provenance.task_id,
+            call_id="call-weak-discovery",
+            tool_name="text_search",
+            result=(
+                '{"status":"success","queries":[{"results":['
+                '{"title":"NOAA vessel","url":"https://www.noaa.gov/vessel",'
+                '"snippet":"A NOAA research vessel."}]}]}'
+            ),
+        ),
+        image_sha256=case.image_sha256,
+    )
+    parent_fact_id = state.decisive_fact_ids[0]
+
+    unknown = apply_attribution(
+        state,
+        AttributionOutput(
+            proposals=[
+                AttributionFactProposal(
+                    statement="The image depicts an unrelated lunar ceremony.",
+                    parent_fact_ids=[parent_fact_id],
+                    discovery_ids=["discovery-does-not-exist"],
+                )
+            ]
+        ),
+    )
+    ungrounded = apply_attribution(
+        state,
+        AttributionOutput(
+            proposals=[
+                AttributionFactProposal(
+                    statement="The image depicts an unrelated lunar ceremony.",
+                    parent_fact_ids=[parent_fact_id],
+                    discovery_ids=update["created_discovery_ids"],
+                )
+            ]
+        ),
+    )
+
+    assert not unknown["accepted_fact_ids"]
+    assert "unknown discovery/evidence/finding" in unknown["rejected_reasons"][0]
+    assert not ungrounded["accepted_fact_ids"]
+    assert "not grounded" in ungrounded["rejected_reasons"][0]
+
+
+def test_duplicate_attribution_updates_existing_fact() -> None:
+    case, state = _runtime_state()
+    provenance = state.tasks[0]
+    parent_fact_id = state.decisive_fact_ids[0]
+    update = record_tool_observation(
+        state,
+        _step(
+            task_id=provenance.task_id,
+            call_id="call-duplicate-attribution",
+            tool_name="text_search",
+            result=(
+                '{"status":"success","queries":[{"results":['
+                '{"title":"NOAA Ship Henry B. Bigelow",'
+                '"url":"https://www.noaa.gov/ship",'
+                '"snippet":"The image shows NOAA Ship Henry B. Bigelow."}]}]}'
+            ),
+        ),
+        image_sha256=case.image_sha256,
+    )
+    proposal = AttributionOutput(
+        proposals=[
+            AttributionFactProposal(
+                statement="The image shows NOAA Ship Henry B. Bigelow.",
+                parent_fact_ids=[parent_fact_id],
+                discovery_ids=update["created_discovery_ids"],
+            )
+        ]
+    )
+
+    first = apply_attribution(state, proposal)
+    fact_count = len(state.facts)
+    second = apply_attribution(state, proposal)
+
+    assert first["accepted_fact_ids"] == second["accepted_fact_ids"]
+    assert len(state.facts) == fact_count
+
+
+def test_peripheral_discovery_does_not_trigger_decisive_attribution() -> None:
+    case, state = _runtime_state()
+    peripheral_task = next(
+        task
+        for task in state.tasks
+        if not any(
+            fact_id in state.decisive_fact_ids
+            for fact_id in task.fact_ids
+        )
+    )
+    parent_fact_id = peripheral_task.fact_ids[0]
+    update = record_tool_observation(
+        state,
+        _step(
+            task_id=peripheral_task.task_id,
+            call_id="call-peripheral-discovery",
+            tool_name="text_search",
+            result=(
+                '{"status":"success","queries":[{"results":['
+                '{"title":"Peripheral profile picture",'
+                '"url":"https://example.org/profile",'
+                '"snippet":"A side-object profile picture."}]}]}'
+            ),
+        ),
+        image_sha256=case.image_sha256,
+    )
+
+    assert not attribution_planning_needed(state, update)
+    applied = apply_attribution(
+        state,
+        AttributionOutput(
+            proposals=[
+                AttributionFactProposal(
+                    statement="The side object is a peripheral profile picture.",
+                    parent_fact_ids=[parent_fact_id],
+                    discovery_ids=update["created_discovery_ids"],
+                    decision_relevance="decisive",
+                )
+            ]
+        ),
+    )
+    assert not applied["accepted_fact_ids"]
+    assert "current central fact lineage" in applied[
+        "rejected_reasons"
+    ][0]
+
+
+def test_original_social_post_can_support_its_own_source_record_match() -> None:
+    import json
+
+    case, state = _screenshot_runtime_state()
+    source_task = next(
+        task
+        for task in state.tasks
+        if "public-record attribution" in task.purpose
+    )
+    parent_fact_id = next(
+        fact_id
+        for fact_id in source_task.fact_ids
+        if fact_id in state.decisive_fact_ids
+    )
+    statement = (
+        "Major Tom @dingzhen47 posted 学生用AI写，学校用AI查 on "
+        "May 18, 2025, with the displayed reply thread."
+    )
+    update = record_tool_observation(
+        state,
+        _step(
+            task_id=source_task.task_id,
+            call_id="call-x-original-post",
+            tool_name="visit",
+            result=json.dumps(
+                {
+                    "status": "success",
+                    "selected_url": (
+                        "https://x.com/dingzhen47/status/1923790000000000000"
+                    ),
+                    "url": (
+                        "https://x.com/dingzhen47/status/1923790000000000000"
+                    ),
+                    "evidence": statement,
+                    "summary": statement,
+                    "relevance": "high",
+                    "stance": "support",
+                    "directness": "direct",
+                    "temporal_alignment": "not_applicable",
+                    "artifact_sha256": "1" * 64,
+                    "evidence_span": {
+                        "start": 0,
+                        "end": len(statement),
+                    },
+                    "retrieved_at": datetime.now(
+                        timezone.utc
+                    ).isoformat(),
+                    "injection_flags": [],
+                    "evidence_eligible": True,
+                }
+            ),
+        ),
+        image_sha256=case.image_sha256,
+    )
+    source_fact = next(
+        fact
+        for fact in state.facts
+        if fact.fact_id == parent_fact_id
+    )
+    assert source_fact.status == "supported"
+    assert next(
+        evidence
+        for evidence in state.evidence
+        if evidence.evidence_id in update["created_evidence_ids"]
+    ).source_class == "ugc"
+
+
+def test_current_mutable_social_metadata_cannot_refute_older_source_record() -> None:
+    import json
+
+    case, state = _screenshot_runtime_state()
+    source_task = next(
+        task
+        for task in state.tasks
+        if "public-record attribution" in task.purpose
+    )
+    source_fact = next(
+        fact
+        for fact in state.facts
+        if fact.fact_id in source_task.fact_ids
+    )
+    statement = "The current X page displays Major Tom @dingzhen_47."
+    record_tool_observation(
+        state,
+        _step(
+            task_id=source_task.task_id,
+            call_id="call-current-mutable-handle",
+            tool_name="visit",
+            result=json.dumps(
+                {
+                    "status": "success",
+                    "selected_url": (
+                        "https://x.com/dingzhen_47/status/"
+                        "1923776560827597300"
+                    ),
+                    "url": (
+                        "https://x.com/dingzhen_47/status/"
+                        "1923776560827597300"
+                    ),
+                    "evidence": statement,
+                    "summary": statement,
+                    "relevance": "high",
+                    "stance": "refute",
+                    "directness": "direct",
+                    "temporal_alignment": "not_applicable",
+                    "artifact_sha256": "2" * 64,
+                    "evidence_span": {
+                        "start": 0,
+                        "end": len(statement),
+                    },
+                    "retrieved_at": datetime.now(
+                        timezone.utc
+                    ).isoformat(),
+                    "injection_flags": [],
+                    "evidence_eligible": True,
+                }
+            ),
+        ),
+        image_sha256=case.image_sha256,
+    )
+
+    assert source_fact.status == "active"
+
+
+def test_related_reply_cannot_support_the_original_source_record() -> None:
+    import json
+
+    case, state = _screenshot_runtime_state()
+    source_task = next(
+        task
+        for task in state.tasks
+        if "public-record attribution" in task.purpose
+    )
+    source_fact = next(
+        fact
+        for fact in state.facts
+        if fact.fact_id in source_task.fact_ids
+    )
+    statement = (
+        "@dingzhen_47 并非，学生用ai写会有一种自己真的在写什么的错觉。"
+        "所以除非你用假几把插飞机杯也能出来。"
+    )
+    record_tool_observation(
+        state,
+        _step(
+            task_id=source_task.task_id,
+            call_id="call-related-reply",
+            tool_name="visit",
+            result=json.dumps(
+                {
+                    "status": "success",
+                    "selected_url": (
+                        "https://x.com/shuiyu_kiger/status/"
+                        "1924132199408038381"
+                    ),
+                    "url": (
+                        "https://x.com/shuiyu_kiger/status/"
+                        "1924132199408038381"
+                    ),
+                    "evidence": statement,
+                    "summary": statement,
+                    "relevance": "high",
+                    "stance": "support",
+                    "directness": "direct",
+                    "temporal_alignment": "before_or_at_cutoff",
+                    "artifact_sha256": "5" * 64,
+                    "evidence_span": {
+                        "start": 0,
+                        "end": len(statement),
+                    },
+                    "retrieved_at": datetime.now(
+                        timezone.utc
+                    ).isoformat(),
+                    "injection_flags": [],
+                    "evidence_eligible": True,
+                }
+            ),
+        ),
+        image_sha256=case.image_sha256,
+    )
+
+    assert source_fact.status == "active"
+
+
+def test_temporally_aligned_social_record_can_refute_source_match() -> None:
+    import json
+
+    case, state = _screenshot_runtime_state()
+    source_task = next(
+        task
+        for task in state.tasks
+        if "public-record attribution" in task.purpose
+    )
+    source_fact = next(
+        fact
+        for fact in state.facts
+        if fact.fact_id in source_task.fact_ids
+    )
+    statement = (
+        "An archived May 18, 2025 record for the post text "
+        "学生用AI写，学校用AI查 displays Major Tom @dingzhen_47."
+    )
+    record_tool_observation(
+        state,
+        _step(
+            task_id=source_task.task_id,
+            call_id="call-archived-handle",
+            tool_name="visit",
+            result=json.dumps(
+                {
+                    "status": "success",
+                    "selected_url": (
+                        "https://x.com/dingzhen_47/status/"
+                        "1923776560827597300"
+                    ),
+                    "url": (
+                        "https://x.com/dingzhen_47/status/"
+                        "1923776560827597300"
+                    ),
+                    "evidence": statement,
+                    "summary": statement,
+                    "relevance": "high",
+                    "stance": "refute",
+                    "directness": "direct",
+                    "temporal_alignment": "before_or_at_cutoff",
+                    "artifact_sha256": "3" * 64,
+                    "evidence_span": {
+                        "start": 0,
+                        "end": len(statement),
+                    },
+                    "retrieved_at": datetime.now(
+                        timezone.utc
+                    ).isoformat(),
+                    "injection_flags": [],
+                    "evidence_eligible": True,
+                }
+            ),
+        ),
+        image_sha256=case.image_sha256,
+    )
+
+    assert source_fact.status == "refuted"
+
+
+def test_adjacent_date_with_unknown_timezone_cannot_refute_source_match() -> None:
+    import json
+
+    case, state = _screenshot_runtime_state()
+    source_task = next(
+        task
+        for task in state.tasks
+        if "public-record attribution" in task.purpose
+    )
+    source_fact = next(
+        fact
+        for fact in state.facts
+        if fact.fact_id in source_task.fact_ids
+    )
+    statement = "4:24 PM · May 17, 2025 529.6K Views"
+    record_tool_observation(
+        state,
+        _step(
+            task_id=source_task.task_id,
+            call_id="call-timezone-ambiguous-date",
+            tool_name="visit",
+            result=json.dumps(
+                {
+                    "status": "success",
+                    "selected_url": (
+                        "https://x.com/dingzhen_47/status/"
+                        "1923776560827597300"
+                    ),
+                    "url": (
+                        "https://x.com/dingzhen_47/status/"
+                        "1923776560827597300"
+                    ),
+                    "evidence": statement,
+                    "summary": statement,
+                    "relevance": "high",
+                    "stance": "refute",
+                    "directness": "direct",
+                    "temporal_alignment": "before_or_at_cutoff",
+                    "artifact_sha256": "4" * 64,
+                    "evidence_span": {
+                        "start": 0,
+                        "end": len(statement),
+                    },
+                    "retrieved_at": datetime.now(
+                        timezone.utc
+                    ).isoformat(),
+                    "injection_flags": [],
+                    "evidence_eligible": True,
+                }
+            ),
+        ),
+        image_sha256=case.image_sha256,
+    )
+
+    assert source_fact.status == "active"
+
+
+def test_visible_integrity_fact_is_resolved_by_targeted_anomaly_scan() -> None:
+    import json
+
+    case, state = _screenshot_runtime_state()
+    integrity_task = next(
+        task
+        for task in state.tasks
+        if "visual integrity property" in task.purpose
+    )
+    integrity_fact = next(
+        fact
+        for fact in state.facts
+        if fact.fact_id in integrity_task.fact_ids
+    )
+    update = record_tool_observation(
+        state,
+        _step(
+            task_id=integrity_task.task_id,
+            call_id="call-screenshot-integrity",
+            tool_name="analyze_visual_anomalies",
+            result=json.dumps(
+                {
+                    "status": "success",
+                    "focus_areas": [
+                        "author, account, text, date, and reply layout"
+                    ],
+                    "anomalies": [],
+                    "overall_authenticity": "authentic",
+                    "confidence": 0.86,
+                    "notes": (
+                        "Typography, spacing, icon alignment, and reply layout "
+                        "are internally consistent with no visible edit seam."
+                    ),
+                }
+            ),
+        ),
+        image_sha256=case.image_sha256,
+    )
+
+    assert update["created_finding_ids"]
+    assert integrity_fact.status == "supported"
+
+
+def test_budget_exhaustion_is_reported_as_incomplete_not_high_confidence() -> None:
+    _, state = _runtime_state()
+    state.stop_reason = "hard_budget_exhausted"
+    judgment = ImageOnlyJudgment(
+        verdict="unverifiable",
+        confidence=0.94,
+        selected_fact_ids=list(state.decisive_fact_ids),
+        selected_finding_ids=[],
+        selected_evidence_ids=[],
+        overall_assessment="The remaining fact was not resolved.",
+        unresolved_gaps=["Decisive source evidence is absent."],
+    )
+
+    normalized = Orchestrator._normalize_incomplete_judgment(
+        state,
+        judgment,
+    )
+
+    assert normalized.confidence == 0.65
+    assert normalized.overall_assessment.startswith(
+        "Investigation incomplete:"
+    )
+    assert Orchestrator._investigation_status(state) == (
+        "incomplete_budget_exhausted"
+    )
 
 
 def test_semantic_reverse_match_preserves_reference_and_is_rendered() -> None:

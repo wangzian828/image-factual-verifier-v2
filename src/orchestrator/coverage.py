@@ -24,7 +24,11 @@ def activate_initial_decisive_facts(
 ) -> List[str]:
     """Activate up to three central, routed facts before the first Reflection."""
 
-    if state.decisive_fact_ids:
+    if state.decisive_fact_ids and not all(
+        fact.predicate == "visual_integrity"
+        for fact in state.facts
+        if fact.fact_id in state.decisive_fact_ids
+    ):
         return list(state.decisive_fact_ids)
     task_priority = {
         fact_id: min(
@@ -57,6 +61,11 @@ def activate_initial_decisive_facts(
         fact for fact in candidates if fact.predicate == "appears_to_depict"
     ]
     selected = scene_candidates[:1] or candidates[:3]
+    selected = [
+        fact
+        for fact in selected
+        if fact.fact_id not in state.decisive_fact_ids
+    ]
     for fact in selected:
         fact.decision_relevance = "decisive"
         if fact.status == "candidate":

@@ -18,18 +18,24 @@ from src.orchestrator.coverage import (
 )
 from src.orchestrator.runtime_case import verify_case_image
 from src.orchestrator.image_only_prompts import (
+    ATTRIBUTION_SYSTEM_PROMPT as IMAGE_ONLY_ATTRIBUTION_PROMPT,
     JUDGMENT_SYSTEM_PROMPT as IMAGE_ONLY_JUDGMENT_PROMPT,
     REACT_SYSTEM_PROMPT as IMAGE_ONLY_REACT_PROMPT,
     REFLECTION_SYSTEM_PROMPT as IMAGE_ONLY_REFLECTION_PROMPT,
+    TARGET_PLANNING_SYSTEM_PROMPT as IMAGE_ONLY_TARGET_PLANNING_PROMPT,
+    render_attribution_context as render_image_only_attribution_context,
     render_judgment_context as render_image_only_judgment_context,
     render_react_context as render_image_only_react_context,
     render_reflection_context as render_image_only_reflection_context,
+    render_target_planning_context as render_image_only_target_planning_context,
 )
 from src.orchestrator.investigation_models import (
+    AttributionOutput,
     ImageOnlyInvestigationState,
     ImageOnlyJudgment,
     InvestigationSegmentOutput,
     ReflectionOutput,
+    TargetPlanningOutput,
 )
 from src.orchestrator.llm_backend import APIBackend
 from src.orchestrator.stage_runner import StageRunner, StageStep
@@ -52,10 +58,12 @@ from src.orchestrator.tool_result import parse_tool_result, serialize_tool_resul
 from src.orchestrator.task_store import (
     MAX_TOOL_ACTIONS,
     REFLECTION_INTERVAL,
+    apply_attribution,
     apply_reflection,
+    apply_target_planning,
+    attribution_planning_needed,
     next_action_boundary,
     record_tool_observation,
-    stable_id,
     state_from_bootstrap,
 )
 from src.storage import default_tool_cache_dir
@@ -265,13 +273,11 @@ class Orchestrator:
             investigation = state_from_bootstrap(bootstrap)
             state.investigation_state = investigation
             self._sync_image_only_state(state, investigation)
-            activate_initial_decisive_facts(investigation)
-            await self._run_image_only_bootstrap_search(
+            await self._run_image_only_target_planning(
                 state,
                 investigation,
-                image_path,
-                runtime_case,
             )
+            activate_initial_decisive_facts(investigation)
             await self._run_image_only_investigation(
                 state,
                 investigation,
@@ -291,6 +297,10 @@ class Orchestrator:
                 coverage,
                 compiled_verdict,
                 basis,
+            )
+            judgment = self._normalize_incomplete_judgment(
+                investigation,
+                judgment,
             )
             investigation.judgment = judgment
             state.judgment = judgment  # type: ignore[assignment]
@@ -312,6 +322,8 @@ class Orchestrator:
             "verdict": judgment.verdict,
             "confidence": judgment.confidence,
             "overall_assessment": judgment.overall_assessment,
+            "investigation_status": self._investigation_status(investigation),
+            "verification_layers": self._verification_layers(investigation),
             "verdict_basis": basis.model_dump(mode="json"),
             "state": state.to_dict(),
             "termination": state.termination,
@@ -344,63 +356,41 @@ class Orchestrator:
                     )
                 )
 
-    async def _run_image_only_bootstrap_search(
+    async def _run_image_only_target_planning(
         self,
         state: VerificationState,
         investigation: ImageOnlyInvestigationState,
-        image_path: str,
-        runtime_case: ImageOnlyRuntimeCase,
     ) -> None:
-        """Always run one initial reverse-image search as Discovery only."""
+        """Let the policy induce bounded factual targets from visible state."""
 
-        if "reverse_image_search" not in self.all_tools:
-            raise RuntimeError(
-                "Required image-only tool 'reverse_image_search' is unavailable."
-            )
-        provenance_task = next(
-            (
-                task
-                for task in investigation.tasks
-                if "earliest verifiable public context" in task.question
+        runner = StageRunner(
+            llm=self.llm,
+            system_prompt=self._sp(IMAGE_ONLY_TARGET_PLANNING_PROMPT),
+            tools=[],
+            output_schema=TargetPlanningOutput,
+            max_rounds=1,
+            stage_name="image_only_planning",
+            attach_image=False,
+            output_validator=lambda parsed, _steps: (
+                self._validate_image_only_target_planning(
+                    investigation,
+                    parsed,
+                )
             ),
-            investigation.tasks[0] if investigation.tasks else None,
-        )
-        if provenance_task is None:
-            raise RuntimeError("image-only bootstrap produced no ResearchTask")
-        serialized, metadata = await self._execute_tool(
-            "reverse_image_search",
-            {"image_input": image_path},
-            image_path,
-        )
-        step = StageStep(
-            round=1,
-            stage_name="image_only_investigation",
-            action_type="tool_call",
-            tool_name="reverse_image_search",
-            tool_args={
-                "image_input": image_path,
-                "task_id": provenance_task.task_id,
-                "__question_id": provenance_task.task_id,
-            },
-            tool_result=serialized,
-            metadata={
-                "stage": "image_only_investigation",
-                "bootstrap_discovery": True,
-                "function_call_id": stable_id(
-                    "call",
-                    runtime_case.case_id,
-                    "bootstrap-reverse-image-search",
-                ),
-                **metadata,
+            max_output_tokens=self._stage_output_tokens("PLANNING", 8192),
+            generation_config={
+                "thinking_level": self._stage_thinking_level("PLANNING")
             },
         )
-        update = record_tool_observation(
-            investigation,
-            step,
-            image_sha256=runtime_case.image_sha256,
+        parsed, steps = await runner.run(
+            render_image_only_target_planning_context(investigation)
         )
-        step.metadata["investigation_state_update"] = update
-        self._record_stage_steps(state, [step])
+        self._record_stage_steps(state, steps)
+        if parsed is None:
+            raise RuntimeError(
+                "image-only target planning did not produce valid output"
+            )
+        apply_target_planning(investigation, parsed)
         self._sync_image_only_state(state, investigation)
 
     async def _run_image_only_investigation(
@@ -415,6 +405,7 @@ class Orchestrator:
         prior_finding_count = len(investigation.findings)
         prior_fact_signature = self._image_only_fact_signature(investigation)
         while not investigation.stop_reason:
+            attribution_pending = False
             self._check_timeout(started, state)
             if investigation.action_count >= MAX_TOOL_ACTIONS:
                 audit_coverage(investigation)
@@ -444,14 +435,23 @@ class Orchestrator:
                 step: StageStep,
                 _steps: List[StageStep],
             ) -> Dict[str, Any]:
+                nonlocal attribution_pending
                 update = record_tool_observation(
                     investigation,
                     step,
                     image_sha256=runtime_case.image_sha256,
                 )
+                if attribution_planning_needed(investigation, update):
+                    attribution_pending = True
                 if (
                     not investigation.stop_reason
                     and verdict_is_determined(investigation)
+                    and (
+                        self._image_only_has_refuted_decisive_fact(
+                            investigation
+                        )
+                        or not attribution_pending
+                    )
                 ):
                     audit_coverage(investigation)
                 self._sync_image_only_state(state, investigation)
@@ -478,6 +478,7 @@ class Orchestrator:
                 tool_call_limits=self.verification_tool_limits,
                 should_stop=lambda _steps: (
                     bool(investigation.stop_reason)
+                    or attribution_pending
                     or investigation.action_count >= segment_stop_action
                 ),
                 min_tool_calls=1,
@@ -543,6 +544,12 @@ class Orchestrator:
                 raise RuntimeError(
                     "image-only ReAct segment did not produce valid structured output"
                 )
+            if attribution_pending and not investigation.stop_reason:
+                await self._run_image_only_attribution(
+                    state,
+                    investigation,
+                )
+                audit_coverage(investigation)
             self._sync_image_only_state(state, investigation)
 
             if (
@@ -568,6 +575,48 @@ class Orchestrator:
                     investigation
                 )
                 self._sync_image_only_state(state, investigation)
+
+    async def _run_image_only_attribution(
+        self,
+        state: VerificationState,
+        investigation: ImageOnlyInvestigationState,
+    ) -> None:
+        """Promote public discoveries into specific facts before Coverage stops."""
+
+        if not (
+            investigation.discoveries
+            or investigation.evidence
+            or investigation.findings
+        ):
+            return
+        runner = StageRunner(
+            llm=self.llm,
+            system_prompt=self._sp(IMAGE_ONLY_ATTRIBUTION_PROMPT),
+            tools=[],
+            output_schema=AttributionOutput,
+            max_rounds=1,
+            stage_name="image_only_attribution_planning",
+            attach_image=False,
+            output_validator=lambda parsed, _steps: (
+                self._validate_image_only_attribution(
+                    investigation,
+                    parsed,
+                )
+            ),
+            max_output_tokens=self._stage_output_tokens("PLANNING", 8192),
+            generation_config={
+                "thinking_level": self._stage_thinking_level("PLANNING")
+            },
+        )
+        parsed, steps = await runner.run(
+            render_image_only_attribution_context(investigation)
+        )
+        self._record_stage_steps(state, steps)
+        if parsed is None:
+            self._sync_image_only_state(state, investigation)
+            return
+        apply_attribution(investigation, parsed)
+        self._sync_image_only_state(state, investigation)
 
     async def _run_image_only_reflection(
         self,
@@ -691,6 +740,32 @@ class Orchestrator:
         return True, ""
 
     @staticmethod
+    def _validate_image_only_target_planning(
+        investigation: ImageOnlyInvestigationState,
+        parsed: TargetPlanningOutput,
+    ) -> tuple[bool, str]:
+        candidate = investigation.model_copy(deep=True)
+        update = apply_target_planning(candidate, parsed)
+        if parsed.proposals and not update["accepted_fact_ids"]:
+            return False, "; ".join(update["rejected_reasons"]) or (
+                "target planning proposed no valid state transition"
+            )
+        return True, ""
+
+    @staticmethod
+    def _validate_image_only_attribution(
+        investigation: ImageOnlyInvestigationState,
+        parsed: AttributionOutput,
+    ) -> tuple[bool, str]:
+        candidate = investigation.model_copy(deep=True)
+        update = apply_attribution(candidate, parsed)
+        if parsed.proposals and not update["accepted_fact_ids"]:
+            return False, "; ".join(update["rejected_reasons"]) or (
+                "attribution planning proposed no valid state transition"
+            )
+        return True, ""
+
+    @staticmethod
     def _validate_image_only_judgment(
         parsed: ImageOnlyJudgment,
         *,
@@ -738,6 +813,15 @@ class Orchestrator:
         for task in investigation.tasks:
             if task.status not in {"active", "pending"}:
                 continue
+            specific_claims = [
+                facts[fact_id].statement
+                for fact_id in task.fact_ids
+                if fact_id in facts
+                and (
+                    facts[fact_id].origin.type == "web_discovery"
+                    or facts[fact_id].predicate == "visual_integrity"
+                )
+            ]
             scene_claims = [
                 facts[fact_id].statement
                 for fact_id in task.fact_ids
@@ -745,8 +829,8 @@ class Orchestrator:
                 and facts[fact_id].predicate == "appears_to_depict"
             ]
             claims[task.task_id] = (
-                " | ".join(scene_claims)
-                if scene_claims
+                " | ".join(specific_claims or scene_claims)
+                if (specific_claims or scene_claims)
                 else f"Question to resolve: {task.question}"
             )[:1800]
         return claims
@@ -760,6 +844,111 @@ class Orchestrator:
                 (fact.fact_id, fact.status)
                 for fact in investigation.facts
             )
+        )
+
+    @staticmethod
+    def _image_only_has_refuted_decisive_fact(
+        investigation: ImageOnlyInvestigationState,
+    ) -> bool:
+        decisive_ids = set(investigation.decisive_fact_ids)
+        return any(
+            fact.fact_id in decisive_ids and fact.status == "refuted"
+            for fact in investigation.facts
+        )
+
+    @staticmethod
+    def _investigation_status(
+        investigation: ImageOnlyInvestigationState,
+    ) -> str:
+        return {
+            "coverage_complete": "complete",
+            "verdict_determined": "complete",
+            "information_saturated": "bounded_unresolved",
+            "hard_budget_exhausted": "incomplete_budget_exhausted",
+        }.get(investigation.stop_reason, "incomplete")
+
+    @staticmethod
+    def _verification_layers(
+        investigation: ImageOnlyInvestigationState,
+    ) -> Dict[str, Any]:
+        source_facts = [
+            fact
+            for fact in investigation.facts
+            if fact.predicate == "source_record_matches"
+        ]
+        integrity_facts = [
+            fact
+            for fact in investigation.facts
+            if fact.predicate == "visual_integrity"
+        ]
+        if not source_facts and not integrity_facts:
+            return {}
+
+        def layer(
+            facts: Sequence[Any],
+            *,
+            unresolved_reason: str,
+        ) -> Dict[str, Any]:
+            if not facts:
+                return {
+                    "status": "not_assessed",
+                    "fact_ids": [],
+                    "reason": unresolved_reason,
+                }
+            statuses = {fact.status for fact in facts}
+            if "refuted" in statuses:
+                status = "refuted"
+            elif statuses == {"supported"}:
+                status = "supported"
+            elif "conflicted" in statuses:
+                status = "conflicted"
+            else:
+                status = "unresolved"
+            return {
+                "status": status,
+                "fact_ids": [fact.fact_id for fact in facts],
+                "reason": (
+                    "Resolved from qualified evidence."
+                    if status in {"supported", "refuted"}
+                    else unresolved_reason
+                ),
+            }
+
+        return {
+            "source_record_match": layer(
+                source_facts,
+                unresolved_reason=(
+                    "The visible account, text, date, and thread relation were "
+                    "not fully bound to an original or archived public record."
+                ),
+            ),
+            "visible_integrity": layer(
+                integrity_facts,
+                unresolved_reason=(
+                    "Visible manipulation or layout integrity was not resolved."
+                ),
+            ),
+        }
+
+    @staticmethod
+    def _normalize_incomplete_judgment(
+        investigation: ImageOnlyInvestigationState,
+        judgment: ImageOnlyJudgment,
+    ) -> ImageOnlyJudgment:
+        if investigation.stop_reason != "hard_budget_exhausted":
+            return judgment
+        prefix = (
+            "Investigation incomplete: the action budget ended before the "
+            "remaining evidence routes were resolved. "
+        )
+        assessment = judgment.overall_assessment
+        if not assessment.startswith("Investigation incomplete:"):
+            assessment = prefix + assessment
+        return judgment.model_copy(
+            update={
+                "confidence": min(judgment.confidence, 0.65),
+                "overall_assessment": assessment[:2000],
+            }
         )
 
     @staticmethod

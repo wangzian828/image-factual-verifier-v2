@@ -25,10 +25,13 @@ def test_exporter_uses_actual_policy_boundaries_and_aligned_masks(
     examples = export_policy_examples(_trace(tmp_path))
 
     assert [item.example_type for item in examples] == [
+        "planning",
         "react",
+        "planning",
+        "react",
+        "planning",
         "judgment",
     ]
-    assert not any(item.example_type == "planning" for item in examples)
     assert all(item.tokenizer_id == "utf8-byte-v1" for item in examples)
     assert all(
         len(item.policy_action_token_ids)
@@ -36,15 +39,20 @@ def test_exporter_uses_actual_policy_boundaries_and_aligned_masks(
         for item in examples
     )
     assert all(set(item.policy_action_loss_mask) == {1} for item in examples)
-    first_action = examples[0].policy_action
-    assert first_action["type"] == "tool_call"
-    assert set(first_action["arguments"]) == {
+    react_actions = [
+        item.policy_action
+        for item in examples
+        if item.example_type == "react"
+    ]
+    assert all(item["type"] == "tool_call" for item in react_actions)
+    assert set(react_actions[0]["arguments"]) == {"question_id"}
+    assert set(react_actions[1]["arguments"]) == {
         "question_id",
         "reference_url",
         "source_page_url",
         "focus",
     }
-    assert "__claim_text" not in json.dumps(first_action)
+    assert "__claim_text" not in json.dumps(react_actions)
     assert examples[-1].terminated is True
 
 
@@ -85,8 +93,16 @@ def test_process_scorer_matches_fact_evidence_and_basis(
 ) -> None:
     trace = _trace(tmp_path)
     investigation = trace["state"]["investigation_state"]
-    runtime_fact = investigation["facts"][0]
-    runtime_evidence = investigation["evidence"][0]
+    runtime_fact = next(
+        fact
+        for fact in investigation["facts"]
+        if fact["fact_id"] in trace["verdict_basis"]["fact_ids"]
+    )
+    runtime_evidence = next(
+        evidence
+        for evidence in investigation["evidence"]
+        if evidence["evidence_id"] in trace["verdict_basis"]["evidence_ids"]
+    )
     gold = {
         "case_id": trace["image_id"],
         "factual_status": "supported",

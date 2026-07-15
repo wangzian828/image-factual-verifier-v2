@@ -193,6 +193,8 @@ def _require_real_run_artifacts(
 
 
 def _command(args: argparse.Namespace) -> list[str]:
+    requested_case_ids = list(args.case_id or [])
+    effective_limit = len(requested_case_ids) if requested_case_ids else args.limit
     command = [
         sys.executable,
         "-m",
@@ -212,8 +214,10 @@ def _command(args: argparse.Namespace) -> list[str]:
         "--concurrency",
         "1",
         "--limit",
-        str(args.limit),
+        str(effective_limit),
     ]
+    for case_id in requested_case_ids:
+        command.extend(["--case-id", case_id])
     if args.source_access_policy:
         command.extend(["--source-access-policy", str(args.source_access_policy)])
     return command
@@ -227,6 +231,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--model", default="gemini-3.5-flash")
     parser.add_argument("--limit", type=int, default=2)
+    parser.add_argument(
+        "--case-id",
+        action="append",
+        default=None,
+        help=(
+            "Explicit canary case ID. Repeat for an ordered multi-case canary; "
+            "the effective limit becomes the number of selected IDs."
+        ),
+    )
     parser.add_argument("--source-access-policy", type=Path)
     return parser
 
@@ -235,6 +248,9 @@ def main(argv: Iterable[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.limit < 1:
         raise ValueError("--limit must be at least 1")
+    requested_case_ids = list(args.case_id or [])
+    if len(requested_case_ids) != len(set(requested_case_ids)):
+        raise ValueError("--case-id values must be unique")
     if args.output_dir.exists() and any(args.output_dir.iterdir()):
         raise FileExistsError(
             f"real canary output directory must be new or empty: {args.output_dir}"

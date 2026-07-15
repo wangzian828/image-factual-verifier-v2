@@ -89,7 +89,8 @@ Acceptance: complete.
 - [x] Build stable deterministic IDs.
 - [x] Create at most four initial evidence-routable tasks.
 - [x] Activate up to three central routed decisive facts.
-- [x] Run initial reverse-image search as Discovery only.
+- [x] Initially ran reverse-image search as Discovery only; Phase J supersedes the
+  fixed first route with model-driven target Planning and ReAct selection.
 - [x] Preserve both Lens and semantic-search reference-image URLs.
 - [x] Expose untested official reference images to ReAct without turning them into
   Evidence.
@@ -356,8 +357,8 @@ properties.
 - [x] Exclude evaluator-private data and scorer annotations.
 - [x] Keep model tokenizer injectable.
 - [x] Use stable `utf8-byte-v1` only as the default adapter.
-- [x] Do not fabricate a Planning target; bootstrap is deterministic.
-- [x] Reserve `planning` in the schema for a future real policy stage.
+- [x] Do not fabricate a Planning target from deterministic bootstrap.
+- [x] Export the real evidence-grounded Attribution Planning stage as `planning`.
 
 ### G2. Dataset export and audit
 
@@ -435,7 +436,7 @@ git diff --check
 Current active suite:
 
 ```text
-175 passed
+200 passed
 ```
 
 This suite intentionally removed the old claim-ledger, fixed-replanning, and
@@ -758,3 +759,58 @@ deterministic; the LLM fallback remains available for genuinely unresolved quali
 alternatives.
 
 Phase I acceptance: complete.
+
+## 15. Phase J - attribution promotion and screenshot completion
+
+The automatic-diverse-20 v4 canary and a separate personal screenshot run exposed the
+same runtime defect: retrieval found the decisive title, creator, place, event, or
+post text, but the state machine kept the original generic scene fact as decisive.
+Coverage could therefore stop on a broad visual description or search until the
+action budget ended without ever testing the recovered specific attribution.
+
+Implemented remediation:
+
+- [x] Preserve every bootstrap anchor used by a VisualFact; deduplicate only task
+  routes.
+- [x] Select committed canary cases explicitly by repeatable `--case-id`.
+- [x] Add the real `image_only_planning` Attribution stage.
+- [x] Allow Discovery to create a candidate attribution fact without treating it as
+  Evidence.
+- [x] Link later qualified Evidence and Findings to the promoted fact.
+- [x] Replace a generic decisive scene parent with the specific attribution fact.
+- [x] Prevent positive generic-scene coverage from stopping before pending
+  attribution planning.
+- [x] Deduplicate equivalent text searches across tasks when their evidence goals
+  also match.
+- [x] Add an initial model-driven target planner grounded only in visible facts,
+  entities, and OCR anchors.
+- [x] Let Planning choose text search, reverse-image search, visual comparison, or
+  integrity inspection from the proposed target rather than from a media-type branch.
+- [x] Allow Planning to separate source-record matching from visible manipulation
+  integrity when the image warrants both.
+- [x] Keep media type as context only; do not hard-code screenshot facts or a fixed
+  screenshot tool sequence.
+- [x] Allow a first-party social post to prove only that its own source record
+  exists; it remains weak evidence for external-world claims.
+- [x] Mark hard action-budget endings as `incomplete_budget_exhausted` and cap the
+  apparent confidence of that incomplete result.
+- [x] Export Attribution Planning examples for Student training.
+- [x] Pass deterministic validation and strict scripted trace audit.
+- [x] Use the personal screenshot as a diagnostic only; X/Jina degraded-access pages
+  made it unsuitable as a factual acceptance case, and it remains outside all
+  experiment/training artifacts.
+- [ ] Run one supported and one refuted v4 case on gpu-13 by explicit case ID.
+- [ ] Require correct classification, strict trace audit, recovered specific
+  decisive facts, and non-zero reference-chain recovery before the 20-case run.
+
+Deterministic validation:
+
+```text
+200 passed
+compileall passed
+git diff --check passed
+scripted photo trace strict audit passed
+scripted screenshot trace strict audit passed
+```
+
+Phase J remains incomplete until the personal and gpu-13 live runs pass.

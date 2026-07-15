@@ -19,6 +19,14 @@ class InvestigationBrief(FrozenStrictModel):
     brief_id: str = Field(min_length=1, max_length=100)
     case_id: str = Field(min_length=1, max_length=200)
     input_mode: Literal["image_only"] = "image_only"
+    media_type: Literal[
+        "photo",
+        "screenshot",
+        "document",
+        "illustration",
+        "meme",
+        "unknown",
+    ] = "photo"
     objective: str = Field(
         default=(
             "Induce, investigate, and audit image-grounded factual targets using "
@@ -265,6 +273,82 @@ class ReflectionOutput(StrictModel):
     recommended_next_task_ids: List[str] = Field(default_factory=list)
     remaining_gaps: List[str] = Field(default_factory=list)
     ready_to_finish: bool = False
+
+
+class TargetFactProposal(StrictModel):
+    statement: str = Field(min_length=1, max_length=1200)
+    kind: Literal["attribute", "relation", "internal_consistency"] = "relation"
+    predicate: Literal[
+        "source_record_matches",
+        "visual_integrity",
+        "provenance_matches",
+        "identified_as",
+        "located_at",
+        "dated_as",
+        "depicts_event",
+    ]
+    parent_fact_ids: List[str] = Field(min_length=1, max_length=12)
+    question: str = Field(min_length=1, max_length=800)
+    purpose: str = Field(min_length=1, max_length=800)
+    suggested_tools: List[
+        Literal[
+            "reverse_image_search",
+            "text_search",
+            "visit",
+            "compare_with_reference",
+            "check_consistency",
+            "analyze_visual_anomalies",
+            "crop_and_search",
+            "crop_and_inspect",
+            "count_objects",
+            "ocr_with_position",
+        ]
+    ] = Field(min_length=1, max_length=4)
+    suggested_queries: List[str] = Field(default_factory=list, max_length=3)
+    decision_relevance: Literal["supporting", "decisive"] = "decisive"
+
+
+class TargetPlanningOutput(StrictModel):
+    proposals: List[TargetFactProposal] = Field(
+        default_factory=list,
+        max_length=3,
+    )
+    remaining_target_gaps: List[str] = Field(
+        default_factory=list,
+        max_length=4,
+    )
+
+
+class AttributionFactProposal(StrictModel):
+    statement: str = Field(min_length=1, max_length=1200)
+    kind: Literal["attribute", "relation"] = "relation"
+    predicate: Literal[
+        "identified_as",
+        "attributed_as",
+        "created_by",
+        "dated_as",
+        "located_at",
+        "occurred_at",
+        "depicts_event",
+        "source_record_matches",
+    ] = "identified_as"
+    parent_fact_ids: List[str] = Field(min_length=1, max_length=3)
+    discovery_ids: List[str] = Field(default_factory=list, max_length=8)
+    evidence_ids: List[str] = Field(default_factory=list, max_length=8)
+    finding_ids: List[str] = Field(default_factory=list, max_length=8)
+    suggested_queries: List[str] = Field(default_factory=list, max_length=3)
+    decision_relevance: Literal["supporting", "decisive"] = "decisive"
+
+
+class AttributionOutput(StrictModel):
+    proposals: List[AttributionFactProposal] = Field(
+        default_factory=list,
+        max_length=2,
+    )
+    remaining_attribution_gaps: List[str] = Field(
+        default_factory=list,
+        max_length=4,
+    )
 
 
 class InvestigationSegmentOutput(StrictModel):

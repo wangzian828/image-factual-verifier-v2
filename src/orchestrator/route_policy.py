@@ -50,6 +50,9 @@ def route_signature(tool_name: str, tool_args: Mapping[str, Any]) -> dict[str, A
                 if _semantic_tokens(str(query))
             }
         )
+        signature["goal"] = " ".join(
+            _semantic_tokens(str(args.get("goal", "")))
+        )
     elif tool == "visit":
         urls = args.get("url", [])
         if isinstance(urls, str):
@@ -123,6 +126,7 @@ def routes_semantically_equivalent(
             "compare_with_reference",
             "reverse_image_search",
             "current_time",
+            "text_search",
         }
         and
         left.get("task_id")
@@ -132,10 +136,18 @@ def routes_semantically_equivalent(
         return False
     tool = left["tool"]
     if tool == "text_search":
-        return _query_sets_equivalent(
+        queries_match = _query_sets_equivalent(
             left.get("queries", []),
             right.get("queries", []),
         )
+        left_goal = str(left.get("goal", ""))
+        right_goal = str(right.get("goal", ""))
+        goals_match = (
+            not left_goal
+            or not right_goal
+            or _text_similarity(left_goal, right_goal) >= 0.5
+        )
+        return queries_match and goals_match
     if tool == "visit":
         left_urls = set(left.get("urls", []))
         right_urls = set(right.get("urls", []))

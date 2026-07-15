@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
+from datetime import date
 from typing import Iterable, Mapping, Sequence
 
 from src.orchestrator.investigation_models import (
@@ -323,7 +325,29 @@ def _evidence_score(
     stance: str,
     fact_evidence: Sequence[InvestigationEvidence],
 ) -> float:
-    if evidence.risk_flags:
+    allowed_first_party_record = (
+        fact.predicate == "source_record_matches"
+        and evidence.source_class == "ugc"
+        and set(evidence.risk_flags) <= {"user_generated_content"}
+    )
+    if evidence.risk_flags and not allowed_first_party_record:
+        return 0.0
+    if (
+        stance == "support"
+        and fact.predicate == "source_record_matches"
+        and evidence.claim_binding == "source_assertion"
+        and not _source_record_support_is_bound(fact, evidence)
+    ):
+        return 0.0
+    if (
+        stance == "refute"
+        and fact.predicate == "source_record_matches"
+        and evidence.claim_binding == "source_assertion"
+        and (
+            _is_dynamic_empty_state(evidence.exact_text)
+            or not _source_record_refute_is_bound(fact, evidence)
+        )
+    ):
         return 0.0
     score = (
         _QUALITY_SCORE.get(evidence.quality, 0.0)
@@ -340,6 +364,37 @@ def _evidence_score(
         score -= 35.0
     if evidence.confidence is not None and evidence.confidence < 0.6:
         score -= 15.0
+
+    if (
+        fact.predicate == "source_record_matches"
+        and evidence.source_class == "ugc"
+        and evidence.claim_binding == "source_assertion"
+        and evidence.directness == "direct"
+        and (
+            stance == "support"
+            or evidence.temporal_alignment.casefold()
+            in {
+                "before_or_at_cutoff",
+                "at_target_time",
+                "exact_event_time",
+            }
+        )
+    ):
+        # A first-party social post is weak evidence for claims about the
+        # outside world, but authoritative support that its own record exists.
+        # A current mutable profile is not decisive refutation of an older
+        # screenshot unless the evidence is explicitly aligned to that time.
+        score += 40.0
+
+    if (
+        stance == "refute"
+        and fact.predicate == "source_record_matches"
+        and _timezone_ambiguous_temporal_mismatch(
+            fact.statement,
+            evidence.exact_text,
+        )
+    ):
+        score = min(score, CORROBORATING_EVIDENCE_SCORE - 1.0)
 
     if stance == "support" and fact.predicate == "appears_to_depict":
         if evidence.claim_binding != "same_capture":
@@ -359,6 +414,198 @@ def _evidence_score(
             else:
                 score = min(score, CORROBORATING_EVIDENCE_SCORE - 1.0)
     return max(0.0, round(score, 3))
+
+
+def _timezone_ambiguous_temporal_mismatch(
+    target_statement: str,
+    evidence_text: str,
+) -> bool:
+    target_dates = _extract_calendar_dates(target_statement)
+    evidence_dates = _extract_calendar_dates(evidence_text)
+    if not target_dates or not evidence_dates:
+        return False
+    if not _has_clock_time(evidence_text):
+        return False
+    if _has_explicit_timezone(target_statement) and _has_explicit_timezone(
+        evidence_text
+    ):
+        return False
+    return min(
+        abs((target - observed).days)
+        for target in target_dates
+        for observed in evidence_dates
+    ) <= 1
+
+
+def _extract_calendar_dates(value: str) -> list[date]:
+    text = str(value or "")
+    dates: list[date] = []
+    for month, day, year in re.findall(
+        r"\b(1[0-2]|0?[1-9])/(3[01]|[12]\d|0?[1-9])/(\d{2,4})\b",
+        text,
+    ):
+        numeric_year = int(year)
+        if numeric_year < 100:
+            numeric_year += 2000
+        try:
+            dates.append(date(numeric_year, int(month), int(day)))
+        except ValueError:
+            continue
+    month_names = {
+        "jan": 1,
+        "january": 1,
+        "feb": 2,
+        "february": 2,
+        "mar": 3,
+        "march": 3,
+        "apr": 4,
+        "april": 4,
+        "may": 5,
+        "jun": 6,
+        "june": 6,
+        "jul": 7,
+        "july": 7,
+        "aug": 8,
+        "august": 8,
+        "sep": 9,
+        "sept": 9,
+        "september": 9,
+        "oct": 10,
+        "october": 10,
+        "nov": 11,
+        "november": 11,
+        "dec": 12,
+        "december": 12,
+    }
+    for month_name, day, year in re.findall(
+        r"\b([A-Za-z]{3,9})\s+(3[01]|[12]\d|0?[1-9]),?\s+(\d{4})\b",
+        text,
+    ):
+        month = month_names.get(month_name.casefold())
+        if month is None:
+            continue
+        try:
+            dates.append(date(int(year), month, int(day)))
+        except ValueError:
+            continue
+    return dates
+
+
+def _has_explicit_timezone(value: str) -> bool:
+    return bool(
+        re.search(
+            r"\b(?:UTC|GMT|[ECMP][SD]T)\b|[+-]\d{2}:?\d{2}\b",
+            str(value or ""),
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def _has_clock_time(value: str) -> bool:
+    return bool(
+        re.search(
+            r"\b(?:[01]?\d|2[0-3]):[0-5]\d(?:\s*[AP]M)?\b",
+            str(value or ""),
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def _source_record_support_is_bound(
+    fact: VisualFact,
+    evidence: InvestigationEvidence,
+) -> bool:
+    evidence_blob = (
+        evidence.exact_text + " " + evidence.source_url
+    ).casefold()
+    target_handles = {
+        item.casefold()
+        for item in re.findall(
+            r"@[A-Za-z0-9_]+",
+            fact.statement,
+        )
+    }
+    if target_handles and not any(
+        handle in evidence_blob for handle in target_handles
+    ):
+        return False
+    target_tokens = _binding_tokens(fact.statement)
+    evidence_tokens = _binding_tokens(evidence_blob)
+    if not target_tokens or not evidence_tokens:
+        return False
+    overlap = target_tokens & evidence_tokens
+    return len(overlap) >= 3 and (
+        len(overlap) / len(target_tokens) >= 0.25
+    )
+
+
+def _source_record_refute_is_bound(
+    fact: VisualFact,
+    evidence: InvestigationEvidence,
+) -> bool:
+    target_tokens = _binding_tokens(fact.statement)
+    evidence_tokens = _binding_tokens(evidence.exact_text)
+    if not target_tokens or not evidence_tokens:
+        return False
+    overlap = target_tokens & evidence_tokens
+    return len(overlap) >= 3 and (
+        len(overlap) / len(target_tokens) >= 0.2
+    )
+
+
+def _is_dynamic_empty_state(value: str) -> bool:
+    lowered = re.sub(r"\s+", " ", str(value or "").casefold()).strip()
+    return any(
+        phrase in lowered
+        for phrase in (
+            "hasn't posted",
+            "has not posted",
+            "no posts yet",
+            "doesn't have any posts",
+            "does not have any posts",
+            "nothing to see here",
+            "no results",
+        )
+    )
+
+
+def _binding_tokens(value: str) -> set[str]:
+    text = str(value or "").casefold()
+    tokens = {
+        token
+        for token in re.findall(r"[a-z0-9_@.-]+", text)
+        if token
+        not in {
+            "the",
+            "a",
+            "an",
+            "is",
+            "are",
+            "at",
+            "in",
+            "of",
+            "to",
+            "this",
+            "image",
+            "post",
+            "shown",
+            "matches",
+            "public",
+            "record",
+            "user",
+            "dated",
+            "on",
+        }
+    }
+    for sequence in re.findall(r"[\u3400-\u9fff]+", text):
+        if len(sequence) == 1:
+            tokens.add(sequence)
+            continue
+        tokens.update(
+            sequence[index : index + 2]
+            for index in range(len(sequence) - 1)
+        )
+    return tokens
 
 
 def _resolve_conflict(

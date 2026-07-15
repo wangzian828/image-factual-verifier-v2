@@ -106,9 +106,20 @@ def build_bootstrap_investigation(
 ) -> BootstrapInvestigation:
     """Create low-commitment, image-grounded facts and initial tasks."""
 
+    media_type = str(perception.image_type or "photo").strip().lower()
+    if media_type not in {
+        "photo",
+        "screenshot",
+        "document",
+        "illustration",
+        "meme",
+        "unknown",
+    }:
+        media_type = "unknown"
     brief = InvestigationBrief(
         brief_id=_id("brief", case.case_id, case.image_sha256),
         case_id=case.case_id,
+        media_type=media_type,
     )
     image_entity = VisualEntity(
         entity_id=_id("ve", case.case_id, "input-image"),
@@ -271,7 +282,6 @@ def build_bootstrap_investigation(
         fact_by_anchor[anchor.anchor_id] = text_fact
         relation_fact_by_anchor[anchor.anchor_id] = relation_fact
 
-    anchors = _unique_by_value(anchors)
     tasks: List[ResearchTask] = []
 
     ranked_text = sorted(
@@ -370,7 +380,7 @@ def build_bootstrap_investigation(
     entity_anchors = sorted(
         (
             anchor
-            for anchor in anchors
+            for anchor in _unique_by_value(anchors)
             if anchor.kind in {"logo", "entity"}
             and len("".join(char for char in anchor.value if char.isalnum())) >= 3
         ),

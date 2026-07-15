@@ -14,7 +14,12 @@ from test_trajectory_export import _trace
 
 def _gold_for_trace(trace: Mapping[str, Any]) -> dict[str, Any]:
     investigation = trace["state"]["investigation_state"]
-    runtime_fact = investigation["facts"][0]
+    basis_fact_id = trace["verdict_basis"]["fact_ids"][0]
+    runtime_fact = next(
+        fact
+        for fact in investigation["facts"]
+        if fact["fact_id"] == basis_fact_id
+    )
     return {
         "case_id": trace["image_id"],
         "factual_status": "supported",
@@ -71,7 +76,11 @@ def test_semantic_recovery_accepts_same_source_page_version(
 ) -> None:
     trace = _trace(tmp_path)
     investigation = trace["state"]["investigation_state"]
-    runtime_fact = investigation["facts"][0]
+    runtime_fact = next(
+        fact
+        for fact in investigation["facts"]
+        if fact["fact_id"] in trace["verdict_basis"]["fact_ids"]
+    )
     runtime_fact["status"] = "refuted"
     evidence = investigation["evidence"][0]
     evidence.update(
@@ -124,8 +133,16 @@ def test_off_chain_evidence_only_hurts_when_added_to_basis(
 ) -> None:
     trace = _trace(tmp_path)
     investigation = trace["state"]["investigation_state"]
-    runtime_fact = investigation["facts"][0]
-    task = investigation["tasks"][0]
+    runtime_fact = next(
+        fact
+        for fact in investigation["facts"]
+        if fact["fact_id"] in trace["verdict_basis"]["fact_ids"]
+    )
+    task = next(
+        item
+        for item in investigation["tasks"]
+        if runtime_fact["fact_id"] in item["fact_ids"]
+    )
     extra_evidence = copy.deepcopy(investigation["evidence"][0])
     extra_evidence.update(
         {

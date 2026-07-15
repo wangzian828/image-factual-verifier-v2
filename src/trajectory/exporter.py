@@ -109,7 +109,10 @@ def _example_type(stage: str) -> str | None:
         return "reflection"
     if stage == "image_only_judgment":
         return "judgment"
-    if stage == "image_only_planning":
+    if stage in {
+        "image_only_planning",
+        "image_only_attribution_planning",
+    }:
         return "planning"
     return None
 

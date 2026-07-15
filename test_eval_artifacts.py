@@ -246,3 +246,45 @@ def test_eval_cli_exits_nonzero_for_engineering_errors(
         raise AssertionError("engineering errors must produce a non-zero process exit")
 
     assert '"num_errors": 1' in capsys.readouterr().out
+
+
+def test_eval_selects_explicit_ordered_case_ids_before_limit() -> None:
+    samples = [
+        {"case_id": "case_a"},
+        {"case_id": "case_b"},
+        {"case_id": "case_c"},
+    ]
+
+    selected = run_eval._select_samples(
+        samples,
+        requested_case_ids=["case_c", "case_a"],
+        limit=2,
+    )
+
+    assert [item["case_id"] for item in selected] == ["case_c", "case_a"]
+
+
+def test_eval_rejects_unknown_or_duplicate_explicit_case_ids() -> None:
+    samples = [{"case_id": "case_a"}, {"case_id": "case_b"}]
+
+    try:
+        run_eval._select_samples(
+            samples,
+            requested_case_ids=["case_a", "case_a"],
+            limit=None,
+        )
+    except ValueError as exc:
+        assert "unique" in str(exc)
+    else:
+        raise AssertionError("duplicate explicit case IDs must fail")
+
+    try:
+        run_eval._select_samples(
+            samples,
+            requested_case_ids=["case_missing"],
+            limit=None,
+        )
+    except ValueError as exc:
+        assert "absent" in str(exc)
+    else:
+        raise AssertionError("unknown explicit case IDs must fail")

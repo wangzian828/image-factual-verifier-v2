@@ -55,7 +55,13 @@ def main():
     print(f"Image: {args.image_path}")
     print(f"Verdict: {result['verdict']}")
     print(f"Confidence: {result['confidence']:.2f}")
+    print(
+        "Investigation status: "
+        f"{result.get('investigation_status', 'unknown')}"
+    )
     print(f"Assessment: {result['overall_assessment']}")
+    if result.get("verification_layers"):
+        print(f"Verification layers: {result['verification_layers']}")
     print(f"Time: {result['time_taken']:.1f}s")
     print(f"Tool calls: {result['total_tool_calls']}")
     print(f"Tokens: {result['token_usage']}")

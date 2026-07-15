@@ -499,18 +499,22 @@ Initial curriculum:
 
 ```text
 perception  25%
-react       50%
-reflection  20%
+planning    10%
+react       45%
+reflection  15%
 judgment     5%
 ```
 
 Ratios are configuration, not a permanent contract. Change them only from observed
 held-out failure rates.
 
-There is no Planning SFT stage in the current runtime. Bootstrap is deterministic,
-and the exporter intentionally does not fabricate Planning targets. A learned planner
-would require a new runtime stage, schema, trace boundary, and dataset version before
-it can enter training.
+Bootstrap remains deterministic and is not exported as a fictional policy target.
+The runtime now has one real Planning target: `image_only_planning` promotes
+evidence-grounded title, creator, identity, place, date, event, or screenshot-source
+attributions into specific VisualFacts. The exporter maps this boundary to
+`example_type=planning`. Student Planning examples must retain cited public record
+IDs, and Discovery-only proposals must remain candidates until Evidence resolves
+them.
 
 ## 10. SFT implementation
 

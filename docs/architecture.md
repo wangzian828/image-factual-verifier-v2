@@ -23,11 +23,14 @@ ImageOnlyRuntimeCase
   -> EasyOCR ocr_with_position
   -> deterministic InvestigationBrief / VisualEntity / VisualFact bootstrap
   -> deterministic initial ResearchTasks (maximum 4)
+  -> model-driven target Planning grounded in visible facts and OCR
   -> smallest central decisive-fact set
-  -> initial reverse-image search (Discovery only)
   -> native Gemini Interactions ReAct
+       model selects the first evidence route
        one accepted tool call per action turn
        deterministic observation reducer after every real action
+       evidence-grounded Attribution Planning when central generic facts
+       acquire specific public context
        structured Reflection at actions 4, 8, 12, 16, 20, 24
        deterministic evidence adjudication after every action
        Coverage after Reflection and when a verdict becomes determined
@@ -36,9 +39,10 @@ ImageOnlyRuntimeCase
   -> real | fake | unverifiable
 ```
 
-The hard action budget is 24. The initial reverse-image search counts as a real action.
-Structured output, Reflection, Judgment, rejected calls, and protocol corrections do
-not count as tool actions.
+The hard action budget is 24. Every accepted ReAct tool call counts as one action;
+the first route is selected by Planning/ReAct and is not fixed to reverse-image
+search. Structured output, Planning, Reflection, Judgment, rejected calls, and
+protocol corrections do not count as tool actions.
 
 ## 3. Runtime input and isolation
 
@@ -272,9 +276,24 @@ versions and official same-capture image assets. An optional LLM judge is restri
 to qualified unresolved edges and cannot invent new evaluation targets. Off-chain
 material is neutral unless selected into the final verdict basis.
 
-`ifv-policy-v1` exports actual ReAct, Reflection, and Judgment request/action
-boundaries. Bootstrap is deterministic, so no fictional Planning example is emitted.
-The schema reserves `planning` for a future real policy stage.
+`ifv-policy-v1` exports actual Attribution Planning, ReAct, Reflection, and Judgment
+request/action boundaries. Bootstrap remains deterministic. The real
+`image_only_planning` stage promotes title, creator, identity, place, date, event, or
+screenshot-source matches from public records into specific VisualFacts; Discovery
+still remains separate from Evidence.
+
+The initial Planning stage may select multiple independent facets when the visible
+state warrants them. For example, a screenshot can yield:
+
+```text
+source record match
+visible manipulation integrity
+```
+
+The first binds visible account/text/date/thread details to an original or archived
+record. The second checks only visible editing and layout anomalies. This is a
+model-proposed plan grounded in current facts and anchors, not a hard-coded screenshot
+pipeline. Other images may produce different targets and tool routes.
 
 Only episodes that pass the explicit trajectory-quality gate are included in the
 policy dataset. Excluded episodes and reasons are preserved as metadata. The default

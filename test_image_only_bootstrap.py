@@ -8,6 +8,11 @@ from typing import Any, Dict
 import pytest
 
 from src.orchestrator.bootstrap import build_bootstrap_investigation
+from src.orchestrator.coverage import activate_initial_decisive_facts
+from src.orchestrator.investigation_models import (
+    TargetFactProposal,
+    TargetPlanningOutput,
+)
 from src.orchestrator.runtime_case import image_sha256
 from src.orchestrator.pipeline import Orchestrator
 from src.orchestrator.state import (
@@ -18,6 +23,10 @@ from src.orchestrator.state import (
 )
 from src.tools.base import BaseTool
 from src.workflow import VerificationWorkflow, WorkflowConfig
+from src.orchestrator.task_store import (
+    apply_target_planning,
+    state_from_bootstrap,
+)
 
 
 class StaticTool(BaseTool):
@@ -33,6 +42,41 @@ class StaticTool(BaseTool):
 
     def call(self, _params: Dict[str, Any]) -> Dict[str, Any]:
         return dict(self.result)
+
+
+class PlanningBoundaryBackend:
+    provider = "gemini"
+    wire_api = "interactions"
+
+    async def create_interaction(self, **kwargs: Any) -> Dict[str, Any]:
+        system = str(kwargs.get("system_instruction", ""))
+        if "initial target-planning step" in system:
+            return {
+                "id": "planning-boundary",
+                "status": "completed",
+                "usage": {
+                    "total_input_tokens": 1,
+                    "total_output_tokens": 1,
+                    "total_thought_tokens": 0,
+                },
+                "steps": [
+                    {
+                        "type": "model_output",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": json.dumps(
+                                    {
+                                        "proposals": [],
+                                        "remaining_target_gaps": [],
+                                    }
+                                ),
+                            }
+                        ],
+                    }
+                ],
+            }
+        raise RuntimeError("controlled investigation boundary")
 
 
 def _case(image_path: Path) -> ImageOnlyRuntimeCase:
@@ -120,7 +164,253 @@ def test_image_only_bootstrap_is_deterministic_grounded_and_bounded(
     assert not first.findings
 
 
-def test_image_only_workflow_persists_bootstrap_before_required_search_boundary(
+def test_duplicate_entity_names_preserve_every_fact_anchor(
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "fixture.jpg"
+    image_path.write_bytes(b"duplicate-entity-bootstrap-fixture")
+    perception = PerceptionReport(
+        scene_description="Several employees welcome a visitor.",
+        entities=[
+            Entity(
+                name="employee in green shirt",
+                entity_type="person",
+                bbox=[0.05, 0.1, 0.25, 0.9],
+                confidence=0.9,
+            ),
+            Entity(
+                name="employee in green shirt",
+                entity_type="person",
+                bbox=[0.3, 0.1, 0.5, 0.9],
+                confidence=0.88,
+            ),
+            Entity(
+                name="employee in green shirt",
+                entity_type="person",
+                bbox=[0.55, 0.1, 0.75, 0.9],
+                confidence=0.86,
+            ),
+        ],
+    )
+
+    bootstrap = build_bootstrap_investigation(
+        _case(image_path),
+        perception,
+    )
+
+    known_basis_ids = {
+        *(item.entity_id for item in bootstrap.entities),
+        *(item.anchor_id for item in bootstrap.retrieval_anchors),
+    }
+    assert all(
+        set(fact.basis_ids) <= known_basis_ids
+        for fact in bootstrap.facts
+    )
+    duplicate_anchors = [
+        item
+        for item in bootstrap.retrieval_anchors
+        if item.value == "employee in green shirt"
+    ]
+    assert len(duplicate_anchors) == 3
+    duplicate_tasks = [
+        task
+        for task in bootstrap.tasks
+        if task.suggested_queries == ["employee in green shirt"]
+    ]
+    assert len(duplicate_tasks) == 1
+
+
+def test_target_planning_dynamically_separates_source_binding_and_integrity(
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "screenshot.jpg"
+    image_path.write_bytes(b"screenshot-bootstrap-fixture")
+    perception = PerceptionReport(
+        scene_description="A screenshot of an X post with a reply below it.",
+        image_type="screenshot",
+        text_regions=[
+            TextRegion(
+                text="Major Tom @dingzhen47",
+                bbox_quad=[
+                    [0.1, 0.1],
+                    [0.5, 0.1],
+                    [0.5, 0.2],
+                    [0.1, 0.2],
+                ],
+                confidence=0.99,
+                language="en",
+            ),
+            TextRegion(
+                text="学生用AI写，学校用AI查",
+                bbox_quad=[
+                    [0.1, 0.25],
+                    [0.9, 0.25],
+                    [0.9, 0.4],
+                    [0.1, 0.4],
+                ],
+                confidence=0.99,
+                language="zh",
+            ),
+            TextRegion(
+                text="5/18/25",
+                bbox_quad=[
+                    [0.1, 0.45],
+                    [0.3, 0.45],
+                    [0.3, 0.5],
+                    [0.1, 0.5],
+                ],
+                confidence=0.98,
+                language="en",
+            ),
+        ],
+    )
+
+    bootstrap = build_bootstrap_investigation(
+        _case(image_path),
+        perception,
+    )
+    assert bootstrap.brief.media_type == "screenshot"
+    assert not any(
+        fact.predicate in {"source_record_matches", "visual_integrity"}
+        for fact in bootstrap.facts
+    )
+    state = state_from_bootstrap(bootstrap)
+    scene_fact = next(
+        fact
+        for fact in state.facts
+        if fact.predicate == "appears_to_depict"
+    )
+    text_facts = [
+        fact for fact in state.facts if fact.predicate == "reads"
+    ]
+    planned = apply_target_planning(
+        state,
+        TargetPlanningOutput(
+            proposals=[
+                TargetFactProposal(
+                    statement=(
+                        "The visible Major Tom @dingzhen47 post text "
+                        "学生用AI写，学校用AI查 dated 5/18/25 matches an "
+                        "original public source record."
+                    ),
+                    predicate="source_record_matches",
+                    parent_fact_ids=[
+                        fact.fact_id for fact in text_facts[:3]
+                    ],
+                    question=(
+                        "Does an original public record match the visible account, "
+                        "text, date, and reply relation?"
+                    ),
+                    purpose="Resolve the visible public-record attribution.",
+                    suggested_tools=["text_search", "visit"],
+                    suggested_queries=[
+                        '"学生用AI写，学校用AI查" @dingzhen47'
+                    ],
+                ),
+                TargetFactProposal(
+                    statement=(
+                        "The visible post layout has no material manipulation "
+                        "affecting its displayed account, text, date, or reply."
+                    ),
+                    kind="internal_consistency",
+                    predicate="visual_integrity",
+                    parent_fact_ids=[scene_fact.fact_id],
+                    question=(
+                        "Are visible account, text, date, or reply elements "
+                        "materially manipulated?"
+                    ),
+                    purpose="Inspect the salient visual integrity property.",
+                    suggested_tools=[
+                        "analyze_visual_anomalies",
+                        "check_consistency",
+                    ],
+                ),
+            ]
+        ),
+    )
+    assert len(planned["accepted_fact_ids"]) == 2
+    assert len(planned["accepted_task_ids"]) == 2
+    activate_initial_decisive_facts(state)
+    decisive_predicates = {
+        fact.predicate
+        for fact in state.facts
+        if fact.fact_id in state.decisive_fact_ids
+    }
+    assert decisive_predicates == {
+        "source_record_matches",
+        "visual_integrity",
+    }
+
+
+def test_source_record_target_cannot_absorb_pixel_integrity_scope(
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "screenshot.jpg"
+    image_path.write_bytes(b"target-scope-fixture")
+    perception = PerceptionReport(
+        scene_description="A screenshot of a public post.",
+        image_type="screenshot",
+        text_regions=[
+            TextRegion(
+                text="@visible_account",
+                bbox_quad=[
+                    [0.1, 0.1],
+                    [0.5, 0.1],
+                    [0.5, 0.2],
+                    [0.1, 0.2],
+                ],
+                confidence=0.99,
+            ),
+            TextRegion(
+                text="Distinctive visible post text",
+                bbox_quad=[
+                    [0.1, 0.25],
+                    [0.9, 0.25],
+                    [0.9, 0.4],
+                    [0.1, 0.4],
+                ],
+                confidence=0.99,
+            ),
+        ],
+    )
+    state = state_from_bootstrap(
+        build_bootstrap_investigation(_case(image_path), perception)
+    )
+    text_facts = [
+        fact for fact in state.facts if fact.predicate == "reads"
+    ]
+
+    update = apply_target_planning(
+        state,
+        TargetPlanningOutput(
+            proposals=[
+                TargetFactProposal(
+                    statement=(
+                        "The visible @visible_account post matches a public "
+                        "source record."
+                    ),
+                    predicate="source_record_matches",
+                    parent_fact_ids=[
+                        fact.fact_id for fact in text_facts
+                    ],
+                    question=(
+                        "Does the source record match, and is the image unmodified?"
+                    ),
+                    purpose="Detect whether the image was digitally fabricated.",
+                    suggested_tools=["text_search", "visit"],
+                    suggested_queries=['"Distinctive visible post text"'],
+                )
+            ]
+        ),
+    )
+
+    assert not update["accepted_fact_ids"]
+    assert "propose visual_integrity separately" in update[
+        "rejected_reasons"
+    ][0]
+
+
+def test_image_only_workflow_persists_bootstrap_before_investigation_boundary(
     tmp_path: Path,
 ) -> None:
     image_path = tmp_path / "fixture.jpg"
@@ -139,6 +429,7 @@ def test_image_only_workflow_persists_bootstrap_before_required_search_boundary(
         validate_startup=False,
     )
     orchestrator.vlm_provider = "controlled"
+    orchestrator.llm = PlanningBoundaryBackend()
     orchestrator.all_tools = {
         "perceive_scene": StaticTool(
             "perceive_scene",
@@ -185,10 +476,7 @@ def test_image_only_workflow_persists_bootstrap_before_required_search_boundary(
     }
     workflow._orchestrator = orchestrator
 
-    with pytest.raises(
-        RuntimeError,
-        match="reverse_image_search.*unavailable",
-    ):
+    with pytest.raises(RuntimeError, match="controlled investigation boundary"):
         asyncio.run(
             workflow.run_single(
                 str(image_path),
@@ -218,10 +506,19 @@ def test_image_only_workflow_persists_bootstrap_before_required_search_boundary(
     assert state["retrieval_anchors"]
     assert state["findings"] == []
     assert state["total_tool_calls"] == 2
-    assert [step["tool_name"] for step in state["all_steps"]] == [
+    assert [
+        step["tool_name"]
+        for step in state["all_steps"]
+        if step["tool_name"]
+    ] == [
         "perceive_scene",
         "ocr_with_position",
     ]
+    assert any(
+        step["stage"] == "image_only_planning"
+        and step["action_type"] == "output"
+        for step in state["all_steps"]
+    )
 
 
 def test_batch_preserves_each_case_error_artifacts() -> None:

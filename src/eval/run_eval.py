@@ -95,6 +95,15 @@ def _parse_args() -> argparse.Namespace:
         help="Optional sample limit for debugging.",
     )
     parser.add_argument(
+        "--case-id",
+        action="append",
+        default=None,
+        help=(
+            "Run only this case_id. Repeat to select an explicit ordered canary "
+            "set without exposing labels to the Agent."
+        ),
+    )
+    parser.add_argument(
         "--source-access-policy",
         default=None,
         help=(
@@ -287,6 +296,40 @@ def _private_index(
     return indexed
 
 
+def _select_samples(
+    samples: List[Dict[str, Any]],
+    *,
+    requested_case_ids: List[str] | None,
+    limit: int | None,
+) -> List[Dict[str, Any]]:
+    indexed: Dict[str, Dict[str, Any]] = {}
+    for sample in samples:
+        case_id = str(sample.get("case_id", "")).strip()
+        if not case_id:
+            raise ValueError("runtime input row lacks case_id")
+        if case_id in indexed:
+            raise ValueError(
+                f"image-only release contains duplicate case_id {case_id}"
+            )
+        indexed[case_id] = sample
+    if requested_case_ids:
+        requested = [str(item).strip() for item in requested_case_ids]
+        if any(not item for item in requested):
+            raise ValueError("--case-id values must be non-empty")
+        if len(requested) != len(set(requested)):
+            raise ValueError("--case-id values must be unique")
+        missing = [case_id for case_id in requested if case_id not in indexed]
+        if missing:
+            raise ValueError(
+                "requested case_id values are absent from release: "
+                + ", ".join(missing)
+            )
+        samples = [indexed[case_id] for case_id in requested]
+    if limit is not None:
+        samples = samples[:limit]
+    return samples
+
+
 def _file_descriptor(path: Path | None) -> Dict[str, Any] | None:
     if path is None or not path.is_file():
         return None
@@ -297,8 +340,11 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
     benchmark_path = Path(args.benchmark).expanduser().resolve()
     release = load_runtime_release(benchmark_path)
     samples = _load_benchmark(benchmark_path)
-    if args.limit is not None:
-        samples = samples[: args.limit]
+    samples = _select_samples(
+        samples,
+        requested_case_ids=getattr(args, "case_id", None),
+        limit=args.limit,
+    )
     samples = [
         resolve_runtime_image_path(sample, benchmark_path) for sample in samples
     ]

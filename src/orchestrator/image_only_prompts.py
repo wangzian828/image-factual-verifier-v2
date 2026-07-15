@@ -41,7 +41,19 @@ Rules:
    incomplete.
 8. Discovery, Evidence, Finding, task, and fact state are reduced by the runtime.
    Do not propose or invent state transitions in the segment output.
-9. Do not write a verdict. Return only the segment summary and
+9. For screenshots, first bind distinctive OCR text, visible account, date, and
+   thread relation to an original or archived source record. Assess visible
+   manipulation separately; existence of a post and absence of visible edits are
+   different questions.
+10. Treat mutable web metadata temporally. A current username, display name,
+    engagement count, profile image, or page layout mismatch does not by itself
+    refute an older screenshot. Seek an archived/same-time record, handle history,
+    or another temporally aligned capture before using that mismatch decisively.
+11. Normalize timestamps before comparing them. A local screenshot time and a UTC
+    source time may fall on adjacent calendar dates while representing the same
+    instant. If either timezone is unknown, treat a one-day boundary mismatch as
+    unresolved and seek timezone-aligned evidence rather than refuting the target.
+12. Do not write a verdict. Return only the segment summary and
    ready_for_reflection flag.
 """
 
@@ -57,6 +69,62 @@ You may not create Evidence or Findings, write a verdict, modify the immutable
 brief, delete history, cite unknown ids, or change task status. Task status is
 owned by the deterministic Finding/Failure reducer. Return exactly one JSON
 object matching the schema.
+"""
+
+
+TARGET_PLANNING_SYSTEM_PROMPT = """\
+You are the initial target-planning step of an open-domain image investigation.
+Use only the supplied pixel-grounded VisualFacts, entities, OCR anchors, and media
+description to propose up to three factual targets worth investigating.
+
+Choose targets by what is salient and decision-relevant, not by a fixed media-type
+pipeline. Examples include source provenance, a specific identity/place/event,
+matching a visible public record, or checking a visually suspicious integrity
+property. These are investigation propositions, not established facts.
+
+Rules:
+1. Every target must cite existing parent VisualFact ids.
+2. Do not add a named person, event, place, date, title, or account absent from the
+   supplied visual/OCR state.
+3. Suggested text queries must be built from supplied anchors. Prefer exact
+   distinctive text when it is present.
+4. Pick tools because they can resolve the proposed target. Do not prescribe a
+   universal order by image type.
+5. Keep evidence scopes separate. source_record_matches tests whether visible
+   account/text/date/thread details match a public record; it must not also claim the
+   pixels are unmodified. Use a separate visual_integrity target only when visible
+   manipulation is itself decision-relevant. Include visible dates or other temporal
+   anchors in the target when they affect mutable account/profile metadata, including
+   the visible clock time when available. Its fact statement must quote or reproduce
+   at least one distinctive visible text anchor; a generic "this post is real"
+   proposition is too weakly bound.
+6. Avoid generic targets that merely restate "an image is visible."
+7. Do not use model memory, public-web facts, evaluator data, or a verdict.
+8. Return exactly one JSON object matching the schema.
+"""
+
+
+ATTRIBUTION_SYSTEM_PROMPT = """\
+You are the attribution-planning step of an image-only factual investigation.
+Turn newly retrieved public context into at most two specific, checkable facts
+about the central image. Useful facts identify a title, creator, subject, place,
+date, event, or an original public record matching a screenshot.
+
+Rules:
+1. Every proposal must cite one or more existing parent VisualFact ids and the
+   supplied Discovery, Evidence, or Finding ids that ground its wording.
+2. A Discovery is a search lead only. It may justify a candidate fact and a
+   follow-up query, but it is never Evidence.
+3. Do not merely restate a generic scene description or visible OCR text.
+4. Do not use model memory or add details absent from the supplied records.
+5. For screenshots, bind the visible author/account, distinctive text, displayed
+   date, and reply/thread relation when those details are recoverable. Use the
+   source_record_matches predicate for that proposition.
+6. Prefer one central specific fact over several weak peripheral facts.
+7. A decisive proposal must descend from a current decisive fact or its existing
+   attribution lineage. Do not promote profile pictures, replies, side objects, or
+   unrelated discoveries merely because they are recent.
+8. Do not write a verdict. Return exactly one JSON object matching the schema.
 """
 
 
@@ -198,6 +266,35 @@ def render_react_context(state: ImageOnlyInvestigationState) -> str:
     )
 
 
+def render_target_planning_context(
+    state: ImageOnlyInvestigationState,
+) -> str:
+    return json.dumps(
+        {
+            "brief": state.brief.model_dump(mode="json"),
+            "entities": [
+                item.model_dump(mode="json")
+                for item in state.entities[:24]
+            ],
+            "pixel_grounded_facts": [
+                item.model_dump(mode="json")
+                for item in state.facts
+                if item.origin.type in {"input_image", "ocr"}
+            ][:36],
+            "retrieval_anchors": [
+                item.model_dump(mode="json")
+                for item in state.retrieval_anchors[:24]
+            ],
+            "bootstrap_tasks": [
+                item.model_dump(mode="json")
+                for item in state.tasks
+            ],
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
 def render_reflection_context(state: ImageOnlyInvestigationState) -> str:
     return json.dumps(
         {
@@ -227,6 +324,57 @@ def render_reflection_context(state: ImageOnlyInvestigationState) -> str:
             ],
             "decisive_fact_ids": state.decisive_fact_ids,
             "remaining_actions": max(0, 24 - state.action_count),
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
+def render_attribution_context(state: ImageOnlyInvestigationState) -> str:
+    recent_discoveries = state.discoveries[-12:]
+    recent_evidence = state.evidence[-8:]
+    recent_findings = state.findings[-8:]
+    record_parent_ids = {
+        fact_id
+        for item in [
+            *recent_discoveries,
+            *recent_evidence,
+            *recent_findings,
+        ]
+        for fact_id in item.fact_ids
+    }
+    decisive = [
+        fact.model_dump(mode="json")
+        for fact in state.facts
+        if fact.fact_id in state.decisive_fact_ids
+    ]
+    existing_attributions = [
+        fact.model_dump(mode="json")
+        for fact in state.facts
+        if fact.origin.type == "web_discovery"
+    ]
+    return json.dumps(
+        {
+            "brief": state.brief.model_dump(mode="json"),
+            "current_decisive_facts": decisive,
+            "record_parent_facts": [
+                fact.model_dump(mode="json")
+                for fact in state.facts
+                if fact.fact_id in record_parent_ids
+            ],
+            "existing_attribution_facts": existing_attributions[-8:],
+            "recent_discoveries": [
+                item.model_dump(mode="json")
+                for item in recent_discoveries
+            ],
+            "recent_evidence": [
+                item.model_dump(mode="json")
+                for item in recent_evidence
+            ],
+            "recent_findings": [
+                item.model_dump(mode="json")
+                for item in recent_findings
+            ],
         },
         ensure_ascii=False,
         indent=2,

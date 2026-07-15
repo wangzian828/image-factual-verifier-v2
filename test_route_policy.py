@@ -72,6 +72,46 @@ def test_same_reference_for_a_different_task_is_still_deduplicated() -> None:
     )
 
 
+def test_same_search_goal_is_deduplicated_across_tasks() -> None:
+    left = {
+        "__question_id": "task-1",
+        "queries": ['"学生用AI写，学校用AI查" @dingzhen47'],
+        "goal": "Find the original post matching the visible account and text.",
+    }
+    right = {
+        "__question_id": "task-2",
+        "queries": ['@dingzhen47 "学生用AI写，学校用AI查"'],
+        "goal": "Locate the original post matching its text and account.",
+    }
+
+    assert routes_semantically_equivalent(
+        "text_search",
+        left,
+        "text_search",
+        right,
+    )
+
+
+def test_same_search_query_with_materially_different_goal_is_allowed() -> None:
+    left = {
+        "__question_id": "task-1",
+        "queries": ["Apple Tysons Corner reopening"],
+        "goal": "Identify the store and reopening date.",
+    }
+    right = {
+        "__question_id": "task-2",
+        "queries": ["Apple Tysons Corner reopening"],
+        "goal": "Find visible image manipulation artifacts.",
+    }
+
+    assert not routes_semantically_equivalent(
+        "text_search",
+        left,
+        "text_search",
+        right,
+    )
+
+
 def test_stage_runner_blocks_resolved_tasks_and_prior_segment_duplicates() -> None:
     active = {"task-1": False}
     runner = StageRunner(

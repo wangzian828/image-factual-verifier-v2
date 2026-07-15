@@ -84,9 +84,9 @@ def test_dataset_export_is_episode_and_source_family_split_safe(
     assert manifest["episode_count"] == 1
     assert manifest["example_counts"]["train"] + (
         manifest["example_counts"]["validation"]
-    ) + manifest["example_counts"]["test"] == 2
+    ) + manifest["example_counts"]["test"] == 6
     assert report["passed"] is True
-    assert report["example_count"] == 2
+    assert report["example_count"] == 6
     assert report["episode_count"] == 1
     assert report["teacher_score_distribution"]["mean"] == 4.75
 
