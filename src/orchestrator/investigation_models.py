@@ -143,9 +143,14 @@ class ResearchTask(StrictModel):
     question: str = Field(min_length=1, max_length=800)
     purpose: str = Field(min_length=1, max_length=800)
     priority: int = Field(default=1, ge=1, le=3)
-    status: Literal["pending", "active", "resolved", "blocked", "exhausted"] = (
-        "active"
-    )
+    status: Literal[
+        "pending",
+        "active",
+        "resolved",
+        "blocked",
+        "exhausted",
+        "superseded",
+    ] = "active"
     parent_task_id: Optional[str] = Field(default=None, max_length=100)
     origin_ids: List[str] = Field(min_length=1, max_length=12)
     suggested_tools: List[str] = Field(default_factory=list, max_length=4)

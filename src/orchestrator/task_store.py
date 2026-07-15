@@ -759,6 +759,20 @@ def attribution_planning_needed(
         for fact in state.facts
         if fact.fact_id in state.decisive_fact_ids
     ]
+    if any(
+        fact.fact_id in affected_fact_ids
+        and fact.origin.type == "web_discovery"
+        and fact.decision_relevance != "decisive"
+        for fact in state.facts
+    ) and any(
+        (
+            getattr(item, "evidence_id", "")
+            or getattr(item, "finding_id", "")
+        )
+        in created_ids
+        for item in [*state.evidence, *state.findings]
+    ):
+        return True
     if any(fact.status == "refuted" for fact in decisive):
         return False
     promotable_predicates = {
@@ -864,6 +878,12 @@ def apply_attribution(
                 and fact.origin.type == "web_discovery"
                 for origin_id in fact.origin.origin_ids
             ],
+            *[
+                fact.fact_id
+                for fact in state.facts
+                if fact.origin.type == "web_discovery"
+                and set(fact.origin.origin_ids) & set(state.decisive_fact_ids)
+            ],
         }
         if (
             proposal.decision_relevance == "decisive"
@@ -874,8 +894,20 @@ def apply_attribution(
                 "fact lineage"
             )
             continue
+        record_parent_ids = list(
+            dict.fromkeys(
+                [
+                    *parent_ids,
+                    *[
+                        origin_id
+                        for fact in parent_facts
+                        for origin_id in fact.origin.origin_ids
+                    ],
+                ]
+            )
+        )
         if not _attribution_records_own_parents(
-            parent_ids,
+            record_parent_ids,
             discoveries,
             evidence_rows,
             findings,
@@ -905,6 +937,27 @@ def apply_attribution(
                 "a negated world fact"
             )
             continue
+        decision_relevance = proposal.decision_relevance
+        visual_bridge_present = _attribution_has_visual_bridge(
+            evidence_rows,
+            findings,
+            evidence_by_id,
+        )
+        if (
+            decision_relevance == "decisive"
+            and proposal.predicate
+            in {
+                "identified_as",
+                "attributed_as",
+                "created_by",
+                "dated_as",
+                "located_at",
+                "occurred_at",
+                "depicts_event",
+            }
+            and not visual_bridge_present
+        ):
+            decision_relevance = "supporting"
         if not _attribution_statement_is_grounded(
             statement,
             discoveries,
@@ -973,7 +1026,7 @@ def apply_attribution(
                 object_entity_id=parent.object_entity_id,
                 status="active",
                 basis_ids=origin_ids[:12],
-                decision_relevance=proposal.decision_relevance,
+                decision_relevance=decision_relevance,
                 origin=FactOrigin(
                     type="web_discovery",
                     origin_ids=origin_ids[:8],
@@ -990,7 +1043,7 @@ def apply_attribution(
             fact.origin.origin_ids = list(
                 dict.fromkeys([*fact.origin.origin_ids, *origin_ids])
             )[:8]
-            if proposal.decision_relevance == "decisive":
+            if decision_relevance == "decisive":
                 fact.decision_relevance = "decisive"
 
         owned_task_ids: set[str] = set()
@@ -1018,7 +1071,7 @@ def apply_attribution(
                 task.fact_ids.append(fact_id)
                 task.fact_ids = task.fact_ids[:6]
 
-        if proposal.decision_relevance == "decisive":
+        if decision_relevance == "decisive":
             _replace_generic_decisive_parents(
                 state,
                 parent_facts,
@@ -1061,6 +1114,8 @@ def apply_attribution(
                 task_by_id[task_id] = task
                 created_task_ids.append(task_id)
             if task is not None:
+                if task.status in {"resolved", "superseded"}:
+                    task.status = "active"
                 state.recommended_next_task_ids = list(
                     dict.fromkeys(
                         [task.task_id, *state.recommended_next_task_ids]
@@ -1170,6 +1225,26 @@ def _attribution_statement_is_grounded(
     )
 
 
+def _attribution_has_visual_bridge(
+    evidence_rows: Sequence[InvestigationEvidence],
+    findings: Sequence[Finding],
+    evidence_by_id: Mapping[str, InvestigationEvidence],
+) -> bool:
+    linked = [
+        evidence_by_id[evidence_id]
+        for finding in findings
+        for evidence_id in finding.evidence_ids
+        if evidence_id in evidence_by_id
+    ]
+    return any(
+        item.claim_binding == "same_capture"
+        and bool(item.same_capture_or_near_duplicate)
+        and not bool(item.likely_different_original_capture)
+        and not item.risk_flags
+        for item in [*evidence_rows, *linked]
+    )
+
+
 def _contains_fabrication_attribution(value: str) -> bool:
     lowered = " ".join(str(value or "").casefold().split())
     return any(
@@ -1270,10 +1345,27 @@ def _replace_generic_decisive_parents(
     parent_facts: Sequence[VisualFact],
     attribution_fact: VisualFact,
 ) -> None:
+    attribution_subject_id = attribution_fact.subject_entity_id
+    ancestor_ids = {
+        *attribution_fact.origin.origin_ids,
+        *[
+            origin_id
+            for fact in parent_facts
+            for origin_id in fact.origin.origin_ids
+        ],
+    }
     parent_ids = {
         fact.fact_id
-        for fact in parent_facts
-        if fact.predicate
+        for fact in state.facts
+        if (
+            fact.fact_id in ancestor_ids
+            or fact in parent_facts
+            or (
+                fact.subject_entity_id == attribution_subject_id
+                and fact.origin.type != "web_discovery"
+            )
+        )
+        and fact.predicate
         in {
             "appears_to_depict",
             "visible_in",
@@ -1285,20 +1377,48 @@ def _replace_generic_decisive_parents(
             "dated_as",
             "depicts_event",
         }
-        and fact.origin.type != "web_discovery"
+        and fact.fact_id != attribution_fact.fact_id
     }
     retained = [
         fact_id
         for fact_id in state.decisive_fact_ids
         if fact_id not in parent_ids
     ]
-    for fact in parent_facts:
+    for fact in state.facts:
         if fact.fact_id in parent_ids:
             fact.decision_relevance = "supporting"
     attribution_fact.decision_relevance = "decisive"
     state.decisive_fact_ids = list(
         dict.fromkeys([*retained, attribution_fact.fact_id])
     )[:DECISIVE_FACTS_MAX]
+    _supersede_same_subject_tasks(state, attribution_fact)
+
+
+def _supersede_same_subject_tasks(
+    state: ImageOnlyInvestigationState,
+    attribution_fact: VisualFact,
+) -> None:
+    fact_by_id = {fact.fact_id: fact for fact in state.facts}
+    for task in state.tasks:
+        if attribution_fact.fact_id in task.fact_ids:
+            continue
+        related = [
+            fact_by_id[fact_id]
+            for fact_id in task.fact_ids
+            if fact_id in fact_by_id
+        ]
+        if not related or not any(
+            fact.subject_entity_id == attribution_fact.subject_entity_id
+            for fact in related
+        ):
+            continue
+        if any(
+            fact.fact_id in state.decisive_fact_ids
+            for fact in related
+        ):
+            continue
+        if task.status in {"active", "pending"}:
+            task.status = "superseded"
 
 
 def apply_reflection(

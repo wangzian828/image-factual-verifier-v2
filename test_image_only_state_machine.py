@@ -316,10 +316,11 @@ def test_discovery_attribution_creates_specific_fact_and_verification_task() -> 
     )
     assert specific.origin.type == "web_discovery"
     assert specific.status == "active"
-    assert state.decisive_fact_ids == [specific.fact_id]
+    assert specific.decision_relevance == "supporting"
+    assert specific.fact_id not in state.decisive_fact_ids
     assert next(
         fact for fact in state.facts if fact.fact_id == parent_fact_id
-    ).decision_relevance == "supporting"
+    ).decision_relevance == "decisive"
     verification_task = next(
         task
         for task in state.tasks
@@ -456,6 +457,125 @@ def test_official_evidence_supports_promoted_attribution_fact() -> None:
     verdict, basis = compile_verdict_basis(state)
     assert verdict == "real"
     assert basis.fact_ids == [specific_id]
+
+
+def test_candidate_attribution_upgrades_after_visual_bridge() -> None:
+    case, state = _runtime_state()
+    parent_fact_id = state.decisive_fact_ids[0]
+    broad_task = next(
+        task
+        for task in state.tasks
+        if parent_fact_id in task.fact_ids
+    )
+    discovery_update = record_tool_observation(
+        state,
+        _step(
+            task_id=broad_task.task_id,
+            call_id="call-candidate-discovery",
+            tool_name="reverse_image_search",
+            result=(
+                '{"status":"success","reference_image_candidates":'
+                '["https://www.si.edu/object/reservation-scene.jpg"],'
+                '"lens_results":[{"title":"Reservation Scene by Louise Nez, 1992",'
+                '"url":"https://www.si.edu/object/reservation-scene",'
+                '"snippet":"The Navajo pictorial weaving Reservation Scene was '
+                'created by Louise Nez in 1992.",'
+                '"image_url":"https://www.si.edu/object/reservation-scene.jpg"}]}'
+            ),
+        ),
+        image_sha256=case.image_sha256,
+    )
+    statement = (
+        'The image depicts the Navajo pictorial weaving "Reservation Scene" '
+        "created by Louise Nez in 1992."
+    )
+    candidate_update = apply_attribution(
+        state,
+        AttributionOutput(
+            proposals=[
+                AttributionFactProposal(
+                    statement=statement,
+                    predicate="identified_as",
+                    parent_fact_ids=[parent_fact_id],
+                    discovery_ids=discovery_update[
+                        "created_discovery_ids"
+                    ],
+                    decision_relevance="decisive",
+                )
+            ]
+        ),
+    )
+    candidate_id = candidate_update["accepted_fact_ids"][0]
+    candidate = next(
+        fact for fact in state.facts if fact.fact_id == candidate_id
+    )
+    candidate_task = next(
+        task
+        for task in state.tasks
+        if task.task_id == candidate_update["created_task_ids"][0]
+    )
+    assert candidate.decision_relevance == "supporting"
+    assert state.decisive_fact_ids == [parent_fact_id]
+
+    comparison_update = record_tool_observation(
+        state,
+        _step(
+            task_id=candidate_task.task_id,
+            call_id="call-candidate-comparison",
+            tool_name="compare_with_reference",
+            result=json.dumps(
+                {
+                    "status": "success",
+                    "reference_url": (
+                        "https://www.si.edu/object/reservation-scene.jpg"
+                    ),
+                    "resolved_reference_url": (
+                        "https://www.si.edu/object/reservation-scene.jpg"
+                    ),
+                    "source_page_url": (
+                        "https://www.si.edu/object/reservation-scene"
+                    ),
+                    "same_subject_or_scene": True,
+                    "same_capture_or_near_duplicate": True,
+                    "likely_different_original_capture": False,
+                    "edit_evidence_present": False,
+                    "overall_observation": (
+                        "The input and museum reference are the same capture."
+                    ),
+                    "confidence": 0.99,
+                }
+            ),
+        ),
+        image_sha256=case.image_sha256,
+    )
+    upgraded = apply_attribution(
+        state,
+        AttributionOutput(
+            proposals=[
+                AttributionFactProposal(
+                    statement=statement,
+                    predicate="identified_as",
+                    parent_fact_ids=[candidate_id],
+                    discovery_ids=discovery_update[
+                        "created_discovery_ids"
+                    ],
+                    evidence_ids=comparison_update[
+                        "created_evidence_ids"
+                    ],
+                    finding_ids=comparison_update[
+                        "created_finding_ids"
+                    ],
+                    decision_relevance="decisive",
+                )
+            ]
+        ),
+    )
+
+    assert upgraded["accepted_fact_ids"] == [candidate_id]
+    assert candidate.decision_relevance == "decisive"
+    assert state.decisive_fact_ids == [candidate_id]
+    assert broad_task.status == "superseded"
+    assert candidate_task.status == "active"
 
 
 def test_single_unknown_source_cannot_resolve_promoted_attribution() -> None:

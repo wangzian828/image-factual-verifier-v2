@@ -133,7 +133,7 @@ class Orchestrator:
         self.verification_tool_limits = {
             "current_time": 1,
             "ocr_with_position": 3,
-            "reverse_image_search": 1,
+            "reverse_image_search": 2,
             "text_search": 16,
             "visit": 16,
             "compare_with_reference": 6,
@@ -465,9 +465,18 @@ class Orchestrator:
                 self._sync_image_only_state(state, investigation)
                 return update
 
-            reverse_attempted = any(
-                self._attempted_image_only_tool(route, "reverse_image_search")
-                for route in investigation.attempted_routes
+            reverse_succeeded = any(
+                step.action_type == "tool_call"
+                and step.tool_name == "reverse_image_search"
+                and self._image_only_step_succeeded(step)
+                for step in state.all_steps
+            )
+            reverse_failures = sum(
+                1
+                for step in state.all_steps
+                if step.action_type == "tool_call"
+                and step.tool_name == "reverse_image_search"
+                and not self._image_only_step_succeeded(step)
             )
             runner = StageRunner(
                 llm=self.llm,
@@ -480,7 +489,7 @@ class Orchestrator:
                     )
                     if tool.name != "current_time"
                     and not (
-                        reverse_attempted
+                        (reverse_succeeded or reverse_failures >= 2)
                         and tool.name == "reverse_image_search"
                     )
                 ],
@@ -861,6 +870,17 @@ class Orchestrator:
         except (TypeError, ValueError):
             return False
         return str(parsed.get("tool", "")).strip() == tool_name
+
+    @staticmethod
+    def _image_only_step_succeeded(step: StageStep) -> bool:
+        try:
+            payload = json.loads(str(step.tool_result or ""))
+        except (TypeError, ValueError):
+            return False
+        return (
+            isinstance(payload, dict)
+            and payload.get("status") == "success"
+        )
 
     @staticmethod
     def _image_only_has_refuted_decisive_fact(
