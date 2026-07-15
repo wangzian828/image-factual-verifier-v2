@@ -83,7 +83,10 @@ def test_semantic_recovery_accepts_same_source_page_version(
             "source_class": "official",
             "exact_text": (
                 "NASA states that the event occurred at Johnson Space Center. "
-                "The crew participated in the Apollo 14 Moon Tree dedication."
+                "The crew participated in the Apollo 14 Moon Tree dedication. "
+                "The page also explains the tree species, seed history, forest "
+                "service germination program, educational use, ceremony date, "
+                "crew visit schedule, and later distribution of seedlings."
             ),
             "stance": "refute",
             "quality": "strong",

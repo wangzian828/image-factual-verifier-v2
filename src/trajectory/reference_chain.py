@@ -25,6 +25,7 @@ from src.trajectory.scoring import (
     _rows,
     _successful_call_ids,
     _token_f1,
+    _tokens,
     _valid_findings,
 )
 
@@ -267,14 +268,23 @@ def _deterministic_semantic_match(
     evidence_text = _normalized_text(evidence.get("exact_text"))
     reference_text = _normalized_text(reference.get("exact_span"))
     text_similarity = _token_f1(evidence_text, reference_text)
+    reference_tokens = _tokens(reference_text)
+    evidence_tokens = _tokens(evidence_text)
+    reference_token_recall = (
+        len(reference_tokens & evidence_tokens) / len(reference_tokens)
+        if reference_tokens
+        else 0.0
+    )
     if evidence_text and reference_text and (
         evidence_text in reference_text
         or reference_text in evidence_text
         or text_similarity >= SEMANTIC_TEXT_MATCH_THRESHOLD
+        or reference_token_recall >= 0.85
     ):
         return "same_source_text_equivalent", max(
             SEMANTIC_TEXT_MATCH_THRESHOLD,
             text_similarity,
+            reference_token_recall,
         )
 
     if (
