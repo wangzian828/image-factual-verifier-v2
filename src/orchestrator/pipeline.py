@@ -53,6 +53,7 @@ from src.orchestrator.task_store import (
     MAX_TOOL_ACTIONS,
     REFLECTION_INTERVAL,
     apply_reflection,
+    next_action_boundary,
     record_tool_observation,
     stable_id,
     state_from_bootstrap,
@@ -427,9 +428,11 @@ class Orchestrator:
                     investigation.stop_reason = "information_saturated"
                 break
 
+            segment_stop_action = next_action_boundary(
+                investigation.action_count
+            )
             remaining_to_reflection = (
-                REFLECTION_INTERVAL
-                - (investigation.action_count % REFLECTION_INTERVAL)
+                segment_stop_action - investigation.action_count
             )
             segment_rounds = min(
                 remaining_to_reflection,
@@ -475,9 +478,7 @@ class Orchestrator:
                 tool_call_limits=self.verification_tool_limits,
                 should_stop=lambda _steps: (
                     bool(investigation.stop_reason)
-                    or
-                    investigation.action_count % REFLECTION_INTERVAL == 0
-                    or investigation.action_count >= MAX_TOOL_ACTIONS
+                    or investigation.action_count >= segment_stop_action
                 ),
                 min_tool_calls=1,
                 attach_image=False,

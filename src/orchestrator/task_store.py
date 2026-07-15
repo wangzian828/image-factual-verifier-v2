@@ -41,6 +41,18 @@ def stable_id(prefix: str, *parts: object) -> str:
     return f"{prefix}-{digest}"
 
 
+def next_action_boundary(action_count: int) -> int:
+    """Return the next Reflection/action-cap boundary after current progress."""
+
+    current = max(0, int(action_count))
+    if current >= MAX_TOOL_ACTIONS:
+        return MAX_TOOL_ACTIONS
+    return min(
+        MAX_TOOL_ACTIONS,
+        ((current // REFLECTION_INTERVAL) + 1) * REFLECTION_INTERVAL,
+    )
+
+
 def state_from_bootstrap(
     bootstrap: BootstrapInvestigation,
 ) -> ImageOnlyInvestigationState:

@@ -28,6 +28,7 @@ from src.orchestrator.state import (
 )
 from src.orchestrator.task_store import (
     apply_reflection,
+    next_action_boundary,
     record_tool_observation,
     state_from_bootstrap,
 )
@@ -86,6 +87,15 @@ def _step(
             "observed_at": datetime.now(timezone.utc).isoformat(),
         },
     )
+
+
+def test_next_action_boundary_advances_after_reflection() -> None:
+    assert next_action_boundary(0) == 4
+    assert next_action_boundary(1) == 4
+    assert next_action_boundary(4) == 8
+    assert next_action_boundary(8) == 12
+    assert next_action_boundary(23) == 24
+    assert next_action_boundary(24) == 24
 
 
 def test_discovery_is_not_evidence_and_reflection_only_reprioritizes() -> None:
