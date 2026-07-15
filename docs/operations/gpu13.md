@@ -231,6 +231,88 @@ gpu-13 itself through Hugging Face, Google Drive, approved object storage, or a
 mounted data path. Do not transfer dataset bytes through `47.104.232.153`, and do not
 run construction code from this runtime checkout.
 
+### Active automatic-diverse-20 v4 data
+
+The server-side v4 release is the only active automatic-diverse-20 input:
+
+```text
+producer checkout:
+/gs/home/wza/projects/image-factual-verifier-data-pipeline
+
+construction:
+/gsdata/home/wza/image-factual-verifier-v2-data/benchmarks/construction/
+automatic-diverse-20-v4-evidence-chain-consolidated-20260715
+
+development pilot:
+/gsdata/home/wza/image-factual-verifier-v2-data/benchmarks/development/
+automatic-diverse-20-development-pilot-v4-20260715
+
+human review:
+/gsdata/home/wza/image-factual-verifier-v2-data/benchmarks/reviews/
+automatic-diverse-20-development-pilot-v4-20260715
+
+runtime release:
+/gsdata/home/wza/image-factual-verifier-v2-data/releases/
+automatic-diverse-20-development-preview-v4-20260715
+
+release audit:
+/gsdata/home/wza/image-factual-verifier-v2-data/runs/release_audits/
+automatic-diverse-20-development-preview-v4-20260715
+
+construction run:
+/gsdata/home/wza/image-factual-verifier-v2-data/runs/benchmark_pipeline/
+automatic-diverse-20-v4-evidence-chain-gpu13-final-20260715
+```
+
+Validated on 2026-07-15:
+
+```text
+20 runtime cases
+20 private gold rows
+10 supported / 10 refuted / 0 unverifiable
+three-field runtime rows only
+all image hashes valid
+all 27 release SHA-256 entries valid
+current v3 release consumer accepts every case
+source-access policy active with 3 excluded provenance URLs
+```
+
+The release is a `development_subset`, not a formal three-class benchmark. The
+data-owned release audit's perfect predictions verify packaging/scorer consistency;
+they are not Agent results.
+
+The frozen `process_reference_protocol.json` still names the older strict
+acceptable-evidence and citation metrics. Current runtime scoring intentionally uses
+chain-only recovery instead. Do not edit the release in place; correct this metadata
+in the next producer release.
+
+Local H-drive paths ending in
+`automatic-diverse-20-development-pilot-v3-20260715` or
+`automatic-diverse-20-development-preview-v3-20260715` are superseded. Final v4 has
+not been synchronized to H and must not be run from those v3 directories. The active
+local producer checkout remains:
+
+```text
+D:\image-factual-verifier-data-pipeline
+```
+
+Foreground canary:
+
+```bash
+cd /gs/home/wza/projects/image-factual-verifier-v3
+release="$IFV_DATA_ROOT/releases/automatic-diverse-20-development-preview-v4-20260715"
+run_id="automatic-diverse-20-v4-canary-$(date -u +%Y%m%dT%H%M%SZ)"
+scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
+  python scripts/run_real_canary.py \
+  --benchmark "$release/runtime_input/cases.jsonl" \
+  --source-access-policy "$release/evaluator_private/source_access_policy.json" \
+  --output-dir "$IFV_DATA_ROOT/runs/eval/$run_id" \
+  --limit 2
+```
+
+Only after the canary passes should all 20 cases be launched with
+`scripts/server/start_eval_gpu13.sh`.
+
 The v3 runtime allows at most 24 real tool actions. The initial reverse-image search
 counts as action 1; structured Reflection runs after actions 4, 8, 12, 16, 20, and 24.
 Coverage can stop earlier when all decisive facts resolve or after two consecutive

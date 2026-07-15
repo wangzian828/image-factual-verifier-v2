@@ -168,6 +168,21 @@ Current runtime assets:
 - canonical ReAct/Reflection/Judgment policy examples;
 - loss masks, split-safe dataset export, quality gates, and strict audits.
 
+Current development evaluation release:
+
+```text
+/gsdata/home/wza/image-factual-verifier-v2-data/releases/
+automatic-diverse-20-development-preview-v4-20260715
+```
+
+It contains 20 validated cases: 10 supported and 10 refuted. It is the next Gemini
+runtime regression and teacher-trajectory source candidate, subject to actual Agent
+rollout and trajectory-quality review. The release audit's gold-derived predictions
+are not teacher trajectories.
+
+The release has no `unverifiable` cases and therefore cannot by itself establish a
+three-class training or evaluation baseline.
+
 Missing assets:
 
 - perception-stage training examples;
