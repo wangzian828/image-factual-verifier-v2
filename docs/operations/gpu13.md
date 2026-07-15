@@ -176,17 +176,17 @@ export OMP_NUM_THREADS=1
 mkdir -p /gs/home/wza/projects
 cd /gs/home/wza/projects
 git clone --branch codex/image-factual-verifier-v3 \
-  https://github.com/wangzian828/image-factual-verifier-v2.git
-cd image-factual-verifier-v2
+  https://github.com/wangzian828/image-factual-verifier-v2.git \
+  image-factual-verifier-v3
+cd image-factual-verifier-v3
 bash scripts/server/bootstrap_gpu13.sh
 ```
 
-No prior Image Factual Verifier checkout or clearly reusable Agent environment was
-found under `/gs/home/wza` during the bounded-depth audit. Existing Conda environments
-serve unrelated vision/inference projects. The deployment therefore uses the isolated
-`ifv-agent` environment with Python 3.11. The bootstrap script is idempotent and stores
-`OMP_NUM_THREADS=1` in that Conda environment as an additional guard. It also
-installs the `ifv-agent` Jupyter kernelspec, whose wrapper sources
+The active checkout is `/gs/home/wza/projects/image-factual-verifier-v3`. Do not use
+the older `/gs/home/wza/projects/image-factual-verifier-v2` checkout. The deployment
+uses the isolated `ifv-agent` environment with Python 3.11. The bootstrap script is
+idempotent and stores `OMP_NUM_THREADS=1` in that Conda environment as an additional
+guard. It also installs the `ifv-agent` Jupyter kernelspec, whose wrapper sources
 `gpu13_env.sh` before launching the kernel. This ensures browser notebooks and
 REST/WebSocket-launched project commands retain the same runtime environment and
 places the `ifv-agent` binary directory first in `PATH`, so shell cells also invoke
@@ -197,7 +197,7 @@ the project interpreter rather than the Jupyter server's base Conda Python.
 After each local commit and push:
 
 ```bash
-cd /gs/home/wza/projects/image-factual-verifier-v2
+cd /gs/home/wza/projects/image-factual-verifier-v3
 bash scripts/server/update_gpu13_checkout.sh codex/image-factual-verifier-v3
 bash scripts/server/bootstrap_gpu13.sh
 ```
@@ -207,10 +207,10 @@ server worktree. Do not bypass that guard by editing or resetting server files.
 
 ## Test And Run
 
-Run focused contract tests without credentials first:
+Run the full deterministic suite without credentials first:
 
 ```bash
-cd /gs/home/wza/projects/image-factual-verifier-v2
+cd /gs/home/wza/projects/image-factual-verifier-v3
 scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
   python -m pytest -q
 ```
@@ -220,14 +220,16 @@ untracked `.env` on gpu-13 using a secure interactive method, then run:
 
 ```bash
 scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
-  python scripts/probe_gemini_interactions.py --model gemini-3-flash-preview
+  python scripts/probe_gemini_interactions.py --model gemini-3.5-flash
 ```
 
 Keep benchmark datasets and caches under `IFV_DATA_ROOT`, outside the Git checkout.
 
 Dataset acquisition, review, and release finalization now belong to the separate
-`image-factual-verifier-data-pipeline` project. Copy or mount only a finalized release
-under `IFV_DATA_ROOT`; do not run construction code from this runtime checkout.
+`image-factual-verifier-data-pipeline` project. Acquire a finalized release from
+gpu-13 itself through Hugging Face, Google Drive, approved object storage, or a
+mounted data path. Do not transfer dataset bytes through `47.104.232.153`, and do not
+run construction code from this runtime checkout.
 
 The v3 runtime allows at most 24 real tool actions. The initial reverse-image search
 counts as action 1; structured Reflection runs after actions 4, 8, 12, 16, 20, and 24.
@@ -255,7 +257,7 @@ scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
 Only after this command passes should a larger formal evaluation be launched in the
 background with `scripts/server/start_eval_gpu13.sh`.
 
-The committed runtime was accepted both locally and on gpu-13:
+Historical baseline acceptance:
 
 ```text
 local commit:
@@ -279,7 +281,7 @@ Both runs produced the expected `fake` and `real` classifications. The gpu-13 ru
 passed 165 repository tests, strict two-trace audit, the data-owned classification
 scorer, and strict policy-dataset audit.
 
-The trajectory-quality remediation was accepted on 2026-07-15:
+Historical trajectory-quality acceptance from 2026-07-15:
 
 ```text
 runtime commit:

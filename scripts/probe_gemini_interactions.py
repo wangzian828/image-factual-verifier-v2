@@ -122,7 +122,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Probe the complete Gemini Interactions structured/tool continuation contract."
     )
-    parser.add_argument("--model", default="gemini-3-flash-preview")
+    parser.add_argument("--model", default="gemini-3.5-flash")
     parser.add_argument("--timeout", type=float, default=90.0)
     parser.add_argument("--repeat", type=int, default=1)
     args = parser.parse_args()
