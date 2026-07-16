@@ -55,6 +55,11 @@ decisive atomic external-world or source-record proposition; failure after the
 bounded correction round is recorded as an engineering error rather than silently
 changing the evaluation target.
 
+Before validation, the reducer may remove an ungrounded parenthetical scientific
+binomial that merely aliases an already visible species. This does not authorize
+new people, places, dates, titles, or other remembered metadata; those still fail
+the normal grounding checks.
+
 Because bootstrap is deterministic, it is not exported as a model-authored policy
 action. Actual Target Planning is retained in the trace.
 

@@ -543,6 +543,16 @@ def apply_target_planning(
                 "initial targets must be grounded in image or OCR facts"
             )
             continue
+        grounding_text = " ".join(
+            [
+                *(parent.statement for parent in parents),
+                anchor_text,
+            ]
+        )
+        proposal = _normalize_target_parenthetical_alias(
+            proposal,
+            grounding_text=grounding_text,
+        )
         if (
             proposal.predicate == "visual_integrity"
             and _visual_integrity_target_contains_world_relation(proposal)
@@ -630,12 +640,6 @@ def apply_target_planning(
                 "depicted-world or source relation instead"
             )
             continue
-        grounding_text = " ".join(
-            [
-                *(parent.statement for parent in parents),
-                anchor_text,
-            ]
-        )
         if _target_introduces_unobserved_named_values(
             proposal.statement,
             proposal.suggested_queries,
@@ -808,6 +812,54 @@ def apply_target_planning(
         "rejected_reasons": rejected_reasons,
         "remaining_target_gaps": output.remaining_target_gaps[:4],
     }
+
+
+def _normalize_target_parenthetical_alias(
+    proposal: TargetFactProposal,
+    *,
+    grounding_text: str,
+) -> TargetFactProposal:
+    """Remove only ungrounded scientific binomials in parenthetical apposition."""
+
+    grounding = _attribution_tokens(grounding_text)
+
+    def normalize(value: str) -> str:
+        def replace(match: re.Match[str]) -> str:
+            content = " ".join(match.group(1).split())
+            words = re.findall(r"[A-Za-z][A-Za-z'-]*", content)
+            if (
+                len(words) != 2
+                or " ".join(words) != content
+                or not words[0][0].isupper()
+                or not words[0][1:].islower()
+                or not words[1].islower()
+                or any(word.casefold() in grounding for word in words)
+            ):
+                return match.group(0)
+            return ""
+
+        return re.sub(
+            r"\s*\(([^()]*)\)",
+            replace,
+            str(value or ""),
+        ).strip()
+
+    statement = normalize(proposal.statement)
+    question = normalize(proposal.question)
+    purpose = normalize(proposal.purpose)
+    if (
+        statement == proposal.statement
+        and question == proposal.question
+        and purpose == proposal.purpose
+    ):
+        return proposal
+    return proposal.model_copy(
+        update={
+            "statement": statement,
+            "question": question,
+            "purpose": purpose,
+        }
+    )
 
 
 def _target_text_is_grounded(

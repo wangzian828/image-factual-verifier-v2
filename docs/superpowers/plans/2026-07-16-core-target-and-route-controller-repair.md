@@ -143,6 +143,8 @@ Implemented:
 - required Target Planning to establish exactly one atomic external-world or
   source-record core, with invalid Planning failing explicitly instead of promoting
   bootstrap `appears_to_depict` prose;
+- normalized only ungrounded parenthetical scientific binomials before the normal
+  Planning grounding checks, without allowing other remembered metadata;
 - made Planning tools first-hop suggestions while task-owned Discoveries
   deterministically authorize and URL-bind their concrete `visit` or
   `compare_with_reference` follow-up;

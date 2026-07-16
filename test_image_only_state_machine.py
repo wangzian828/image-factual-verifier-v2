@@ -551,6 +551,58 @@ def test_target_planning_rejects_unobserved_named_metadata() -> None:
     )
 
 
+def test_target_planning_strips_ungrounded_scientific_binomial_alias() -> None:
+    _, state = _antarctic_butterfly_state()
+    scene = next(
+        fact for fact in state.facts if fact.predicate == "appears_to_depict"
+    )
+
+    update = apply_target_planning(
+        state,
+        TargetPlanningOutput(
+            proposals=[
+                TargetFactProposal(
+                    statement=(
+                        "The monarch butterflies (Danaus plexippus) shown in "
+                        "the image are living in Antarctica."
+                    ),
+                    predicate="located_at",
+                    parent_fact_ids=[scene.fact_id],
+                    question=(
+                        "Are monarch butterflies (Danaus plexippus) capable "
+                        "of living in Antarctica?"
+                    ),
+                    purpose=(
+                        "Verify whether monarch butterflies "
+                        "(Danaus plexippus) naturally occur there."
+                    ),
+                    suggested_tools=["text_search"],
+                    suggested_queries=[
+                        "monarch butterfly Antarctica",
+                    ],
+                )
+            ]
+        ),
+    )
+
+    assert len(update["accepted_fact_ids"]) == 1
+    fact = next(
+        item
+        for item in state.facts
+        if item.fact_id == update["accepted_fact_ids"][0]
+    )
+    task = next(
+        item
+        for item in state.tasks
+        if fact.fact_id in item.fact_ids
+        and item.purpose.startswith("Verify whether")
+    )
+    assert "Danaus" not in fact.statement
+    assert "Danaus" not in task.question
+    assert "Danaus" not in task.purpose
+    assert "Antarctica" in fact.statement
+
+
 def test_target_planning_normalizes_terminal_punctuation_but_keeps_scope_atomic() -> None:
     _, state = _antarctic_butterfly_state()
     scene = next(
