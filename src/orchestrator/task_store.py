@@ -40,7 +40,7 @@ INITIAL_TASKS_MAX = 4
 TOTAL_TASKS_MAX = 12
 NEW_TASKS_PER_REFLECTION_MAX = 3
 ATTRIBUTION_FACTS_PER_PASS_MAX = 2
-MAX_ATTEMPTS_PER_TASK = 5
+MAX_ATTEMPTS_PER_TASK = 7
 MAX_TEXT_SEARCH_ROUTES_PER_TASK = 2
 
 
@@ -2671,14 +2671,17 @@ def _remaining_task_material_routes(
         else:
             one_shot_tools.add(tool_name)
 
-    pending_routes: List[str] = []
+    pending_routes: List[tuple[int, str]] = []
     for discovery in state.discoveries:
         if discovery.task_id != task.task_id:
             continue
         page_url = canonicalize_url(discovery.candidate_url)
         if "visit" in allowed and page_url and page_url not in attempted_pages:
             pending_routes.append(
-                f"visit:{task.task_id}:{page_url}"
+                (
+                    _discovery_source_rank(discovery.candidate_url),
+                    f"visit:{task.task_id}:{page_url}",
+                )
             )
         reference_url = canonicalize_url(discovery.reference_image_url)
         if (
@@ -2687,12 +2690,32 @@ def _remaining_task_material_routes(
             and reference_url not in attempted_references
         ):
             pending_routes.append(
-                f"compare_with_reference:{task.task_id}:{reference_url}"
+                (
+                    _discovery_source_rank(discovery.reference_image_url),
+                    f"compare_with_reference:{task.task_id}:{reference_url}",
+                )
             )
-    if pending_routes:
-        return list(dict.fromkeys(pending_routes))
+    pending_routes = sorted(
+        dict.fromkeys(pending_routes),
+        key=lambda item: (item[0], item[1]),
+    )
+    inspected_candidate = bool(attempted_pages or attempted_references)
+    if pending_routes and not inspected_candidate:
+        # A search lead should get one concrete inspection before another
+        # retrieval, but a SERP may contain many weak reposts.  Requiring every
+        # unvisited URL would turn lead enumeration into the stopping policy.
+        return [pending_routes[0][1]]
 
     routes: List[str] = []
+    # Once one candidate page/reference has been inspected, keep only newly
+    # discovered authoritative candidates in the required route inventory.
+    # Unknown and UGC reposts remain visible Discovery records but cannot keep
+    # the core loop alive or consume the task's bounded route budget.
+    routes.extend(
+        route
+        for rank, route in pending_routes
+        if rank <= 1
+    )
     if "reverse_image_search" in allowed:
         for branch in ("lens", "semantic"):
             if branch not in reverse_branches:
@@ -2713,3 +2736,14 @@ def _remaining_task_material_routes(
         if tool_name in allowed and tool_name not in one_shot_tools:
             routes.append(f"{tool_name}:{task.task_id}")
     return routes
+
+
+def _discovery_source_rank(value: str) -> int:
+    source_class = classify_source(value).source_class
+    return {
+        "official": 0,
+        "news": 1,
+        "visual": 2,
+        "unknown": 3,
+        "ugc": 4,
+    }.get(source_class, 9)

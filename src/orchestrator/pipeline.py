@@ -879,12 +879,28 @@ class Orchestrator:
     ) -> Dict[str, str]:
         """Use the source-answerable task question, not the whole image claim."""
 
-        return {
-            task.task_id: task.question[:1800]
-            for task in investigation.tasks
-            if task.status in {"active", "pending"}
-            and (task_ids is None or task.task_id in task_ids)
+        discovery_task_ids = {
+            item.task_id
+            for item in investigation.discoveries
         }
+        goals: Dict[str, str] = {}
+        for task in investigation.tasks:
+            if (
+                task.status not in {"active", "pending"}
+                or (task_ids is not None and task.task_id not in task_ids)
+            ):
+                continue
+            if task.task_id in discovery_task_ids:
+                goals[task.task_id] = (
+                    "Does this candidate public source identify or directly "
+                    "describe the same input image or depicted scene? Extract "
+                    "only the concrete title, identity, event, place, date, "
+                    "creator, or source-record statement that the page itself "
+                    "supports."
+                )
+            else:
+                goals[task.task_id] = task.question[:1800]
+        return goals
 
     @staticmethod
     def _image_only_discovery_route_error(
@@ -937,6 +953,23 @@ class Orchestrator:
             task_ids={task_id},
         )
         if not (pending["pages"] or pending["references"]):
+            return ""
+        inspected_candidate = False
+        for raw in investigation.attempted_routes:
+            try:
+                route = json.loads(raw)
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(route, dict):
+                continue
+            if (
+                str(route.get("task_id", "")).strip() == task_id
+                and str(route.get("tool", "")).strip()
+                in {"visit", "compare_with_reference"}
+            ):
+                inspected_candidate = True
+                break
+        if inspected_candidate:
             return ""
         return (
             f"Task {task_id!r} already has uninspected candidate pages or "

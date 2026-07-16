@@ -368,7 +368,7 @@ traces expose both policy action count and actual provider request count.
 Local verification:
 
 ```text
-264 passed
+266 passed
 compileall passed
 git diff --check clean
 ```
@@ -401,3 +401,24 @@ visual-authenticity and external-world claims in one core proposition.
 This is a controller/state repair, not a prompt expansion. The next real validation
 uses selected v4 cases only; the previous Apple trace remains a regression artifact,
 not the primary canary.
+
+The first selected v4 probe then exposed two additional, coupled route defects:
+
+```text
+one official source page visited
+  -> lower-quality repost pages were still mandatory before new retrieval
+
+source-identification page visited
+  -> extractor was asked for "earliest public context"
+  -> page-level title/creator/source evidence was scored as irrelevant
+```
+
+The current controller therefore:
+
+- requires one ranked candidate inspection after a retrieval, not every candidate;
+- does not let unknown/UGC reposts keep core coverage open;
+- permits up to seven actions for one core task so a bounded pair of reverse-search
+  branches, two text queries, and necessary source-page inspection do not contradict
+  the route inventory;
+- changes the evidence goal after Discovery to whether a candidate page identifies
+  the same input image or depicted scene.

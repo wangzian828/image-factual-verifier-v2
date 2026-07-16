@@ -280,6 +280,36 @@ def test_web_evidence_goal_uses_task_question_not_full_image_claim() -> None:
     assert goals[task.task_id] != claims[task.task_id]
 
 
+def test_discovered_source_uses_image_identification_evidence_goal() -> None:
+    case, state = _runtime_state()
+    task = next(
+        item
+        for item in state.tasks
+        if state.core_verdict_fact_id in item.fact_ids
+    )
+    record_tool_observation(
+        state,
+        _step(
+            task_id=task.task_id,
+            call_id="call-source-lead",
+            tool_name="reverse_image_search",
+            result=(
+                '{"status":"success","lens_results":['
+                '{"title":"Official record","url":"https://www.si.edu/object/record",'
+                '"snippet":"Official object record.","image_url":""}],'
+                '"semantic_results":[]}'
+            ),
+        ),
+        image_sha256=case.image_sha256,
+    )
+
+    goals = Orchestrator._image_only_task_evidence_goals(state)
+
+    assert goals[task.task_id].startswith(
+        "Does this candidate public source identify"
+    )
+
+
 def test_target_planning_rejects_generic_multi_entity_coexistence() -> None:
     _, state = _antarctic_butterfly_state()
     parent_ids = [
@@ -700,6 +730,73 @@ def test_failed_lens_keeps_semantic_and_text_routes_executable() -> None:
     assert coverage.stop_reason == "continue"
     assert any(route.startswith("reverse_image_search:semantic:") for route in routes)
     assert any(route.startswith("text_search:") for route in routes)
+
+
+def test_one_lead_inspection_releases_retrieval_and_skips_weak_reposts() -> None:
+    case, state = _runtime_state()
+    task = next(
+        item
+        for item in state.tasks
+        if state.core_verdict_fact_id in item.fact_ids
+    )
+    task.suggested_tools = [
+        "reverse_image_search",
+        "text_search",
+        "visit",
+    ]
+    record_tool_observation(
+        state,
+        _step(
+            task_id=task.task_id,
+            call_id="call-ranked-leads",
+            tool_name="reverse_image_search",
+            result=(
+                '{"status":"success","lens_results":['
+                '{"title":"Official source","url":"https://www.si.edu/object/record",'
+                '"snippet":"","image_url":""},'
+                '{"title":"Repost","url":"https://www.pinterest.com/example/",'
+                '"snippet":"","image_url":""}],"semantic_results":[]}'
+            ),
+        ),
+        image_sha256=case.image_sha256,
+    )
+    initial_routes = remaining_material_routes(
+        state,
+        fact_id=state.core_verdict_fact_id or "",
+    )
+
+    assert len(initial_routes) == 1
+    assert "si.edu" in initial_routes[0]
+    assert Orchestrator._image_only_discovery_route_error(
+        state,
+        "text_search",
+        {"__question_id": task.task_id},
+    )
+
+    official_visit = _step(
+        task_id=task.task_id,
+        call_id="call-official-source",
+        tool_name="visit",
+        result='{"status":"success","evidence":"","summary":"","relevance":"low"}',
+    )
+    official_visit.tool_args["url"] = ["https://www.si.edu/object/record"]
+    record_tool_observation(
+        state,
+        official_visit,
+        image_sha256=case.image_sha256,
+    )
+    routes = remaining_material_routes(
+        state,
+        fact_id=state.core_verdict_fact_id or "",
+    )
+
+    assert not Orchestrator._image_only_discovery_route_error(
+        state,
+        "text_search",
+        {"__question_id": task.task_id},
+    )
+    assert any(route.startswith("text_search:") for route in routes)
+    assert not any("pinterest.com" in route for route in routes)
 
 
 def test_failed_comparison_does_not_exhaust_task_with_uninspected_page() -> None:
@@ -2943,7 +3040,7 @@ def test_real_order_atomic_location_refutation_compiles_fake_without_source_bind
     assert basis.fact_ids == [core_id]
 
 
-def test_task_exhausts_after_five_attempts_without_resolution() -> None:
+def test_task_exhausts_after_seven_attempts_without_resolution() -> None:
     case, state = _runtime_state()
     task = next(
         item
@@ -2953,7 +3050,7 @@ def test_task_exhausts_after_five_attempts_without_resolution() -> None:
             for fact_id in item.fact_ids
         )
     )
-    for index in range(5):
+    for index in range(7):
         record_tool_observation(
             state,
             _step(
@@ -2968,7 +3065,7 @@ def test_task_exhausts_after_five_attempts_without_resolution() -> None:
             image_sha256=case.image_sha256,
         )
 
-    assert task.attempt_count == 5
+    assert task.attempt_count == 7
     assert task.status == "exhausted"
 
 
