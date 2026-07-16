@@ -11,6 +11,7 @@ from src.orchestrator.investigation_models import (
     ImageOnlyCoverage,
     ImageOnlyInvestigationState,
     VerdictBasis,
+    VisualFact,
 )
 from src.orchestrator.task_store import (
     DECISIVE_FACTS_MAX,
@@ -134,10 +135,15 @@ def audit_coverage(
             )
         )
 
-    complete = bool(coverages) and all(
+    decisive_complete = bool(coverages) and all(
         item.status in {"supported", "refuted"}
         for item in coverages
     )
+    supplemental_integrity_open = _has_open_screenshot_integrity_check(
+        state,
+        fact_by_id,
+    )
+    complete = decisive_complete and not supplemental_integrity_open
     previous = state.coverage_audits[-1] if state.coverage_audits else None
     previous_checkpoint = next(
         (
@@ -225,9 +231,15 @@ def audit_coverage(
             "At least one decisive proposition is refuted after evidence-conflict "
             "adjudication; remaining supporting facts cannot change the fake verdict."
         )
+    elif decisive_complete and supplemental_integrity_open:
+        stop_reason = "continue"
+        reason = (
+            "The decisive source-binding facts are resolved, but the separately "
+            "planned screenshot integrity check still has an executable route."
+        )
     elif complete:
         stop_reason = "coverage_complete"
-        reason = "Every active decisive fact is supported or refuted."
+        reason = "Every required decisive and supplemental fact is resolved."
     elif state.action_count >= MAX_TOOL_ACTIONS:
         stop_reason = "hard_budget_exhausted"
         reason = "The image-only tool action budget is exhausted."
@@ -266,6 +278,32 @@ def audit_coverage(
     if stop_reason != "continue":
         state.stop_reason = stop_reason
     return audit
+
+
+def _has_open_screenshot_integrity_check(
+    state: ImageOnlyInvestigationState,
+    fact_by_id: Dict[str, VisualFact],
+) -> bool:
+    """Keep a planned screenshot tamper check separate from verdict ownership."""
+
+    if state.brief.media_type != "screenshot":
+        return False
+    integrity_ids = {
+        fact.fact_id
+        for fact in fact_by_id.values()
+        if (
+            fact.predicate == "visual_integrity"
+            and fact.decision_relevance == "supporting"
+            and fact.status not in {"supported", "refuted"}
+        )
+    }
+    return any(
+        task.status in {"active", "pending"}
+        and task.attempt_count < MAX_ATTEMPTS_PER_TASK
+        and bool(set(task.fact_ids) & integrity_ids)
+        and bool(task.suggested_tools)
+        for task in state.tasks
+    )
 
 
 def compile_verdict_basis(

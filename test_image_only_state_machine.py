@@ -324,6 +324,8 @@ def test_target_planning_accepts_atomic_visible_location_relation() -> None:
         if fact.predicate == "visible_in"
         and "monarch" in fact.statement.casefold()
     )
+    activate_initial_decisive_facts(state)
+    assert scene.fact_id in state.decisive_fact_ids
 
     update = apply_target_planning(
         state,
@@ -355,9 +357,10 @@ def test_target_planning_accepts_atomic_visible_location_relation() -> None:
 
     assert len(update["accepted_fact_ids"]) == 1
     fact_id = update["accepted_fact_ids"][0]
-    assert fact_id in state.decisive_fact_ids
+    assert state.decisive_fact_ids == [fact_id]
     fact = next(item for item in state.facts if item.fact_id == fact_id)
     assert "Antarctic" in fact.statement
+    assert scene.decision_relevance == "supporting"
 
 
 def test_pending_search_candidate_requires_inspection_before_retrieval() -> None:
@@ -438,6 +441,157 @@ def test_pending_search_candidate_requires_inspection_before_retrieval() -> None
 
     assert len(pending["pages"]) == 1
     assert pending["pages"][0]["task_id"] == task.task_id
+    assert Orchestrator._image_only_discovery_route_error(
+        state,
+        "text_search",
+        {"__question_id": task.task_id},
+    )
+    assert not Orchestrator._image_only_discovery_route_error(
+        state,
+        "visit",
+        {"__question_id": task.task_id},
+    )
+
+
+def test_pending_discovery_routes_prefer_official_sources() -> None:
+    case, state = _antarctic_butterfly_state()
+    scene = next(
+        fact for fact in state.facts if fact.predicate == "appears_to_depict"
+    )
+    butterfly = next(
+        fact
+        for fact in state.facts
+        if fact.predicate == "visible_in"
+        and "monarch" in fact.statement.casefold()
+    )
+    update = apply_target_planning(
+        state,
+        TargetPlanningOutput(
+            proposals=[
+                TargetFactProposal(
+                    statement=(
+                        "Millions of monarch butterflies naturally overwinter "
+                        "in the Antarctic landscape shown in the image."
+                    ),
+                    predicate="located_at",
+                    parent_fact_ids=[scene.fact_id, butterfly.fact_id],
+                    question="Do monarch butterflies migrate to Antarctica?",
+                    purpose="Verify the visible subject-to-place relation.",
+                    suggested_tools=["text_search", "visit"],
+                )
+            ]
+        ),
+    )
+    task = next(
+        item
+        for item in state.tasks
+        if update["accepted_fact_ids"][0] in item.fact_ids
+    )
+    record_tool_observation(
+        state,
+        _step(
+            task_id=task.task_id,
+            call_id="call-source-ranking",
+            tool_name="text_search",
+            result=json.dumps(
+                {
+                    "status": "success",
+                    "queries": [
+                        {
+                            "query": "monarch Antarctica",
+                            "results": [
+                                {
+                                    "title": "Unverified answer",
+                                    "url": "https://www.quora.com/example",
+                                    "snippet": "No butterflies in Antarctica.",
+                                },
+                                {
+                                    "title": "Monarch butterflies",
+                                    "url": (
+                                        "https://www.si.edu/spotlight/"
+                                        "buginfo/monarch"
+                                    ),
+                                    "snippet": "Smithsonian monarch record.",
+                                },
+                            ],
+                        }
+                    ],
+                }
+            ),
+        ),
+        image_sha256=case.image_sha256,
+    )
+
+    pending = pending_discovery_routes(
+        state,
+        task_ids={task.task_id},
+    )
+
+    assert pending["pages"][0]["source_class"] == "official"
+    assert pending["pages"][0]["url"].startswith("https://www.si.edu/")
+
+
+def test_external_target_demotes_parallel_visual_integrity() -> None:
+    _, state = _antarctic_butterfly_state()
+    scene = next(
+        fact for fact in state.facts if fact.predicate == "appears_to_depict"
+    )
+    butterfly = next(
+        fact
+        for fact in state.facts
+        if fact.predicate == "visible_in"
+        and "monarch" in fact.statement.casefold()
+    )
+    activate_initial_decisive_facts(state)
+
+    update = apply_target_planning(
+        state,
+        TargetPlanningOutput(
+            proposals=[
+                TargetFactProposal(
+                    statement=(
+                        "The depicted monarch butterfly scene is an authentic, "
+                        "unmodified photograph of a real-world scene."
+                    ),
+                    kind="internal_consistency",
+                    predicate="visual_integrity",
+                    parent_fact_ids=[scene.fact_id],
+                    question="Are the pixels authentic and unmodified?",
+                    purpose="Inspect visual integrity.",
+                    suggested_tools=["analyze_visual_anomalies"],
+                    decision_relevance="decisive",
+                ),
+                TargetFactProposal(
+                    statement=(
+                        "Millions of monarch butterflies naturally overwinter "
+                        "in the Antarctic landscape shown in the image."
+                    ),
+                    predicate="located_at",
+                    parent_fact_ids=[scene.fact_id, butterfly.fact_id],
+                    question="Do monarch butterflies migrate to Antarctica?",
+                    purpose="Verify the visible subject-to-place relation.",
+                    suggested_tools=["text_search", "visit"],
+                    decision_relevance="decisive",
+                ),
+            ]
+        ),
+    )
+
+    location_id = next(
+        fact_id
+        for fact_id in update["accepted_fact_ids"]
+        if next(
+            fact for fact in state.facts if fact.fact_id == fact_id
+        ).predicate
+        == "located_at"
+    )
+    integrity = next(
+        fact
+        for fact in state.facts
+        if fact.predicate == "visual_integrity"
+    )
+    assert integrity.decision_relevance == "supporting"
+    assert state.decisive_fact_ids == [location_id]
 
 
 def test_react_exposes_only_tasks_blocking_unresolved_decisive_facts() -> None:

@@ -184,7 +184,7 @@ fact-specific gaps.
 def select_react_tasks(
     state: ImageOnlyInvestigationState,
 ) -> List[Any]:
-    """Expose verdict-blocking tasks before optional supporting investigation."""
+    """Expose blocking work plus a planned screenshot integrity companion."""
 
     active = [
         task
@@ -203,10 +203,31 @@ def select_react_tasks(
         for task in active
         if set(task.fact_ids) & unresolved_decisive_ids
     ]
+    supplemental_integrity = [
+        task
+        for task in active
+        if state.brief.media_type == "screenshot"
+        and any(
+            facts.get(fact_id) is not None
+            and facts[fact_id].predicate == "visual_integrity"
+            and facts[fact_id].decision_relevance == "supporting"
+            and facts[fact_id].status not in {"supported", "refuted"}
+            for fact_id in task.fact_ids
+        )
+    ]
+    blocking_task_ids = {task.task_id for task in blocking}
     if blocking:
-        active = blocking
+        active = [
+            *blocking,
+            *[
+                task
+                for task in supplemental_integrity
+                if task.task_id not in blocking_task_ids
+            ],
+        ]
     active.sort(
         key=lambda task: (
+            task.task_id not in blocking_task_ids,
             task.priority,
             task.task_id not in state.recommended_next_task_ids,
             task.attempt_count,
@@ -253,7 +274,7 @@ def pending_discovery_routes(
     references: List[Dict[str, str]] = []
     seen_pages: set[str] = set()
     seen_references: set[str] = set()
-    for item in reversed(state.discoveries):
+    for item in state.discoveries:
         if item.task_id not in active_task_ids:
             continue
         page_url = canonicalize_url(item.candidate_url)
@@ -263,12 +284,14 @@ def pending_discovery_routes(
             and page_url not in seen_pages
         ):
             seen_pages.add(page_url)
+            source_class = classify_source(item.candidate_url).source_class
             pages.append(
                 {
                     "discovery_id": item.discovery_id,
                     "task_id": item.task_id,
                     "url": item.candidate_url,
                     "title": item.title,
+                    "source_class": source_class,
                 }
             )
         reference_url = canonicalize_url(item.reference_image_url)
@@ -278,6 +301,9 @@ def pending_discovery_routes(
             and reference_url not in seen_references
         ):
             seen_references.add(reference_url)
+            source_class = classify_source(
+                item.reference_image_url
+            ).source_class
             references.append(
                 {
                     "discovery_id": item.discovery_id,
@@ -285,8 +311,30 @@ def pending_discovery_routes(
                     "reference_image_url": item.reference_image_url,
                     "page_url": item.candidate_url,
                     "title": item.title,
+                    "source_class": source_class,
                 }
             )
+    source_rank = {
+        "official": 0,
+        "news": 1,
+        "visual": 2,
+        "unknown": 3,
+        "ugc": 4,
+    }
+    pages.sort(
+        key=lambda item: (
+            source_rank.get(item["source_class"], 9),
+            item["task_id"],
+            item["discovery_id"],
+        )
+    )
+    references.sort(
+        key=lambda item: (
+            source_rank.get(item["source_class"], 9),
+            item["task_id"],
+            item["discovery_id"],
+        )
+    )
     return {
         "pages": pages[:8],
         "references": references[:8],
@@ -319,9 +367,6 @@ def render_react_context(state: ImageOnlyInvestigationState) -> str:
     pending_references = [
         {
             **item,
-            "source_class": classify_source(
-                item["reference_image_url"]
-            ).source_class,
         }
         for item in pending_routes["references"]
     ]

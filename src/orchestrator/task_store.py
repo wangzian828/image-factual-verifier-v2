@@ -220,6 +220,11 @@ def apply_target_planning(
     accepted_fact_ids: List[str] = []
     accepted_task_ids: List[str] = []
     rejected_reasons: List[str] = []
+    has_external_decisive_target = any(
+        proposal.decision_relevance == "decisive"
+        and proposal.predicate != "visual_integrity"
+        for proposal in output.proposals
+    )
     if (
         _planning_needs_world_relation(output)
         and not _planning_has_world_relation(output)
@@ -348,6 +353,12 @@ def apply_target_planning(
             proposal.statement,
             proposal.predicate,
         )
+        decision_relevance = proposal.decision_relevance
+        if (
+            proposal.predicate == "visual_integrity"
+            and has_external_decisive_target
+        ):
+            decision_relevance = "supporting"
         if existing is None:
             if len(state.facts) >= 72:
                 rejected_reasons.append("VisualFact budget exhausted")
@@ -389,7 +400,7 @@ def apply_target_planning(
                 object_entity_id=parent.object_entity_id,
                 status="active",
                 basis_ids=basis_ids,
-                decision_relevance=proposal.decision_relevance,
+                decision_relevance=decision_relevance,
                 origin=FactOrigin(
                     type=origin_type,
                     origin_ids=parent_ids[:8],
@@ -399,15 +410,22 @@ def apply_target_planning(
             fact_by_id[fact.fact_id] = fact
         else:
             fact = existing
-            if proposal.decision_relevance == "decisive":
+            if decision_relevance == "decisive":
                 fact.decision_relevance = "decisive"
 
-        if proposal.decision_relevance == "decisive":
-            state.decisive_fact_ids = list(
-                dict.fromkeys(
-                    [*state.decisive_fact_ids, fact.fact_id]
+        if decision_relevance == "decisive":
+            if proposal.predicate != "visual_integrity":
+                _replace_generic_decisive_parents(
+                    state,
+                    parents,
+                    fact,
                 )
-            )[:DECISIVE_FACTS_MAX]
+            else:
+                state.decisive_fact_ids = list(
+                    dict.fromkeys(
+                        [*state.decisive_fact_ids, fact.fact_id]
+                    )
+                )[:DECISIVE_FACTS_MAX]
         task_id = stable_id(
             "task",
             fact.fact_id,

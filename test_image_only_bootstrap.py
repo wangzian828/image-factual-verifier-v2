@@ -336,10 +336,7 @@ def test_target_planning_dynamically_separates_source_binding_and_integrity(
         for fact in state.facts
         if fact.fact_id in state.decisive_fact_ids
     }
-    assert decisive_predicates == {
-        "source_record_matches",
-        "visual_integrity",
-    }
+    assert decisive_predicates == {"source_record_matches"}
 
 
 def test_source_record_target_cannot_absorb_pixel_integrity_scope(

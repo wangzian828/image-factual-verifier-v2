@@ -441,13 +441,6 @@ class Orchestrator:
             )
             react_tasks = select_image_only_react_tasks(investigation)
             react_task_ids = {task.task_id for task in react_tasks}
-            pending_routes = pending_image_only_discovery_routes(
-                investigation,
-                task_ids=react_task_ids,
-            )
-            inspection_pending = bool(
-                pending_routes["pages"] or pending_routes["references"]
-            )
             task_claims = self._image_only_task_claims(
                 investigation,
                 task_ids=react_task_ids,
@@ -507,15 +500,6 @@ class Orchestrator:
                     )
                     if tool.name != "current_time"
                     and not (
-                        inspection_pending
-                        and tool.name
-                        in {
-                            "text_search",
-                            "reverse_image_search",
-                            "crop_and_search",
-                        }
-                    )
-                    and not (
                         (reverse_succeeded or reverse_failures >= 2)
                         and tool.name == "reverse_image_search"
                     )
@@ -558,6 +542,13 @@ class Orchestrator:
                 priority_question_ids=[],
                 supporting_question_ids=[],
                 source_access_policy=self.source_access_policy,
+                visual_call_validator=lambda tool_name, tool_args: (
+                    self._image_only_discovery_route_error(
+                        investigation,
+                        tool_name,
+                        tool_args,
+                    )
+                ),
                 max_protocol_corrections=4,
                 max_tool_calls_per_turn=1,
                 force_tool_each_round=True,
@@ -900,6 +891,36 @@ class Orchestrator:
             if task.status in {"active", "pending"}
             and (task_ids is None or task.task_id in task_ids)
         }
+
+    @staticmethod
+    def _image_only_discovery_route_error(
+        investigation: ImageOnlyInvestigationState,
+        tool_name: str,
+        tool_args: Dict[str, Any],
+    ) -> str:
+        """Keep one task from repeatedly searching before inspecting its leads."""
+
+        if tool_name != "text_search":
+            return ""
+        task_id = str(
+            tool_args.get("__question_id")
+            or tool_args.get("question_id")
+            or tool_args.get("task_id")
+            or ""
+        ).strip()
+        if not task_id:
+            return ""
+        pending = pending_image_only_discovery_routes(
+            investigation,
+            task_ids={task_id},
+        )
+        if not (pending["pages"] or pending["references"]):
+            return ""
+        return (
+            f"Task {task_id!r} already has uninspected candidate pages or "
+            "reference images. Use visit or compare_with_reference for this "
+            "task before another text_search, or choose a different active task."
+        )
 
     @staticmethod
     def _image_only_fact_signature(

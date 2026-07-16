@@ -901,4 +901,10 @@ def test_scripted_screenshot_source_and_integrity_trajectory(
         fact["predicate"]
         for fact in state["facts"]
         if fact["fact_id"] in state["decisive_fact_ids"]
-    } == {"source_record_matches", "visual_integrity"}
+    } == {"source_record_matches"}
+    assert any(
+        fact["predicate"] == "visual_integrity"
+        and fact["decision_relevance"] == "supporting"
+        and fact["status"] == "supported"
+        for fact in state["facts"]
+    )
