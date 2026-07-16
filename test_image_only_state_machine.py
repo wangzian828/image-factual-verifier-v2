@@ -29,6 +29,7 @@ from src.orchestrator.pipeline import Orchestrator
 from src.orchestrator.image_only_prompts import (
     pending_discovery_routes,
     render_react_context,
+    render_target_refresh_context,
     select_react_tasks,
 )
 from src.orchestrator.state import (
@@ -745,6 +746,151 @@ def test_external_target_demotes_parallel_visual_integrity() -> None:
     )
     assert integrity.decision_relevance == "supporting"
     assert state.decisive_fact_ids == [location_id]
+
+
+def test_target_refresh_can_add_independent_scene_relation() -> None:
+    _, state = _antarctic_butterfly_state()
+    scene = next(
+        fact for fact in state.facts if fact.predicate == "appears_to_depict"
+    )
+    butterfly = next(
+        fact
+        for fact in state.facts
+        if fact.predicate == "visible_in"
+        and "monarch" in fact.statement.casefold()
+    )
+    pine = next(
+        fact
+        for fact in state.facts
+        if fact.predicate == "visible_in"
+        and "pine" in fact.statement.casefold()
+    )
+    initial = apply_target_planning(
+        state,
+        TargetPlanningOutput(
+            proposals=[
+                TargetFactProposal(
+                    statement=(
+                        "Monarch butterflies naturally occur in the Antarctic "
+                        "landscape shown in the image."
+                    ),
+                    predicate="located_at",
+                    parent_fact_ids=[scene.fact_id, butterfly.fact_id],
+                    question=(
+                        "Do monarch butterflies naturally occur in Antarctica?"
+                    ),
+                    purpose="Verify the visible butterfly-to-place relation.",
+                    suggested_tools=["text_search", "visit"],
+                    suggested_queries=["monarch butterflies Antarctica"],
+                )
+            ]
+        ),
+    )
+    exhausted_task = next(
+        task
+        for task in state.tasks
+        if initial["accepted_fact_ids"][0] in task.fact_ids
+    )
+    exhausted_task.status = "exhausted"
+    assert Orchestrator._image_only_target_refresh_needed(state)
+
+    context = render_target_refresh_context(state)
+    assert initial["accepted_fact_ids"][0] in context
+    assert "exhausted_decisive_targets" in context
+
+    refreshed = apply_target_planning(
+        state,
+        TargetPlanningOutput(
+            proposals=[
+                TargetFactProposal(
+                    statement=(
+                        "Pine trees naturally grow in the Antarctic landscape "
+                        "shown in the image."
+                    ),
+                    predicate="located_at",
+                    parent_fact_ids=[scene.fact_id, pine.fact_id],
+                    question="Do pine trees naturally grow in Antarctica?",
+                    purpose="Verify the visible tree-to-place relation.",
+                    suggested_tools=["text_search", "visit"],
+                    suggested_queries=["pine trees Antarctica"],
+                )
+            ]
+        ),
+    )
+
+    assert len(refreshed["accepted_fact_ids"]) == 1
+    refreshed_fact_id = refreshed["accepted_fact_ids"][0]
+    assert refreshed_fact_id in state.decisive_fact_ids
+    assert any(
+        refreshed_fact_id in task.fact_ids and task.status == "active"
+        for task in state.tasks
+    )
+
+
+def test_visual_anomaly_result_does_not_attach_to_depicted_world_fact() -> None:
+    case, state = _antarctic_butterfly_state()
+    scene = next(
+        fact for fact in state.facts if fact.predicate == "appears_to_depict"
+    )
+    butterfly = next(
+        fact
+        for fact in state.facts
+        if fact.predicate == "visible_in"
+        and "monarch" in fact.statement.casefold()
+    )
+    update = apply_target_planning(
+        state,
+        TargetPlanningOutput(
+            proposals=[
+                TargetFactProposal(
+                    statement=(
+                        "Monarch butterflies naturally occur in the Antarctic "
+                        "landscape shown in the image."
+                    ),
+                    predicate="located_at",
+                    parent_fact_ids=[scene.fact_id, butterfly.fact_id],
+                    question=(
+                        "Do monarch butterflies naturally occur in Antarctica?"
+                    ),
+                    purpose="Verify the visible butterfly-to-place relation.",
+                    suggested_tools=["text_search", "visit"],
+                )
+            ]
+        ),
+    )
+    fact_id = update["accepted_fact_ids"][0]
+    task = next(item for item in state.tasks if fact_id in item.fact_ids)
+    assert "external source evidence" in Orchestrator._image_only_discovery_route_error(
+        state,
+        "analyze_visual_anomalies",
+        {"__question_id": task.task_id},
+    )
+
+    result = record_tool_observation(
+        state,
+        _step(
+            task_id=task.task_id,
+            call_id="call-world-anomaly",
+            tool_name="analyze_visual_anomalies",
+            result=json.dumps(
+                {
+                    "status": "success",
+                    "anomalies": [
+                        {"phenomenon": "inconsistent lighting"}
+                    ],
+                    "overall_authenticity": "likely_ai",
+                    "notes": "The scene has synthetic-looking edges.",
+                }
+            ),
+        ),
+        image_sha256=case.image_sha256,
+    )
+
+    assert result["created_evidence_ids"] == []
+    assert result["created_finding_ids"] == []
+    assert next(fact for fact in state.facts if fact.fact_id == fact_id).status == (
+        "active"
+    )
 
 
 def test_react_exposes_only_tasks_blocking_unresolved_decisive_facts() -> None:

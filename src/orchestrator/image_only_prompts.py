@@ -15,51 +15,14 @@ from src.orchestrator.source_provenance import canonicalize_url
 
 
 REACT_SYSTEM_PROMPT = """\
-You are the single investigation agent for an image-only factual verification run.
+Investigate one supplied active task with one tool call. Search results are leads,
+not evidence: inspect a promising page or reference image before another retrieval
+for that task. Use visual comparison for an image match and webpage text for factual
+claims; keep source-record verification, depicted-world facts, and pixel integrity
+separate. For screenshots, prefer an original or time-aligned source record.
 
-Choose exactly one active ResearchTask and exactly one tool call per action turn.
-Use the task id as question_id. Search for independent source context and inspect
-visual details when needed. A search result title, snippet, or reverse-image match is
-Discovery only. It is not Evidence until a page is fetched or a visual comparison
-successfully observes the relevant property.
-
-Rules:
-1. Never use evaluator gold, benchmark labels, or model memory as Evidence.
-2. Never invent Evidence, Finding ids, source text, URLs, or tool results.
-3. Avoid exact duplicate routes.
-4. Prefer priority-1 unresolved tasks, then recommended tasks.
-5. For text_search and visit, the immutable verification goal is supplied by runtime.
-6. If a Discovery has a non-empty reference_image_url, use
-   compare_with_reference to test the visual match and pass its page_url as
-   source_page_url so the tool can recover an expired or hotlink-blocked image.
-   Visiting only the surrounding page text does not validate that the current image
-   matches the reference.
-7. Prefer an untested official reference image when one is available. An exact
-   same-capture match hosted by an original official source can bind the scene
-   directly. For non-original, unknown, news, or UGC image hosts, also use visit to
-   fetch a direct caption or event/place assertion; the image match alone is
-   incomplete.
-8. Discovery, Evidence, Finding, task, and fact state are reduced by the runtime.
-   Do not propose or invent state transitions in the segment output.
-9. For screenshots, first bind distinctive OCR text, visible account, date, and
-   thread relation to an original or archived source record. Assess visible
-   manipulation separately; existence of a post and absence of visible edits are
-   different questions.
-10. Treat mutable web metadata temporally. A current username, display name,
-    engagement count, profile image, or page layout mismatch does not by itself
-    refute an older screenshot. Seek an archived/same-time record, handle history,
-    or another temporally aligned capture before using that mismatch decisively.
-11. Normalize timestamps before comparing them. A local screenshot time and a UTC
-    source time may fall on adjacent calendar dates while representing the same
-    instant. If either timezone is unknown, treat a one-day boundary mismatch as
-    unresolved and seek timezone-aligned evidence rather than refuting the target.
-12. Do not write a verdict. Return only the segment summary and
-   ready_for_reflection flag.
-13. Retrieval must alternate with inspection. After text_search, reverse-image
-   search, or crop search yields an unvisited candidate page or reference image for
-   the active task, inspect a promising candidate with visit or
-   compare_with_reference before issuing another retrieval query for that task.
-   Search snippets remain Discovery and cannot resolve the task.
+Use only observed tool results. Return the segment summary and reflection boundary;
+the runtime owns task state, evidence, duplicate control, source policy, and verdicts.
 """
 
 
@@ -79,62 +42,28 @@ object matching the schema.
 
 TARGET_PLANNING_SYSTEM_PROMPT = """\
 You are the initial target-planning step of an open-domain image investigation.
-Use only the supplied pixel-grounded VisualFacts, entities, OCR anchors, and media
-description to propose up to three factual targets worth investigating.
+Propose up to three pixel-grounded, checkable targets for an open-domain image
+investigation. Favor the smallest salient real-world relation: one visible subject
+bound to one visible place, event, identity, date, or source record. The target
+statement must be the positive proposition that evidence can support or refute.
 
-Choose targets by what is salient and decision-relevant, not by a fixed media-type
-pipeline. Examples include source provenance, a specific identity/place/event,
-matching a visible public record, or checking a visually suspicious integrity
-property. These are investigation propositions, not established facts.
+Choose independent alternatives when the image contains several factual relations.
+Use visual integrity only as a separate supporting check when an external factual
+relation is available. Do not assume public-web facts or add details absent from the
+pixel/OCR state. The runtime validates grounding, atomicity, queries, task state,
+and output structure.
+"""
 
-Rules:
-1. Every target must cite existing parent VisualFact ids.
-2. Do not add a named person, event, place, date, title, or account absent from the
-   supplied visual/OCR state.
-3. Suggested text queries must be built from supplied anchors. Prefer exact
-   distinctive text when it is present.
-4. Pick tools because they can resolve the proposed target. Do not prescribe a
-   universal order by image type.
-5. Keep evidence scopes separate. source_record_matches tests whether visible
-   account/text/date/thread details match a public record; it must not also claim the
-   pixels are unmodified. Use a separate visual_integrity target only when visible
-   manipulation is itself decision-relevant. Include visible dates or other temporal
-   anchors in the target when they affect mutable account/profile metadata, including
-   the visible clock time when available. Its fact statement must quote or reproduce
-   at least one distinctive visible text anchor; a generic "this post is real"
-   proposition is too weakly bound.
-6. Avoid generic targets that merely restate "an image is visible."
-7. The fact statement must express the proposition that the question will resolve.
-   Do not ask for a creator, title, place, event, date, or source while leaving that
-   slot out of the fact statement. If the slot is not yet known, state it as a
-   bounded attribution proposition about the depicted central subject, rather than
-   prematurely asserting only a broad scene description.
-8. Prefer a checkable depicted-world relation when the pixels visibly combine a
-   subject with a place, event, date, or public-record context. Keep that relation
-   atomic: prefer one salient subject and one decisive place/event/identity slot over
-   a conjunction of every visible object. Its question must be answerable by a source
-   about that subject or relation; do not require one webpage to discuss the entire
-   input image. A visual_integrity target may be added when useful, but it is not a
-   substitute for checking whether the depicted-world relation is factually possible
-   or correctly attributed. Mark visual_integrity decisive only when pixel alteration
-   itself is the central factual issue; otherwise keep it supporting. If the integrity
-   proposition itself says that subjects coexist, occur, or are located in a
-   real-world place or event, you must also propose that relation as a separate
-   decisive fact.
-   When the visible scene description names or strongly specifies a place or habitat,
-   preserve that concrete place/habitat in the located_at statement and question.
-   Bind it to one named salient subject from the pixels: for example, ask whether
-   the depicted butterflies occur in the named Antarctic landscape, not only whether
-   "the image was taken" there. Do not list every visible object in one target.
-   Never replace it with "the same place", "some location", a conjunction of all
-   visible objects, or a generic coexistence question.
-9. Frame every target as the positive proposition whose truth would make the image
-   real. In particular, a visual_integrity fact should say that the relevant pixels
-   are authentic, coherent, or unmodified. Never state that the image is fake,
-   manipulated, synthetic, AI-generated, or impossible as the target proposition;
-   anomaly Evidence may refute the positive integrity proposition.
-10. Do not use model memory, public-web facts, evaluator data, or a verdict.
-11. Return exactly one JSON object matching the schema.
+
+TARGET_REFRESH_SYSTEM_PROMPT = """\
+A decisive image-grounded target has exhausted its current evidence routes without
+resolving the image. Propose up to two new, independent, pixel-grounded factual
+targets that could still verify the same scene. Prefer an atomic relation with a
+visible subject and place, event, identity, date, or source record for which an
+authoritative page could answer the question directly. Do not paraphrase the
+exhausted target, use visual-integrity/anomaly claims as a substitute, or assume
+outside facts. The runtime validates grounding, duplicate control, and output
+structure.
 """
 
 
@@ -469,6 +398,39 @@ def render_target_planning_context(
         ensure_ascii=False,
         indent=2,
     )
+
+
+def render_target_refresh_context(
+    state: ImageOnlyInvestigationState,
+) -> str:
+    payload = json.loads(render_target_planning_context(state))
+    facts = {fact.fact_id: fact for fact in state.facts}
+    payload["exhausted_decisive_targets"] = [
+        {
+            "fact_id": fact_id,
+            "statement": facts[fact_id].statement,
+            "predicate": facts[fact_id].predicate,
+        }
+        for fact_id in state.decisive_fact_ids
+        if fact_id in facts
+        and facts[fact_id].status in {"exhausted", "blocked", "candidate", "active"}
+        and any(
+            task.status == "exhausted" and fact_id in task.fact_ids
+            for task in state.tasks
+        )
+    ]
+    payload["existing_target_statements"] = [
+        {
+            "fact_id": fact.fact_id,
+            "statement": fact.statement,
+            "predicate": fact.predicate,
+            "status": fact.status,
+        }
+        for fact in state.facts
+        if fact.predicate
+        not in {"appears_to_depict", "visible_in", "reads", "context_suggested_by_text"}
+    ]
+    return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
 def render_reflection_context(state: ImageOnlyInvestigationState) -> str:

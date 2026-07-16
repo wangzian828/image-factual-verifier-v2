@@ -225,6 +225,10 @@ def apply_target_planning(
     accepted_task_ids: List[str] = []
     rejected_reasons: List[str] = []
     has_external_decisive_target = any(
+        fact.fact_id in state.decisive_fact_ids
+        and fact.predicate != "visual_integrity"
+        for fact in state.facts
+    ) or any(
         proposal.decision_relevance == "decisive"
         and proposal.predicate != "visual_integrity"
         for proposal in output.proposals
@@ -2001,6 +2005,10 @@ def _visual_evidence_record(
     claim_binding = "pixel_observation"
     source_url = ""
     region = data.get("crop_bbox") or data.get("bbox") or [0.0, 0.0, 1.0, 1.0]
+    if tool_name in {"check_consistency", "analyze_visual_anomalies"} and not (
+        _task_owns_visual_integrity_fact(state, task)
+    ):
+        return None
     if tool_name == "compare_with_reference":
         statement = str(data.get("overall_observation", "")).strip()
         source_url = str(
@@ -2350,6 +2358,18 @@ def _task_owns_scene_fact(
     return any(
         facts.get(fact_id) is not None
         and facts[fact_id].predicate == "appears_to_depict"
+        for fact_id in task.fact_ids
+    )
+
+
+def _task_owns_visual_integrity_fact(
+    state: ImageOnlyInvestigationState,
+    task: ResearchTask,
+) -> bool:
+    facts = {fact.fact_id: fact for fact in state.facts}
+    return any(
+        facts.get(fact_id) is not None
+        and facts[fact_id].predicate == "visual_integrity"
         for fact_id in task.fact_ids
     )
 

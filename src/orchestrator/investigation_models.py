@@ -479,6 +479,7 @@ class ImageOnlyInvestigationState(StrictModel):
     attempted_routes: List[str] = Field(default_factory=list, max_length=120)
     action_count: int = Field(default=0, ge=0, le=24)
     reflection_failure_streak: int = Field(default=0, ge=0, le=2)
+    target_refresh_count: int = Field(default=0, ge=0, le=2)
     verdict_basis: Optional[VerdictBasis] = None
     judgment: Optional[ImageOnlyJudgment] = None
     stop_reason: Literal[

@@ -23,11 +23,13 @@ from src.orchestrator.image_only_prompts import (
     REACT_SYSTEM_PROMPT as IMAGE_ONLY_REACT_PROMPT,
     REFLECTION_SYSTEM_PROMPT as IMAGE_ONLY_REFLECTION_PROMPT,
     TARGET_PLANNING_SYSTEM_PROMPT as IMAGE_ONLY_TARGET_PLANNING_PROMPT,
+    TARGET_REFRESH_SYSTEM_PROMPT as IMAGE_ONLY_TARGET_REFRESH_PROMPT,
     render_attribution_context as render_image_only_attribution_context,
     render_judgment_context as render_image_only_judgment_context,
     render_react_context as render_image_only_react_context,
     render_reflection_context as render_image_only_reflection_context,
     render_target_planning_context as render_image_only_target_planning_context,
+    render_target_refresh_context as render_image_only_target_refresh_context,
     pending_discovery_routes as pending_image_only_discovery_routes,
     select_react_tasks as select_image_only_react_tasks,
 )
@@ -624,6 +626,11 @@ class Orchestrator:
                     evidence_gain=evidence_gain,
                     decision_gain=decision_gain,
                 )
+                if self._image_only_target_refresh_needed(investigation):
+                    await self._run_image_only_target_refresh(
+                        state,
+                        investigation,
+                    )
                 audit_coverage(
                     investigation,
                     reflection_checkpoint=True,
@@ -675,6 +682,49 @@ class Orchestrator:
                 break
         self._record_stage_steps(state, steps)
         self._sync_image_only_state(state, investigation)
+
+    async def _run_image_only_target_refresh(
+        self,
+        state: VerificationState,
+        investigation: ImageOnlyInvestigationState,
+    ) -> None:
+        """Ask the policy for an independent pixel-grounded target after exhaustion."""
+
+        runner = StageRunner(
+            llm=self.llm,
+            system_prompt=self._sp(IMAGE_ONLY_TARGET_REFRESH_PROMPT),
+            tools=[],
+            output_schema=TargetPlanningOutput,
+            max_rounds=1,
+            stage_name="image_only_target_refresh",
+            attach_image=False,
+            output_validator=lambda parsed, _steps: (
+                self._validate_image_only_target_planning(
+                    investigation,
+                    parsed,
+                )
+            ),
+            max_output_tokens=self._stage_output_tokens("PLANNING", 8192),
+            generation_config={
+                "thinking_level": self._stage_thinking_level("PLANNING")
+            },
+        )
+        parsed, steps = await runner.run(
+            render_image_only_target_refresh_context(investigation)
+        )
+        investigation.target_refresh_count += 1
+        if parsed is None:
+            self._record_stage_steps(state, steps)
+            self._sync_image_only_state(state, investigation)
+            return
+        update = apply_target_planning(investigation, parsed)
+        for step in reversed(steps):
+            if step.action_type == "output":
+                step.metadata["target_refresh_state_update"] = update
+                break
+        self._record_stage_steps(state, steps)
+        self._sync_image_only_state(state, investigation)
+
 
     async def _run_image_only_reflection(
         self,
@@ -913,8 +963,6 @@ class Orchestrator:
     ) -> str:
         """Keep one task from repeatedly searching before inspecting its leads."""
 
-        if tool_name != "text_search":
-            return ""
         task_id = str(
             tool_args.get("__question_id")
             or tool_args.get("question_id")
@@ -922,6 +970,24 @@ class Orchestrator:
             or ""
         ).strip()
         if not task_id:
+            return ""
+        if tool_name in {"check_consistency", "analyze_visual_anomalies"}:
+            facts = {fact.fact_id: fact for fact in investigation.facts}
+            task = next(
+                (item for item in investigation.tasks if item.task_id == task_id),
+                None,
+            )
+            if task is not None and not any(
+                facts.get(fact_id) is not None
+                and facts[fact_id].predicate == "visual_integrity"
+                for fact_id in task.fact_ids
+            ):
+                return (
+                    f"Tool {tool_name!r} may inspect pixel integrity only. "
+                    "Use external source evidence for identity, location, event, "
+                    "date, distribution, habitat, or other depicted-world facts."
+                )
+        if tool_name != "text_search":
             return ""
         pending = pending_image_only_discovery_routes(
             investigation,
@@ -945,6 +1011,39 @@ class Orchestrator:
                 for fact in investigation.facts
             )
         )
+
+    @staticmethod
+    def _image_only_target_refresh_needed(
+        investigation: ImageOnlyInvestigationState,
+    ) -> bool:
+        if (
+            investigation.target_refresh_count >= 2
+            or investigation.action_count >= MAX_TOOL_ACTIONS
+        ):
+            return False
+        facts = {fact.fact_id: fact for fact in investigation.facts}
+        decisive_ids = {
+            fact_id
+            for fact_id in investigation.decisive_fact_ids
+            if fact_id in facts
+            and facts[fact_id].predicate != "visual_integrity"
+            and facts[fact_id].status not in {"supported", "refuted"}
+        }
+        if not decisive_ids:
+            return False
+        has_exhausted_target = any(
+            task.status == "exhausted"
+            and bool(set(task.fact_ids) & decisive_ids)
+            for task in investigation.tasks
+        )
+        has_open_route = any(
+            task.status in {"active", "pending"}
+            and bool(set(task.fact_ids) & decisive_ids)
+            and bool(task.suggested_tools)
+            for task in investigation.tasks
+        )
+        return has_exhausted_target and not has_open_route
+
 
     @staticmethod
     def _attempted_image_only_tool(route: str, tool_name: str) -> bool:
