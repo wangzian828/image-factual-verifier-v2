@@ -204,7 +204,7 @@ def test_off_chain_evidence_only_hurts_when_added_to_basis(
     with_basis_pollution = asyncio.run(score_reference_chain_trace(trace, gold))
     assert (
         with_basis_pollution["metrics"]["basis_reference_precision"]
-        == 0.666667
+        == 0.5
     )
     assert with_basis_pollution[
         "off_reference_chain_basis_evidence_ids"

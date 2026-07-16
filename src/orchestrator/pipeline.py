@@ -431,6 +431,13 @@ class Orchestrator:
             if investigation.action_count >= MAX_TOOL_ACTIONS:
                 audit_coverage(investigation)
                 break
+            if self._image_only_target_refresh_needed(investigation):
+                await self._run_image_only_target_refresh(
+                    state,
+                    investigation,
+                )
+                self._sync_image_only_state(state, investigation)
+                continue
             if not any(
                 task.status in {"active", "pending"}
                 for task in investigation.tasks
@@ -711,7 +718,7 @@ class Orchestrator:
             stage_name="image_only_target_refresh",
             attach_image=False,
             output_validator=lambda parsed, _steps: (
-                self._validate_image_only_target_planning(
+                self._validate_image_only_target_refresh(
                     investigation,
                     parsed,
                 )
@@ -729,7 +736,11 @@ class Orchestrator:
             self._record_stage_steps(state, steps)
             self._sync_image_only_state(state, investigation)
             return
-        update = apply_target_planning(investigation, parsed)
+        update = apply_target_planning(
+            investigation,
+            parsed,
+            force_external_decisive=True,
+        )
         for step in reversed(steps):
             if step.action_type == "output":
                 step.metadata["target_refresh_state_update"] = update
@@ -871,6 +882,28 @@ class Orchestrator:
                 "target planning proposed no valid state transition"
             )
         return True, ""
+
+    @staticmethod
+    def _validate_image_only_target_refresh(
+        investigation: ImageOnlyInvestigationState,
+        parsed: TargetPlanningOutput,
+    ) -> tuple[bool, str]:
+        candidate = investigation.model_copy(deep=True)
+        before = set(candidate.decisive_fact_ids)
+        update = apply_target_planning(
+            candidate,
+            parsed,
+            force_external_decisive=True,
+        )
+        if any(
+            fact_id not in before
+            for fact_id in candidate.decisive_fact_ids
+        ):
+            return True, ""
+        return False, "; ".join(update["rejected_reasons"]) or (
+            "target refresh must add an atomic pixel-grounded external fact; "
+            "generic provenance or source-search work remains supporting"
+        )
 
     @staticmethod
     def _validate_image_only_judgment(

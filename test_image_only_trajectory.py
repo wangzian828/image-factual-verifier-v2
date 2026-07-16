@@ -636,7 +636,7 @@ def test_scripted_image_only_complete_trajectory(tmp_path: Path) -> None:
     assert result["verdict"] == "real"
     assert result["verdict_basis"]["policy_rule_id"] == "reinspect-v2"
     state = result["state"]["investigation_state"]
-    assert state["action_count"] == 3
+    assert state["action_count"] == 2
     assert len(state["reflections"]) == 0
     assert state["coverage_audits"][-1]["stop_reason"] == "coverage_complete"
     assert state["discoveries"]

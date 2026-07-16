@@ -422,6 +422,80 @@ def test_target_planning_accepts_atomic_visible_location_relation() -> None:
     assert scene.decision_relevance == "supporting"
 
 
+def test_generic_source_search_target_stays_supporting_for_photo() -> None:
+    _, state = _antarctic_butterfly_state()
+    scene = next(
+        fact for fact in state.facts if fact.predicate == "appears_to_depict"
+    )
+
+    update = apply_target_planning(
+        state,
+        TargetPlanningOutput(
+            proposals=[
+                TargetFactProposal(
+                    statement=(
+                        "The input image has a specific original publication "
+                        "record identifying its creator and source."
+                    ),
+                    predicate="source_record_matches",
+                    parent_fact_ids=[scene.fact_id],
+                    question="What original public record identifies this image?",
+                    purpose="Search for optional provenance context.",
+                    suggested_tools=["reverse_image_search", "visit"],
+                    decision_relevance="decisive",
+                )
+            ]
+        ),
+    )
+
+    assert all(
+        next(
+            item
+            for item in state.facts
+            if item.fact_id == fact_id
+        ).decision_relevance != "decisive"
+        for fact_id in update["accepted_fact_ids"]
+    )
+    activate_initial_decisive_facts(state)
+    assert state.decisive_fact_ids == [scene.fact_id]
+
+
+def test_target_refresh_rejects_unobserved_named_metadata() -> None:
+    _, state = _antarctic_butterfly_state()
+    scene = next(
+        fact for fact in state.facts if fact.predicate == "appears_to_depict"
+    )
+
+    update = apply_target_planning(
+        state,
+        TargetPlanningOutput(
+            proposals=[
+                TargetFactProposal(
+                    statement=(
+                        "The depicted artwork was created by Linda Nez in 1994 "
+                        "and is held by the Stark Museum of Art."
+                    ),
+                    predicate="identified_as",
+                    parent_fact_ids=[scene.fact_id],
+                    question="Who created the artwork and which museum holds it?",
+                    purpose="Test remembered attribution metadata.",
+                    suggested_tools=["text_search", "visit"],
+                    suggested_queries=[
+                        '"Linda Nez" 1994 "Stark Museum of Art"'
+                    ],
+                )
+            ]
+        ),
+        force_external_decisive=True,
+    )
+
+    assert not update["accepted_fact_ids"]
+    assert any(
+        "absent from image/OCR grounding" in reason
+        for reason in update["rejected_reasons"]
+    )
+
+
 def test_pending_search_candidate_requires_inspection_before_retrieval() -> None:
     case, state = _antarctic_butterfly_state()
     scene = next(
@@ -1281,13 +1355,14 @@ def test_candidate_attribution_upgrades_after_visual_bridge() -> None:
     )
 
     assert upgraded["accepted_fact_ids"] == [candidate_id]
-    assert candidate.decision_relevance == "decisive"
-    assert state.decisive_fact_ids == [candidate_id]
-    assert broad_task.status == "superseded"
+    assert candidate.decision_relevance == "supporting"
+    assert candidate.status == "active"
+    assert state.decisive_fact_ids == [parent_fact_id]
+    assert broad_task.status != "superseded"
     assert candidate_task.status == "active"
 
 
-def test_single_unknown_source_cannot_resolve_promoted_attribution() -> None:
+def test_same_source_capture_and_assertion_can_resolve_attribution() -> None:
     case, state = _runtime_state()
     parent_fact_id = state.decisive_fact_ids[0]
     provenance = state.tasks[0]
@@ -1381,8 +1456,108 @@ def test_single_unknown_source_cannot_resolve_promoted_attribution() -> None:
         for fact in state.facts
         if fact.fact_id == applied["accepted_fact_ids"][0]
     )
-    assert specific.status == "active"
-    assert applied["created_task_ids"]
+    assert specific.status == "supported"
+    assert specific.decision_relevance == "decisive"
+    assert state.decisive_fact_ids == [specific.fact_id]
+    assert not applied["created_task_ids"]
+
+
+def test_reverse_search_bound_official_record_resolves_without_compare() -> None:
+    case, state = _runtime_state()
+    parent_fact_id = state.decisive_fact_ids[0]
+    provenance = state.tasks[0]
+    page_url = "https://www.si.edu/object/reservation-scene"
+    discovery = record_tool_observation(
+        state,
+        _step(
+            task_id=provenance.task_id,
+            call_id="call-official-ris-record",
+            tool_name="reverse_image_search",
+            result=json.dumps(
+                {
+                    "status": "success",
+                    "candidate_page_urls": [page_url],
+                    "reference_image_candidates": [],
+                    "lens_results": [
+                        {
+                            "title": "Reservation Scene | Smithsonian",
+                            "url": page_url,
+                            "snippet": "",
+                            "image_url": "",
+                        }
+                    ],
+                    "semantic_results": [],
+                }
+            ),
+        ),
+        image_sha256=case.image_sha256,
+    )
+    statement = (
+        'Louise Nez, "Reservation Scene," 1992, commercial yarn, '
+        "Smithsonian American Art Museum."
+    )
+    assertion = record_tool_observation(
+        state,
+        _step(
+            task_id=provenance.task_id,
+            call_id="call-official-ris-visit",
+            tool_name="visit",
+            result=json.dumps(
+                {
+                    "status": "success",
+                    "selected_url": page_url,
+                    "url": page_url,
+                    "evidence": statement,
+                    "summary": statement,
+                    "relevance": "high",
+                    "stance": "support",
+                    "directness": "direct",
+                    "temporal_alignment": "not_applicable",
+                    "artifact_sha256": "d" * 64,
+                    "evidence_span": {
+                        "start": 0,
+                        "end": len(statement),
+                    },
+                    "retrieved_at": datetime.now(
+                        timezone.utc
+                    ).isoformat(),
+                    "injection_flags": [],
+                    "evidence_eligible": True,
+                }
+            ),
+        ),
+        image_sha256=case.image_sha256,
+    )
+
+    applied = apply_attribution(
+        state,
+        AttributionOutput(
+            proposals=[
+                AttributionFactProposal(
+                    statement=(
+                        'The image shows the Navajo pictorial weaving '
+                        '"Reservation Scene" created by Louise Nez in 1992.'
+                    ),
+                    predicate="identified_as",
+                    parent_fact_ids=[parent_fact_id],
+                    discovery_ids=discovery["created_discovery_ids"],
+                    evidence_ids=assertion["created_evidence_ids"],
+                    finding_ids=assertion["created_finding_ids"],
+                    decision_relevance="decisive",
+                )
+            ]
+        ),
+    )
+
+    specific = next(
+        fact
+        for fact in state.facts
+        if fact.fact_id == applied["accepted_fact_ids"][0]
+    )
+    assert specific.status == "supported"
+    assert specific.decision_relevance == "decisive"
+    assert state.decisive_fact_ids == [specific.fact_id]
+    assert not applied["created_task_ids"]
 
 
 def test_attribution_rejects_unknown_or_ungrounded_records() -> None:

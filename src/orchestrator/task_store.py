@@ -214,6 +214,8 @@ def record_tool_observation(
 def apply_target_planning(
     state: ImageOnlyInvestigationState,
     output: TargetPlanningOutput,
+    *,
+    force_external_decisive: bool = False,
 ) -> Dict[str, Any]:
     """Apply image-grounded investigation targets without a media-type pipeline."""
 
@@ -328,6 +330,22 @@ def apply_target_planning(
                 "depicted-world or source relation instead"
             )
             continue
+        grounding_text = " ".join(
+            [
+                *(parent.statement for parent in parents),
+                anchor_text,
+            ]
+        )
+        if _target_introduces_unobserved_named_values(
+            proposal.statement,
+            proposal.suggested_queries,
+            grounding_text,
+        ):
+            rejected_reasons.append(
+                "target introduces a named person, institution, place, title, "
+                "or year that is absent from image/OCR grounding"
+            )
+            continue
         if (
             proposal.predicate == "provenance_matches"
             and not _target_preserves_question_slots(
@@ -340,12 +358,6 @@ def apply_target_planning(
                 "place, event, date, or source slot asked by its task"
             )
             continue
-        grounding_text = " ".join(
-            [
-                *(parent.statement for parent in parents),
-                anchor_text,
-            ]
-        )
         if not _target_text_is_grounded(
             proposal.statement,
             grounding_text,
@@ -369,6 +381,21 @@ def apply_target_planning(
             proposal.predicate,
         )
         decision_relevance = proposal.decision_relevance
+        has_visible_source_anchor = any(
+            parent.origin.type == "ocr" or parent.predicate == "reads"
+            for parent in parents
+        )
+        if (
+            proposal.predicate
+            in {"source_record_matches", "provenance_matches"}
+            and not has_visible_source_anchor
+        ):
+            decision_relevance = "supporting"
+        elif (
+            force_external_decisive
+            and proposal.predicate != "visual_integrity"
+        ):
+            decision_relevance = "decisive"
         if (
             proposal.predicate == "visual_integrity"
             and has_external_decisive_target
@@ -511,6 +538,59 @@ def _target_text_is_grounded(
     minimum_ratio = 0.05 if predicate == "visual_integrity" else 0.12
     return len(overlap) >= minimum and (
         len(overlap) / len(target) >= minimum_ratio
+    )
+
+
+_TARGET_GENERIC_CAPITALIZED_WORDS = {
+    "A",
+    "An",
+    "And",
+    "Antarctic",
+    "Arctic",
+    "Image",
+    "Input",
+    "Millions",
+    "The",
+    "This",
+}
+
+
+def _target_introduces_unobserved_named_values(
+    statement: str,
+    queries: Sequence[str],
+    grounding_text: str,
+) -> bool:
+    """Reject model-memory proper names and dates from pixel-only planning."""
+
+    grounding = _attribution_tokens(grounding_text)
+    rendered = " ".join([statement, *queries])
+    years = re.findall(r"\b(?:18|19|20)\d{2}\b", rendered)
+    if any(year.casefold() not in grounding for year in years):
+        return True
+    handles = re.findall(r"@[A-Za-z0-9_]+", rendered)
+    if any(handle.casefold() not in grounding for handle in handles):
+        return True
+    capitalized = re.findall(r"\b[A-Z][A-Za-z'-]{2,}\b", rendered)
+    return any(
+        token not in _TARGET_GENERIC_CAPITALIZED_WORDS
+        and not _named_token_is_grounded(token, grounding)
+        for token in capitalized
+    )
+
+
+def _named_token_is_grounded(token: str, grounding: set[str]) -> bool:
+    lowered = token.casefold()
+    if lowered in grounding:
+        return True
+    # Permit ordinary inflectional/geographic variants such as
+    # Antarctic/Antarctica without permitting unrelated remembered names.
+    return len(lowered) >= 6 and any(
+        len(candidate) >= 6
+        and (
+            lowered.startswith(candidate)
+            or candidate.startswith(lowered)
+        )
+        for candidate in grounding
     )
 
 
@@ -845,6 +925,7 @@ def attribution_planning_needed(
         "reads",
         "context_suggested_by_text",
         "provenance_matches",
+        "source_record_matches",
     }
     if any(
         fact.fact_id in affected_fact_ids
@@ -1007,6 +1088,17 @@ def apply_attribution(
             findings,
             evidence_by_id,
         )
+        direct_authoritative_record = any(
+            item.claim_binding == "source_assertion"
+            and item.source_class in {"official", "news"}
+            and item.directness == "direct"
+            and not item.risk_flags
+            for item in evidence_rows
+        )
+        retrieval_bridge_present = _attribution_has_retrieval_bridge(
+            discoveries,
+            evidence_rows,
+        )
         if (
             _contains_fabrication_attribution(statement)
             and not visual_bridge_present
@@ -1035,6 +1127,10 @@ def apply_attribution(
                 "depicts_event",
             }
             and not visual_bridge_present
+            and not (
+                direct_authoritative_record
+                and retrieval_bridge_present
+            )
         ):
             decision_relevance = "supporting"
         if not _attribution_statement_is_grounded(
@@ -1150,13 +1246,21 @@ def apply_attribution(
                 task.fact_ids.append(fact_id)
                 task.fact_ids = task.fact_ids[:6]
 
-        if decision_relevance == "decisive":
+        _refresh_fact_states(state)
+        if (
+            decision_relevance == "decisive"
+            and fact.status in {"supported", "refuted"}
+        ):
+            # Only an already-resolved atomic child may replace a broad
+            # decisive parent. Incomplete title/creator/date/platform bundles
+            # remain optional attribution metadata instead of new blockers.
             _replace_generic_decisive_parents(
                 state,
                 parent_facts,
                 fact,
             )
-        _refresh_fact_states(state)
+        elif decision_relevance == "decisive":
+            fact.decision_relevance = "supporting"
         if fact.status not in {"supported", "refuted"}:
             task_id = stable_id("task", fact_id, "verify-attribution")
             task = task_by_id.get(task_id)
@@ -1337,12 +1441,31 @@ def _attribution_has_visual_bridge(
     )
 
 
+def _attribution_has_retrieval_bridge(
+    discoveries: Sequence[InvestigationDiscovery],
+    evidence_rows: Sequence[InvestigationEvidence],
+) -> bool:
+    """Bind an authoritative page to the input through image-search retrieval."""
+
+    evidence_urls = {
+        canonicalize_url(item.source_url)
+        for item in evidence_rows
+        if canonicalize_url(item.source_url)
+    }
+    return any(
+        item.tool_name in {"reverse_image_search", "crop_and_search"}
+        and canonicalize_url(item.candidate_url) in evidence_urls
+        for item in discoveries
+    )
+
+
 def _contains_fabrication_attribution(value: str) -> bool:
     lowered = " ".join(str(value or "").casefold().split())
     return any(
         phrase in lowered
         for phrase in (
             "digital creation",
+            "digital artwork",
             "ai-generated",
             "ai generated",
             "generated by ai",
@@ -1353,6 +1476,9 @@ def _contains_fabrication_attribution(value: str) -> bool:
             "synthetic image",
             "fabricated image",
             "physically impossible",
+            "fictional scene",
+            "fictional concept",
+            "surrealist concept",
         )
     )
 

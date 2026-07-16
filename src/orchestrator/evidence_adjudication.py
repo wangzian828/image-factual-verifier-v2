@@ -233,6 +233,18 @@ def _assess_direction(
         if stance == "support" and _requires_attribution_support_pair(fact)
         else []
     )
+    direct_public_record = (
+        rows[0]
+        if (
+            stance == "support"
+            and _requires_attribution_support_pair(fact)
+            and rows[0][1].claim_binding == "source_assertion"
+            and rows[0][1].source_class in {"official", "news"}
+            and rows[0][1].directness == "direct"
+            and rows[0][0] >= DECISIVE_SINGLE_EVIDENCE_SCORE
+        )
+        else None
+    )
     official_exact_capture = (
         rows[0]
         if (
@@ -254,6 +266,8 @@ def _assess_direction(
         selected = [official_exact_capture]
     elif scene_support_pair:
         selected = scene_support_pair
+    elif direct_public_record is not None:
+        selected = [direct_public_record]
     elif attribution_support_pair:
         selected = attribution_support_pair
     elif (
@@ -277,6 +291,7 @@ def _assess_direction(
     decisive = bool(selected) and (
         official_exact_capture is not None
         or bool(scene_support_pair)
+        or direct_public_record is not None
         or bool(attribution_support_pair)
         or selected[0][0] >= DECISIVE_SINGLE_EVIDENCE_SCORE
         or len(selected) >= 2
@@ -300,6 +315,8 @@ def _assess_direction(
         score = attribution_support_pair[0][0] + (
             0.25 * attribution_support_pair[1][0]
         )
+    if direct_public_record is not None:
+        score = direct_public_record[0]
     if decisive and len(families) > 1:
         score += min(10.0, 5.0 * (len(families) - 1))
     return DirectionAssessment(
@@ -367,24 +384,7 @@ def _attribution_support_pair(
     ]
     if not captures or not assertions:
         return []
-    authoritative = [
-        row
-        for row in assertions
-        if row[1].source_class in {"official", "news"}
-    ]
-    if authoritative:
-        return [captures[0], authoritative[0]]
-    independent: list[tuple[float, InvestigationEvidence, str]] = []
-    families: set[str] = set()
-    for row in assertions:
-        family = row[1].source_family
-        if family in families:
-            continue
-        families.add(family)
-        independent.append(row)
-        if len(independent) == 2:
-            return [captures[0], *independent]
-    return []
+    return [captures[0], assertions[0]]
 
 
 def _evidence_score(
