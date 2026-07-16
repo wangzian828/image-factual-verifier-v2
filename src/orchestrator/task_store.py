@@ -1593,28 +1593,59 @@ def apply_evidence_decision(
                 "Evidence does not provide it"
             ),
         }
+    selected_reference_evidence = [
+        evidence_by_id[item]
+        for item in selected_ids
+        if evidence_by_id[item].evidence_kind == "reference_comparison"
+    ]
     if (
-        output.assessment == "supported"
-        and core.predicate
-        in {
-            "identified_as",
-            "located_at",
-            "occurred_at",
-            "depicts_event",
-            "provenance_matches",
-        }
-        and _only_different_capture_visual_context(
-            [evidence_by_id[item] for item in selected_ids]
+        output.assessment in {"supported", "refuted"}
+        and any(
+            not _reference_comparison_is_same_capture(item)
+            for item in selected_reference_evidence
         )
     ):
         return {
             "accepted": False,
             "rejected_reason": (
                 "a different original capture of the same subject or event is "
-                "a discovery/refinement bridge, not terminal support for world "
-                "identity, location, event, or provenance; select fetched source "
-                "Evidence, same-capture Evidence, or keep the fact insufficient "
-                "and refine the discovered event slot"
+                "a discovery/refinement bridge, not terminal Evidence; select "
+                "fetched source Evidence, same-capture Evidence, or keep the "
+                "fact insufficient and refine the discovered visual slot"
+            ),
+        }
+    if (
+        output.assessment == "supported"
+        and any(
+            item.edit_evidence_present is True
+            for item in selected_reference_evidence
+        )
+    ):
+        return {
+            "accepted": False,
+            "rejected_reason": (
+                "reference comparison with explicit edit evidence cannot "
+                "terminally support the active proposition"
+            ),
+        }
+    if (
+        output.assessment == "refuted"
+        and selected_reference_evidence
+        and all(
+            item.evidence_kind == "reference_comparison"
+            for item in (evidence_by_id[item] for item in selected_ids)
+        )
+        and not any(
+            item.edit_evidence_present is True
+            for item in selected_reference_evidence
+        )
+    ):
+        return {
+            "accepted": False,
+            "rejected_reason": (
+                "same-capture comparison without explicit edit evidence is an "
+                "image-binding bridge, not standalone terminal refutation; "
+                "select factual source Evidence or keep the fact insufficient"
             ),
         }
 
@@ -1969,24 +2000,17 @@ def _refinement_slot_preserves_relation(
     return proposed_predicate in allowed.get(slot, set())
 
 
-def _only_different_capture_visual_context(
-    selected_evidence: Sequence[InvestigationEvidence],
+def _reference_comparison_is_same_capture(
+    evidence: InvestigationEvidence,
 ) -> bool:
-    """Detect visual context that identifies a candidate but cannot close it.
+    """Return whether structured comparison fields bind one original capture."""
 
-    A reference image from another photographer may reveal the likely subject,
-    place, or event. It does not by itself establish that factual attribution for
-    the input image. A fetched source assertion or same-capture bridge can close
-    the relation at a later checkpoint.
-    """
-
-    return bool(selected_evidence) and all(
-        item.evidence_kind == "reference_comparison"
-        and item.claim_binding == "same_subject"
-        and item.same_subject_or_scene is True
-        and item.same_capture_or_near_duplicate is not True
-        and item.likely_different_original_capture is True
-        for item in selected_evidence
+    return (
+        evidence.evidence_kind == "reference_comparison"
+        and evidence.claim_binding == "same_capture"
+        and evidence.same_subject_or_scene is True
+        and evidence.same_capture_or_near_duplicate is True
+        and evidence.likely_different_original_capture is not True
     )
 
 
@@ -2665,15 +2689,21 @@ def _visual_evidence_record(
             or data.get("reference_url", "")
         ).strip()
         kind = "reference_comparison"
-        if bool(data.get("edit_evidence_present", False)):
+        same_subject = bool(data.get("same_subject_or_scene", False))
+        same_capture = bool(data.get("same_capture_or_near_duplicate", False))
+        different_capture = bool(
+            data.get("likely_different_original_capture", False)
+        )
+        edit_present = bool(data.get("edit_evidence_present", False))
+        if not same_subject:
+            # An unrelated reference image supplies neither image binding nor a
+            # valid alteration baseline. The attempted inspection remains in
+            # route history, but the comparison is not promoted to Evidence.
+            return None
+        claim_binding = "same_capture" if same_capture else "same_subject"
+        if edit_present and same_capture and not different_capture:
             stance = "refute"
-            claim_binding = "pixel_observation"
-        elif bool(data.get("same_subject_or_scene", False)):
-            claim_binding = (
-                "same_capture"
-                if bool(data.get("same_capture_or_near_duplicate", False))
-                else "same_subject"
-            )
+        else:
             # A visual match binds source context to the input pixels. It does
             # not itself support a location, event, identity, or other world
             # assertion printed on the surrounding page.

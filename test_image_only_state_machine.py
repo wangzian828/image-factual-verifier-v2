@@ -2450,6 +2450,47 @@ def test_scene_reference_requires_near_duplicate_not_only_same_subject() -> None
     assert scene_task.status == "active"
 
 
+def test_unrelated_reference_image_is_not_promoted_to_evidence() -> None:
+    case, state = _runtime_state()
+    task = next(
+        item
+        for item in state.tasks
+        if state.core_verdict_fact_id in item.fact_ids
+    )
+    comparison = {
+        "status": "success",
+        "reference_url": "https://example.org/unrelated-bus.jpg",
+        "same_subject_or_scene": False,
+        "same_capture_or_near_duplicate": False,
+        "likely_different_original_capture": True,
+        "edit_evidence_present": False,
+        "edit_evidence_strength": "none",
+        "differences": [],
+        "overall_observation": (
+            "The reference is unrelated to the input image and supplies no "
+            "shared subject, scene, capture, or alteration baseline."
+        ),
+        "confidence": 0.99,
+    }
+
+    update = record_tool_observation(
+        state,
+        _step(
+            task_id=task.task_id,
+            call_id="call-unrelated-reference",
+            tool_name="compare_with_reference",
+            result=json.dumps(comparison),
+        ),
+        image_sha256=case.image_sha256,
+    )
+
+    assert not update["created_evidence_ids"]
+    assert not update["created_finding_ids"]
+    assert not pending_evidence_decision_ids(state)
+    route = json.loads(state.attempted_routes[-1])
+    assert route["outcome"] == "empty"
+
+
 def test_different_capture_cannot_terminally_support_event_attribution() -> None:
     case, state = _runtime_state()
     for fact in state.facts:
@@ -2532,6 +2573,97 @@ def test_different_capture_cannot_terminally_support_event_attribution() -> None
     assert next(
         fact for fact in state.facts if fact.fact_id == core_id
     ).status == "active"
+
+
+def test_different_capture_cannot_terminally_refute_event_attribution() -> None:
+    case, state = _runtime_state()
+    core_id = state.core_verdict_fact_id or ""
+    core = next(fact for fact in state.facts if fact.fact_id == core_id)
+    core.predicate = "depicts_event"
+    task = next(item for item in state.tasks if core_id in item.fact_ids)
+    comparison = {
+        "status": "success",
+        "reference_url": "https://example.org/different-event-photo.jpg",
+        "same_subject_or_scene": True,
+        "same_capture_or_near_duplicate": False,
+        "likely_different_original_capture": True,
+        "edit_evidence_present": False,
+        "edit_evidence_strength": "none",
+        "differences": [],
+        "overall_observation": (
+            "The images show the same vessel in different original captures."
+        ),
+        "confidence": 0.97,
+    }
+    update = record_tool_observation(
+        state,
+        _step(
+            task_id=task.task_id,
+            call_id="call-different-event-refute",
+            tool_name="compare_with_reference",
+            result=json.dumps(comparison),
+        ),
+        image_sha256=case.image_sha256,
+    )
+    evidence_id = update["created_evidence_ids"][0]
+
+    terminal = _apply_core_decision(
+        state,
+        [evidence_id],
+        assessment="refuted",
+        binding_requirement="text_sufficient",
+        rationale="The other photograph does not depict the exact input capture.",
+    )
+
+    assert terminal["accepted"] is False
+    assert "different original capture" in terminal["rejected_reason"]
+    assert core.status == "active"
+    assert next(
+        item for item in state.evidence if item.evidence_id == evidence_id
+    ).stance == "neutral"
+
+
+def test_same_capture_without_edit_evidence_cannot_terminally_refute() -> None:
+    case, state = _runtime_state()
+    core_id = state.core_verdict_fact_id or ""
+    core = next(fact for fact in state.facts if fact.fact_id == core_id)
+    core.predicate = "depicts_event"
+    task = next(item for item in state.tasks if core_id in item.fact_ids)
+    comparison = {
+        "status": "success",
+        "reference_url": "https://example.org/matching-capture.jpg",
+        "same_subject_or_scene": True,
+        "same_capture_or_near_duplicate": True,
+        "likely_different_original_capture": False,
+        "edit_evidence_present": False,
+        "edit_evidence_strength": "none",
+        "differences": [],
+        "overall_observation": "The two images are the same original capture.",
+        "confidence": 0.99,
+    }
+    update = record_tool_observation(
+        state,
+        _step(
+            task_id=task.task_id,
+            call_id="call-same-capture-no-edit-refute",
+            tool_name="compare_with_reference",
+            result=json.dumps(comparison),
+        ),
+        image_sha256=case.image_sha256,
+    )
+    evidence_id = update["created_evidence_ids"][0]
+
+    terminal = _apply_core_decision(
+        state,
+        [evidence_id],
+        assessment="refuted",
+        binding_requirement="text_sufficient",
+        rationale="The comparison alone refutes the event.",
+    )
+
+    assert terminal["accepted"] is False
+    assert "without explicit edit evidence" in terminal["rejected_reason"]
+    assert core.status == "active"
 
 
 def test_different_capture_can_ground_bounded_event_refinement() -> None:
