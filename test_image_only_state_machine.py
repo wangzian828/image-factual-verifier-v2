@@ -20,6 +20,7 @@ from src.orchestrator.investigation_models import (
     InvestigationSegmentOutput,
     ImageOnlyJudgment,
     ReflectionOutput,
+    ResearchTask,
     TargetFactProposal,
     TargetPlanningOutput,
     TaskUpdate,
@@ -1657,6 +1658,24 @@ def test_target_planning_rejects_negative_integrity_and_slotless_provenance() ->
             ]
         ),
     )
+    negative_world_fact = apply_target_planning(
+        state.model_copy(deep=True),
+        TargetPlanningOutput(
+            proposals=[
+                TargetFactProposal(
+                    statement=(
+                        "The input image is a digitally generated composite "
+                        "that does not represent a real-world event."
+                    ),
+                    predicate="depicts_event",
+                    parent_fact_ids=[parent_fact_id],
+                    question="Is this a real-world event or an AI composite?",
+                    purpose="Determine whether the image is fabricated.",
+                    suggested_tools=["text_search"],
+                )
+            ]
+        ),
+    )
 
     assert not negative_integrity["accepted_fact_ids"]
     assert "positive authenticity proposition" in negative_integrity[
@@ -1664,6 +1683,41 @@ def test_target_planning_rejects_negative_integrity_and_slotless_provenance() ->
     ][0]
     assert not slotless_provenance["accepted_fact_ids"]
     assert "omits the identity" in slotless_provenance["rejected_reasons"][0]
+    assert not negative_world_fact["accepted_fact_ids"]
+    assert "positive image claim" in negative_world_fact["rejected_reasons"][0]
+
+
+def test_reflection_cannot_spawn_same_fact_search_without_new_grounding() -> None:
+    _, state = _runtime_state()
+    fact_id = state.decisive_fact_ids[0]
+    state.action_count = 4
+    record = apply_reflection(
+        state,
+        ReflectionOutput(
+            new_tasks=[
+                ResearchTask(
+                    task_id="task-ungrounded-follow-up",
+                    fact_ids=[fact_id],
+                    question="Search the web again for the marked research vessel.",
+                    purpose="Try a different generic query for the same fact.",
+                    priority=1,
+                    status="pending",
+                    parent_task_id=state.tasks[0].task_id,
+                    origin_ids=[fact_id],
+                    suggested_tools=["text_search"],
+                    suggested_queries=["research vessel"],
+                )
+            ]
+        ),
+        evidence_gain=False,
+        decision_gain=False,
+    )
+
+    assert record.accepted_new_task_ids == []
+    assert any(
+        "bare fact cannot justify" in reason
+        for reason in record.rejected_reasons
+    )
 
 
 def test_original_social_post_can_support_its_own_source_record_match() -> None:

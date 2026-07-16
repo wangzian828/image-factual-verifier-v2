@@ -311,6 +311,23 @@ def apply_target_planning(
                 "that anomaly evidence can refute"
             )
             continue
+        if _attribution_statement_is_negative(proposal.statement):
+            rejected_reasons.append(
+                "target statement must preserve the positive image claim; "
+                "attach refuting evidence to that claim instead of planning "
+                "a negated world fact"
+            )
+            continue
+        if (
+            proposal.predicate != "visual_integrity"
+            and _contains_fabrication_attribution(proposal.statement)
+        ):
+            rejected_reasons.append(
+                "initial target cannot assert fabrication, AI generation, or "
+                "compositing without source evidence; plan a positive "
+                "depicted-world or source relation instead"
+            )
+            continue
         if (
             proposal.predicate == "provenance_matches"
             and not _target_preserves_question_slots(
@@ -1545,6 +1562,12 @@ def apply_reflection(
     fact_by_id = {fact.fact_id: fact for fact in state.facts}
     finding_ids = {item.finding_id for item in state.findings}
     failure_ids = {item.failure_id for item in state.failures}
+    follow_up_origin_ids = {
+        *[item.discovery_id for item in state.discoveries],
+        *[item.evidence_id for item in state.evidence],
+        *finding_ids,
+        *failure_ids,
+    }
     origin_ids = {
         state.brief.brief_id,
         *[item.entity_id for item in state.entities],
@@ -1630,6 +1653,13 @@ def apply_reflection(
             continue
         if not set(task.origin_ids) <= origin_ids:
             rejected.append(f"{task.task_id} cites unknown origins")
+            continue
+        if not set(task.origin_ids) & follow_up_origin_ids:
+            rejected.append(
+                f"{task.task_id} needs a new discovery, evidence, finding, "
+                "or failure origin; a bare fact cannot justify another "
+                "same-fact search task"
+            )
             continue
         key = _semantic_task_key(task.question)
         if key in semantic_keys:

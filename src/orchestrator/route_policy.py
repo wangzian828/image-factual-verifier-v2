@@ -36,7 +36,10 @@ def route_signature(tool_name: str, tool_args: Mapping[str, Any]) -> dict[str, A
     tool = str(tool_name or "").strip()
     args = dict(tool_args or {})
     task_id = str(
-        args.get("__question_id") or args.get("task_id") or ""
+        args.get("__question_id")
+        or args.get("question_id")
+        or args.get("task_id")
+        or ""
     ).strip()
     signature: dict[str, Any] = {"tool": tool, "task_id": task_id}
     if tool == "text_search":
@@ -153,6 +156,13 @@ def routes_semantically_equivalent(
         right_urls = set(right.get("urls", []))
         if not left_urls or not right_urls or left_urls != right_urls:
             return False
+        left_task = str(left.get("task_id", ""))
+        right_task = str(right.get("task_id", ""))
+        if left_task and right_task and left_task != right_task:
+            return _text_similarity(
+                str(left.get("goal", "")),
+                str(right.get("goal", "")),
+            ) >= 0.75
         return True
     if tool == "compare_with_reference":
         return bool(left.get("reference_url")) and (

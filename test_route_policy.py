@@ -45,6 +45,26 @@ def test_visit_tracking_variants_are_a_semantic_duplicate() -> None:
     )
 
 
+def test_same_visit_url_with_distinct_cross_task_goals_is_allowed() -> None:
+    left = {
+        "__question_id": "task-catalog",
+        "url": "https://americanart.si.edu/artwork/reservation-scene-36280",
+        "goal": "What is the official catalog or accession number?",
+    }
+    right = {
+        "__question_id": "task-collection",
+        "url": "https://americanart.si.edu/artwork/reservation-scene-36280",
+        "goal": "Which museum holds the physical weaving in its collection?",
+    }
+
+    assert not routes_semantically_equivalent(
+        "visit",
+        left,
+        "visit",
+        right,
+    )
+
+
 def test_same_reference_for_a_different_task_is_still_deduplicated() -> None:
     left = {
         "__question_id": "task-1",

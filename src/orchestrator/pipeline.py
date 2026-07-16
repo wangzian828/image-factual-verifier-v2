@@ -426,6 +426,7 @@ class Orchestrator:
         prior_fact_signature = self._image_only_fact_signature(investigation)
         while not investigation.stop_reason:
             attribution_pending = False
+            target_refresh_pending = False
             self._check_timeout(started, state)
             if investigation.action_count >= MAX_TOOL_ACTIONS:
                 audit_coverage(investigation)
@@ -464,7 +465,7 @@ class Orchestrator:
                 step: StageStep,
                 _steps: List[StageStep],
             ) -> Dict[str, Any]:
-                nonlocal attribution_pending
+                nonlocal attribution_pending, target_refresh_pending
                 update = record_tool_observation(
                     investigation,
                     step,
@@ -472,6 +473,11 @@ class Orchestrator:
                 )
                 if attribution_planning_needed(investigation, update):
                     attribution_pending = True
+                if (
+                    not attribution_pending
+                    and self._image_only_target_refresh_needed(investigation)
+                ):
+                    target_refresh_pending = True
                 if (
                     not investigation.stop_reason
                     and verdict_is_determined(investigation)
@@ -525,6 +531,7 @@ class Orchestrator:
                 should_stop=lambda _steps: (
                     bool(investigation.stop_reason)
                     or attribution_pending
+                    or target_refresh_pending
                     or investigation.action_count >= segment_stop_action
                     or not any(
                         task.task_id in react_task_ids
@@ -608,6 +615,11 @@ class Orchestrator:
                     investigation,
                 )
                 audit_coverage(investigation)
+            elif target_refresh_pending and not investigation.stop_reason:
+                await self._run_image_only_target_refresh(
+                    state,
+                    investigation,
+                )
             self._sync_image_only_state(state, investigation)
 
             if (
