@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence
 
 from src.integrations.gemini import take_runtime_metrics
+from src.integrations.clock.system_clock import SystemClockClient
 from src.orchestrator.bootstrap import build_bootstrap_investigation
 from src.orchestrator.coverage import (
     audit_coverage,
@@ -179,9 +180,9 @@ class Orchestrator:
         if validate_startup:
             require_tools(self.tool_health, REQUIRED_TOOLS)
             self._validate_startup_configuration()
-        now = datetime.now().astimezone()
+        clock = SystemClockClient().now()
         self.date_prefix = (
-            f"Current date: {now.date().isoformat()} ({now.tzinfo}). "
+            f"Current date: {clock['current_date']} ({clock['timezone']}). "
             "Use this runtime date for time-sensitive judgments instead of model memory.\n\n"
         )
 
