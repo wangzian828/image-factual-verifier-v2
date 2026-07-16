@@ -565,6 +565,7 @@ def apply_target_planning(
             proposal,
             grounding_text=grounding_text,
         )
+        proposal = _normalize_target_authenticity_wrapper(proposal)
         if (
             proposal.predicate == "visual_integrity"
             and _visual_integrity_target_contains_world_relation(proposal)
@@ -652,14 +653,19 @@ def apply_target_planning(
                 "depicted-world or source relation instead"
             )
             continue
-        if _target_introduces_unobserved_named_values(
+        unobserved_named_values = _unobserved_named_values(
             proposal.statement,
             proposal.suggested_queries,
             grounding_text,
-        ):
+        )
+        if unobserved_named_values:
+            rendered_values = ", ".join(unobserved_named_values[:4])
             rejected_reasons.append(
-                "target introduces a named person, institution, place, title, "
-                "or year that is absent from image/OCR grounding"
+                "target introduces named value(s) absent from image/OCR "
+                f"grounding: {rendered_values}. Remove only the unsupported "
+                "value(s) while preserving the visible subject, object, place, "
+                "and event relation; do not replace the relation with incidental "
+                "OCR metadata"
             )
             continue
         if (
@@ -874,6 +880,124 @@ def _normalize_target_parenthetical_alias(
     )
 
 
+def _normalize_target_authenticity_wrapper(
+    proposal: TargetFactProposal,
+) -> TargetFactProposal:
+    """Preserve a valid world relation while removing image-authenticity scope.
+
+    Initial planning sometimes wraps an otherwise useful event proposition in
+    wording such as "a real historical event" and then asks whether the pixels
+    are a genuine photograph or an AI composite.  Regenerating the whole target
+    after rejecting that wrapper can discard the salient subject-object-event
+    relation and collapse onto incidental OCR metadata.  Normalize only the
+    authenticity wrapper here; all ordinary grounding, atomicity, and named-value
+    checks still run on the preserved proposition.
+    """
+
+    if proposal.predicate in {
+        "visual_integrity",
+        "source_record_matches",
+        "provenance_matches",
+    }:
+        return proposal
+
+    statement = str(proposal.statement or "")
+    normalized_statement = re.sub(
+        r"^\s*(the\s+(?:input\s+)?image)\s+is\s+(?:a|an)\s+"
+        r"(?:real|genuine|authentic)\s+(?:photograph|photo|image)\s+"
+        r"(?:that\s+)?(?:depicts|depicting|shows|showing)\s+",
+        r"\1 depicts ",
+        statement,
+        flags=re.IGNORECASE,
+    )
+    normalized_statement = re.sub(
+        r"^\s*(?:this|the\s+(?:input\s+)?image)\s+is\s+(?:a|an)\s+"
+        r"(?:real|genuine|authentic)\s+(?:photograph|photo|image)\s+of\s+",
+        "The image depicts ",
+        normalized_statement,
+        flags=re.IGNORECASE,
+    )
+    normalized_statement = re.sub(
+        r"\b(?:a|an)\s+(?:real|genuine|authentic)\s+"
+        r"(?:historical\s+)?event\b",
+        "an event",
+        normalized_statement,
+        flags=re.IGNORECASE,
+    )
+    normalized_statement = re.sub(
+        r"\b(?:a|an)\s+(?:real|genuine|authentic)\s+"
+        r"(?:historical\s+)?occurrence\b",
+        "an occurrence",
+        normalized_statement,
+        flags=re.IGNORECASE,
+    )
+    normalized_statement = re.sub(
+        r"\s+",
+        " ",
+        normalized_statement,
+    ).strip()
+
+    context = " ".join(
+        (
+            proposal.statement,
+            proposal.question,
+            proposal.purpose,
+        )
+    )
+    if (
+        normalized_statement == proposal.statement
+        and not _contains_initial_image_authenticity_scope(context)
+    ):
+        return proposal
+
+    question = proposal.question
+    purpose = proposal.purpose
+    task_context = " ".join((question, purpose))
+    if _contains_initial_image_authenticity_scope(task_context):
+        question = (
+            "Does this image-grounded proposition hold: "
+            f"{normalized_statement.rstrip('.')}?"
+        )
+        purpose = (
+            "Verify the image-grounded "
+            f"{proposal.predicate.replace('_', ' ')} relation."
+        )
+    return proposal.model_copy(
+        update={
+            "statement": normalized_statement,
+            "question": question,
+            "purpose": purpose,
+        }
+    )
+
+
+def _contains_initial_image_authenticity_scope(value: str) -> bool:
+    lowered = " ".join(str(value or "").casefold().split())
+    return (
+        _contains_visual_integrity_scope(value)
+        or _contains_fabrication_attribution(value)
+        or any(
+            phrase in lowered
+            for phrase in (
+                "genuine photograph",
+                "genuine photo",
+                "genuine image",
+                "authentic photograph",
+                "authentic photo",
+                "authentic image",
+                "real photograph",
+                "real photo",
+                "real image",
+                "real historical event",
+                "real historical occurrence",
+                "image authenticity",
+                "photo authenticity",
+                "photograph authenticity",
+            )
+        )
+    )
+
+
 def _target_text_is_grounded(
     statement: str,
     grounding_text: str,
@@ -913,20 +1037,45 @@ def _target_introduces_unobserved_named_values(
 ) -> bool:
     """Reject model-memory proper names and dates from pixel-only planning."""
 
+    return bool(
+        _unobserved_named_values(
+            statement,
+            queries,
+            grounding_text,
+        )
+    )
+
+
+def _unobserved_named_values(
+    statement: str,
+    queries: Sequence[str],
+    grounding_text: str,
+) -> List[str]:
+    """Return unsupported named/date tokens for actionable planning feedback."""
+
     grounding = _attribution_tokens(grounding_text)
     rendered = " ".join([statement, *queries])
+    missing: List[str] = []
     years = re.findall(r"\b(?:18|19|20)\d{2}\b", rendered)
-    if any(year.casefold() not in grounding for year in years):
-        return True
-    handles = re.findall(r"@[A-Za-z0-9_]+", rendered)
-    if any(handle.casefold() not in grounding for handle in handles):
-        return True
-    capitalized = re.findall(r"\b[A-Z][A-Za-z'-]{2,}\b", rendered)
-    return any(
-        token not in _TARGET_GENERIC_CAPITALIZED_WORDS
-        and not _named_token_is_grounded(token, grounding)
-        for token in capitalized
+    missing.extend(
+        year
+        for year in years
+        if year.casefold() not in grounding
     )
+    handles = re.findall(r"@[A-Za-z0-9_]+", rendered)
+    missing.extend(
+        handle
+        for handle in handles
+        if handle.casefold() not in grounding
+    )
+    capitalized = re.findall(r"\b[A-Z][A-Za-z'-]{2,}\b", rendered)
+    missing.extend(
+        token
+        for token in capitalized
+        if token not in _TARGET_GENERIC_CAPITALIZED_WORDS
+        and not _named_token_is_grounded(token, grounding)
+    )
+    return list(dict.fromkeys(missing))
 
 
 def _named_token_is_grounded(token: str, grounding: set[str]) -> bool:

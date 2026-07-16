@@ -228,6 +228,60 @@ def _antarctic_butterfly_state():
     return case, state
 
 
+def _ceremonial_bus_state():
+    case = ImageOnlyRuntimeCase(
+        case_id="case-ceremonial-bus",
+        image_path="ceremonial-bus.jpg",
+        image_sha256="d" * 64,
+    )
+    perception = PerceptionReport(
+        scene_description=(
+            "A crowned monarch waves from the top deck of a red double-decker "
+            "bus during coronation celebrations in 1953."
+        ),
+        entities=[
+            Entity(
+                name="crowned monarch",
+                entity_type="person",
+                bbox=[0.4, 0.1, 0.6, 0.5],
+                confidence=0.98,
+            ),
+            Entity(
+                name="double-decker bus",
+                entity_type="object",
+                bbox=[0.2, 0.3, 0.9, 0.95],
+                confidence=0.99,
+            ),
+        ],
+        text_regions=[
+            TextRegion(
+                text="1953",
+                bbox_quad=[
+                    [0.3, 0.5],
+                    [0.4, 0.5],
+                    [0.4, 0.56],
+                    [0.3, 0.56],
+                ],
+                confidence=0.99,
+            ),
+            TextRegion(
+                text="LPT 123",
+                bbox_quad=[
+                    [0.35, 0.58],
+                    [0.45, 0.58],
+                    [0.45, 0.64],
+                    [0.35, 0.64],
+                ],
+                confidence=0.95,
+            ),
+        ],
+    )
+    state = state_from_bootstrap(
+        build_bootstrap_investigation(case, perception)
+    )
+    return case, state
+
+
 def _step(
     *,
     task_id: str,
@@ -608,7 +662,7 @@ def test_target_planning_strips_ungrounded_scientific_binomial_alias() -> None:
     assert "Antarctica" in fact.statement
 
 
-def test_target_planning_normalizes_terminal_punctuation_but_keeps_scope_atomic() -> None:
+def test_target_planning_strips_authenticity_wrapper_and_keeps_world_relation() -> None:
     _, state = _antarctic_butterfly_state()
     scene = next(
         fact for fact in state.facts if fact.predicate == "appears_to_depict"
@@ -656,11 +710,147 @@ def test_target_planning_normalizes_terminal_punctuation_but_keeps_scope_atomic(
     )
 
     assert grounded["accepted_fact_ids"]
-    assert not mixed_scope["accepted_fact_ids"]
-    assert any(
-        "must not combine visual authenticity" in reason
-        for reason in mixed_scope["rejected_reasons"]
+    assert mixed_scope["accepted_fact_ids"]
+    candidate = state.model_copy(deep=True)
+    applied = apply_target_planning(
+        candidate,
+        TargetPlanningOutput(
+            proposals=[
+                TargetFactProposal(
+                    statement=(
+                        "The image is a genuine photograph depicting a "
+                        "real-world event at an Apple Store."
+                    ),
+                    predicate="depicts_event",
+                    parent_fact_ids=[scene.fact_id],
+                    question="Which Apple Store event does the image depict?",
+                    purpose="Verify the visible event relation.",
+                    suggested_tools=["text_search", "visit"],
+                    suggested_queries=["Apple Store event"],
+                )
+            ]
+        ),
     )
+    normalized = next(
+        fact
+        for fact in candidate.facts
+        if fact.fact_id == applied["accepted_fact_ids"][0]
+    )
+    assert normalized.statement == (
+        "The image depicts a real-world event at an Apple Store."
+    )
+
+
+def test_target_planning_revision_names_only_unsupported_modifier() -> None:
+    _, state = _ceremonial_bus_state()
+    scene = next(
+        fact for fact in state.facts if fact.predicate == "appears_to_depict"
+    )
+
+    rejected = apply_target_planning(
+        state.model_copy(deep=True),
+        TargetPlanningOutput(
+            proposals=[
+                TargetFactProposal(
+                    statement=(
+                        "The input image depicts a real historical event from "
+                        "1953 where the crowned monarch rode on the top deck of "
+                        "a London double-decker bus registered as LPT 123."
+                    ),
+                    predicate="depicts_event",
+                    parent_fact_ids=[scene.fact_id],
+                    question=(
+                        "Is this a genuine historical photograph of the "
+                        "crowned monarch riding the London bus?"
+                    ),
+                    purpose=(
+                        "Determine whether the image is an AI-generated "
+                        "combination of a monarch and a London bus."
+                    ),
+                    suggested_tools=[
+                        "reverse_image_search",
+                        "text_search",
+                        "visit",
+                    ],
+                    suggested_queries=[
+                        '"LPT 123" bus',
+                        "crowned monarch double decker bus 1953",
+                    ],
+                )
+            ]
+        ),
+    )
+
+    assert not rejected["accepted_fact_ids"]
+    assert rejected["rejected_reasons"] == [
+        (
+            "target introduces named value(s) absent from image/OCR grounding: "
+            "London. Remove only the unsupported value(s) while preserving the "
+            "visible subject, object, place, and event relation; do not replace "
+            "the relation with incidental OCR metadata"
+        )
+    ]
+
+
+def test_target_planning_corrected_event_keeps_person_vehicle_and_date() -> None:
+    _, state = _ceremonial_bus_state()
+    scene = next(
+        fact for fact in state.facts if fact.predicate == "appears_to_depict"
+    )
+
+    update = apply_target_planning(
+        state,
+        TargetPlanningOutput(
+            proposals=[
+                TargetFactProposal(
+                    statement=(
+                        "The input image depicts a real historical event from "
+                        "1953 where the crowned monarch rode on the top deck of "
+                        "a red double-decker bus registered as LPT 123."
+                    ),
+                    predicate="depicts_event",
+                    parent_fact_ids=[scene.fact_id],
+                    question=(
+                        "Is this a genuine historical photograph of the "
+                        "crowned monarch riding the red double-decker bus?"
+                    ),
+                    purpose=(
+                        "Determine whether the image is an AI-generated "
+                        "combination of a monarch and a red bus."
+                    ),
+                    suggested_tools=[
+                        "reverse_image_search",
+                        "text_search",
+                        "visit",
+                    ],
+                    suggested_queries=[
+                        '"LPT 123" bus',
+                        "crowned monarch double decker bus 1953",
+                    ],
+                )
+            ]
+        ),
+    )
+
+    assert len(update["accepted_fact_ids"]) == 1
+    fact = next(
+        item
+        for item in state.facts
+        if item.fact_id == update["accepted_fact_ids"][0]
+    )
+    task = next(
+        item
+        for item in state.tasks
+        if fact.fact_id in item.fact_ids
+    )
+    assert fact.statement == (
+        "The input image depicts an event from 1953 where the crowned monarch "
+        "rode on the top deck of a red double-decker bus registered as LPT 123."
+    )
+    assert "monarch" in task.question
+    assert "double-decker bus" in task.question
+    assert "authentic" not in task.question.casefold()
+    assert "ai-generated" not in task.purpose.casefold()
 
 
 def test_pending_search_candidate_requires_inspection_before_retrieval() -> None:
