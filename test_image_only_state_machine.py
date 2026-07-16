@@ -510,6 +510,102 @@ def test_pending_search_candidate_requires_inspection_before_retrieval() -> None
     )
 
 
+def test_failed_comparison_does_not_exhaust_task_with_uninspected_page() -> None:
+    case, state = _antarctic_butterfly_state()
+    scene = next(
+        fact for fact in state.facts if fact.predicate == "appears_to_depict"
+    )
+    butterfly = next(
+        fact
+        for fact in state.facts
+        if fact.predicate == "visible_in"
+        and "monarch" in fact.statement.casefold()
+    )
+    update = apply_target_planning(
+        state,
+        TargetPlanningOutput(
+            proposals=[
+                TargetFactProposal(
+                    statement=(
+                        "Millions of monarch butterflies naturally overwinter "
+                        "in the Antarctic landscape shown in the image."
+                    ),
+                    predicate="located_at",
+                    parent_fact_ids=[scene.fact_id, butterfly.fact_id],
+                    question="Do monarch butterflies migrate to Antarctica?",
+                    purpose="Verify the visible subject-to-place relation.",
+                    suggested_tools=[
+                        "text_search",
+                        "reverse_image_search",
+                        "compare_with_reference",
+                        "visit",
+                    ],
+                )
+            ]
+        ),
+    )
+    task = next(
+        item
+        for item in state.tasks
+        if update["accepted_fact_ids"][0] in item.fact_ids
+    )
+    for index, (tool_name, result) in enumerate(
+        [
+            (
+                "text_search",
+                {
+                    "status": "success",
+                    "queries": [
+                        {
+                            "query": "monarch butterfly Antarctica",
+                            "results": [
+                                {
+                                    "title": "Monarch facts",
+                                    "url": "https://www.fws.gov/species/monarch",
+                                    "snippet": "Official monarch information.",
+                                }
+                            ],
+                        }
+                    ],
+                },
+            ),
+            (
+                "reverse_image_search",
+                {
+                    "status": "success",
+                    "lens_results": [
+                        {
+                            "title": "Reference image",
+                            "url": "https://example.org/reference-page",
+                            "image_url": "https://example.org/reference.jpg",
+                        }
+                    ],
+                },
+            ),
+            (
+                "compare_with_reference",
+                {
+                    "status": "error",
+                    "error": "comparison backend temporarily failed",
+                },
+            ),
+        ]
+    ):
+        record_tool_observation(
+            state,
+            _step(
+                task_id=task.task_id,
+                call_id=f"call-pending-{index}",
+                tool_name=tool_name,
+                result=json.dumps(result),
+            ),
+            image_sha256=case.image_sha256,
+        )
+
+    assert task.attempt_count == 3
+    assert task.status == "active"
+
+
 def test_pending_discovery_routes_prefer_official_sources() -> None:
     case, state = _antarctic_butterfly_state()
     scene = next(

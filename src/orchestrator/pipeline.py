@@ -518,6 +518,11 @@ class Orchestrator:
                     bool(investigation.stop_reason)
                     or attribution_pending
                     or investigation.action_count >= segment_stop_action
+                    or not any(
+                        task.task_id in react_task_ids
+                        and task.status in {"active", "pending"}
+                        for task in investigation.tasks
+                    )
                 ),
                 min_tool_calls=1,
                 attach_image=False,

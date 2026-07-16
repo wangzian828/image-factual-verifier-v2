@@ -200,6 +200,40 @@ def test_compare_derives_edit_flag_from_difference_type(tmp_path: Path) -> None:
     assert result["differences"][0]["is_edit_evidence"] is True
 
 
+def test_compare_accepts_an_unrelated_reference_image(tmp_path: Path) -> None:
+    output = valid_comparison()
+    output.update(
+        {
+            "same_subject_or_scene": False,
+            "same_capture_or_near_duplicate": False,
+            "likely_different_original_capture": True,
+            "differences": [
+                {
+                    "region": "entire image",
+                    "description": (
+                        "The reference depicts a different subject and scene."
+                    ),
+                    "type": "unrelated_content",
+                    "significance": "high",
+                }
+            ],
+            "overall_observation": (
+                "The reference image is unrelated to the current image."
+            ),
+        }
+    )
+    backend = FakeBackend(interaction(output))
+    tool = make_tool(tmp_path, backend)
+
+    result = asyncio.run(
+        tool.call_async({"reference_url": "https://example.test/unrelated.jpg"})
+    )
+
+    assert result["status"] == "success"
+    assert result["same_subject_or_scene"] is False
+    assert result["likely_different_original_capture"] is True
+
+
 def test_compare_requires_create_interaction_without_legacy_fallback(tmp_path: Path) -> None:
     class LegacyOnlyBackend:
         async def get_response(self, *_args, **_kwargs):

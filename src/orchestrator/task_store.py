@@ -25,7 +25,10 @@ from src.orchestrator.investigation_models import (
 )
 from src.orchestrator.evidence_adjudication import assess_fact
 from src.orchestrator.route_policy import route_signature
-from src.orchestrator.source_provenance import classify_source
+from src.orchestrator.source_provenance import (
+    canonicalize_url,
+    classify_source,
+)
 from src.orchestrator.tool_result import parse_tool_result
 
 
@@ -183,6 +186,7 @@ def record_tool_observation(
         failure_ids
         and task.attempt_count >= 3
         and not _task_owns_scene_fact(state, task)
+        and not _task_has_uninspected_discovery(state, task)
     ):
         task.status = "exhausted"
     if (
@@ -2348,3 +2352,42 @@ def _task_owns_scene_fact(
         and facts[fact_id].predicate == "appears_to_depict"
         for fact_id in task.fact_ids
     )
+
+
+def _task_has_uninspected_discovery(
+    state: ImageOnlyInvestigationState,
+    task: ResearchTask,
+) -> bool:
+    """Keep a task runnable while its own search leads offer a next action."""
+
+    attempted_pages: set[str] = set()
+    attempted_references: set[str] = set()
+    for route in state.attempted_routes:
+        try:
+            parsed = json.loads(route)
+        except (TypeError, ValueError):
+            continue
+        tool_name = str(parsed.get("tool", "")).strip()
+        if tool_name == "visit":
+            attempted_pages.update(
+                canonicalize_url(str(url))
+                for url in parsed.get("urls", []) or []
+                if canonicalize_url(str(url))
+            )
+        elif tool_name == "compare_with_reference":
+            reference_url = canonicalize_url(
+                str(parsed.get("reference_url", ""))
+            )
+            if reference_url:
+                attempted_references.add(reference_url)
+
+    for discovery in state.discoveries:
+        if discovery.task_id != task.task_id:
+            continue
+        page_url = canonicalize_url(discovery.candidate_url)
+        if page_url and page_url not in attempted_pages:
+            return True
+        reference_url = canonicalize_url(discovery.reference_image_url)
+        if reference_url and reference_url not in attempted_references:
+            return True
+    return False

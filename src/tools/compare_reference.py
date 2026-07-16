@@ -548,8 +548,6 @@ class CompareWithReferenceTool(BaseTool):
 
         if same_capture and not same_subject:
             raise ValueError("same capture requires same_subject_or_scene=true")
-        if different_capture and not same_subject:
-            raise ValueError("different original capture requires same_subject_or_scene=true")
         if same_capture and different_capture:
             raise ValueError("same capture and different original capture cannot both be true")
         if edit_present != bool(edit_items):
