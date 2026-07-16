@@ -2255,6 +2255,90 @@ def test_scene_reference_requires_near_duplicate_not_only_same_subject() -> None
     assert scene_task.status == "active"
 
 
+def test_different_capture_cannot_terminally_support_event_attribution() -> None:
+    case, state = _runtime_state()
+    for fact in state.facts:
+        if fact.decision_relevance == "decisive":
+            fact.decision_relevance = "supporting"
+        if fact.status == "active":
+            fact.status = "candidate"
+    state.core_verdict_fact_id = None
+    state.decisive_fact_ids = []
+    state.evidence_gaps = []
+    scene = next(
+        fact for fact in state.facts if fact.predicate == "appears_to_depict"
+    )
+    planned = apply_target_planning(
+        state,
+        TargetPlanningOutput(
+            proposals=[
+                TargetFactProposal(
+                    statement=(
+                        "The image depicts NOAA Ship Henry B. Bigelow "
+                        "on the water."
+                    ),
+                    predicate="depicts_event",
+                    parent_fact_ids=[scene.fact_id],
+                    question=(
+                        "Does the image depict NOAA Ship Henry B. Bigelow "
+                        "on the water?"
+                    ),
+                    purpose="Verify the visible vessel-to-scene relation.",
+                    suggested_tools=[
+                        "reverse_image_search",
+                        "compare_with_reference",
+                        "text_search",
+                        "visit",
+                    ],
+                    suggested_queries=[],
+                )
+            ]
+        ),
+    )
+    core_id = planned["accepted_fact_ids"][0]
+    task = next(item for item in state.tasks if core_id in item.fact_ids)
+    comparison = {
+        "status": "success",
+        "reference_url": "https://example.org/different-event-photo.jpg",
+        "same_subject_or_scene": True,
+        "same_capture_or_near_duplicate": False,
+        "likely_different_original_capture": True,
+        "edit_evidence_present": False,
+        "edit_evidence_strength": "none",
+        "differences": [],
+        "overall_observation": (
+            "The images show NOAA Ship Henry B. Bigelow on the water but are "
+            "different original photographic captures."
+        ),
+        "confidence": 0.97,
+    }
+    update = record_tool_observation(
+        state,
+        _step(
+            task_id=task.task_id,
+            call_id="call-different-event-capture",
+            tool_name="compare_with_reference",
+            result=json.dumps(comparison),
+        ),
+        image_sha256=case.image_sha256,
+    )
+    evidence_id = update["created_evidence_ids"][0]
+
+    terminal = _apply_core_decision(
+        state,
+        [evidence_id],
+        assessment="supported",
+        binding_requirement="text_sufficient",
+        rationale="The other photograph shows the same vessel scene.",
+    )
+
+    assert terminal["accepted"] is False
+    assert "different original capture" in terminal["rejected_reason"]
+    assert next(
+        fact for fact in state.facts if fact.fact_id == core_id
+    ).status == "active"
+
+
 def test_scene_support_requires_near_duplicate_and_source_assertion() -> None:
     case, state = _runtime_state()
     scene_task = next(

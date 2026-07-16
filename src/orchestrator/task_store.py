@@ -1444,6 +1444,30 @@ def apply_evidence_decision(
                 "Evidence does not provide it"
             ),
         }
+    if (
+        output.assessment == "supported"
+        and core.predicate
+        in {
+            "identified_as",
+            "located_at",
+            "occurred_at",
+            "depicts_event",
+            "provenance_matches",
+        }
+        and _only_different_capture_visual_context(
+            [evidence_by_id[item] for item in selected_ids]
+        )
+    ):
+        return {
+            "accepted": False,
+            "rejected_reason": (
+                "a different original capture of the same subject or event is "
+                "a discovery/refinement bridge, not terminal support for world "
+                "identity, location, event, or provenance; select fetched source "
+                "Evidence, same-capture Evidence, or keep the fact insufficient "
+                "and refine the discovered event slot"
+            ),
+        }
 
     accepted_refinement_fact_id = ""
     accepted_refinement_task_id = ""
@@ -1754,6 +1778,27 @@ def _valid_visual_refinement_transition(
             "located_at",
             "depicts_event",
         }
+    )
+
+
+def _only_different_capture_visual_context(
+    selected_evidence: Sequence[InvestigationEvidence],
+) -> bool:
+    """Detect visual context that identifies a candidate but cannot close it.
+
+    A reference image from another photographer may reveal the likely subject,
+    place, or event. It does not by itself establish that factual attribution for
+    the input image. A fetched source assertion or same-capture bridge can close
+    the relation at a later checkpoint.
+    """
+
+    return bool(selected_evidence) and all(
+        item.evidence_kind == "reference_comparison"
+        and item.claim_binding == "same_subject"
+        and item.same_subject_or_scene is True
+        and item.same_capture_or_near_duplicate is not True
+        and item.likely_different_original_capture is True
+        for item in selected_evidence
     )
 
 
