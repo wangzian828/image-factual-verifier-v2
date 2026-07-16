@@ -317,6 +317,13 @@ The v3 runtime allows at most 24 real tool actions. Initial target Planning choo
 the evidence target, and ReAct selects the first tool route; there is no fixed initial
 reverse-image call. Structured Reflection runs after accepted actions 4, 8, 12, 16,
 20, and 24.
+Gemini model and vision requests use a separate bounded request timeout (90 seconds
+by default) and one retry. Configure them with
+`AGENT_LLM_REQUEST_TIMEOUT_SECONDS`, `AGENT_LLM_REQUEST_MAX_RETRIES`,
+`VLM_TOOL_REQUEST_TIMEOUT_SECONDS`, `VLM_TOOL_REQUEST_MAX_RETRIES`, or
+`GEMINI_VISION_TIMEOUT_SECONDS` when a provider needs a different limit. This is
+separate from the 1,800-second per-image budget: one stalled network request becomes
+a recoverable failure instead of holding the full case open.
 Coverage can stop earlier when all decisive facts resolve or after two consecutive
 low-gain Reflection intervals with no unattempted priority-1 task. Open-ended ReAct
 turns use a 16,384-token output budget; Reflection and Judgment use 8,192. All active

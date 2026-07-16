@@ -2,6 +2,7 @@
 """Tool registry for the active orchestrator pipeline."""
 from __future__ import annotations
 
+import os
 from typing import Any, Dict, List, Optional, Tuple
 
 from src.integrations.vlm.factory import build_vlm_client
@@ -54,12 +55,20 @@ def build_all_tools_with_health(
 
     from src.orchestrator.llm_backend import APIBackend
 
+    request_timeout = float(
+        os.getenv("VLM_TOOL_REQUEST_TIMEOUT_SECONDS", "90")
+    )
+    request_max_retries = int(
+        os.getenv("VLM_TOOL_REQUEST_MAX_RETRIES", "1")
+    )
     vlm_backend = APIBackend(
         provider=vlm_provider,
         model_name=vlm_model,
         wire_api=vlm_wire_api,
         temperature=0.0,
         max_tokens=4096,
+        timeout=request_timeout,
+        max_retries=request_max_retries,
     )
 
     def sync_vlm_client() -> Any:
@@ -67,6 +76,8 @@ def build_all_tools_with_health(
             provider=vlm_provider,
             model_name=vlm_model,
             wire_api=vlm_wire_api,
+            timeout=request_timeout,
+            max_retries=request_max_retries,
         )
 
     def register(name: str, builder) -> None:

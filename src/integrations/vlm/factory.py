@@ -25,7 +25,7 @@ def build_vlm_client(
             )
         timeout = max(
             timeout,
-            float(os.getenv("GEMINI_VISION_TIMEOUT_SECONDS", "240")),
+            float(os.getenv("GEMINI_VISION_TIMEOUT_SECONDS", "90")),
         )
         return OpenAIVisionClient(
             api_key=None,

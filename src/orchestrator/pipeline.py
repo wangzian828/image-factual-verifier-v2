@@ -152,6 +152,12 @@ class Orchestrator:
             wire_api=self.llm_wire_api,
             temperature=temperature,
             max_tokens=max_tokens,
+            timeout=float(
+                os.getenv("AGENT_LLM_REQUEST_TIMEOUT_SECONDS", "90")
+            ),
+            max_retries=int(
+                os.getenv("AGENT_LLM_REQUEST_MAX_RETRIES", "1")
+            ),
         )
         self.all_tools, self.tool_health = build_all_tools_with_health(
             vlm_provider=self.vlm_provider,

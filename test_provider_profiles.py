@@ -33,6 +33,18 @@ def test_local_student_profile_uses_qwen_without_gemini_fallback() -> None:
     assert backend.base_url == "http://127.0.0.1:8899/v1"
     assert backend.wire_api == "chat_completions"
 
+
+def test_backend_exposes_bounded_interaction_retry_configuration() -> None:
+    backend = APIBackend(
+        provider="lmdeploy",
+        model_name="/models/qwen-student",
+        timeout=90.0,
+        max_retries=1,
+    )
+
+    assert backend.timeout == 90.0
+    assert backend.max_retries == 1
+
 def test_qwen_api_profile_fails_closed_without_selected_model() -> None:
     with pytest.raises(ValueError, match="QWEN_API_MODEL"):
         resolve_provider_settings(profile_id="student-qwen-api", environ={})

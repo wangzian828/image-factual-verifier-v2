@@ -193,6 +193,19 @@ def test_gemini_vlm_uses_production_timeout_floor(monkeypatch) -> None:
     assert client.timeout == 240.0
 
 
+def test_gemini_vlm_uses_bounded_default_timeout(monkeypatch) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "environment-key")
+    monkeypatch.delenv("GEMINI_VISION_TIMEOUT_SECONDS", raising=False)
+
+    client = build_vlm_client(
+        provider="gemini",
+        model_name="gemini-test",
+        timeout=60.0,
+    )
+
+    assert client.timeout == 90.0
+
+
 if __name__ == "__main__":
     from pytest import MonkeyPatch
 

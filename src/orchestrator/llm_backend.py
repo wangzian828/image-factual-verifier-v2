@@ -64,6 +64,7 @@ class APIBackend(LLMBackend):
         temperature: float = 0.0,
         max_tokens: int = 8192,
         timeout: float = 120.0,
+        max_retries: int = 1,
         proxy: Optional[str] = None,
         extra_body: Optional[Dict[str, Any]] = None,
     ):
@@ -79,6 +80,7 @@ class APIBackend(LLMBackend):
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.timeout = timeout
+        self.max_retries = max(0, int(max_retries))
         self.proxy = proxy or self._resolve_proxy()
         self.extra_body = extra_body or self._resolve_extra_body()
         self._shared_client: Optional[httpx.AsyncClient] = None
@@ -399,7 +401,7 @@ class APIBackend(LLMBackend):
         client = GeminiInteractionsClient(
             base_url=self._interactions_base_url(),
             timeout=self.timeout,
-            max_retries=4,
+            max_retries=self.max_retries,
             client=self._get_shared_client(),
         )
         return await client.create(
