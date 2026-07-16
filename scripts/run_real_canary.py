@@ -82,6 +82,42 @@ def _validate_provider_environment() -> None:
         _required_env("JINA_API_KEY")
 
 
+def _git_output(*args: str) -> str:
+    try:
+        completed = subprocess.run(
+            ["git", *args],
+            cwd=REPO_ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise RuntimeError(
+            "real canary requires a readable Git checkout"
+        ) from exc
+    return completed.stdout.strip()
+
+
+def _require_clean_runtime_checkout() -> str:
+    """Bind the canary manifest to the exact clean source tree being executed."""
+
+    actual_commit = _git_output("rev-parse", "HEAD")
+    configured_commit = os.getenv("GIT_COMMIT", "").strip()
+    if configured_commit and configured_commit != actual_commit:
+        raise RuntimeError(
+            "GIT_COMMIT does not match the runtime checkout: "
+            f"configured={configured_commit}, actual={actual_commit}"
+        )
+    dirty = _git_output("status", "--porcelain", "--untracked-files=all")
+    if dirty:
+        raise RuntimeError(
+            "real canary requires a clean Git worktree; commit or move source "
+            "changes before running"
+        )
+    return actual_commit
+
+
 def _mapping(value: Any) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
 
@@ -256,7 +292,15 @@ def main(argv: Iterable[str] | None = None) -> int:
     if release.decision_policy_version != "reinspect-v2":
         raise RuntimeError("real canary accepts reinspect-v2 releases only")
     _validate_provider_environment()
-    completed = subprocess.run(_command(args), cwd=REPO_ROOT, check=False)
+    runtime_commit = _require_clean_runtime_checkout()
+    child_env = os.environ.copy()
+    child_env["GIT_COMMIT"] = runtime_commit
+    completed = subprocess.run(
+        _command(args),
+        cwd=REPO_ROOT,
+        check=False,
+        env=child_env,
+    )
     if completed.returncode:
         return completed.returncode
     result = _require_real_run_artifacts(args.output_dir)

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 
+import pytest
+
 from scripts import run_real_canary
 
 
@@ -24,3 +26,42 @@ def test_explicit_canary_cases_are_forwarded_in_order() -> None:
         "--case-id",
         "case_supported",
     ]
+
+
+def test_real_canary_rejects_configured_commit_mismatch(monkeypatch) -> None:
+    monkeypatch.setenv("GIT_COMMIT", "configured")
+    monkeypatch.setattr(
+        run_real_canary,
+        "_git_output",
+        lambda *args: "actual" if args == ("rev-parse", "HEAD") else "",
+    )
+
+    with pytest.raises(RuntimeError, match="does not match"):
+        run_real_canary._require_clean_runtime_checkout()
+
+
+def test_real_canary_rejects_dirty_checkout(monkeypatch) -> None:
+    monkeypatch.delenv("GIT_COMMIT", raising=False)
+    monkeypatch.setattr(
+        run_real_canary,
+        "_git_output",
+        lambda *args: (
+            "actual"
+            if args == ("rev-parse", "HEAD")
+            else " M src/orchestrator/pipeline.py"
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="clean Git worktree"):
+        run_real_canary._require_clean_runtime_checkout()
+
+
+def test_real_canary_binds_clean_actual_commit(monkeypatch) -> None:
+    monkeypatch.setenv("GIT_COMMIT", "actual")
+    monkeypatch.setattr(
+        run_real_canary,
+        "_git_output",
+        lambda *args: "actual" if args == ("rev-parse", "HEAD") else "",
+    )
+
+    assert run_real_canary._require_clean_runtime_checkout() == "actual"

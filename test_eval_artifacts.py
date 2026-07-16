@@ -5,6 +5,7 @@ import asyncio
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from src.eval import run_eval
@@ -292,3 +293,21 @@ def test_eval_rejects_unknown_or_duplicate_explicit_case_ids() -> None:
         assert "absent" in str(exc)
     else:
         raise AssertionError("unknown explicit case IDs must fail")
+
+
+def test_eval_manifest_commit_rejects_environment_mismatch(
+    monkeypatch: Any,
+) -> None:
+    monkeypatch.setenv("GIT_COMMIT", "configured")
+    monkeypatch.setattr(
+        run_eval.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(stdout="actual\n"),
+    )
+
+    try:
+        run_eval._git_commit()
+    except RuntimeError as exc:
+        assert "does not match" in str(exc)
+    else:
+        raise AssertionError("a configured commit must not override actual HEAD")

@@ -165,8 +165,6 @@ def _sha256(path: Path) -> str:
 
 def _git_commit() -> str:
     configured = os.getenv("GIT_COMMIT", "").strip()
-    if configured:
-        return configured
     try:
         completed = subprocess.run(
             ["git", "rev-parse", "HEAD"],
@@ -177,8 +175,14 @@ def _git_commit() -> str:
             timeout=5,
         )
     except (OSError, subprocess.SubprocessError):
-        return ""
-    return completed.stdout.strip()
+        return configured
+    actual = completed.stdout.strip()
+    if configured and actual and configured != actual:
+        raise RuntimeError(
+            "GIT_COMMIT does not match the runtime checkout: "
+            f"configured={configured}, actual={actual}"
+        )
+    return actual or configured
 
 
 def _write_json(path: Path, payload: Dict[str, Any]) -> None:
