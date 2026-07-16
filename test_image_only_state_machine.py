@@ -282,6 +282,51 @@ def _ceremonial_bus_state():
     return case, state
 
 
+def _sponsored_product_state():
+    case = ImageOnlyRuntimeCase(
+        case_id="case-sponsored-product",
+        image_path="sponsored-product.png",
+        image_sha256="e" * 64,
+    )
+    perception = PerceptionReport(
+        scene_description=(
+            "A sponsored post shows presenter Andreea Esca holding a packet "
+            "of Dr. Oetker Bicarbonat de Sodiu."
+        ),
+        image_type="screenshot",
+        entities=[
+            Entity(
+                name="Andreea Esca",
+                entity_type="person",
+                bbox=[0.05, 0.3, 0.45, 0.95],
+                confidence=0.98,
+            ),
+            Entity(
+                name="Dr. Oetker Bicarbonat de Sodiu",
+                entity_type="object",
+                bbox=[0.3, 0.6, 0.5, 0.95],
+                confidence=0.96,
+            ),
+        ],
+        text_regions=[
+            TextRegion(
+                text="Sponsored",
+                bbox_quad=[
+                    [0.05, 0.15],
+                    [0.2, 0.15],
+                    [0.2, 0.2],
+                    [0.05, 0.2],
+                ],
+                confidence=0.99,
+            ),
+        ],
+    )
+    state = state_from_bootstrap(
+        build_bootstrap_investigation(case, perception)
+    )
+    return case, state
+
+
 def _step(
     *,
     task_id: str,
@@ -851,6 +896,99 @@ def test_target_planning_corrected_event_keeps_person_vehicle_and_date() -> None
     assert "double-decker bus" in task.question
     assert "authentic" not in task.question.casefold()
     assert "ai-generated" not in task.purpose.casefold()
+
+
+def test_target_planning_rejects_hidden_original_media_state() -> None:
+    _, state = _sponsored_product_state()
+    parents = [
+        fact.fact_id
+        for fact in state.facts
+        if fact.predicate in {"appears_to_depict", "visible_in"}
+    ]
+
+    rejected = apply_target_planning(
+        state.model_copy(deep=True),
+        TargetPlanningOutput(
+            proposals=[
+                TargetFactProposal(
+                    statement=(
+                        "The original, unaltered photograph of Andreea Esca "
+                        "depicts her holding a microphone rather than a packet "
+                        "of Dr. Oetker Bicarbonat de Sodiu."
+                    ),
+                    predicate="identified_as",
+                    parent_fact_ids=parents[:3],
+                    question=(
+                        "What did Andreea Esca actually hold in the original "
+                        "source photograph?"
+                    ),
+                    purpose="Recover a hidden pre-edit media state.",
+                    suggested_tools=[
+                        "reverse_image_search",
+                        "text_search",
+                        "compare_with_reference",
+                    ],
+                    suggested_queries=[
+                        "Andreea Esca microphone",
+                    ],
+                )
+            ]
+        ),
+    )
+
+    assert not rejected["accepted_fact_ids"]
+    assert "unseen original" in rejected["rejected_reasons"][0]
+    assert "visible positive subject-object" in rejected["rejected_reasons"][0]
+
+
+def test_target_planning_keeps_visible_person_product_ad_relation() -> None:
+    _, state = _sponsored_product_state()
+    parents = [
+        fact.fact_id
+        for fact in state.facts
+        if fact.predicate in {"appears_to_depict", "visible_in", "reads"}
+    ]
+
+    update = apply_target_planning(
+        state,
+        TargetPlanningOutput(
+            proposals=[
+                TargetFactProposal(
+                    statement=(
+                        "The sponsored post shows Andreea Esca endorsing "
+                        "Dr. Oetker Bicarbonat de Sodiu."
+                    ),
+                    predicate="identified_as",
+                    parent_fact_ids=parents[:4],
+                    question=(
+                        "Does Andreea Esca endorse the Dr. Oetker product "
+                        "shown in the sponsored post?"
+                    ),
+                    purpose="Verify the visible person-to-product ad relation.",
+                    suggested_tools=["text_search", "visit"],
+                    suggested_queries=[
+                        "Andreea Esca Dr Oetker sponsored endorsement",
+                    ],
+                )
+            ]
+        ),
+    )
+
+    assert len(update["accepted_fact_ids"]) == 1
+    fact = next(
+        item
+        for item in state.facts
+        if item.fact_id == update["accepted_fact_ids"][0]
+    )
+    task = next(
+        item
+        for item in state.tasks
+        if fact.fact_id in item.fact_ids
+    )
+    assert "endorsing" in fact.statement
+    assert "sponsored post" in fact.statement
+    assert "original" not in fact.statement.casefold()
+    assert "endorse" in task.question
 
 
 def test_pending_search_candidate_requires_inspection_before_retrieval() -> None:
@@ -2786,6 +2924,99 @@ def test_different_capture_cannot_terminally_refute_event_attribution() -> None:
     assert next(
         item for item in state.evidence if item.evidence_id == evidence_id
     ).stance == "neutral"
+
+
+def test_different_capture_can_assist_independent_source_assertion() -> None:
+    case, state = _runtime_state()
+    core_id = state.core_verdict_fact_id or ""
+    core = next(fact for fact in state.facts if fact.fact_id == core_id)
+    core.predicate = "identified_as"
+    task = next(item for item in state.tasks if core_id in item.fact_ids)
+    comparison = {
+        "status": "success",
+        "reference_url": "https://example.org/different-capture.jpg",
+        "same_subject_or_scene": True,
+        "same_capture_or_near_duplicate": False,
+        "likely_different_original_capture": True,
+        "edit_evidence_present": True,
+        "edit_evidence_strength": "strong",
+        "differences": [
+            {
+                "region": "held object",
+                "description": "A product image was inserted over the subject.",
+                "type": "object_replacement",
+                "significance": "high",
+                "is_edit_evidence": True,
+            }
+        ],
+        "overall_observation": (
+            "The comparison supplies visual manipulation context but is not "
+            "the same original capture."
+        ),
+        "confidence": 0.95,
+    }
+    comparison_update = record_tool_observation(
+        state,
+        _step(
+            task_id=task.task_id,
+            call_id="call-combined-different-capture",
+            tool_name="compare_with_reference",
+            result=json.dumps(comparison),
+        ),
+        image_sha256=case.image_sha256,
+    )
+    statement = (
+        "The independent source directly identifies the visible person-product "
+        "claim as an impersonation."
+    )
+    source_update = record_tool_observation(
+        state,
+        _step(
+            task_id=task.task_id,
+            call_id="call-combined-source",
+            tool_name="visit",
+            result=json.dumps(
+                {
+                    "status": "success",
+                    "url": "https://example.org/impersonation-report",
+                    "selected_url": "https://example.org/impersonation-report",
+                    "evidence": statement,
+                    "summary": statement,
+                    "relevance": "high",
+                    "stance": "refute",
+                    "directness": "direct",
+                    "temporal_alignment": "not_applicable",
+                    "artifact_sha256": "9" * 64,
+                    "evidence_span": {
+                        "start": 0,
+                        "end": len(statement),
+                    },
+                    "retrieved_at": datetime.now(timezone.utc).isoformat(),
+                    "injection_flags": [],
+                    "evidence_eligible": True,
+                }
+            ),
+        ),
+        image_sha256=case.image_sha256,
+    )
+    evidence_ids = [
+        *comparison_update["created_evidence_ids"],
+        *source_update["created_evidence_ids"],
+    ]
+
+    terminal = _apply_core_decision(
+        state,
+        evidence_ids,
+        assessment="refuted",
+        binding_requirement="text_sufficient",
+        rationale=(
+            "The source assertion decides the visible relation; the comparison "
+            "is supporting manipulation context."
+        ),
+    )
+
+    assert terminal["accepted"] is True
+    assert core.status == "refuted"
 
 
 def test_same_capture_without_edit_evidence_cannot_terminally_refute() -> None:

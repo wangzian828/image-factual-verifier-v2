@@ -557,6 +557,49 @@ def apply_target_planning(
             grounding_text=grounding_text,
         )
         proposal = _normalize_target_authenticity_wrapper(proposal)
+        unobserved_named_values = _unobserved_named_values(
+            proposal.statement,
+            proposal.suggested_queries,
+            grounding_text,
+        )
+        invalid_initial_scope = (
+            proposal.predicate != "visual_integrity"
+            and _target_describes_unobserved_media_state(
+                proposal.statement
+            )
+        )
+        if invalid_initial_scope:
+            reasons = [
+                "target describes an unseen original, unaltered, or "
+                "counterfactual media state instead of the visible positive "
+                "subject-object, person-product, place, or event relation"
+            ]
+            if unobserved_named_values:
+                rendered_values = ", ".join(unobserved_named_values[:4])
+                reasons.append(
+                    "target introduces named value(s) absent from image/OCR "
+                    f"grounding: {rendered_values}"
+                )
+            rejected_reasons.append(
+                "; ".join(reasons)
+                + ". Preserve the visible relation and remove only unsupported "
+                "values; do not replace it with hidden source-image details or "
+                "incidental OCR metadata"
+            )
+            continue
+        if (
+            proposal.predicate != "visual_integrity"
+            and unobserved_named_values
+        ):
+            rendered_values = ", ".join(unobserved_named_values[:4])
+            rejected_reasons.append(
+                "target introduces named value(s) absent from image/OCR "
+                f"grounding: {rendered_values}. Remove only the unsupported "
+                "value(s) while preserving the visible subject, object, place, "
+                "and event relation; do not replace the relation with incidental "
+                "OCR metadata"
+            )
+            continue
         if (
             proposal.predicate == "visual_integrity"
             and _visual_integrity_target_contains_world_relation(proposal)
@@ -642,21 +685,6 @@ def apply_target_planning(
                 "initial target cannot assert fabrication, AI generation, or "
                 "compositing without source evidence; plan a positive "
                 "depicted-world or source relation instead"
-            )
-            continue
-        unobserved_named_values = _unobserved_named_values(
-            proposal.statement,
-            proposal.suggested_queries,
-            grounding_text,
-        )
-        if unobserved_named_values:
-            rendered_values = ", ".join(unobserved_named_values[:4])
-            rejected_reasons.append(
-                "target introduces named value(s) absent from image/OCR "
-                f"grounding: {rendered_values}. Remove only the unsupported "
-                "value(s) while preserving the visible subject, object, place, "
-                "and event relation; do not replace the relation with incidental "
-                "OCR metadata"
             )
             continue
         if (
@@ -986,6 +1014,50 @@ def _contains_initial_image_authenticity_scope(value: str) -> bool:
                 "photograph authenticity",
             )
         )
+    )
+
+
+def _target_describes_unobserved_media_state(value: str) -> bool:
+    """Reject initial cores about a hidden pre-edit or alternative source image."""
+
+    lowered = " ".join(str(value or "").casefold().split())
+    hidden_media = any(
+        phrase in lowered
+        for phrase in (
+            "original photograph",
+            "original photo",
+            "original image",
+            "unaltered photograph",
+            "unaltered photo",
+            "unaltered image",
+            "unedited photograph",
+            "unedited photo",
+            "unedited image",
+            "underlying photograph",
+            "underlying photo",
+            "underlying image",
+            "background plate",
+            "source photograph",
+            "source photo",
+            "source image",
+        )
+    )
+    counterfactual = any(
+        phrase in lowered
+        for phrase in (
+            "rather than",
+            "actually holding",
+            "actually wearing",
+            "actually shows",
+            "before editing",
+            "before alteration",
+            "before manipulation",
+        )
+    )
+    return hidden_media and (
+        counterfactual
+        or _contains_visual_integrity_scope(lowered)
+        or _contains_fabrication_attribution(lowered)
     )
 
 
@@ -1589,8 +1661,14 @@ def apply_evidence_decision(
         for item in selected_ids
         if evidence_by_id[item].evidence_kind == "reference_comparison"
     ]
+    selected_non_reference_evidence = [
+        evidence_by_id[item]
+        for item in selected_ids
+        if evidence_by_id[item].evidence_kind != "reference_comparison"
+    ]
     if (
         output.assessment in {"supported", "refuted"}
+        and not selected_non_reference_evidence
         and any(
             not _reference_comparison_is_same_capture(item)
             for item in selected_reference_evidence
@@ -1607,6 +1685,7 @@ def apply_evidence_decision(
         }
     if (
         output.assessment == "supported"
+        and not selected_non_reference_evidence
         and any(
             item.edit_evidence_present is True
             for item in selected_reference_evidence
