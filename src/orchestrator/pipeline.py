@@ -14,7 +14,6 @@ from src.orchestrator.coverage import (
     activate_initial_decisive_facts,
     audit_coverage,
     compile_verdict_basis,
-    verdict_is_determined,
 )
 from src.orchestrator.runtime_case import verify_case_image
 from src.orchestrator.image_only_prompts import (
@@ -23,13 +22,11 @@ from src.orchestrator.image_only_prompts import (
     REACT_SYSTEM_PROMPT as IMAGE_ONLY_REACT_PROMPT,
     REFLECTION_SYSTEM_PROMPT as IMAGE_ONLY_REFLECTION_PROMPT,
     TARGET_PLANNING_SYSTEM_PROMPT as IMAGE_ONLY_TARGET_PLANNING_PROMPT,
-    TARGET_REFRESH_SYSTEM_PROMPT as IMAGE_ONLY_TARGET_REFRESH_PROMPT,
     render_attribution_context as render_image_only_attribution_context,
     render_judgment_context as render_image_only_judgment_context,
     render_react_context as render_image_only_react_context,
     render_reflection_context as render_image_only_reflection_context,
     render_target_planning_context as render_image_only_target_planning_context,
-    render_target_refresh_context as render_image_only_target_refresh_context,
     pending_discovery_routes as pending_image_only_discovery_routes,
     select_react_tasks as select_image_only_react_tasks,
 )
@@ -132,7 +129,6 @@ class Orchestrator:
             "crop_and_inspect",
             "check_consistency",
             "analyze_visual_anomalies",
-            "count_objects",
         }
         self.verification_tool_limits = {
             "current_time": 1,
@@ -141,11 +137,9 @@ class Orchestrator:
             "text_search": 16,
             "visit": 16,
             "compare_with_reference": 6,
-            "crop_and_search": 4,
             "crop_and_inspect": 4,
             "check_consistency": 3,
             "analyze_visual_anomalies": 3,
-            "count_objects": 3,
         }
 
         self.llm = APIBackend(
@@ -340,6 +334,8 @@ class Orchestrator:
             "time_taken": state.stage_timings["total"],
             "token_usage": state.token_usage,
             "total_tool_calls": state.total_tool_calls,
+            "total_tool_subcalls": state.total_tool_subcalls,
+            "tool_subcalls_by_kind": state.tool_subcalls_by_kind,
             "llm_api_calls": state.llm_api_calls,
             "error": None,
         }
@@ -424,20 +420,15 @@ class Orchestrator:
         prior_evidence_count = len(investigation.evidence)
         prior_finding_count = len(investigation.findings)
         prior_fact_signature = self._image_only_fact_signature(investigation)
+        # Establish the no-progress baseline before the first tool call.  Every
+        # later accepted action is a decision checkpoint.
+        audit_coverage(investigation)
         while not investigation.stop_reason:
             attribution_pending = False
-            target_refresh_pending = False
             self._check_timeout(started, state)
             if investigation.action_count >= MAX_TOOL_ACTIONS:
                 audit_coverage(investigation)
                 break
-            if self._image_only_target_refresh_needed(investigation):
-                await self._run_image_only_target_refresh(
-                    state,
-                    investigation,
-                )
-                self._sync_image_only_state(state, investigation)
-                continue
             if not any(
                 task.status in {"active", "pending"}
                 for task in investigation.tasks
@@ -459,6 +450,9 @@ class Orchestrator:
             )
             react_tasks = select_image_only_react_tasks(investigation)
             react_task_ids = {task.task_id for task in react_tasks}
+            if not react_task_ids:
+                audit_coverage(investigation)
+                break
             task_claims = self._image_only_task_claims(
                 investigation,
                 task_ids=react_task_ids,
@@ -472,46 +466,24 @@ class Orchestrator:
                 step: StageStep,
                 _steps: List[StageStep],
             ) -> Dict[str, Any]:
-                nonlocal attribution_pending, target_refresh_pending
+                nonlocal attribution_pending
                 update = record_tool_observation(
                     investigation,
                     step,
                     image_sha256=runtime_case.image_sha256,
                 )
-                if attribution_planning_needed(investigation, update):
-                    attribution_pending = True
-                if (
-                    not attribution_pending
-                    and self._image_only_target_refresh_needed(investigation)
-                ):
-                    target_refresh_pending = True
+                audit_coverage(
+                    investigation,
+                    decision_checkpoint=True,
+                )
                 if (
                     not investigation.stop_reason
-                    and verdict_is_determined(investigation)
-                    and (
-                        self._image_only_has_refuted_decisive_fact(
-                            investigation
-                        )
-                        or not attribution_pending
-                    )
+                    and attribution_planning_needed(investigation, update)
                 ):
-                    audit_coverage(investigation)
+                    attribution_pending = True
                 self._sync_image_only_state(state, investigation)
                 return update
 
-            reverse_succeeded = any(
-                step.action_type == "tool_call"
-                and step.tool_name == "reverse_image_search"
-                and self._image_only_step_succeeded(step)
-                for step in state.all_steps
-            )
-            reverse_failures = sum(
-                1
-                for step in state.all_steps
-                if step.action_type == "tool_call"
-                and step.tool_name == "reverse_image_search"
-                and not self._image_only_step_succeeded(step)
-            )
             runner = StageRunner(
                 llm=self.llm,
                 system_prompt=self._sp(IMAGE_ONLY_REACT_PROMPT),
@@ -522,10 +494,6 @@ class Orchestrator:
                         self.all_tools,
                     )
                     if tool.name != "current_time"
-                    and not (
-                        (reverse_succeeded or reverse_failures >= 2)
-                        and tool.name == "reverse_image_search"
-                    )
                 ],
                 output_schema=InvestigationSegmentOutput,
                 max_rounds=max(1, segment_rounds),
@@ -538,7 +506,6 @@ class Orchestrator:
                 should_stop=lambda _steps: (
                     bool(investigation.stop_reason)
                     or attribution_pending
-                    or target_refresh_pending
                     or investigation.action_count >= segment_stop_action
                     or not any(
                         task.task_id in react_task_ids
@@ -622,11 +589,6 @@ class Orchestrator:
                     investigation,
                 )
                 audit_coverage(investigation)
-            elif target_refresh_pending and not investigation.stop_reason:
-                await self._run_image_only_target_refresh(
-                    state,
-                    investigation,
-                )
             self._sync_image_only_state(state, investigation)
 
             if (
@@ -645,11 +607,6 @@ class Orchestrator:
                     evidence_gain=evidence_gain,
                     decision_gain=decision_gain,
                 )
-                if self._image_only_target_refresh_needed(investigation):
-                    await self._run_image_only_target_refresh(
-                        state,
-                        investigation,
-                    )
                 audit_coverage(
                     investigation,
                     reflection_checkpoint=True,
@@ -701,53 +658,6 @@ class Orchestrator:
                 break
         self._record_stage_steps(state, steps)
         self._sync_image_only_state(state, investigation)
-
-    async def _run_image_only_target_refresh(
-        self,
-        state: VerificationState,
-        investigation: ImageOnlyInvestigationState,
-    ) -> None:
-        """Ask the policy for an independent pixel-grounded target after exhaustion."""
-
-        runner = StageRunner(
-            llm=self.llm,
-            system_prompt=self._sp(IMAGE_ONLY_TARGET_REFRESH_PROMPT),
-            tools=[],
-            output_schema=TargetPlanningOutput,
-            max_rounds=1,
-            stage_name="image_only_target_refresh",
-            attach_image=False,
-            output_validator=lambda parsed, _steps: (
-                self._validate_image_only_target_refresh(
-                    investigation,
-                    parsed,
-                )
-            ),
-            max_output_tokens=self._stage_output_tokens("PLANNING", 8192),
-            generation_config={
-                "thinking_level": self._stage_thinking_level("PLANNING")
-            },
-        )
-        parsed, steps = await runner.run(
-            render_image_only_target_refresh_context(investigation)
-        )
-        investigation.target_refresh_count += 1
-        if parsed is None:
-            self._record_stage_steps(state, steps)
-            self._sync_image_only_state(state, investigation)
-            return
-        update = apply_target_planning(
-            investigation,
-            parsed,
-            force_external_decisive=True,
-        )
-        for step in reversed(steps):
-            if step.action_type == "output":
-                step.metadata["target_refresh_state_update"] = update
-                break
-        self._record_stage_steps(state, steps)
-        self._sync_image_only_state(state, investigation)
-
 
     async def _run_image_only_reflection(
         self,
@@ -857,12 +767,10 @@ class Orchestrator:
         proposed_changes = bool(
             parsed.task_updates
             or parsed.new_tasks
-            or parsed.proposed_decisive_fact_ids
         )
         accepted_changes = bool(
             record.accepted_task_update_ids
             or record.accepted_new_task_ids
-            or record.accepted_decisive_fact_ids
         )
         if proposed_changes and not accepted_changes:
             return False, "; ".join(record.rejected_reasons) or (
@@ -882,28 +790,6 @@ class Orchestrator:
                 "target planning proposed no valid state transition"
             )
         return True, ""
-
-    @staticmethod
-    def _validate_image_only_target_refresh(
-        investigation: ImageOnlyInvestigationState,
-        parsed: TargetPlanningOutput,
-    ) -> tuple[bool, str]:
-        candidate = investigation.model_copy(deep=True)
-        before = set(candidate.decisive_fact_ids)
-        update = apply_target_planning(
-            candidate,
-            parsed,
-            force_external_decisive=True,
-        )
-        if any(
-            fact_id not in before
-            for fact_id in candidate.decisive_fact_ids
-        ):
-            return True, ""
-        return False, "; ".join(update["rejected_reasons"]) or (
-            "target refresh must add an atomic pixel-grounded external fact; "
-            "generic provenance or source-search work remains supporting"
-        )
 
     @staticmethod
     def _validate_image_only_judgment(
@@ -1058,39 +944,6 @@ class Orchestrator:
         )
 
     @staticmethod
-    def _image_only_target_refresh_needed(
-        investigation: ImageOnlyInvestigationState,
-    ) -> bool:
-        if (
-            investigation.target_refresh_count >= 2
-            or investigation.action_count >= MAX_TOOL_ACTIONS
-        ):
-            return False
-        facts = {fact.fact_id: fact for fact in investigation.facts}
-        decisive_ids = {
-            fact_id
-            for fact_id in investigation.decisive_fact_ids
-            if fact_id in facts
-            and facts[fact_id].predicate != "visual_integrity"
-            and facts[fact_id].status not in {"supported", "refuted"}
-        }
-        if not decisive_ids:
-            return False
-        has_exhausted_target = any(
-            task.status == "exhausted"
-            and bool(set(task.fact_ids) & decisive_ids)
-            for task in investigation.tasks
-        )
-        has_open_route = any(
-            task.status in {"active", "pending"}
-            and bool(set(task.fact_ids) & decisive_ids)
-            and bool(task.suggested_tools)
-            for task in investigation.tasks
-        )
-        return has_exhausted_target and not has_open_route
-
-
-    @staticmethod
     def _attempted_image_only_tool(route: str, tool_name: str) -> bool:
         try:
             parsed = json.loads(route)
@@ -1107,16 +960,6 @@ class Orchestrator:
         return (
             isinstance(payload, dict)
             and payload.get("status") == "success"
-        )
-
-    @staticmethod
-    def _image_only_has_refuted_decisive_fact(
-        investigation: ImageOnlyInvestigationState,
-    ) -> bool:
-        decisive_ids = set(investigation.decisive_fact_ids)
-        return any(
-            fact.fact_id in decisive_ids and fact.status == "refuted"
-            for fact in investigation.facts
         )
 
     @staticmethod
@@ -1507,6 +1350,21 @@ class Orchestrator:
         state.total_tool_calls += sum(1 for step in steps if step.action_type == "tool_call")
         thought_violation: Optional[StageStep] = None
         for step in steps:
+            subcalls = step.metadata.get("tool_subcalls", [])
+            if isinstance(subcalls, list):
+                for subcall in subcalls:
+                    if not isinstance(subcall, dict):
+                        continue
+                    request_count = max(
+                        0,
+                        int(subcall.get("request_count", 1) or 0),
+                    )
+                    state.total_tool_subcalls += request_count
+                    kind = str(subcall.get("kind", "unknown")).strip() or "unknown"
+                    state.tool_subcalls_by_kind[kind] = (
+                        state.tool_subcalls_by_kind.get(kind, 0)
+                        + request_count
+                    )
             tool_tokens = step.metadata.get("tool_tokens", {})
             if not isinstance(tool_tokens, dict):
                 tool_tokens = {}

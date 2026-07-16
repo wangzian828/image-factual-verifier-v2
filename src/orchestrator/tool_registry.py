@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import inspect
 from typing import Any, Dict, List, Optional, Tuple
 
 from src.integrations.vlm.factory import build_vlm_client
@@ -25,9 +26,7 @@ STAGE_TOOLS: Dict[str, List[str]] = {
         "compare_with_reference",
         "check_consistency",
         "analyze_visual_anomalies",
-        "crop_and_search",
         "crop_and_inspect",
-        "count_objects",
     ],
     "judgment": [],
 }
@@ -72,13 +71,18 @@ def build_all_tools_with_health(
     )
 
     def sync_vlm_client() -> Any:
-        return build_vlm_client(
+        client = build_vlm_client(
             provider=vlm_provider,
             model_name=vlm_model,
             wire_api=vlm_wire_api,
             timeout=request_timeout,
             max_retries=request_max_retries,
         )
+        _validate_structured_vision_client(
+            client,
+            provider=vlm_provider,
+        )
+        return client
 
     def register(name: str, builder) -> None:
         try:
@@ -168,3 +172,36 @@ def build_all_tools_with_health(
     )
 
     return tools, health
+
+
+def _validate_structured_vision_client(
+    client: Any,
+    *,
+    provider: str,
+) -> None:
+    method = getattr(client, "create_image_json", None)
+    if not callable(method):
+        raise RuntimeError(
+            f"{provider} vision client does not implement create_image_json."
+        )
+    parameters = inspect.signature(method).parameters
+    required = {
+        "system_prompt",
+        "user_text",
+        "image_input",
+        "max_tokens",
+        "response_schema",
+    }
+    missing = sorted(required - set(parameters))
+    if missing:
+        raise RuntimeError(
+            f"{provider} vision client lacks structured-output parameters: "
+            + ", ".join(missing)
+        )
+    if not str(getattr(client, "api_key", "") or "").strip():
+        env_name = (
+            "QWEN_API_KEY or DASHSCOPE_API_KEY"
+            if str(provider).strip().lower() == "qwen"
+            else f"{str(provider).upper()} API key"
+        )
+        raise RuntimeError(f"{env_name} is required for structured vision tools.")

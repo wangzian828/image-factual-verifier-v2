@@ -33,7 +33,6 @@ def test_exporter_uses_actual_policy_boundaries_and_aligned_masks(
         "react",
         "planning",
         "react",
-        "planning",
         "judgment",
     ]
     assert all(item.tokenizer_id == "utf8-byte-v1" for item in examples)

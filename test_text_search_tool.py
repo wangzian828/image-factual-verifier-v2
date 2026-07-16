@@ -49,7 +49,11 @@ def _assert_discovery_only(result: dict) -> None:
     }
     assert result["status"] == "success"
     assert set(result).isdisjoint(forbidden)
-    assert len(result["queries"]) == 2
+    assert len(result["queries"]) == 1
+    assert len(result["subcalls"]) == 1
+    assert result["subcalls"][0]["kind"] == "search_query"
+    assert result["subcalls"][0]["request_count"] == 1
+    assert result["subcalls"][0]["result_count"] == 1
     for response in result["queries"]:
         assert response["results"]
         assert set(response).isdisjoint(forbidden)
@@ -61,7 +65,7 @@ def test_text_search_returns_discovery_without_hidden_visits_or_llm() -> None:
     tool = TextSearchTool(client=client, top_k=5)
 
     result = tool.search(
-        ["monarch", "antarctica"],
+        ["monarch Antarctica"],
         gl="us",
         hl="en",
         goal="Do monarch butterflies migrate to Antarctica?",
@@ -69,12 +73,11 @@ def test_text_search_returns_discovery_without_hidden_visits_or_llm() -> None:
 
     _assert_discovery_only(result)
     assert client.calls == [
-        ("monarch", 5, "us", "en"),
-        ("antarctica", 5, "us", "en"),
+        ("monarch Antarctica", 5, "us", "en"),
     ]
 
 
-def test_async_text_search_has_the_same_discovery_contract() -> None:
+def test_text_search_rejects_multiple_queries_without_provider_calls() -> None:
     client = FakeSearchClient()
     tool = TextSearchTool(client=client, top_k=4)
 
@@ -82,6 +85,24 @@ def test_async_text_search_has_the_same_discovery_contract() -> None:
         tool.call_async(
             {
                 "queries": ["one", "two"],
+                "goal": "Find candidate pages.",
+            }
+        )
+    )
+
+    assert result["status"] == "error"
+    assert "exactly one query" in result["error"]
+    assert client.calls == []
+
+
+def test_async_text_search_has_the_same_single_query_contract() -> None:
+    client = FakeSearchClient()
+    tool = TextSearchTool(client=client, top_k=4)
+
+    result = asyncio.run(
+        tool.call_async(
+            {
+                "queries": ["one"],
                 "goal": "Find candidate pages.",
             }
         )

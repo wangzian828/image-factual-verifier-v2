@@ -133,6 +133,48 @@ def test_compare_uses_two_interactions_content_images_and_exact_schema(tmp_path:
     assert "image_url" not in json.dumps(request["input_payload"])
 
 
+def test_compare_short_circuits_pixel_identical_images_without_vlm(
+    tmp_path: Path,
+) -> None:
+    backend = FakeBackend(
+        AssertionError("pixel-identical images must not call the VLM")
+    )
+    image_path = tmp_path / "current.png"
+    Image.new("RGB", (8, 8), "white").save(image_path)
+    reference_data = image_path.read_bytes()
+    import base64
+
+    tool = CompareWithReferenceTool(
+        vlm_backend=backend,
+        image_path=str(image_path),
+    )
+
+    async def same_download(_url: str) -> dict:
+        return {
+            "data_url": (
+                "data:image/png;base64,"
+                + base64.b64encode(reference_data).decode("ascii")
+            ),
+            "resolved_url": "https://example.test/reference.png",
+            "download_method": "direct",
+            "attempted_urls": ["https://example.test/reference.png"],
+        }
+
+    tool._download_reference = same_download
+    result = asyncio.run(
+        tool.call_async(
+            {"reference_url": "https://example.test/reference.png"}
+        )
+    )
+
+    assert result["status"] == "success"
+    assert result["comparison_method"] == "deterministic_exact_pixels"
+    assert result["same_capture_or_near_duplicate"] is True
+    assert result["confidence"] == 1.0
+    assert result["__runtime_metrics__"] == {}
+    assert backend.requests == []
+
+
 def test_compare_propagates_interactions_failure_as_tool_error(tmp_path: Path) -> None:
     backend = FakeBackend(RuntimeError("endpoint unavailable"))
     tool = make_tool(tmp_path, backend)

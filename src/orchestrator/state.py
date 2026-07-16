@@ -92,6 +92,8 @@ class VerificationState:
     all_steps: List[Any] = field(default_factory=list)
     stage_timings: Dict[str, float] = field(default_factory=dict)
     total_tool_calls: int = 0
+    total_tool_subcalls: int = 0
+    tool_subcalls_by_kind: Dict[str, int] = field(default_factory=dict)
     llm_api_calls: int = 0
     token_usage: Dict[str, int] = field(
         default_factory=lambda: {"prompt": 0, "completion": 0, "thought": 0}
@@ -171,6 +173,8 @@ class VerificationState:
                 "all_steps": steps_data,
                 "stage_timings": self.stage_timings,
                 "total_tool_calls": self.total_tool_calls,
+                "total_tool_subcalls": self.total_tool_subcalls,
+                "tool_subcalls_by_kind": self.tool_subcalls_by_kind,
                 "llm_api_calls": self.llm_api_calls,
                 "token_usage": self.token_usage,
                 "termination": self.termination,

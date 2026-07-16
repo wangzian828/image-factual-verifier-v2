@@ -274,7 +274,6 @@ class TaskUpdate(StrictModel):
 class ReflectionOutput(StrictModel):
     task_updates: List[TaskUpdate] = Field(default_factory=list)
     new_tasks: List[ResearchTask] = Field(default_factory=list)
-    proposed_decisive_fact_ids: List[str] = Field(default_factory=list)
     recommended_next_task_ids: List[str] = Field(default_factory=list)
     remaining_gaps: List[str] = Field(default_factory=list)
     ready_to_finish: bool = False
@@ -303,9 +302,7 @@ class TargetFactProposal(StrictModel):
             "compare_with_reference",
             "check_consistency",
             "analyze_visual_anomalies",
-            "crop_and_search",
             "crop_and_inspect",
-            "count_objects",
             "ocr_with_position",
         ]
     ] = Field(min_length=1, max_length=4)
@@ -342,7 +339,7 @@ class AttributionFactProposal(StrictModel):
     evidence_ids: List[str] = Field(default_factory=list, max_length=8)
     finding_ids: List[str] = Field(default_factory=list, max_length=8)
     suggested_queries: List[str] = Field(default_factory=list, max_length=3)
-    decision_relevance: Literal["supporting", "decisive"] = "decisive"
+    decision_relevance: Literal["supporting", "decisive"] = "supporting"
 
 
 class AttributionOutput(StrictModel):
@@ -367,10 +364,28 @@ class ReflectionRecord(StrictModel):
     output: ReflectionOutput
     accepted_task_update_ids: List[str] = Field(default_factory=list, max_length=12)
     accepted_new_task_ids: List[str] = Field(default_factory=list, max_length=3)
-    accepted_decisive_fact_ids: List[str] = Field(default_factory=list, max_length=2)
     rejected_reasons: List[str] = Field(default_factory=list, max_length=20)
     evidence_gain: bool = False
     decision_gain: bool = False
+
+
+class EvidenceGap(StrictModel):
+    gap_id: str = Field(min_length=1, max_length=100)
+    fact_id: str = Field(min_length=1, max_length=100)
+    kind: Literal[
+        "image_source_binding",
+        "direct_support_or_refute",
+        "conflict_resolution",
+    ]
+    status: Literal[
+        "open",
+        "resolved",
+        "blocked",
+        "exhausted",
+        "not_required",
+    ] = "open"
+    evidence_ids: List[str] = Field(default_factory=list, max_length=40)
+    reason: str = Field(default="", max_length=800)
 
 
 class FactCoverage(StrictModel):
@@ -401,8 +416,9 @@ class FactCoverage(StrictModel):
 class ImageOnlyCoverage(StrictModel):
     audit_id: str = Field(min_length=1, max_length=100)
     action_count: int = Field(ge=0)
-    decisive_fact_ids: List[str] = Field(default_factory=list, max_length=6)
-    facts: List[FactCoverage] = Field(default_factory=list, max_length=6)
+    decisive_fact_ids: List[str] = Field(default_factory=list, max_length=1)
+    facts: List[FactCoverage] = Field(default_factory=list, max_length=1)
+    evidence_gaps: List[EvidenceGap] = Field(default_factory=list, max_length=3)
     complete: bool = False
     stop_reason: Literal[
         "continue",
@@ -412,6 +428,7 @@ class ImageOnlyCoverage(StrictModel):
         "hard_budget_exhausted",
     ] = "continue"
     reflection_checkpoint: bool = False
+    decision_checkpoint: bool = False
     substantive_gain: bool = False
     low_gain_intervals: int = Field(default=0, ge=0)
     reason: str = Field(default="", max_length=1200)
@@ -474,12 +491,17 @@ class ImageOnlyInvestigationState(StrictModel):
         default_factory=list,
         max_length=32,
     )
-    decisive_fact_ids: List[str] = Field(default_factory=list, max_length=6)
+    core_verdict_fact_id: Optional[str] = Field(
+        default=None,
+        max_length=100,
+    )
+    core_fact_refinement_count: int = Field(default=0, ge=0, le=1)
+    evidence_gaps: List[EvidenceGap] = Field(default_factory=list, max_length=3)
+    decisive_fact_ids: List[str] = Field(default_factory=list, max_length=1)
     recommended_next_task_ids: List[str] = Field(default_factory=list, max_length=4)
     attempted_routes: List[str] = Field(default_factory=list, max_length=120)
     action_count: int = Field(default=0, ge=0, le=24)
     reflection_failure_streak: int = Field(default=0, ge=0, le=2)
-    target_refresh_count: int = Field(default=0, ge=0, le=2)
     verdict_basis: Optional[VerdictBasis] = None
     judgment: Optional[ImageOnlyJudgment] = None
     stop_reason: Literal[
@@ -489,6 +511,26 @@ class ImageOnlyInvestigationState(StrictModel):
         "information_saturated",
         "hard_budget_exhausted",
     ] = ""
+
+    @model_validator(mode="after")
+    def validate_core_verdict_ownership(
+        self,
+    ) -> "ImageOnlyInvestigationState":
+        if self.core_verdict_fact_id is None and self.decisive_fact_ids:
+            self.core_verdict_fact_id = self.decisive_fact_ids[0]
+        if self.core_verdict_fact_id is not None:
+            if self.core_verdict_fact_id not in {
+                fact.fact_id for fact in self.facts
+            }:
+                raise ValueError(
+                    "core_verdict_fact_id must reference an existing fact"
+                )
+            self.decisive_fact_ids = [self.core_verdict_fact_id]
+        elif self.decisive_fact_ids:
+            raise ValueError(
+                "decisive_fact_ids requires core_verdict_fact_id"
+            )
+        return self
 
 
 class BootstrapInvestigation(StrictModel):

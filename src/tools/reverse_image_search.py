@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import time
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
@@ -39,7 +38,7 @@ IMAGE_QUERY_SCHEMA = {
 
 @dataclass
 class ReverseImageSearchTool(BaseTool):
-    """Hybrid reverse image search: visual reverse search plus semantic image search."""
+    """One bounded reverse-image or semantic-image search branch per action."""
 
     vlm_client: Optional[Any] = None
     image_search_client: Optional[SerperImageSearchClient] = None
@@ -54,9 +53,8 @@ class ReverseImageSearchTool(BaseTool):
     source_access_policy: Optional[SourceAccessPolicy] = None
     name: str = "reverse_image_search"
     description: str = (
-        "Reverse image search: finds visually similar web pages and images using a visual search provider, "
-        "plus generates a semantic search query from the image content. "
-        "Returns both visual matches and semantic matches."
+        "Run one image-search branch. Use branch='lens' for reverse-image search "
+        "or branch='semantic' to generate one visual query and run image search."
     )
     parameters: dict = field(
         default_factory=lambda: {
@@ -65,6 +63,14 @@ class ReverseImageSearchTool(BaseTool):
                 "image_input": {
                     "type": "string",
                     "description": "Local path, URL, or data URL of the image.",
+                },
+                "branch": {
+                    "type": "string",
+                    "enum": ["lens", "semantic"],
+                    "description": (
+                        "One bounded branch. Default lens; semantic is a separate "
+                        "later action when reverse-image candidates are insufficient."
+                    ),
                 },
             },
             "required": ["image_input"],
@@ -86,24 +92,48 @@ class ReverseImageSearchTool(BaseTool):
                 serper_lens_client=self.lens_client,
             )
 
-    def search(self, image_input: str) -> Dict[str, Any]:
+    def search(
+        self,
+        image_input: str,
+        *,
+        branch: str = "lens",
+    ) -> Dict[str, Any]:
         total_t0 = time.perf_counter()
-        results: Dict[str, Any] = {"status": "success", "image_input": image_input}
+        branch = str(branch or "lens").strip().lower()
+        if branch not in {"lens", "semantic"}:
+            return {
+                "status": "error",
+                "error": "reverse_image_search branch must be lens or semantic",
+            }
+        results: Dict[str, Any] = {
+            "status": "success",
+            "image_input": image_input,
+            "branch": branch,
+            "lens_results": [],
+            "semantic_results": [],
+        }
         timings: Dict[str, Any] = {}
 
-        if self.use_lens and self.use_vlm_query:
-            with ThreadPoolExecutor(max_workers=2) as executor:
-                future_lens = executor.submit(self._run_lens_branch, image_input)
-                future_semantic = executor.submit(self._run_semantic_branch, image_input)
-                lens_payload = future_lens.result()
-                semantic_payload = future_semantic.result()
-            self._merge_lens_payload(results, timings, lens_payload)
-            self._merge_semantic_payload(results, timings, semantic_payload)
+        if branch == "lens":
+            if not self.use_lens:
+                return {
+                    **results,
+                    "status": "error",
+                    "error": "Lens branch is disabled.",
+                }
+            payload = self._run_lens_branch(image_input)
+            self._merge_lens_payload(results, timings, payload)
+            results["subcalls"] = list(payload.get("subcalls", []))
         else:
-            if self.use_lens:
-                self._merge_lens_payload(results, timings, self._run_lens_branch(image_input))
-            if self.use_vlm_query:
-                self._merge_semantic_payload(results, timings, self._run_semantic_branch(image_input))
+            if not self.use_vlm_query:
+                return {
+                    **results,
+                    "status": "error",
+                    "error": "Semantic branch is disabled.",
+                }
+            payload = self._run_semantic_branch(image_input)
+            self._merge_semantic_payload(results, timings, payload)
+            results["subcalls"] = list(payload.get("subcalls", []))
 
         lens_results = results.get("lens_results", []) or []
         semantic_results = results.get("semantic_results", []) or []
@@ -131,10 +161,10 @@ class ReverseImageSearchTool(BaseTool):
 
         errors = []
         lens_error = str(results.get("lens_error", "")).strip()
-        if self.use_lens and lens_error:
+        if branch == "lens" and lens_error:
             errors.append(lens_error)
         vlm_error = str(results.get("vlm_error", "")).strip()
-        if self.use_vlm_query and vlm_error and not lens_results and not semantic_results:
+        if branch == "semantic" and vlm_error and not semantic_results:
             errors.append(vlm_error)
         if errors:
             return {
@@ -150,6 +180,7 @@ class ReverseImageSearchTool(BaseTool):
         payload: Dict[str, Any] = {
             "lens_results": [],
             "timings": {},
+            "subcalls": [],
         }
         try:
             visual = self.visual_search_client.search(image_input, top_k=self.top_k)
@@ -173,8 +204,45 @@ class ReverseImageSearchTool(BaseTool):
                     f"{name}: {msg}" for name, msg in visual["errors"].items()
                 )
             payload["timings"] = dict(visual.get("timings", {}))
+            upload_meta = visual.get("upload", {})
+            if isinstance(upload_meta, dict) and upload_meta:
+                payload["subcalls"].append(
+                    {
+                        "kind": "upload",
+                        "provider": str(
+                            upload_meta.get("provider", "image_upload")
+                        ),
+                        "status": "success",
+                        "request_count": 1,
+                    }
+                )
+            payload["subcalls"].append(
+                {
+                    "kind": "reverse_image_query",
+                    "provider": str(
+                        visual.get("provider", "visual_search")
+                    ),
+                    "status": (
+                        "error"
+                        if visual.get("error")
+                        or str(visual.get("status", "")).lower() == "error"
+                        else "success"
+                    ),
+                    "request_count": 1,
+                    "result_count": len(visual.get("results", []) or []),
+                }
+            )
         except Exception as exc:
             payload["lens_error"] = f"{type(exc).__name__}: {exc}"
+            payload["subcalls"].append(
+                {
+                    "kind": "reverse_image_query",
+                    "provider": "visual_search",
+                    "status": "error",
+                    "request_count": 1,
+                    "result_count": 0,
+                }
+            )
         payload["timings"]["lens_branch_ms"] = round((time.perf_counter() - t0) * 1000, 2)
         return payload
 
@@ -183,6 +251,7 @@ class ReverseImageSearchTool(BaseTool):
         payload: Dict[str, Any] = {
             "semantic_results": [],
             "timings": {},
+            "subcalls": [],
         }
         try:
             query_t0 = time.perf_counter()
@@ -192,18 +261,51 @@ class ReverseImageSearchTool(BaseTool):
             payload["timings"]["vlm_query_ms"] = round((time.perf_counter() - query_t0) * 1000, 2)
             query = str(query_payload.get("query", "")).strip()
             payload["vlm_query"] = query
+            payload["subcalls"].append(
+                {
+                    "kind": "vision_extract",
+                    "provider": self.provider,
+                    "status": "success" if query else "error",
+                    "request_count": 1,
+                }
+            )
             if query:
                 semantic_t0 = time.perf_counter()
+                image_search_subcall = {
+                    "kind": "image_search_query",
+                    "provider": "serper_image",
+                    "status": "error",
+                    "request_count": 1,
+                    "result_count": 0,
+                }
+                payload["subcalls"].append(image_search_subcall)
                 payload["semantic_results"] = self.image_search_client.search(
                     query=query,
                     top_k=self.top_k,
                 )
                 payload["timings"]["semantic_search_ms"] = round((time.perf_counter() - semantic_t0) * 1000, 2)
+                image_search_subcall.update(
+                    {
+                        "status": "success",
+                        "result_count": len(
+                            payload["semantic_results"] or []
+                        ),
+                    }
+                )
         except Exception as exc:
             payload["vlm_error"] = f"{type(exc).__name__}: {exc}"
             metrics = exception_runtime_metrics(exc)
             if metrics:
                 payload[RUNTIME_METRICS_KEY] = metrics
+            if not payload["subcalls"]:
+                payload["subcalls"].append(
+                    {
+                        "kind": "vision_extract",
+                        "provider": self.provider,
+                        "status": "error",
+                        "request_count": 1,
+                    }
+                )
         payload["timings"]["semantic_branch_ms"] = round((time.perf_counter() - t0) * 1000, 2)
         return payload
 
@@ -243,7 +345,10 @@ class ReverseImageSearchTool(BaseTool):
         )
 
     def call(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        return self.search(params["image_input"])
+        return self.search(
+            params["image_input"],
+            branch=params.get("branch", "lens"),
+        )
 
     def set_source_access_policy(self, policy: SourceAccessPolicy) -> None:
         self.source_access_policy = policy

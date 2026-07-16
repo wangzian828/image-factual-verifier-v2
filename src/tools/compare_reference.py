@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import base64
+import io
 from dataclasses import dataclass, field
 from typing import Any, Dict, Mapping, Optional
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
@@ -186,6 +188,9 @@ class CompareWithReferenceTool(BaseTool):
 
         try:
             runtime_metrics: Dict[str, Any] = {}
+            download: Dict[str, Any] = {}
+            download_subcalls: list[Dict[str, Any]] = []
+            comparison_attempted = False
             download = (
                 await self._download_reference(
                     reference_url,
@@ -201,6 +206,7 @@ class CompareWithReferenceTool(BaseTool):
                     "download_method": "direct",
                     "attempted_urls": [reference_url],
                 }
+            download_subcalls = self._download_subcalls(download or {})
             reference_data_url = str(
                 (download or {}).get("data_url", "")
             ).strip()
@@ -211,11 +217,43 @@ class CompareWithReferenceTool(BaseTool):
                 error["attempted_urls"] = list(
                     (download or {}).get("attempted_urls", [])
                 )
+                error["subcalls"] = download_subcalls
                 return error
 
             from src.tools.vision_utils import image_to_data_url
 
             current_data_url = image_to_data_url(self.image_path)
+            deterministic = self._deterministic_exact_match(
+                reference_data_url,
+                current_data_url,
+            )
+            if deterministic is not None:
+                return {
+                    "status": "success",
+                    "reference_url": reference_url,
+                    "resolved_reference_url": str(
+                        (download or {}).get("resolved_url", reference_url)
+                    ),
+                    "source_page_url": source_page_url,
+                    "download_method": str(
+                        (download or {}).get("download_method", "direct")
+                    ),
+                    "attempted_urls": list(
+                        (download or {}).get("attempted_urls", [reference_url])
+                    ),
+                    "comparison_method": "deterministic_exact_pixels",
+                    "subcalls": [
+                        *download_subcalls,
+                        {
+                            "kind": "image_compare",
+                            "provider": "deterministic_pixels",
+                            "status": "success",
+                            "request_count": 1,
+                        },
+                    ],
+                    **deterministic,
+                    RUNTIME_METRICS_KEY: {},
+                }
             input_payload = [
                 {"type": "text", "text": COMPARE_PROMPT.format(focus=focus)},
                 self._data_url_to_image_content(reference_data_url),
@@ -225,6 +263,7 @@ class CompareWithReferenceTool(BaseTool):
                 COMPARE_RESPONSE_SCHEMA,
                 require_all_properties=True,
             )
+            comparison_attempted = True
             payload = await self.vlm_backend.create_interaction(
                 input_payload=input_payload,
                 system_instruction=SYSTEM_INSTRUCTION,
@@ -266,6 +305,23 @@ class CompareWithReferenceTool(BaseTool):
                 "Gemini Interactions comparison failed: "
                 f"{type(exc).__name__}: {exc or '<no message>'}"
             )
+            error["subcalls"] = [
+                *locals().get("download_subcalls", []),
+                *(
+                    [
+                        {
+                            "kind": "image_compare",
+                            "provider": str(
+                                getattr(self.vlm_backend, "provider", "gemini")
+                            ),
+                            "status": "error",
+                            "request_count": 1,
+                        }
+                    ]
+                    if locals().get("comparison_attempted", False)
+                    else []
+                ),
+            ]
             if runtime_metrics:
                 error[RUNTIME_METRICS_KEY] = runtime_metrics
             return error
@@ -283,9 +339,89 @@ class CompareWithReferenceTool(BaseTool):
             "attempted_urls": list(
                 (download or {}).get("attempted_urls", [reference_url])
             ),
+            "comparison_method": "vlm",
+            "subcalls": [
+                *self._download_subcalls(download or {}),
+                {
+                    "kind": "image_compare",
+                    "provider": str(
+                        getattr(self.vlm_backend, "provider", "gemini")
+                    ),
+                    "status": "success",
+                    "request_count": 1,
+                },
+            ],
             **validated,
             RUNTIME_METRICS_KEY: runtime_metrics,
         }
+
+    @staticmethod
+    def _deterministic_exact_match(
+        reference_data_url: str,
+        current_data_url: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Return an exact-pixel match without spending a VLM call."""
+
+        from PIL import Image, ImageChops
+
+        try:
+            reference_bytes = CompareWithReferenceTool._decode_data_url(
+                reference_data_url
+            )
+            current_bytes = CompareWithReferenceTool._decode_data_url(
+                current_data_url
+            )
+            with Image.open(io.BytesIO(reference_bytes)) as reference_image:
+                reference = reference_image.convert("RGB")
+            with Image.open(io.BytesIO(current_bytes)) as current_image:
+                current = current_image.convert("RGB")
+            if reference.size != current.size:
+                return None
+            if ImageChops.difference(reference, current).getbbox() is not None:
+                return None
+        except Exception:
+            return None
+        return {
+            "same_subject_or_scene": True,
+            "same_capture_or_near_duplicate": True,
+            "likely_different_original_capture": False,
+            "edit_evidence_present": False,
+            "edit_evidence_strength": "none",
+            "differences": [],
+            "overall_observation": (
+                "The reference and current image are pixel-identical after "
+                "deterministic RGB normalization."
+            ),
+            "confidence": 1.0,
+        }
+
+    @staticmethod
+    def _download_subcalls(download: Mapping[str, Any]) -> list[Dict[str, Any]]:
+        attempted = [
+            str(url).strip()
+            for url in download.get("attempted_urls", []) or []
+            if str(url).strip()
+        ]
+        resolved = str(download.get("resolved_url", "")).strip()
+        return [
+            {
+                "kind": "page_fetch",
+                "provider": "reference_download",
+                "status": (
+                    "success"
+                    if resolved and index == len(attempted) - 1
+                    else "error"
+                ),
+                "request_count": 1,
+            }
+            for index, _url in enumerate(attempted)
+        ]
+
+    @staticmethod
+    def _decode_data_url(data_url: str) -> bytes:
+        if not (data_url.startswith("data:") and ";base64," in data_url):
+            raise ValueError("Image must be a base64 data URL.")
+        return base64.b64decode(data_url.split(",", 1)[1], validate=True)
 
     async def _download_reference(
         self,

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Union
@@ -28,7 +27,13 @@ class TextSearchTool(BaseTool):
             "properties": {
                 "queries": {
                     "type": ["array", "string"],
-                    "description": "One query string or a list of query strings.",
+                    "items": {"type": "string"},
+                    "minItems": 1,
+                    "maxItems": 1,
+                    "description": (
+                        "Exactly one query string. One text_search action maps "
+                        "to one provider request."
+                    ),
                 },
                 "gl": {"type": "string", "description": "Country code such as us or cn."},
                 "hl": {"type": "string", "description": "Language code such as en or zh-cn."},
@@ -63,25 +68,38 @@ class TextSearchTool(BaseTool):
     ) -> Dict[str, Any]:
         if isinstance(queries, str):
             queries = [queries]
+        queries = [
+            str(query).strip()
+            for query in queries
+            if str(query).strip()
+        ]
         if not queries:
             return {"status": "error", "error": "At least one non-empty search query is required."}
-        responses: List[Dict[str, Any]] = []
-        for query in queries:
-            blocked_domain = (
-                self.source_access_policy.blocked_query_reference(query)
-                if self.source_access_policy is not None
-                else ""
-            )
-            if blocked_domain:
-                return {
-                    "status": "error",
-                    "error": (
-                        "Search query explicitly targets a source excluded by the active "
-                        "evaluation policy. Use independent open-web sources instead."
-                    ),
-                }
-            responses.append(self._run_single_query(query, gl=gl, hl=hl, goal=goal))
-        return self._build_result(responses)
+        if len(queries) != 1:
+            return {
+                "status": "error",
+                "error": (
+                    "text_search accepts exactly one query per action; submit "
+                    "additional queries as later actions only if the core gap remains open."
+                ),
+            }
+        query = queries[0]
+        blocked_domain = (
+            self.source_access_policy.blocked_query_reference(query)
+            if self.source_access_policy is not None
+            else ""
+        )
+        if blocked_domain:
+            return {
+                "status": "error",
+                "error": (
+                    "Search query explicitly targets a source excluded by the active "
+                    "evaluation policy. Use independent open-web sources instead."
+                ),
+            }
+        return self._build_result(
+            [self._run_single_query(query, gl=gl, hl=hl, goal=goal)]
+        )
 
     def call(self, params: Dict[str, Any]) -> Dict[str, Any]:
         return self.search(
@@ -92,36 +110,15 @@ class TextSearchTool(BaseTool):
         )
 
     async def call_async(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        queries = params["queries"]
-        gl = params.get("gl")
-        hl = params.get("hl")
-        goal = params.get("goal")
-        if isinstance(queries, str):
-            queries = [queries]
-        if not queries:
-            return {"status": "error", "error": "At least one non-empty search query is required."}
-        blocked_domain = next(
-            (
-                domain
-                for query in queries
-                if self.source_access_policy is not None
-                if (domain := self.source_access_policy.blocked_query_reference(query))
-            ),
-            "",
+        import asyncio
+
+        return await asyncio.to_thread(
+            self.search,
+            params["queries"],
+            gl=params.get("gl"),
+            hl=params.get("hl"),
+            goal=params.get("goal"),
         )
-        if blocked_domain:
-            return {
-                "status": "error",
-                "error": (
-                    "Search query explicitly targets a source excluded by the active "
-                    "evaluation policy. Use independent open-web sources instead."
-                ),
-            }
-        tasks = [
-            asyncio.to_thread(self._run_single_query, query, gl=gl, hl=hl, goal=goal)
-            for query in queries
-        ]
-        return self._build_result(list(await asyncio.gather(*tasks)))
 
     @staticmethod
     def _build_result(responses: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -130,7 +127,35 @@ class TextSearchTool(BaseTool):
             for response in responses
             if str(response.get("search_error", "")).strip()
         ]
-        result: Dict[str, Any] = {"status": "success", "queries": responses}
+        result: Dict[str, Any] = {
+            "status": "success",
+            "queries": responses,
+            "subcalls": [
+                {
+                    "kind": "search_query",
+                    "provider": str(
+                        response.get("provider", "serper")
+                    ),
+                    "status": (
+                        "error"
+                        if response.get("search_error")
+                        else "success"
+                    ),
+                    "request_count": 1,
+                    "result_count": len(
+                        response.get("results", []) or []
+                    ),
+                    "duration_ms": float(
+                        (response.get("timings", {}) or {}).get(
+                            "search_ms",
+                            0.0,
+                        )
+                        or 0.0
+                    ),
+                }
+                for response in responses
+            ],
+        }
         if errors:
             result.update({"status": "error", "error": "; ".join(errors)})
         return result

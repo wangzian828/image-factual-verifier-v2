@@ -93,7 +93,6 @@ class AdaptiveImageOnlyBackend:
                 {
                     "task_updates": [],
                     "new_tasks": [],
-                    "proposed_decisive_fact_ids": [],
                     "recommended_next_task_ids": [],
                     "remaining_gaps": [],
                     "ready_to_finish": True,
@@ -258,7 +257,7 @@ class ScreenshotBackend:
         self.target_output = target_output
         self.source_task_id = source_task_id
         self.integrity_task_id = integrity_task_id
-        self.phase = "source"
+        self.phase = "search"
         self.counter = 0
 
     async def create_interaction(self, **kwargs: Any) -> Dict[str, Any]:
@@ -307,8 +306,8 @@ class ScreenshotBackend:
                     "ready_for_reflection": True,
                 },
             )
-        if self.phase == "source":
-            self.phase = "integrity"
+        if self.phase == "search":
+            self.phase = "visit"
             return _call(
                 interaction_id,
                 f"screenshot-call-{self.counter}",
@@ -327,14 +326,16 @@ class ScreenshotBackend:
         return _call(
             interaction_id,
             f"screenshot-call-{self.counter}",
-            "analyze_visual_anomalies",
+            "visit",
             {
-                "question_id": self.integrity_task_id,
-                "focus_areas": [
-                    "author, account, post text, date, and reply layout"
+                "question_id": self.source_task_id,
+                "url": [
+                    "https://x.com/dingzhen47/status/1923790000000000000"
                 ],
-                "context": "Check visible manipulation only.",
-                "check_type": "manipulation",
+                "goal": (
+                    "Confirm that the original public record matches the "
+                    "visible account, text, date, and reply relation."
+                ),
             },
         )
 
@@ -638,7 +639,7 @@ def test_scripted_image_only_complete_trajectory(tmp_path: Path) -> None:
     state = result["state"]["investigation_state"]
     assert state["action_count"] == 2
     assert len(state["reflections"]) == 0
-    assert state["coverage_audits"][-1]["stop_reason"] == "coverage_complete"
+    assert state["coverage_audits"][-1]["stop_reason"] == "verdict_determined"
     assert state["discoveries"]
     assert state["evidence"]
     assert state["findings"]
@@ -817,7 +818,7 @@ def test_scripted_screenshot_source_and_integrity_trajectory(
                 "required": ["image_input"],
             },
         ),
-        "text_search": StaticTool(
+            "text_search": StaticTool(
             "text_search",
             text_search_result,
             {
@@ -827,9 +828,47 @@ def test_scripted_screenshot_source_and_integrity_trajectory(
                     "goal": {"type": "string"},
                 },
                 "required": ["queries"],
-            },
-        ),
-        "analyze_visual_anomalies": StaticTool(
+                },
+            ),
+            "visit": StaticTool(
+                "visit",
+                {
+                    "status": "success",
+                    "selected_url": (
+                        "https://x.com/dingzhen47/status/"
+                        "1923790000000000000"
+                    ),
+                    "url": (
+                        "https://x.com/dingzhen47/status/"
+                        "1923790000000000000"
+                    ),
+                    "evidence": statement,
+                    "summary": statement,
+                    "relevance": "high",
+                    "stance": "support",
+                    "directness": "direct",
+                    "temporal_alignment": "at_target_time",
+                    "artifact_sha256": hashlib.sha256(
+                        statement.encode()
+                    ).hexdigest(),
+                    "evidence_span": {
+                        "start": 0,
+                        "end": len(statement),
+                    },
+                    "retrieved_at": "2026-07-15T00:00:00+00:00",
+                    "injection_flags": [],
+                    "evidence_eligible": True,
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "url": {"type": ["string", "array"]},
+                        "goal": {"type": "string"},
+                    },
+                    "required": ["url", "goal"],
+                },
+            ),
+            "analyze_visual_anomalies": StaticTool(
             "analyze_visual_anomalies",
             {
                 "status": "success",
@@ -894,7 +933,7 @@ def test_scripted_screenshot_source_and_integrity_trajectory(
     ] == "supported"
     assert result["verification_layers"]["visible_integrity"][
         "status"
-    ] == "supported"
+    ] == "unresolved"
     state = result["state"]["investigation_state"]
     assert state["action_count"] == 2
     assert {
@@ -905,6 +944,6 @@ def test_scripted_screenshot_source_and_integrity_trajectory(
     assert any(
         fact["predicate"] == "visual_integrity"
         and fact["decision_relevance"] == "supporting"
-        and fact["status"] == "supported"
+        and fact["status"] == "active"
         for fact in state["facts"]
     )

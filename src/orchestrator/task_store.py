@@ -13,6 +13,7 @@ from src.orchestrator.investigation_models import (
     BootstrapInvestigation,
     FactOrigin,
     Finding,
+    EvidenceGap,
     ImageOnlyInvestigationState,
     InvestigationDiscovery,
     InvestigationEvidence,
@@ -38,8 +39,6 @@ MAX_REFLECTIONS = 6
 INITIAL_TASKS_MAX = 4
 TOTAL_TASKS_MAX = 12
 NEW_TASKS_PER_REFLECTION_MAX = 3
-DECISIVE_FACTS_MAX = 6
-NEW_DECISIVE_FACTS_PER_REFLECTION_MAX = 2
 ATTRIBUTION_FACTS_PER_PASS_MAX = 2
 MAX_ATTEMPTS_PER_TASK = 5
 
@@ -73,6 +72,268 @@ def state_from_bootstrap(
         retrieval_anchors=list(bootstrap.retrieval_anchors),
         findings=list(bootstrap.findings),
     )
+
+
+_CORE_BINDING_PREDICATES = {
+    "appears_to_depict",
+    "source_record_matches",
+    "provenance_matches",
+    "identified_as",
+}
+_CORE_REFINEMENT_PREDICATES = {
+    "source_record_matches",
+    "provenance_matches",
+    "identified_as",
+    "located_at",
+    "occurred_at",
+    "depicts_event",
+}
+_CORE_METADATA_PREDICATES = {
+    "attributed_as",
+    "created_by",
+    "dated_as",
+}
+
+
+def reconcile_core_verdict_fact(
+    state: ImageOnlyInvestigationState,
+    candidate_fact: VisualFact,
+    *,
+    parent_facts: Sequence[VisualFact] = (),
+    allow_initial: bool = False,
+    allow_refinement: bool = False,
+) -> tuple[bool, str]:
+    """Apply the only allowed core-verdict ownership transition.
+
+    One image investigation owns exactly one factual proposition.  Planning may
+    establish that proposition once; later web attribution may replace it only
+    after the narrower candidate has itself been adjudicated.  This deliberately
+    keeps title/creator/date and other optional metadata from becoming new
+    stopping conditions.
+    """
+
+    fact_by_id = {fact.fact_id: fact for fact in state.facts}
+    candidate = fact_by_id.get(candidate_fact.fact_id)
+    if candidate is None:
+        return False, "core candidate does not exist in the investigation state"
+    if candidate.predicate == "visual_integrity":
+        return False, "pixel-integrity checks are diagnostic and cannot own verdicts"
+    if candidate.predicate in _CORE_METADATA_PREDICATES:
+        return False, "creator, title, or date metadata cannot own the verdict"
+
+    current_id = state.core_verdict_fact_id
+    if current_id is None:
+        if not allow_initial:
+            return False, "initial core fact was not authorized"
+        _set_core_verdict_fact(state, candidate)
+        return True, "initial core fact established"
+
+    if current_id == candidate.fact_id:
+        _set_core_verdict_fact(state, candidate)
+        return True, "candidate already owns the core verdict"
+
+    if not allow_refinement:
+        return False, "core fact is stable; only a resolved refinement may replace it"
+    if state.core_fact_refinement_count >= 1:
+        return False, "the one permitted core-fact refinement is already used"
+    current = fact_by_id.get(current_id)
+    if current is None:
+        return False, "current core fact is missing"
+    if candidate.status not in {"supported", "refuted"}:
+        return False, "a refinement must be supported or refuted before promotion"
+    if candidate.predicate not in _CORE_REFINEMENT_PREDICATES:
+        return False, "candidate predicate is not a verdict-preserving refinement"
+    if candidate.subject_entity_id != current.subject_entity_id:
+        return False, "a refinement must preserve the core fact's salient subject"
+    if not _fact_descends_from(candidate, current.fact_id, fact_by_id):
+        return False, "a refinement must descend from the current core fact lineage"
+    if not _core_refinement_is_atomic(candidate.statement):
+        return False, "a refinement must contain one factual slot, not metadata bundle"
+
+    _set_core_verdict_fact(state, candidate)
+    state.core_fact_refinement_count += 1
+    _supersede_same_subject_tasks(state, candidate)
+    return True, "resolved atomic refinement replaced the core fact"
+
+
+def refresh_core_evidence_gaps(
+    state: ImageOnlyInvestigationState,
+) -> List[EvidenceGap]:
+    """Synchronize bounded evidence gaps for the one current core fact."""
+
+    core_id = state.core_verdict_fact_id
+    if not core_id:
+        state.evidence_gaps = []
+        return []
+    facts = {fact.fact_id: fact for fact in state.facts}
+    core = facts.get(core_id)
+    if core is None:
+        state.evidence_gaps = []
+        return []
+
+    evidence_by_id = {item.evidence_id: item for item in state.evidence}
+    findings = [
+        finding
+        for finding in state.findings
+        if core_id in finding.fact_ids
+    ]
+    owned_evidence = [
+        evidence
+        for evidence in state.evidence
+        if core_id in evidence.fact_ids
+    ]
+    assessment = assess_fact(
+        core,
+        findings,
+        evidence_by_id,
+        all_fact_evidence=owned_evidence,
+    )
+    winning_ids = list(assessment.winning_evidence_ids)
+    capture_ids = [
+        item.evidence_id
+        for item in owned_evidence
+        if (
+            item.claim_binding == "same_capture"
+            or item.same_capture_or_near_duplicate is True
+        )
+    ]
+    source_record_ids = [
+        item.evidence_id
+        for item in owned_evidence
+        if (
+            core.predicate == "source_record_matches"
+            and item.claim_binding == "source_assertion"
+            and item.directness == "direct"
+            and item.stance in {"support", "refute"}
+        )
+    ]
+    binding_ids = list(
+        dict.fromkeys([*capture_ids, *source_record_ids])
+    )
+    binding_required = core.predicate in _CORE_BINDING_PREDICATES
+    binding_status = (
+        "resolved"
+        if binding_ids
+        else (
+            "blocked"
+            if core.status == "blocked"
+            else "exhausted"
+            if core.status == "exhausted"
+            else "open"
+        )
+    )
+    direct_status = (
+        "resolved"
+        if assessment.status in {"supported", "refuted"}
+        else (
+            "blocked"
+            if core.status == "blocked"
+            else "exhausted"
+            if core.status == "exhausted"
+            else "open"
+        )
+    )
+    conflict_exists = (
+        assessment.support.decisive and assessment.refute.decisive
+    )
+    conflict_status = (
+        "open"
+        if assessment.status == "conflicted"
+        else "resolved"
+        if conflict_exists
+        else "not_required"
+    )
+    gaps = [
+        EvidenceGap(
+            gap_id=stable_id("gap", core_id, "image_source_binding"),
+            fact_id=core_id,
+            kind="image_source_binding",
+            status=binding_status if binding_required else "not_required",
+            evidence_ids=binding_ids[:40],
+            reason=(
+                "A direct first-party source record or a same-capture/near-"
+                "duplicate bridge is required for this proposition."
+                if binding_required and binding_status == "open"
+                else ""
+            ),
+        ),
+        EvidenceGap(
+            gap_id=stable_id("gap", core_id, "direct_support_or_refute"),
+            fact_id=core_id,
+            kind="direct_support_or_refute",
+            status=direct_status,
+            evidence_ids=winning_ids[:40],
+            reason=assessment.reason if direct_status != "resolved" else "",
+        ),
+        EvidenceGap(
+            gap_id=stable_id("gap", core_id, "conflict_resolution"),
+            fact_id=core_id,
+            kind="conflict_resolution",
+            status=conflict_status,
+            evidence_ids=winning_ids[:40],
+            reason=assessment.reason if conflict_status == "open" else "",
+        ),
+    ]
+    state.evidence_gaps = gaps
+    return gaps
+
+
+def _set_core_verdict_fact(
+    state: ImageOnlyInvestigationState,
+    candidate: VisualFact,
+) -> None:
+    for fact in state.facts:
+        if fact.fact_id != candidate.fact_id and fact.decision_relevance == "decisive":
+            fact.decision_relevance = "supporting"
+    candidate.decision_relevance = "decisive"
+    if candidate.status == "candidate":
+        candidate.status = "active"
+    state.core_verdict_fact_id = candidate.fact_id
+    state.decisive_fact_ids = [candidate.fact_id]
+    refresh_core_evidence_gaps(state)
+
+
+def _fact_descends_from(
+    candidate: VisualFact,
+    ancestor_id: str,
+    fact_by_id: Mapping[str, VisualFact],
+) -> bool:
+    pending = [
+        *candidate.origin.origin_ids,
+        *candidate.basis_ids,
+    ]
+    seen: set[str] = set()
+    while pending:
+        current_id = pending.pop()
+        if current_id == ancestor_id:
+            return True
+        if current_id in seen:
+            continue
+        seen.add(current_id)
+        parent = fact_by_id.get(current_id)
+        if parent is not None:
+            pending.extend(parent.origin.origin_ids)
+            pending.extend(parent.basis_ids)
+    return False
+
+
+def _core_refinement_is_atomic(statement: str) -> bool:
+    text = " ".join(str(statement or "").casefold().split())
+    if not text or ";" in text:
+        return False
+    metadata_slots = sum(
+        token in text
+        for token in (
+            "title",
+            "creator",
+            "author",
+            "photographer",
+            "date",
+            "asset id",
+            "platform",
+        )
+    )
+    return metadata_slots <= 1
 
 
 def record_tool_observation(
@@ -131,18 +392,19 @@ def record_tool_observation(
         data = {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
         succeeded = False
 
-    discovery_ids = _record_discoveries(
-        state,
-        task,
-        function_call_id=call_id,
-        tool_name=tool_name,
-        data=data,
-    )
+    discovery_ids: List[str] = []
     evidence_ids: List[str] = []
     finding_ids: List[str] = []
     failure_ids: List[str] = []
 
     if succeeded:
+        discovery_ids = _record_discoveries(
+            state,
+            task,
+            function_call_id=call_id,
+            tool_name=tool_name,
+            data=data,
+        )
         evidence_ids, finding_ids = _record_evidence_and_findings(
             state,
             task,
@@ -214,8 +476,6 @@ def record_tool_observation(
 def apply_target_planning(
     state: ImageOnlyInvestigationState,
     output: TargetPlanningOutput,
-    *,
-    force_external_decisive: bool = False,
 ) -> Dict[str, Any]:
     """Apply image-grounded investigation targets without a media-type pipeline."""
 
@@ -226,15 +486,6 @@ def apply_target_planning(
     accepted_fact_ids: List[str] = []
     accepted_task_ids: List[str] = []
     rejected_reasons: List[str] = []
-    has_external_decisive_target = any(
-        fact.fact_id in state.decisive_fact_ids
-        and fact.predicate != "visual_integrity"
-        for fact in state.facts
-    ) or any(
-        proposal.decision_relevance == "decisive"
-        and proposal.predicate != "visual_integrity"
-        for proposal in output.proposals
-    )
     for proposal in output.proposals[:3]:
         parent_ids = list(dict.fromkeys(proposal.parent_fact_ids))
         parents = [
@@ -380,7 +631,11 @@ def apply_target_planning(
             proposal.statement,
             proposal.predicate,
         )
-        decision_relevance = proposal.decision_relevance
+        core_candidate_requested = (
+            state.core_verdict_fact_id is None
+            and proposal.decision_relevance == "decisive"
+            and proposal.predicate != "visual_integrity"
+        )
         has_visible_source_anchor = any(
             parent.origin.type == "ocr" or parent.predicate == "reads"
             for parent in parents
@@ -390,17 +645,7 @@ def apply_target_planning(
             in {"source_record_matches", "provenance_matches"}
             and not has_visible_source_anchor
         ):
-            decision_relevance = "supporting"
-        elif (
-            force_external_decisive
-            and proposal.predicate != "visual_integrity"
-        ):
-            decision_relevance = "decisive"
-        if (
-            proposal.predicate == "visual_integrity"
-            and has_external_decisive_target
-        ):
-            decision_relevance = "supporting"
+            core_candidate_requested = False
         if existing is None:
             if len(state.facts) >= 72:
                 rejected_reasons.append("VisualFact budget exhausted")
@@ -442,7 +687,7 @@ def apply_target_planning(
                 object_entity_id=parent.object_entity_id,
                 status="active",
                 basis_ids=basis_ids,
-                decision_relevance=decision_relevance,
+                decision_relevance="supporting",
                 origin=FactOrigin(
                     type=origin_type,
                     origin_ids=parent_ids[:8],
@@ -452,22 +697,6 @@ def apply_target_planning(
             fact_by_id[fact.fact_id] = fact
         else:
             fact = existing
-            if decision_relevance == "decisive":
-                fact.decision_relevance = "decisive"
-
-        if decision_relevance == "decisive":
-            if proposal.predicate != "visual_integrity":
-                _replace_generic_decisive_parents(
-                    state,
-                    parents,
-                    fact,
-                )
-            else:
-                state.decisive_fact_ids = list(
-                    dict.fromkeys(
-                        [*state.decisive_fact_ids, fact.fact_id]
-                    )
-                )[:DECISIVE_FACTS_MAX]
         task_id = stable_id(
             "task",
             fact.fact_id,
@@ -504,6 +733,15 @@ def apply_target_planning(
                 )[:3],
             )
             state.tasks.append(task)
+        if core_candidate_requested:
+            accepted_core, core_reason = reconcile_core_verdict_fact(
+                state,
+                fact,
+                parent_facts=parents,
+                allow_initial=True,
+            )
+            if not accepted_core:
+                rejected_reasons.append(core_reason)
         accepted_fact_ids.append(fact.fact_id)
         accepted_task_ids.append(task.task_id)
 
@@ -863,7 +1101,12 @@ def attribution_planning_needed(
     state: ImageOnlyInvestigationState,
     update: Mapping[str, Any],
 ) -> bool:
-    """Return whether new public evidence may warrant a specific attribution fact."""
+    """Return whether an unresolved core fact gained public context.
+
+    Attribution is optional supporting work.  It is never allowed to postpone a
+    resolved core verdict, but it can turn a newly found source identity into a
+    narrower, independently adjudicable refinement.
+    """
 
     created_ids = {
         str(item)
@@ -892,62 +1135,18 @@ def attribution_planning_needed(
         for fact_id in item.fact_ids
     }
     facts = {fact.fact_id: fact for fact in state.facts}
-    if affected_fact_ids and all(
-        facts.get(fact_id) is not None
-        and facts[fact_id].predicate == "visual_integrity"
+    core = facts.get(state.core_verdict_fact_id or "")
+    if core is None or core.status in {"supported", "refuted"}:
+        return False
+    if core.fact_id in affected_fact_ids:
+        return True
+    return any(
+        fact_id in affected_fact_ids
+        and facts.get(fact_id) is not None
+        and facts[fact_id].subject_entity_id == core.subject_entity_id
+        and facts[fact_id].predicate != "visual_integrity"
         for fact_id in affected_fact_ids
-    ):
-        return False
-    decisive = [
-        fact
-        for fact in state.facts
-        if fact.fact_id in state.decisive_fact_ids
-    ]
-    if any(
-        fact.fact_id in affected_fact_ids
-        and fact.origin.type == "web_discovery"
-        and fact.decision_relevance != "decisive"
-        for fact in state.facts
-    ) and any(
-        (
-            getattr(item, "evidence_id", "")
-            or getattr(item, "finding_id", "")
-        )
-        in created_ids
-        for item in [*state.evidence, *state.findings]
-    ):
-        return True
-    if any(fact.status == "refuted" for fact in decisive):
-        return False
-    promotable_predicates = {
-        "appears_to_depict",
-        "visible_in",
-        "reads",
-        "context_suggested_by_text",
-        "provenance_matches",
-        "source_record_matches",
-    }
-    if any(
-        fact.fact_id in affected_fact_ids
-        and fact.predicate in promotable_predicates
-        and fact.origin.type != "web_discovery"
-        for fact in decisive
-    ):
-        return True
-    decisive_subject_ids = {
-        fact.subject_entity_id
-        for fact in decisive
-        if fact.subject_entity_id
-    }
-    if any(
-        fact.fact_id in affected_fact_ids
-        and fact.predicate in promotable_predicates
-        and fact.origin.type != "web_discovery"
-        and fact.subject_entity_id in decisive_subject_ids
-        for fact in state.facts
-    ):
-        return True
-    return False
+    )
 
 
 def apply_attribution(
@@ -1014,31 +1213,6 @@ def apply_attribution(
                 "attribution proposal has no public grounding records"
             )
             continue
-        central_lineage = {
-            *state.decisive_fact_ids,
-            *[
-                origin_id
-                for fact in state.facts
-                if fact.fact_id in state.decisive_fact_ids
-                and fact.origin.type == "web_discovery"
-                for origin_id in fact.origin.origin_ids
-            ],
-            *[
-                fact.fact_id
-                for fact in state.facts
-                if fact.origin.type == "web_discovery"
-                and set(fact.origin.origin_ids) & set(state.decisive_fact_ids)
-            ],
-        }
-        if (
-            proposal.decision_relevance == "decisive"
-            and not set(parent_ids) & central_lineage
-        ):
-            rejected_reasons.append(
-                "decisive attribution must descend from the current central "
-                "fact lineage"
-            )
-            continue
         record_parent_ids = list(
             dict.fromkeys(
                 [
@@ -1062,42 +1236,18 @@ def apply_attribution(
             )
             continue
         statement = re.sub(r"\s+", " ", proposal.statement).strip()
-        if (
-            proposal.decision_relevance == "decisive"
-            and proposal.predicate
-            in {
-                "identified_as",
-                "attributed_as",
-                "created_by",
-                "dated_as",
-                "located_at",
-                "occurred_at",
-                "depicts_event",
-            }
-            and _attribution_statement_is_negative(statement)
-        ):
+        if _attribution_statement_is_negative(statement):
             rejected_reasons.append(
-                "decisive attribution must preserve the positive image claim; "
+                "attribution must preserve the positive image claim; "
                 "attach refuting evidence to that claim instead of promoting "
                 "a negated world fact"
             )
             continue
-        decision_relevance = proposal.decision_relevance
+        refinement_requested = proposal.decision_relevance == "decisive"
         visual_bridge_present = _attribution_has_visual_bridge(
             evidence_rows,
             findings,
             evidence_by_id,
-        )
-        direct_authoritative_record = any(
-            item.claim_binding == "source_assertion"
-            and item.source_class in {"official", "news"}
-            and item.directness == "direct"
-            and not item.risk_flags
-            for item in evidence_rows
-        )
-        retrieval_bridge_present = _attribution_has_retrieval_bridge(
-            discoveries,
-            evidence_rows,
         )
         if (
             _contains_fabrication_attribution(statement)
@@ -1114,25 +1264,6 @@ def apply_attribution(
                 "fabrication mechanism"
             )
             continue
-        if (
-            decision_relevance == "decisive"
-            and proposal.predicate
-            in {
-                "identified_as",
-                "attributed_as",
-                "created_by",
-                "dated_as",
-                "located_at",
-                "occurred_at",
-                "depicts_event",
-            }
-            and not visual_bridge_present
-            and not (
-                direct_authoritative_record
-                and retrieval_bridge_present
-            )
-        ):
-            decision_relevance = "supporting"
         if not _attribution_statement_is_grounded(
             statement,
             discoveries,
@@ -1201,7 +1332,7 @@ def apply_attribution(
                 object_entity_id=parent.object_entity_id,
                 status="active",
                 basis_ids=origin_ids[:12],
-                decision_relevance=decision_relevance,
+                decision_relevance="supporting",
                 origin=FactOrigin(
                     type="web_discovery",
                     origin_ids=origin_ids[:8],
@@ -1218,8 +1349,6 @@ def apply_attribution(
             fact.origin.origin_ids = list(
                 dict.fromkeys([*fact.origin.origin_ids, *origin_ids])
             )[:8]
-            if decision_relevance == "decisive":
-                fact.decision_relevance = "decisive"
 
         owned_task_ids: set[str] = set()
         for evidence in evidence_rows:
@@ -1247,20 +1376,17 @@ def apply_attribution(
                 task.fact_ids = task.fact_ids[:6]
 
         _refresh_fact_states(state)
-        if (
-            decision_relevance == "decisive"
-            and fact.status in {"supported", "refuted"}
-        ):
-            # Only an already-resolved atomic child may replace a broad
-            # decisive parent. Incomplete title/creator/date/platform bundles
-            # remain optional attribution metadata instead of new blockers.
-            _replace_generic_decisive_parents(
+        if refinement_requested and fact.status in {"supported", "refuted"}:
+            accepted_core, core_reason = reconcile_core_verdict_fact(
                 state,
-                parent_facts,
                 fact,
+                parent_facts=parent_facts,
+                allow_refinement=True,
             )
-        elif decision_relevance == "decisive":
-            fact.decision_relevance = "supporting"
+            if not accepted_core:
+                rejected_reasons.append(
+                    f"attribution stayed supporting: {core_reason}"
+                )
         if fact.status not in {"supported", "refuted"}:
             task_id = stable_id("task", fact_id, "verify-attribution")
             task = task_by_id.get(task_id)
@@ -1280,7 +1406,18 @@ def apply_attribution(
             ):
                 task = ResearchTask(
                     task_id=task_id,
-                    fact_ids=[fact_id],
+                    fact_ids=list(
+                        dict.fromkeys(
+                            [
+                                *(
+                                    [state.core_verdict_fact_id]
+                                    if state.core_verdict_fact_id
+                                    else []
+                                ),
+                                fact_id,
+                            ]
+                        )
+                    )[:6],
                     question=(
                         "What reliable original or direct source verifies or "
                         f"refutes this image attribution: {statement}"
@@ -1441,24 +1578,6 @@ def _attribution_has_visual_bridge(
     )
 
 
-def _attribution_has_retrieval_bridge(
-    discoveries: Sequence[InvestigationDiscovery],
-    evidence_rows: Sequence[InvestigationEvidence],
-) -> bool:
-    """Bind an authoritative page to the input through image-search retrieval."""
-
-    evidence_urls = {
-        canonicalize_url(item.source_url)
-        for item in evidence_rows
-        if canonicalize_url(item.source_url)
-    }
-    return any(
-        item.tool_name in {"reverse_image_search", "crop_and_search"}
-        and canonicalize_url(item.candidate_url) in evidence_urls
-        for item in discoveries
-    )
-
-
 def _contains_fabrication_attribution(value: str) -> bool:
     lowered = " ".join(str(value or "").casefold().split())
     return any(
@@ -1592,60 +1711,6 @@ def _matching_attribution_fact(
     return None
 
 
-def _replace_generic_decisive_parents(
-    state: ImageOnlyInvestigationState,
-    parent_facts: Sequence[VisualFact],
-    attribution_fact: VisualFact,
-) -> None:
-    attribution_subject_id = attribution_fact.subject_entity_id
-    ancestor_ids = {
-        *attribution_fact.origin.origin_ids,
-        *[
-            origin_id
-            for fact in parent_facts
-            for origin_id in fact.origin.origin_ids
-        ],
-    }
-    parent_ids = {
-        fact.fact_id
-        for fact in state.facts
-        if (
-            fact.fact_id in ancestor_ids
-            or fact in parent_facts
-            or (
-                fact.subject_entity_id == attribution_subject_id
-                and fact.origin.type != "web_discovery"
-            )
-        )
-        and fact.predicate
-        in {
-            "appears_to_depict",
-            "visible_in",
-            "reads",
-            "context_suggested_by_text",
-            "provenance_matches",
-            "identified_as",
-            "located_at",
-            "dated_as",
-            "depicts_event",
-        }
-        and fact.fact_id != attribution_fact.fact_id
-    }
-    retained = [
-        fact_id
-        for fact_id in state.decisive_fact_ids
-        if fact_id not in parent_ids
-    ]
-    for fact in state.facts:
-        if fact.fact_id in parent_ids:
-            fact.decision_relevance = "supporting"
-    attribution_fact.decision_relevance = "decisive"
-    state.decisive_fact_ids = list(
-        dict.fromkeys([*retained, attribution_fact.fact_id])
-    )[:DECISIVE_FACTS_MAX]
-    _supersede_same_subject_tasks(state, attribution_fact)
-
-
 def _supersede_same_subject_tasks(
     state: ImageOnlyInvestigationState,
     attribution_fact: VisualFact,
@@ -1706,7 +1771,6 @@ def apply_reflection(
     }
     accepted_updates: List[str] = []
     accepted_new: List[str] = []
-    accepted_decisive: List[str] = []
     rejected: List[str] = []
 
     if len(output.task_updates) > 12:
@@ -1714,14 +1778,6 @@ def apply_reflection(
     if len(output.new_tasks) > NEW_TASKS_PER_REFLECTION_MAX:
         rejected.append(
             f"new task budget truncated to {NEW_TASKS_PER_REFLECTION_MAX}"
-        )
-    if (
-        len(output.proposed_decisive_fact_ids)
-        > NEW_DECISIVE_FACTS_PER_REFLECTION_MAX
-    ):
-        rejected.append(
-            "decisive fact proposal budget truncated to "
-            f"{NEW_DECISIVE_FACTS_PER_REFLECTION_MAX}"
         )
     if len(output.recommended_next_task_ids) > 4:
         rejected.append("recommended task budget truncated to 4")
@@ -1731,9 +1787,6 @@ def apply_reflection(
         update={
             "task_updates": output.task_updates[:12],
             "new_tasks": output.new_tasks[:NEW_TASKS_PER_REFLECTION_MAX],
-            "proposed_decisive_fact_ids": output.proposed_decisive_fact_ids[
-                :NEW_DECISIVE_FACTS_PER_REFLECTION_MAX
-            ],
             "recommended_next_task_ids": output.recommended_next_task_ids[:4],
             "remaining_gaps": output.remaining_gaps[:8],
         }
@@ -1754,12 +1807,13 @@ def apply_reflection(
         _semantic_task_key(task.question): task.task_id
         for task in state.tasks
     }
-    unresolved_decisive = {
-        fact_id
-        for fact_id in state.decisive_fact_ids
-        if fact_by_id.get(fact_id) is not None
-        and fact_by_id[fact_id].status not in {"supported", "refuted"}
-    }
+    unresolved_core_id = state.core_verdict_fact_id
+    if (
+        unresolved_core_id
+        and fact_by_id.get(unresolved_core_id) is not None
+        and fact_by_id[unresolved_core_id].status in {"supported", "refuted"}
+    ):
+        unresolved_core_id = None
     for task in bounded_output.new_tasks:
         if len(state.tasks) >= TOTAL_TASKS_MAX:
             rejected.append("total task budget exhausted")
@@ -1770,11 +1824,9 @@ def apply_reflection(
         if not set(task.fact_ids) <= set(fact_by_id):
             rejected.append(f"{task.task_id} cites unknown facts")
             continue
-        if unresolved_decisive and not (
-            set(task.fact_ids) & unresolved_decisive
-        ):
+        if unresolved_core_id and unresolved_core_id not in task.fact_ids:
             rejected.append(
-                f"{task.task_id} does not own an unresolved decisive fact"
+                f"{task.task_id} does not own the unresolved core fact"
             )
             continue
         if not set(task.origin_ids) <= origin_ids:
@@ -1799,43 +1851,11 @@ def apply_reflection(
         semantic_keys[key] = task.task_id
         accepted_new.append(task.task_id)
 
-    for fact_id in bounded_output.proposed_decisive_fact_ids:
-        if len(state.decisive_fact_ids) >= DECISIVE_FACTS_MAX:
-            rejected.append("decisive fact budget exhausted")
-            break
-        fact = fact_by_id.get(fact_id)
-        if fact is None:
-            rejected.append(f"unknown decisive fact {fact_id}")
-            continue
-        if fact_id in state.decisive_fact_ids:
-            continue
-        if (
-            fact.predicate in {"visible_in", "reads"}
-            and any(
-                item.fact_id in state.decisive_fact_ids
-                and item.predicate == "appears_to_depict"
-                for item in state.facts
-            )
-        ):
-            rejected.append(
-                f"{fact_id} is incidental and already subsumed by the "
-                "central scene proposition"
-            )
-            continue
-        if not _fact_has_executable_route(state, fact_id):
-            rejected.append(f"{fact_id} has no executable route")
-            continue
-        fact.decision_relevance = "decisive"
-        if fact.status == "candidate":
-            fact.status = "active"
-        state.decisive_fact_ids.append(fact_id)
-        accepted_decisive.append(fact_id)
-
-    scene_task_ids = [
+    core_task_ids = [
         task.task_id
         for task in state.tasks
         if task.status in {"active", "pending"}
-        and _task_owns_scene_fact(state, task)
+        and state.core_verdict_fact_id in task.fact_ids
     ]
     model_recommendations = [
         task_id
@@ -1844,7 +1864,7 @@ def apply_reflection(
         and task_by_id[task_id].status in {"active", "pending"}
     ]
     state.recommended_next_task_ids = list(
-        dict.fromkeys([*model_recommendations, *scene_task_ids])
+        dict.fromkeys([*model_recommendations, *core_task_ids])
     )[:4]
     record = ReflectionRecord(
         reflection_id=stable_id(
@@ -1857,7 +1877,6 @@ def apply_reflection(
         output=bounded_output,
         accepted_task_update_ids=accepted_updates,
         accepted_new_task_ids=accepted_new,
-        accepted_decisive_fact_ids=accepted_decisive,
         rejected_reasons=rejected,
         evidence_gain=evidence_gain,
         decision_gain=decision_gain,
@@ -2161,9 +2180,9 @@ def _visual_evidence_record(
     claim_binding = "pixel_observation"
     source_url = ""
     region = data.get("crop_bbox") or data.get("bbox") or [0.0, 0.0, 1.0, 1.0]
-    if tool_name in {"check_consistency", "analyze_visual_anomalies"} and not (
-        _task_owns_visual_integrity_fact(state, task)
-    ):
+    if tool_name in {"check_consistency", "analyze_visual_anomalies"}:
+        # General VLM consistency/anomaly opinions are diagnostics. They are not
+        # calibrated forensic Evidence and cannot support or refute authenticity.
         return None
     if tool_name == "compare_with_reference":
         statement = str(data.get("overall_observation", "")).strip()
@@ -2192,39 +2211,6 @@ def _visual_evidence_record(
         statement = str(
             data.get("answer", "") or data.get("description", "")
         ).strip()
-    elif tool_name == "check_consistency":
-        statement = str(data.get("details", "")).strip()
-        if data.get("consistent") is False:
-            stance = "refute"
-        elif data.get("consistent") is True:
-            stance = "support"
-    elif tool_name == "analyze_visual_anomalies":
-        statement = str(data.get("notes", "")).strip()
-        if not statement:
-            statement = "; ".join(
-                str(
-                    item.get("phenomenon")
-                    or item.get("reasoning")
-                    or item.get("name", "")
-                ).strip()
-                for item in data.get("anomalies", []) or []
-                if isinstance(item, Mapping)
-            ).strip()
-        if not statement and str(data.get("overall_authenticity", "")).strip():
-            statement = (
-                "The targeted visual scan reported overall_authenticity="
-                + str(data.get("overall_authenticity", "")).strip()
-                + "."
-            )
-        if data.get("anomalies") and str(
-            data.get("overall_authenticity", "")
-        ) in {"likely_ai", "likely_manipulated"}:
-            stance = "refute"
-        elif (
-            not data.get("anomalies")
-            and str(data.get("overall_authenticity", "")) == "authentic"
-        ):
-            stance = "support"
     elif tool_name == "ocr_with_position":
         statement = str(data.get("full_text", "")).strip()
     else:
@@ -2241,7 +2227,7 @@ def _visual_evidence_record(
             (source_url + "\n" + statement).encode("utf-8")
         ).hexdigest()
         if kind == "reference_comparison"
-        else image_sha256
+        else str(data.get("artifact_sha256", "")).strip() or image_sha256
     )
     identity = classify_source(source_url) if source_url else None
     evidence_id = stable_id(
@@ -2481,18 +2467,6 @@ def _semantic_task_key(question: str) -> str:
     )
 
 
-def _fact_has_executable_route(
-    state: ImageOnlyInvestigationState,
-    fact_id: str,
-) -> bool:
-    return any(
-        fact_id in task.fact_ids
-        and task.status in {"active", "pending", "resolved"}
-        and bool(task.suggested_tools)
-        for task in state.tasks
-    )
-
-
 def _task_has_unresolved_decisive_fact(
     state: ImageOnlyInvestigationState,
     task: ResearchTask,
@@ -2514,18 +2488,6 @@ def _task_owns_scene_fact(
     return any(
         facts.get(fact_id) is not None
         and facts[fact_id].predicate == "appears_to_depict"
-        for fact_id in task.fact_ids
-    )
-
-
-def _task_owns_visual_integrity_fact(
-    state: ImageOnlyInvestigationState,
-    task: ResearchTask,
-) -> bool:
-    facts = {fact.fact_id: fact for fact in state.facts}
-    return any(
-        facts.get(fact_id) is not None
-        and facts[fact_id].predicate == "visual_integrity"
         for fact_id in task.fact_ids
     )
 

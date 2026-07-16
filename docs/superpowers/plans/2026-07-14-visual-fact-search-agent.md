@@ -4,7 +4,13 @@
 
 **Updated:** 2026-07-15
 
-**Status:** Runtime baseline and trajectory-quality remediation complete
+**Status:** Superseded historical implementation record
+
+> This file records the path used to build the first v3 runtime. It is not the
+> current search-control contract. The active implementation plan is
+> `docs/superpowers/plans/2026-07-16-search-control-and-tool-correctness-audit.md`;
+> the active runtime has one stable `CoreVerdictFact`, no Target Refresh, Coverage
+> after every accepted action, and no mandatory first reverse-image call.
 
 **Repository:** `D:\image-factual-verifier-v2-worktrees\visual-fact-search-agent`
 

@@ -1965,7 +1965,14 @@ class StageRunner:
 
         if not isinstance(result, dict):
             runtime_metrics: Dict[str, Any] = {}
+            tool_subcalls: List[Dict[str, Any]] = []
         else:
+            raw_subcalls = result.get("subcalls", [])
+            tool_subcalls = [
+                dict(item)
+                for item in raw_subcalls
+                if isinstance(item, dict)
+            ] if isinstance(raw_subcalls, list) else []
             runtime_metrics = take_runtime_metrics(result)
         try:
             serialized, succeeded = serialize_tool_result(result)
@@ -1983,7 +1990,15 @@ class StageRunner:
                 "tool_exception": "ToolResultContractError",
                 "tool_llm_api_calls": int(runtime_metrics.get("llm_api_calls", 0) or 0),
                 "tool_tokens": self._normalize_tool_tokens(runtime_metrics.get("tokens")),
+                "tool_subcalls": tool_subcalls,
             }
+        if succeeded:
+            parsed_result, _ = parse_tool_result(serialized)
+            canonical = self._canonical_tool_result(
+                tool_name,
+                parsed_result,
+            )
+            serialized, succeeded = serialize_tool_result(canonical)
         if succeeded and self.source_access_policy.active:
             parsed_result, _ = parse_tool_result(serialized)
             sanitized, filtered_count = self.source_access_policy.sanitize_payload(parsed_result)
@@ -2012,6 +2027,7 @@ class StageRunner:
             "serialized_size": len(serialized),
             "tool_llm_api_calls": int(runtime_metrics.get("llm_api_calls", 0) or 0),
             "tool_tokens": self._normalize_tool_tokens(runtime_metrics.get("tokens")),
+            "tool_subcalls": tool_subcalls,
         }
 
     @staticmethod
@@ -2081,20 +2097,109 @@ class StageRunner:
         if data is None and str(result).strip().lower().startswith("error"):
             return {"status": "error", "error": str(result).strip()}
 
-        if tool_name == "text_search":
-            return self._compact_search_result(data)
-        if tool_name == "visit":
-            return self._compact_visit_result(data)
-        if tool_name == "reverse_image_search":
-            return self._compact_reverse_image_result(data)
-        if tool_name == "crop_and_search":
-            return self._compact_crop_and_search_result(data)
         if isinstance(data, (dict, list)):
             raw = json.dumps(data, ensure_ascii=False)
             if len(raw) <= self.tool_response_max_chars:
                 return data
             return {"preview": raw[: self.tool_response_max_chars - 32] + "...<truncated>"}
         return str(result)[: self.tool_response_max_chars]
+
+    def _canonical_tool_result(
+        self,
+        tool_name: str,
+        data: Any,
+    ) -> Dict[str, Any]:
+        if not isinstance(data, dict):
+            raise ToolResultContractError(
+                f"{tool_name} result must be an object"
+            )
+        status = str(data.get("status", "")).strip().lower()
+        if status != "success":
+            return dict(data)
+        if tool_name == "text_search":
+            return self._canonical_search_result(data)
+        if tool_name == "visit":
+            return self._canonical_visit_result(data)
+        if tool_name == "reverse_image_search":
+            return self._canonical_reverse_image_result(data)
+        if tool_name == "crop_and_search":
+            return self._canonical_crop_and_search_result(data)
+        return dict(data)
+
+    @staticmethod
+    def _canonical_search_result(data: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(data.get("queries"), list):
+            return dict(data)
+        queries: List[Dict[str, Any]] = []
+        for item in (data.get("queries", []) or [])[:1]:
+            if not isinstance(item, dict):
+                continue
+            rows = []
+            for row in (item.get("results", []) or [])[:5]:
+                if isinstance(row, dict):
+                    rows.append(
+                        {
+                            "title": str(row.get("title", "")),
+                            "url": str(row.get("url", "")),
+                            "snippet": str(row.get("snippet", ""))[:220],
+                        }
+                    )
+            queries.append(
+                {
+                    "query": str(item.get("query", "")),
+                    "provider": str(item.get("provider", "")),
+                    "results": rows,
+                    "search_error": str(item.get("search_error", "")),
+                    "timings": dict(item.get("timings", {}) or {}),
+                }
+            )
+        return {
+            "status": "success",
+            "queries": queries,
+            "subcalls": [
+                dict(item)
+                for item in (data.get("subcalls", []) or [])
+                if isinstance(item, dict)
+            ],
+        }
+
+    def _canonical_visit_result(
+        self,
+        data: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        canonical = self._compact_visit_result(data)
+        canonical.update(
+            {
+                "status": "success",
+                "url": str(data.get("url", "")),
+                "selected_url": str(
+                    data.get("selected_url", "")
+                    or data.get("url", "")
+                ),
+                "provider": str(data.get("provider", "")),
+            }
+        )
+        return canonical
+
+    @staticmethod
+    def _canonical_reverse_image_result(
+        data: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        return {
+            "status": "success",
+            "branch": str(data.get("branch", "lens")),
+            "subcalls": list(data.get("subcalls", []) or []),
+            **StageRunner._compact_reverse_image_result(data),
+        }
+
+    @staticmethod
+    def _canonical_crop_and_search_result(
+        data: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        return {
+            "status": "success",
+            **StageRunner._compact_crop_and_search_result(data),
+        }
 
     def _compact_search_result(self, data: Any) -> Any:
         if isinstance(data, dict) and isinstance(data.get("queries"), list):
@@ -2181,7 +2286,7 @@ class StageRunner:
         return {
             "selected_url": data.get("selected_url", ""),
             "summary": "" if unsafe else str(data.get("summary", ""))[:320],
-            "evidence": "" if unsafe else str(data.get("evidence", ""))[:320],
+            "evidence": "" if unsafe else str(data.get("evidence", "")),
             "stance": data.get("stance", "unclear"),
             "directness": data.get("directness", "none"),
             "temporal_alignment": data.get(

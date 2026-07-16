@@ -9,14 +9,14 @@ deterministic code.
 | --- | --- | --- | --- |
 | Release/case validation | Deterministic | v0.3 manifest and public row | Hash-verified `ImageOnlyRuntimeCase` |
 | Scene perception | Gemini tool prompt | Image | Literal entities, boxes, scene, image type |
-| OCR | EasyOCR | Image | Positioned text regions |
+| OCR | PP-OCR service when configured, otherwise EasyOCR | Image or crop | Accepted positioned text plus isolated low-confidence candidates |
 | Bootstrap | Deterministic | Case + perception/OCR | Brief, entities, facts, anchors, initial tasks |
-| Initial reverse search | Deterministic schedule, real tool | Image | Discovery only |
+| Target Planning | Gemini structured output + deterministic validator | Visible facts, OCR, anchors, tasks | One core fact and candidate evidence routes |
 | ReAct | Gemini native function calling | Compact current investigation | One tool action, then segment output |
 | Observation reduction | Deterministic | Tool result + task/fact state | Discovery/Evidence/Finding/Failure updates |
-| Reflection | Gemini structured output + deterministic validator | Global state every four actions | Bounded task/fact delta |
+| Reflection | Gemini structured output + deterministic validator | Global state every four actions | Bounded task-order and route delta |
 | Coverage | Deterministic | Facts, Findings, Evidence, tasks, budget | Stop state and fact coverage |
-| Verdict basis | Deterministic | Final decisive-fact state | Allowed verdict and exact basis IDs |
+| Verdict basis | Deterministic | One core fact and its evidence gaps | Allowed verdict and exact basis IDs |
 | Judgment | Gemini structured output + deterministic validator | Allowed basis only | Matching `ImageOnlyJudgment` |
 | Scoring/export | Deterministic, post-rollout | Trace + private references | Metrics, teacher score, policy examples |
 
@@ -25,9 +25,11 @@ deterministic code.
 `perceive_scene` is a Gemini Interactions image request. It is instructed to report
 literal visible content and normalized geometry, not infer evaluator gold.
 
-`ocr_with_position` is EasyOCR and runs immediately afterward. The runtime merges both
-results. OCR strings remain observations; bootstrap decides whether they become text
-facts, relation facts, or retrieval anchors.
+`ocr_with_position` runs immediately afterward. It uses a configured
+PP-OCR/PP-Structure-compatible service when available and falls back to a cached
+EasyOCR reader. The runtime merges accepted regions with perception while retaining
+low-confidence candidates separately. OCR strings remain observations; bootstrap
+decides whether accepted text becomes a fact or retrieval anchor.
 
 Failure of either required perception tool is an engineering error.
 
@@ -39,13 +41,15 @@ Bootstrap is not an LLM Planning stage. It deterministically:
 - converts visible entities and text into stable records;
 - preserves pixel/OCR provenance;
 - creates low-commitment candidate facts;
-- chooses at most four initial tasks;
-- activates up to three central, routed decisive facts.
+- chooses at most four initial tasks.
 
-The initial reverse-image search always runs once and records only Discovery.
+Target Planning then selects one image-grounded, evidence-routable
+`CoreVerdictFact`. There is no mandatory first reverse-image search: Planning and
+ReAct choose the first route from the open evidence gap. Reverse-image results, when
+requested, remain Discovery.
 
-Because bootstrap is deterministic, the trajectory exporter does not fabricate a
-Planning target.
+Because bootstrap is deterministic, it is not exported as a model-authored policy
+action. Actual Target Planning is retained in the trace.
 
 ## ReAct prompt
 
@@ -80,7 +84,9 @@ For a tool-bearing segment:
 5. Serialize `status=success|error`.
 6. Reduce the observation into runtime state.
 7. Send `function_result` with `previous_interaction_id`.
-8. Continue until the four-action boundary or a valid segment output.
+8. Run deterministic reduction and Coverage immediately after the accepted action.
+9. Continue only if Coverage leaves the core fact unresolved and an executable route
+   remains.
 
 Corrections remain in the same interaction chain. The runtime never changes provider,
 model, protocol, or thinking policy to hide a failure.
@@ -92,14 +98,15 @@ The reducer, not Gemini prose, creates canonical records.
 Discovery can be created by:
 
 - `reverse_image_search`;
-- `text_search`;
-- `crop_and_search`.
+- `text_search`.
 
 Evidence can be created only from:
 
 - fetched exact web spans;
-- successful image-region observations;
+- validated positioned OCR or focused image-region observations tied to an open gap;
 - successful reference comparisons.
+
+General consistency/anomaly output is diagnostic. It cannot create verdict Evidence.
 
 A Finding proposal is accepted only if:
 
@@ -121,9 +128,9 @@ alignment. A tie remains `conflicted` only while the Agent seeks discriminating
 evidence. If bounded search cannot break the tie, the final gap is insufficient
 evidence, not “conflict means unverifiable.”
 
-A task may own Findings while remaining active. It becomes resolved only when those
-Findings are sufficient to resolve every owned decisive fact; a weak Finding must not
-remove the task from future scheduling.
+A task may own Findings while remaining active. A core-owning task becomes resolved
+only when its Findings materially close the owned core evidence gap; a weak Finding
+must not remove the task from future scheduling.
 
 ## Reflection prompt
 
@@ -132,30 +139,32 @@ return:
 
 - task priority updates;
 - up to three new grounded tasks;
-- up to two decisive-fact proposals;
 - recommended next tasks;
 - remaining gaps and readiness signal.
 
 Deterministic validation rejects unknown IDs, duplicate tasks, unsupported task-state
-mutation, and decisive facts with no executable route. Task status is reducer-owned;
-Reflection cannot mark a task resolved, blocked, or exhausted.
+mutation, and new tasks that do not serve an unresolved core evidence gap. Task status
+and core ownership are reducer-owned; Reflection cannot mark a task resolved, blocked,
+or exhausted, and cannot replace the `CoreVerdictFact`.
 
 ## Coverage and stop
 
-Coverage is deterministic and runs after each Reflection. It compares current fact
-status and Evidence IDs with the previous audit.
+Coverage is deterministic and runs after every accepted tool action. It compares the
+one core fact, its winning qualified Evidence, and its three bounded gaps with the
+previous audit.
 
 ```text
-coverage_complete
+verdict_determined
 information_saturated
 hard_budget_exhausted
 continue
 ```
 
-`verdict_determined` may stop before a Reflection boundary when a decisive refutation
-has survived adjudication. `information_saturated` requires two consecutive low-gain
-Reflection intervals and no unattempted priority-1 task. Discovery-only progress does
-not reset the counter.
+`verdict_determined` stops immediately when qualified support or refutation closes all
+required core gaps. `information_saturated` occurs when no executable core route
+remains or when two consecutive accepted-action checkpoints make no qualified core
+progress. Discovery-only progress, optional metadata, new IDs, and task churn do not
+reset the counter.
 
 ## Judgment prompt
 
@@ -178,11 +187,11 @@ Several tools make their own Gemini Interactions calls:
 | --- | --- |
 | `perceive_scene` | Literal image inventory |
 | `crop_and_inspect` | Answer a focused crop question |
-| `count_objects` | Visible object count |
+| `count_objects` | Standalone diagnostic visible-object count; not exposed in the Agent loop |
 | `check_consistency` | Physical/visual consistency |
 | `analyze_visual_anomalies` | Structured forensic anomalies |
 | `compare_with_reference` | Query/reference comparison |
-| reverse/crop search query generation | Semantic retrieval query |
+| reverse-image semantic branch | Semantic retrieval query |
 | browse extraction | Select one immutable page passage and stance |
 
 Tool-internal token/call metrics are removed from model-visible JSON and added to trace
@@ -209,7 +218,7 @@ They produce no classification prediction.
 ## Policy trajectory export
 
 Actual model-visible `policy_input` and `policy_action` snapshots are captured on
-ReAct, Reflection, and Judgment steps.
+Target Planning, Attribution Planning, ReAct, Reflection, and Judgment steps.
 
 Exporter behavior:
 

@@ -5,7 +5,7 @@ Prompts express semantic judgment. The runtime owns mechanical constraints.
 | Prompt responsibility | Runtime responsibility |
 |---|---|
 | Select an exact relevant webpage passage and judge its factual relation to a goal. | Validate the passage id, recover the original text and offsets, and enforce source policy. |
-| Choose a useful image-grounded relation or a genuinely independent fallback relation. | Validate fact ids, pixel/OCR grounding, atomicity, query grounding, duplicate control, and task budgets. |
+| Choose a useful image-grounded core relation. | Validate fact ids, pixel/OCR grounding, atomicity, query grounding, stable core ownership, and task budgets. |
 | Choose a next investigative action from supplied state. | Enforce active tasks, one action per turn, route deduplication, source access, inspection-before-repeat, and stopping. |
 | Explain a compiled result. | Compile verdicts and evidence bases from immutable state. |
 

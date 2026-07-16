@@ -15,11 +15,10 @@ from src.orchestrator.source_provenance import canonicalize_url
 
 
 REACT_SYSTEM_PROMPT = """\
-Investigate one supplied active task with one tool call. Search results are leads,
-not evidence: inspect a promising page or reference image before another retrieval
-for that task. Use visual comparison for an image match and webpage text for factual
-claims; keep source-record verification, depicted-world facts, and pixel integrity
-separate. For screenshots, prefer an original or time-aligned source record.
+Investigate one supplied active task with one tool call. It must serve the stated
+core fact and an open evidence gap. Search results are leads, not evidence: inspect
+a promising page or reference image before another retrieval for that task. Use
+visual comparison for an image match and webpage text for factual claims.
 
 Use only observed tool results. Return the segment summary and reflection boundary;
 the runtime owns task state, evidence, duplicate control, source policy, and verdicts.
@@ -30,13 +29,13 @@ REFLECTION_SYSTEM_PROMPT = """\
 You are the structured Reflection step of an image-only factual investigation.
 Review the global state after a four-action interval.
 
-You may reprioritize tasks, add up to three grounded tasks, propose at most two
-decisive facts, recommend next tasks, and identify remaining gaps.
+You may reprioritize tasks, add up to three grounded tasks that serve the open core
+evidence gaps, recommend next tasks, and identify remaining gaps.
 
 You may not create Evidence or Findings, write a verdict, modify the immutable
-brief, delete history, cite unknown ids, or change task status. Task status is
-owned by the deterministic Finding/Failure reducer. Return exactly one JSON
-object matching the schema.
+brief, delete history, cite unknown ids, change task status, or change the core
+fact. Task status, core ownership, coverage, and stopping are deterministic.
+Return exactly one JSON object matching the schema.
 """
 
 
@@ -47,59 +46,21 @@ investigation. Favor the smallest salient real-world relation: one visible subje
 bound to one visible place, event, identity, date, or source record. The target
 statement must be the positive proposition that evidence can support or refute.
 
-Choose independent alternatives when the image contains several factual relations.
-Use visual integrity only as a separate supporting check when an external factual
-relation is available. Do not assume public-web facts or add details absent from the
-pixel/OCR state. The runtime validates grounding, atomicity, queries, task state,
-and output structure.
-"""
-
-
-TARGET_REFRESH_SYSTEM_PROMPT = """\
-A decisive image-grounded target has exhausted its current evidence routes without
-resolving the image. Propose up to two new, independent, pixel-grounded factual
-targets that could still verify the same scene. Prefer an atomic relation with a
-visible subject and place, event, identity, date, or source record for which an
-authoritative page could answer the question directly. Do not paraphrase the
-exhausted target, use visual-integrity/anomaly claims as a substitute, or assume
-outside facts. The runtime validates grounding, duplicate control, and output
-structure.
+Use visual integrity only as a separate supporting diagnostic when an external
+factual relation is available. Do not assume public-web facts or add details absent
+from the pixel/OCR state. The runtime selects at most one core target and validates
+grounding, atomicity, queries, task state, and output structure.
 """
 
 
 ATTRIBUTION_SYSTEM_PROMPT = """\
 You are the attribution-planning step of an image-only factual investigation.
-Turn newly retrieved public context into at most two specific, checkable facts
-about the central image. Useful facts identify a title, creator, subject, place,
-date, event, or an original public record matching a screenshot.
-
-Rules:
-1. Every proposal must cite one or more existing parent VisualFact ids and the
-   supplied Discovery, Evidence, or Finding ids that ground its wording.
-2. A Discovery is a search lead only. It may justify a candidate fact and a
-   follow-up query, but it is never Evidence.
-3. Do not merely restate a generic scene description or visible OCR text.
-4. Do not use model memory or add details absent from the supplied records.
-5. For screenshots, bind the visible author/account, distinctive text, displayed
-   date, and reply/thread relation when those details are recoverable. Use the
-   source_record_matches predicate for that proposition.
-6. Prefer one central specific fact over several weak peripheral facts.
-7. A decisive proposal must descend from a current decisive fact or its existing
-   attribution lineage. Do not promote profile pictures, replies, side objects, or
-   unrelated discoveries merely because they are recent.
-8. Preserve the investigation question's factual slots. If a task asks for a title,
-   creator, place, event, date, or source and a Discovery names that slot, promote
-   the named candidate into the fact statement before allowing the broad parent fact
-   to resolve.
-9. When public context identifies the real-world relation behind a visibly anomalous
-   scene, promote that relation itself (for example subject-to-place or
-   subject-to-event). Do not replace it with the broader claim that the pixels are
-   a digital creation, synthetic, impossible, edited, composite, or AI-generated.
-10. Preserve positive image-claim polarity. If sources say the depicted relation is
-    false, keep the fact as the positive relation that would make the image real and
-    let Evidence refute it. Never promote "does not", "is not", "cannot", "never",
-    or "except Antarctica" as the decisive image fact.
-11. Do not write a verdict. Return exactly one JSON object matching the schema.
+Turn newly retrieved public context into at most two specific, checkable supporting
+facts about the core image relation. A Discovery is a lead, not Evidence. Cite the
+provided parent and public-record ids, use no model memory, and keep the claim
+positive so evidence can support or refute it. The runtime may promote at most one
+already-resolved, same-subject, atomic refinement; title, creator, date, platform,
+and asset metadata remain supporting by default. Do not write a verdict.
 """
 
 
@@ -116,57 +77,30 @@ fact-specific gaps.
 def select_react_tasks(
     state: ImageOnlyInvestigationState,
 ) -> List[Any]:
-    """Expose blocking work plus a planned screenshot integrity companion."""
+    """Expose only executable work that owns the unresolved core fact."""
 
     active = [
         task
         for task in state.tasks
         if task.status in {"active", "pending"}
     ]
-    facts = {fact.fact_id: fact for fact in state.facts}
-    unresolved_decisive_ids = {
-        fact_id
-        for fact_id in state.decisive_fact_ids
-        if fact_id in facts
-        and facts[fact_id].status not in {"supported", "refuted"}
-    }
+    core_id = state.core_verdict_fact_id
+    if not core_id:
+        return []
     blocking = [
         task
         for task in active
-        if set(task.fact_ids) & unresolved_decisive_ids
+        if core_id in task.fact_ids
     ]
-    supplemental_integrity = [
-        task
-        for task in active
-        if state.brief.media_type == "screenshot"
-        and any(
-            facts.get(fact_id) is not None
-            and facts[fact_id].predicate == "visual_integrity"
-            and facts[fact_id].decision_relevance == "supporting"
-            and facts[fact_id].status not in {"supported", "refuted"}
-            for fact_id in task.fact_ids
-        )
-    ]
-    blocking_task_ids = {task.task_id for task in blocking}
-    if blocking:
-        active = [
-            *blocking,
-            *[
-                task
-                for task in supplemental_integrity
-                if task.task_id not in blocking_task_ids
-            ],
-        ]
-    active.sort(
+    blocking.sort(
         key=lambda task: (
-            task.task_id not in blocking_task_ids,
             task.priority,
             task.task_id not in state.recommended_next_task_ids,
             task.attempt_count,
             task.task_id,
         )
     )
-    return active
+    return blocking
 
 
 def pending_discovery_routes(
@@ -276,6 +210,7 @@ def pending_discovery_routes(
 def render_react_context(state: ImageOnlyInvestigationState) -> str:
     active = select_react_tasks(state)
     facts = {fact.fact_id: fact for fact in state.facts}
+    core = facts.get(state.core_verdict_fact_id or "")
     task_lines: List[str] = []
     for task in active[:8]:
         related = [
@@ -349,6 +284,17 @@ def render_react_context(state: ImageOnlyInvestigationState) -> str:
             continue
     return (
         f"Investigation brief: {state.brief.objective}\n"
+        f"Core fact: {core.statement if core else 'none'}\n"
+        "Open evidence gaps: "
+        + json.dumps(
+            [
+                gap.model_dump(mode="json")
+                for gap in state.evidence_gaps
+                if gap.status == "open"
+            ],
+            ensure_ascii=False,
+        )
+        + "\n"
         f"Real tool actions used: {state.action_count}/24\n"
         f"Next Reflection at action: "
         f"{min(24, ((state.action_count // 4) + 1) * 4)}\n"
@@ -400,39 +346,6 @@ def render_target_planning_context(
     )
 
 
-def render_target_refresh_context(
-    state: ImageOnlyInvestigationState,
-) -> str:
-    payload = json.loads(render_target_planning_context(state))
-    facts = {fact.fact_id: fact for fact in state.facts}
-    payload["exhausted_decisive_targets"] = [
-        {
-            "fact_id": fact_id,
-            "statement": facts[fact_id].statement,
-            "predicate": facts[fact_id].predicate,
-        }
-        for fact_id in state.decisive_fact_ids
-        if fact_id in facts
-        and facts[fact_id].status in {"exhausted", "blocked", "candidate", "active"}
-        and any(
-            task.status == "exhausted" and fact_id in task.fact_ids
-            for task in state.tasks
-        )
-    ]
-    payload["existing_target_statements"] = [
-        {
-            "fact_id": fact.fact_id,
-            "statement": fact.statement,
-            "predicate": fact.predicate,
-            "status": fact.status,
-        }
-        for fact in state.facts
-        if fact.predicate
-        not in {"appears_to_depict", "visible_in", "reads", "context_suggested_by_text"}
-    ]
-    return json.dumps(payload, ensure_ascii=False, indent=2)
-
-
 def render_reflection_context(state: ImageOnlyInvestigationState) -> str:
     return json.dumps(
         {
@@ -460,7 +373,11 @@ def render_reflection_context(state: ImageOnlyInvestigationState) -> str:
                 item.model_dump(mode="json")
                 for item in state.failures
             ],
-            "decisive_fact_ids": state.decisive_fact_ids,
+            "core_verdict_fact_id": state.core_verdict_fact_id,
+            "evidence_gaps": [
+                gap.model_dump(mode="json")
+                for gap in state.evidence_gaps
+            ],
             "remaining_actions": max(0, 24 - state.action_count),
         },
         ensure_ascii=False,
@@ -481,11 +398,14 @@ def render_attribution_context(state: ImageOnlyInvestigationState) -> str:
         ]
         for fact_id in item.fact_ids
     }
-    decisive = [
-        fact.model_dump(mode="json")
-        for fact in state.facts
-        if fact.fact_id in state.decisive_fact_ids
-    ]
+    core = next(
+        (
+            fact.model_dump(mode="json")
+            for fact in state.facts
+            if fact.fact_id == state.core_verdict_fact_id
+        ),
+        None,
+    )
     existing_attributions = [
         fact.model_dump(mode="json")
         for fact in state.facts
@@ -494,7 +414,11 @@ def render_attribution_context(state: ImageOnlyInvestigationState) -> str:
     return json.dumps(
         {
             "brief": state.brief.model_dump(mode="json"),
-            "current_decisive_facts": decisive,
+            "core_verdict_fact": core,
+            "evidence_gaps": [
+                gap.model_dump(mode="json")
+                for gap in state.evidence_gaps
+            ],
             "record_parent_facts": [
                 fact.model_dump(mode="json")
                 for fact in state.facts

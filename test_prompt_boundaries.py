@@ -2,7 +2,6 @@ from src.integrations.browse.jina_reader import EXTRACT_PROMPT
 from src.orchestrator.image_only_prompts import (
     REACT_SYSTEM_PROMPT,
     TARGET_PLANNING_SYSTEM_PROMPT,
-    TARGET_REFRESH_SYSTEM_PROMPT,
 )
 
 
@@ -11,7 +10,6 @@ def test_hot_path_prompts_stay_semantic_and_compact() -> None:
         "browse extraction": (EXTRACT_PROMPT, 1400),
         "investigation": (REACT_SYSTEM_PROMPT, 1200),
         "target planning": (TARGET_PLANNING_SYSTEM_PROMPT, 1300),
-        "target refresh": (TARGET_REFRESH_SYSTEM_PROMPT, 1300),
     }
 
     for name, (prompt, maximum_length) in prompts.items():
@@ -24,4 +22,4 @@ def test_hot_path_prompts_stay_semantic_and_compact() -> None:
     assert "missing mention is not a refutation" in browse_prompt
     assert "incompatible with the positive goal" in browse_prompt
     assert "runtime owns task state" in react_prompt
-    assert "runtime validates grounding" in planning_prompt
+    assert "validates grounding" in planning_prompt

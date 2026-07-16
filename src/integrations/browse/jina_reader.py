@@ -195,6 +195,7 @@ class JinaReaderClient:
         if cached is not None:
             result = dict(cached)
             result.pop(RUNTIME_METRICS_KEY, None)
+            result["subcalls"] = []
             timings = dict(result.get("timings", {}))
             timings["cache_hit"] = True
             timings.setdefault("total_ms", round((time.perf_counter() - total_t0) * 1000, 2))
@@ -202,17 +203,210 @@ class JinaReaderClient:
             return result
 
         fetch_t0 = time.perf_counter()
-        raw_content, provider = self.fetch_page_content(normalized_url)
+        try:
+            raw_content, provider = self.fetch_page_content(normalized_url)
+        except Exception as exc:
+            fetch_attempts = list(
+                getattr(self._thread_local, "fetch_attempts", []) or []
+            )
+            fetch_duration_ms = round(
+                (time.perf_counter() - fetch_t0) * 1000,
+                2,
+            )
+            result = {
+                "status": "error",
+                "url": normalized_url,
+                "goal": goal,
+                "provider": self.fetch_provider,
+                "fetch_attempts": fetch_attempts,
+                "subcalls": self._fetch_subcalls(fetch_attempts),
+                "blocked": False,
+                "error": f"{type(exc).__name__}: {exc}",
+                "rationale": "Every configured page-fetch route failed.",
+                "evidence": "",
+                "summary": "",
+                "relevance": "low",
+                "stance": "unclear",
+                "directness": "none",
+                "temporal_alignment": "unknown",
+                "artifact_sha256": "",
+                "evidence_span": {},
+                "retrieved_at": datetime.now(timezone.utc).isoformat(),
+                "injection_flags": [],
+                "evidence_eligible": False,
+                "timings": {
+                    "fetch_ms": fetch_duration_ms,
+                    "extract_ms": 0.0,
+                    "total_ms": round(
+                        (time.perf_counter() - total_t0) * 1000,
+                        2,
+                    ),
+                    "cache_hit": False,
+                },
+            }
+            with self._cache_lock:
+                self._visit_cache[cache_key] = dict(result)
+            return result
+        fetch_attempts = list(
+            getattr(self._thread_local, "fetch_attempts", []) or []
+        )
         fetch_duration_ms = round((time.perf_counter() - fetch_t0) * 1000, 2)
-        extract_t0 = time.perf_counter()
-        extracted = self.extract_goal_evidence(raw_content, goal)
-        extract_duration_ms = round((time.perf_counter() - extract_t0) * 1000, 2)
+        blocked_reason = self._detect_blocked_page(raw_content)
         injection_flags = self._detect_prompt_injection(raw_content)
+        fetch_subcalls = self._fetch_subcalls(fetch_attempts)
+        if blocked_reason:
+            result = {
+                "status": "error",
+                "url": normalized_url,
+                "goal": goal,
+                "provider": provider,
+                "fetch_attempts": fetch_attempts,
+                "subcalls": fetch_subcalls,
+                "blocked": True,
+                "blocked_reason": blocked_reason,
+                "error": (
+                    "Page visit was blocked by security verification: "
+                    + blocked_reason
+                ),
+                "rationale": (
+                    "Blocked by anti-bot or security verification page: "
+                    + blocked_reason
+                ),
+                "evidence": "",
+                "summary": "",
+                "relevance": "low",
+                "stance": "unclear",
+                "directness": "none",
+                "temporal_alignment": "unknown",
+                "artifact_sha256": "",
+                "evidence_span": {},
+                "retrieved_at": datetime.now(timezone.utc).isoformat(),
+                "injection_flags": [],
+                "evidence_eligible": False,
+                "timings": {
+                    "fetch_ms": fetch_duration_ms,
+                    "extract_ms": 0.0,
+                    "total_ms": round(
+                        (time.perf_counter() - total_t0) * 1000,
+                        2,
+                    ),
+                    "cache_hit": False,
+                },
+            }
+            with self._cache_lock:
+                self._visit_cache[cache_key] = dict(result)
+            return result
+        if injection_flags:
+            result = {
+                "status": "error",
+                "url": normalized_url,
+                "goal": goal,
+                "provider": provider,
+                "fetch_attempts": fetch_attempts,
+                "subcalls": fetch_subcalls,
+                "blocked": False,
+                "error": (
+                    "Page content matched prompt-injection patterns and was not "
+                    "sent to the evidence extractor."
+                ),
+                "rationale": (
+                    "Rejected untrusted page before LLM extraction."
+                ),
+                "evidence": "",
+                "summary": "",
+                "relevance": "low",
+                "stance": "unclear",
+                "directness": "none",
+                "temporal_alignment": "unknown",
+                "artifact_sha256": "",
+                "evidence_span": {},
+                "retrieved_at": datetime.now(timezone.utc).isoformat(),
+                "injection_flags": injection_flags,
+                "evidence_eligible": False,
+                "timings": {
+                    "fetch_ms": fetch_duration_ms,
+                    "extract_ms": 0.0,
+                    "total_ms": round(
+                        (time.perf_counter() - total_t0) * 1000,
+                        2,
+                    ),
+                    "cache_hit": False,
+                },
+            }
+            with self._cache_lock:
+                self._visit_cache[cache_key] = dict(result)
+            return result
+        extract_t0 = time.perf_counter()
+        try:
+            extracted = self.extract_goal_evidence(raw_content, goal)
+        except Exception as exc:
+            extract_duration_ms = round(
+                (time.perf_counter() - extract_t0) * 1000,
+                2,
+            )
+            result = {
+                "status": "error",
+                "url": normalized_url,
+                "goal": goal,
+                "provider": provider,
+                "fetch_attempts": fetch_attempts,
+                "subcalls": [
+                    *fetch_subcalls,
+                    {
+                        "kind": "page_extract",
+                        "provider": self.extract_provider,
+                        "status": "error",
+                        "request_count": 1,
+                        "duration_ms": extract_duration_ms,
+                    },
+                ],
+                "blocked": False,
+                "error": f"{type(exc).__name__}: {exc}",
+                "rationale": "The page was fetched but evidence extraction failed.",
+                "evidence": "",
+                "summary": "",
+                "relevance": "low",
+                "stance": "unclear",
+                "directness": "none",
+                "temporal_alignment": "unknown",
+                "artifact_sha256": "",
+                "evidence_span": {},
+                "retrieved_at": datetime.now(timezone.utc).isoformat(),
+                "injection_flags": [],
+                "evidence_eligible": False,
+                "timings": {
+                    "fetch_ms": fetch_duration_ms,
+                    "extract_ms": extract_duration_ms,
+                    "total_ms": round(
+                        (time.perf_counter() - total_t0) * 1000,
+                        2,
+                    ),
+                    "cache_hit": False,
+                },
+            }
+            metrics = exception_runtime_metrics(exc)
+            if metrics:
+                result[RUNTIME_METRICS_KEY] = metrics
+            with self._cache_lock:
+                self._visit_cache[cache_key] = dict(result)
+            return result
+        extract_duration_ms = round((time.perf_counter() - extract_t0) * 1000, 2)
         result = {
             "status": "success",
             "url": normalized_url,
             "goal": goal,
             "provider": provider,
+            "fetch_attempts": fetch_attempts,
+            "subcalls": [
+                *fetch_subcalls,
+                {
+                    "kind": "page_extract",
+                    "provider": self.extract_provider,
+                    "status": "success",
+                    "request_count": 1,
+                    "duration_ms": extract_duration_ms,
+                },
+            ],
             "rationale": extracted.get("rationale", ""),
             "evidence": extracted.get("evidence", ""),
             "summary": extracted.get("summary", ""),
@@ -239,27 +433,7 @@ class JinaReaderClient:
                 "cache_hit": False,
             },
         }
-        blocked_reason = self._detect_blocked_page(raw_content)
-        if blocked_reason:
-            result.update(
-                {
-                    "status": "error",
-                    "blocked": True,
-                    "blocked_reason": blocked_reason,
-                    "error": f"Page visit was blocked by security verification: {blocked_reason}",
-                    "evidence": "",
-                    "summary": "",
-                    "relevance": "low",
-                    "stance": "unclear",
-                    "directness": "none",
-                    "temporal_alignment": "unknown",
-                    "evidence_span": {},
-                    "evidence_eligible": False,
-                    "rationale": f"Blocked by anti-bot or security verification page: {blocked_reason}",
-                }
-            )
-        else:
-            result["blocked"] = False
+        result["blocked"] = False
         with self._cache_lock:
             self._visit_cache[cache_key] = dict(result)
         return result
@@ -270,15 +444,66 @@ class JinaReaderClient:
         with self._cache_lock:
             cached = self._content_cache.get(normalized_url)
         if cached is not None:
+            self._thread_local.fetch_attempts = []
             return cached
 
+        attempts: List[Dict[str, Any]] = []
         if self.fetch_provider == "jina":
-            result = (self._fetch_with_jina(normalized_url), "jina_reader")
+            try:
+                result = (self._fetch_with_jina(normalized_url), "jina_reader")
+                attempts.append({"provider": "jina_reader", "status": "success"})
+            except Exception as exc:
+                attempts.append(
+                    {
+                        "provider": "jina_reader",
+                        "status": "error",
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                )
+                try:
+                    result = (self._fetch_direct(normalized_url), "direct_reader")
+                    attempts.append(
+                        {"provider": "direct_reader", "status": "success"}
+                    )
+                except Exception as direct_exc:
+                    attempts.append(
+                        {
+                            "provider": "direct_reader",
+                            "status": "error",
+                            "error": (
+                                f"{type(direct_exc).__name__}: {direct_exc}"
+                            ),
+                        }
+                    )
+                    self._thread_local.fetch_attempts = attempts
+                    raise RuntimeError(
+                        "All page fetch providers failed: "
+                        + "; ".join(
+                            f"{item['provider']}: {item.get('error', '')}"
+                            for item in attempts
+                        )
+                    ) from direct_exc
         else:
             result = (self._fetch_direct(normalized_url), "direct_reader")
+            attempts.append({"provider": "direct_reader", "status": "success"})
+        self._thread_local.fetch_attempts = attempts
         with self._cache_lock:
             self._content_cache[normalized_url] = result
         return result
+
+    @staticmethod
+    def _fetch_subcalls(
+        attempts: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        return [
+            {
+                "kind": "page_fetch",
+                "provider": str(attempt.get("provider", "unknown")),
+                "status": str(attempt.get("status", "error")),
+                "request_count": 1,
+            }
+            for attempt in attempts
+        ]
 
     def _fetch_with_jina(self, url: str) -> str:
         headers: Dict[str, str] = {}
@@ -478,10 +703,14 @@ class JinaReaderClient:
 
     def extract_goal_evidence(self, content: str, goal: str) -> Dict[str, Any]:
         evidence_document = self._prepare_evidence_document(content)
-        clipped_content = evidence_document[: min(self.max_chars, self.extract_max_chars)]
-        if not clipped_content.strip():
+        if not evidence_document.strip():
             raise RuntimeError("Fetched page did not contain a usable evidence document.")
-        passages = self._build_evidence_passages(clipped_content)
+        all_passages = self._build_evidence_passages(evidence_document)
+        passages = self._select_goal_passages(
+            all_passages,
+            goal,
+            max_chars=self.extract_max_chars,
+        )
         if not passages:
             raise RuntimeError("Fetched page did not contain any usable evidence passages.")
         extracted = self._extract_with_llm(self._format_evidence_passages(passages), goal)
@@ -529,12 +758,76 @@ class JinaReaderClient:
                 "stance": stance,
                 "directness": directness,
                 "temporal_alignment": temporal_alignment,
-                "artifact_sha256": hashlib.sha256(clipped_content.encode("utf-8")).hexdigest(),
+                "artifact_sha256": hashlib.sha256(
+                    evidence_document.encode("utf-8")
+                ).hexdigest(),
                 "evidence_span": evidence_span,
                 RUNTIME_METRICS_KEY: runtime_metrics,
             }
         )
         return extracted
+
+    @classmethod
+    def _select_goal_passages(
+        cls,
+        passages: List[Dict[str, Any]],
+        goal: str,
+        *,
+        max_chars: int,
+    ) -> List[Dict[str, Any]]:
+        """Select from the whole document while preserving original offsets."""
+
+        if not passages:
+            return []
+        goal_tokens = cls._ranking_tokens(goal)
+        ranked: List[tuple[float, int, Dict[str, Any]]] = []
+        for index, passage in enumerate(passages):
+            text = str(passage.get("text", ""))
+            tokens = cls._ranking_tokens(text)
+            overlap = len(goal_tokens & tokens)
+            coverage = overlap / max(1, len(goal_tokens))
+            density = overlap / max(1, len(tokens))
+            phrase_bonus = sum(
+                1.0
+                for phrase in re.findall(r'"([^"]{3,})"', str(goal or ""))
+                if phrase.casefold() in text.casefold()
+            )
+            score = (8.0 * coverage) + (2.0 * density) + (4.0 * phrase_bonus)
+            ranked.append((score, index, passage))
+        ranked.sort(key=lambda item: (-item[0], item[1]))
+
+        selected: List[Dict[str, Any]] = []
+        used = 0
+        for _score, _index, passage in ranked:
+            text = str(passage.get("text", ""))
+            cost = len(text) + 32
+            if selected and used + cost > max_chars:
+                continue
+            selected.append(dict(passage))
+            used += cost
+            if used >= max_chars:
+                break
+        selected.sort(key=lambda item: int(item.get("start", 0)))
+        for passage_id, passage in enumerate(selected):
+            passage["passage_id"] = passage_id
+        return selected
+
+    @staticmethod
+    def _ranking_tokens(value: str) -> set[str]:
+        stopwords = {
+            "a", "an", "and", "are", "as", "at", "be", "by", "does",
+            "for", "from", "in", "is", "it", "of", "on", "or", "the",
+            "this", "to", "what", "when", "where", "which", "who", "with",
+        }
+        return {
+            token
+            for token in re.findall(
+                r"[\w]+",
+                str(value or "").casefold(),
+                flags=re.UNICODE,
+            )
+            if len(token) > 1 and token not in stopwords
+        }
 
     @classmethod
     def _prepare_evidence_document(cls, content: str) -> str:

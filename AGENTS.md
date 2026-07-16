@@ -7,9 +7,10 @@ Read these active documents before changing the runtime:
 - `docs/architecture.md`
 - `docs/agent-prompt-and-runtime-guide.md`
 - `docs/runtime-release-contract.md`
-- `docs/superpowers/plans/2026-07-14-visual-fact-search-agent.md`
+- `docs/superpowers/plans/2026-07-16-search-control-and-tool-correctness-audit.md`
 
-The implementation and contract tests win when an old research note disagrees.
+The July 14 implementation plan is a superseded historical record. The implementation
+and contract tests win when an old research note disagrees.
 
 ## Supported boundary
 
@@ -26,19 +27,25 @@ project version.
 ## Required control flow
 
 1. Validate and hash-check `ImageOnlyRuntimeCase`.
-2. Run Gemini `perceive_scene` and EasyOCR `ocr_with_position`.
+2. Run Gemini `perceive_scene` and layered `ocr_with_position` (configured PP-OCR
+   service with EasyOCR fallback).
 3. Deterministically build an immutable `InvestigationBrief`, pixel-grounded
    `VisualEntity`/`VisualFact` records, retrieval anchors, and at most four initial
    `ResearchTask` records.
-4. Run one initial reverse-image search as Discovery only.
-5. Let Gemini choose one native Interactions function call per action turn.
-6. Deterministically reduce each real action into separate Discovery, Evidence,
+4. Let Target Planning establish one image-grounded `CoreVerdictFact`; do not run a
+   mandatory first reverse-image search.
+5. Let Gemini choose one native Interactions function call per action turn. One
+   policy action performs one bounded semantic operation.
+6. Deterministically reduce each accepted action into separate Discovery, Evidence,
    Finding, Failure, task, and fact state.
-7. Run structured Reflection after cumulative actions 4, 8, 12, 16, 20, and 24.
-8. Adjudicate support/refute conflicts after every action and stop when the verdict is
-   determined, on full coverage, after two low-gain Reflection intervals, or at the
+7. Adjudicate evidence and run Coverage after every accepted action.
+8. Run structured Reflection after cumulative actions 4, 8, 12, 16, 20, and 24. It
+   may reorder or add bounded routes for the same core fact, but cannot change verdict
+   ownership.
+9. Stop immediately when the core fact resolves, when no executable core route
+   remains, after two action checkpoints without qualified core progress, or at the
    24-action cap.
-9. Compile the only allowed verdict and basis, then require Gemini Judgment to match
+10. Compile the only allowed verdict and basis, then require Gemini Judgment to match
    them exactly.
 
 ## Non-negotiable invariants
@@ -47,8 +54,9 @@ project version.
   providers after an error.
 - Tool-bearing turns use native `function_call` / `function_result` with
   `previous_interaction_id`; at most one tool call is accepted per v3 action turn.
-- Gemini sees the image in `perceive_scene`. EasyOCR is a separate deterministic OCR
-  tool. Manual image inspection is not part of the runtime.
+- Gemini sees the image in `perceive_scene`. Positioned OCR is a separate observation;
+  low-confidence text is isolated and decisive small text may require focused visual
+  verification. Manual image inspection is not part of the runtime.
 - A tool result is a JSON object with `status=success|error`. Tool errors and malformed
   output are not Evidence.
 - Search snippets, titles, reverse-image matches, and generated summaries are
@@ -58,9 +66,19 @@ project version.
 - A Finding must link one ResearchTask and owned fact/evidence IDs.
 - A verdict basis must follow
   `VisualFact -> Finding -> Evidence -> successful tool call`.
-- `fake` requires a decisive refuted fact after conflict adjudication; `real` requires
-  every decisive fact to be supported with required visual binding; all other valid
-  factual outcomes are `unverifiable` because evidence is insufficient.
+- Exactly one `CoreVerdictFact` owns the verdict. Optional title, creator, date,
+  platform, asset ID, second-source, and general visual-integrity details are
+  supporting by default and cannot delay a resolved verdict.
+- `fake` requires the core fact to be refuted after conflict adjudication; `real`
+  requires the core fact to be supported with its required source/image binding; all
+  other valid factual outcomes are `unverifiable` because evidence is insufficient.
+- Reflection cannot replace the core fact. At most one already-resolved,
+  same-subject, atomic refinement may replace it through
+  `reconcile_core_verdict_fact(...)`.
+- General VLM consistency/anomaly opinions are diagnostic and cannot create verdict
+  Evidence.
+- `text_search` accepts one query, `visit` one URL, and
+  `reverse_image_search` one explicit Lens or semantic branch per action.
 - If all investigation tools fail, or a provider/protocol/runtime boundary fails, stop
   with an engineering error before Judgment.
 - Keep evaluator-private gold out of runtime/model state. Load it only after all
@@ -79,7 +97,7 @@ project version.
 - `src/orchestrator/investigation_models.py`: strict VisualFact state schemas.
 - `src/orchestrator/bootstrap.py`: deterministic brief/fact/task bootstrap.
 - `src/orchestrator/task_store.py`: action reducer and bounded Reflection transitions.
-- `src/orchestrator/coverage.py`: decisive-fact coverage and verdict basis.
+- `src/orchestrator/coverage.py`: one-core-fact coverage and verdict basis.
 - `src/orchestrator/stage_runner.py`: native Interactions protocol and tool execution.
 - `src/eval/release_adapter.py`: immutable v0.3 release consumer.
 - `src/eval/run_eval.py`: rollout, post-rollout scoring, and artifacts.

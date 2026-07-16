@@ -92,6 +92,32 @@ def test_same_reference_for_a_different_task_is_still_deduplicated() -> None:
     )
 
 
+def test_reverse_image_search_branches_are_distinct_routes() -> None:
+    lens = {
+        "__question_id": "task-1",
+        "image_input": "input.png",
+        "branch": "lens",
+    }
+    semantic = {
+        "__question_id": "task-1",
+        "image_input": "input.png",
+        "branch": "semantic",
+    }
+
+    assert not routes_semantically_equivalent(
+        "reverse_image_search",
+        lens,
+        "reverse_image_search",
+        semantic,
+    )
+    assert routes_semantically_equivalent(
+        "reverse_image_search",
+        lens,
+        "reverse_image_search",
+        dict(lens),
+    )
+
+
 def test_same_search_goal_is_deduplicated_across_tasks() -> None:
     left = {
         "__question_id": "task-1",

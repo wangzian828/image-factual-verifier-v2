@@ -311,7 +311,7 @@ def test_visual_search_provider_does_not_fall_through() -> None:
     assert serper.called is False
 
 
-def test_browse_provider_does_not_fall_through(
+def test_browse_provider_falls_back_to_direct(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("BROWSE_FETCH_PROVIDER", "jina")
@@ -323,14 +323,15 @@ def test_browse_provider_does_not_fall_through(
         lambda _url: (_ for _ in ()).throw(RuntimeError("jina failed")),
     )
 
-    def unexpected_direct(_url: str) -> str:
+    def direct(_url: str) -> str:
         called["direct"] = True
-        return "unexpected"
+        return "direct fallback"
 
-    monkeypatch.setattr(client, "_fetch_direct", unexpected_direct)
-    with pytest.raises(RuntimeError, match="jina failed"):
-        client.fetch_page_content("https://example.test")
-    assert called["direct"] is False
+    monkeypatch.setattr(client, "_fetch_direct", direct)
+    content, provider = client.fetch_page_content("https://example.test")
+    assert called["direct"] is True
+    assert content == "direct fallback"
+    assert provider == "direct_reader"
 
 
 def test_cache_ttl_and_namespace(

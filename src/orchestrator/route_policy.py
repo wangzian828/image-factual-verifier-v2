@@ -93,6 +93,7 @@ def route_signature(tool_name: str, tool_args: Mapping[str, Any]) -> dict[str, A
         )
     elif tool == "reverse_image_search":
         signature["image_input"] = str(args.get("image_input", "")).strip()
+        signature["branch"] = str(args.get("branch", "lens")).strip().lower()
     elif tool in {"check_consistency", "analyze_visual_anomalies"}:
         signature["focus"] = " ".join(
             _semantic_tokens(
@@ -183,7 +184,10 @@ def routes_semantically_equivalent(
             >= 0.75
         )
     if tool == "reverse_image_search":
-        return left.get("image_input") == right.get("image_input")
+        return (
+            left.get("image_input") == right.get("image_input")
+            and left.get("branch") == right.get("branch")
+        )
     if tool in {
         "current_time",
         "check_consistency",

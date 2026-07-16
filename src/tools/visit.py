@@ -26,7 +26,13 @@ class VisitTool(BaseTool):
             "properties": {
                 "url": {
                     "type": ["string", "array"],
-                    "description": "One webpage URL or a list of URLs to visit.",
+                    "items": {"type": "string"},
+                    "minItems": 1,
+                    "maxItems": 1,
+                    "description": (
+                        "Exactly one webpage URL. Additional pages require "
+                        "separate policy actions."
+                    ),
                 },
                 "goal": {"type": "string", "description": "The verification goal or target claim."},
             },
@@ -50,6 +56,14 @@ class VisitTool(BaseTool):
         try:
             if isinstance(url, list):
                 urls = [str(item) for item in url if str(item).strip()]
+                if len(urls) != 1:
+                    return {
+                        "status": "error",
+                        "error": (
+                            "visit accepts exactly one URL per action; inspect "
+                            "additional pages only if the core gap remains open."
+                        ),
+                    }
                 if self.source_access_policy is not None:
                     urls = [item for item in urls if self.source_access_policy.allows(item)]
                 if not urls:
@@ -57,7 +71,7 @@ class VisitTool(BaseTool):
                         "status": "error",
                         "error": "All requested URLs are blocked by the active source access policy.",
                     }
-                result = self.client.visit_many(urls, goal)
+                result = self.client.visit(urls[0], goal)
             else:
                 if self.source_access_policy is not None and not self.source_access_policy.allows(str(url)):
                     return {

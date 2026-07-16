@@ -30,7 +30,6 @@ from src.orchestrator.pipeline import Orchestrator
 from src.orchestrator.image_only_prompts import (
     pending_discovery_routes,
     render_react_context,
-    render_target_refresh_context,
     select_react_tasks,
 )
 from src.orchestrator.state import (
@@ -372,7 +371,7 @@ def test_target_planning_keeps_valid_proposal_when_parallel_target_is_invalid() 
     assert accepted.decision_relevance == "supporting"
 
 
-def test_target_planning_accepts_atomic_visible_location_relation() -> None:
+def test_target_planning_keeps_existing_core_stable_until_refinement_resolves() -> None:
     _, state = _antarctic_butterfly_state()
     scene = next(
         fact for fact in state.facts if fact.predicate == "appears_to_depict"
@@ -416,10 +415,10 @@ def test_target_planning_accepts_atomic_visible_location_relation() -> None:
 
     assert len(update["accepted_fact_ids"]) == 1
     fact_id = update["accepted_fact_ids"][0]
-    assert state.decisive_fact_ids == [fact_id]
+    assert state.decisive_fact_ids == [scene.fact_id]
     fact = next(item for item in state.facts if item.fact_id == fact_id)
     assert "Antarctic" in fact.statement
-    assert scene.decision_relevance == "supporting"
+    assert scene.decision_relevance == "decisive"
 
 
 def test_generic_source_search_target_stays_supporting_for_photo() -> None:
@@ -460,7 +459,7 @@ def test_generic_source_search_target_stays_supporting_for_photo() -> None:
     assert state.decisive_fact_ids == [scene.fact_id]
 
 
-def test_target_refresh_rejects_unobserved_named_metadata() -> None:
+def test_target_planning_rejects_unobserved_named_metadata() -> None:
     _, state = _antarctic_butterfly_state()
     scene = next(
         fact for fact in state.facts if fact.predicate == "appears_to_depict"
@@ -486,7 +485,6 @@ def test_target_refresh_rejects_unobserved_named_metadata() -> None:
                 )
             ]
         ),
-        force_external_decisive=True,
     )
 
     assert not update["accepted_fact_ids"]
@@ -820,10 +818,10 @@ def test_external_target_demotes_parallel_visual_integrity() -> None:
         if fact.predicate == "visual_integrity"
     )
     assert integrity.decision_relevance == "supporting"
-    assert state.decisive_fact_ids == [location_id]
+    assert state.decisive_fact_ids == [scene.fact_id]
 
 
-def test_target_refresh_can_add_independent_scene_relation() -> None:
+def test_exhausted_core_is_not_replaced_by_an_independent_relation() -> None:
     _, state = _antarctic_butterfly_state()
     scene = next(
         fact for fact in state.facts if fact.predicate == "appears_to_depict"
@@ -867,11 +865,7 @@ def test_target_refresh_can_add_independent_scene_relation() -> None:
         if initial["accepted_fact_ids"][0] in task.fact_ids
     )
     exhausted_task.status = "exhausted"
-    assert Orchestrator._image_only_target_refresh_needed(state)
-
-    context = render_target_refresh_context(state)
-    assert initial["accepted_fact_ids"][0] in context
-    assert "exhausted_decisive_targets" in context
+    initial_core_id = state.core_verdict_fact_id
 
     refreshed = apply_target_planning(
         state,
@@ -895,7 +889,8 @@ def test_target_refresh_can_add_independent_scene_relation() -> None:
 
     assert len(refreshed["accepted_fact_ids"]) == 1
     refreshed_fact_id = refreshed["accepted_fact_ids"][0]
-    assert refreshed_fact_id in state.decisive_fact_ids
+    assert state.core_verdict_fact_id == initial_core_id
+    assert refreshed_fact_id not in state.decisive_fact_ids
     assert any(
         refreshed_fact_id in task.fact_ids and task.status == "active"
         for task in state.tasks
@@ -984,21 +979,27 @@ def test_react_exposes_only_tasks_blocking_unresolved_decisive_facts() -> None:
     )
 
 
-def test_non_reflection_coverage_does_not_advance_low_gain_streak() -> None:
+def test_only_decision_checkpoints_advance_low_gain_streak() -> None:
     _, state = _runtime_state()
 
-    audit_coverage(state, reflection_checkpoint=True)
+    audit_coverage(state)
     first_low_gain = audit_coverage(
         state,
-        reflection_checkpoint=True,
+        decision_checkpoint=True,
     )
     between_reflections = audit_coverage(state)
+    second_low_gain = audit_coverage(
+        state,
+        decision_checkpoint=True,
+    )
 
     assert first_low_gain.low_gain_intervals == 1
-    assert first_low_gain.reflection_checkpoint is True
+    assert first_low_gain.decision_checkpoint is True
     assert between_reflections.low_gain_intervals == 1
-    assert between_reflections.reflection_checkpoint is False
+    assert between_reflections.decision_checkpoint is False
     assert between_reflections.stop_reason == "continue"
+    assert second_low_gain.low_gain_intervals == 2
+    assert second_low_gain.stop_reason == "information_saturated"
 
 
 def test_discovery_is_not_evidence_and_reflection_only_reprioritizes() -> None:
@@ -1218,7 +1219,8 @@ def test_official_evidence_supports_promoted_attribution_fact() -> None:
         fact for fact in state.facts if fact.fact_id == specific_id
     )
     assert specific.status == "supported"
-    assert state.decisive_fact_ids == [specific_id]
+    assert state.decisive_fact_ids == [parent_fact_id]
+    assert specific.decision_relevance == "supporting"
     assert all(
         specific_id in item.fact_ids
         for item in state.evidence
@@ -1239,7 +1241,7 @@ def test_official_evidence_supports_promoted_attribution_fact() -> None:
     )
     verdict, basis = compile_verdict_basis(state)
     assert verdict == "real"
-    assert basis.fact_ids == [specific_id]
+    assert basis.fact_ids == [parent_fact_id]
 
 
 def test_candidate_attribution_upgrades_after_visual_bridge() -> None:
@@ -1457,8 +1459,9 @@ def test_same_source_capture_and_assertion_can_resolve_attribution() -> None:
         if fact.fact_id == applied["accepted_fact_ids"][0]
     )
     assert specific.status == "supported"
-    assert specific.decision_relevance == "decisive"
-    assert state.decisive_fact_ids == [specific.fact_id]
+    assert specific.decision_relevance == "supporting"
+    assert state.core_verdict_fact_id == parent_fact_id
+    assert state.decisive_fact_ids == [parent_fact_id]
     assert not applied["created_task_ids"]
 
 
@@ -1730,10 +1733,14 @@ def test_peripheral_discovery_does_not_trigger_decisive_attribution() -> None:
             ]
         ),
     )
-    assert not applied["accepted_fact_ids"]
-    assert "current central fact lineage" in applied[
-        "rejected_reasons"
-    ][0]
+    assert applied["accepted_fact_ids"]
+    specific = next(
+        fact
+        for fact in state.facts
+        if fact.fact_id == applied["accepted_fact_ids"][0]
+    )
+    assert specific.decision_relevance == "supporting"
+    assert state.core_verdict_fact_id != specific.fact_id
 
 
 def test_provenance_discovery_triggers_specific_attribution_planning() -> None:
@@ -2196,7 +2203,7 @@ def test_adjacent_date_with_unknown_timezone_cannot_refute_source_match() -> Non
     assert source_fact.status == "active"
 
 
-def test_visible_integrity_fact_is_resolved_by_targeted_anomaly_scan() -> None:
+def test_general_anomaly_scan_remains_diagnostic_for_integrity_fact() -> None:
     import json
 
     case, state = _screenshot_runtime_state()
@@ -2235,8 +2242,9 @@ def test_visible_integrity_fact_is_resolved_by_targeted_anomaly_scan() -> None:
         image_sha256=case.image_sha256,
     )
 
-    assert update["created_finding_ids"]
-    assert integrity_fact.status == "supported"
+    assert update["created_evidence_ids"] == []
+    assert update["created_finding_ids"] == []
+    assert integrity_fact.status == "active"
 
 
 def test_budget_exhaustion_is_reported_as_incomplete_not_high_confidence() -> None:
@@ -2547,7 +2555,7 @@ def test_generic_official_support_cannot_resolve_scene_without_visual_bridge() -
     assert basis.evidence_ids == update["created_evidence_ids"]
 
 
-def test_direct_official_refutation_resolves_scene_and_compiles_fake() -> None:
+def test_unbound_official_refutation_cannot_resolve_generic_scene() -> None:
     case, state = _runtime_state()
     target_task = next(
         task
@@ -2594,13 +2602,14 @@ def test_direct_official_refutation_resolves_scene_and_compiles_fake() -> None:
     coverage = audit_coverage(state)
     verdict, basis = compile_verdict_basis(state)
 
-    assert coverage.complete is True
-    assert verdict == "fake"
+    assert coverage.complete is False
+    assert coverage.stop_reason == "information_saturated"
+    assert verdict == "unverifiable"
     assert basis.fact_ids == state.decisive_fact_ids
-    assert basis.evidence_ids == update["created_evidence_ids"]
+    assert basis.unresolved_gaps
 
 
-def test_visual_integrity_refutation_does_not_hide_unresolved_world_fact() -> None:
+def test_visual_integrity_diagnostic_cannot_replace_the_existing_core_fact() -> None:
     _, state = _runtime_state()
     subject_id = state.facts[0].subject_entity_id
     integrity = VisualFact(
@@ -2611,7 +2620,7 @@ def test_visual_integrity_refutation_does_not_hide_unresolved_world_fact() -> No
         predicate="visual_integrity",
         status="active",
         basis_ids=["anchor-integrity"],
-        decision_relevance="decisive",
+        decision_relevance="supporting",
         origin=FactOrigin(
             type="input_image",
             origin_ids=["anchor-integrity"],
@@ -2625,7 +2634,7 @@ def test_visual_integrity_refutation_does_not_hide_unresolved_world_fact() -> No
         predicate="located_at",
         status="active",
         basis_ids=["anchor-location"],
-        decision_relevance="decisive",
+        decision_relevance="supporting",
         origin=FactOrigin(
             type="input_image",
             origin_ids=["anchor-location"],
@@ -2660,7 +2669,6 @@ def test_visual_integrity_refutation_does_not_hide_unresolved_world_fact() -> No
         source_family_ids=[evidence.source_family],
     )
     state.facts.extend([integrity, world_fact])
-    state.decisive_fact_ids = [integrity.fact_id, world_fact.fact_id]
     state.evidence.append(evidence)
     state.findings.append(finding)
 
@@ -2668,12 +2676,10 @@ def test_visual_integrity_refutation_does_not_hide_unresolved_world_fact() -> No
 
     assert coverage.stop_reason == "continue"
     assert state.stop_reason == ""
-    assert {
-        item.fact_id: item.status for item in coverage.facts
-    } == {
-        integrity.fact_id: "refuted",
-        world_fact.fact_id: "unresolved",
-    }
+    assert [item.fact_id for item in coverage.facts] == [
+        state.core_verdict_fact_id
+    ]
+    assert integrity.decision_relevance == "supporting"
 
 
 def test_pixel_anomaly_cannot_refute_external_location_fact() -> None:
@@ -2729,6 +2735,90 @@ def test_pixel_anomaly_cannot_refute_external_location_fact() -> None:
 
     assert assessment.status == "active"
     assert assessment.refute.score == 0.0
+
+
+def test_real_order_atomic_location_refutation_compiles_fake_without_source_binding() -> None:
+    case, state = _antarctic_butterfly_state()
+    scene = next(
+        fact for fact in state.facts if fact.predicate == "appears_to_depict"
+    )
+    butterfly = next(
+        fact
+        for fact in state.facts
+        if fact.predicate == "visible_in"
+        and "monarch" in fact.statement.casefold()
+    )
+    planned = apply_target_planning(
+        state,
+        TargetPlanningOutput(
+            proposals=[
+                TargetFactProposal(
+                    statement=(
+                        "Millions of monarch butterflies migrate to Antarctica "
+                        "during the winter."
+                    ),
+                    predicate="located_at",
+                    parent_fact_ids=[scene.fact_id, butterfly.fact_id],
+                    question=(
+                        "Do monarch butterflies migrate to Antarctica during winter?"
+                    ),
+                    purpose="Verify the visible subject-to-place relation.",
+                    suggested_tools=["text_search", "visit"],
+                    suggested_queries=["monarch butterfly wintering grounds"],
+                )
+            ]
+        ),
+    )
+    core_id = planned["accepted_fact_ids"][0]
+    assert state.core_verdict_fact_id == core_id
+    task = next(item for item in state.tasks if core_id in item.fact_ids)
+    statement = (
+        "Two protected sanctuaries in Mexico's Central Highlands become the "
+        "wintering grounds for millions of monarch butterflies."
+    )
+    update = record_tool_observation(
+        state,
+        _step(
+            task_id=task.task_id,
+            call_id="call-monarch-refute",
+            tool_name="visit",
+            result=json.dumps(
+                {
+                    "status": "success",
+                    "url": "https://example.gov/monarch-migration",
+                    "selected_url": "https://example.gov/monarch-migration",
+                    "evidence": statement,
+                    "summary": statement,
+                    "relevance": "high",
+                    "stance": "refute",
+                    "directness": "direct",
+                    "temporal_alignment": "not_applicable",
+                    "artifact_sha256": "f" * 64,
+                    "evidence_span": {
+                        "start": 0,
+                        "end": len(statement),
+                    },
+                    "retrieved_at": datetime.now(timezone.utc).isoformat(),
+                    "injection_flags": [],
+                    "evidence_eligible": True,
+                }
+            ),
+        ),
+        image_sha256=case.image_sha256,
+    )
+
+    coverage = audit_coverage(state, decision_checkpoint=True)
+    verdict, basis = compile_verdict_basis(state)
+
+    assert update["created_finding_ids"]
+    assert coverage.complete is True
+    assert coverage.stop_reason == "verdict_determined"
+    assert all(
+        gap.status in {"resolved", "not_required"}
+        for gap in coverage.evidence_gaps
+    )
+    assert verdict == "fake"
+    assert basis.fact_ids == [core_id]
 
 
 def test_task_exhausts_after_five_attempts_without_resolution() -> None:

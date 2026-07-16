@@ -128,6 +128,18 @@ The following were verified through that proxy:
 - Hugging Face HTTPS;
 - Google Drive HTTPS.
 
+Optional layered OCR configuration:
+
+```bash
+export PPOCR_SERVICE_URL=http://127.0.0.1:<port>/ocr
+```
+
+The endpoint must accept `image_base64` and return positioned regions under
+`text_regions` or `regions`. Do not set this variable until a compatible service is
+actually deployed. When unset, the Agent keeps using EasyOCR; when set but temporarily
+unavailable, it records the failed PP-OCR subcall and falls back to EasyOCR without
+changing the Gemini environment.
+
 Use `scripts/server/run_gpu13.sh` for project commands. It always sources the
 required proxy and threading environment and fails if the OMP value is not `1`.
 
@@ -214,6 +226,19 @@ cd /gs/home/wza/projects/image-factual-verifier-v3
 scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
   python -m pytest -q
 ```
+
+Current traces report:
+
+```text
+total_tool_calls       policy-level tool actions
+total_tool_subcalls    real provider requests inside those actions
+tool_subcalls_by_kind  search, fetch, extract, OCR, upload, and comparison counts
+```
+
+The active runtime enforces one text query, one visited page, or one reverse-image
+branch per policy action. `crop_and_search` and `count_objects` are not exposed to the
+Agent loop; general VLM anomaly checks remain diagnostic and cannot create verdict
+Evidence.
 
 These are contract and scripted-state checks. For real Gemini transport, create an
 untracked `.env` on gpu-13 using a secure interactive method, then run:
@@ -324,9 +349,11 @@ by default) and one retry. Configure them with
 `GEMINI_VISION_TIMEOUT_SECONDS` when a provider needs a different limit. This is
 separate from the 1,800-second per-image budget: one stalled network request becomes
 a recoverable failure instead of holding the full case open.
-Coverage can stop earlier when all decisive facts resolve or after two consecutive
-low-gain Reflection intervals with no unattempted priority-1 task. Open-ended ReAct
-turns use a 16,384-token output budget; Reflection and Judgment use 8,192. All active
+Coverage runs after every accepted action and stops immediately when the one core fact
+and its required evidence gaps resolve. It also stops as `information_saturated` when
+no executable core-gap route remains or when two consecutive action checkpoints make
+no qualified core progress. Open-ended ReAct turns use a 16,384-token output budget;
+Reflection and Judgment use 8,192. All active
 Gemini stages require minimal thinking. Interactions failures remain hard failures,
 and the error trace retains completed calls. Evaluation also rejects queries that
 explicitly target policy-excluded fact-check domains before Serper.

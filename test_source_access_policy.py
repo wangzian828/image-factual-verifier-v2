@@ -246,7 +246,7 @@ def test_reverse_search_removes_blocked_pages_and_reference_images() -> None:
     )
     tool.set_source_access_policy(_policy())
 
-    result = tool.search("image.jpg")
+    result = tool.search("image.jpg", branch="semantic")
     serialized = json.dumps(result)
     assert "factcrescendo" not in serialized
     assert "hidden verdict" not in serialized

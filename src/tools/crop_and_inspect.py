@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import math
 from typing import Any, Dict, Optional
 
 from src.integrations.gemini import RUNTIME_METRICS_KEY, exception_runtime_metrics
@@ -102,6 +103,13 @@ class CropAndInspectTool(BaseTool):
                 "status": "error",
                 "error": "bbox must be [x1, y1, x2, y2] with 4 normalized values.",
             }
+        try:
+            self._validate_bbox(bbox)
+        except ValueError as exc:
+            return {
+                "status": "error",
+                "error": f"Invalid bbox: {exc}",
+            }
 
         try:
             import os
@@ -165,6 +173,27 @@ class CropAndInspectTool(BaseTool):
             "focus_question": focus_question,
             RUNTIME_METRICS_KEY: parsed.get(RUNTIME_METRICS_KEY, {}),
         }
+
+    @staticmethod
+    def _validate_bbox(bbox: Any) -> None:
+        if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+            raise ValueError("bbox must contain exactly four coordinates")
+        if any(
+            isinstance(value, bool) or not isinstance(value, (int, float))
+            for value in bbox
+        ):
+            raise ValueError("bbox coordinates must be numeric")
+        values = [float(value) for value in bbox]
+        if any(not math.isfinite(value) for value in values):
+            raise ValueError("bbox coordinates must be finite")
+        x1, y1, x2, y2 = values
+        if x1 < 0 or y1 < 0:
+            raise ValueError("bbox coordinates cannot be negative")
+        if max(values) <= 1.5:
+            if any(value > 1.0 for value in values):
+                raise ValueError("normalized bbox coordinates must be in [0, 1]")
+        if x1 >= x2 or y1 >= y2:
+            raise ValueError("bbox must satisfy x1 < x2 and y1 < y2")
 
     @staticmethod
     def _bbox_to_pixels(bbox: Any, width: int, height: int) -> tuple[int, int, int, int]:

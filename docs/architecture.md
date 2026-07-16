@@ -20,20 +20,19 @@ accepted by the release adapter, public workflow, strict auditor, or real canary
 ImageOnlyRuntimeCase
   -> verify image SHA-256
   -> Gemini perceive_scene
-  -> EasyOCR ocr_with_position
+  -> layered ocr_with_position (optional PP-OCR service, EasyOCR fallback)
   -> deterministic InvestigationBrief / VisualEntity / VisualFact bootstrap
   -> deterministic initial ResearchTasks (maximum 4)
   -> model-driven target Planning grounded in visible facts and OCR
-  -> smallest central decisive-fact set
+  -> one stable CoreVerdictFact + bounded EvidenceGaps
   -> native Gemini Interactions ReAct
        model selects the first evidence route
        one accepted tool call per action turn
        deterministic observation reducer after every real action
-       evidence-grounded Attribution Planning when central generic facts
-       acquire specific public context
+       optional supporting Attribution Planning for public context
        structured Reflection at actions 4, 8, 12, 16, 20, 24
        deterministic evidence adjudication after every action
-       Coverage after Reflection and when a verdict becomes determined
+       deterministic Coverage after every accepted action
   -> deterministic verdict and verdict_basis compiler
   -> constrained Gemini Judgment
   -> real | fake | unverifiable
@@ -70,7 +69,9 @@ Perception is a fixed two-tool schedule:
 
 1. `perceive_scene`: a Gemini Interactions image request producing literal visible
    entities, normalized boxes, scene description, and image type.
-2. `ocr_with_position`: EasyOCR producing text and normalized geometry.
+2. `ocr_with_position`: optional PP-OCR-compatible service with EasyOCR fallback,
+   producing accepted text, rejected low-confidence candidates, normalized geometry,
+   and an artifact hash for the actual image or crop.
 
 Gemini, not Codex, interprets benchmark pixels at runtime. OCR is an independent
 observation and does not automatically become a decisive factual proposition.
@@ -94,7 +95,7 @@ fact resolution, or verdict.
 | Capability | Tools |
 | --- | --- |
 | Discovery/retrieval | `reverse_image_search`, `text_search`, `visit` |
-| Focused visual work | `ocr_with_position`, `crop_and_search`, `crop_and_inspect`, `count_objects` |
+| Focused visual work | `ocr_with_position`, `crop_and_inspect` |
 | Comparison/consistency | `compare_with_reference`, `check_consistency`, `analyze_visual_anomalies` |
 | Runtime context | `current_time` |
 
@@ -102,6 +103,11 @@ Gemini chooses the active task and tool. Each native `function_call` must contai
 known active task ID as `question_id`; deterministic code validates schemas, source
 policy, semantic route duplicates across segments, budgets, and provider selection
 before execution.
+
+One policy action maps to one bounded external operation: one text query, one page,
+or one explicit Lens/semantic image-search branch. `crop_and_search` and
+`count_objects` remain standalone diagnostics and are not exposed to the Agent loop.
+Traces separately report policy actions and real provider subcalls.
 
 Blocked duplicate or already-resolved route proposals are retained as route-control
 warnings rather than executed tool actions. They do not invalidate a factual canary,
@@ -144,6 +150,10 @@ Eligible visual Evidence records the successful visual tool call, image region o
 reference comparison, image/reference artifact hash, retrieval time, stance, and
 source family. A neutral observation remains Evidence but does not resolve a fact.
 
+General VLM consistency and anomaly opinions are diagnostics, not calibrated forensic
+Evidence. A clean scan cannot support authenticity, and an anomaly opinion cannot by
+itself refute authenticity.
+
 When qualified support and refute evidence coexist, the reducer compares claim/scene
 binding, source originality, directness, source risk, temporal alignment, and
 independence. `conflicted` means more discriminating evidence is required; it is not
@@ -154,13 +164,13 @@ itself a final reason for `unverifiable`.
 Reflection runs after every four cumulative actions. It may:
 
 - reprioritize existing tasks;
-- add at most three grounded tasks;
-- propose at most two new decisive facts;
+- add at most three grounded tasks serving open core EvidenceGaps;
 - recommend next tasks;
 - describe remaining gaps.
 
 It may not create Evidence or Findings, modify the brief, delete history, write a
-verdict, or resolve/block tasks without real Finding/Failure IDs.
+verdict, change the CoreVerdictFact, or resolve/block tasks without real
+Finding/Failure IDs.
 
 Global limits:
 
@@ -171,36 +181,36 @@ MAX_REFLECTIONS = 6
 INITIAL_TASKS_MAX = 4
 TOTAL_TASKS_MAX = 12
 NEW_TASKS_PER_REFLECTION_MAX = 3
-DECISIVE_FACTS_MAX = 6
-NEW_DECISIVE_FACTS_PER_REFLECTION_MAX = 2
+CORE_VERDICT_FACTS = 1
+CORE_FACT_REFINEMENTS_MAX = 1
 ```
 
 Two consecutive invalid Reflections are an engineering failure.
 
 ## 7. Coverage and Judgment
 
-Coverage audits every active decisive fact as:
+Coverage audits the one CoreVerdictFact as:
 
 ```text
 supported | refuted | conflicted | blocked | exhausted | unresolved
 ```
 
-Substantive gain is a new Evidence ID or a decisive fact-status change. New discovery
-URLs and task churn do not count.
+Qualified gain is a change in core status, support/refute score, winning Evidence,
+source binding, or conflict resolution. New IDs, discovery URLs, optional metadata,
+and task churn do not count.
 
 Stop states:
 
-- `verdict_determined`: a decisive refutation has survived conflict adjudication, so
-  unrelated supporting facts cannot change the `fake` result;
-- `coverage_complete`: every decisive fact is supported or refuted;
-- `information_saturated`: two consecutive Reflection intervals without substantive
-  gain and no unattempted priority-1 task;
+- `verdict_determined`: the core fact is supported or refuted and every required gap
+  is resolved;
+- `information_saturated`: no executable core route remains, or two consecutive
+  action checkpoints produced no qualified gain;
 - `hard_budget_exhausted`: 24 tool actions used.
 
 The verdict compiler is deterministic:
 
-- any decisive refuted fact -> `fake`;
-- all decisive facts supported -> `real`;
+- core fact refuted with required binding -> `fake`;
+- core fact supported with required binding -> `real`;
 - otherwise -> `unverifiable` with fact-specific gaps.
 
 It compiles `VerdictBasis` from the smallest sufficient winning
@@ -278,12 +288,14 @@ material is neutral unless selected into the final verdict basis.
 
 `ifv-policy-v1` exports actual Attribution Planning, ReAct, Reflection, and Judgment
 request/action boundaries. Bootstrap remains deterministic. The real
-`image_only_planning` stage promotes title, creator, identity, place, date, event, or
-screenshot-source matches from public records into specific VisualFacts; Discovery
-still remains separate from Evidence.
+`image_only_planning` may turn title, creator, identity, place, date, event, or
+screenshot-source matches from public records into specific supporting VisualFacts;
+Discovery still remains separate from Evidence. These records do not replace the core
+fact unless they satisfy the one already-resolved, same-subject atomic refinement
+gate.
 
-The initial Planning stage may select multiple independent facets when the visible
-state warrants them. For example, a screenshot can yield:
+Initial Planning may propose alternatives, but the runtime selects one core factual
+relation. Other facets remain supporting. For example, a screenshot can yield:
 
 ```text
 source record match

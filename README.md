@@ -6,11 +6,12 @@ The supported flow is:
 
 ```text
 ImageOnlyRuntimeCase
-  -> Gemini perception + EasyOCR
+  -> Gemini perception + layered positioned OCR
   -> deterministic VisualFact/task bootstrap
+  -> one stable CoreVerdictFact
   -> native Gemini Interactions ReAct
   -> Reflection every four real tool actions
-  -> deterministic decisive-fact Coverage
+  -> deterministic Coverage after every accepted action
   -> reinspect-v2 Judgment
   -> real | fake | unverifiable
 ```
@@ -61,8 +62,10 @@ python -m src path\to\image.jpg
 ```
 
 Gemini perception receives the image through the Interactions API.
-`ocr_with_position` is a separate EasyOCR observation; Codex does not manually inspect
-benchmark images during runtime.
+`ocr_with_position` is a separate positioned observation. It uses a configured
+PP-OCR-compatible service when available and falls back to EasyOCR; decisive small
+text can be checked with a focused Gemini/Qwen visual action. Codex does not manually
+inspect benchmark images during runtime.
 
 ## Evaluation
 

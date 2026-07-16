@@ -6,7 +6,7 @@
 
 **Plan:** `docs/superpowers/plans/2026-07-16-search-control-and-tool-correctness-audit.md`
 
-**Status:** In progress
+**Status:** Local audit and repairs complete; gpu-13 real-canary validation pending
 
 ## 1. Audit rules
 
@@ -63,7 +63,7 @@ successful subset or fail without state-changing rows.
 **Rating:** correct with bounded limitations; needs a schema repair before relying on
 action-level efficiency metrics.
 
-### Current behavior
+### Pre-repair behavior
 
 - Uses Serper Search only.
 - Produces titles, URLs, snippets, provider aggregates, locale, and timing.
@@ -73,7 +73,7 @@ action-level efficiency metrics.
 - Empty SERP results are successful empty output and later become a recorded
   `no_results` failure for the owning task.
 
-### Correct aspects
+### Correct aspects retained
 
 - Discovery/Evidence separation is correct.
 - Provider exceptions become explicit tool errors.
@@ -85,7 +85,7 @@ action-level efficiency metrics.
   text search / browse / source policy / failure contracts: 54 passed
   ```
 
-### Problems
+### Problems found
 
 1. `queries` has no `maxItems`, item schema, length limit, or non-empty-string
    validation. One action can launch arbitrarily many Serper requests.
@@ -105,7 +105,7 @@ action-level efficiency metrics.
    the reducer, but add model-visible ungrounded aggregates unless compaction removes
    them.
 
-### Required disposition
+### Implemented disposition
 
 - Limit one action to one query, or at most two explicitly schema-bounded queries.
 - Canonicalize and deduplicate returned URLs before both model display and reduction.
@@ -387,9 +387,10 @@ structures referring to multiple regions.
 10. The low-value-query filter is an English lexical heuristic. It is not multilingual
     and does not determine whether a query can affect the core verdict fact.
 
-### Required disposition
+### Implemented disposition
 
-Preferred:
+The active Agent no longer exposes this compound tool. A future reintroduction must
+use explicit actions:
 
 ```text
 crop_image
@@ -398,18 +399,8 @@ crop_image
   -> compare_with_reference(selected image)
 ```
 
-If a separate crop artifact tool is undesirable, keep `crop_and_search` as Discovery
-only:
-
-- one crop;
-- one selected visual-search provider;
-- no semantic VLM branch by default;
-- no page visits;
-- no Evidence or Finding creation;
-- explicit subcall metrics and artifact lifecycle.
-
-The current compound implementation must not remain a single action that can produce
-verdict Evidence.
+The retained standalone implementation is diagnostic only. It cannot appear in the
+Agent registry or produce runtime verdict Evidence.
 
 ### External comparison
 
@@ -505,12 +496,11 @@ separation between visible class/geometry and external identity.
 
 ### Required disposition
 
-- Cache one reader per process/device and release it at process shutdown.
-- Make CPU/GPU configuration explicit.
-- Sort text regions into a deterministic reading order.
-- Store crop hash/coordinates for regional OCR.
-- Turn regional OCR into a structured comparison against `expected_property` rather
-  than a neutral full-text dump.
+- Cache one reader per process/device and make CPU/GPU configuration explicit.
+- Keep low-confidence candidates outside canonical `full_text`.
+- Store the actual crop hash and coordinates for regional OCR.
+- Reject reversed or empty regional boxes.
+- Allow a PP-OCR/PP-Structure-compatible service and record fallback to EasyOCR.
 - Keep OCR positive matches as pixel evidence and absences as inconclusive unless the
   region/visibility obligation makes absence meaningful.
 
@@ -940,3 +930,162 @@ Design risks requiring real calibration rather than only a code fix:
 - source-class and independence weighting;
 - full-page evidence chunk retrieval strategy;
 - maximum search/visit fan-out per policy action.
+
+## 22. gpu-13 real-provider probes on 2026-07-16
+
+The committed audit head `cc9b16d2b780f9314153ce6783239c60bf6e733d`
+was fast-forwarded to the clean gpu-13 checkout before these probes. All project
+commands ran through the `ifv-agent` kernel with `OMP_NUM_THREADS=1`. Credentials
+were loaded from the existing untracked project environment and were never printed
+or persisted.
+
+### `text_search`
+
+Observed provider accounting:
+
+```text
+one normal query       -> 1 Serper POST, 1 credit
+one nonsense query     -> 1 Serper POST, 1 credit, 5 rewritten-looking results
+two queries in action  -> 2 Serper POSTs, 2 credits
+empty query list       -> 0 requests, status=error
+```
+
+The nonsense query did not produce an empty result. Google/Serper returned unrelated
+GitHub, Codex, Verizon, IBM, and Cisco rows. Therefore result count is not progress,
+and action count is not search cost. Query and retry counts must be explicit.
+
+### `visit`
+
+Three real behaviors were reproduced:
+
+1. A USDA official page that had fetched successfully moments earlier failed through
+   Jina with an SSL record-layer error. The tool returned `status=error` and made no
+   direct-fetch fallback attempt.
+2. A NOAA PDF contained the requested monarch/Mexico terms at about character 62,000
+   in the cleaned document. The extractor received only the first 12,000 characters
+   and returned `low/unclear/none` with a summary that the document did not mention
+   monarch butterflies or Mexico.
+3. A nonexistent domain produced one Jina request and a typed top-level error without
+   an extraction call.
+
+Additional static position probes found relevant terms at about 34,000 to 66,000
+characters in several NOAA documents. `extract_max_chars=60000` does not currently
+help because `max_chars=12000` is applied first.
+
+### `reverse_image_search`
+
+One Apple Tysons Corner image action expanded into:
+
+```text
+1 OSS upload
+1 Serper Lens request
+1 Gemini structured-vision query generation
+1 Serper semantic image search
+```
+
+Lens returned five unrelated clothing/product rows. The semantic branch generated
+`Apple Tysons Corner reopening first customer` and found the official Apple page.
+The combined action reported success. Lens and semantic branches therefore require
+separate outcomes and accounting.
+
+### `compare_with_reference`
+
+Using one backend in the normal asynchronous execution path:
+
+```text
+exact same image -> same_capture_or_near_duplicate=true, confidence=1.0
+unrelated Apple/monarch images -> same_subject=false, unrelated_content, confidence=1.0
+```
+
+The visual decisions were correct for these two easy probes. Repeated direct use of
+the synchronous compatibility wrapper with a shared async backend reproduced
+`Event loop is closed`; the orchestrator uses `call_async`, so this is a development
+API lifecycle defect rather than the current trajectory failure.
+
+### Scene perception and local visual tools
+
+Gemini scene perception correctly described both the Apple event photo and the
+synthetic monarch/Antarctica image. The monarch scene description explicitly
+identified the polar setting, penguin, iceberg, pine tree, and monarch butterflies.
+
+`crop_and_inspect` correctly recovered `Tysons Corner` from a focused Apple-shirt
+crop. It also accepted the invalid box `[0.8, 0.8, -0.2, -0.2]`, silently converted
+it into a different one-pixel crop, spent one Gemini call, and returned a successful
+description of a solid color.
+
+`count_objects` returned a plausible count of 12 people but produced 50 malformed or
+duplicated free-text location strings. Its stricter bbox validator correctly rejected
+a reversed crop. Successful count output still has no reducer landing.
+
+### OCR
+
+Whole-image EasyOCR on the Apple photo returned:
+
+```text
+U          confidence=0.037
+TyU(TI T   confidence=0.081
+```
+
+The tool exposed both strings through `full_text`, while focused Gemini crop
+inspection correctly read `Tysons Corner`. Bootstrap filters OCR regions below 0.5,
+but the later reducer consumes unfiltered `full_text`; the two runtime paths disagree.
+
+DEFAME also names EasyOCR, but its reader initialization is commented out and its
+implementation contains a PaddleOCR TODO. It is not evidence that the current
+EasyOCR-only path is mature.
+
+OpenSearch-VL at commit `236e0e07ded730e66cf6e85ad39d5a34e403dbca`
+uses a PP-StructureV3-compatible layout-parsing service and exposes perspective
+correction, super-resolution, and sharpening before document text extraction.
+MMSearch, DeepEyes, and UI-TARS did not expose a comparable standalone traditional
+OCR tool in the inspected commits.
+
+Disposition: retain a cheap detector only as one layer. Separate document/layout OCR
+from natural-image scene text, exclude low-confidence strings from canonical text,
+reuse the reader, and use focused Gemini/Qwen-VL verification for decisive small text.
+
+### Integrity tools
+
+`check_consistency` judged the Apple photo consistent and the monarch/Antarctica
+scene inconsistent. Its refutation was based on ecological knowledge and scene
+semantics rather than pixel forensics.
+
+The general visual-anomaly tool falsely labeled the real Apple official photo
+`likely_ai` with confidence 0.7 because of allegedly distorted shirt text and hands.
+It labeled the generated monarch image `likely_ai` with confidence 0.8. This confirms
+that the tool is not safe as standalone authenticity Evidence. Clean scans also cannot
+support authenticity.
+
+### `crop_and_search`
+
+One focused Apple-shirt action expanded into:
+
+```text
+1 crop and persistent artifact copy
+1 OSS upload
+1 Serper Lens request
+1 Gemini query-generation call
+1 Serper semantic image-search request
+1 Jina page fetch
+1 Gemini page-extraction call
+```
+
+It generated the useful query `Apple Store Tysons Corner shirt`, but selected an eBay
+page, returned `low/unclear/none`, and consumed two model calls. This confirms that
+`crop_and_search` is a hidden compound sub-agent and must not remain one atomic
+verification action.
+
+## 23. Real-probe disposition
+
+The pre-repair probes change the repair priority as follows:
+
+1. Prevent top-level errors and low-confidence OCR garbage from mutating state.
+2. Make provider/tool health capability-aware, especially for Qwen structured vision.
+3. Use one canonical bounded payload for policy context and reduction.
+4. Record actual query, fetch, upload, extraction, and model subcalls.
+5. Split or demote `crop_and_search`.
+6. Repair full-document visit selection and Jina/direct fallback.
+7. Treat VLM consistency/anomaly output as diagnostic unless a registered
+   authenticity gap and qualified forensic signal exist.
+8. Replace EasyOCR-only decisive text extraction with layered OCR plus focused VLM
+   verification.

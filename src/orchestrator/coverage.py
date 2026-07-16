@@ -1,4 +1,4 @@
-"""Deterministic v3 Coverage and reinspect-v2 verdict-basis compilation."""
+"""Deterministic Coverage and verdict-basis compilation for image-only runs."""
 
 from __future__ import annotations
 
@@ -14,9 +14,10 @@ from src.orchestrator.investigation_models import (
     VisualFact,
 )
 from src.orchestrator.task_store import (
-    DECISIVE_FACTS_MAX,
     MAX_ATTEMPTS_PER_TASK,
     MAX_TOOL_ACTIONS,
+    reconcile_core_verdict_fact,
+    refresh_core_evidence_gaps,
     stable_id,
 )
 
@@ -24,14 +25,15 @@ from src.orchestrator.task_store import (
 def activate_initial_decisive_facts(
     state: ImageOnlyInvestigationState,
 ) -> List[str]:
-    """Activate up to three central, routed facts before the first Reflection."""
+    """Establish a single initial core fact, with a scene fallback.
 
-    if state.decisive_fact_ids and not all(
-        fact.predicate == "visual_integrity"
-        for fact in state.facts
-        if fact.fact_id in state.decisive_fact_ids
-    ):
-        return list(state.decisive_fact_ids)
+    Initial target planning can already have established a core.  Otherwise the
+    most salient scene proposition becomes the stable fallback; no list of
+    parallel decisive facts is ever activated.
+    """
+
+    if state.core_verdict_fact_id:
+        return [state.core_verdict_fact_id]
     task_priority = {
         fact_id: min(
             task.priority
@@ -49,214 +51,94 @@ def activate_initial_decisive_facts(
         for fact in state.facts
         if fact.fact_id in task_priority
         and fact.kind in {"relation", "attribute", "internal_consistency"}
-        and fact.predicate != "context_suggested_by_text"
+        and fact.predicate not in {"context_suggested_by_text", "visual_integrity"}
     ]
     candidates.sort(
         key=lambda fact: (
-            task_priority[fact.fact_id],
             fact.predicate != "appears_to_depict",
+            task_priority[fact.fact_id],
             fact.kind == "relation",
             fact.fact_id,
         )
     )
-    scene_candidates = [
-        fact for fact in candidates if fact.predicate == "appears_to_depict"
-    ]
-    selected = scene_candidates[:1] or candidates[:3]
-    selected = [
-        fact
-        for fact in selected
-        if fact.fact_id not in state.decisive_fact_ids
-    ]
-    for fact in selected:
-        fact.decision_relevance = "decisive"
-        if fact.status == "candidate":
-            fact.status = "active"
-        state.decisive_fact_ids.append(fact.fact_id)
-    return list(state.decisive_fact_ids)
+    for fact in candidates:
+        accepted, _ = reconcile_core_verdict_fact(
+            state,
+            fact,
+            allow_initial=True,
+        )
+        if accepted:
+            return [fact.fact_id]
+    return []
 
 
 def audit_coverage(
     state: ImageOnlyInvestigationState,
     *,
     reflection_checkpoint: bool = False,
+    decision_checkpoint: bool = False,
 ) -> ImageOnlyCoverage:
-    decisive_ids = list(state.decisive_fact_ids[:DECISIVE_FACTS_MAX])
-    fact_by_id = {fact.fact_id: fact for fact in state.facts}
-    findings_by_fact: Dict[str, List[Finding]] = {}
-    for finding in state.findings:
-        for fact_id in finding.fact_ids:
-            findings_by_fact.setdefault(fact_id, []).append(finding)
-    evidence_ids = {item.evidence_id for item in state.evidence}
-    evidence_by_id = {item.evidence_id: item for item in state.evidence}
-    coverages: List[FactCoverage] = []
-    for fact_id in decisive_ids:
-        fact = fact_by_id[fact_id]
-        findings = findings_by_fact.get(fact_id, [])
-        assessment = assess_fact(
-            fact,
-            findings,
-            evidence_by_id,
-            all_fact_evidence=[
-                item for item in state.evidence if fact_id in item.fact_ids
-            ],
-        )
-        if assessment.status in {"supported", "refuted", "conflicted"}:
-            status = assessment.status
-        elif fact.status in {"blocked", "exhausted"}:
-            status = fact.status
-        else:
-            status = "unresolved"
-        finding_ids = [item.finding_id for item in findings]
-        owned_evidence = list(
-            dict.fromkeys(
-                evidence_id
-                for item in findings
-                for evidence_id in item.evidence_ids
-                if evidence_id in evidence_ids
-            )
-        )
-        coverages.append(
-            FactCoverage(
-                fact_id=fact_id,
-                status=status,
-                finding_ids=finding_ids,
-                evidence_ids=owned_evidence,
-                winning_finding_ids=list(assessment.winning_finding_ids),
-                winning_evidence_ids=list(assessment.winning_evidence_ids),
-                support_score=assessment.support.score,
-                refute_score=assessment.refute.score,
-                conflict_resolution=assessment.conflict_resolution,
-                reason=(
-                    assessment.reason
-                    if status in {"supported", "refuted", "conflicted"}
-                    else _fact_reason(status, fact.statement)
-                ),
-            )
-        )
+    """Audit only the core fact and its bounded evidence gaps.
 
-    decisive_complete = bool(coverages) and all(
-        item.status in {"supported", "refuted"}
-        for item in coverages
+    Every accepted tool action calls this function with
+    ``decision_checkpoint=True``.  Search leads, task churn, and optional
+    attribution metadata do not constitute progress; the state can continue
+    only when a core evidence gap changes.
+    """
+
+    core_id = state.core_verdict_fact_id
+    fact_by_id = {fact.fact_id: fact for fact in state.facts}
+    core = fact_by_id.get(core_id or "")
+    coverage = _build_core_coverage(state, core)
+    gaps = refresh_core_evidence_gaps(state)
+    required_gaps = [
+        gap
+        for gap in gaps
+        if gap.status != "not_required"
+    ]
+    complete = bool(
+        coverage
+        and coverage.status in {"supported", "refuted"}
+        and all(gap.status == "resolved" for gap in required_gaps)
     )
-    supplemental_integrity_open = _has_open_screenshot_integrity_check(
-        state,
-        fact_by_id,
-    )
-    complete = decisive_complete and not supplemental_integrity_open
     previous = state.coverage_audits[-1] if state.coverage_audits else None
-    previous_checkpoint = next(
-        (
-            item
-            for item in reversed(state.coverage_audits)
-            if item.reflection_checkpoint
-        ),
-        None,
+    substantive_gain = _coverage_signature(coverage, gaps) != _audit_signature(
+        previous
     )
-    comparison = previous_checkpoint or previous
-    previous_signature = (
-        {
-            (item.fact_id, item.status)
-            for item in comparison.facts
-        }
-        if comparison
-        else set()
-    )
-    current_signature = {
-        (item.fact_id, item.status)
-        for item in coverages
-    }
-    previous_evidence = (
-        {
-            evidence_id
-            for item in comparison.facts
-            for evidence_id in item.evidence_ids
-        }
-        if comparison
-        else set()
-    )
-    current_evidence = {
-        evidence_id
-        for item in coverages
-        for evidence_id in item.evidence_ids
-    }
-    substantive_gain = (
-        current_signature != previous_signature
-        or not current_evidence <= previous_evidence
-    )
-    prior_low_gain = (
-        previous_checkpoint.low_gain_intervals
-        if previous_checkpoint
-        else 0
-    )
+    prior_low_gain = previous.low_gain_intervals if previous else 0
     low_gain = (
         0 if substantive_gain else prior_low_gain + 1
-    ) if reflection_checkpoint else prior_low_gain
-    open_high_priority = any(
-        task.status in {"active", "pending"}
-        and task.priority == 1
-        and task.attempt_count == 0
-        for task in state.tasks
-    )
-    unresolved_decisive_ids = {
-        item.fact_id
-        for item in coverages
-        if item.status not in {"supported", "refuted"}
-    }
-    open_decisive_route = any(
-        task.status in {"active", "pending"}
-        and task.attempt_count < MAX_ATTEMPTS_PER_TASK
-        and bool(task.suggested_tools)
-        and bool(set(task.fact_ids) & unresolved_decisive_ids)
-        for task in state.tasks
-    )
-    determined_verdict = _coverage_verdict(coverages)
-    unresolved_non_integrity = any(
-        item.status not in {"supported", "refuted"}
-        and fact_by_id[item.fact_id].predicate != "visual_integrity"
-        for item in coverages
-    )
-    refuted_non_integrity = any(
-        item.status == "refuted"
-        and fact_by_id[item.fact_id].predicate != "visual_integrity"
-        for item in coverages
-    )
-    if (
-        determined_verdict == "fake"
-        and not complete
-        and (refuted_non_integrity or not unresolved_non_integrity)
-    ):
+    ) if decision_checkpoint else prior_low_gain
+
+    open_core_route = _has_executable_core_route(state)
+    if complete and coverage and coverage.status == "refuted":
         stop_reason = "verdict_determined"
-        reason = (
-            "At least one decisive proposition is refuted after evidence-conflict "
-            "adjudication; remaining supporting facts cannot change the fake verdict."
-        )
-    elif decisive_complete and supplemental_integrity_open:
-        stop_reason = "continue"
-        reason = (
-            "The decisive source-binding facts are resolved, but the separately "
-            "planned screenshot integrity check still has an executable route."
-        )
-    elif complete:
-        stop_reason = "coverage_complete"
-        reason = "Every required decisive and supplemental fact is resolved."
+        reason = "The core factual proposition is directly refuted."
+    elif complete and coverage and coverage.status == "supported":
+        stop_reason = "verdict_determined"
+        reason = "The core factual proposition is supported and all required gaps close."
     elif state.action_count >= MAX_TOOL_ACTIONS:
         stop_reason = "hard_budget_exhausted"
-        reason = "The image-only tool action budget is exhausted."
-    elif (
-        reflection_checkpoint
-        and low_gain >= 2
-        and not open_high_priority
-        and not open_decisive_route
-    ):
+        reason = "The image-only action budget ended before core coverage closed."
+    elif core is None or not open_core_route:
         stop_reason = "information_saturated"
         reason = (
-            "Two consecutive Reflection intervals produced no evidence or "
-            "decision gain and no unattempted priority-1 task remains."
+            "No executable task remains for an unresolved core evidence gap."
+        )
+    elif decision_checkpoint and low_gain >= 2:
+        stop_reason = "information_saturated"
+        reason = (
+            "Two consecutive action checkpoints produced no qualified change "
+            "to the core fact, its winning evidence, or its evidence gaps."
         )
     else:
         stop_reason = "continue"
-        reason = "Decisive-fact coverage is incomplete."
+        reason = (
+            "Core-fact coverage remains open."
+            if core is not None
+            else "A core factual proposition has not been established."
+        )
+
     audit = ImageOnlyCoverage(
         audit_id=stable_id(
             "coverage",
@@ -265,11 +147,13 @@ def audit_coverage(
             len(state.coverage_audits) + 1,
         ),
         action_count=state.action_count,
-        decisive_fact_ids=decisive_ids,
-        facts=coverages,
+        decisive_fact_ids=[core_id] if core_id else [],
+        facts=[coverage] if coverage else [],
+        evidence_gaps=list(gaps),
         complete=complete,
         stop_reason=stop_reason,
         reflection_checkpoint=reflection_checkpoint,
+        decision_checkpoint=decision_checkpoint,
         substantive_gain=substantive_gain,
         low_gain_intervals=low_gain,
         reason=reason,
@@ -280,29 +164,127 @@ def audit_coverage(
     return audit
 
 
-def _has_open_screenshot_integrity_check(
+def _build_core_coverage(
     state: ImageOnlyInvestigationState,
-    fact_by_id: Dict[str, VisualFact],
-) -> bool:
-    """Keep a planned screenshot tamper check separate from verdict ownership."""
-
-    if state.brief.media_type != "screenshot":
-        return False
-    integrity_ids = {
-        fact.fact_id
-        for fact in fact_by_id.values()
-        if (
-            fact.predicate == "visual_integrity"
-            and fact.decision_relevance == "supporting"
-            and fact.status not in {"supported", "refuted"}
+    core: VisualFact | None,
+) -> FactCoverage | None:
+    if core is None:
+        return None
+    evidence_by_id = {item.evidence_id: item for item in state.evidence}
+    findings = [
+        finding
+        for finding in state.findings
+        if core.fact_id in finding.fact_ids
+    ]
+    owned_evidence = [
+        item
+        for item in state.evidence
+        if core.fact_id in item.fact_ids
+    ]
+    assessment = assess_fact(
+        core,
+        findings,
+        evidence_by_id,
+        all_fact_evidence=owned_evidence,
+    )
+    if assessment.status in {"supported", "refuted", "conflicted"}:
+        status = assessment.status
+    elif core.status in {"blocked", "exhausted"}:
+        status = core.status
+    else:
+        status = "unresolved"
+    evidence_ids = list(
+        dict.fromkeys(
+            evidence_id
+            for finding in findings
+            for evidence_id in finding.evidence_ids
+            if evidence_id in evidence_by_id
         )
-    }
-    return any(
-        task.status in {"active", "pending"}
-        and task.attempt_count < MAX_ATTEMPTS_PER_TASK
-        and bool(set(task.fact_ids) & integrity_ids)
-        and bool(task.suggested_tools)
-        for task in state.tasks
+    )
+    return FactCoverage(
+        fact_id=core.fact_id,
+        status=status,
+        finding_ids=[finding.finding_id for finding in findings],
+        evidence_ids=evidence_ids,
+        winning_finding_ids=list(assessment.winning_finding_ids),
+        winning_evidence_ids=list(assessment.winning_evidence_ids),
+        support_score=assessment.support.score,
+        refute_score=assessment.refute.score,
+        conflict_resolution=assessment.conflict_resolution,
+        reason=(
+            assessment.reason
+            if status in {"supported", "refuted", "conflicted"}
+            else _fact_reason(status, core.statement)
+        ),
+    )
+
+
+def _coverage_signature(
+    coverage: FactCoverage | None,
+    gaps: List[object],
+) -> tuple[object, ...]:
+    if coverage is None:
+        coverage_signature: tuple[object, ...] = ("no_core",)
+    else:
+        coverage_signature = (
+            coverage.fact_id,
+            coverage.status,
+            coverage.support_score,
+            coverage.refute_score,
+            tuple(coverage.winning_evidence_ids),
+            coverage.conflict_resolution,
+        )
+    gap_signature = tuple(
+        (
+            getattr(gap, "kind", ""),
+            getattr(gap, "status", ""),
+            tuple(getattr(gap, "evidence_ids", []) or []),
+        )
+        for gap in gaps
+    )
+    return coverage_signature + (gap_signature,)
+
+
+def _audit_signature(
+    audit: ImageOnlyCoverage | None,
+) -> tuple[object, ...] | None:
+    if audit is None:
+        return None
+    coverage = audit.facts[0] if audit.facts else None
+    gap_signature = tuple(
+        (
+            gap.kind,
+            gap.status,
+            tuple(gap.evidence_ids),
+        )
+        for gap in audit.evidence_gaps
+    )
+    if coverage is None:
+        return ("no_core", gap_signature)
+    return (
+        coverage.fact_id,
+        coverage.status,
+        coverage.support_score,
+        coverage.refute_score,
+        tuple(coverage.winning_evidence_ids),
+        coverage.conflict_resolution,
+        gap_signature,
+    )
+
+
+def _has_executable_core_route(
+    state: ImageOnlyInvestigationState,
+) -> bool:
+    core_id = state.core_verdict_fact_id
+    return bool(
+        core_id
+        and any(
+            task.status in {"active", "pending"}
+            and task.attempt_count < MAX_ATTEMPTS_PER_TASK
+            and core_id in task.fact_ids
+            and bool(task.suggested_tools)
+            for task in state.tasks
+        )
     )
 
 
@@ -314,42 +296,31 @@ def compile_verdict_basis(
         if state.coverage_audits
         else audit_coverage(state)
     )
-    refuted = [item for item in audit.facts if item.status == "refuted"]
-    supported = [item for item in audit.facts if item.status == "supported"]
+    core = audit.facts[0] if audit.facts else None
     fact_by_id = {fact.fact_id: fact for fact in state.facts}
-    if refuted:
+    if audit.complete and core and core.status == "refuted":
         verdict = "fake"
-        selected = [
-            sorted(
-                refuted,
-                key=lambda item: (
-                    -item.refute_score,
-                    len(item.winning_evidence_ids),
-                    item.fact_id,
-                ),
-            )[0]
-        ]
+        selected = [core]
         mechanism = _infer_mechanism(
-            [fact_by_id[item.fact_id].statement for item in selected]
+            [fact_by_id[core.fact_id].statement]
+            if core.fact_id in fact_by_id
+            else []
         )
         unresolved: List[str] = []
-    elif audit.facts and len(supported) == len(audit.facts):
+    elif audit.complete and core and core.status == "supported":
         verdict = "real"
-        selected = supported
+        selected = [core]
         mechanism = None
         unresolved = []
     else:
         verdict = "unverifiable"
-        selected = [
-            item
-            for item in audit.facts
-            if item.status
-            in {"conflicted", "blocked", "exhausted", "unresolved"}
-        ]
+        selected = [core] if core else []
         mechanism = None
-        unresolved = [item.reason for item in selected]
-        if not unresolved:
-            unresolved = ["No decisive fact reached a qualified resolution."]
+        unresolved = [
+            gap.reason or f"{gap.kind} is {gap.status}"
+            for gap in state.evidence_gaps
+            if gap.status != "resolved" and gap.status != "not_required"
+        ] or [audit.reason]
     basis = VerdictBasis(
         verdict_target=_verdict_target(state),
         fact_ids=[item.fact_id for item in selected],
@@ -376,62 +347,49 @@ def compile_verdict_basis(
             )
         ),
         mechanism=mechanism,
-        unresolved_gaps=unresolved,
+        unresolved_gaps=unresolved[:12],
     )
     state.verdict_basis = basis
     return verdict, basis
 
 
 def verdict_is_determined(state: ImageOnlyInvestigationState) -> bool:
-    """Return whether current adjudicated fact state fixes real/fake already."""
+    """Return whether the one core fact is resolved with all required gaps."""
 
-    decisive = [
-        fact
-        for fact in state.facts
-        if fact.fact_id in state.decisive_fact_ids
-    ]
-    if not decisive:
+    core_id = state.core_verdict_fact_id
+    core = next(
+        (fact for fact in state.facts if fact.fact_id == core_id),
+        None,
+    )
+    if core is None or core.status not in {"supported", "refuted"}:
         return False
-    if any(fact.status == "refuted" for fact in decisive):
-        return True
-    return all(fact.status == "supported" for fact in decisive)
-
-
-def _coverage_verdict(facts: List[FactCoverage]) -> str:
-    if any(item.status == "refuted" for item in facts):
-        return "fake"
-    if facts and all(item.status == "supported" for item in facts):
-        return "real"
-    return ""
+    gaps = refresh_core_evidence_gaps(state)
+    return all(
+        gap.status in {"resolved", "not_required"}
+        for gap in gaps
+    )
 
 
 def _fact_reason(status: str, statement: str) -> str:
-    if status == "supported":
-        return f"Qualified evidence supports: {statement}"
-    if status == "refuted":
-        return f"Qualified evidence refutes: {statement}"
-    if status == "conflicted":
-        return f"Qualified evidence conflicts about: {statement}"
     if status == "blocked":
         return f"Required evidence access is blocked for: {statement}"
     if status == "exhausted":
         return f"Available evidence routes are exhausted for: {statement}"
-    return f"Decisive evidence is absent for: {statement}"
+    return f"Qualified evidence is still absent for: {statement}"
 
 
 def _verdict_target(state: ImageOnlyInvestigationState) -> str:
-    fact_by_id = {fact.fact_id: fact for fact in state.facts}
-    statements = [
-        fact_by_id[fact_id].statement
-        for fact_id in state.decisive_fact_ids
-        if fact_id in fact_by_id
-    ]
-    if not statements:
+    core_id = state.core_verdict_fact_id
+    fact = next(
+        (item for item in state.facts if item.fact_id == core_id),
+        None,
+    )
+    if fact is None:
         return (
             "Whether the image's strongest recoverable factual interpretation "
             "is supported by qualified evidence."
         )
-    return " | ".join(statements)[:1200]
+    return fact.statement[:1200]
 
 
 def _infer_mechanism(statements: List[str]) -> str:

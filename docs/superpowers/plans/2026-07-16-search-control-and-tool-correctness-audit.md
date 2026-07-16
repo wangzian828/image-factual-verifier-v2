@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-16
 
-**Status:** Audit pass complete; implementation pending
+**Status:** implemented locally; gpu-13 canary validation pending
 
 **Repository:** `D:\image-factual-verifier-v2-worktrees\visual-fact-search-agent`
 
@@ -133,18 +133,18 @@ same_capture or near_duplicate binding
 
 ## 6. Structural simplification tasks
 
-- [ ] Introduce an explicit `CoreVerdictFact`/evidence-gap state.
-- [ ] Centralize every decisive-set mutation.
-- [ ] Remove decisive promotion from Reflection.
-- [ ] Make Attribution supporting by default.
-- [ ] Remove Target Refresh as a mechanism for changing the factual question.
-- [ ] Permit one resolved, scope-preserving core-fact refinement.
-- [ ] Replace evidence-ID gain with qualified decision gain.
-- [ ] Run Coverage after every accepted evidence update.
-- [ ] Stop immediately when the core fact is adjudicated.
-- [ ] Preserve optional attribution metadata in traces and process metrics.
-- [ ] Keep Judgment constrained to the compiled verdict and basis.
-- [ ] Add migration tests for old traces without preserving old runtime behavior.
+- [x] Introduce an explicit `CoreVerdictFact`/evidence-gap state.
+- [x] Centralize every decisive-set mutation.
+- [x] Remove decisive promotion from Reflection.
+- [x] Make Attribution supporting by default.
+- [x] Remove Target Refresh as a mechanism for changing the factual question.
+- [x] Permit one resolved, scope-preserving core-fact refinement.
+- [x] Replace evidence-ID gain with qualified decision gain.
+- [x] Run Coverage after every accepted evidence update.
+- [x] Stop immediately when the core fact is adjudicated.
+- [x] Preserve optional attribution metadata in traces and process metrics.
+- [x] Keep Judgment constrained to the compiled verdict and basis.
+- [x] Remove old Target Refresh samples from trajectory export.
 
 ## 7. Tool audit method
 
@@ -244,12 +244,12 @@ For each tool record:
 Do not patch tools while their shared assumptions are still under review.
 
 1. [x] Finish the external evidence-chain audit.
-2. [ ] Freeze shared Discovery/Evidence tool contracts.
-3. [ ] Implement the simplified core-fact and stopping controller.
-4. [ ] Repair evidence-chain tools in dependency order.
-5. [ ] Repair local image tools.
-6. [ ] Run focused deterministic tests.
-7. [ ] Run the full local suite.
+2. [x] Freeze shared Discovery/Evidence tool contracts.
+3. [x] Implement the simplified core-fact and stopping controller.
+4. [x] Repair evidence-chain tools in dependency order.
+5. [x] Repair local image tools.
+6. [x] Run focused deterministic tests.
+7. [x] Run the full local suite.
 8. [ ] Commit and fast-forward gpu-13.
 9. [ ] Run fixed real probes for every repaired tool.
 10. [ ] Rerun the same supported/refuted v4 canaries.
@@ -308,6 +308,7 @@ DEFAME        0d5c2eb5e07cfa8a673351e765c9c576070cdd6c
 Search-R1     598e61bd1d36895726d28a8d06b3a15bed19f5d3
 Open Research b764481fca7f0dbf00b2c70239bd97cea59d1059
 STORM         fb951af7744dab086e34962e9bc6fe878e145f83
+OpenSearch-VL 236e0e07ded730e66cf6e85ad39d5a34e403dbca
 ```
 
 The comparison supports:
@@ -318,3 +319,55 @@ The comparison supports:
 - accounting by actual query/subcall count;
 - separating retrieval candidates from verdict Evidence;
 - specialized forensic signals for manipulation claims.
+
+The frozen transition contract is:
+
+```text
+docs/tool-audit/2026-07-16-tool-runtime-contract.md
+```
+
+Pre-repair gpu-13 probes were completed on 2026-07-16 and appended to the detailed
+audit. They reproduced the visit-prefix failure, missing Jina/direct fallback,
+Qwen false health, invalid crop acceptance, OCR weakness, VLM anomaly false positive,
+and compound hidden fan-out.
+
+## 14. Local implementation result
+
+Implemented on 2026-07-16:
+
+```text
+one stable core_verdict_fact_id
+three bounded evidence gaps
+Coverage after every accepted action
+two no-qualified-progress checkpoints -> information_saturated
+no Target Refresh
+Reflection cannot mutate verdict ownership
+Attribution is supporting by default
+one already-resolved same-subject atomic refinement at most
+```
+
+Tool behavior now includes:
+
+```text
+text_search            one query per action
+visit                  one URL per action
+reverse_image_search   one explicit lens or semantic branch per action
+crop_and_search        removed from the active Agent tool set
+count_objects          removed from the active Agent tool set
+visit extraction       ranks passages over the complete cleaned document
+visit fetch             Jina failure falls back to direct fetch
+compare                 exact-pixel matches bypass the VLM
+OCR                     optional PP-OCR service, EasyOCR fallback
+general anomaly tools  diagnostic only; never verdict Evidence
+```
+
+Every repaired external/tool-internal operation emits structured `subcalls`; final
+traces expose both policy action count and actual provider request count.
+
+Local verification:
+
+```text
+261 passed
+compileall passed
+git diff --check clean
+```
