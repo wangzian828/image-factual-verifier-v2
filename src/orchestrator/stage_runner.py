@@ -2,7 +2,9 @@
 """Single-path stage runner for multi-round ReAct execution."""
 from __future__ import annotations
 
+import asyncio
 import json
+import os
 import re
 import time
 from copy import deepcopy
@@ -29,6 +31,23 @@ from src.orchestrator.tool_result import ToolResultContractError, parse_tool_res
 from src.orchestrator.source_access import SourceAccessPolicy
 from src.tools.base import BaseTool
 from src.tools.vision_utils import image_to_data_url
+
+
+def _bounded_timeout(
+    value: Optional[float],
+    *,
+    env_name: str,
+    default: float,
+) -> float:
+    """Resolve an action deadline without allowing a zero/negative timeout."""
+
+    if value is None:
+        raw = os.getenv(env_name, "").strip()
+        try:
+            value = float(raw) if raw else default
+        except ValueError:
+            value = default
+    return max(5.0, float(value))
 
 
 @dataclass
@@ -89,6 +108,8 @@ class StageRunner:
         force_tool_each_round: bool = False,
         question_is_active: Optional[Callable[[str], bool]] = None,
         stop_output_factory: Optional[Callable[[], BaseModel]] = None,
+        request_timeout_seconds: Optional[float] = None,
+        tool_timeout_seconds: Optional[float] = None,
     ):
         self.llm = llm
         self.system_prompt = system_prompt
@@ -141,6 +162,16 @@ class StageRunner:
         self.force_tool_each_round = bool(force_tool_each_round)
         self.question_is_active = question_is_active
         self.stop_output_factory = stop_output_factory
+        self.request_timeout_seconds = _bounded_timeout(
+            request_timeout_seconds,
+            env_name="AGENT_STAGE_REQUEST_TIMEOUT_SECONDS",
+            default=120.0,
+        )
+        self.tool_timeout_seconds = _bounded_timeout(
+            tool_timeout_seconds,
+            env_name="AGENT_TOOL_ACTION_TIMEOUT_SECONDS",
+            default=150.0,
+        )
 
     async def run(self, input_context: str) -> Tuple[Optional[BaseModel], List[StageStep]]:
         """Run the ReAct loop."""
@@ -399,7 +430,7 @@ class StageRunner:
             self.llm_api_calls += 1
             system_instruction = self.system_prompt
             response_format = self._native_response_format()
-            payload = await self.llm.create_interaction(
+            payload = await self._create_interaction(
                 input_payload=next_input,
                 system_instruction=system_instruction,
                 previous_interaction_id=request_previous_interaction_id,
@@ -524,7 +555,7 @@ class StageRunner:
             if self.force_tool_each_round or action_turns < self.min_tool_calls:
                 request_generation_config["tool_choice"] = "any"
             try:
-                payload = await self.llm.create_interaction(
+                payload = await self._create_interaction(
                     input_payload=next_input,
                     system_instruction=system_instruction,
                     tools=native_tools,
@@ -1229,7 +1260,7 @@ class StageRunner:
             started = time.perf_counter()
             self.llm_api_calls += 1
             try:
-                payload = await self.llm.create_interaction(
+                payload = await self._create_interaction(
                     input_payload=request_input,
                     system_instruction=system_instruction,
                     tools=[],
@@ -1859,9 +1890,32 @@ class StageRunner:
     async def _call_llm(self, messages: List[Dict[str, Any]]) -> Tuple[LLMResponse, Dict[str, Any]]:
         started = time.perf_counter()
         self.llm_api_calls += 1
-        response = await self.llm.get_response(messages)
+        try:
+            response = await asyncio.wait_for(
+                self.llm.get_response(messages),
+                timeout=self.request_timeout_seconds,
+            )
+        except asyncio.TimeoutError as exc:
+            raise TimeoutError(
+                f"{self.stage_name or 'stage'} model request exceeded "
+                f"{self.request_timeout_seconds:.1f}s"
+            ) from exc
         duration_ms = round((time.perf_counter() - started) * 1000, 2)
         return response, {"llm_duration_ms": duration_ms}
+
+    async def _create_interaction(self, **kwargs: Any) -> Dict[str, Any]:
+        """Apply one wall-clock deadline to every native Gemini request."""
+
+        try:
+            return await asyncio.wait_for(
+                self.llm.create_interaction(**kwargs),
+                timeout=self.request_timeout_seconds,
+            )
+        except asyncio.TimeoutError as exc:
+            raise TimeoutError(
+                f"{self.stage_name or 'stage'} Gemini request exceeded "
+                f"{self.request_timeout_seconds:.1f}s"
+            ) from exc
 
     @staticmethod
     def _extract_think(content: str) -> str:
@@ -1943,12 +1997,38 @@ class StageRunner:
 
         try:
             if hasattr(tool, "call_async"):
-                result = await tool.call_async(tool_args)
+                result = await asyncio.wait_for(
+                    tool.call_async(tool_args),
+                    timeout=self.tool_timeout_seconds,
+                )
             else:
-                import asyncio
-
                 loop = asyncio.get_event_loop()
-                result = await loop.run_in_executor(None, tool.call, tool_args)
+                result = await asyncio.wait_for(
+                    loop.run_in_executor(None, tool.call, tool_args),
+                    timeout=self.tool_timeout_seconds,
+                )
+        except asyncio.TimeoutError:
+            serialized = json.dumps(
+                {
+                    "status": "error",
+                    "error": (
+                        f"ToolActionTimeout: {tool_name} exceeded "
+                        f"{self.tool_timeout_seconds:.1f}s"
+                    ),
+                },
+                ensure_ascii=False,
+            )
+            return serialized, {
+                "cache_hit": False,
+                "tool_success": False,
+                "observed_at": datetime.now(timezone.utc).isoformat(),
+                "duration_ms": round((time.perf_counter() - started) * 1000, 2),
+                "serialized_size": len(serialized),
+                "tool_exception": "ToolActionTimeout",
+                "tool_timeout_seconds": self.tool_timeout_seconds,
+                "tool_llm_api_calls": 0,
+                "tool_tokens": self._normalize_tool_tokens(None),
+            }
         except Exception as exc:
             serialized = json.dumps({"status": "error", "error": f"{type(exc).__name__}: {exc}"}, ensure_ascii=False)
             runtime_metrics = exception_runtime_metrics(exc)

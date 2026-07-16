@@ -2,6 +2,7 @@
 """VisualFact-driven image-only factual investigation orchestrator."""
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import time
@@ -102,6 +103,14 @@ class Orchestrator:
             )
         self.source_access_policy = source_access_policy or SourceAccessPolicy()
         self.timeout = timeout
+        self.tool_action_timeout_seconds = self._runtime_timeout(
+            "AGENT_TOOL_ACTION_TIMEOUT_SECONDS",
+            150.0,
+        )
+        self.stage_request_timeout_seconds = self._runtime_timeout(
+            "AGENT_STAGE_REQUEST_TIMEOUT_SECONDS",
+            120.0,
+        )
         cache_namespace = os.getenv("TOOL_CACHE_NAMESPACE", "").strip() or "|".join(
             [
                 "tool-contract-v1",
@@ -559,6 +568,8 @@ class Orchestrator:
                     ),
                     ready_for_reflection=True,
                 ),
+                request_timeout_seconds=self.stage_request_timeout_seconds,
+                tool_timeout_seconds=self.tool_action_timeout_seconds,
             )
             try:
                 parsed, steps = await runner.run(
@@ -1261,12 +1272,51 @@ class Orchestrator:
 
         try:
             if hasattr(tool, "call_async"):
-                result = await tool.call_async(tool_args)
+                result = await asyncio.wait_for(
+                    tool.call_async(tool_args),
+                    timeout=getattr(
+                        self,
+                        "tool_action_timeout_seconds",
+                        150.0,
+                    ),
+                )
             else:
-                import asyncio
-
                 loop = asyncio.get_event_loop()
-                result = await loop.run_in_executor(None, tool.call, tool_args)
+                result = await asyncio.wait_for(
+                    loop.run_in_executor(None, tool.call, tool_args),
+                    timeout=getattr(
+                        self,
+                        "tool_action_timeout_seconds",
+                        150.0,
+                    ),
+                )
+        except asyncio.TimeoutError:
+            deadline = getattr(
+                self,
+                "tool_action_timeout_seconds",
+                150.0,
+            )
+            serialized = json.dumps(
+                {
+                    "status": "error",
+                    "error": (
+                        f"ToolActionTimeout: {tool_name} exceeded "
+                        f"{deadline:.1f}s"
+                    ),
+                },
+                ensure_ascii=False,
+            )
+            return serialized, {
+                "cache_hit": False,
+                "tool_success": False,
+                "observed_at": datetime.now(timezone.utc).isoformat(),
+                "duration_ms": round((time.perf_counter() - started) * 1000, 2),
+                "serialized_size": len(serialized),
+                "tool_exception": "ToolActionTimeout",
+                "tool_timeout_seconds": deadline,
+                "tool_llm_api_calls": 0,
+                "tool_tokens": StageRunner._normalize_tool_tokens(None),
+            }
         except Exception as exc:
             runtime_metrics = getattr(exc, "_gemini_runtime_metrics", {})
             serialized = json.dumps(
@@ -1472,3 +1522,12 @@ class Orchestrator:
         if time.time() - started > self.timeout:
             state.termination = "timeout"
             raise TimeoutError(f"Pipeline exceeded timeout of {self.timeout} seconds.")
+
+    @staticmethod
+    def _runtime_timeout(env_name: str, default: float) -> float:
+        raw = os.getenv(env_name, "").strip()
+        try:
+            value = float(raw) if raw else default
+        except ValueError:
+            value = default
+        return max(5.0, value)

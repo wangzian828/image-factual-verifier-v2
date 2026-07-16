@@ -22,7 +22,7 @@ from src.integrations.search.visual_search import (
     VisualReverseSearchClient,
 )
 from src.orchestrator.pipeline import Orchestrator
-from src.orchestrator.stage_runner import StageStep
+from src.orchestrator.stage_runner import StageRunner, StageStep
 from src.orchestrator.state import VerificationState
 from src.orchestrator.tool_cache import ToolResultCache
 from src.orchestrator.tool_health import ToolHealth
@@ -49,6 +49,23 @@ class StaticTool(BaseTool):
 
     def call(self, _params: dict[str, Any]) -> dict[str, Any]:
         return dict(self.result)
+
+
+class HangingAsyncTool(BaseTool):
+    name = "hanging_tool"
+    description = "Never returns without an outer action deadline."
+    parameters = {
+        "type": "object",
+        "properties": {},
+        "required": [],
+    }
+
+    def call(self, _params: dict[str, Any]) -> dict[str, Any]:
+        raise AssertionError("async path must be used")
+
+    async def call_async(self, _params: dict[str, Any]) -> dict[str, Any]:
+        await asyncio.Event().wait()
+        return {"status": "success"}
 
 
 def _bare_perception_orchestrator(
@@ -179,6 +196,50 @@ def test_perception_exception_is_persisted_as_failed_step(
         "error": "RuntimeError: vision endpoint failed",
     }
     assert state.all_steps[0].metadata["tool_exception"] == "RuntimeError"
+
+
+def test_perception_tool_action_deadline_returns_structured_failure() -> None:
+    orchestrator = _bare_perception_orchestrator(
+        {"hanging_tool": HangingAsyncTool()}
+    )
+    orchestrator.tool_action_timeout_seconds = 0.01
+
+    serialized, metadata = asyncio.run(
+        orchestrator._execute_tool(
+            "hanging_tool",
+            {},
+            "",
+        )
+    )
+
+    assert json.loads(serialized)["status"] == "error"
+    assert "ToolActionTimeout" in json.loads(serialized)["error"]
+    assert metadata["tool_exception"] == "ToolActionTimeout"
+
+
+def test_stage_runner_deadlines_cover_tools_and_native_requests() -> None:
+    class HangingLLM:
+        async def create_interaction(self, **_kwargs: Any) -> dict[str, Any]:
+            await asyncio.Event().wait()
+            return {}
+
+    runner = StageRunner(
+        llm=HangingLLM(),
+        system_prompt="test",
+        tools=[HangingAsyncTool()],
+        request_timeout_seconds=5.0,
+        tool_timeout_seconds=5.0,
+    )
+    runner.request_timeout_seconds = 0.01
+    runner.tool_timeout_seconds = 0.01
+
+    serialized, metadata = asyncio.run(
+        runner._execute_tool("hanging_tool", {})
+    )
+    assert "ToolActionTimeout" in json.loads(serialized)["error"]
+    assert metadata["tool_exception"] == "ToolActionTimeout"
+    with pytest.raises(TimeoutError, match="Gemini request exceeded"):
+        asyncio.run(runner._create_interaction())
 
 
 def test_tool_internal_usage_is_counted_and_hidden(tmp_path: Path) -> None:

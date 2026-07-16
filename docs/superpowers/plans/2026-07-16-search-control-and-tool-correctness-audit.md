@@ -368,7 +368,7 @@ traces expose both policy action count and actual provider request count.
 Local verification:
 
 ```text
-266 passed
+268 passed
 compileall passed
 git diff --check clean
 ```
@@ -422,3 +422,19 @@ The current controller therefore:
   the route inventory;
 - changes the evidence goal after Discovery to whether a candidate page identifies
   the same input image or depicted scene.
+
+The first Monarch retry exposed an operational boundary defect: the 30-minute
+per-case timeout was checked only between investigation segments. A native model or
+tool await that never returned could therefore block the case without a partial trace.
+
+The runtime now applies outer wall-clock deadlines to:
+
+```text
+native Gemini stage request  120 seconds by default
+one tool action              150 seconds by default
+```
+
+Both values are environment-overridable. Tool deadline failures are serialized as
+`ToolActionTimeout` results so the reducer records an ordinary recoverable Failure
+and can try another material route. Stage-request deadline failures are explicit
+engineering errors with the stage name instead of silent 30-minute hangs.
