@@ -633,7 +633,7 @@ def test_pending_search_candidate_requires_inspection_before_retrieval() -> None
                         "Antarctica during winter?"
                     ),
                     purpose="Verify the visible subject-to-place relation.",
-                    suggested_tools=["text_search", "visit"],
+                    suggested_tools=["text_search"],
                 )
             ]
         ),
@@ -697,7 +697,18 @@ def test_pending_search_candidate_requires_inspection_before_retrieval() -> None
     assert not Orchestrator._image_only_discovery_route_error(
         state,
         "visit",
-        {"__question_id": task.task_id},
+        {
+            "__question_id": task.task_id,
+            "url": pending["pages"][0]["url"],
+        },
+    )
+    assert Orchestrator._image_only_discovery_route_error(
+        state,
+        "visit",
+        {
+            "__question_id": task.task_id,
+            "url": "https://example.org/unowned-page",
+        },
     )
     assert Orchestrator._image_only_task_evidence_goals(
         state,
@@ -707,6 +718,14 @@ def test_pending_search_candidate_requires_inspection_before_retrieval() -> None
         state,
         task_ids={task.task_id},
     ) == {"visit"}
+    assert Orchestrator._image_only_tool_argument_constraints(
+        state,
+        task_ids={task.task_id},
+    ) == {
+        "visit": {
+            "url": [pending["pages"][0]["url"]],
+        }
+    }
 
 
 def test_task_tool_contract_rejects_unsuggested_ocr() -> None:

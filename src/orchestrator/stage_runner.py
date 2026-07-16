@@ -970,7 +970,17 @@ class StageRunner:
             ):
                 if property_name not in properties or not allowed_values:
                     continue
-                properties[property_name]["enum"] = list(allowed_values)
+                property_schema = properties[property_name]
+                property_type = property_schema.get("type")
+                if (
+                    property_type == "array"
+                    or isinstance(property_type, list)
+                    and "array" in property_type
+                ):
+                    property_schema.setdefault("items", {"type": "string"})
+                    property_schema["items"]["enum"] = list(allowed_values)
+                else:
+                    property_schema["enum"] = list(allowed_values)
             properties.pop("image_input", None)
             required = [name for name in required if name != "image_input"]
             parameters = self._normalize_native_schema(parameters)
@@ -2420,6 +2430,9 @@ class StageRunner:
             "vlm_error": data.get("vlm_error", ""),
             "lens_error": data.get("lens_error", ""),
             "candidate_page_urls": (data.get("candidate_page_urls", []) or [])[:5],
+            "reference_image_candidates": (
+                data.get("reference_image_candidates", []) or []
+            )[:5],
             "reference_image_url": data.get("reference_image_url", ""),
             "lens_results": _rows(data.get("lens_results", [])),
             "semantic_results": _rows(data.get("semantic_results", [])),

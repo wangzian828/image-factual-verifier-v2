@@ -41,6 +41,7 @@ from src.orchestrator.investigation_models import (
 from src.orchestrator.llm_backend import APIBackend
 from src.orchestrator.stage_runner import StageRunner, StageStep
 from src.orchestrator.source_access import SourceAccessPolicy
+from src.orchestrator.source_provenance import canonicalize_url
 from src.orchestrator.state import (
     Entity,
     ImageOnlyRuntimeCase,
@@ -67,6 +68,7 @@ from src.orchestrator.task_store import (
     pending_evidence_decision_ids,
     remaining_material_routes,
     record_tool_observation,
+    runtime_task_tool_names,
     state_from_bootstrap,
 )
 from src.storage import default_tool_cache_dir
@@ -1153,18 +1155,17 @@ class Orchestrator:
         # for the selected task's current leads. This permits a same-source
         # image comparison followed by its page visit, while keeping search
         # tools hidden until at least one lead has been inspected.
-        task_by_id = {
-            task.task_id: task
-            for task in investigation.tasks
-        }
+        task_by_id = {task.task_id: task for task in investigation.tasks}
         for task_id in inspection_task_ids:
-            allowed = set(
-                getattr(task_by_id.get(task_id), "suggested_tools", []) or []
+            task = task_by_id.get(task_id)
+            if task is None:
+                continue
+            allowed = runtime_task_tool_names(investigation, task)
+            names.update(
+                tool_name
+                for tool_name in {"visit", "compare_with_reference"}
+                if tool_name in allowed
             )
-            if "visit" in allowed:
-                names.add("visit")
-            if "compare_with_reference" in allowed:
-                names.add("compare_with_reference")
         return names
 
     @staticmethod
@@ -1179,6 +1180,7 @@ class Orchestrator:
         if not core_id:
             return {}
         branches: List[str] = []
+        pages: List[str] = []
         references: List[str] = []
         for route in remaining_material_routes(
             investigation,
@@ -1190,6 +1192,9 @@ class Orchestrator:
             if parts[0] == "reverse_image_search" and len(parts) == 3:
                 if parts[2] in task_ids:
                     branches.append(parts[1])
+            elif parts[0] == "visit" and len(parts) == 3:
+                if parts[1] in task_ids:
+                    pages.append(parts[2])
             elif parts[0] == "compare_with_reference" and len(parts) == 3:
                 if parts[1] in task_ids:
                     references.append(parts[2])
@@ -1197,6 +1202,10 @@ class Orchestrator:
         if branches:
             constraints["reverse_image_search"] = {
                 "branch": list(dict.fromkeys(branches))
+            }
+        if pages:
+            constraints["visit"] = {
+                "url": list(dict.fromkeys(pages))
             }
         if references:
             constraints["compare_with_reference"] = {
@@ -1230,7 +1239,8 @@ class Orchestrator:
         )
         if task is None:
             return f"Unknown image-only task {task_id!r}."
-        if tool_name not in set(task.suggested_tools):
+        allowed_tools = runtime_task_tool_names(investigation, task)
+        if tool_name not in allowed_tools:
             return (
                 f"Tool {tool_name!r} is not enabled for task {task_id!r}. "
                 "Use one of that task's planned tools or select another "
@@ -1248,12 +1258,50 @@ class Orchestrator:
                     "Use external source evidence for identity, location, event, "
                     "date, distribution, habitat, or other depicted-world facts."
                 )
-        if tool_name not in {"text_search", "reverse_image_search"}:
-            return ""
         pending = pending_image_only_discovery_routes(
             investigation,
             task_ids={task_id},
         )
+        if tool_name == "visit":
+            requested = tool_args.get("url", [])
+            requested_urls = (
+                [requested]
+                if isinstance(requested, str)
+                else list(requested)
+                if isinstance(requested, list)
+                else []
+            )
+            pending_urls = {
+                canonicalize_url(item["url"])
+                for item in pending["pages"]
+                if item.get("url")
+            }
+            if (
+                len(requested_urls) != 1
+                or canonicalize_url(str(requested_urls[0])) not in pending_urls
+            ):
+                return (
+                    f"Tool 'visit' must inspect one pending candidate page owned "
+                    f"by task {task_id!r}."
+                )
+            return ""
+        if tool_name == "compare_with_reference":
+            reference_url = canonicalize_url(
+                str(tool_args.get("reference_url", ""))
+            )
+            pending_urls = {
+                canonicalize_url(item["reference_image_url"])
+                for item in pending["references"]
+                if item.get("reference_image_url")
+            }
+            if not reference_url or reference_url not in pending_urls:
+                return (
+                    "Tool 'compare_with_reference' must inspect a pending "
+                    f"reference image owned by task {task_id!r}."
+                )
+            return ""
+        if tool_name not in {"text_search", "reverse_image_search"}:
+            return ""
         if not (pending["pages"] or pending["references"]):
             return ""
         inspected_candidate = False

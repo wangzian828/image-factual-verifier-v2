@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from src.orchestrator.source_access import SourceAccessPolicy
 from src.orchestrator.stage_runner import StageRunner, StageStep
 from src.tools.base import BaseTool
+from src.tools.visit import VisitTool
 from test_support_models import ToolStageOutput
 
 
@@ -643,6 +644,66 @@ def test_native_tool_schema_hides_server_image_path() -> None:
     )
     assert json.loads(serialized)["status"] == "success"
     assert tool.calls == [{"image_input": "D:/private/input.png"}]
+
+
+def test_native_tool_schema_constrains_array_items() -> None:
+    runner = StageRunner(
+        llm=NativeFakeBackend([]),
+        system_prompt="Inspect the selected candidate.",
+        tools=[VisitTool()],
+        stage_name="verification",
+        tool_argument_constraints={
+            "visit": {
+                "url": ["https://example.org/pending"],
+            }
+        },
+    )
+    runner.active_question_ids = ["q0"]
+
+    schema = runner._build_native_tool_schemas()[0]["parameters"]
+
+    assert schema["properties"]["url"]["items"]["enum"] == [
+        "https://example.org/pending"
+    ]
+    assert runner._validate_native_tool_args(
+        "visit",
+        {
+            "question_id": "q0",
+            "url": ["https://example.org/pending"],
+            "goal": "Check the claim.",
+        },
+    ) == ""
+    assert "must be one of" in runner._validate_native_tool_args(
+        "visit",
+        {
+            "question_id": "q0",
+            "url": ["https://example.org/unowned"],
+            "goal": "Check the claim.",
+        },
+    )
+
+
+def test_canonical_reverse_image_result_preserves_validated_references() -> None:
+    reference_url = "https://example.org/reference.jpg"
+
+    result = StageRunner._canonical_reverse_image_result(
+        {
+            "status": "success",
+            "branch": "lens",
+            "candidate_page_urls": ["https://example.org/page"],
+            "reference_image_candidates": [reference_url],
+            "lens_results": [
+                {
+                    "title": "Reference",
+                    "url": "https://example.org/page",
+                    "image_url": reference_url,
+                }
+            ],
+        }
+    )
+
+    assert result["reference_image_candidates"] == [reference_url]
+    assert result["lens_results"][0]["image_url"] == reference_url
 
 
 def test_tool_internal_llm_usage_is_private_and_attached_to_step_metadata() -> None:

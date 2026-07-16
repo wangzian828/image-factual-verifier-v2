@@ -75,6 +75,12 @@ The ReAct prompt tells Gemini to:
 - avoid duplicate routes;
 - never output a verdict.
 
+Planning's `suggested_tools` are first-hop advice, not a closed permission list.
+A task-owned search Discovery deterministically enables `visit` for its candidate
+page and `compare_with_reference` for its validated reference image. The next
+segment exposes only the concrete uninspected route and binds its URL in the native
+tool schema.
+
 The model receives compact active tasks, related fact statements, recent Discoveries,
 eligible Evidence, Findings, Failures, action count, and next Reflection boundary.
 

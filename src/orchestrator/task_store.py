@@ -2763,6 +2763,28 @@ def remaining_material_routes(
     return list(dict.fromkeys(routes))
 
 
+def runtime_task_tool_names(
+    state: ImageOnlyInvestigationState,
+    task: ResearchTask,
+) -> set[str]:
+    """Return Planning tools plus inspection tools implied by real Discoveries.
+
+    Planning proposes useful first-hop tools. It cannot know which concrete page
+    or reference image retrieval will discover, so task-owned Discoveries
+    deterministically authorize their matching inspection operation.
+    """
+
+    allowed = set(task.suggested_tools)
+    for discovery in state.discoveries:
+        if discovery.task_id != task.task_id:
+            continue
+        if canonicalize_url(discovery.candidate_url):
+            allowed.add("visit")
+        if canonicalize_url(discovery.reference_image_url):
+            allowed.add("compare_with_reference")
+    return allowed
+
+
 def _attempted_routes_by_task(
     state: ImageOnlyInvestigationState,
 ) -> Dict[str, List[Mapping[str, Any]]]:
@@ -2809,7 +2831,7 @@ def _remaining_task_material_routes(
     *,
     global_reverse_branches: set[str],
 ) -> List[str]:
-    allowed = set(task.suggested_tools)
+    allowed = runtime_task_tool_names(state, task)
     if not allowed:
         return []
 

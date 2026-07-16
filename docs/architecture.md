@@ -119,6 +119,13 @@ Blocked duplicate or already-resolved route proposals are retained as route-cont
 warnings rather than executed tool actions. They do not invalidate a factual canary,
 but any episode containing them fails the teacher-data quality gate.
 
+Task Planning tools describe possible first hops. Once retrieval creates a
+task-owned Discovery, the runtime derives the matching inspection permission:
+candidate pages enable `visit`, and validated reference images enable
+`compare_with_reference`. Dynamic schemas bind those tools to the remaining
+Discovery URL instead of relying on the model to have predicted every follow-up
+tool during Planning.
+
 Every real tool call is reduced into separate collections:
 
 | Collection | Meaning |

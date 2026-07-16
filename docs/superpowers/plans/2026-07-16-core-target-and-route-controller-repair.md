@@ -143,6 +143,9 @@ Implemented:
 - required Target Planning to establish exactly one atomic external-world or
   source-record core, with invalid Planning failing explicitly instead of promoting
   bootstrap `appears_to_depict` prose;
+- made Planning tools first-hop suggestions while task-owned Discoveries
+  deterministically authorize and URL-bind their concrete `visit` or
+  `compare_with_reference` follow-up;
 - added `image_only_evidence_decision` and trajectory export;
 - made semantic checkpoints sparse rather than per-Evidence;
 - allowed text-only closure when semantically sufficient;
