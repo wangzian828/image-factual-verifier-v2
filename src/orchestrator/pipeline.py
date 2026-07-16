@@ -902,13 +902,25 @@ class Orchestrator:
         ).strip()
         if not task_id:
             return ""
+        task = next(
+            (
+                item
+                for item in investigation.tasks
+                if item.task_id == task_id
+            ),
+            None,
+        )
+        if task is None:
+            return f"Unknown image-only task {task_id!r}."
+        if tool_name not in set(task.suggested_tools):
+            return (
+                f"Tool {tool_name!r} is not enabled for task {task_id!r}. "
+                "Use one of that task's planned tools or select another "
+                "active task."
+            )
         if tool_name in {"check_consistency", "analyze_visual_anomalies"}:
             facts = {fact.fact_id: fact for fact in investigation.facts}
-            task = next(
-                (item for item in investigation.tasks if item.task_id == task_id),
-                None,
-            )
-            if task is not None and not any(
+            if not any(
                 facts.get(fact_id) is not None
                 and facts[fact_id].predicate == "visual_integrity"
                 for fact_id in task.fact_ids
@@ -918,7 +930,7 @@ class Orchestrator:
                     "Use external source evidence for identity, location, event, "
                     "date, distribution, habitat, or other depicted-world facts."
                 )
-        if tool_name != "text_search":
+        if tool_name not in {"text_search", "reverse_image_search"}:
             return ""
         pending = pending_image_only_discovery_routes(
             investigation,
@@ -929,7 +941,8 @@ class Orchestrator:
         return (
             f"Task {task_id!r} already has uninspected candidate pages or "
             "reference images. Use visit or compare_with_reference for this "
-            "task before another text_search, or choose a different active task."
+            "task before another retrieval call, or choose a different active "
+            "task."
         )
 
     @staticmethod

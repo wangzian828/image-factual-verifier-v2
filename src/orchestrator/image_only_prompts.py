@@ -10,6 +10,7 @@ from src.orchestrator.investigation_models import (
     ImageOnlyInvestigationState,
     VerdictBasis,
 )
+from src.orchestrator.task_store import remaining_material_routes
 from src.orchestrator.source_provenance import classify_source
 from src.orchestrator.source_provenance import canonicalize_url
 
@@ -226,6 +227,14 @@ def render_react_context(state: ImageOnlyInvestigationState) -> str:
             f"suggested_queries={task.suggested_queries}"
         )
     active_task_ids = {task.task_id for task in active}
+    remaining_routes = (
+        remaining_material_routes(
+            state,
+            fact_id=core.fact_id,
+        )
+        if core is not None
+        else []
+    )
     pending_routes = pending_discovery_routes(
         state,
         task_ids=active_task_ids,
@@ -312,6 +321,8 @@ def render_react_context(state: ImageOnlyInvestigationState) -> str:
         + json.dumps(findings, ensure_ascii=False, indent=2)
         + "\n\nFailures:\n"
         + json.dumps(failures, ensure_ascii=False, indent=2)
+        + "\n\nRemaining material routes (choose one; do not repeat a route):\n"
+        + json.dumps(remaining_routes[:12], ensure_ascii=False, indent=2)
         + "\n\nAttempted semantic routes (do not repeat):\n"
         + json.dumps(attempted_routes, ensure_ascii=False, indent=2)
     )

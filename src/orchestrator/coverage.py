@@ -16,6 +16,7 @@ from src.orchestrator.investigation_models import (
 from src.orchestrator.task_store import (
     MAX_ATTEMPTS_PER_TASK,
     MAX_TOOL_ACTIONS,
+    remaining_material_routes,
     reconcile_core_verdict_fact,
     refresh_core_evidence_gaps,
     stable_id,
@@ -111,6 +112,11 @@ def audit_coverage(
     ) if decision_checkpoint else prior_low_gain
 
     open_core_route = _has_executable_core_route(state)
+    remaining_routes = (
+        remaining_material_routes(state, fact_id=core_id)
+        if core_id
+        else []
+    )
     if complete and coverage and coverage.status == "refuted":
         stop_reason = "verdict_determined"
         reason = "The core factual proposition is directly refuted."
@@ -126,11 +132,21 @@ def audit_coverage(
             "No executable task remains for an unresolved core evidence gap."
         )
     elif decision_checkpoint and low_gain >= 2:
-        stop_reason = "information_saturated"
-        reason = (
-            "Two consecutive action checkpoints produced no qualified change "
-            "to the core fact, its winning evidence, or its evidence gaps."
-        )
+        if remaining_routes:
+            stop_reason = "continue"
+            reason = (
+                "Recent actions produced no qualified core gain, but distinct "
+                "material routes remain: "
+                + ", ".join(route.rsplit(":", 1)[0] for route in remaining_routes[:4])
+                + "."
+            )
+        else:
+            stop_reason = "information_saturated"
+            reason = (
+                "Two consecutive action checkpoints produced no qualified "
+                "change to the core fact, its winning evidence, or its "
+                "evidence gaps, and no distinct material route remains."
+            )
     else:
         stop_reason = "continue"
         reason = (

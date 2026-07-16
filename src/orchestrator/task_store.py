@@ -41,6 +41,7 @@ TOTAL_TASKS_MAX = 12
 NEW_TASKS_PER_REFLECTION_MAX = 3
 ATTRIBUTION_FACTS_PER_PASS_MAX = 2
 MAX_ATTEMPTS_PER_TASK = 5
+MAX_TEXT_SEARCH_ROUTES_PER_TASK = 2
 
 
 def stable_id(prefix: str, *parts: object) -> str:
@@ -541,6 +542,18 @@ def apply_target_planning(
             rejected_reasons.append(
                 "source_record_matches must test source existence/content only; "
                 "propose visual_integrity separately for pixel alteration"
+            )
+            continue
+        if (
+            proposal.predicate != "visual_integrity"
+            and _target_mixes_visual_integrity_and_world_relation(
+                proposal.statement
+            )
+        ):
+            rejected_reasons.append(
+                "target must not combine visual authenticity with an external "
+                "event, identity, place, date, or source relation; plan the "
+                "world relation and any integrity diagnostic separately"
             )
             continue
         if (
@@ -1498,7 +1511,10 @@ def _attribution_tokens(value: str) -> set[str]:
     text = str(value or "").casefold()
     tokens = {
         token
-        for token in re.findall(r"[a-z0-9_@.-]+", text)
+        for token in re.findall(
+            r"@?[a-z0-9_]+(?:[.-][a-z0-9_]+)*",
+            text,
+        )
         if token
         not in {
             "the",
@@ -1527,6 +1543,38 @@ def _attribution_tokens(value: str) -> set[str]:
             for index in range(len(sequence) - 1)
         )
     return tokens
+
+
+def _target_mixes_visual_integrity_and_world_relation(value: str) -> bool:
+    """Keep an initial target to one adjudicable world or pixel proposition."""
+
+    lowered = " ".join(str(value or "").casefold().split())
+    has_visual_authenticity = any(
+        phrase in lowered
+        for phrase in (
+            "genuine photograph",
+            "genuine photo",
+            "authentic photograph",
+            "authentic photo",
+            "unmodified image",
+            "unaltered image",
+        )
+    )
+    has_world_relation = any(
+        phrase in lowered
+        for phrase in (
+            "depicts",
+            "depicting",
+            "located at",
+            "occurred",
+            "took place",
+            "created by",
+            "matches a public",
+            "source record",
+            "identified as",
+        )
+    )
+    return has_visual_authenticity and has_world_relation
 
 
 def _attribution_statement_is_grounded(
@@ -2529,3 +2577,139 @@ def _task_has_uninspected_discovery(
         if reference_url and reference_url not in attempted_references:
             return True
     return False
+
+
+def remaining_material_routes(
+    state: ImageOnlyInvestigationState,
+    *,
+    fact_id: str,
+) -> List[str]:
+    """Return bounded, still-untried routes for one unresolved core fact.
+
+    This is deliberately a route inventory rather than an information-gain
+    score.  A failed Lens upload, an empty OCR pass, or a weak query cannot
+    establish saturation while another material retrieval or inspection route
+    remains.  Conversely, query reformulation is bounded so new wording cannot
+    keep an investigation alive indefinitely.
+    """
+
+    tasks = [
+        task
+        for task in state.tasks
+        if (
+            task.status in {"active", "pending"}
+            and task.attempt_count < MAX_ATTEMPTS_PER_TASK
+            and fact_id in task.fact_ids
+        )
+    ]
+    if not tasks:
+        return []
+    attempted = _attempted_routes_by_task(state)
+    routes: List[str] = []
+    for task in tasks:
+        routes.extend(
+            _remaining_task_material_routes(
+                state,
+                task,
+                attempted.get(task.task_id, []),
+            )
+        )
+    return list(dict.fromkeys(routes))
+
+
+def _attempted_routes_by_task(
+    state: ImageOnlyInvestigationState,
+) -> Dict[str, List[Mapping[str, Any]]]:
+    attempts: Dict[str, List[Mapping[str, Any]]] = {}
+    for raw in state.attempted_routes:
+        try:
+            route = json.loads(raw)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(route, Mapping):
+            continue
+        task_id = str(route.get("task_id", "")).strip()
+        if task_id:
+            attempts.setdefault(task_id, []).append(route)
+    return attempts
+
+
+def _remaining_task_material_routes(
+    state: ImageOnlyInvestigationState,
+    task: ResearchTask,
+    attempts: Sequence[Mapping[str, Any]],
+) -> List[str]:
+    allowed = set(task.suggested_tools)
+    if not allowed:
+        return []
+
+    attempted_pages: set[str] = set()
+    attempted_references: set[str] = set()
+    reverse_branches: set[str] = set()
+    text_search_count = 0
+    one_shot_tools: set[str] = set()
+    for route in attempts:
+        tool_name = str(route.get("tool", "")).strip()
+        if tool_name == "visit":
+            attempted_pages.update(
+                canonicalize_url(str(url))
+                for url in route.get("urls", []) or []
+                if canonicalize_url(str(url))
+            )
+        elif tool_name == "compare_with_reference":
+            reference_url = canonicalize_url(
+                str(route.get("reference_url", ""))
+            )
+            if reference_url:
+                attempted_references.add(reference_url)
+        elif tool_name == "reverse_image_search":
+            reverse_branches.add(
+                str(route.get("branch", "lens")).strip().lower() or "lens"
+            )
+        elif tool_name == "text_search":
+            text_search_count += 1
+        else:
+            one_shot_tools.add(tool_name)
+
+    pending_routes: List[str] = []
+    for discovery in state.discoveries:
+        if discovery.task_id != task.task_id:
+            continue
+        page_url = canonicalize_url(discovery.candidate_url)
+        if "visit" in allowed and page_url and page_url not in attempted_pages:
+            pending_routes.append(
+                f"visit:{task.task_id}:{page_url}"
+            )
+        reference_url = canonicalize_url(discovery.reference_image_url)
+        if (
+            "compare_with_reference" in allowed
+            and reference_url
+            and reference_url not in attempted_references
+        ):
+            pending_routes.append(
+                f"compare_with_reference:{task.task_id}:{reference_url}"
+            )
+    if pending_routes:
+        return list(dict.fromkeys(pending_routes))
+
+    routes: List[str] = []
+    if "reverse_image_search" in allowed:
+        for branch in ("lens", "semantic"):
+            if branch not in reverse_branches:
+                routes.append(
+                    f"reverse_image_search:{branch}:{task.task_id}"
+                )
+    if (
+        "text_search" in allowed
+        and text_search_count < MAX_TEXT_SEARCH_ROUTES_PER_TASK
+    ):
+        routes.append(f"text_search:{task.task_id}")
+    for tool_name in (
+        "ocr_with_position",
+        "crop_and_inspect",
+        "check_consistency",
+        "analyze_visual_anomalies",
+    ):
+        if tool_name in allowed and tool_name not in one_shot_tools:
+            routes.append(f"{tool_name}:{task.task_id}")
+    return routes

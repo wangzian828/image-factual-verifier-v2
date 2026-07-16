@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-16
 
-**Status:** implemented locally; gpu-13 canary validation pending
+**Status:** implemented locally; focused gpu-13 v4 validation pending
 
 **Repository:** `D:\image-factual-verifier-v2-worktrees\visual-fact-search-agent`
 
@@ -115,6 +115,7 @@ no executable route for an open decisive gap
   -> unverifiable
 
 two consecutive decision checkpoints without qualified progress
+and no distinct material route remains
   -> unverifiable
 
 hard action/time/provider budget exhausted
@@ -251,8 +252,8 @@ Do not patch tools while their shared assumptions are still under review.
 6. [x] Run focused deterministic tests.
 7. [x] Run the full local suite.
 8. [ ] Commit and fast-forward gpu-13.
-9. [ ] Run fixed real probes for every repaired tool.
-10. [ ] Rerun the same supported/refuted v4 canaries.
+9. [ ] Run focused real probes for the repaired controller paths.
+10. [ ] Rerun selected supported/refuted v4 cases.
 11. [ ] Manually inspect traces before any 20-case run.
 
 ## 12. Acceptance
@@ -367,7 +368,36 @@ traces expose both policy action count and actual provider request count.
 Local verification:
 
 ```text
-261 passed
+264 passed
 compileall passed
 git diff --check clean
 ```
+
+## 15. Post-canary control repair
+
+The first real Apple trace on July 16 exposed a controller failure rather than an
+evidence failure: one Lens-upload timeout and one redundant OCR attempt caused
+`information_saturated`, even though semantic image search and text search had not
+been tried.
+
+The repair keeps the stable-core model and adds three deterministic boundaries:
+
+```text
+ResearchTask.suggested_tools
+  -> only those tools may execute for that task
+
+attempted route inventory
+  -> Lens, semantic search, bounded text-search reformulation,
+     unvisited pages, and untested reference images are distinct routes
+
+two low-gain checkpoints + no remaining material route
+  -> information_saturated
+```
+
+The reducer now also normalizes terminal punctuation in grounding tokens, preventing
+`Apple Store.` from failing to match `Apple Store`, while rejecting targets that mix
+visual-authenticity and external-world claims in one core proposition.
+
+This is a controller/state repair, not a prompt expansion. The next real validation
+uses selected v4 cases only; the previous Apple trace remains a regression artifact,
+not the primary canary.

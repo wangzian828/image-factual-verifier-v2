@@ -44,6 +44,7 @@ from src.orchestrator.task_store import (
     apply_target_planning,
     attribution_planning_needed,
     next_action_boundary,
+    remaining_material_routes,
     record_tool_observation,
     state_from_bootstrap,
 )
@@ -494,6 +495,61 @@ def test_target_planning_rejects_unobserved_named_metadata() -> None:
     )
 
 
+def test_target_planning_normalizes_terminal_punctuation_but_keeps_scope_atomic() -> None:
+    _, state = _antarctic_butterfly_state()
+    scene = next(
+        fact for fact in state.facts if fact.predicate == "appears_to_depict"
+    )
+    scene.statement = (
+        "The image appears to depict Apple Store employees greeting a visitor."
+    )
+
+    grounded = apply_target_planning(
+        state.model_copy(deep=True),
+        TargetPlanningOutput(
+            proposals=[
+                TargetFactProposal(
+                    statement=(
+                        "The image depicts a real-world event at an Apple Store."
+                    ),
+                    predicate="depicts_event",
+                    parent_fact_ids=[scene.fact_id],
+                    question="Which Apple Store event does the image depict?",
+                    purpose="Verify the visible event relation.",
+                    suggested_tools=["text_search", "visit"],
+                    suggested_queries=["Apple Store event"],
+                )
+            ]
+        ),
+    )
+    mixed_scope = apply_target_planning(
+        state.model_copy(deep=True),
+        TargetPlanningOutput(
+            proposals=[
+                TargetFactProposal(
+                    statement=(
+                        "The image is a genuine photograph depicting a "
+                        "real-world event at an Apple Store."
+                    ),
+                    predicate="depicts_event",
+                    parent_fact_ids=[scene.fact_id],
+                    question="Which Apple Store event does the image depict?",
+                    purpose="Verify the visible event relation.",
+                    suggested_tools=["text_search", "visit"],
+                    suggested_queries=["Apple Store event"],
+                )
+            ]
+        ),
+    )
+
+    assert grounded["accepted_fact_ids"]
+    assert not mixed_scope["accepted_fact_ids"]
+    assert any(
+        "must not combine visual authenticity" in reason
+        for reason in mixed_scope["rejected_reasons"]
+    )
+
+
 def test_pending_search_candidate_requires_inspection_before_retrieval() -> None:
     case, state = _antarctic_butterfly_state()
     scene = next(
@@ -577,11 +633,73 @@ def test_pending_search_candidate_requires_inspection_before_retrieval() -> None
         "text_search",
         {"__question_id": task.task_id},
     )
+    assert Orchestrator._image_only_discovery_route_error(
+        state,
+        "reverse_image_search",
+        {"__question_id": task.task_id},
+    )
     assert not Orchestrator._image_only_discovery_route_error(
         state,
         "visit",
         {"__question_id": task.task_id},
     )
+
+
+def test_task_tool_contract_rejects_unsuggested_ocr() -> None:
+    _, state = _runtime_state()
+    task = next(
+        item
+        for item in state.tasks
+        if state.core_verdict_fact_id in item.fact_ids
+    )
+
+    error = Orchestrator._image_only_discovery_route_error(
+        state,
+        "ocr_with_position",
+        {"__question_id": task.task_id},
+    )
+
+    assert "not enabled" in error
+    assert task.task_id in error
+
+
+def test_failed_lens_keeps_semantic_and_text_routes_executable() -> None:
+    case, state = _runtime_state()
+    task = next(
+        item
+        for item in state.tasks
+        if state.core_verdict_fact_id in item.fact_ids
+    )
+    task.suggested_tools = ["reverse_image_search", "text_search"]
+    lens = _step(
+        task_id=task.task_id,
+        call_id="call-lens-timeout",
+        tool_name="reverse_image_search",
+        result=json.dumps(
+            {
+                "status": "error",
+                "branch": "lens",
+                "error": "upload timed out",
+            }
+        ),
+    )
+    lens.tool_args["branch"] = "lens"
+
+    audit_coverage(state)
+    record_tool_observation(
+        state,
+        lens,
+        image_sha256=case.image_sha256,
+    )
+    coverage = audit_coverage(state, decision_checkpoint=True)
+    routes = remaining_material_routes(
+        state,
+        fact_id=state.core_verdict_fact_id or "",
+    )
+
+    assert coverage.stop_reason == "continue"
+    assert any(route.startswith("reverse_image_search:semantic:") for route in routes)
+    assert any(route.startswith("text_search:") for route in routes)
 
 
 def test_failed_comparison_does_not_exhaust_task_with_uninspected_page() -> None:
@@ -930,7 +1048,7 @@ def test_visual_anomaly_result_does_not_attach_to_depicted_world_fact() -> None:
     )
     fact_id = update["accepted_fact_ids"][0]
     task = next(item for item in state.tasks if fact_id in item.fact_ids)
-    assert "external source evidence" in Orchestrator._image_only_discovery_route_error(
+    assert "not enabled" in Orchestrator._image_only_discovery_route_error(
         state,
         "analyze_visual_anomalies",
         {"__question_id": task.task_id},
@@ -979,7 +1097,7 @@ def test_react_exposes_only_tasks_blocking_unresolved_decisive_facts() -> None:
     )
 
 
-def test_only_decision_checkpoints_advance_low_gain_streak() -> None:
+def test_low_gain_does_not_saturate_while_material_core_routes_remain() -> None:
     _, state = _runtime_state()
 
     audit_coverage(state)
@@ -999,7 +1117,11 @@ def test_only_decision_checkpoints_advance_low_gain_streak() -> None:
     assert between_reflections.decision_checkpoint is False
     assert between_reflections.stop_reason == "continue"
     assert second_low_gain.low_gain_intervals == 2
-    assert second_low_gain.stop_reason == "information_saturated"
+    assert second_low_gain.stop_reason == "continue"
+    assert remaining_material_routes(
+        state,
+        fact_id=state.core_verdict_fact_id or "",
+    )
 
 
 def test_discovery_is_not_evidence_and_reflection_only_reprioritizes() -> None:
