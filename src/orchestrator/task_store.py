@@ -225,36 +225,6 @@ def apply_target_planning(
         and proposal.predicate != "visual_integrity"
         for proposal in output.proposals
     )
-    if (
-        _planning_needs_world_relation(output)
-        and not _planning_has_world_relation(output)
-    ):
-        return {
-            "accepted_fact_ids": [],
-            "accepted_task_ids": [],
-            "rejected_reasons": [
-                "visual_integrity describes a subject-to-place, event, date, "
-                "or coexistence relation; propose that depicted-world relation "
-                "as a separate decisive fact"
-            ],
-            "remaining_target_gaps": output.remaining_target_gaps[:4],
-        }
-    if any(
-        _located_at_target_is_overbroad(proposal, fact_by_id)
-        for proposal in output.proposals
-        if proposal.predicate == "located_at"
-    ):
-        return {
-            "accepted_fact_ids": [],
-            "accepted_task_ids": [],
-            "rejected_reasons": [
-                "located_at target must bind one salient visible subject to one "
-                "concrete visible place or habitat; generic coexistence and "
-                "multi-entity location conjunctions are not atomic"
-            ],
-            "remaining_target_gaps": output.remaining_target_gaps[:4],
-        }
-
     for proposal in output.proposals[:3]:
         parent_ids = list(dict.fromkeys(proposal.parent_fact_ids))
         parents = [
@@ -273,6 +243,26 @@ def apply_target_planning(
         ):
             rejected_reasons.append(
                 "initial targets must be grounded in image or OCR facts"
+            )
+            continue
+        if (
+            proposal.predicate == "visual_integrity"
+            and _visual_integrity_target_contains_world_relation(proposal)
+        ):
+            rejected_reasons.append(
+                "visual_integrity describes a subject-to-place, event, date, "
+                "or coexistence relation; propose that depicted-world relation "
+                "as a separate decisive fact"
+            )
+            continue
+        if (
+            proposal.predicate == "located_at"
+            and _located_at_target_is_overbroad(proposal, fact_by_id)
+        ):
+            rejected_reasons.append(
+                "located_at target must bind one salient visible subject to one "
+                "concrete visible place or habitat; generic coexistence and "
+                "multi-entity location conjunctions are not atomic"
             )
             continue
         if (
@@ -664,7 +654,9 @@ def _target_preserves_question_slots(
     return bool(requested & preserved)
 
 
-def _planning_needs_world_relation(output: TargetPlanningOutput) -> bool:
+def _visual_integrity_target_contains_world_relation(proposal: Any) -> bool:
+    if proposal.predicate != "visual_integrity":
+        return False
     relation_markers = (
         "real-world scene where",
         "coexist",
@@ -682,34 +674,14 @@ def _planning_needs_world_relation(output: TargetPlanningOutput) -> bool:
         " in an antarctic",
         " in an arctic",
     )
-    for proposal in output.proposals:
-        if proposal.predicate != "visual_integrity":
-            continue
-        rendered = " ".join(
-            (
-                proposal.statement,
-                proposal.question,
-                proposal.purpose,
-            )
-        ).casefold()
-        if any(marker in rendered for marker in relation_markers):
-            return True
-    return False
-
-
-def _planning_has_world_relation(output: TargetPlanningOutput) -> bool:
-    return any(
-        proposal.predicate
-        in {
-            "identified_as",
-            "located_at",
-            "dated_as",
-            "depicts_event",
-            "source_record_matches",
-        }
-        and proposal.decision_relevance == "decisive"
-        for proposal in output.proposals
-    )
+    rendered = " ".join(
+        (
+            proposal.statement,
+            proposal.question,
+            proposal.purpose,
+        )
+    ).casefold()
+    return any(marker in rendered for marker in relation_markers)
 
 
 def _source_record_target_preserves_visible_text(

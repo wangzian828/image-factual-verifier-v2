@@ -397,9 +397,11 @@ class Orchestrator:
             )
         self._record_stage_steps(state, steps)
         if parsed is None:
-            raise RuntimeError(
-                "image-only target planning did not produce valid output"
-            )
+            # Bootstrap always provides a bounded provenance task. A malformed
+            # optional Planning proposal must not convert an otherwise runnable
+            # image case into an engineering error.
+            self._sync_image_only_state(state, investigation)
+            return
         apply_target_planning(investigation, parsed)
         self._sync_image_only_state(state, investigation)
 

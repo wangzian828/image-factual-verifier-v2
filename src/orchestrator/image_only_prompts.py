@@ -123,6 +123,9 @@ Rules:
    decisive fact.
    When the visible scene description names or strongly specifies a place or habitat,
    preserve that concrete place/habitat in the located_at statement and question.
+   Bind it to one named salient subject from the pixels: for example, ask whether
+   the depicted butterflies occur in the named Antarctic landscape, not only whether
+   "the image was taken" there. Do not list every visible object in one target.
    Never replace it with "the same place", "some location", a conjunction of all
    visible objects, or a generic coexistence question.
 9. Frame every target as the positive proposition whose truth would make the image

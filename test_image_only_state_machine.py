@@ -313,6 +313,63 @@ def test_target_planning_rejects_generic_multi_entity_coexistence() -> None:
     assert "not atomic" in update["rejected_reasons"][0]
 
 
+def test_target_planning_keeps_valid_proposal_when_parallel_target_is_invalid() -> None:
+    _, state = _antarctic_butterfly_state()
+    scene = next(
+        fact for fact in state.facts if fact.predicate == "appears_to_depict"
+    )
+    parent_ids = [
+        fact.fact_id
+        for fact in state.facts
+        if fact.predicate in {"appears_to_depict", "visible_in"}
+    ]
+
+    update = apply_target_planning(
+        state,
+        TargetPlanningOutput(
+            proposals=[
+                TargetFactProposal(
+                    statement=(
+                        "Monarch butterflies, pine trees, and penguins coexist "
+                        "in one real-world geographic location."
+                    ),
+                    predicate="located_at",
+                    parent_fact_ids=parent_ids[:4],
+                    question=(
+                        "Is there any habitat where monarch butterflies, pine "
+                        "trees, and penguins coexist?"
+                    ),
+                    purpose="Test the depicted-world relation.",
+                    suggested_tools=["text_search", "visit"],
+                ),
+                TargetFactProposal(
+                    statement=(
+                        "The depicted monarch butterfly scene is authentic and "
+                        "unmodified."
+                    ),
+                    kind="internal_consistency",
+                    predicate="visual_integrity",
+                    parent_fact_ids=[scene.fact_id],
+                    question="Are the visible pixels authentic and unmodified?",
+                    purpose="Inspect visible pixel integrity only.",
+                    suggested_tools=["analyze_visual_anomalies"],
+                    decision_relevance="supporting",
+                ),
+            ]
+        ),
+    )
+
+    assert len(update["accepted_fact_ids"]) == 1
+    assert any("not atomic" in reason for reason in update["rejected_reasons"])
+    accepted = next(
+        fact
+        for fact in state.facts
+        if fact.fact_id == update["accepted_fact_ids"][0]
+    )
+    assert accepted.predicate == "visual_integrity"
+    assert accepted.decision_relevance == "supporting"
+
+
 def test_target_planning_accepts_atomic_visible_location_relation() -> None:
     _, state = _antarctic_butterfly_state()
     scene = next(

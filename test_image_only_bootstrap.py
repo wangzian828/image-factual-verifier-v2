@@ -20,6 +20,7 @@ from src.orchestrator.state import (
     ImageOnlyRuntimeCase,
     PerceptionReport,
     TextRegion,
+    VerificationState,
 )
 from src.tools.base import BaseTool
 from src.workflow import VerificationWorkflow, WorkflowConfig
@@ -68,6 +69,57 @@ class PlanningBoundaryBackend:
                                 "text": json.dumps(
                                     {
                                         "proposals": [],
+                                        "remaining_target_gaps": [],
+                                    }
+                                ),
+                            }
+                        ],
+                    }
+                ],
+            }
+        raise RuntimeError("controlled investigation boundary")
+
+
+class InvalidPlanningFallbackBackend:
+    provider = "gemini"
+    wire_api = "interactions"
+
+    async def create_interaction(self, **kwargs: Any) -> Dict[str, Any]:
+        system = str(kwargs.get("system_instruction", ""))
+        if "initial target-planning step" in system:
+            return {
+                "id": "invalid-planning-fallback",
+                "status": "completed",
+                "usage": {
+                    "total_input_tokens": 1,
+                    "total_output_tokens": 1,
+                    "total_thought_tokens": 0,
+                },
+                "steps": [
+                    {
+                        "type": "model_output",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": json.dumps(
+                                    {
+                                        "proposals": [
+                                            {
+                                                "statement": (
+                                                    "Butterflies, trees, penguins, "
+                                                    "and icebergs coexist in one "
+                                                    "real-world location."
+                                                ),
+                                                "kind": "relation",
+                                                "predicate": "located_at",
+                                                "parent_fact_ids": ["unknown"],
+                                                "question": "Is this coexistence real?",
+                                                "purpose": "Test the full scene.",
+                                                "suggested_tools": ["text_search"],
+                                                "suggested_queries": [],
+                                                "decision_relevance": "decisive",
+                                            }
+                                        ],
                                         "remaining_target_gaps": [],
                                     }
                                 ),
@@ -515,6 +567,39 @@ def test_image_only_workflow_persists_bootstrap_before_investigation_boundary(
         step["stage"] == "image_only_planning"
         and step["action_type"] == "output"
         for step in state["all_steps"]
+    )
+
+
+def test_invalid_target_planning_falls_back_to_bootstrap_tasks(
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "planning-fallback.jpg"
+    image_path.write_bytes(b"planning-fallback-fixture")
+    case = _case(image_path)
+    bootstrap = build_bootstrap_investigation(case, _perception())
+    investigation = state_from_bootstrap(bootstrap)
+    state = VerificationState(
+        image_path=str(image_path),
+        image_id=case.case_id,
+        runtime_case=case,
+        input_mode="image_only",
+        decision_policy_version="reinspect-v2",
+    )
+    orchestrator = Orchestrator(
+        provider="gemini",
+        model_name="controlled-invalid-planning",
+        validate_startup=False,
+    )
+    orchestrator.llm = InvalidPlanningFallbackBackend()
+
+    asyncio.run(
+        orchestrator._run_image_only_target_planning(state, investigation)
+    )
+
+    assert investigation.tasks == bootstrap.tasks
+    assert any(
+        step.action_type == "planning_revision"
+        for step in state.all_steps
     )
 
 
