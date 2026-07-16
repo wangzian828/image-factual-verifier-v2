@@ -49,6 +49,12 @@ Target Planning then selects one image-grounded, evidence-routable
 ReAct choose the first route from the open evidence gap. Reverse-image results, when
 requested, remain Discovery.
 
+The broad bootstrap `appears_to_depict` sentence is perception context only. It is
+never promoted as a fallback core. Target Planning must establish exactly one
+decisive atomic external-world or source-record proposition; failure after the
+bounded correction round is recorded as an engineering error rather than silently
+changing the evaluation target.
+
 Because bootstrap is deterministic, it is not exported as a model-authored policy
 action. Actual Target Planning is retained in the trace.
 

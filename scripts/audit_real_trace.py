@@ -502,7 +502,10 @@ def _audit_rejections(
     route_control_count = 0
     for index, step in enumerate(steps):
         metadata = _mapping(step.get("metadata"))
-        if str(step.get("action_type", "")) == "planning_revision":
+        if str(step.get("action_type", "")) in {
+            "planning_revision",
+            "evidence_decision_revision",
+        }:
             continue
         rejected = (
             str(step.get("action_type", "")) in REJECTION_ACTIONS

@@ -52,6 +52,22 @@ class PlanningBoundaryBackend:
     async def create_interaction(self, **kwargs: Any) -> Dict[str, Any]:
         system = str(kwargs.get("system_instruction", ""))
         if "initial target-planning step" in system:
+            raw = kwargs.get("input_payload", "")
+            text = raw if isinstance(raw, str) else json.dumps(raw)
+            context = json.loads(text)
+            facts = context["pixel_grounded_facts"]
+            vessel_fact = next(
+                fact
+                for fact in facts
+                if fact["predicate"] == "visible_in"
+                and "research vessel" in fact["statement"]
+            )
+            name_fact = next(
+                fact
+                for fact in facts
+                if fact["predicate"] == "reads"
+                and "HENRY B. BIGELOW" in fact["statement"]
+            )
             return {
                 "id": "planning-boundary",
                 "status": "completed",
@@ -68,7 +84,39 @@ class PlanningBoundaryBackend:
                                 "type": "text",
                                 "text": json.dumps(
                                     {
-                                        "proposals": [],
+                                        "proposals": [
+                                            {
+                                                "statement": (
+                                                    "The visible research vessel "
+                                                    "is identified as HENRY B. "
+                                                    "BIGELOW."
+                                                ),
+                                                "kind": "relation",
+                                                "predicate": "identified_as",
+                                                "parent_fact_ids": [
+                                                    vessel_fact["fact_id"],
+                                                    name_fact["fact_id"],
+                                                ],
+                                                "question": (
+                                                    "Does reliable evidence "
+                                                    "identify the visible research "
+                                                    "vessel as HENRY B. BIGELOW?"
+                                                ),
+                                                "purpose": (
+                                                    "Verify the visible vessel "
+                                                    "identity."
+                                                ),
+                                                "suggested_tools": [
+                                                    "reverse_image_search",
+                                                    "text_search",
+                                                    "visit",
+                                                ],
+                                                "suggested_queries": [
+                                                    "HENRY B. BIGELOW R 225"
+                                                ],
+                                                "decision_relevance": "decisive",
+                                            }
+                                        ],
                                         "remaining_target_gaps": [],
                                     }
                                 ),
@@ -570,7 +618,7 @@ def test_image_only_workflow_persists_bootstrap_before_investigation_boundary(
     )
 
 
-def test_invalid_target_planning_falls_back_to_bootstrap_tasks(
+def test_invalid_target_planning_fails_without_broad_scene_fallback(
     tmp_path: Path,
 ) -> None:
     image_path = tmp_path / "planning-fallback.jpg"
@@ -592,11 +640,19 @@ def test_invalid_target_planning_falls_back_to_bootstrap_tasks(
     )
     orchestrator.llm = InvalidPlanningFallbackBackend()
 
-    asyncio.run(
-        orchestrator._run_image_only_target_planning(state, investigation)
-    )
+    with pytest.raises(
+        RuntimeError,
+        match="did not establish an atomic core fact",
+    ):
+        asyncio.run(
+            orchestrator._run_image_only_target_planning(
+                state,
+                investigation,
+            )
+        )
 
     assert investigation.tasks == bootstrap.tasks
+    assert investigation.core_verdict_fact_id is None
     assert any(
         step.action_type == "planning_revision"
         for step in state.all_steps

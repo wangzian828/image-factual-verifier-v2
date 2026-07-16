@@ -12,7 +12,6 @@ from typing import Any, Dict, List, Optional, Sequence
 from src.integrations.gemini import take_runtime_metrics
 from src.orchestrator.bootstrap import build_bootstrap_investigation
 from src.orchestrator.coverage import (
-    activate_initial_decisive_facts,
     audit_coverage,
     compile_verdict_basis,
 )
@@ -292,7 +291,6 @@ class Orchestrator:
                 state,
                 investigation,
             )
-            activate_initial_decisive_facts(investigation)
             await self._run_image_only_investigation(
                 state,
                 investigation,
@@ -385,7 +383,7 @@ class Orchestrator:
             system_prompt=self._sp(IMAGE_ONLY_TARGET_PLANNING_PROMPT),
             tools=[],
             output_schema=TargetPlanningOutput,
-            max_rounds=1,
+            max_rounds=2,
             stage_name="image_only_planning",
             attach_image=False,
             output_validator=lambda parsed, _steps: (
@@ -413,8 +411,28 @@ class Orchestrator:
         self._record_stage_steps(state, steps)
         if parsed is None:
             self._sync_image_only_state(state, investigation)
-            return
-        apply_target_planning(investigation, parsed)
+            raise RuntimeError(
+                "image-only Target Planning did not establish an atomic core fact"
+            )
+        update = apply_target_planning(investigation, parsed)
+        core = next(
+            (
+                fact
+                for fact in investigation.facts
+                if fact.fact_id == investigation.core_verdict_fact_id
+            ),
+            None,
+        )
+        if (
+            not update.get("accepted_fact_ids")
+            or core is None
+            or core.predicate == "appears_to_depict"
+        ):
+            self._sync_image_only_state(state, investigation)
+            raise RuntimeError(
+                "image-only Target Planning produced no externally checkable "
+                "atomic core fact"
+            )
         self._sync_image_only_state(state, investigation)
 
     async def _run_image_only_investigation(
@@ -750,6 +768,13 @@ class Orchestrator:
                 reviewed_evidence_ids=reviewed_evidence_ids,
             )
         )
+        for step in steps:
+            if step.action_type != "output_rejected":
+                continue
+            step.action_type = "evidence_decision_revision"
+            step.metadata["evidence_decision_revision_reason"] = (
+                step.metadata.get("rejection_reason", "")
+            )
         if parsed is None:
             self._record_stage_steps(state, steps)
             self._sync_image_only_state(state, investigation)
@@ -905,11 +930,28 @@ class Orchestrator:
         investigation: ImageOnlyInvestigationState,
         parsed: TargetPlanningOutput,
     ) -> tuple[bool, str]:
+        if len(parsed.proposals) != 1:
+            return False, (
+                "Target Planning must return exactly one decisive external-world "
+                "or source-record proposition"
+            )
+        proposal = parsed.proposals[0]
+        if (
+            proposal.decision_relevance != "decisive"
+            or proposal.predicate == "visual_integrity"
+        ):
+            return False, (
+                "Target Planning must return one decisive externally checkable "
+                "proposition, not a visual-integrity diagnostic"
+            )
         candidate = investigation.model_copy(deep=True)
         update = apply_target_planning(candidate, parsed)
-        if parsed.proposals and not update["accepted_fact_ids"]:
+        if (
+            not update["accepted_fact_ids"]
+            or candidate.core_verdict_fact_id not in update["accepted_fact_ids"]
+        ):
             return False, "; ".join(update["rejected_reasons"]) or (
-                "target planning proposed no valid state transition"
+                "target planning proposed no externally checkable atomic core fact"
             )
         return True, ""
 

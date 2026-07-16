@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from src.orchestrator.bootstrap import build_bootstrap_investigation
-from src.orchestrator.coverage import activate_initial_decisive_facts
 from src.orchestrator.runtime_case import image_sha256
 from src.orchestrator.pipeline import Orchestrator
 from src.orchestrator.investigation_models import (
@@ -76,8 +75,8 @@ class AdaptiveImageOnlyBackend:
     provider = "gemini"
     wire_api = "interactions"
 
-    def __init__(self, task_ids: List[str]) -> None:
-        self.pending_task_ids = list(task_ids)
+    def __init__(self) -> None:
+        self.pending_task_ids: List[str] = []
         self.pending_phase = "reverse"
         self.requests: List[Dict[str, Any]] = []
         self.counter = 0
@@ -148,10 +147,51 @@ class AdaptiveImageOnlyBackend:
                 },
             )
         if "initial target-planning step" in system:
+            context = json.loads(text)
+            facts = context["pixel_grounded_facts"]
+            vessel_fact = next(
+                fact
+                for fact in facts
+                if fact["predicate"] == "visible_in"
+                and "Henry B. Bigelow" in fact["statement"]
+            )
+            name_fact = next(
+                fact
+                for fact in facts
+                if fact["predicate"] == "reads"
+                and "HENRY B. BIGELOW" in fact["statement"]
+            )
             return _completed(
                 interaction_id,
                 {
-                    "proposals": [],
+                    "proposals": [
+                        {
+                            "statement": (
+                                "The visible research vessel is identified as "
+                                "NOAA Ship Henry B. Bigelow."
+                            ),
+                            "kind": "relation",
+                            "predicate": "identified_as",
+                            "parent_fact_ids": [
+                                vessel_fact["fact_id"],
+                                name_fact["fact_id"],
+                            ],
+                            "question": (
+                                "Does reliable evidence identify the visible "
+                                "research vessel as NOAA Ship Henry B. Bigelow?"
+                            ),
+                            "purpose": "Verify the visible vessel identity.",
+                            "suggested_tools": [
+                                "reverse_image_search",
+                                "compare_with_reference",
+                                "visit",
+                            ],
+                            "suggested_queries": [
+                                "\"HENRY B. BIGELOW\" R 225"
+                            ],
+                            "decision_relevance": "decisive",
+                        }
+                    ],
                     "remaining_target_gaps": [],
                 },
             )
@@ -228,8 +268,15 @@ class AdaptiveImageOnlyBackend:
                     "ready_for_reflection": True,
                 },
             )
+        active_task_ids = re.findall(r"\[(task-[^\]]+)\]", text)
+        if active_task_ids and not self.pending_task_ids:
+            self.pending_task_ids = [active_task_ids[0]]
         if self.pending_task_ids:
-            task_id = self.pending_task_ids[0]
+            task_id = (
+                active_task_ids[0]
+                if active_task_ids
+                else self.pending_task_ids[0]
+            )
             if self.pending_phase == "reverse":
                 self.pending_phase = "compare"
                 return _call(
@@ -297,11 +344,9 @@ class ScreenshotBackend:
         self,
         target_output: Dict[str, Any],
         source_task_id: str,
-        integrity_task_id: str,
     ) -> None:
         self.target_output = target_output
         self.source_task_id = source_task_id
-        self.integrity_task_id = integrity_task_id
         self.phase = "search"
         self.counter = 0
 
@@ -361,8 +406,8 @@ class ScreenshotBackend:
                     "selected_finding_ids": basis["finding_ids"],
                     "selected_evidence_ids": basis["evidence_ids"],
                     "overall_assessment": (
-                        "The original post record matches the screenshot content, "
-                        "and a targeted visual scan found no visible manipulation."
+                        "The original post record matches the visible screenshot "
+                        "content."
                     ),
                     "unresolved_gaps": basis["unresolved_gaps"],
                 },
@@ -594,17 +639,6 @@ def test_scripted_image_only_complete_trajectory(tmp_path: Path) -> None:
         image_sha256=image_sha256(str(image_path)),
     )
     bootstrap = build_bootstrap_investigation(case, _perception())
-    investigation = state_from_bootstrap(bootstrap)
-    activate_initial_decisive_facts(investigation)
-    react_task_ids = [
-        task.task_id
-        for task in bootstrap.tasks
-        if any(
-            fact_id in investigation.decisive_fact_ids
-            for fact_id in task.fact_ids
-        )
-    ]
-    assert len(react_task_ids) == 1
 
     orchestrator = Orchestrator(
         provider="gemini",
@@ -612,7 +646,7 @@ def test_scripted_image_only_complete_trajectory(tmp_path: Path) -> None:
         validate_startup=False,
     )
     orchestrator.vlm_provider = "controlled"
-    orchestrator.llm = AdaptiveImageOnlyBackend(react_task_ids)
+    orchestrator.llm = AdaptiveImageOnlyBackend()
     orchestrator.all_tools = {
         "perceive_scene": StaticTool(
             "perceive_scene",
@@ -729,7 +763,7 @@ def test_scripted_image_only_complete_trajectory(tmp_path: Path) -> None:
     assert trace_path.is_file()
 
 
-def test_scripted_screenshot_source_and_integrity_trajectory(
+def test_scripted_screenshot_source_record_trajectory(
     tmp_path: Path,
 ) -> None:
     image_path = tmp_path / "screenshot.jpg"
@@ -742,11 +776,6 @@ def test_scripted_screenshot_source_and_integrity_trajectory(
     perception = _screenshot_perception()
     bootstrap = build_bootstrap_investigation(case, perception)
     planning_state = state_from_bootstrap(bootstrap)
-    scene_fact = next(
-        fact
-        for fact in planning_state.facts
-        if fact.predicate == "appears_to_depict"
-    )
     text_facts = [
         fact
         for fact in planning_state.facts
@@ -774,37 +803,14 @@ def test_scripted_screenshot_source_and_integrity_trajectory(
                     '"学生用AI写，学校用AI查" @dingzhen47'
                 ],
             ),
-            TargetFactProposal(
-                statement=(
-                    "The visible post layout has no material manipulation "
-                    "affecting its displayed account, text, date, or reply."
-                ),
-                kind="internal_consistency",
-                predicate="visual_integrity",
-                parent_fact_ids=[scene_fact.fact_id],
-                question=(
-                    "Are visible account, text, date, or reply elements "
-                    "materially manipulated?"
-                ),
-                purpose="Inspect the salient visual integrity property.",
-                suggested_tools=[
-                    "analyze_visual_anomalies",
-                    "check_consistency",
-                ],
-            ),
         ]
     )
     applied = apply_target_planning(planning_state, target_output)
-    assert len(applied["accepted_task_ids"]) == 2
+    assert len(applied["accepted_task_ids"]) == 1
     source_task_id = next(
         task.task_id
         for task in planning_state.tasks
         if "public-record attribution" in task.purpose
-    )
-    integrity_task_id = next(
-        task.task_id
-        for task in planning_state.tasks
-        if "visual integrity property" in task.purpose
     )
     statement = (
         "Major Tom @dingzhen47 posted 学生用AI写，学校用AI查 on "
@@ -859,7 +865,6 @@ def test_scripted_screenshot_source_and_integrity_trajectory(
     orchestrator.llm = ScreenshotBackend(
         target_output.model_dump(mode="json"),
         source_task_id,
-        integrity_task_id,
     )
     orchestrator.all_tools = {
         "perceive_scene": StaticTool(
@@ -1011,7 +1016,7 @@ def test_scripted_screenshot_source_and_integrity_trajectory(
     ] == "supported"
     assert result["verification_layers"]["visible_integrity"][
         "status"
-    ] == "unresolved"
+    ] == "not_assessed"
     state = result["state"]["investigation_state"]
     assert state["action_count"] == 2
     assert len(state["evidence_decisions"]) == 1
@@ -1023,9 +1028,7 @@ def test_scripted_screenshot_source_and_integrity_trajectory(
         for fact in state["facts"]
         if fact["fact_id"] in state["decisive_fact_ids"]
     } == {"source_record_matches"}
-    assert any(
+    assert not any(
         fact["predicate"] == "visual_integrity"
-        and fact["decision_relevance"] == "supporting"
-        and fact["status"] == "active"
         for fact in state["facts"]
     )

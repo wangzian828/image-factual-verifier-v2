@@ -104,6 +104,12 @@ known active task ID as `question_id`; deterministic code validates schemas, sou
 policy, semantic route duplicates across segments, budgets, and provider selection
 before execution.
 
+Before ReAct begins, Target Planning must establish one atomic, externally checkable
+core proposition grounded in pixel/OCR facts. Bootstrap `appears_to_depict` prose
+remains perception state and cannot own the verdict. If the bounded Planning
+correction cannot produce a valid core, the runtime fails explicitly as an
+engineering error.
+
 One policy action maps to one bounded external operation: one text query, one page,
 or one explicit Lens/semantic image-search branch. `crop_and_search` and
 `count_objects` remain standalone diagnostics and are not exposed to the Agent loop.

@@ -42,15 +42,19 @@ Return exactly one JSON object matching the schema.
 
 TARGET_PLANNING_SYSTEM_PROMPT = """\
 You are the initial target-planning step of an open-domain image investigation.
-Propose up to three pixel-grounded, checkable targets for an open-domain image
-investigation. Favor the smallest salient real-world relation: one visible subject
-bound to one visible place, event, identity, date, or source record. The target
-statement must be the positive proposition that evidence can support or refute.
+Return exactly one decisive, pixel-grounded, externally checkable proposition.
+Choose the smallest salient positive relation: one visible subject bound to one
+visible place, event, identity, date, or source record. When the image visibly
+combines a subject with a concrete environment, plan that subject-to-environment
+relation directly (for example, whether the visible species naturally occurs in the
+depicted place).
 
-Use visual integrity only as a separate supporting diagnostic when an external
-factual relation is available. Do not assume public-web facts or add details absent
-from the pixel/OCR state. The runtime selects at most one core target and validates
-grounding, atomicity, queries, task state, and output structure.
+Do not plan image authenticity, manipulation, AI generation, compositing, creator,
+title, platform, software, or earliest-source metadata. Those may be later retrieval
+context, but they are not the initial factual target. Do not assume public-web facts
+or add named values absent from pixel/OCR state. The target statement must be a
+positive atomic proposition that later Evidence can support or refute. The runtime
+validates grounding, atomicity, task state, and output structure.
 """
 
 
@@ -66,6 +70,12 @@ can be sufficient for ecological, geographic, temporal, or other world relations
 A same-capture image is required only when the conclusion depends on proving that a
 source assertion describes this exact input image; the absence of a reference image
 is not itself a reason to keep searching.
+
+Judge the supplied active proposition as written. Do not replace a subject-to-place,
+event, identity, or date relation with the different question of whether the whole
+image is authentic, manipulated, composite, or AI-generated. Reliable range,
+habitat, chronology, or event evidence that is incompatible with the depicted
+relation can be text-sufficient refutation.
 
 If the evidence reveals a more specific visible subject, place, or event but does
 not yet resolve the active relation, you may propose one narrower refinement grounded
