@@ -394,12 +394,10 @@ def _evidence_score(
     stance: str,
     fact_evidence: Sequence[InvestigationEvidence],
 ) -> float:
-    allowed_first_party_record = (
-        fact.predicate == "source_record_matches"
-        and evidence.source_class == "ugc"
-        and set(evidence.risk_flags) <= {"user_generated_content"}
-    )
-    if evidence.risk_flags and not allowed_first_party_record:
+    hard_risk_flags = set(evidence.risk_flags) - {
+        "user_generated_content",
+    }
+    if hard_risk_flags:
         return 0.0
     if (
         evidence.claim_binding == "pixel_observation"

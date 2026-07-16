@@ -337,9 +337,35 @@ def render_react_context(state: ImageOnlyInvestigationState) -> str:
             attempted_routes.append(json.loads(route))
         except (TypeError, ValueError):
             continue
+    observed_image_context = [
+        {
+            "fact_id": fact.fact_id,
+            "statement": fact.statement,
+            "origin": fact.origin.type,
+        }
+        for fact in state.facts
+        if fact.origin.type in {"input_image", "ocr"}
+    ][:12]
+    observed_retrieval_anchors = [
+        item.model_dump(mode="json")
+        for item in state.retrieval_anchors[:12]
+    ]
     return (
         f"Investigation brief: {state.brief.objective}\n"
         f"Core fact: {core.statement if core else 'none'}\n"
+        "Observed image/OCR context:\n"
+        + json.dumps(
+            observed_image_context,
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n\nObserved retrieval anchors:\n"
+        + json.dumps(
+            observed_retrieval_anchors,
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n"
         "Open evidence gaps: "
         + json.dumps(
             [

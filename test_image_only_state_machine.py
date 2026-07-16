@@ -837,7 +837,7 @@ def test_failed_lens_keeps_semantic_and_text_routes_executable() -> None:
     assert any(route.startswith("text_search:") for route in routes)
 
 
-def test_one_batch_lead_inspection_releases_retrieval() -> None:
+def test_empty_batch_inspection_exposes_one_bounded_sibling_fallback() -> None:
     case, state = _runtime_state()
     task = next(
         item
@@ -896,13 +896,36 @@ def test_one_batch_lead_inspection_releases_retrieval() -> None:
         fact_id=state.core_verdict_fact_id or "",
     )
 
-    assert not Orchestrator._image_only_discovery_route_error(
+    assert Orchestrator._image_only_discovery_route_error(
         state,
         "text_search",
         {"__question_id": task.task_id},
     )
-    assert any(route.startswith("text_search:") for route in routes)
-    assert not any("pinterest.com" in route for route in routes)
+    assert routes == [
+        f"visit:{task.task_id}:https://www.pinterest.com/example"
+    ]
+
+    repost_visit = _step(
+        task_id=task.task_id,
+        call_id="call-repost-source",
+        tool_name="visit",
+        result='{"status":"error","error":"captcha"}',
+    )
+    repost_visit.tool_args["url"] = ["https://www.pinterest.com/example"]
+    record_tool_observation(
+        state,
+        repost_visit,
+        image_sha256=case.image_sha256,
+    )
+    released_routes = remaining_material_routes(
+        state,
+        fact_id=state.core_verdict_fact_id or "",
+    )
+
+    assert set(released_routes) == {
+        f"reverse_image_search:semantic:{task.task_id}",
+        f"text_search:{task.task_id}",
+    }
 
 
 def test_new_search_batch_exposes_relevant_unknown_candidates_after_weak_visit() -> None:
@@ -954,6 +977,27 @@ def test_new_search_batch_exposes_relevant_unknown_candidates_after_weak_visit()
     record_tool_observation(
         state,
         weak_visit,
+        image_sha256=case.image_sha256,
+    )
+
+    sibling_routes = remaining_material_routes(
+        state,
+        fact_id=state.core_verdict_fact_id or "",
+    )
+    assert sibling_routes == [
+        f"visit:{task.task_id}:https://example.org/butterflies"
+    ]
+
+    sibling_visit = _step(
+        task_id=task.task_id,
+        call_id="call-empty-butterfly-page",
+        tool_name="visit",
+        result='{"status":"error","error":"captcha"}',
+    )
+    sibling_visit.tool_args["url"] = ["https://example.org/butterflies"]
+    record_tool_observation(
+        state,
+        sibling_visit,
         image_sha256=case.image_sha256,
     )
 
@@ -1027,6 +1071,86 @@ def test_new_search_batch_exposes_relevant_unknown_candidates_after_weak_visit()
     }
     assert not any("example.org/penguins" in route for route in routes)
     assert not any("example.org/butterflies" in route for route in routes)
+
+
+def test_evidence_consumes_retrieval_batch_without_sibling_sweep() -> None:
+    case, state = _runtime_state()
+    task = next(
+        item
+        for item in state.tasks
+        if state.core_verdict_fact_id in item.fact_ids
+    )
+    task.suggested_tools = ["text_search", "visit"]
+    record_tool_observation(
+        state,
+        _step(
+            task_id=task.task_id,
+            call_id="call-evidence-batch",
+            tool_name="text_search",
+            result=json.dumps(
+                {
+                    "status": "success",
+                    "queries": [
+                        {
+                            "query": "research vessel identity",
+                            "results": [
+                                {
+                                    "title": "Direct record",
+                                    "url": "https://example.org/direct",
+                                    "snippet": "A direct vessel record.",
+                                },
+                                {
+                                    "title": "Sibling page",
+                                    "url": "https://example.org/sibling",
+                                    "snippet": "A second candidate.",
+                                },
+                            ],
+                        }
+                    ],
+                }
+            ),
+        ),
+        image_sha256=case.image_sha256,
+    )
+    statement = "The official record identifies the depicted research vessel."
+    direct_visit = _step(
+        task_id=task.task_id,
+        call_id="call-direct-evidence",
+        tool_name="visit",
+        result=json.dumps(
+            {
+                "status": "success",
+                "selected_url": "https://example.org/direct",
+                "url": "https://example.org/direct",
+                "evidence": statement,
+                "summary": statement,
+                "relevance": "high",
+                "stance": "support",
+                "directness": "direct",
+                "temporal_alignment": "not_applicable",
+                "artifact_sha256": "a" * 64,
+                "evidence_span": {"start": 0, "end": len(statement)},
+                "retrieved_at": datetime.now(timezone.utc).isoformat(),
+                "injection_flags": [],
+                "evidence_eligible": True,
+            }
+        ),
+    )
+    direct_visit.tool_args["url"] = ["https://example.org/direct"]
+    update = record_tool_observation(
+        state,
+        direct_visit,
+        image_sha256=case.image_sha256,
+    )
+
+    routes = remaining_material_routes(
+        state,
+        fact_id=state.core_verdict_fact_id or "",
+    )
+
+    assert update["created_evidence_ids"]
+    assert not any("example.org/sibling" in route for route in routes)
+    assert routes == [f"text_search:{task.task_id}"]
 
 
 def test_failed_comparison_does_not_exhaust_task_with_uninspected_page() -> None:
@@ -2035,6 +2159,8 @@ def test_semantic_reverse_match_preserves_reference_and_is_rendered() -> None:
     assert discovery.reference_image_url == reference_url
     rendered = render_react_context(state)
     assert "Untested reference images" in rendered
+    assert "Observed image/OCR context" in rendered
+    assert "Observed retrieval anchors" in rendered
     assert reference_url in rendered
     assert '"source_class": "official"' in rendered
 

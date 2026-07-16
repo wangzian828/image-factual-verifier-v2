@@ -45,6 +45,7 @@ MAX_ATTEMPTS_PER_TASK = 7
 MAX_TEXT_SEARCH_ROUTES_PER_TASK = 2
 MAX_CORE_FACT_REFINEMENTS = 1
 MAX_INSPECTION_CANDIDATES_PER_BATCH = 4
+MAX_INSPECTION_ATTEMPTS_PER_BATCH = 2
 
 
 def stable_id(prefix: str, *parts: object) -> str:
@@ -413,15 +414,6 @@ def record_tool_observation(
     state.action_count += 1
     task.attempt_count += 1
     task.status = "active"
-    route = json.dumps(
-        route_signature(tool_name, tool_args),
-        ensure_ascii=False,
-        sort_keys=True,
-        default=str,
-    )
-    if route not in state.attempted_routes:
-        state.attempted_routes.append(route)
-
     serialized = str(getattr(step, "tool_result", "") or "")
     try:
         data, succeeded = parse_tool_result(serialized)
@@ -473,6 +465,26 @@ def record_tool_observation(
                 message=str(data.get("error", "tool call failed")),
             )
         )
+
+    route_payload = route_signature(tool_name, tool_args)
+    route_payload["function_call_id"] = call_id
+    route_payload["outcome"] = (
+        "evidence"
+        if evidence_ids
+        else "discovery"
+        if discovery_ids
+        else "empty"
+        if succeeded
+        else "failed"
+    )
+    route = json.dumps(
+        route_payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        default=str,
+    )
+    if route not in state.attempted_routes:
+        state.attempted_routes.append(route)
 
     _refresh_fact_states(state)
     if finding_ids and not _task_has_unresolved_decisive_fact(state, task):
@@ -2743,37 +2755,21 @@ def _task_has_uninspected_discovery(
 ) -> bool:
     """Keep a task runnable while its own search leads offer a next action."""
 
-    attempted_pages: set[str] = set()
-    attempted_references: set[str] = set()
-    for route in state.attempted_routes:
-        try:
-            parsed = json.loads(route)
-        except (TypeError, ValueError):
-            continue
-        tool_name = str(parsed.get("tool", "")).strip()
-        if tool_name == "visit":
-            attempted_pages.update(
-                canonicalize_url(str(url))
-                for url in parsed.get("urls", []) or []
-                if canonicalize_url(str(url))
-            )
-        elif tool_name == "compare_with_reference":
-            reference_url = canonicalize_url(
-                str(parsed.get("reference_url", ""))
-            )
-            if reference_url:
-                attempted_references.add(reference_url)
-
-    for discovery in state.discoveries:
-        if discovery.task_id != task.task_id:
-            continue
-        page_url = canonicalize_url(discovery.candidate_url)
-        if page_url and page_url not in attempted_pages:
-            return True
-        reference_url = canonicalize_url(discovery.reference_image_url)
-        if reference_url and reference_url not in attempted_references:
-            return True
-    return False
+    attempts = _attempted_routes_by_task(state).get(task.task_id, [])
+    return bool(
+        _pending_inspection_batches(
+            state,
+            task,
+            attempts,
+            tool_name="visit",
+        )
+        or _pending_inspection_batches(
+            state,
+            task,
+            attempts,
+            tool_name="compare_with_reference",
+        )
+    )
 
 
 def remaining_material_routes(
@@ -2888,80 +2884,35 @@ def _remaining_task_material_routes(
     if not allowed:
         return []
 
-    attempted_pages: set[str] = set()
-    attempted_references: set[str] = set()
     text_search_count = 0
     one_shot_tools: set[str] = set()
     for route in attempts:
         tool_name = str(route.get("tool", "")).strip()
-        if tool_name == "visit":
-            attempted_pages.update(
-                canonicalize_url(str(url))
-                for url in route.get("urls", []) or []
-                if canonicalize_url(str(url))
-            )
-        elif tool_name == "compare_with_reference":
-            reference_url = canonicalize_url(
-                str(route.get("reference_url", ""))
-            )
-            if reference_url:
-                attempted_references.add(reference_url)
-        elif tool_name == "text_search":
+        if tool_name == "text_search":
             text_search_count += 1
-        else:
+        elif tool_name not in {"visit", "compare_with_reference"}:
             one_shot_tools.add(tool_name)
 
-    discovery_batches: Dict[str, List[InvestigationDiscovery]] = {}
-    for discovery in state.discoveries:
-        if discovery.task_id == task.task_id:
-            discovery_batches.setdefault(
-                discovery.function_call_id,
-                [],
-            ).append(discovery)
-
-    pending_page_batches: List[List[str]] = []
-    pending_reference_batches: List[List[str]] = []
-    for discoveries in discovery_batches.values():
-        batch_pages = list(
-            dict.fromkeys(
-                canonicalize_url(item.candidate_url)
-                for item in discoveries
-                if canonicalize_url(item.candidate_url)
-            )
+    pending_page_batches = (
+        _pending_inspection_batches(
+            state,
+            task,
+            attempts,
+            tool_name="visit",
         )
-        batch_references = list(
-            dict.fromkeys(
-                canonicalize_url(item.reference_image_url)
-                for item in discoveries
-                if canonicalize_url(item.reference_image_url)
-            )
+        if "visit" in allowed
+        else []
+    )
+    pending_reference_batches = (
+        _pending_inspection_batches(
+            state,
+            task,
+            attempts,
+            tool_name="compare_with_reference",
         )
-        if (
-            "visit" in allowed
-            and batch_pages
-            and not attempted_pages.intersection(batch_pages)
-        ):
-            pending_page_batches.append(
-                [
-                    f"visit:{task.task_id}:{url}"
-                    for url in batch_pages[
-                        :MAX_INSPECTION_CANDIDATES_PER_BATCH
-                    ]
-                ]
-            )
-        if (
-            "compare_with_reference" in allowed
-            and batch_references
-            and not attempted_references.intersection(batch_references)
-        ):
-            pending_reference_batches.append(
-                [
-                    f"compare_with_reference:{task.task_id}:{url}"
-                    for url in batch_references[
-                        :MAX_INSPECTION_CANDIDATES_PER_BATCH
-                    ]
-                ]
-            )
+        if "compare_with_reference" in allowed
+        else []
+    )
 
     pending_routes = [
         *(pending_page_batches[-1] if pending_page_batches else []),
@@ -2972,9 +2923,9 @@ def _remaining_task_material_routes(
         ),
     ]
     if pending_routes:
-        # Each retrieval batch receives one bounded, model-selected inspection.
-        # Once any page/reference from that modality is inspected, sibling
-        # candidates in the same batch no longer keep the investigation alive.
+        # Each retrieval batch receives bounded, model-selected inspections.
+        # Useful Evidence consumes the batch immediately; empty or blocked
+        # inspections may expose only the small sibling fallback budget.
         return pending_routes
 
     routes: List[str] = []
@@ -2998,3 +2949,87 @@ def _remaining_task_material_routes(
         if tool_name in allowed and tool_name not in one_shot_tools:
             routes.append(f"{tool_name}:{task.task_id}")
     return routes
+
+
+def _pending_inspection_batches(
+    state: ImageOnlyInvestigationState,
+    task: ResearchTask,
+    attempts: Sequence[Mapping[str, Any]],
+    *,
+    tool_name: str,
+) -> List[List[str]]:
+    """Expose bounded sibling fallbacks after an empty or failed inspection.
+
+    One useful Evidence item consumes the batch. An empty or blocked first page
+    may be followed by one sibling candidate, but repeated inspection failure
+    cannot turn a retrieval batch into an unbounded page sweep.
+    """
+
+    if tool_name not in {"visit", "compare_with_reference"}:
+        return []
+    attempted_outcomes: Dict[str, str] = {}
+    for route in attempts:
+        if str(route.get("tool", "")).strip() != tool_name:
+            continue
+        if tool_name == "visit":
+            urls = route.get("urls", []) or []
+            if isinstance(urls, str):
+                urls = [urls]
+        else:
+            urls = [route.get("reference_url", "")]
+        outcome = str(route.get("outcome", "")).strip() or "evidence"
+        for raw_url in urls:
+            url = canonicalize_url(str(raw_url))
+            if url:
+                attempted_outcomes[url] = outcome
+
+    discovery_batches: Dict[str, List[InvestigationDiscovery]] = {}
+    for discovery in state.discoveries:
+        if discovery.task_id == task.task_id:
+            discovery_batches.setdefault(
+                discovery.function_call_id,
+                [],
+            ).append(discovery)
+
+    pending: List[List[str]] = []
+    for discoveries in discovery_batches.values():
+        candidate_urls = list(
+            dict.fromkeys(
+                canonicalize_url(
+                    item.candidate_url
+                    if tool_name == "visit"
+                    else item.reference_image_url
+                )
+                for item in discoveries
+                if canonicalize_url(
+                    item.candidate_url
+                    if tool_name == "visit"
+                    else item.reference_image_url
+                )
+            )
+        )[:MAX_INSPECTION_CANDIDATES_PER_BATCH]
+        if not candidate_urls:
+            continue
+        attempted = [
+            url for url in candidate_urls if url in attempted_outcomes
+        ]
+        if any(
+            attempted_outcomes[url] == "evidence"
+            for url in attempted
+        ):
+            continue
+        if len(attempted) >= MAX_INSPECTION_ATTEMPTS_PER_BATCH:
+            continue
+        remaining = [
+            url for url in candidate_urls if url not in attempted_outcomes
+        ]
+        if not remaining:
+            continue
+        prefix = "visit" if tool_name == "visit" else "compare_with_reference"
+        pending.append(
+            [
+                f"{prefix}:{task.task_id}:{url}"
+                for url in remaining
+            ]
+        )
+    return pending
