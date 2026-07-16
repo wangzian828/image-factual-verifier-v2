@@ -6,6 +6,7 @@ from pathlib import Path
 from scripts.trajectory.audit_dataset import audit_dataset
 from scripts.trajectory.export_dataset import export_dataset
 from src.trajectory.exporter import export_policy_examples
+from src.trajectory.perception_exporter import export_perception_example
 from test_image_only_trajectory import (
     test_scripted_image_only_complete_trajectory,
 )
@@ -57,6 +58,19 @@ def _run_dir(tmp_path: Path) -> Path:
         run_dir / "policy_trajectories.jsonl",
         [item.model_dump(mode="json") for item in examples],
     )
+    perception = export_perception_example(
+        trace,
+        source_metadata={
+            "source_run_id": "run-scripted",
+            "runtime_commit": "a" * 40,
+            "release_id": "release-scripted",
+            "runtime_contract_version": "ifv-image-only-runtime-v1",
+        },
+    )
+    _write_jsonl(
+        run_dir / "perception_trajectories.jsonl",
+        [perception.model_dump(mode="json")],
+    )
     _write_jsonl(
         run_dir / "trajectory_scores.jsonl",
         [
@@ -88,6 +102,7 @@ def test_dataset_export_is_episode_and_source_family_split_safe(
     assert report["passed"] is True
     assert report["example_count"] == 7
     assert report["episode_count"] == 1
+    assert sum(manifest["perception_example_counts"].values()) == 1
     assert report["teacher_score_distribution"]["mean"] == 4.75
 
 

@@ -24,6 +24,7 @@ from src.orchestrator.runtime_case import image_sha256, verify_case_image
 from src.orchestrator.pipeline import Orchestrator
 from src.orchestrator.state import ImageOnlyRuntimeCase
 from src.orchestrator.source_access import SourceAccessPolicy
+from src.provider_profiles import resolve_provider_settings
 from src.redaction import sanitize_for_persistence
 from src.storage import default_trace_dir
 
@@ -33,8 +34,9 @@ class WorkflowConfig:
     """Configuration for the verification workflow."""
 
     # LLM settings
-    provider: str = "gemini"
-    model_name: str = "gemini-3.5-flash"
+    profile_id: Optional[str] = None
+    provider: Optional[str] = None
+    model_name: Optional[str] = None
     vlm_provider: Optional[str] = None  # Defaults to provider
     vlm_model: Optional[str] = None  # Defaults to model_name
     llm_wire_api: Optional[str] = None
@@ -50,6 +52,24 @@ class WorkflowConfig:
     save_traces: bool = True
     source_access_policy: Optional[SourceAccessPolicy] = None
     decision_policy_version: str = "reinspect-v2"
+
+    def __post_init__(self) -> None:
+        resolved = resolve_provider_settings(
+            profile_id=self.profile_id,
+            provider=self.provider,
+            model_name=self.model_name,
+            vlm_provider=self.vlm_provider,
+            vlm_model=self.vlm_model,
+            llm_wire_api=self.llm_wire_api,
+            vlm_wire_api=self.vlm_wire_api,
+        )
+        self.profile_id = resolved.profile_id
+        self.provider = resolved.provider
+        self.model_name = resolved.model_name
+        self.vlm_provider = resolved.vlm_provider
+        self.vlm_model = resolved.vlm_model
+        self.llm_wire_api = resolved.llm_wire_api
+        self.vlm_wire_api = resolved.vlm_wire_api
 
 
 class VerificationWorkflow:

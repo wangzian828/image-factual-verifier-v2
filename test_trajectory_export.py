@@ -4,6 +4,10 @@ import json
 from pathlib import Path
 
 from src.trajectory.exporter import export_policy_examples
+from src.trajectory.perception_exporter import (
+    PERCEPTION_INSTRUCTION,
+    export_perception_example,
+ )
 from src.trajectory.scoring import score_process_trace
 from test_image_only_trajectory import (
     test_scripted_image_only_complete_trajectory,
@@ -92,6 +96,30 @@ def test_exporter_rejects_evaluator_private_leak(tmp_path: Path) -> None:
         assert "evaluation_gold" in str(exc)
     else:
         raise AssertionError("private evaluator data must be rejected")
+
+
+def test_perception_exporter_keeps_only_public_image_and_report(
+    tmp_path: Path,
+ ) -> None:
+    trace = _trace(tmp_path)
+    example = export_perception_example(
+        trace,
+        source_metadata={
+            "source_run_id": "run-1",
+            "runtime_commit": "a" * 40,
+            "release_id": "release-1",
+            "runtime_contract_version": "ifv-image-only-runtime-v1",
+        },
+    )
+
+    assert example.episode_id == trace["image_id"]
+    assert example.instruction == PERCEPTION_INSTRUCTION
+    assert example.image_sha256 == (
+        trace["state"]["runtime_case"]["image_sha256"]
+    )
+    assert example.perception_report == trace["state"]["perception"]
+    assert "investigation_state" not in example.model_dump()
+    assert "judgment" not in example.model_dump()
 
 
 def test_process_scorer_matches_fact_evidence_and_basis(

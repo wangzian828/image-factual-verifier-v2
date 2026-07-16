@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
 from src.workflow import VerificationWorkflow, WorkflowConfig
+from src.provider_profiles import PROFILE_IDS
 from src.storage import default_eval_root
 from src.eval.release_adapter import (
     image_only_case_from_runtime_row,
@@ -23,6 +24,7 @@ from src.orchestrator.runtime_case import verify_case_image
 from src.orchestrator.source_access import SourceAccessPolicy
 from src.redaction import sanitize_for_persistence
 from src.trajectory.exporter import export_policy_examples
+from src.trajectory.perception_exporter import export_perception_example
 from src.trajectory.reference_chain import score_reference_chain_trace
 from src.trajectory.scoring import score_process_trace
 
@@ -40,13 +42,19 @@ def _parse_args() -> argparse.Namespace:
         help="Path to a v0.3 release runtime_input/cases.jsonl.",
     )
     parser.add_argument(
+        "--profile",
+        choices=PROFILE_IDS,
+        default=None,
+        help="Explicit teacher/student provider profile.",
+    )
+    parser.add_argument(
         "--provider",
-        default="gemini",
+        default=None,
         help="LLM provider for the agent.",
     )
     parser.add_argument(
         "--model",
-        default="gemini-3.5-flash",
+        default=None,
         help="Model name for the agent.",
     )
     parser.add_argument(
@@ -357,12 +365,28 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
     for runtime_case in runtime_cases:
         verify_case_image(runtime_case, runtime_case.image_path)
 
+    config = WorkflowConfig(
+        profile_id=getattr(args, "profile", None),
+        provider=getattr(args, "provider", None),
+        model_name=getattr(args, "model", None),
+        vlm_provider=getattr(args, "vlm_provider", None),
+        vlm_model=getattr(args, "vlm_model", None),
+        llm_wire_api=getattr(args, "llm_wire_api", None),
+        vlm_wire_api=getattr(args, "vlm_wire_api", None),
+        timeout=args.timeout,
+        save_traces=True,
+        decision_policy_version=release.decision_policy_version,
+    )
+
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_dir = (
         Path(args.output_dir)
         if args.output_dir
         else default_eval_root()
-        / f"{timestamp}_{args.provider}_{args.model.replace('/', '_')}"
+        / (
+            f"{timestamp}_{config.provider}_"
+            f"{str(config.model_name).replace('/', '_')}"
+        )
     )
     if run_dir.exists() and any(run_dir.iterdir()):
         raise FileExistsError(
@@ -394,6 +418,7 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
         if release.artifacts.source_access_policy is not None
         else None
     )
+    config.source_access_policy = explicit_policy
 
     trace_dir = run_dir / "traces"
     trace_dir.mkdir(parents=True, exist_ok=True)
@@ -426,12 +451,13 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
             "evaluation_gold": None,
         },
         "agent": {
-            "provider": args.provider,
-            "model": args.model,
-            "vlm_provider": args.vlm_provider or args.provider,
-            "vlm_model": args.vlm_model or args.model,
-            "llm_wire_api": args.llm_wire_api,
-            "vlm_wire_api": args.vlm_wire_api,
+            "profile_id": config.profile_id,
+            "provider": config.provider,
+            "model": config.model_name,
+            "vlm_provider": config.vlm_provider,
+            "vlm_model": config.vlm_model,
+            "llm_wire_api": config.llm_wire_api,
+            "vlm_wire_api": config.vlm_wire_api,
             "timeout_seconds": args.timeout,
             "max_tool_actions": 24,
             "reflection_interval": 4,
@@ -458,25 +484,14 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
             "reference_chain_metrics": "reference_chain_metrics.jsonl",
             "trajectory_scores": "trajectory_scores.jsonl",
             "policy_trajectories": "policy_trajectories.jsonl",
+            "perception_trajectories": "perception_trajectories.jsonl",
             "summary": "summary.json",
             "traces": "traces/",
         },
     }
     _write_json(manifest_path, manifest)
 
-    config = WorkflowConfig(
-        provider=args.provider,
-        model_name=args.model,
-        vlm_provider=args.vlm_provider,
-        vlm_model=args.vlm_model,
-        llm_wire_api=args.llm_wire_api,
-        vlm_wire_api=args.vlm_wire_api,
-        output_dir=str(trace_dir),
-        timeout=args.timeout,
-        save_traces=True,
-        source_access_policy=explicit_policy,
-        decision_policy_version=release.decision_policy_version,
-    )
+    config.output_dir = str(trace_dir)
     try:
         workflow = VerificationWorkflow(config)
         image_paths = [str(sample["image_path"]) for sample in samples]
@@ -513,6 +528,7 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
         reference_chain_metrics: List[Dict[str, Any]] = []
         trajectory_scores: List[Dict[str, Any]] = []
         policy_trajectories: List[Dict[str, Any]] = []
+        perception_trajectories: List[Dict[str, Any]] = []
         for sample, result in zip(samples, results):
             identity = str(sample.get("case_id") or "")
             record = _run_result_record(sample, result)
@@ -520,6 +536,23 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
             if trace_path.exists():
                 record["trace_path"] = trace_path.relative_to(run_dir).as_posix()
                 trace = json.loads(trace_path.read_text(encoding="utf-8"))
+                trace_state = trace.get("state")
+                if isinstance(trace_state, dict) and isinstance(
+                    trace_state.get("perception"), dict
+                ):
+                    perception_trajectories.append(
+                        export_perception_example(
+                            trace,
+                            source_metadata={
+                                "source_run_id": manifest["run_id"],
+                                "runtime_commit": manifest["git_commit"],
+                                "release_id": release.release_id,
+                                "runtime_contract_version": (
+                                    release.runtime_contract_version
+                                ),
+                            },
+                        ).model_dump(mode="json")
+                    )
                 metrics, teacher_score = score_process_trace(
                     trace,
                     evaluation_gold_index[identity],
@@ -628,6 +661,10 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
         )
         _write_jsonl(run_dir / "trajectory_scores.jsonl", trajectory_scores)
         _write_jsonl(run_dir / "policy_trajectories.jsonl", policy_trajectories)
+        _write_jsonl(
+            run_dir / "perception_trajectories.jsonl",
+            perception_trajectories,
+        )
         _write_json(run_dir / "summary.json", summary)
 
         manifest["status"] = (

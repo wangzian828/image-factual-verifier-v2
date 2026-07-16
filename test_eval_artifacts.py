@@ -212,6 +212,7 @@ def test_v03_eval_keeps_gold_post_rollout_and_writes_scorer_predictions(
     assert (run_dir / "reference_chain_metrics.jsonl").is_file()
     assert (run_dir / "trajectory_scores.jsonl").is_file()
     assert (run_dir / "policy_trajectories.jsonl").is_file()
+    assert (run_dir / "perception_trajectories.jsonl").is_file()
     manifest = json.loads(
         (run_dir / "run_manifest.json").read_text(encoding="utf-8")
     )
@@ -225,6 +226,9 @@ def test_v03_eval_keeps_gold_post_rollout_and_writes_scorer_predictions(
     assert manifest["artifacts"]["process_metrics"] == "process_metrics.jsonl"
     assert manifest["artifacts"]["reference_chain_metrics"] == (
         "reference_chain_metrics.jsonl"
+    )
+    assert manifest["artifacts"]["perception_trajectories"] == (
+        "perception_trajectories.jsonl"
     )
 
 

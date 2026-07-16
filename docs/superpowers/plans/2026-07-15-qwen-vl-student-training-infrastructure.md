@@ -530,7 +530,7 @@ them.
 
 ### S1. Dataset adapters
 
-- [ ] Add perception export to the runtime.
+- [x] Add provider-neutral perception export to the runtime.
 - [ ] Version the teacher dataset release contract.
 - [x] Implement provider-neutral to ms-swift `messages`, `tools`, and `images`
   conversion without importing runtime or data-pipeline packages.
@@ -782,6 +782,11 @@ D:\image-factual-verifier-training
 
 Implemented locally:
 
+- explicit `teacher-gemini`, `student-qwen-local`, and `student-qwen-api` runtime
+  profiles with conflict rejection and no provider fallback;
+- run manifests record the resolved provider profile, model, VLM, and wire APIs;
+- canonical traces export public image identity plus `PerceptionReport` without
+  evaluator-private gold, process scores, or full investigation state;
 - fixed `ms-swift==4.4.1` train/serve dependency surfaces;
 - separate `ifv-qwen-train` and `ifv-qwen-serve` bootstrap without touching
   `ifv-agent`;

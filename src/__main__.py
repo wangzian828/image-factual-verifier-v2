@@ -8,14 +8,23 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from src.workflow import VerificationWorkflow, WorkflowConfig
+from src.provider_profiles import PROFILE_IDS
 from src.storage import default_trace_dir
 
 
 def main():
     parser = argparse.ArgumentParser(description="Image Factual Verifier v3")
     parser.add_argument("image_path", help="Path to the image to verify")
-    parser.add_argument("--provider", default="gemini", help="LLM provider")
-    parser.add_argument("--model", default="gemini-3.5-flash", help="Model name")
+    parser.add_argument(
+        "--profile",
+        choices=PROFILE_IDS,
+        default=None,
+        help="Explicit teacher/student provider profile.",
+    )
+    parser.add_argument("--provider", default=None, help="Loose LLM provider")
+    parser.add_argument("--model", default=None, help="Loose model name")
+    parser.add_argument("--vlm-provider", default=None)
+    parser.add_argument("--vlm-model", default=None)
     parser.add_argument(
         "--llm-wire-api",
         default=None,
@@ -38,8 +47,11 @@ def main():
     args = parser.parse_args()
 
     config = WorkflowConfig(
+        profile_id=args.profile,
         provider=args.provider,
         model_name=args.model,
+        vlm_provider=args.vlm_provider,
+        vlm_model=args.vlm_model,
         llm_wire_api=args.llm_wire_api,
         vlm_wire_api=args.vlm_wire_api,
         output_dir=args.output_dir,

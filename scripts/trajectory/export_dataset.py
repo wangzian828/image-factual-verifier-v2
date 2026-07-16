@@ -14,7 +14,12 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from src.trajectory.schema import DatasetExample, PolicyExample
+from src.trajectory.schema import (
+    DatasetExample,
+    DatasetPerceptionExample,
+    PerceptionExample,
+    PolicyExample,
+ )
 
 
 SPLITS = ("train", "validation", "test")
@@ -162,6 +167,7 @@ def export_dataset(
         )
 
     examples_by_episode: Dict[str, List[PolicyExample]] = defaultdict(list)
+    perception_by_episode: Dict[str, PerceptionExample] = {}
     episode_metadata: Dict[str, Dict[str, Any]] = {}
     score_by_episode: Dict[str, Dict[str, Any]] = {}
     source_runs: List[Dict[str, Any]] = []
@@ -183,6 +189,14 @@ def export_dataset(
         for row in _load_jsonl(run_dir / "policy_trajectories.jsonl"):
             example = PolicyExample.model_validate(row)
             examples_by_episode[example.episode_id].append(example)
+        for row in _load_jsonl(run_dir / "perception_trajectories.jsonl"):
+            example = PerceptionExample.model_validate(row)
+            if example.episode_id in perception_by_episode:
+                raise ValueError(
+                    "duplicate perception episode across source runs: "
+                    f"{example.episode_id}"
+                )
+            perception_by_episode[example.episode_id] = example
         for trace_path in sorted((run_dir / "traces").glob("*.json")):
             trace = _load_json(trace_path)
             episode_id = str(
@@ -211,14 +225,15 @@ def export_dataset(
                 "training_exclusion_reasons": exclusion_reasons,
             }
 
-    unknown_metadata = sorted(set(examples_by_episode) - set(episode_metadata))
+    candidate_ids = set(examples_by_episode) | set(perception_by_episode)
+    unknown_metadata = sorted(candidate_ids - set(episode_metadata))
     if unknown_metadata:
         raise ValueError(
             "policy examples lack canonical trace metadata: "
             + ", ".join(unknown_metadata)
         )
 
-    all_episodes = sorted(examples_by_episode)
+    all_episodes = sorted(candidate_ids)
     episodes = [
         episode_id
         for episode_id in all_episodes
@@ -228,6 +243,9 @@ def export_dataset(
         {
             **episode_metadata[episode_id],
             "example_count": len(examples_by_episode[episode_id]),
+            "perception_example_count": int(
+                episode_id in perception_by_episode
+            ),
         }
         for episode_id in all_episodes
         if episode_id not in episodes
@@ -279,6 +297,9 @@ def export_dataset(
     split_rows: Dict[str, List[Dict[str, Any]]] = {
         split: [] for split in SPLITS
     }
+    perception_split_rows: Dict[str, List[Dict[str, Any]]] = {
+        split: [] for split in SPLITS
+    }
     metadata_rows: List[Dict[str, Any]] = []
     for episode_id in episodes:
         metadata = episode_metadata[episode_id]
@@ -301,10 +322,26 @@ def export_dataset(
             split_rows[split].append(
                 dataset_example.model_dump(mode="json")
             )
+        perception_example = perception_by_episode.get(episode_id)
+        if perception_example is not None:
+            dataset_perception = DatasetPerceptionExample(
+                **perception_example.model_dump(mode="json"),
+                split=split,
+                split_group_id=group_by_episode[episode_id],
+            )
+            perception_split_rows[split].append(
+                dataset_perception.model_dump(mode="json")
+            )
 
     for split, rows in split_rows.items():
         rows.sort(key=lambda item: (item["episode_id"], item["step_id"]))
         _write_jsonl(output_dir / f"{split}.jsonl", rows)
+        perception_rows = perception_split_rows[split]
+        perception_rows.sort(key=lambda item: item["episode_id"])
+        _write_jsonl(
+            output_dir / f"perception.{split}.jsonl",
+            perception_rows,
+        )
     metadata_rows.sort(key=lambda item: item["episode_id"])
     _write_jsonl(output_dir / "episode_metadata.jsonl", metadata_rows)
     excluded_episode_rows.sort(key=lambda item: item["episode_id"])
@@ -316,6 +353,7 @@ def export_dataset(
         "schema_version": "ifv-policy-dataset-manifest-v2",
         "dataset_version": "ifv-policy-dataset-v2",
         "trajectory_version": "ifv-policy-v1",
+        "perception_version": "ifv-perception-v1",
         "seed": seed,
         "split_ratios": {
             "train": train_ratio,
@@ -330,10 +368,17 @@ def export_dataset(
         "example_counts": {
             split: len(rows) for split, rows in split_rows.items()
         },
+        "perception_example_counts": {
+            split: len(rows)
+            for split, rows in perception_split_rows.items()
+        },
         "artifacts": {
             "train": "train.jsonl",
             "validation": "validation.jsonl",
             "test": "test.jsonl",
+            "perception_train": "perception.train.jsonl",
+            "perception_validation": "perception.validation.jsonl",
+            "perception_test": "perception.test.jsonl",
             "episode_metadata": "episode_metadata.jsonl",
             "excluded_episode_metadata": (
                 "excluded_episode_metadata.jsonl"

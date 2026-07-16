@@ -126,6 +126,8 @@ def _require_real_run_artifacts(
     model = str(agent.get("model", "")).lower()
     if str(agent.get("provider", "")).lower() != "gemini":
         raise RuntimeError("real canary must use provider=gemini")
+    if agent.get("profile_id") != "teacher-gemini":
+        raise RuntimeError("real canary must use profile=teacher-gemini")
     if any(marker in model for marker in ("fake", "fixture", "scripted", "mock")):
         raise RuntimeError(f"real canary rejected non-real model name: {model}")
     if manifest.get("status") != "completed":
@@ -203,14 +205,8 @@ def _command(args: argparse.Namespace) -> list[str]:
         str(args.benchmark),
         "--output-dir",
         str(args.output_dir),
-        "--provider",
-        "gemini",
-        "--model",
-        args.model,
-        "--llm-wire-api",
-        "interactions",
-        "--vlm-wire-api",
-        "interactions",
+        "--profile",
+        "teacher-gemini",
         "--concurrency",
         "1",
         "--limit",
@@ -229,7 +225,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--benchmark", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--model", default="gemini-3.5-flash")
     parser.add_argument("--limit", type=int, default=2)
     parser.add_argument(
         "--case-id",
