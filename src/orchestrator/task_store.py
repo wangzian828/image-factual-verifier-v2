@@ -1114,17 +1114,17 @@ def attribution_planning_needed(
     state: ImageOnlyInvestigationState,
     update: Mapping[str, Any],
 ) -> bool:
-    """Return whether an unresolved core fact gained public context.
+    """Return whether qualified evidence can refine unresolved core context.
 
     Attribution is optional supporting work.  It is never allowed to postpone a
-    resolved core verdict, but it can turn a newly found source identity into a
-    narrower, independently adjudicable refinement.
+    resolved core verdict. A Discovery is only a lead: it must first be
+    inspected as Evidence, otherwise attribution can replace decisive world-fact
+    work with optional creator/title/provenance work.
     """
 
     created_ids = {
         str(item)
         for key in (
-            "created_discovery_ids",
             "created_evidence_ids",
             "created_finding_ids",
         )

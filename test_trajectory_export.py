@@ -31,7 +31,6 @@ def test_exporter_uses_actual_policy_boundaries_and_aligned_masks(
     assert [item.example_type for item in examples] == [
         "planning",
         "react",
-        "planning",
         "react",
         "judgment",
     ]

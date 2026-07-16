@@ -58,7 +58,7 @@ def build_all_tools_with_health(
         os.getenv("VLM_TOOL_REQUEST_TIMEOUT_SECONDS", "90")
     )
     request_max_retries = int(
-        os.getenv("VLM_TOOL_REQUEST_MAX_RETRIES", "1")
+        os.getenv("VLM_TOOL_REQUEST_MAX_RETRIES", "3")
     )
     vlm_backend = APIBackend(
         provider=vlm_provider,

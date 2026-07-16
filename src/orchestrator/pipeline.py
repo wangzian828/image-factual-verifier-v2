@@ -65,6 +65,7 @@ from src.orchestrator.task_store import (
     apply_target_planning,
     attribution_planning_needed,
     next_action_boundary,
+    remaining_material_routes,
     record_tool_observation,
     state_from_bootstrap,
 )
@@ -161,7 +162,7 @@ class Orchestrator:
                 os.getenv("AGENT_LLM_REQUEST_TIMEOUT_SECONDS", "90")
             ),
             max_retries=int(
-                os.getenv("AGENT_LLM_REQUEST_MAX_RETRIES", "1")
+                os.getenv("AGENT_LLM_REQUEST_MAX_RETRIES", "3")
             ),
         )
         self.all_tools, self.tool_health = build_all_tools_with_health(
@@ -450,16 +451,16 @@ class Orchestrator:
             segment_stop_action = next_action_boundary(
                 investigation.action_count
             )
-            remaining_to_reflection = (
-                segment_stop_action - investigation.action_count
-            )
-            segment_rounds = min(
-                remaining_to_reflection,
-                MAX_TOOL_ACTIONS - investigation.action_count,
-            )
             react_tasks = select_image_only_react_tasks(investigation)
             react_task_ids = {task.task_id for task in react_tasks}
             if not react_task_ids:
+                audit_coverage(investigation)
+                break
+            executable_tool_names = self._image_only_executable_tool_names(
+                investigation,
+                task_ids=react_task_ids,
+            )
+            if not executable_tool_names:
                 audit_coverage(investigation)
                 break
             task_claims = self._image_only_task_claims(
@@ -502,10 +503,18 @@ class Orchestrator:
                         "verification",
                         self.all_tools,
                     )
-                    if tool.name != "current_time"
+                    if (
+                        tool.name != "current_time"
+                        and tool.name in executable_tool_names
+                    )
                 ],
                 output_schema=InvestigationSegmentOutput,
-                max_rounds=max(1, segment_rounds),
+                # Tool availability depends on the reducer state produced by the
+                # previous action (for example, a search lead makes page
+                # inspection mandatory). End each accepted action at a
+                # deterministic boundary so the next request receives a newly
+                # compiled tool schema instead of a stale multi-turn schema.
+                max_rounds=1,
                 image_path=image_path,
                 stage_name="verification",
                 recent_rounds_to_keep=3,
@@ -515,6 +524,10 @@ class Orchestrator:
                 should_stop=lambda _steps: (
                     bool(investigation.stop_reason)
                     or attribution_pending
+                    or any(
+                        step.action_type == "tool_call"
+                        for step in _steps
+                    )
                     or investigation.action_count >= segment_stop_action
                     or not any(
                         task.task_id in react_task_ids
@@ -901,7 +914,13 @@ class Orchestrator:
                 or (task_ids is not None and task.task_id not in task_ids)
             ):
                 continue
-            if task.task_id in discovery_task_ids:
+            if (
+                task.task_id in discovery_task_ids
+                and Orchestrator._image_only_task_requires_source_goal(
+                    investigation,
+                    task,
+                )
+            ):
                 goals[task.task_id] = (
                     "Does this candidate public source identify or directly "
                     "describe the same input image or depicted scene? Extract "
@@ -912,6 +931,83 @@ class Orchestrator:
             else:
                 goals[task.task_id] = task.question[:1800]
         return goals
+
+    @staticmethod
+    def _image_only_task_requires_source_goal(
+        investigation: ImageOnlyInvestigationState,
+        task: Any,
+    ) -> bool:
+        """Keep world-fact extraction tied to its fact rather than its lead."""
+
+        facts = {fact.fact_id: fact for fact in investigation.facts}
+        if any(
+            facts.get(fact_id) is not None
+            and facts[fact_id].predicate
+            in {"source_record_matches", "provenance_matches"}
+            for fact_id in task.fact_ids
+        ):
+            return True
+        task_text = " ".join(
+            (str(task.question or ""), str(task.purpose or ""))
+        ).casefold()
+        return (
+            "earliest verifiable public context" in task_text
+            or "establish image provenance" in task_text
+        )
+
+    @staticmethod
+    def _image_only_executable_tool_names(
+        investigation: ImageOnlyInvestigationState,
+        *,
+        task_ids: set[str],
+    ) -> set[str]:
+        """Expose reducer-approved retrieval or lead-inspection tool families."""
+
+        core_id = investigation.core_verdict_fact_id
+        if not core_id:
+            return set()
+        routes = remaining_material_routes(
+            investigation,
+            fact_id=core_id,
+        )
+        inspection_task_ids: set[str] = set()
+        names: set[str] = set()
+        for route in routes:
+            parts = route.split(":", 2)
+            tool_name = parts[0]
+            route_task_id = (
+                parts[2]
+                if tool_name == "reverse_image_search" and len(parts) >= 3
+                else parts[1]
+                if len(parts) >= 2
+                else ""
+            )
+            if route_task_id not in task_ids:
+                continue
+            if tool_name in {"visit", "compare_with_reference"}:
+                inspection_task_ids.add(route_task_id)
+            else:
+                names.add(tool_name)
+        if not inspection_task_ids:
+            return names
+
+        # Before another retrieval, expose all concrete inspection modalities
+        # for the selected task's current leads. This permits a same-source
+        # image comparison followed by its page visit, while keeping search
+        # tools hidden until at least one lead has been inspected.
+        task_by_id = {
+            task.task_id: task
+            for task in investigation.tasks
+        }
+        for task_id in inspection_task_ids:
+            allowed = set(
+                getattr(task_by_id.get(task_id), "suggested_tools", []) or []
+            )
+            if "visit" in allowed:
+                names.add("visit")
+            if "compare_with_reference" in allowed:
+                names.add("compare_with_reference")
+        return names
 
     @staticmethod
     def _image_only_discovery_route_error(

@@ -673,6 +673,14 @@ def test_pending_search_candidate_requires_inspection_before_retrieval() -> None
         "visit",
         {"__question_id": task.task_id},
     )
+    assert Orchestrator._image_only_task_evidence_goals(
+        state,
+        task_ids={task.task_id},
+    )[task.task_id] == task.question
+    assert Orchestrator._image_only_executable_tool_names(
+        state,
+        task_ids={task.task_id},
+    ) == {"visit"}
 
 
 def test_task_tool_contract_rejects_unsuggested_ocr() -> None:
@@ -1962,7 +1970,7 @@ def test_peripheral_discovery_does_not_trigger_decisive_attribution() -> None:
     assert state.core_verdict_fact_id != specific.fact_id
 
 
-def test_provenance_discovery_triggers_specific_attribution_planning() -> None:
+def test_discovery_waits_for_evidence_before_attribution_planning() -> None:
     case, state = _runtime_state()
     parent_fact_id = state.decisive_fact_ids[0]
     planned = apply_target_planning(
@@ -2021,7 +2029,36 @@ def test_provenance_discovery_triggers_specific_attribution_planning() -> None:
         image_sha256=case.image_sha256,
     )
 
-    assert attribution_planning_needed(state, update)
+    assert not attribution_planning_needed(state, update)
+    evidence_update = record_tool_observation(
+        state,
+        _step(
+            task_id=planned_task.task_id,
+            call_id="call-provenance-evidence",
+            tool_name="visit",
+            result=json.dumps(
+                {
+                    "status": "success",
+                    "selected_url": "https://www.noaa.gov/ship",
+                    "url": "https://www.noaa.gov/ship",
+                    "summary": "NOAA identifies NOAA Ship Henry B. Bigelow.",
+                    "evidence": "NOAA identifies NOAA Ship Henry B. Bigelow.",
+                    "stance": "support",
+                    "directness": "direct",
+                    "relevance": "high",
+                    "temporal_alignment": "not_applicable",
+                    "artifact_sha256": "1" * 64,
+                    "evidence_span": {"start": 0, "end": 43},
+                    "retrieved_at": datetime.now(timezone.utc).isoformat(),
+                    "injection_flags": [],
+                    "evidence_eligible": True,
+                }
+            ),
+        ),
+        image_sha256=case.image_sha256,
+    )
+
+    assert attribution_planning_needed(state, evidence_update)
 
 
 def test_target_planning_rejects_negative_integrity_and_slotless_provenance() -> None:

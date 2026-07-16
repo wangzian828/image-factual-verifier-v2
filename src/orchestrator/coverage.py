@@ -14,7 +14,6 @@ from src.orchestrator.investigation_models import (
     VisualFact,
 )
 from src.orchestrator.task_store import (
-    MAX_ATTEMPTS_PER_TASK,
     MAX_TOOL_ACTIONS,
     remaining_material_routes,
     reconcile_core_verdict_fact,
@@ -294,12 +293,9 @@ def _has_executable_core_route(
     core_id = state.core_verdict_fact_id
     return bool(
         core_id
-        and any(
-            task.status in {"active", "pending"}
-            and task.attempt_count < MAX_ATTEMPTS_PER_TASK
-            and core_id in task.fact_ids
-            and bool(task.suggested_tools)
-            for task in state.tasks
+        and remaining_material_routes(
+            state,
+            fact_id=core_id,
         )
     )
 
