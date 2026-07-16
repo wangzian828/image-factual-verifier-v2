@@ -1132,7 +1132,6 @@ class Orchestrator:
             investigation,
             fact_id=core_id,
         )
-        inspection_task_ids: set[str] = set()
         names: set[str] = set()
         for route in routes:
             parts = route.split(":", 2)
@@ -1146,28 +1145,7 @@ class Orchestrator:
             )
             if route_task_id not in task_ids:
                 continue
-            if tool_name in {"visit", "compare_with_reference"}:
-                inspection_task_ids.add(route_task_id)
-            else:
-                names.add(tool_name)
-        if not inspection_task_ids:
-            return names
-
-        # Before another retrieval, expose all concrete inspection modalities
-        # for the selected task's current leads. This permits a same-source
-        # image comparison followed by its page visit, while keeping search
-        # tools hidden until at least one lead has been inspected.
-        task_by_id = {task.task_id: task for task in investigation.tasks}
-        for task_id in inspection_task_ids:
-            task = task_by_id.get(task_id)
-            if task is None:
-                continue
-            allowed = runtime_task_tool_names(investigation, task)
-            names.update(
-                tool_name
-                for tool_name in {"visit", "compare_with_reference"}
-                if tool_name in allowed
-            )
+            names.add(tool_name)
         return names
 
     @staticmethod

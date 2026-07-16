@@ -1444,6 +1444,171 @@ def test_failed_comparison_does_not_exhaust_task_with_uninspected_page() -> None
     assert task.status == "active"
 
 
+def test_two_mixed_inspections_release_new_retrieval_routes() -> None:
+    case, state = _runtime_state()
+    task = next(
+        item
+        for item in state.tasks
+        if state.core_verdict_fact_id in item.fact_ids
+    )
+    task.suggested_tools = [
+        "reverse_image_search",
+        "text_search",
+        "compare_with_reference",
+        "visit",
+    ]
+    record_tool_observation(
+        state,
+        _step(
+            task_id=task.task_id,
+            call_id="call-mixed-reverse-batch",
+            tool_name="reverse_image_search",
+            result=json.dumps(
+                {
+                    "status": "success",
+                    "reference_image_candidates": [
+                        "https://example.org/ref-one.jpg",
+                        "https://example.org/ref-two.jpg",
+                    ],
+                    "lens_results": [
+                        {
+                            "title": "First unrelated result",
+                            "url": "https://example.org/page-one",
+                            "image_url": "https://example.org/ref-one.jpg",
+                        },
+                        {
+                            "title": "Second unrelated result",
+                            "url": "https://example.org/page-two",
+                            "image_url": "https://example.org/ref-two.jpg",
+                        },
+                    ],
+                }
+            ),
+        ),
+        image_sha256=case.image_sha256,
+    )
+    for index in (1, 2):
+        comparison = _step(
+            task_id=task.task_id,
+            call_id=f"call-unrelated-reference-{index}",
+            tool_name="compare_with_reference",
+            result=json.dumps(
+                {
+                    "status": "success",
+                    "reference_url": f"https://example.org/ref-{['one', 'two'][index - 1]}.jpg",
+                    "same_subject_or_scene": False,
+                    "same_capture_or_near_duplicate": False,
+                    "likely_different_original_capture": True,
+                    "edit_evidence_present": False,
+                    "edit_evidence_strength": "none",
+                    "differences": [],
+                    "overall_observation": "The images are unrelated.",
+                    "confidence": 0.99,
+                }
+            ),
+        )
+        comparison.tool_args["reference_url"] = (
+            f"https://example.org/ref-{['one', 'two'][index - 1]}.jpg"
+        )
+        record_tool_observation(
+            state,
+            comparison,
+            image_sha256=case.image_sha256,
+        )
+
+    routes = remaining_material_routes(
+        state,
+        fact_id=state.core_verdict_fact_id or "",
+    )
+    executable = Orchestrator._image_only_executable_tool_names(
+        state,
+        task_ids={task.task_id},
+    )
+    constraints = Orchestrator._image_only_tool_argument_constraints(
+        state,
+        task_ids={task.task_id},
+    )
+
+    assert set(routes) == {
+        f"reverse_image_search:semantic:{task.task_id}",
+        f"text_search:{task.task_id}",
+    }
+    assert executable == {"reverse_image_search", "text_search"}
+    assert constraints == {
+        "reverse_image_search": {"branch": ["semantic"]}
+    }
+
+
+def test_empty_inspection_batch_does_not_exhaust_unused_text_search_route() -> None:
+    case, state = _runtime_state()
+    task = next(
+        item
+        for item in state.tasks
+        if state.core_verdict_fact_id in item.fact_ids
+    )
+    task.suggested_tools = ["text_search", "visit"]
+    record_tool_observation(
+        state,
+        _step(
+            task_id=task.task_id,
+            call_id="call-first-empty-search-batch",
+            tool_name="text_search",
+            result=json.dumps(
+                {
+                    "status": "success",
+                    "queries": [
+                        {
+                            "query": "first bounded query",
+                            "results": [
+                                {
+                                    "title": "First weak page",
+                                    "url": "https://example.org/weak-one",
+                                    "snippet": "No direct answer.",
+                                },
+                                {
+                                    "title": "Second weak page",
+                                    "url": "https://example.org/weak-two",
+                                    "snippet": "No direct answer.",
+                                },
+                            ],
+                        }
+                    ],
+                }
+            ),
+        ),
+        image_sha256=case.image_sha256,
+    )
+    for index in (1, 2):
+        visit = _step(
+            task_id=task.task_id,
+            call_id=f"call-empty-visit-{index}",
+            tool_name="visit",
+            result=json.dumps(
+                {
+                    "status": "success",
+                    "evidence": "",
+                    "summary": "The page does not answer the active proposition.",
+                    "relevance": "low",
+                }
+            ),
+        )
+        visit.tool_args["url"] = [f"https://example.org/weak-{'one' if index == 1 else 'two'}"]
+        record_tool_observation(
+            state,
+            visit,
+            image_sha256=case.image_sha256,
+        )
+
+    routes = remaining_material_routes(
+        state,
+        fact_id=state.core_verdict_fact_id or "",
+    )
+
+    assert task.attempt_count == 3
+    assert task.status == "active"
+    assert routes == [f"text_search:{task.task_id}"]
+
+
 def test_pending_discovery_routes_keep_unknown_and_annotate_source_class() -> None:
     case, state = _antarctic_butterfly_state()
     scene = next(

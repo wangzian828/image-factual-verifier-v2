@@ -497,7 +497,7 @@ def record_tool_observation(
         failure_ids
         and task.attempt_count >= 3
         and not _task_owns_scene_fact(state, task)
-        and not _task_has_uninspected_discovery(state, task)
+        and not _task_has_remaining_material_route(state, task)
     ):
         task.status = "exhausted"
     if (
@@ -3035,6 +3035,25 @@ def _task_has_uninspected_discovery(
     )
 
 
+def _task_has_remaining_material_route(
+    state: ImageOnlyInvestigationState,
+    task: ResearchTask,
+) -> bool:
+    """Keep a task active while any bounded retrieval or inspection route remains."""
+
+    if task.attempt_count >= MAX_ATTEMPTS_PER_TASK:
+        return False
+    attempts = _attempted_routes_by_task(state).get(task.task_id, [])
+    return bool(
+        _remaining_task_material_routes(
+            state,
+            task,
+            attempts,
+            global_reverse_branches=_attempted_reverse_branches(state),
+        )
+    )
+
+
 def remaining_material_routes(
     state: ImageOnlyInvestigationState,
     *,
@@ -3232,9 +3251,10 @@ def _pending_inspection_batches(
         return []
     attempted_outcomes: Dict[str, str] = {}
     for route in attempts:
-        if str(route.get("tool", "")).strip() != tool_name:
+        attempted_tool = str(route.get("tool", "")).strip()
+        if attempted_tool not in {"visit", "compare_with_reference"}:
             continue
-        if tool_name == "visit":
+        if attempted_tool == "visit":
             urls = route.get("urls", []) or []
             if isinstance(urls, str):
                 urls = [urls]
@@ -3256,6 +3276,14 @@ def _pending_inspection_batches(
 
     pending: List[List[str]] = []
     for discoveries in discovery_batches.values():
+        paired_page_by_reference = {
+            canonicalize_url(item.reference_image_url): canonicalize_url(
+                item.candidate_url
+            )
+            for item in discoveries
+            if canonicalize_url(item.reference_image_url)
+            and canonicalize_url(item.candidate_url)
+        }
         candidate_urls = list(
             dict.fromkeys(
                 canonicalize_url(
@@ -3273,15 +3301,58 @@ def _pending_inspection_batches(
         )[:MAX_INSPECTION_CANDIDATES_PER_BATCH]
         if not candidate_urls:
             continue
-        attempted = [
-            url for url in candidate_urls if url in attempted_outcomes
-        ]
+        batch_page_urls = {
+            canonicalize_url(item.candidate_url)
+            for item in discoveries
+            if canonicalize_url(item.candidate_url)
+        }
+        batch_reference_urls = {
+            canonicalize_url(item.reference_image_url)
+            for item in discoveries
+            if canonicalize_url(item.reference_image_url)
+        }
+        attempted_pages = {
+            url for url in batch_page_urls if url in attempted_outcomes
+        }
+        attempted_references = {
+            url for url in batch_reference_urls if url in attempted_outcomes
+        }
         if any(
             attempted_outcomes[url] == "evidence"
-            for url in attempted
+            for url in attempted_pages
         ):
+            # Fetched source text resolves or materially advances the batch;
+            # sibling pages and images are no longer mandatory.
             continue
-        if len(attempted) >= MAX_INSPECTION_ATTEMPTS_PER_BATCH:
+        evidence_reference_urls = [
+            url
+            for url in attempted_references
+            if attempted_outcomes[url] == "evidence"
+        ]
+        if evidence_reference_urls:
+            # A visual match is an image/source bridge, not the surrounding
+            # page's factual assertion. Permit only the paired source page as
+            # the second inspection; do not sweep sibling references or pages.
+            if tool_name != "visit":
+                continue
+            paired_pages = list(
+                dict.fromkeys(
+                    paired_page_by_reference.get(url, "")
+                    for url in evidence_reference_urls
+                    if paired_page_by_reference.get(url, "")
+                    and paired_page_by_reference[url] not in attempted_outcomes
+                )
+            )
+            if paired_pages:
+                pending.append(
+                    [
+                        f"visit:{task.task_id}:{url}"
+                        for url in paired_pages[:1]
+                    ]
+                )
+            continue
+        attempted_count = len(attempted_pages | attempted_references)
+        if attempted_count >= MAX_INSPECTION_ATTEMPTS_PER_BATCH:
             continue
         remaining = [
             url for url in candidate_urls if url not in attempted_outcomes
