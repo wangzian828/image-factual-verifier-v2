@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import re
 
 import pytest
@@ -224,15 +225,12 @@ def test_visit_tool_rejects_unaggregated_all_url_failures() -> None:
 
 
 @pytest.mark.parametrize("async_call", [False, True])
-def test_text_search_propagates_browse_provider_error(async_call: bool) -> None:
-    class FailingBrowseClient:
-        def visit_many(self, _urls: list[str], _goal: str) -> dict:
-            raise RuntimeError("Jina fetch failed")
+def test_text_search_propagates_search_provider_error(async_call: bool) -> None:
+    class FailingSearchClient:
+        def search(self, *_args, **_kwargs) -> dict:
+            raise RuntimeError("Serper search failed")
 
-    tool = TextSearchTool(
-        client=StubTextSearchClient([{"url": "https://result.example"}]),
-        browse_client=FailingBrowseClient(),
-    )
+    tool = TextSearchTool(client=FailingSearchClient())
 
     if async_call:
         result = asyncio.run(tool.call_async({"queries": ["query"]}))
@@ -240,19 +238,14 @@ def test_text_search_propagates_browse_provider_error(async_call: bool) -> None:
         result = tool.search(["query"])
 
     assert result["status"] == "error"
-    assert result["error"] == "Jina fetch failed"
-    assert result["queries"][0]["visit_error"] == "Jina fetch failed"
-
-
-def test_text_search_empty_provider_results_are_success_without_browse() -> None:
-    class UnexpectedBrowseClient:
-        def visit_many(self, _urls: list[str], _goal: str) -> dict:
-            raise AssertionError("browse must not run for a legitimate empty search result")
-
-    tool = TextSearchTool(
-        client=StubTextSearchClient([]),
-        browse_client=UnexpectedBrowseClient(),
+    assert result["error"] == "RuntimeError: Serper search failed"
+    assert result["queries"][0]["search_error"] == (
+        "RuntimeError: Serper search failed"
     )
+
+
+def test_text_search_empty_provider_results_are_success() -> None:
+    tool = TextSearchTool(client=StubTextSearchClient([]))
     result = tool.search("query")
 
     assert result["status"] == "success"
@@ -260,19 +253,18 @@ def test_text_search_empty_provider_results_are_success_without_browse() -> None
     assert "error" not in result
 
 
-def test_text_search_propagates_explicit_browse_error_result() -> None:
-    class FailingBrowseClient:
-        def visit_many(self, _urls: list[str], _goal: str) -> dict:
-            return {"status": "error", "error": "selected browse provider failed", "visits": []}
-
+def test_text_search_does_not_emit_browse_or_evidence_fields() -> None:
     tool = TextSearchTool(
         client=StubTextSearchClient([{"url": "https://result.example"}]),
-        browse_client=FailingBrowseClient(),
     )
-    result = tool.search("query")
+    result = tool.search("query", goal="Check a factual proposition")
 
-    assert result["status"] == "error"
-    assert result["error"] == "selected browse provider failed"
+    serialized = json.dumps(result)
+    assert result["status"] == "success"
+    assert "visited_pages" not in serialized
+    assert "evidence_eligible" not in serialized
+    assert "selected_url" not in serialized
+    assert "artifact_sha256" not in serialized
 
 
 def test_reverse_image_search_visual_failure_is_not_masked_by_semantic_success() -> None:

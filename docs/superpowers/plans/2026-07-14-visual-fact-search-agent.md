@@ -796,21 +796,45 @@ Implemented remediation:
   apparent confidence of that incomplete result.
 - [x] Export Attribution Planning examples for Student training.
 - [x] Pass deterministic validation and strict scripted trace audit.
+- [x] Require `located_at` targets to bind one salient subject to one concrete
+-   visible place or habitat instead of a generic multi-entity coexistence claim.
+- [x] Make `text_search` a pure SERP Discovery tool with zero hidden page visits
+-   and zero hidden LLM evidence-extraction calls.
+- [x] Pause further retrieval while task-linked candidate pages or reference images
+-   remain uninspected; use `visit` or `compare_with_reference` next.
+- [x] Reject fabrication/composite attributions unless a same-capture visual bridge
+-   or an explicit source assertion names that mechanism.
 - [x] Use the personal screenshot as a diagnostic only; X/Jina degraded-access pages
   made it unsuitable as a factual acceptance case, and it remains outside all
   experiment/training artifacts.
-- [ ] Run one supported and one refuted v4 case on gpu-13 by explicit case ID.
+- [x] Run one supported and one refuted v4 case on gpu-13 by explicit case ID.
+- [ ] Rerun the same pair after the atomic-location and pure-search remediation.
 - [ ] Require correct classification, strict trace audit, recovered specific
   decisive facts, and non-zero reference-chain recovery before the 20-case run.
 
 Deterministic validation:
 
 ```text
-200 passed
+223 passed
 compileall passed
 git diff --check passed
 scripted photo trace strict audit passed
 scripted screenshot trace strict audit passed
 ```
+
+First gpu-13 live diagnostic on 2026-07-16:
+
+```text
+run = automatic-diverse-20-v4-phase-j-rerun-20260716T044748Z
+supported case_04886b363981174d -> real (accepted, 4 actions, 18 LLM calls)
+refuted case_21ea1e62758d3d7c -> unverifiable (failed, 20 actions, 168 LLM calls)
+```
+
+The failed refuted trace used 39 outer Agent interactions plus 129 tool-internal
+LLM calls. Fourteen `text_search` actions caused 116 hidden calls because the old
+tool automatically visited the top three pages for every query and ran Gemini
+evidence extraction. It also abstracted the visible Antarctica relation into a
+generic coexistence question. Both contracts are now corrected locally; the same
+two cases must be rerun from the committed head.
 
 Phase J remains incomplete until the personal and gpu-13 live runs pass.

@@ -27,6 +27,7 @@ from src.orchestrator.investigation_models import (
 )
 from src.orchestrator.pipeline import Orchestrator
 from src.orchestrator.image_only_prompts import (
+    pending_discovery_routes,
     render_react_context,
     select_react_tasks,
 )
@@ -186,6 +187,44 @@ def _screenshot_runtime_state():
     return case, state
 
 
+def _antarctic_butterfly_state():
+    case = ImageOnlyRuntimeCase(
+        case_id="case-antarctic-butterflies",
+        image_path="antarctic-butterflies.jpg",
+        image_sha256="c" * 64,
+    )
+    perception = PerceptionReport(
+        scene_description=(
+            "Millions of monarch butterflies cover a pine tree in an "
+            "Antarctic winter landscape with penguins."
+        ),
+        entities=[
+            Entity(
+                name="monarch butterflies",
+                entity_type="animal",
+                bbox=[0.1, 0.1, 0.7, 0.8],
+                confidence=0.98,
+            ),
+            Entity(
+                name="pine tree",
+                entity_type="scene_element",
+                bbox=[0.2, 0.1, 0.8, 0.9],
+                confidence=0.95,
+            ),
+            Entity(
+                name="penguins",
+                entity_type="animal",
+                bbox=[0.7, 0.6, 0.95, 0.9],
+                confidence=0.94,
+            ),
+        ],
+    )
+    state = state_from_bootstrap(
+        build_bootstrap_investigation(case, perception)
+    )
+    return case, state
+
+
 def _step(
     *,
     task_id: str,
@@ -237,6 +276,168 @@ def test_web_evidence_goal_uses_task_question_not_full_image_claim() -> None:
     assert claims[task.task_id] == fact.statement
     assert goals[task.task_id] == task.question
     assert goals[task.task_id] != claims[task.task_id]
+
+
+def test_target_planning_rejects_generic_multi_entity_coexistence() -> None:
+    _, state = _antarctic_butterfly_state()
+    parent_ids = [
+        fact.fact_id
+        for fact in state.facts
+        if fact.predicate in {"appears_to_depict", "visible_in"}
+    ]
+
+    update = apply_target_planning(
+        state,
+        TargetPlanningOutput(
+            proposals=[
+                TargetFactProposal(
+                    statement=(
+                        "Monarch butterflies, pine trees, and penguins "
+                        "naturally coexist in the same real-world geographic "
+                        "location."
+                    ),
+                    predicate="located_at",
+                    parent_fact_ids=parent_ids[:4],
+                    question=(
+                        "Is there any real-world habitat where monarch "
+                        "butterflies, pine trees, and penguins coexist?"
+                    ),
+                    purpose="Test the depicted-world relation.",
+                    suggested_tools=["text_search", "visit"],
+                )
+            ]
+        ),
+    )
+
+    assert not update["accepted_fact_ids"]
+    assert "not atomic" in update["rejected_reasons"][0]
+
+
+def test_target_planning_accepts_atomic_visible_location_relation() -> None:
+    _, state = _antarctic_butterfly_state()
+    scene = next(
+        fact for fact in state.facts if fact.predicate == "appears_to_depict"
+    )
+    butterfly = next(
+        fact
+        for fact in state.facts
+        if fact.predicate == "visible_in"
+        and "monarch" in fact.statement.casefold()
+    )
+
+    update = apply_target_planning(
+        state,
+        TargetPlanningOutput(
+            proposals=[
+                TargetFactProposal(
+                    statement=(
+                        "Millions of monarch butterflies naturally overwinter "
+                        "in the Antarctic landscape shown in the image."
+                    ),
+                    predicate="located_at",
+                    parent_fact_ids=[scene.fact_id, butterfly.fact_id],
+                    question=(
+                        "Do millions of monarch butterflies migrate to "
+                        "Antarctica during winter?"
+                    ),
+                    purpose=(
+                        "Verify the concrete subject-to-place relation visible "
+                        "in the scene."
+                    ),
+                    suggested_tools=["text_search", "visit"],
+                    suggested_queries=[
+                        "monarch butterflies Antarctica winter migration"
+                    ],
+                )
+            ]
+        ),
+    )
+
+    assert len(update["accepted_fact_ids"]) == 1
+    fact_id = update["accepted_fact_ids"][0]
+    assert fact_id in state.decisive_fact_ids
+    fact = next(item for item in state.facts if item.fact_id == fact_id)
+    assert "Antarctic" in fact.statement
+
+
+def test_pending_search_candidate_requires_inspection_before_retrieval() -> None:
+    case, state = _antarctic_butterfly_state()
+    scene = next(
+        fact for fact in state.facts if fact.predicate == "appears_to_depict"
+    )
+    butterfly = next(
+        fact
+        for fact in state.facts
+        if fact.predicate == "visible_in"
+        and "monarch" in fact.statement.casefold()
+    )
+    update = apply_target_planning(
+        state,
+        TargetPlanningOutput(
+            proposals=[
+                TargetFactProposal(
+                    statement=(
+                        "Millions of monarch butterflies naturally overwinter "
+                        "in the Antarctic landscape shown in the image."
+                    ),
+                    predicate="located_at",
+                    parent_fact_ids=[scene.fact_id, butterfly.fact_id],
+                    question=(
+                        "Do millions of monarch butterflies migrate to "
+                        "Antarctica during winter?"
+                    ),
+                    purpose="Verify the visible subject-to-place relation.",
+                    suggested_tools=["text_search", "visit"],
+                )
+            ]
+        ),
+    )
+    task = next(
+        item
+        for item in state.tasks
+        if update["accepted_fact_ids"][0] in item.fact_ids
+    )
+    record_tool_observation(
+        state,
+        _step(
+            task_id=task.task_id,
+            call_id="call-location-search",
+            tool_name="text_search",
+            result=json.dumps(
+                {
+                    "status": "success",
+                    "queries": [
+                        {
+                            "query": "monarch butterfly wintering ground",
+                            "results": [
+                                {
+                                    "title": "Monarch migration in Mexico",
+                                    "url": (
+                                        "https://www.nationalgeographic.com/"
+                                        "travel/article/latin-america-"
+                                        "butterfly-monarch-migration"
+                                    ),
+                                    "snippet": (
+                                        "Mexico's Central Highlands become "
+                                        "the wintering grounds."
+                                    ),
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ),
+        ),
+        image_sha256=case.image_sha256,
+    )
+
+    pending = pending_discovery_routes(
+        state,
+        task_ids={task.task_id},
+    )
+
+    assert len(pending["pages"]) == 1
+    assert pending["pages"][0]["task_id"] == task.task_id
 
 
 def test_react_exposes_only_tasks_blocking_unresolved_decisive_facts() -> None:

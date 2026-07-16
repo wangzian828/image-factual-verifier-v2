@@ -28,6 +28,7 @@ from src.orchestrator.image_only_prompts import (
     render_react_context as render_image_only_react_context,
     render_reflection_context as render_image_only_reflection_context,
     render_target_planning_context as render_image_only_target_planning_context,
+    pending_discovery_routes as pending_image_only_discovery_routes,
     select_react_tasks as select_image_only_react_tasks,
 )
 from src.orchestrator.investigation_models import (
@@ -440,6 +441,13 @@ class Orchestrator:
             )
             react_tasks = select_image_only_react_tasks(investigation)
             react_task_ids = {task.task_id for task in react_tasks}
+            pending_routes = pending_image_only_discovery_routes(
+                investigation,
+                task_ids=react_task_ids,
+            )
+            inspection_pending = bool(
+                pending_routes["pages"] or pending_routes["references"]
+            )
             task_claims = self._image_only_task_claims(
                 investigation,
                 task_ids=react_task_ids,
@@ -498,6 +506,15 @@ class Orchestrator:
                         self.all_tools,
                     )
                     if tool.name != "current_time"
+                    and not (
+                        inspection_pending
+                        and tool.name
+                        in {
+                            "text_search",
+                            "reverse_image_search",
+                            "crop_and_search",
+                        }
+                    )
                     and not (
                         (reverse_succeeded or reverse_failures >= 2)
                         and tool.name == "reverse_image_search"

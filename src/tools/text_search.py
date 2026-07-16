@@ -5,8 +5,6 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Union
 
-from src.integrations.browse.jina_reader import JinaReaderClient
-from src.integrations.gemini import RUNTIME_METRICS_KEY, add_runtime_metrics
 from src.integrations.search.serper import SerperTextSearchClient
 from src.orchestrator.source_access import SourceAccessPolicy
 from src.tools.base import BaseTool
@@ -14,15 +12,16 @@ from src.tools.base import BaseTool
 
 @dataclass
 class TextSearchTool(BaseTool):
-    """Serper-backed batched web text search."""
+    """Pure Serper-backed Discovery search with no hidden page visits or LLM calls."""
 
     client: Optional[SerperTextSearchClient] = None
-    browse_client: Optional[JinaReaderClient] = None
     top_k: int = 10
-    visit_top_k: int = 3
     source_access_policy: Optional[SourceAccessPolicy] = None
     name: str = "text_search"
-    description: str = "Search the web for textual evidence related to one or more queries."
+    description: str = (
+        "Search the web and return candidate titles, URLs, and snippets as "
+        "Discovery only. Use visit to inspect a selected page and create Evidence."
+    )
     parameters: dict = field(
         default_factory=lambda: {
             "type": "object",
@@ -35,7 +34,10 @@ class TextSearchTool(BaseTool):
                 "hl": {"type": "string", "description": "Language code such as en or zh-cn."},
                 "goal": {
                     "type": "string",
-                    "description": "Immutable declarative claim used only for evidence stance extraction.",
+                    "description": (
+                        "Immutable task goal recorded with the search response; "
+                        "text_search does not extract or adjudicate Evidence."
+                    ),
                 },
             },
             "required": ["queries"],
@@ -45,16 +47,11 @@ class TextSearchTool(BaseTool):
     def __post_init__(self) -> None:
         if self.client is None:
             self.client = SerperTextSearchClient()
-        if self.browse_client is None:
-            self.browse_client = JinaReaderClient()
         if self.source_access_policy is not None:
             self.set_source_access_policy(self.source_access_policy)
 
     def set_source_access_policy(self, policy: SourceAccessPolicy) -> None:
         self.source_access_policy = policy
-        setter = getattr(self.browse_client, "set_source_access_policy", None)
-        if callable(setter):
-            setter(policy)
 
     def search(
         self,
@@ -129,14 +126,11 @@ class TextSearchTool(BaseTool):
     @staticmethod
     def _build_result(responses: List[Dict[str, Any]]) -> Dict[str, Any]:
         errors = [
-            str(response.get("visit_error", "")).strip()
+            str(response.get("search_error", "")).strip()
             for response in responses
-            if str(response.get("visit_error", "")).strip()
+            if str(response.get("search_error", "")).strip()
         ]
         result: Dict[str, Any] = {"status": "success", "queries": responses}
-        for response in responses:
-            if isinstance(response, dict):
-                add_runtime_metrics(result, response.get(RUNTIME_METRICS_KEY))
         if errors:
             result.update({"status": "error", "error": "; ".join(errors)})
         return result
@@ -150,7 +144,25 @@ class TextSearchTool(BaseTool):
         goal: Optional[str] = None,
     ) -> Dict[str, Any]:
         search_t0 = time.perf_counter()
-        response = self.client.search(query, top_k=self.top_k, gl=gl, hl=hl)
+        try:
+            response = self.client.search(
+                query,
+                top_k=self.top_k,
+                gl=gl,
+                hl=hl,
+            )
+        except Exception as exc:
+            search_duration_ms = round(
+                (time.perf_counter() - search_t0) * 1000,
+                2,
+            )
+            return {
+                "query": query,
+                "results": [],
+                "goal": str(goal or query),
+                "search_error": f"{type(exc).__name__}: {exc}",
+                "timings": {"search_ms": search_duration_ms},
+            }
         policy = self.source_access_policy
         if policy is not None:
             filtered, blocked_count = policy.filter_rows(response.get("results", []))
@@ -162,96 +174,7 @@ class TextSearchTool(BaseTool):
             if blocked_count:
                 response["policy_filtered_count"] = blocked_count
         search_duration_ms = round((time.perf_counter() - search_t0) * 1000, 2)
-        enriched = self._enrich_with_visits(response, goal=str(goal or query))
-        timings = dict(enriched.get("timings", {}))
-        timings["search_ms"] = search_duration_ms
-        enriched["timings"] = timings
-        return enriched
-
-    def _enrich_with_visits(self, response: Dict[str, Any], *, goal: str) -> Dict[str, Any]:
-        enriched = dict(response)
-        enriched["goal"] = goal
-        results = response.get("results", [])
-        urls = [
-            str(item.get("url", "")).strip()
-            for item in results[: self.visit_top_k]
-            if isinstance(item, dict) and str(item.get("url", "")).strip()
-        ]
-        if not urls:
-            enriched.update(
-                {
-                    "visited_pages": [],
-                    "evidence": "",
-                    "summary": "",
-                    "rationale": "No result URLs available for webpage visit.",
-                    "relevance": "low",
-                    "stance": "unclear",
-                    "directness": "none",
-                    "temporal_alignment": "unknown",
-                    "artifact_sha256": "",
-                    "evidence_span": {},
-                    "retrieved_at": "",
-                    "injection_flags": [],
-                    "evidence_eligible": False,
-                    "timings": {"visit_ms": 0.0},
-                }
-            )
-            return enriched
-
-        try:
-            visit_t0 = time.perf_counter()
-            visit_result = self.browse_client.visit_many(urls, goal)
-            visit_duration_ms = round((time.perf_counter() - visit_t0) * 1000, 2)
-        except Exception as exc:
-            visit_duration_ms = round((time.perf_counter() - visit_t0) * 1000, 2) if "visit_t0" in locals() else 0.0
-            visit_result = {
-                "visits": [],
-                "evidence": "",
-                "summary": "",
-                "rationale": f"Failed to visit result pages: {exc}",
-                "relevance": "low",
-                "stance": "unclear",
-                "directness": "none",
-                "temporal_alignment": "unknown",
-                "artifact_sha256": "",
-                "evidence_span": {},
-                "retrieved_at": "",
-                "injection_flags": [],
-                "evidence_eligible": False,
-                "error": str(exc),
-            }
-
-        enriched.update(
-            {
-                "visited_pages": visit_result.get("visits", []),
-                "evidence": visit_result.get("evidence", ""),
-                "summary": visit_result.get("summary", ""),
-                "rationale": visit_result.get("rationale", ""),
-                "relevance": visit_result.get("relevance", "low"),
-                "stance": visit_result.get("stance", "unclear"),
-                "directness": visit_result.get("directness", "none"),
-                "temporal_alignment": visit_result.get(
-                    "temporal_alignment",
-                    "not_applicable",
-                ),
-                "artifact_sha256": visit_result.get("artifact_sha256", ""),
-                "evidence_span": visit_result.get("evidence_span", {}),
-                "retrieved_at": visit_result.get("retrieved_at", ""),
-                "injection_flags": visit_result.get("injection_flags", []),
-                "evidence_eligible": bool(visit_result.get("evidence_eligible", False)),
-                "selected_url": visit_result.get("selected_url", ""),
-                "blocked_pages": visit_result.get("blocked_pages", []),
-                "timings": {
-                    "visit_ms": visit_duration_ms,
-                    **(visit_result.get("timings", {}) if isinstance(visit_result.get("timings"), dict) else {}),
-                },
-            }
-        )
-        add_runtime_metrics(enriched, visit_result.get(RUNTIME_METRICS_KEY))
-        visit_status = str(visit_result.get("status", "")).strip().lower()
-        if visit_status == "error" or visit_result.get("error"):
-            enriched["visit_error"] = (
-                str(visit_result.get("error", "")).strip()
-                or "Selected browse provider failed while visiting search results."
-            )
-        return enriched
+        result = dict(response)
+        result["goal"] = str(goal or query)
+        result["timings"] = {"search_ms": search_duration_ms}
+        return result

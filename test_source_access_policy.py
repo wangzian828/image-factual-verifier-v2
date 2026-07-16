@@ -182,9 +182,8 @@ def test_fact_check_subdomain_scope_does_not_block_parent_news_domain() -> None:
     assert policy.allows("https://www.afp.com/primary-report")
 
 
-def test_text_search_filters_before_automatic_browse_and_removes_aggregates() -> None:
-    browse = BrowseClient()
-    tool = TextSearchTool(client=SearchClient(), browse_client=browse, visit_top_k=3)
+def test_text_search_filters_results_and_removes_aggregates() -> None:
+    tool = TextSearchTool(client=SearchClient())
     tool.set_source_access_policy(_policy())
 
     result = tool.search("claim keywords")
@@ -197,7 +196,10 @@ def test_text_search_filters_before_automatic_browse_and_removes_aggregates() ->
     assert [item["url"] for item in response["results"]] == [
         "https://independent.example/report"
     ]
-    assert browse.urls == ["https://independent.example/report"]
+    assert response["answer_box"] is None
+    assert response["knowledge_graph"] is None
+    assert "visited_pages" not in response
+    assert "evidence" not in response
 
 
 def test_text_search_rejects_query_that_targets_excluded_domain_before_provider_call() -> None:
@@ -209,7 +211,7 @@ def test_text_search_rejects_query_that_targets_excluded_domain_before_provider_
             raise AssertionError("policy-blocked query must not reach search provider")
 
     search = RecordingSearch()
-    tool = TextSearchTool(client=search, browse_client=BrowseClient())
+    tool = TextSearchTool(client=search)
     tool.set_source_access_policy(_policy())
 
     result = tool.search("site:factcrescendo.com Sajith Premadasa UNP")

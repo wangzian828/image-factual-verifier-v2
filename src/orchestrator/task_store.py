@@ -234,6 +234,21 @@ def apply_target_planning(
             ],
             "remaining_target_gaps": output.remaining_target_gaps[:4],
         }
+    if any(
+        _located_at_target_is_overbroad(proposal, fact_by_id)
+        for proposal in output.proposals
+        if proposal.predicate == "located_at"
+    ):
+        return {
+            "accepted_fact_ids": [],
+            "accepted_task_ids": [],
+            "rejected_reasons": [
+                "located_at target must bind one salient visible subject to one "
+                "concrete visible place or habitat; generic coexistence and "
+                "multi-entity location conjunctions are not atomic"
+            ],
+            "remaining_target_gaps": output.remaining_target_gaps[:4],
+        }
 
     for proposal in output.proposals[:3]:
         parent_ids = list(dict.fromkeys(proposal.parent_fact_ids))
@@ -464,6 +479,40 @@ def _target_text_is_grounded(
     return len(overlap) >= minimum and (
         len(overlap) / len(target) >= minimum_ratio
     )
+
+
+def _located_at_target_is_overbroad(
+    proposal: Any,
+    fact_by_id: Mapping[str, VisualFact],
+) -> bool:
+    parents = [
+        fact_by_id[fact_id]
+        for fact_id in proposal.parent_fact_ids
+        if fact_id in fact_by_id
+    ]
+    visible_subject_count = sum(
+        parent.predicate == "visible_in" for parent in parents
+    )
+    text = " ".join(
+        (
+            proposal.statement,
+            proposal.question,
+            proposal.purpose,
+        )
+    ).casefold()
+    generic_location = any(
+        phrase in text
+        for phrase in (
+            "coexist",
+            "same real-world geographic location",
+            "same geographic location",
+            "same real-world location",
+            "same location",
+            "any real-world habitat",
+            "any geographic location",
+        )
+    )
+    return visible_subject_count > 1 or generic_location
 
 
 def _contains_visual_integrity_scope(value: str) -> bool:
@@ -944,6 +993,21 @@ def apply_attribution(
             evidence_by_id,
         )
         if (
+            _contains_fabrication_attribution(statement)
+            and not visual_bridge_present
+            and not _records_explicitly_assert_fabrication(
+                discoveries,
+                evidence_rows,
+                findings,
+            )
+        ):
+            rejected_reasons.append(
+                "fabrication/composite attribution requires a same-capture "
+                "visual bridge or a cited record that explicitly asserts the "
+                "fabrication mechanism"
+            )
+            continue
+        if (
             decision_relevance == "decisive"
             and proposal.predicate
             in {
@@ -1274,6 +1338,40 @@ def _contains_fabrication_attribution(value: str) -> bool:
             "synthetic image",
             "fabricated image",
             "physically impossible",
+        )
+    )
+
+
+def _records_explicitly_assert_fabrication(
+    discoveries: Sequence[InvestigationDiscovery],
+    evidence_rows: Sequence[InvestigationEvidence],
+    findings: Sequence[Finding],
+) -> bool:
+    source_text = " ".join(
+        [
+            *[
+                " ".join((item.title, item.snippet))
+                for item in discoveries
+            ],
+            *[item.exact_text for item in evidence_rows],
+            *[item.statement for item in findings],
+        ]
+    ).casefold()
+    return any(
+        phrase in source_text
+        for phrase in (
+            "digital composite",
+            "composite image",
+            "photomontage",
+            "photo montage",
+            "photoshop",
+            "digitally manipulated",
+            "digitally altered",
+            "ai-generated",
+            "ai generated",
+            "synthetic image",
+            "digital artwork",
+            "digital art",
         )
     )
 

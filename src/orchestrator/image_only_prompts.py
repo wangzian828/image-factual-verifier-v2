@@ -55,6 +55,11 @@ Rules:
     unresolved and seek timezone-aligned evidence rather than refuting the target.
 12. Do not write a verdict. Return only the segment summary and
    ready_for_reflection flag.
+13. Retrieval must alternate with inspection. After text_search, reverse-image
+   search, or crop search yields an unvisited candidate page or reference image for
+   the active task, inspect a promising candidate with visit or
+   compare_with_reference before issuing another retrieval query for that task.
+   Search snippets remain Discovery and cannot resolve the task.
 """
 
 
@@ -116,6 +121,10 @@ Rules:
    proposition itself says that subjects coexist, occur, or are located in a
    real-world place or event, you must also propose that relation as a separate
    decisive fact.
+   When the visible scene description names or strongly specifies a place or habitat,
+   preserve that concrete place/habitat in the located_at statement and question.
+   Never replace it with "the same place", "some location", a conjunction of all
+   visible objects, or a generic coexistence question.
 9. Frame every target as the positive proposition whose truth would make the image
    real. In particular, a visual_integrity fact should say that the relevant pixels
    are authentic, coherent, or unmodified. Never state that the image is fake,
@@ -207,6 +216,83 @@ def select_react_tasks(
     return active
 
 
+def pending_discovery_routes(
+    state: ImageOnlyInvestigationState,
+    *,
+    task_ids: set[str] | None = None,
+) -> Dict[str, List[Dict[str, str]]]:
+    """Return task-linked candidate pages/images not yet inspected."""
+
+    attempted_pages: set[str] = set()
+    attempted_references: set[str] = set()
+    for route in state.attempted_routes:
+        try:
+            parsed = json.loads(route)
+        except (TypeError, ValueError):
+            continue
+        tool = str(parsed.get("tool", "")).strip()
+        if tool == "visit":
+            attempted_pages.update(
+                canonicalize_url(str(url))
+                for url in parsed.get("urls", []) or []
+                if canonicalize_url(str(url))
+            )
+        elif tool == "compare_with_reference":
+            reference_url = canonicalize_url(
+                str(parsed.get("reference_url", ""))
+            )
+            if reference_url:
+                attempted_references.add(reference_url)
+
+    active_task_ids = task_ids or {
+        task.task_id
+        for task in state.tasks
+        if task.status in {"active", "pending"}
+    }
+    pages: List[Dict[str, str]] = []
+    references: List[Dict[str, str]] = []
+    seen_pages: set[str] = set()
+    seen_references: set[str] = set()
+    for item in reversed(state.discoveries):
+        if item.task_id not in active_task_ids:
+            continue
+        page_url = canonicalize_url(item.candidate_url)
+        if (
+            page_url
+            and page_url not in attempted_pages
+            and page_url not in seen_pages
+        ):
+            seen_pages.add(page_url)
+            pages.append(
+                {
+                    "discovery_id": item.discovery_id,
+                    "task_id": item.task_id,
+                    "url": item.candidate_url,
+                    "title": item.title,
+                }
+            )
+        reference_url = canonicalize_url(item.reference_image_url)
+        if (
+            reference_url
+            and reference_url not in attempted_references
+            and reference_url not in seen_references
+        ):
+            seen_references.add(reference_url)
+            references.append(
+                {
+                    "discovery_id": item.discovery_id,
+                    "task_id": item.task_id,
+                    "reference_image_url": item.reference_image_url,
+                    "page_url": item.candidate_url,
+                    "title": item.title,
+                }
+            )
+    return {
+        "pages": pages[:8],
+        "references": references[:8],
+    }
+
+
 def render_react_context(state: ImageOnlyInvestigationState) -> str:
     active = select_react_tasks(state)
     facts = {fact.fact_id: fact for fact in state.facts}
@@ -224,37 +310,20 @@ def render_react_context(state: ImageOnlyInvestigationState) -> str:
             f"suggested_tools={task.suggested_tools}; "
             f"suggested_queries={task.suggested_queries}"
         )
-    attempted_reference_urls: set[str] = set()
-    for route in state.attempted_routes:
-        try:
-            parsed_route = json.loads(route)
-        except (TypeError, ValueError):
-            continue
-        if str(parsed_route.get("tool", "")).strip() != "compare_with_reference":
-            continue
-        args = parsed_route.get("args")
-        reference_url = str(parsed_route.get("reference_url", "")).strip()
-        if not reference_url and isinstance(args, dict):
-            reference_url = str(args.get("reference_url", "")).strip()
-        if reference_url:
-            attempted_reference_urls.add(canonicalize_url(reference_url))
     active_task_ids = {task.task_id for task in active}
+    pending_routes = pending_discovery_routes(
+        state,
+        task_ids=active_task_ids,
+    )
+    pending_pages = pending_routes["pages"]
     pending_references = [
         {
-            "discovery_id": item.discovery_id,
-            "task_id": item.task_id,
+            **item,
             "source_class": classify_source(
-                item.reference_image_url
+                item["reference_image_url"]
             ).source_class,
-            "page_url": item.candidate_url,
-            "reference_image_url": item.reference_image_url,
-            "title": item.title,
         }
-        for item in state.discoveries
-        if item.task_id in active_task_ids
-        and item.reference_image_url
-        and canonicalize_url(item.reference_image_url)
-        not in attempted_reference_urls
+        for item in pending_routes["references"]
     ]
     pending_references.sort(
         key=lambda item: (
@@ -312,6 +381,8 @@ def render_react_context(state: ImageOnlyInvestigationState) -> str:
         + json.dumps(discoveries, ensure_ascii=False, indent=2)
         + "\n\nUntested reference images (compare visually before relying on them):\n"
         + json.dumps(pending_references[:8], ensure_ascii=False, indent=2)
+        + "\n\nUnvisited candidate pages (visit before another retrieval query):\n"
+        + json.dumps(pending_pages[:8], ensure_ascii=False, indent=2)
         + "\n\nEligible Evidence:\n"
         + json.dumps(evidence, ensure_ascii=False, indent=2)
         + "\n\nFindings:\n"
