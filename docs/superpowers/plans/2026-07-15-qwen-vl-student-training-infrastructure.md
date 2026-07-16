@@ -1,7 +1,7 @@
 # Qwen-VL Student Training Infrastructure Plan
 
 **Date:** 2026-07-15  
-**Status:** proposed  
+**Status:** in progress — local infrastructure implemented; gpu-13 gates pending
 **Runtime project:** `image-factual-verifier-v3`  
 **Training project:** new, separate `image-factual-verifier-training` repository  
 **Teacher:** Gemini  
@@ -273,9 +273,9 @@ ifv-agent
   never receives ms-swift/DeepSpeed/vLLM training dependencies
 
 ifv-qwen-train
-  Python 3.12
-  ms-swift source install
-  PyTorch, Transformers, DeepSpeed/Megatron, training vLLM dependencies
+  Python 3.11
+  ms-swift 4.4.1 release
+  PyTorch, Transformers, DeepSpeed, and training vLLM dependencies
 
 ifv-qwen-serve
   serving-only dependencies
@@ -520,7 +520,8 @@ them.
 
 ### S0. Framework and model probe
 
-- [ ] Create the training repository.
+- [x] Create the training repository locally at
+  `D:\image-factual-verifier-training`.
 - [ ] Bootstrap `ifv-qwen-train` and `ifv-qwen-serve`.
 - [ ] Record gpu-13 hardware and environment manifests.
 - [ ] Run Qwen3-VL and Qwen3.5 model/processor probes.
@@ -531,10 +532,12 @@ them.
 
 - [ ] Add perception export to the runtime.
 - [ ] Version the teacher dataset release contract.
-- [ ] Implement Qwen processor/chat-template conversion.
-- [ ] Align assistant spans and loss masks after tokenization.
-- [ ] Add image/token length and truncation audits.
-- [ ] Add deterministic byte-identical dataset rebuild tests.
+- [x] Implement provider-neutral to ms-swift `messages`, `tools`, and `images`
+  conversion without importing runtime or data-pipeline packages.
+- [ ] Run the exact Qwen processor/chat-template conversion on gpu-13.
+- [ ] Verify assistant spans and loss masks with the exact Qwen processor.
+- [x] Add image/token length and truncation probe commands.
+- [x] Add deterministic byte-identical dataset rebuild tests.
 
 ### S2. LoRA smoke training
 
@@ -632,7 +635,9 @@ visible and independently auditable.
 #### R1. Deterministic mock environment
 
 - [ ] Run 20-step GRPO smoke training with mocked deterministic tools.
-- [ ] Verify multi-turn message construction and token masks.
+- [x] Implement deterministic mock tools through ms-swift 4.4.1's official
+  `Env`/`GYMScheduler` plugin boundary; no custom trainer or rollout engine.
+- [ ] Verify multi-turn message construction and token masks on gpu-13.
 - [ ] Verify checkpoint/resume and rollout audit.
 
 #### R2. Cached-tool environment
@@ -766,6 +771,54 @@ Jupyter control path.
 8. Run LoRA smoke training and serve the adapter.
 9. Add dual Gemini/Qwen runtime canaries.
 10. Build reward replay before enabling online RL.
+
+## 15.1 Implementation checkpoint — 2026-07-16
+
+Local repository:
+
+```text
+D:\image-factual-verifier-training
+```
+
+Implemented locally:
+
+- fixed `ms-swift==4.4.1` train/serve dependency surfaces;
+- separate `ifv-qwen-train` and `ifv-qwen-serve` bootstrap without touching
+  `ifv-agent`;
+- fail-closed `ifv-policy-dataset-v2` consumer;
+- ms-swift-native Agent rows using `tool_call`, `tools`, and explicit loss;
+- quality-gated perception rows with source-safe split reuse;
+- provider-wire stripping while preserving provider-neutral response schemas;
+- stage-specific datasets and ms-swift-native mixed curriculum probabilities;
+- two-GPU LoRA SFT, explicit resume, merge/export, and vLLM serving launchers;
+- checkpoint, environment, and serving manifests;
+- image/tool-call/structured-continuation endpoint probes;
+- deterministic Gym GRPO smoke environment using ms-swift's built-in
+  `total_reward` path.
+
+Local verification:
+
+```text
+13 tests passed
+compileall passed
+Git Bash shell syntax passed
+current-v3 scripted teacher conversion:
+  7 policy examples
+  1 perception example
+  strict derived-dataset audits passed
+```
+
+The historical two-case local run is not accepted as training data because its
+trajectory score predates the current `training_eligible` field. The v2 exporter
+correctly excluded both episodes with `missing_training_quality_score`.
+
+Pending gpu-13 evidence:
+
+- install and lock the two isolated environments;
+- run Qwen3-VL/Qwen3.5 processor and serving probes;
+- execute 100-step LoRA, save/resume/export/reload;
+- execute 20-step multimodal Gym GRPO smoke;
+- run Qwen and unchanged Gemini Agent canaries.
 
 ## 16. Explicit non-goals
 
