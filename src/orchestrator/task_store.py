@@ -41,7 +41,6 @@ MAX_REFLECTIONS = 6
 INITIAL_TASKS_MAX = 4
 TOTAL_TASKS_MAX = 12
 NEW_TASKS_PER_REFLECTION_MAX = 3
-MAX_ATTEMPTS_PER_TASK = 7
 MAX_TEXT_SEARCH_ROUTES_PER_TASK = 2
 MAX_CORE_FACT_REFINEMENTS = 1
 MAX_INSPECTION_CANDIDATES_PER_BATCH = 4
@@ -495,17 +494,9 @@ def record_tool_observation(
         task.status = "active"
     elif (
         failure_ids
-        and task.attempt_count >= 3
-        and not _task_owns_scene_fact(state, task)
         and not _task_has_remaining_material_route(state, task)
     ):
         task.status = "exhausted"
-    if (
-        task.status == "active"
-        and task.attempt_count >= MAX_ATTEMPTS_PER_TASK
-    ):
-        task.status = "exhausted"
-
     return {
         "action_count": state.action_count,
         "task_id": task.task_id,
@@ -3041,8 +3032,6 @@ def _task_has_remaining_material_route(
 ) -> bool:
     """Keep a task active while any bounded retrieval or inspection route remains."""
 
-    if task.attempt_count >= MAX_ATTEMPTS_PER_TASK:
-        return False
     attempts = _attempted_routes_by_task(state).get(task.task_id, [])
     return bool(
         _remaining_task_material_routes(
@@ -3073,7 +3062,6 @@ def remaining_material_routes(
         for task in state.tasks
         if (
             task.status in {"active", "pending"}
-            and task.attempt_count < MAX_ATTEMPTS_PER_TASK
             and fact_id in task.fact_ids
         )
     ]

@@ -3763,7 +3763,7 @@ def test_evidence_decision_rejects_refinement_that_replaces_location() -> None:
     assert state.core_verdict_fact_id == core_id
 
 
-def test_task_exhausts_after_seven_attempts_without_resolution() -> None:
+def test_task_exhausts_when_finite_routes_are_consumed() -> None:
     case, state = _runtime_state()
     task = next(
         item
@@ -3773,7 +3773,8 @@ def test_task_exhausts_after_seven_attempts_without_resolution() -> None:
             for fact_id in item.fact_ids
         )
     )
-    for index in range(7):
+    task.suggested_tools = ["text_search"]
+    for index in range(2):
         record_tool_observation(
             state,
             _step(
@@ -3782,14 +3783,25 @@ def test_task_exhausts_after_seven_attempts_without_resolution() -> None:
                 tool_name="text_search",
                 result=(
                     '{"status":"success","queries":['
-                    '{"query":"controlled","results":[]}]}'
+                    f'{{"query":"controlled route {index}","results":[]}}'
+                    ']}'
                 ),
             ),
             image_sha256=case.image_sha256,
         )
+        if index == 0:
+            assert task.status == "active"
+            assert remaining_material_routes(
+                state,
+                fact_id=state.core_verdict_fact_id or "",
+            ) == [f"text_search:{task.task_id}"]
 
-    assert task.attempt_count == 7
+    assert task.attempt_count == 2
     assert task.status == "exhausted"
+    assert not remaining_material_routes(
+        state,
+        fact_id=state.core_verdict_fact_id or "",
+    )
 
 
 def test_conflict_requires_discriminating_evidence_before_resolution() -> None:
