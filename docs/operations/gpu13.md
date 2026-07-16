@@ -110,8 +110,9 @@ kernelspec; no Jupyter server restart is required.
 
 ## Required Server Runtime Environment
 
-The server's `.bashrc` was observed to contain the obsolete proxy port `47894`.
-Do not rely on it for this project. The committed gpu-13 wrappers override it with:
+The server's `.bashrc` and an older Jupyter process were observed to contain the
+obsolete proxy port `47894`. Do not rely on either environment. The committed
+gpu-13 wrappers ignore the legacy `IFV_SERVER_PROXY` variable and use:
 
 ```bash
 export http_proxy=http://100.10.1.210:47899
@@ -121,6 +122,10 @@ export HTTPS_PROXY="$https_proxy"
 export OMP_NUM_THREADS=1
 export IFV_DATA_ROOT=/gsdata/home/wza/image-factual-verifier-v2-data
 ```
+
+Only an explicitly announced proxy migration should set
+`IFV_SERVER_PROXY_OVERRIDE`. This distinct name prevents a stale inherited
+`IFV_SERVER_PROXY=...:47894` value from silently breaking GitHub and provider access.
 
 The following were verified through that proxy:
 
@@ -185,31 +190,40 @@ export http_proxy=http://100.10.1.210:47899
 export https_proxy=http://100.10.1.210:47899
 export OMP_NUM_THREADS=1
 
-mkdir -p /gs/home/wza/projects
-cd /gs/home/wza/projects
+mkdir -p /gs/home/wza/projects/image-factual-verifier-v2-worktrees
+cd /gs/home/wza/projects/image-factual-verifier-v2-worktrees
 git clone --branch codex/image-factual-verifier-v3 \
   https://github.com/wangzian828/image-factual-verifier-v2.git \
-  image-factual-verifier-v3
-cd image-factual-verifier-v3
+  visual-fact-search-agent
+cd visual-fact-search-agent
 bash scripts/server/bootstrap_gpu13.sh
 ```
 
-The active checkout is `/gs/home/wza/projects/image-factual-verifier-v3`. Do not use
-the older `/gs/home/wza/projects/image-factual-verifier-v2` checkout. The deployment
-uses the isolated `ifv-agent` environment with Python 3.11. The bootstrap script is
-idempotent and stores `OMP_NUM_THREADS=1` in that Conda environment as an additional
-guard. It also installs the `ifv-agent` Jupyter kernelspec, whose wrapper sources
-`gpu13_env.sh` before launching the kernel. This ensures browser notebooks and
-REST/WebSocket-launched project commands retain the same runtime environment and
-places the `ifv-agent` binary directory first in `PATH`, so shell cells also invoke
-the project interpreter rather than the Jupyter server's base Conda Python.
+The active checkout verified on 2026-07-16 is:
+
+```text
+/gs/home/wza/projects/image-factual-verifier-v2-worktrees/visual-fact-search-agent
+```
+
+Do not run `/gs/home/wza/projects/image-factual-verifier-v2`: it is a legacy
+`feature/visual-fact-search-agent` checkout with an unrelated staged migration.
+Its source tree does not represent its HEAD and must not be reset or reused as v3.
+
+The deployment uses the isolated `ifv-agent` environment with Python 3.11. The
+bootstrap script is idempotent and stores `OMP_NUM_THREADS=1` in that Conda
+environment as an additional guard. It also installs the `ifv-agent` Jupyter
+kernelspec, whose wrapper sources `gpu13_env.sh` before launching the kernel. This
+ensures browser notebooks and REST/WebSocket-launched project commands retain the
+same runtime environment and places the `ifv-agent` binary directory first in
+`PATH`, so shell cells also invoke the project interpreter rather than the Jupyter
+server's base Conda Python.
 
 ## Update From GitHub
 
 After each local commit and push:
 
 ```bash
-cd /gs/home/wza/projects/image-factual-verifier-v3
+cd /gs/home/wza/projects/image-factual-verifier-v2-worktrees/visual-fact-search-agent
 bash scripts/server/update_gpu13_checkout.sh codex/image-factual-verifier-v3
 bash scripts/server/bootstrap_gpu13.sh
 ```
@@ -222,7 +236,7 @@ server worktree. Do not bypass that guard by editing or resetting server files.
 Run the full deterministic suite without credentials first:
 
 ```bash
-cd /gs/home/wza/projects/image-factual-verifier-v3
+cd /gs/home/wza/projects/image-factual-verifier-v2-worktrees/visual-fact-search-agent
 scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
   python -m pytest -q
 ```
@@ -324,7 +338,7 @@ D:\image-factual-verifier-data-pipeline
 Foreground canary:
 
 ```bash
-cd /gs/home/wza/projects/image-factual-verifier-v3
+cd /gs/home/wza/projects/image-factual-verifier-v2-worktrees/visual-fact-search-agent
 release="$IFV_DATA_ROOT/releases/automatic-diverse-20-development-preview-v4-20260715"
 run_id="automatic-diverse-20-v4-canary-$(date -u +%Y%m%dT%H%M%SZ)"
 scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
@@ -363,7 +377,7 @@ the real evaluator, requires successful search/visit/visual tool classes, and ru
 strict trace audit:
 
 ```bash
-cd /gs/home/wza/projects/image-factual-verifier-v3
+cd /gs/home/wza/projects/image-factual-verifier-v2-worktrees/visual-fact-search-agent
 run_id="runtime-canary-$(date -u +%Y%m%dT%H%M%SZ)"
 scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
   python scripts/run_real_canary.py \
@@ -374,6 +388,11 @@ scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
 
 Only after this command passes should a larger formal evaluation be launched in the
 background with `scripts/server/start_eval_gpu13.sh`.
+
+`run_real_canary.py` refuses a dirty checkout and rejects any `GIT_COMMIT` value that
+does not match the actual HEAD. The child evaluator receives the verified HEAD, so a
+run directory name or inherited environment variable cannot falsify manifest
+provenance.
 
 Historical baseline acceptance:
 
@@ -388,7 +407,7 @@ gpu-13 commit:
 abb7db553cd4d3e8046faed3c43dac3dce67e328
 
 gpu-13 checkout:
-/gs/home/wza/projects/image-factual-verifier-v3
+/gs/home/wza/projects/image-factual-verifier-v2-worktrees/visual-fact-search-agent
 
 gpu-13 run:
 /gsdata/home/wza/image-factual-verifier-v2-data/runs/eval/

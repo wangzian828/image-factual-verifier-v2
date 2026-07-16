@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 
 # Source this file before every project command on gpu-13.
-# IFV_SERVER_PROXY exists only to support an explicitly announced proxy change.
-_ifv_proxy="${IFV_SERVER_PROXY:-http://100.10.1.210:47899}"
+# Use a deliberately named override so stale login/Jupyter environment variables
+# cannot silently replace the committed working proxy.
+_ifv_proxy="${IFV_SERVER_PROXY_OVERRIDE:-http://100.10.1.210:47899}"
 _ifv_data_root="${IFV_DATA_ROOT:-/gsdata/home/wza/image-factual-verifier-v2-data}"
 
 export OMP_NUM_THREADS=1
