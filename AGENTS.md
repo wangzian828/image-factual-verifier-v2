@@ -38,14 +38,18 @@ project version.
    policy action performs one bounded semantic operation.
 6. Deterministically reduce each accepted action into separate Discovery, Evidence,
    Finding, Failure, task, and fact state.
-7. Adjudicate evidence and run Coverage after every accepted action.
-8. Run structured Reflection after cumulative actions 4, 8, 12, 16, 20, and 24. It
+7. After each accepted action, deterministically decide whether a sparse semantic
+   Evidence Decision checkpoint is needed. Run it after potentially decisive
+   inspected Evidence, before Reflection, or before an unresolved terminal outcome.
+8. Let Gemini classify the active proposition as
+   `supported|refuted|conflicted|insufficient`, then run deterministic Coverage.
+9. Run structured Reflection after cumulative actions 4, 8, 12, 16, 20, and 24. It
    may reorder or add bounded routes for the same core fact, but cannot change verdict
    ownership.
-9. Stop immediately when the core fact resolves, when no executable core route
+10. Stop immediately when the core fact resolves, when no executable core route
    remains, after two action checkpoints without qualified core progress, or at the
    24-action cap.
-10. Compile the only allowed verdict and basis, then require Gemini Judgment to match
+11. Compile the only allowed verdict and basis, then require Gemini Judgment to match
    them exactly.
 
 ## Non-negotiable invariants
@@ -69,12 +73,16 @@ project version.
 - Exactly one `CoreVerdictFact` owns the verdict. Optional title, creator, date,
   platform, asset ID, second-source, and general visual-integrity details are
   supporting by default and cannot delay a resolved verdict.
+- Reliable text may close ecological, geographic, temporal, or other world
+  relations. A same-capture bridge is mandatory only when the semantic decision says
+  the conclusion depends on binding a source assertion to this exact input image.
 - `fake` requires the core fact to be refuted after conflict adjudication; `real`
   requires the core fact to be supported with its required source/image binding; all
   other valid factual outcomes are `unverifiable` because evidence is insufficient.
-- Reflection cannot replace the core fact. At most one already-resolved,
-  same-subject, atomic refinement may replace it through
-  `reconcile_core_verdict_fact(...)`.
+- Reflection cannot replace the core fact. At most one Evidence Decision may narrow
+  an unknown visible subject/place/event slot while preserving the original relation,
+  same salient subject, pixel/OCR anchors, and newly reviewed Evidence. It cannot
+  replace location/event scope or promote creator/title/date/platform metadata.
 - General VLM consistency/anomaly opinions are diagnostic and cannot create verdict
   Evidence.
 - `text_search` accepts one query, `visit` one URL, and

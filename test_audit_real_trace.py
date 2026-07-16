@@ -20,7 +20,7 @@ def test_strict_audit_accepts_complete_image_only_trace(
     report = audit_trace(_scripted_trace(tmp_path))
 
     assert not report.failures(strict_scheduler=True)
-    assert report.stats["image_only_actions"] == 2
+    assert report.stats["image_only_actions"] == 3
     assert report.stats["reflections"] == 0
     assert report.stats["decisive_facts"] == 1
 
@@ -184,3 +184,78 @@ def test_successful_planning_revision_is_not_a_protocol_rejection(
 
     assert not report.failures(strict_scheduler=True)
     assert report.stats["protocol_rejections"] == 0
+
+
+def test_strict_audit_rejects_post_determination_action(
+    tmp_path: Path,
+) -> None:
+    trace_path = _scripted_trace(tmp_path)
+    trace = json.loads(trace_path.read_text(encoding="utf-8"))
+    investigation = trace["state"]["investigation_state"]
+    terminal_action = investigation["coverage_audits"][-1]["action_count"]
+    investigation["action_count"] = terminal_action + 1
+    trace["state"]["all_steps"].append(
+        {
+            "round": 99,
+            "stage": "image_only_investigation",
+            "action_type": "tool_call",
+            "tool_name": "text_search",
+            "tool_args": {
+                "__question_id": investigation["tasks"][0]["task_id"],
+                "query": "redundant query after verdict",
+            },
+            "tool_result": json.dumps(
+                {"status": "success", "results": []}
+            ),
+            "metadata": {
+                "stage": "image_only_investigation",
+                "function_call_id": "call-after-verdict",
+            },
+        }
+    )
+    trace_path.write_text(
+        json.dumps(trace, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    report = audit_trace(trace_path)
+    codes = {
+        issue.code
+        for issue in report.failures(strict_scheduler=True)
+    }
+
+    assert "POST_DETERMINATION_ACTION" in codes
+
+
+def test_strict_audit_rejects_unanchored_refinement(
+    tmp_path: Path,
+) -> None:
+    trace_path = _scripted_trace(tmp_path)
+    trace = json.loads(trace_path.read_text(encoding="utf-8"))
+    investigation = trace["state"]["investigation_state"]
+    decision = investigation["evidence_decisions"][0]
+    decision["accepted_refinement_fact_id"] = investigation["facts"][0]["fact_id"]
+    decision["output"]["refinement"] = {
+        "slot": "subject_identity",
+        "statement": "The visible subject is Example.",
+        "predicate": "identified_as",
+        "anchor_fact_ids": ["missing-anchor"],
+        "grounding_evidence_ids": decision["reviewed_evidence_ids"][:1],
+        "question": "Is the visible subject Example?",
+        "purpose": "Narrow the visible identity slot.",
+        "suggested_tools": ["text_search"],
+        "suggested_queries": ["Example"],
+    }
+    investigation["core_fact_refinement_count"] = 1
+    trace_path.write_text(
+        json.dumps(trace, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    report = audit_trace(trace_path)
+    codes = {
+        issue.code
+        for issue in report.failures(strict_scheduler=True)
+    }
+
+    assert "EVIDENCE_REFINEMENT_ANCHOR_INVALID" in codes

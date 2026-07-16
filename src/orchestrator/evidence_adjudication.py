@@ -445,6 +445,32 @@ def _evidence_score(
     if evidence.confidence is not None and evidence.confidence < 0.6:
         score -= 15.0
 
+    has_same_capture_bridge = any(
+        item.evidence_id != evidence.evidence_id
+        and item.claim_binding == "same_capture"
+        and item.same_capture_or_near_duplicate is True
+        and item.likely_different_original_capture is not True
+        and not item.risk_flags
+        for item in fact_evidence
+    )
+    if (
+        evidence.claim_binding == "source_assertion"
+        and evidence.directness == "direct"
+        and has_same_capture_bridge
+        and fact.predicate
+        in {
+            "located_at",
+            "occurred_at",
+            "depicts_event",
+            "identified_as",
+            "provenance_matches",
+        }
+    ):
+        # The comparison supplies image/source binding; the fetched page
+        # supplies the factual direction. Together they can close one visual
+        # hypothesis without requiring an unrelated second website.
+        score += 30.0
+
     if (
         fact.predicate == "source_record_matches"
         and evidence.source_class == "ugc"

@@ -61,16 +61,17 @@ Exactly one runtime component may mutate verdict ownership:
 reconcile_core_verdict_fact(...)
 ```
 
-Target Planning, Attribution, Reflection, and tools may submit proposals but cannot
-directly edit `decisive_fact_ids`.
+Target Planning, Evidence Decision, Reflection, and tools may submit proposals but
+cannot directly edit `decisive_fact_ids`.
 
 A replacement is allowed at most once and only when all conditions hold:
 
 1. the proposed fact is atomic;
 2. it stays inside the semantic scope of the current fact;
 3. it is tied to the same salient image subject;
-4. it has already reached `supported` or `refuted`;
-5. it is more direct than the current broad fact;
+4. it has already reached `supported`/`refuted`, or it is the one allowed active
+   visual-slot refinement grounded in newly reviewed Evidence;
+5. it preserves all non-target parts of the current relation;
 6. replacing the fact removes ambiguity rather than adding metadata obligations.
 
 An unresolved web-discovered attribution, fabrication mechanism, or compound metadata
@@ -137,9 +138,11 @@ same_capture or near_duplicate binding
 - [x] Introduce an explicit `CoreVerdictFact`/evidence-gap state.
 - [x] Centralize every decisive-set mutation.
 - [x] Remove decisive promotion from Reflection.
-- [x] Make Attribution supporting by default.
+- [x] Remove runtime Attribution target expansion.
 - [x] Remove Target Refresh as a mechanism for changing the factual question.
-- [x] Permit one resolved, scope-preserving core-fact refinement.
+- [x] Permit one scope-preserving visual-slot refinement.
+- [x] Add sparse model-led Evidence Decision checkpoints.
+- [x] Let reliable text close world relations without mandatory same-capture search.
 - [x] Replace evidence-ID gain with qualified decision gain.
 - [x] Run Coverage after every accepted evidence update.
 - [x] Stop immediately when the core fact is adjudicated.
@@ -343,8 +346,10 @@ Coverage after every accepted action
 two no-qualified-progress checkpoints -> information_saturated
 no Target Refresh
 Reflection cannot mutate verdict ownership
-Attribution is supporting by default
-one already-resolved same-subject atomic refinement at most
+sparse semantic Evidence Decision at material boundaries
+text-only closure when semantically sufficient
+same-capture required only when the proposition needs exact image/source binding
+one relation-preserving visual-slot refinement at most
 ```
 
 Tool behavior now includes:

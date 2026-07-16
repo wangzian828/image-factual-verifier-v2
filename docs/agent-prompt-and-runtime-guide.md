@@ -14,6 +14,7 @@ deterministic code.
 | Target Planning | Gemini structured output + deterministic validator | Visible facts, OCR, anchors, tasks | One core fact and candidate evidence routes |
 | ReAct | Gemini native function calling | Compact current investigation | One tool action, then segment output |
 | Observation reduction | Deterministic | Tool result + task/fact state | Discovery/Evidence/Finding/Failure updates |
+| Evidence Decision | Gemini structured output + deterministic validator | Active fact + qualified Evidence + pixel/OCR anchors | Semantic assessment, binding requirement, optional one-slot refinement |
 | Reflection | Gemini structured output + deterministic validator | Global state every four actions | Bounded task-order and route delta |
 | Coverage | Deterministic | Facts, Findings, Evidence, tasks, budget | Stop state and fact coverage |
 | Verdict basis | Deterministic | One core fact and its evidence gaps | Allowed verdict and exact basis IDs |
@@ -84,9 +85,11 @@ For a tool-bearing segment:
 5. Serialize `status=success|error`.
 6. Reduce the observation into runtime state.
 7. Send `function_result` with `previous_interaction_id`.
-8. Run deterministic reduction and Coverage immediately after the accepted action.
-9. Continue only if Coverage leaves the core fact unresolved and an executable route
-   remains.
+8. Run deterministic observation reduction.
+9. At a material boundary, run a sparse Evidence Decision over accumulated qualified
+   Evidence; otherwise retain the prior semantic decision.
+10. Run Coverage immediately. Continue only if the core fact remains unresolved and
+    an executable route exists.
 
 Corrections remain in the same interaction chain. The runtime never changes provider,
 model, protocol, or thinking policy to hide a failure.
@@ -107,6 +110,9 @@ Evidence can be created only from:
 - successful reference comparisons.
 
 General consistency/anomaly output is diagnostic. It cannot create verdict Evidence.
+Search snippets remain Discovery. Fetched spans and visual comparisons become
+provenance-preserving Evidence, but their relation to the active proposition is not
+finalized by query-relative extractor labels.
 
 A Finding proposal is accepted only if:
 
@@ -116,21 +122,48 @@ A Finding proposal is accepted only if:
 - its stance agrees with owned Evidence;
 - source-family provenance is retained.
 
-Direct official evidence can refute an exact event/place/identity slot. An exact
-same-capture/near-duplicate hosted by an original official source can bind a full
-scene proposition. A non-original or unknown image host additionally requires a
-fetched direct source assertion. The same subject in a different capture is neutral,
-and a generic official identity page does not prove visible presence in the input.
+The reducer validates source quality, directness, risk, provenance, and visual
+comparison structure. Evidence Decision interprets those qualified records relative
+to the active proposition. Same-subject evidence from a different capture stays
+neutral for exact image binding, and generic identity pages do not prove that an
+entity is visible in the input.
 
-If support and refute both qualify, deterministic adjudication compares visual
-binding, source originality, directness, independence, source risk, and temporal
-alignment. A tie remains `conflicted` only while the Agent seeks discriminating
-evidence. If bounded search cannot break the tie, the final gap is insufficient
-evidence, not “conflict means unverifiable.”
+If support and refute both qualify, Evidence Decision compares their semantics,
+scope, binding, directness, source risk, and temporal alignment. The runtime validates
+the cited IDs and provenance. A tie remains `conflicted` while the Agent seeks
+discriminating evidence. If bounded search cannot break the tie, the final gap is
+insufficient evidence, not “conflict means unverifiable.”
 
-A task may own Findings while remaining active. A core-owning task becomes resolved
-only when its Findings materially close the owned core evidence gap; a weak Finding
-must not remove the task from future scheduling.
+A task remains active after an `insufficient|conflicted` decision. It resolves only
+after a terminal Evidence Decision creates task-owned Findings for the active fact.
+
+## Evidence Decision prompt
+
+Evidence Decision is not called for every new Evidence row. It runs when inspected
+Evidence may decide the case, before Reflection, or before an unresolved terminal
+outcome. Gemini evaluates the active proposition rather than the wording of the query
+that found the source and returns:
+
+```text
+supported | refuted | conflicted | insufficient
+```
+
+It also decides whether binding is `text_sufficient`,
+`same_capture_helpful`, or `same_capture_required`. Reliable text alone can refute
+claims such as “monarch butterflies naturally occur in Antarctica.” Missing a
+reference image does not keep that investigation alive. Same-capture is mandatory
+only when the source assertion must be tied to this exact input image.
+
+For an unresolved broad visual relation, Gemini may propose one narrower visible
+slot. Deterministic validation requires pixel/OCR anchors, newly reviewed selected
+Evidence, the same salient subject, and preservation of the original non-target
+relation. Thus “orange-and-black butterflies in Antarctica” may become “monarch
+butterflies in Antarctica,” but not “monarch butterflies in Mexico,” and never “photo
+by Jane Example.”
+
+Accepted terminal decisions create auditable task-owned Findings without changing
+Evidence text, URL, span, hash, or function-call provenance. Coverage then stops
+before Reflection or another search.
 
 ## Reflection prompt
 
@@ -149,9 +182,9 @@ or exhausted, and cannot replace the `CoreVerdictFact`.
 
 ## Coverage and stop
 
-Coverage is deterministic and runs after every accepted tool action. It compares the
-one core fact, its winning qualified Evidence, and its three bounded gaps with the
-previous audit.
+Coverage is deterministic and runs after every accepted tool action. It consumes the
+latest Evidence Decision for the active fact and compares its selected Evidence and
+three bounded gaps with the previous audit.
 
 ```text
 verdict_determined
@@ -218,7 +251,7 @@ They produce no classification prediction.
 ## Policy trajectory export
 
 Actual model-visible `policy_input` and `policy_action` snapshots are captured on
-Target Planning, Attribution Planning, ReAct, Reflection, and Judgment steps.
+Target Planning, ReAct, Evidence Decision, Reflection, and Judgment steps.
 
 Exporter behavior:
 

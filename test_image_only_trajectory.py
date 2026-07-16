@@ -86,7 +86,56 @@ class AdaptiveImageOnlyBackend:
         self.requests.append(kwargs)
         self.counter += 1
         system = str(kwargs.get("system_instruction", ""))
+        raw = kwargs.get("input_payload", "")
+        text = raw if isinstance(raw, str) else json.dumps(raw)
         interaction_id = f"interaction-{self.counter}"
+        if "semantic decision checkpoint" in system:
+            context = json.loads(text)
+            active = context["active_fact"]
+            evidence = context["eligible_evidence"]
+            selected_ids = [
+                item["evidence_id"]
+                for item in evidence
+            ]
+            has_page_assertion = any(
+                item["evidence_kind"] == "web_span"
+                for item in evidence
+            )
+            return _completed(
+                interaction_id,
+                {
+                    "active_fact_id": active["fact_id"],
+                    "assessment": (
+                        "supported"
+                        if has_page_assertion
+                        else "insufficient"
+                    ),
+                    "selected_evidence_ids": selected_ids,
+                    "binding_requirement": (
+                        "same_capture_required"
+                        if has_page_assertion
+                        else "same_capture_helpful"
+                    ),
+                    "remaining_gap": (
+                        ""
+                        if has_page_assertion
+                        else (
+                            "Inspect the source page for the factual assertion "
+                            "associated with this same-capture image."
+                        )
+                    ),
+                    "rationale": (
+                        "The official page assertion and same-capture comparison "
+                        "jointly support the active visual proposition."
+                        if has_page_assertion
+                        else (
+                            "The comparison binds a source image to the input but "
+                            "does not by itself establish the page's world claim."
+                        )
+                    ),
+                    "refinement": None,
+                },
+            )
         if "structured Reflection step" in system:
             return _completed(
                 interaction_id,
@@ -107,8 +156,6 @@ class AdaptiveImageOnlyBackend:
                 },
             )
         if "attribution-planning step" in system:
-            raw = kwargs.get("input_payload", "")
-            text = raw if isinstance(raw, str) else json.dumps(raw)
             context = json.loads(text)
             discoveries = context.get("recent_discoveries", [])
             evidence = context.get("recent_evidence", [])
@@ -155,8 +202,6 @@ class AdaptiveImageOnlyBackend:
                 },
             )
         if "constrained final synthesizer" in system:
-            raw = kwargs.get("input_payload", "")
-            text = raw if isinstance(raw, str) else json.dumps(raw)
             context = json.loads(text)
             basis = context["compiled_basis"]
             return _completed(
@@ -266,6 +311,30 @@ class ScreenshotBackend:
         system = str(kwargs.get("system_instruction", ""))
         raw = kwargs.get("input_payload", "")
         text = raw if isinstance(raw, str) else json.dumps(raw)
+        if "semantic decision checkpoint" in system:
+            context = json.loads(text)
+            active = context["active_fact"]
+            evidence = context["eligible_evidence"]
+            selected_ids = [
+                item["evidence_id"]
+                for item in evidence
+                if item["evidence_kind"] == "web_span"
+            ]
+            return _completed(
+                interaction_id,
+                {
+                    "active_fact_id": active["fact_id"],
+                    "assessment": "supported",
+                    "selected_evidence_ids": selected_ids,
+                    "binding_requirement": "text_sufficient",
+                    "remaining_gap": "",
+                    "rationale": (
+                        "The first-party source record directly matches the "
+                        "visible account, post text, and date."
+                    ),
+                    "refinement": None,
+                },
+            )
         if "initial target-planning step" in system:
             return _completed(
                 interaction_id,
@@ -378,13 +447,15 @@ class ControlledVisitTool(StaticTool):
 
     def call(self, params: Dict[str, Any]) -> Dict[str, Any]:
         self.calls.append(dict(params))
-        statement = str(params["goal"])
-        excerpt = f"NOAA official record confirms: {statement}"
+        excerpt = (
+            "NOAA official record confirms: The image shows NOAA Ship "
+            "Henry B. Bigelow."
+        )
         return {
             "status": "success",
             "selected_url": "https://www.noaa.gov/controlled-reference",
             "url": "https://www.noaa.gov/controlled-reference",
-            "goal": statement,
+            "goal": str(params["goal"]),
             "evidence": excerpt,
             "summary": excerpt,
             "relevance": "high",
@@ -637,8 +708,15 @@ def test_scripted_image_only_complete_trajectory(tmp_path: Path) -> None:
     assert result["verdict"] == "real"
     assert result["verdict_basis"]["policy_rule_id"] == "reinspect-v2"
     state = result["state"]["investigation_state"]
-    assert state["action_count"] == 2
+    assert state["action_count"] == 3
     assert len(state["reflections"]) == 0
+    assert len(state["evidence_decisions"]) == 2
+    assert state["evidence_decisions"][0]["output"]["assessment"] == (
+        "insufficient"
+    )
+    assert state["evidence_decisions"][1]["output"]["assessment"] == (
+        "supported"
+    )
     assert state["coverage_audits"][-1]["stop_reason"] == "verdict_determined"
     assert state["discoveries"]
     assert state["evidence"]
@@ -936,6 +1014,10 @@ def test_scripted_screenshot_source_and_integrity_trajectory(
     ] == "unresolved"
     state = result["state"]["investigation_state"]
     assert state["action_count"] == 2
+    assert len(state["evidence_decisions"]) == 1
+    assert state["evidence_decisions"][0]["output"][
+        "binding_requirement"
+    ] == "text_sufficient"
     assert {
         fact["predicate"]
         for fact in state["facts"]

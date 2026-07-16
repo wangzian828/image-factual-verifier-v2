@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-16
 
-**Status:** planned from the clean Monarch retry
+**Status:** implemented locally; gpu-13 Monarch acceptance pending
 
 ## Why
 
@@ -31,7 +31,9 @@ task into image attribution.
 core world relation
   -> search lead
   -> visit lead using the original relation-specific goal
-  -> Evidence / Finding
+  -> Evidence
+  -> sparse semantic Evidence Decision
+  -> Finding
   -> Coverage
 ```
 
@@ -61,11 +63,21 @@ world-fact core, retain `task.question` after search results arrive. The page re
 must receive the concrete ecological/event/place relation it is supposed to support
 or refute.
 
-### 2. Do not trigger Attribution from Discovery alone
+### 2. Remove runtime Attribution target expansion
 
-Attribution planning may run only after Evidence or a Finding was created, and only
-when it can close a current core gap. A generic SERP/Lens Discovery cannot create
-creator/title/platform facts or mutate the goal of the active world-fact task.
+The runtime Attribution stage is removed. A generic SERP/Lens Discovery cannot create
+creator/title/platform facts or mutate the active world-fact goal.
+
+Qualified Evidence is reviewed at a sparse Evidence Decision checkpoint. Gemini may:
+
+- support, refute, conflict, or leave the active proposition insufficient;
+- decide whether text is sufficient or same-capture binding is required;
+- once, narrow an unknown visible subject/place/event slot while preserving the
+  original relation.
+
+The runtime validates Evidence IDs, task/fact ownership, pixel/OCR anchors, one-time
+budget, and relation preservation. It does not use a score threshold or prompt rule to
+decide truth.
 
 ### 3. Dynamically expose only executable tools
 
@@ -89,12 +101,19 @@ addresses the observed trace.
 
 Semantic duplicate detection remains as a guardrail, not the normal control path.
 
+### 4. Stop before Reflection or another search
+
+After a material Evidence Decision, Coverage runs immediately. A supported/refuted
+core with all required gaps closed sets `verdict_determined`; the loop cannot run
+Reflection or another tool action afterward. Before an unresolved terminal outcome,
+all pending core Evidence receives one mandatory semantic review.
+
 ## Acceptance tests
 
 1. The Monarch ecology task keeps its migration/coexistence goal when visiting the
    Florida Museum/NOAA-style search lead, and the page can create refuting Evidence.
-2. A Discovery alone does not invoke Attribution or create creator/title/product
-   tasks.
+2. A Discovery alone does not invoke semantic adjudication or create
+   creator/title/product tasks.
 3. When a candidate page is uninspected, only `visit` is exposed for that task; no
    strict-audit protocol rejection occurs.
 4. When every route is exhausted or duplicate, the segment terminates
@@ -102,6 +121,11 @@ Semantic duplicate detection remains as a guardrail, not the normal control path
    `protocol_correction_budget_exhausted`.
 5. A real Monarch retry, then Berlin Wall supported and Queen bus refuted, must
    pass strict trace audit before any broader run.
+6. Unknown orange-and-black butterflies may refine once to monarch butterflies while
+   retaining Antarctica; a refinement that substitutes Mexico or photographer
+   metadata is rejected.
+7. Reliable ecology text can refute the Antarctica relation without a reference
+   image, and the trace contains no action/Reflection after that decision.
 
 ## Non-goals
 
@@ -110,3 +134,20 @@ Semantic duplicate detection remains as a guardrail, not the normal control path
   world-fact core.
 - No unrestricted target refresh or target expansion.
 - No replacement of Gemini while it remains the teacher runtime.
+
+## Local implementation result
+
+Implemented:
+
+- removed the active Attribution stage and deterministic fallback target invention;
+- added `image_only_evidence_decision` and trajectory export;
+- made semantic checkpoints sparse rather than per-Evidence;
+- allowed text-only closure when semantically sufficient;
+- made same-capture conditional on the proposition;
+- added one relation-preserving visual-slot refinement;
+- made Coverage consume the latest semantic decision;
+- added strict trace auditing for Evidence ownership, refinement grounding/budget,
+  and post-determination actions.
+
+Local deterministic validation is complete; real acceptance remains the Monarch,
+Berlin Wall, and Queen bus sequence on the clean gpu-13 worktree.

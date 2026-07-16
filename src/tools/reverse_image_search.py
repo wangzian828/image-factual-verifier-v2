@@ -73,7 +73,7 @@ class ReverseImageSearchTool(BaseTool):
                     ),
                 },
             },
-            "required": ["image_input"],
+            "required": ["image_input", "branch"],
         }
     )
 

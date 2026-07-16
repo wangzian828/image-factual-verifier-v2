@@ -32,6 +32,9 @@ def test_exporter_uses_actual_policy_boundaries_and_aligned_masks(
         "planning",
         "react",
         "react",
+        "evidence_decision",
+        "react",
+        "evidence_decision",
         "judgment",
     ]
     assert all(item.tokenizer_id == "utf8-byte-v1" for item in examples)
@@ -53,6 +56,11 @@ def test_exporter_uses_actual_policy_boundaries_and_aligned_masks(
         "reference_url",
         "source_page_url",
         "focus",
+    }
+    assert set(react_actions[2]["arguments"]) == {
+        "question_id",
+        "url",
+        "goal",
     }
     assert "__claim_text" not in json.dumps(react_actions)
     assert examples[-1].terminated is True

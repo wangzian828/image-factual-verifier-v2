@@ -844,3 +844,23 @@ generic coexistence question. Both contracts are now corrected locally; the same
 two cases must be rerun from the committed head.
 
 Phase J remains incomplete until the personal and gpu-13 live runs pass.
+
+### Phase J superseding control repair
+
+The runtime Attribution stage and its target-expansion behavior were subsequently
+removed. The active implementation uses sparse `image_only_evidence_decision`
+checkpoints:
+
+```text
+tool Evidence
+  -> semantic support/refute/conflict/insufficient decision
+  -> optional one-time relation-preserving visual-slot refinement
+  -> Coverage
+  -> immediate stop or bounded continuation
+```
+
+Creator/title/date/platform metadata cannot own the verdict. Reliable ecology or
+geography text may close a world relation without reproducing a reference image.
+Same-capture is required only when the active proposition depends on tying source
+text to the exact input pixels. The active acceptance plan is
+`2026-07-16-core-target-and-route-controller-repair.md`.

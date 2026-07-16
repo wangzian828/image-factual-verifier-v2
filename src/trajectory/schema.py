@@ -24,7 +24,13 @@ class PolicyExample(StrictModel):
         default="",
         max_length=200,
     )
-    example_type: Literal["planning", "react", "reflection", "judgment"]
+    example_type: Literal[
+        "planning",
+        "react",
+        "evidence_decision",
+        "reflection",
+        "judgment",
+    ]
     runtime_observation_refs: List[str] = Field(default_factory=list, max_length=64)
     policy_input: Dict[str, Any]
     policy_action: Dict[str, Any]

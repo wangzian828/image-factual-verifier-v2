@@ -321,35 +321,75 @@ class TargetPlanningOutput(StrictModel):
     )
 
 
-class AttributionFactProposal(StrictModel):
+class EvidenceDecisionRefinement(StrictModel):
+    slot: Literal[
+        "subject_identity",
+        "scene_location",
+        "event_identity",
+    ]
     statement: str = Field(min_length=1, max_length=1200)
-    kind: Literal["attribute", "relation"] = "relation"
     predicate: Literal[
         "identified_as",
-        "attributed_as",
-        "created_by",
-        "dated_as",
         "located_at",
         "occurred_at",
         "depicts_event",
         "source_record_matches",
-    ] = "identified_as"
-    parent_fact_ids: List[str] = Field(min_length=1, max_length=3)
-    discovery_ids: List[str] = Field(default_factory=list, max_length=8)
-    evidence_ids: List[str] = Field(default_factory=list, max_length=8)
-    finding_ids: List[str] = Field(default_factory=list, max_length=8)
+        "provenance_matches",
+    ]
+    anchor_fact_ids: List[str] = Field(min_length=1, max_length=6)
+    grounding_evidence_ids: List[str] = Field(min_length=1, max_length=8)
+    question: str = Field(min_length=1, max_length=800)
+    purpose: str = Field(min_length=1, max_length=800)
+    suggested_tools: List[
+        Literal[
+            "reverse_image_search",
+            "text_search",
+            "visit",
+            "compare_with_reference",
+            "check_consistency",
+            "analyze_visual_anomalies",
+            "crop_and_inspect",
+            "ocr_with_position",
+        ]
+    ] = Field(min_length=1, max_length=4)
     suggested_queries: List[str] = Field(default_factory=list, max_length=3)
-    decision_relevance: Literal["supporting", "decisive"] = "supporting"
 
 
-class AttributionOutput(StrictModel):
-    proposals: List[AttributionFactProposal] = Field(
-        default_factory=list,
-        max_length=2,
-    )
-    remaining_attribution_gaps: List[str] = Field(
-        default_factory=list,
-        max_length=4,
+class EvidenceDecisionOutput(StrictModel):
+    active_fact_id: str = Field(min_length=1, max_length=100)
+    assessment: Literal[
+        "supported",
+        "refuted",
+        "conflicted",
+        "insufficient",
+    ]
+    selected_evidence_ids: List[str] = Field(default_factory=list, max_length=12)
+    binding_requirement: Literal[
+        "none",
+        "text_sufficient",
+        "same_capture_helpful",
+        "same_capture_required",
+    ] = "none"
+    remaining_gap: str = Field(default="", max_length=800)
+    rationale: str = Field(min_length=1, max_length=1600)
+    refinement: Optional[EvidenceDecisionRefinement] = None
+
+
+class EvidenceDecisionRecord(StrictModel):
+    decision_id: str = Field(min_length=1, max_length=100)
+    action_count: int = Field(ge=1)
+    trigger: Literal[
+        "decisive_evidence",
+        "before_reflection",
+        "before_replan",
+        "before_unverifiable",
+    ]
+    reviewed_evidence_ids: List[str] = Field(min_length=1, max_length=40)
+    output: EvidenceDecisionOutput
+    finding_ids: List[str] = Field(default_factory=list, max_length=12)
+    accepted_refinement_fact_id: Optional[str] = Field(
+        default=None,
+        max_length=100,
     )
 
 
@@ -487,6 +527,10 @@ class ImageOnlyInvestigationState(StrictModel):
     findings: List[Finding] = Field(default_factory=list, max_length=120)
     failures: List[InvestigationFailure] = Field(default_factory=list, max_length=120)
     reflections: List[ReflectionRecord] = Field(default_factory=list, max_length=6)
+    evidence_decisions: List[EvidenceDecisionRecord] = Field(
+        default_factory=list,
+        max_length=24,
+    )
     coverage_audits: List[ImageOnlyCoverage] = Field(
         default_factory=list,
         max_length=32,

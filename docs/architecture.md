@@ -29,10 +29,10 @@ ImageOnlyRuntimeCase
        model selects the first evidence route
        one accepted tool call per action turn
        deterministic observation reducer after every real action
-       optional supporting Attribution Planning for public context
+       sparse Gemini Evidence Decision at material control boundaries
+       optional one-time visual-slot refinement that preserves the core relation
+       deterministic Coverage immediately after each Evidence Decision/action
        structured Reflection at actions 4, 8, 12, 16, 20, 24
-       deterministic evidence adjudication after every action
-       deterministic Coverage after every accepted action
   -> deterministic verdict and verdict_basis compiler
   -> constrained Gemini Judgment
   -> real | fake | unverifiable
@@ -159,7 +159,46 @@ binding, source originality, directness, source risk, temporal alignment, and
 independence. `conflicted` means more discriminating evidence is required; it is not
 itself a final reason for `unverifiable`.
 
-## 6. Reflection and deterministic state transitions
+## 6. Semantic Evidence Decision
+
+The observation reducer preserves fetched text, URLs, hashes, offsets, visual
+comparison output, and tool-call provenance. It does not decide whether page text
+semantically supports the active proposition.
+
+A separate Gemini Evidence Decision runs sparsely:
+
+- after directly inspected Evidence that may change the conclusion;
+- after a same-capture binding is followed by direct page text;
+- when multiple qualified independent Evidence rows accumulate;
+- immediately before Reflection/Replan;
+- immediately before returning unresolved or `unverifiable`.
+
+It outputs:
+
+```text
+supported | refuted | conflicted | insufficient
+
+none | text_sufficient | same_capture_helpful | same_capture_required
+```
+
+Reliable text can close ecological, geographic, temporal, and other world relations
+without finding the exact source image. Same-capture Evidence is required only when
+the decision depends on proving that a source assertion describes the exact input
+pixels.
+
+One `insufficient|conflicted` decision may narrow one unknown visible slot. For
+example:
+
+```text
+orange-and-black butterflies occur in Antarctica
+  -> monarch butterflies occur in Antarctica
+```
+
+The runtime validates that the refinement uses pixel/OCR facts and newly reviewed
+Evidence, remains atomic, preserves the original relation and non-target slots, and
+does not promote creator/title/date/platform metadata. The refinement budget is one.
+
+## 7. Reflection and deterministic state transitions
 
 Reflection runs after every four cumulative actions. It may:
 
@@ -187,7 +226,7 @@ CORE_FACT_REFINEMENTS_MAX = 1
 
 Two consecutive invalid Reflections are an engineering failure.
 
-## 7. Coverage and Judgment
+## 8. Coverage and Judgment
 
 Coverage audits the one CoreVerdictFact as:
 
@@ -195,9 +234,10 @@ Coverage audits the one CoreVerdictFact as:
 supported | refuted | conflicted | blocked | exhausted | unresolved
 ```
 
-Qualified gain is a change in core status, support/refute score, winning Evidence,
-source binding, or conflict resolution. New IDs, discovery URLs, optional metadata,
-and task churn do not count.
+Coverage consumes the latest semantic Evidence Decision for the active fact.
+Qualified gain is a change in its status, selected winning Evidence, required
+binding, conflict state, or accepted visual-slot refinement. New IDs, discovery URLs,
+optional metadata, and task churn do not count.
 
 Stop states:
 
@@ -224,7 +264,7 @@ The strict chain is:
 VisualFact -> Finding -> Evidence -> successful tool call
 ```
 
-## 8. Failure contract
+## 9. Failure contract
 
 Engineering failures include:
 
@@ -242,7 +282,7 @@ Engineering failures end before factual Judgment. Evaluation writes diagnostics 
 error trace, but no row to `predictions.jsonl`. They are never converted to
 `unverifiable`.
 
-## 9. Canonical trace
+## 10. Canonical trace
 
 The canonical trace stores:
 
@@ -257,7 +297,7 @@ The canonical trace stores:
 Credentials and signed authentication parameters are redacted before persistence.
 `src.trace_viewer` renders a v3-only diagnostic HTML view; JSON remains canonical.
 
-## 10. Evaluation and training handoff
+## 11. Evaluation and training handoff
 
 `src.eval.run_eval` emits:
 
@@ -286,13 +326,11 @@ versions and official same-capture image assets. An optional LLM judge is restri
 to qualified unresolved edges and cannot invent new evaluation targets. Off-chain
 material is neutral unless selected into the final verdict basis.
 
-`ifv-policy-v1` exports actual Attribution Planning, ReAct, Reflection, and Judgment
-request/action boundaries. Bootstrap remains deterministic. The real
-`image_only_planning` may turn title, creator, identity, place, date, event, or
-screenshot-source matches from public records into specific supporting VisualFacts;
-Discovery still remains separate from Evidence. These records do not replace the core
-fact unless they satisfy the one already-resolved, same-subject atomic refinement
-gate.
+`ifv-policy-v1` exports Target Planning, ReAct, Evidence Decision, Reflection, and
+Judgment request/action boundaries. Bootstrap remains deterministic. Discovery stays
+separate from Evidence. Public title, creator, date, platform, and asset metadata may
+remain retrieval context or supporting trace records, but cannot replace the core
+fact. Only the one bounded visual-slot refinement described above may do so.
 
 Initial Planning may propose alternatives, but the runtime selects one core factual
 relation. Other facets remain supporting. For example, a screenshot can yield:

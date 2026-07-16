@@ -396,12 +396,14 @@ async def score_reference_chain_trace(
             in {str(item) for item in finding.get("fact_ids", []) or []}
             and str(finding.get("finding_id", "")) in valid_finding_ids
         ]
-        related_evidence = [
-            evidence_by_id[str(evidence_id)]
-            for finding in related_findings
-            for evidence_id in finding.get("evidence_ids", []) or []
-            if str(evidence_id) in evidence_by_id
-        ]
+        related_evidence = list(
+            {
+                str(evidence_id): evidence_by_id[str(evidence_id)]
+                for finding in related_findings
+                for evidence_id in finding.get("evidence_ids", []) or []
+                if str(evidence_id) in evidence_by_id
+            }.values()
+        )
 
         match_records: List[Dict[str, Any]] = []
         fact_recovered_evidence_ids: set[str] = set()
@@ -449,6 +451,72 @@ async def score_reference_chain_trace(
                     )
                 )
                 break
+
+        # A final basis may legitimately contain two complementary edges from
+        # one recovered source chain: a same-capture comparison binds the
+        # source to the input pixels, while a direct page assertion supplies
+        # the factual direction. Once one edge has recovered the frozen source,
+        # credit the other only when it is selected in the basis, qualified,
+        # same-family, same-direction, and complementary. Generic off-chain
+        # pages and unrelated extra evidence remain unmatched.
+        recovered_rows = [
+            evidence_by_id[evidence_id]
+            for evidence_id in fact_recovered_evidence_ids
+            if evidence_id in evidence_by_id
+        ]
+        recovered_families = {
+            _family_key(item.get("source_family"))
+            for item in recovered_rows
+            if _family_key(item.get("source_family"))
+        }
+        recovered_bindings = {
+            str(item.get("claim_binding", ""))
+            for item in recovered_rows
+        }
+        recovered_stances = {
+            str(item.get("stance", ""))
+            for item in recovered_rows
+        }
+        for evidence in related_evidence:
+            evidence_id = str(evidence.get("evidence_id", ""))
+            if (
+                evidence_id in fact_recovered_evidence_ids
+                or evidence_id not in basis_evidence_ids
+                or not _qualified_semantic_candidate(
+                    evidence,
+                    successful_calls,
+                )
+            ):
+                continue
+            family = _family_key(evidence.get("source_family"))
+            binding = str(evidence.get("claim_binding", ""))
+            stance = str(evidence.get("stance", ""))
+            complementary = (
+                binding == "source_assertion"
+                and "same_capture" in recovered_bindings
+            ) or (
+                binding == "same_capture"
+                and "source_assertion" in recovered_bindings
+            )
+            if (
+                family
+                and family in recovered_families
+                and stance in recovered_stances
+                and complementary
+            ):
+                fact_recovered_evidence_ids.add(evidence_id)
+                match_records.append(
+                    {
+                        "evidence_id": evidence_id,
+                        "reference_source_id": "",
+                        "method": "same_source_chain_complement",
+                        "confidence": 1.0,
+                        "reason": (
+                            "Qualified same-source capture binding and factual "
+                            "assertion form one complementary evidence chain."
+                        ),
+                    }
+                )
 
         if semantic_matcher is not None:
             unresolved_candidates = [

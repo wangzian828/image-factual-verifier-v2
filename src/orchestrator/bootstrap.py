@@ -308,15 +308,16 @@ def build_bootstrap_investigation(
     if scene_fact is not None:
         tasks.append(
             ResearchTask(
-                task_id=_id("task", case.case_id, "provenance"),
+                task_id=_id("task", case.case_id, "scene-relation"),
                 fact_ids=[scene_fact.fact_id],
                 question=(
-                    "What is the earliest verifiable public context or source for "
-                    "this image or a close visual match?"
+                    "Does reliable external evidence support or refute this "
+                    f"image-grounded scene proposition: {scene_fact.statement}"
                 ),
                 purpose=(
-                    "Establish image provenance before accepting any event, place, "
-                    "identity, or authenticity attribution."
+                    "Investigate the central visible subject, place, event, or "
+                    "scene relation. Source metadata may guide retrieval but must "
+                    "not replace the depicted-world question."
                 ),
                 priority=1,
                 origin_ids=list(scene_fact.basis_ids),

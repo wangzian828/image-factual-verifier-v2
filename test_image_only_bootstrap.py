@@ -201,13 +201,13 @@ def test_image_only_bootstrap_is_deterministic_grounded_and_bounded(
     assert "OOUOHUEUIRUU" not in serialized
     fact_ids = {fact.fact_id for fact in first.facts}
     assert all(set(task.fact_ids) <= fact_ids for task in first.tasks)
-    provenance_task = next(
+    scene_task = next(
         task
         for task in first.tasks
-        if "earliest verifiable public context" in task.question
+        if "image-grounded scene proposition" in task.question
     )
-    assert "HENRY B. BIGELOW R 225" in provenance_task.suggested_queries
-    assert '"HENRY B. BIGELOW"' in provenance_task.suggested_queries
+    assert "HENRY B. BIGELOW R 225" in scene_task.suggested_queries
+    assert '"HENRY B. BIGELOW"' in scene_task.suggested_queries
     assert not any(
         "jointly indicated" in task.question
         for task in first.tasks

@@ -699,6 +699,7 @@ def _audit_image_only_trace(
         "findings",
         "failures",
         "reflections",
+        "evidence_decisions",
         "coverage_audits",
     )
     for name in collection_names:
@@ -719,6 +720,7 @@ def _audit_image_only_trace(
     findings = _rows(investigation.get("findings"))
     failures = _rows(investigation.get("failures"))
     reflections = _rows(investigation.get("reflections"))
+    evidence_decisions = _rows(investigation.get("evidence_decisions"))
     coverage_audits = _rows(investigation.get("coverage_audits"))
 
     entity_by_id = _unique_index(
@@ -775,6 +777,12 @@ def _audit_image_only_trace(
         location_prefix="state.investigation_state.reflections",
         report=report,
     )
+    decision_by_id = _unique_index(
+        evidence_decisions,
+        id_field="decision_id",
+        location_prefix="state.investigation_state.evidence_decisions",
+        report=report,
+    )
     _unique_index(
         coverage_audits,
         id_field="audit_id",
@@ -801,6 +809,208 @@ def _audit_image_only_trace(
         str(_mapping(investigation.get("brief")).get("case_id", "")).strip(),
     }
     all_known_origins.discard("")
+
+    accepted_refinement_ids: list[str] = []
+    for decision_id, decision in decision_by_id.items():
+        location = _location(
+            "state.investigation_state.evidence_decisions",
+            decision_id,
+        )
+        output = _mapping(decision.get("output"))
+        active_fact_id = str(output.get("active_fact_id", "")).strip()
+        if active_fact_id not in fact_by_id:
+            _issue(
+                report,
+                "EVIDENCE_DECISION_FACT_UNKNOWN",
+                f"Evidence decision targets unknown fact {active_fact_id!r}",
+                location=location,
+            )
+        reviewed_ids = {
+            str(item)
+            for item in decision.get("reviewed_evidence_ids", []) or []
+        }
+        selected_ids = {
+            str(item)
+            for item in output.get("selected_evidence_ids", []) or []
+        }
+        unknown_evidence = sorted(
+            (reviewed_ids | selected_ids) - set(evidence_by_id)
+        )
+        if unknown_evidence:
+            _issue(
+                report,
+                "EVIDENCE_DECISION_EVIDENCE_UNKNOWN",
+                "Evidence decision cites unknown Evidence: "
+                + ", ".join(unknown_evidence),
+                location=location,
+            )
+        if selected_ids and not selected_ids & reviewed_ids:
+            _issue(
+                report,
+                "EVIDENCE_DECISION_NOT_INCREMENTAL",
+                "Evidence decision must select at least one newly reviewed item",
+                location=location,
+            )
+        assessment = str(output.get("assessment", "")).strip()
+        if assessment in {"supported", "refuted", "conflicted"} and not selected_ids:
+            _issue(
+                report,
+                "EVIDENCE_DECISION_BASIS_EMPTY",
+                "A material Evidence decision must select Evidence",
+                location=location,
+            )
+        for evidence_id in selected_ids & set(evidence_by_id):
+            selected_evidence_row = evidence_by_id[evidence_id]
+            task_id = str(selected_evidence_row.get("task_id", "")).strip()
+            if active_fact_id not in {
+                str(item)
+                for item in selected_evidence_row.get("fact_ids", []) or []
+            }:
+                _issue(
+                    report,
+                    "EVIDENCE_DECISION_FACT_OWNERSHIP_INVALID",
+                    (
+                        f"Selected Evidence {evidence_id!r} does not belong to "
+                        f"active fact {active_fact_id!r}"
+                    ),
+                    location=location,
+                )
+            task = task_by_id.get(task_id)
+            if task is None or active_fact_id not in {
+                str(item) for item in task.get("fact_ids", []) or []
+            }:
+                _issue(
+                    report,
+                    "EVIDENCE_DECISION_TASK_OWNERSHIP_INVALID",
+                    (
+                        f"Selected Evidence {evidence_id!r} is not owned by an "
+                        "active-fact ResearchTask"
+                    ),
+                    location=location,
+                )
+        if (
+            assessment in {"supported", "refuted"}
+            and str(output.get("binding_requirement", "")).strip()
+            == "same_capture_required"
+            and not any(
+                str(evidence_by_id[evidence_id].get("claim_binding", "")).strip()
+                == "same_capture"
+                or evidence_by_id[evidence_id].get(
+                    "same_capture_or_near_duplicate"
+                )
+                is True
+                for evidence_id in selected_ids & set(evidence_by_id)
+            )
+        ):
+            _issue(
+                report,
+                "EVIDENCE_DECISION_CAPTURE_BINDING_MISSING",
+                (
+                    "Terminal decision requires same-capture binding but its "
+                    "selected Evidence does not provide it"
+                ),
+                location=location,
+            )
+        refinement = _mapping(output.get("refinement"))
+        accepted_refinement_id = str(
+            decision.get("accepted_refinement_fact_id") or ""
+        ).strip()
+        if accepted_refinement_id:
+            accepted_refinement_ids.append(accepted_refinement_id)
+            if accepted_refinement_id not in fact_by_id:
+                _issue(
+                    report,
+                    "EVIDENCE_REFINEMENT_FACT_UNKNOWN",
+                    (
+                        "Evidence decision accepted unknown refinement fact "
+                        f"{accepted_refinement_id!r}"
+                    ),
+                    location=location,
+                )
+            if not refinement:
+                _issue(
+                    report,
+                    "EVIDENCE_REFINEMENT_OUTPUT_MISSING",
+                    "Accepted refinement requires a structured refinement proposal",
+                    location=location,
+                )
+            anchor_ids = {
+                str(item)
+                for item in refinement.get("anchor_fact_ids", []) or []
+            }
+            grounding_ids = {
+                str(item)
+                for item in refinement.get("grounding_evidence_ids", []) or []
+            }
+            invalid_anchors = sorted(
+                anchor_id
+                for anchor_id in anchor_ids
+                if anchor_id not in fact_by_id
+                or str(
+                    _mapping(fact_by_id[anchor_id].get("origin")).get("type", "")
+                )
+                not in {"input_image", "ocr"}
+            )
+            if invalid_anchors:
+                _issue(
+                    report,
+                    "EVIDENCE_REFINEMENT_ANCHOR_INVALID",
+                    (
+                        "Refinement anchors must be existing pixel/OCR facts: "
+                        + ", ".join(invalid_anchors)
+                    ),
+                    location=location,
+                )
+            if (
+                not grounding_ids
+                or not grounding_ids <= selected_ids
+                or not grounding_ids <= reviewed_ids
+            ):
+                _issue(
+                    report,
+                    "EVIDENCE_REFINEMENT_GROUNDING_INVALID",
+                    (
+                        "Refinement grounding must use newly reviewed selected "
+                        "Evidence"
+                    ),
+                    location=location,
+                )
+        unknown_findings = sorted(
+            {
+                str(item)
+                for item in decision.get("finding_ids", []) or []
+            }
+            - set(finding_by_id)
+        )
+        if unknown_findings:
+            _issue(
+                report,
+                "EVIDENCE_DECISION_FINDING_UNKNOWN",
+                "Evidence decision cites unknown Findings: "
+                + ", ".join(unknown_findings),
+                location=location,
+            )
+
+    refinement_count = int(
+        investigation.get("core_fact_refinement_count", 0) or 0
+    )
+    if refinement_count > 1 or len(accepted_refinement_ids) > 1:
+        _issue(
+            report,
+            "CORE_REFINEMENT_BUDGET_EXCEEDED",
+            "An image-only investigation may refine its active visual slot once",
+            location="state.investigation_state.core_fact_refinement_count",
+        )
+    if refinement_count != len(accepted_refinement_ids):
+        _issue(
+            report,
+            "CORE_REFINEMENT_COUNT_MISMATCH",
+            (
+                f"core_fact_refinement_count={refinement_count}, but "
+                f"{len(accepted_refinement_ids)} accepted refinements are recorded"
+            ),
+            location="state.investigation_state.core_fact_refinement_count",
+        )
 
     for fact_id, fact in fact_by_id.items():
         location = _location("state.investigation_state.facts", fact_id)
@@ -1017,6 +1227,43 @@ def _audit_image_only_trace(
             f"image-only investigation used {action_count} actions; maximum is 24",
             location="state.investigation_state.action_count",
         )
+    terminal_audits = [
+        item
+        for item in coverage_audits
+        if str(item.get("stop_reason", "")) == "verdict_determined"
+    ]
+    if terminal_audits:
+        terminal_action = min(
+            int(item.get("action_count", 0) or 0)
+            for item in terminal_audits
+        )
+        if action_count > terminal_action:
+            _issue(
+                report,
+                "POST_DETERMINATION_ACTION",
+                (
+                    f"Verdict was determined at action {terminal_action}, but "
+                    f"the trace continued to action {action_count}"
+                ),
+                category=SCHEDULER,
+                location="state.investigation_state.action_count",
+            )
+        late_reflections = [
+            int(item.get("action_count", 0) or 0)
+            for item in reflections
+            if int(item.get("action_count", 0) or 0) >= terminal_action
+        ]
+        if late_reflections:
+            _issue(
+                report,
+                "POST_DETERMINATION_REFLECTION",
+                (
+                    "Reflection ran after the semantic verdict boundary at "
+                    f"action {terminal_action}"
+                ),
+                category=SCHEDULER,
+                location="state.investigation_state.reflections",
+            )
     for index, step in enumerate(investigation_tool_steps):
         count = _mapping(step.get("metadata")).get("function_call_count")
         if count is not None and int(count or 0) != 1:
@@ -1240,6 +1487,8 @@ def _audit_image_only_trace(
             "image_only_evidence": len(evidence),
             "findings": len(findings),
             "reflections": len(reflections),
+            "evidence_decisions": len(evidence_decisions),
+            "core_refinements": refinement_count,
             "decisive_facts": len(decisive_ids),
             "image_only_actions": action_count,
         }

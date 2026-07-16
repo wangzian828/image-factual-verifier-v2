@@ -54,14 +54,24 @@ grounding, atomicity, queries, task state, and output structure.
 """
 
 
-ATTRIBUTION_SYSTEM_PROMPT = """\
-You are the attribution-planning step of an image-only factual investigation.
-Turn newly retrieved public context into at most two specific, checkable supporting
-facts about the core image relation. A Discovery is a lead, not Evidence. Cite the
-provided parent and public-record ids, use no model memory, and keep the claim
-positive so evidence can support or refute it. The runtime may promote at most one
-already-resolved, same-subject, atomic refinement; title, creator, date, platform,
-and asset metadata remain supporting by default. Do not write a verdict.
+EVIDENCE_DECISION_SYSTEM_PROMPT = """\
+You are a semantic decision checkpoint for an image-grounded investigation.
+Evaluate the active proposition against the supplied eligible Evidence, not against
+the wording of the search query that found it. Decide whether the proposition is
+supported, refuted, materially conflicted, or still insufficient, and cite only
+supplied Evidence ids.
+
+Decide flexibly whether the proposition needs source-to-image binding. Reliable text
+can be sufficient for ecological, geographic, temporal, or other world relations.
+A same-capture image is required only when the conclusion depends on proving that a
+source assertion describes this exact input image; the absence of a reference image
+is not itself a reason to keep searching.
+
+If the evidence reveals a more specific visible subject, place, or event but does
+not yet resolve the active relation, you may propose one narrower refinement grounded
+in supplied pixel/OCR anchor facts and Evidence. Creator, title, platform, upload
+date, and asset metadata are retrieval context unless visibly part of the image.
+Do not invent facts, ids, sources, or a requirement for a second source.
 """
 
 
@@ -396,57 +406,68 @@ def render_reflection_context(state: ImageOnlyInvestigationState) -> str:
     )
 
 
-def render_attribution_context(state: ImageOnlyInvestigationState) -> str:
-    recent_discoveries = state.discoveries[-12:]
-    recent_evidence = state.evidence[-8:]
-    recent_findings = state.findings[-8:]
-    record_parent_ids = {
-        fact_id
-        for item in [
-            *recent_discoveries,
-            *recent_evidence,
-            *recent_findings,
-        ]
-        for fact_id in item.fact_ids
-    }
+def render_evidence_decision_context(
+    state: ImageOnlyInvestigationState,
+    *,
+    reviewed_evidence_ids: List[str],
+) -> str:
     core = next(
         (
-            fact.model_dump(mode="json")
+            fact
             for fact in state.facts
             if fact.fact_id == state.core_verdict_fact_id
         ),
         None,
     )
-    existing_attributions = [
+    reviewed = set(reviewed_evidence_ids)
+    core_evidence = [
+        item
+        for item in state.evidence
+        if (
+            core is not None
+            and core.fact_id in item.fact_ids
+        )
+    ]
+    evidence_rows = [
+        {
+            **item.model_dump(mode="json"),
+            "new_since_last_decision": item.evidence_id in reviewed,
+        }
+        for item in core_evidence[-24:]
+    ]
+    relevant_task_ids = {
+        item.task_id for item in core_evidence
+    }
+    pixel_facts = [
         fact.model_dump(mode="json")
         for fact in state.facts
-        if fact.origin.type == "web_discovery"
+        if fact.origin.type in {"input_image", "ocr"}
     ]
     return json.dumps(
         {
             "brief": state.brief.model_dump(mode="json"),
-            "core_verdict_fact": core,
-            "evidence_gaps": [
-                gap.model_dump(mode="json")
-                for gap in state.evidence_gaps
-            ],
-            "record_parent_facts": [
-                fact.model_dump(mode="json")
-                for fact in state.facts
-                if fact.fact_id in record_parent_ids
-            ],
-            "existing_attribution_facts": existing_attributions[-8:],
-            "recent_discoveries": [
+            "active_fact": (
+                core.model_dump(mode="json") if core is not None else None
+            ),
+            "pixel_or_ocr_anchor_facts": pixel_facts[:36],
+            "retrieval_anchors": [
                 item.model_dump(mode="json")
-                for item in recent_discoveries
+                for item in state.retrieval_anchors[:24]
             ],
-            "recent_evidence": [
+            "evidence_under_review_ids": reviewed_evidence_ids,
+            "eligible_evidence": evidence_rows,
+            "related_discoveries_for_context_only": [
                 item.model_dump(mode="json")
-                for item in recent_evidence
+                for item in state.discoveries[-16:]
+                if item.task_id in relevant_task_ids
             ],
-            "recent_findings": [
+            "prior_evidence_decisions": [
                 item.model_dump(mode="json")
-                for item in recent_findings
+                for item in state.evidence_decisions[-4:]
+            ],
+            "current_evidence_gaps": [
+                item.model_dump(mode="json")
+                for item in state.evidence_gaps
             ],
         },
         ensure_ascii=False,

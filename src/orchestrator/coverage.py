@@ -15,6 +15,7 @@ from src.orchestrator.investigation_models import (
 )
 from src.orchestrator.task_store import (
     MAX_TOOL_ACTIONS,
+    latest_evidence_decision,
     remaining_material_routes,
     reconcile_core_verdict_fact,
     refresh_core_evidence_gaps,
@@ -185,51 +186,78 @@ def _build_core_coverage(
 ) -> FactCoverage | None:
     if core is None:
         return None
-    evidence_by_id = {item.evidence_id: item for item in state.evidence}
-    findings = [
-        finding
-        for finding in state.findings
-        if core.fact_id in finding.fact_ids
-    ]
-    owned_evidence = [
-        item
-        for item in state.evidence
-        if core.fact_id in item.fact_ids
-    ]
-    assessment = assess_fact(
-        core,
-        findings,
-        evidence_by_id,
-        all_fact_evidence=owned_evidence,
+    decision = latest_evidence_decision(
+        state,
+        fact_id=core.fact_id,
     )
-    if assessment.status in {"supported", "refuted", "conflicted"}:
-        status = assessment.status
-    elif core.status in {"blocked", "exhausted"}:
+    if decision is not None:
+        assessment = decision.output.assessment
+        status = {
+            "supported": "supported",
+            "refuted": "refuted",
+            "conflicted": "conflicted",
+            "insufficient": "unresolved",
+        }[assessment]
+        support_score = 100.0 if assessment == "supported" else 0.0
+        refute_score = 100.0 if assessment == "refuted" else 0.0
+        return FactCoverage(
+            fact_id=core.fact_id,
+            status=status,
+            finding_ids=list(decision.finding_ids),
+            evidence_ids=list(decision.output.selected_evidence_ids),
+            winning_finding_ids=(
+                list(decision.finding_ids)
+                if assessment in {"supported", "refuted"}
+                else []
+            ),
+            winning_evidence_ids=(
+                list(decision.output.selected_evidence_ids)
+                if assessment in {"supported", "refuted"}
+                else []
+            ),
+            support_score=support_score,
+            refute_score=refute_score,
+            conflict_resolution={
+                "supported": "support_wins",
+                "refuted": "refute_wins",
+                "conflicted": "needs_discriminating_evidence",
+                "insufficient": "not_applicable",
+            }[assessment],
+            reason=(
+                decision.output.rationale
+                if assessment != "insufficient"
+                else (
+                    decision.output.remaining_gap
+                    or decision.output.rationale
+                )
+            ),
+        )
+
+    if core.status in {"blocked", "exhausted"}:
         status = core.status
     else:
         status = "unresolved"
-    evidence_ids = list(
-        dict.fromkeys(
-            evidence_id
-            for finding in findings
-            for evidence_id in finding.evidence_ids
-            if evidence_id in evidence_by_id
-        )
-    )
+    evidence_ids = [
+        item.evidence_id
+        for item in state.evidence
+        if core.fact_id in item.fact_ids
+    ]
     return FactCoverage(
         fact_id=core.fact_id,
         status=status,
-        finding_ids=[finding.finding_id for finding in findings],
+        finding_ids=[],
         evidence_ids=evidence_ids,
-        winning_finding_ids=list(assessment.winning_finding_ids),
-        winning_evidence_ids=list(assessment.winning_evidence_ids),
-        support_score=assessment.support.score,
-        refute_score=assessment.refute.score,
-        conflict_resolution=assessment.conflict_resolution,
+        winning_finding_ids=[],
+        winning_evidence_ids=[],
+        support_score=0.0,
+        refute_score=0.0,
+        conflict_resolution="not_applicable",
         reason=(
-            assessment.reason
-            if status in {"supported", "refuted", "conflicted"}
-            else _fact_reason(status, core.statement)
+            _fact_reason(status, core.statement)
+            if status != "unresolved"
+            else (
+                "Evidence is recorded but awaits a semantic decision checkpoint."
+            )
         ),
     )
 

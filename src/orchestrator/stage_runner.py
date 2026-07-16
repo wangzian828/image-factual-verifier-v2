@@ -110,6 +110,9 @@ class StageRunner:
         stop_output_factory: Optional[Callable[[], BaseModel]] = None,
         request_timeout_seconds: Optional[float] = None,
         tool_timeout_seconds: Optional[float] = None,
+        tool_argument_constraints: Optional[
+            Dict[str, Dict[str, List[Any]]]
+        ] = None,
     ):
         self.llm = llm
         self.system_prompt = system_prompt
@@ -162,6 +165,9 @@ class StageRunner:
         self.force_tool_each_round = bool(force_tool_each_round)
         self.question_is_active = question_is_active
         self.stop_output_factory = stop_output_factory
+        self.tool_argument_constraints = deepcopy(
+            tool_argument_constraints or {}
+        )
         self.request_timeout_seconds = _bounded_timeout(
             request_timeout_seconds,
             env_name="AGENT_STAGE_REQUEST_TIMEOUT_SECONDS",
@@ -959,6 +965,12 @@ class StageRunner:
             parameters.setdefault("type", "object")
             properties = parameters.setdefault("properties", {})
             required = list(parameters.get("required", []) or [])
+            for property_name, allowed_values in (
+                self.tool_argument_constraints.get(tool.name, {}).items()
+            ):
+                if property_name not in properties or not allowed_values:
+                    continue
+                properties[property_name]["enum"] = list(allowed_values)
             properties.pop("image_input", None)
             required = [name for name in required if name != "image_input"]
             parameters = self._normalize_native_schema(parameters)
@@ -2155,7 +2167,7 @@ class StageRunner:
         step: StageStep,
         steps: List[StageStep],
     ) -> Optional[Dict[str, Any]]:
-        if self.observation_callback is None or step.action_type not in {"tool_call", "format_error"}:
+        if self.observation_callback is None or step.action_type != "tool_call":
             return None
         update = self.observation_callback(step, list(self.prior_steps) + list(steps))
         if update:

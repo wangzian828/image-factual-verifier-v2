@@ -18,12 +18,12 @@ from src.orchestrator.coverage import (
 )
 from src.orchestrator.runtime_case import verify_case_image
 from src.orchestrator.image_only_prompts import (
-    ATTRIBUTION_SYSTEM_PROMPT as IMAGE_ONLY_ATTRIBUTION_PROMPT,
+    EVIDENCE_DECISION_SYSTEM_PROMPT as IMAGE_ONLY_EVIDENCE_DECISION_PROMPT,
     JUDGMENT_SYSTEM_PROMPT as IMAGE_ONLY_JUDGMENT_PROMPT,
     REACT_SYSTEM_PROMPT as IMAGE_ONLY_REACT_PROMPT,
     REFLECTION_SYSTEM_PROMPT as IMAGE_ONLY_REFLECTION_PROMPT,
     TARGET_PLANNING_SYSTEM_PROMPT as IMAGE_ONLY_TARGET_PLANNING_PROMPT,
-    render_attribution_context as render_image_only_attribution_context,
+    render_evidence_decision_context as render_image_only_evidence_decision_context,
     render_judgment_context as render_image_only_judgment_context,
     render_react_context as render_image_only_react_context,
     render_reflection_context as render_image_only_reflection_context,
@@ -32,7 +32,7 @@ from src.orchestrator.image_only_prompts import (
     select_react_tasks as select_image_only_react_tasks,
 )
 from src.orchestrator.investigation_models import (
-    AttributionOutput,
+    EvidenceDecisionOutput,
     ImageOnlyInvestigationState,
     ImageOnlyJudgment,
     InvestigationSegmentOutput,
@@ -60,11 +60,12 @@ from src.orchestrator.tool_result import parse_tool_result, serialize_tool_resul
 from src.orchestrator.task_store import (
     MAX_TOOL_ACTIONS,
     REFLECTION_INTERVAL,
-    apply_attribution,
+    apply_evidence_decision,
     apply_reflection,
     apply_target_planning,
-    attribution_planning_needed,
+    evidence_decision_checkpoint_reason,
     next_action_boundary,
+    pending_evidence_decision_ids,
     remaining_material_routes,
     record_tool_observation,
     state_from_bootstrap,
@@ -411,9 +412,6 @@ class Orchestrator:
             )
         self._record_stage_steps(state, steps)
         if parsed is None:
-            # Bootstrap always provides a bounded provenance task. A malformed
-            # optional Planning proposal must not convert an otherwise runnable
-            # image case into an engineering error.
             self._sync_image_only_state(state, investigation)
             return
         apply_target_planning(investigation, parsed)
@@ -434,15 +432,33 @@ class Orchestrator:
         # later accepted action is a decision checkpoint.
         audit_coverage(investigation)
         while not investigation.stop_reason:
-            attribution_pending = False
             self._check_timeout(started, state)
             if investigation.action_count >= MAX_TOOL_ACTIONS:
+                await self._run_image_only_evidence_decision(
+                    state,
+                    investigation,
+                    trigger="before_unverifiable",
+                    required=True,
+                )
                 audit_coverage(investigation)
                 break
             if not any(
                 task.status in {"active", "pending"}
                 for task in investigation.tasks
             ):
+                reviewed = await self._run_image_only_evidence_decision(
+                    state,
+                    investigation,
+                    trigger="before_unverifiable",
+                    required=True,
+                )
+                if reviewed and any(
+                    task.status in {"active", "pending"}
+                    for task in investigation.tasks
+                ):
+                    audit_coverage(investigation)
+                    self._sync_image_only_state(state, investigation)
+                    continue
                 audit_coverage(investigation)
                 if not investigation.stop_reason:
                     investigation.stop_reason = "information_saturated"
@@ -454,6 +470,16 @@ class Orchestrator:
             react_tasks = select_image_only_react_tasks(investigation)
             react_task_ids = {task.task_id for task in react_tasks}
             if not react_task_ids:
+                reviewed = await self._run_image_only_evidence_decision(
+                    state,
+                    investigation,
+                    trigger="before_unverifiable",
+                    required=True,
+                )
+                if reviewed and select_image_only_react_tasks(investigation):
+                    audit_coverage(investigation)
+                    self._sync_image_only_state(state, investigation)
+                    continue
                 audit_coverage(investigation)
                 break
             executable_tool_names = self._image_only_executable_tool_names(
@@ -461,6 +487,26 @@ class Orchestrator:
                 task_ids=react_task_ids,
             )
             if not executable_tool_names:
+                reviewed = await self._run_image_only_evidence_decision(
+                    state,
+                    investigation,
+                    trigger="before_unverifiable",
+                    required=True,
+                )
+                if reviewed:
+                    refreshed_tasks = select_image_only_react_tasks(
+                        investigation
+                    )
+                    refreshed_ids = {
+                        item.task_id for item in refreshed_tasks
+                    }
+                    if self._image_only_executable_tool_names(
+                        investigation,
+                        task_ids=refreshed_ids,
+                    ):
+                        audit_coverage(investigation)
+                        self._sync_image_only_state(state, investigation)
+                        continue
                 audit_coverage(investigation)
                 break
             task_claims = self._image_only_task_claims(
@@ -472,25 +518,19 @@ class Orchestrator:
                 task_ids=react_task_ids,
             )
 
+            observation_update: Dict[str, Any] = {}
+
             def observation_callback(
                 step: StageStep,
                 _steps: List[StageStep],
             ) -> Dict[str, Any]:
-                nonlocal attribution_pending
+                nonlocal observation_update
                 update = record_tool_observation(
                     investigation,
                     step,
                     image_sha256=runtime_case.image_sha256,
                 )
-                audit_coverage(
-                    investigation,
-                    decision_checkpoint=True,
-                )
-                if (
-                    not investigation.stop_reason
-                    and attribution_planning_needed(investigation, update)
-                ):
-                    attribution_pending = True
+                observation_update = update
                 self._sync_image_only_state(state, investigation)
                 return update
 
@@ -523,7 +563,6 @@ class Orchestrator:
                 tool_call_limits=self.verification_tool_limits,
                 should_stop=lambda _steps: (
                     bool(investigation.stop_reason)
-                    or attribution_pending
                     or any(
                         step.action_type == "tool_call"
                         for step in _steps
@@ -583,6 +622,12 @@ class Orchestrator:
                 ),
                 request_timeout_seconds=self.stage_request_timeout_seconds,
                 tool_timeout_seconds=self.tool_action_timeout_seconds,
+                tool_argument_constraints=(
+                    self._image_only_tool_argument_constraints(
+                        investigation,
+                        task_ids=react_task_ids,
+                    )
+                ),
             )
             try:
                 parsed, steps = await runner.run(
@@ -607,16 +652,39 @@ class Orchestrator:
                 raise RuntimeError(
                     "image-only ReAct segment did not produce valid structured output"
                 )
-            if attribution_pending and not investigation.stop_reason:
-                await self._run_image_only_attribution(
+            reflection_boundary = (
+                investigation.action_count > 0
+                and investigation.action_count % REFLECTION_INTERVAL == 0
+            )
+            decision_trigger = evidence_decision_checkpoint_reason(
+                investigation,
+                update=observation_update,
+                before_reflection=reflection_boundary,
+            )
+            if not decision_trigger and not remaining_material_routes(
+                investigation,
+                fact_id=investigation.core_verdict_fact_id or "",
+            ):
+                decision_trigger = evidence_decision_checkpoint_reason(
+                    investigation,
+                    before_unverifiable=True,
+                )
+            if decision_trigger:
+                await self._run_image_only_evidence_decision(
                     state,
                     investigation,
+                    trigger=decision_trigger,
+                    required=decision_trigger == "before_unverifiable",
                 )
-                audit_coverage(investigation)
+
+            audit_coverage(
+                investigation,
+                decision_checkpoint=True,
+            )
             self._sync_image_only_state(state, investigation)
 
             if (
-                investigation.action_count % REFLECTION_INTERVAL == 0
+                reflection_boundary
                 and not investigation.stop_reason
             ):
                 evidence_gain = len(investigation.evidence) > prior_evidence_count
@@ -642,46 +710,76 @@ class Orchestrator:
                 )
                 self._sync_image_only_state(state, investigation)
 
-    async def _run_image_only_attribution(
+    async def _run_image_only_evidence_decision(
         self,
         state: VerificationState,
         investigation: ImageOnlyInvestigationState,
-    ) -> None:
-        """Promote public discoveries into specific facts before Coverage stops."""
+        *,
+        trigger: str,
+        required: bool,
+    ) -> bool:
+        """Review accumulated Evidence only at a material control boundary."""
 
-        if not (
-            investigation.discoveries
-            or investigation.evidence
-            or investigation.findings
-        ):
-            return
+        reviewed_evidence_ids = pending_evidence_decision_ids(investigation)
+        if not reviewed_evidence_ids:
+            return False
         runner = StageRunner(
             llm=self.llm,
-            system_prompt=self._sp(IMAGE_ONLY_ATTRIBUTION_PROMPT),
+            system_prompt=self._sp(IMAGE_ONLY_EVIDENCE_DECISION_PROMPT),
             tools=[],
-            output_schema=AttributionOutput,
+            output_schema=EvidenceDecisionOutput,
             max_rounds=1,
-            stage_name="image_only_attribution_planning",
+            stage_name="image_only_evidence_decision",
             attach_image=False,
-            max_output_tokens=self._stage_output_tokens("PLANNING", 8192),
+            output_validator=lambda parsed, _steps: (
+                self._validate_image_only_evidence_decision(
+                    investigation,
+                    parsed,
+                    reviewed_evidence_ids=reviewed_evidence_ids,
+                    trigger=trigger,
+                )
+            ),
+            max_output_tokens=self._stage_output_tokens("VERIFICATION", 8192),
             generation_config={
-                "thinking_level": self._stage_thinking_level("PLANNING")
+                "thinking_level": self._stage_thinking_level("VERIFICATION")
             },
         )
         parsed, steps = await runner.run(
-            render_image_only_attribution_context(investigation)
+            render_image_only_evidence_decision_context(
+                investigation,
+                reviewed_evidence_ids=reviewed_evidence_ids,
+            )
         )
         if parsed is None:
             self._record_stage_steps(state, steps)
             self._sync_image_only_state(state, investigation)
-            return
-        update = apply_attribution(investigation, parsed)
+            if required:
+                raise RuntimeError(
+                    "mandatory semantic Evidence decision did not validate"
+                )
+            return False
+        update = apply_evidence_decision(
+            investigation,
+            parsed,
+            reviewed_evidence_ids=reviewed_evidence_ids,
+            trigger=trigger,
+        )
+        if not update.get("accepted", False):
+            self._record_stage_steps(state, steps)
+            self._sync_image_only_state(state, investigation)
+            if required:
+                raise RuntimeError(
+                    "mandatory semantic Evidence decision was rejected: "
+                    + str(update.get("rejected_reason", "unknown reason"))
+                )
+            return False
         for step in reversed(steps):
             if step.action_type == "output":
-                step.metadata["attribution_state_update"] = update
+                step.metadata["evidence_decision_state_update"] = update
                 break
         self._record_stage_steps(state, steps)
         self._sync_image_only_state(state, investigation)
+        return True
 
     async def _run_image_only_reflection(
         self,
@@ -812,6 +910,30 @@ class Orchestrator:
         if parsed.proposals and not update["accepted_fact_ids"]:
             return False, "; ".join(update["rejected_reasons"]) or (
                 "target planning proposed no valid state transition"
+            )
+        return True, ""
+
+    @staticmethod
+    def _validate_image_only_evidence_decision(
+        investigation: ImageOnlyInvestigationState,
+        parsed: EvidenceDecisionOutput,
+        *,
+        reviewed_evidence_ids: Sequence[str],
+        trigger: str,
+    ) -> tuple[bool, str]:
+        candidate = investigation.model_copy(deep=True)
+        update = apply_evidence_decision(
+            candidate,
+            parsed,
+            reviewed_evidence_ids=reviewed_evidence_ids,
+            trigger=trigger,
+        )
+        if not update.get("accepted", False):
+            return False, str(
+                update.get(
+                    "rejected_reason",
+                    "Evidence decision proposed no valid state transition",
+                )
             )
         return True, ""
 
@@ -947,13 +1069,7 @@ class Orchestrator:
             for fact_id in task.fact_ids
         ):
             return True
-        task_text = " ".join(
-            (str(task.question or ""), str(task.purpose or ""))
-        ).casefold()
-        return (
-            "earliest verifiable public context" in task_text
-            or "establish image provenance" in task_text
-        )
+        return False
 
     @staticmethod
     def _image_only_executable_tool_names(
@@ -1008,6 +1124,43 @@ class Orchestrator:
             if "compare_with_reference" in allowed:
                 names.add("compare_with_reference")
         return names
+
+    @staticmethod
+    def _image_only_tool_argument_constraints(
+        investigation: ImageOnlyInvestigationState,
+        *,
+        task_ids: set[str],
+    ) -> Dict[str, Dict[str, List[Any]]]:
+        """Bind schemas to the reducer's actually executable route variants."""
+
+        core_id = investigation.core_verdict_fact_id
+        if not core_id:
+            return {}
+        branches: List[str] = []
+        references: List[str] = []
+        for route in remaining_material_routes(
+            investigation,
+            fact_id=core_id,
+        ):
+            parts = route.split(":", 2)
+            if len(parts) < 2:
+                continue
+            if parts[0] == "reverse_image_search" and len(parts) == 3:
+                if parts[2] in task_ids:
+                    branches.append(parts[1])
+            elif parts[0] == "compare_with_reference" and len(parts) == 3:
+                if parts[1] in task_ids:
+                    references.append(parts[2])
+        constraints: Dict[str, Dict[str, List[Any]]] = {}
+        if branches:
+            constraints["reverse_image_search"] = {
+                "branch": list(dict.fromkeys(branches))
+            }
+        if references:
+            constraints["compare_with_reference"] = {
+                "reference_url": list(dict.fromkeys(references))
+            }
+        return constraints
 
     @staticmethod
     def _image_only_discovery_route_error(
