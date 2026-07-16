@@ -747,7 +747,10 @@ class Orchestrator:
             system_prompt=self._sp(IMAGE_ONLY_EVIDENCE_DECISION_PROMPT),
             tools=[],
             output_schema=EvidenceDecisionOutput,
-            max_rounds=1,
+            # One semantic rejection may expose a second, independent schema
+            # boundary (for example terminal-vs-refinement, then slot scope).
+            # Allow two bounded correction turns without reopening tool use.
+            max_rounds=2,
             stage_name="image_only_evidence_decision",
             attach_image=False,
             output_validator=lambda parsed, _steps: (

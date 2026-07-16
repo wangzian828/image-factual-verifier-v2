@@ -252,6 +252,7 @@ def _apply_core_decision(
     evidence_ids,
     *,
     assessment: str,
+    selected_evidence_ids=None,
     binding_requirement: str = "none",
     remaining_gap: str = "",
     rationale: str = "The selected Evidence resolves the active proposition.",
@@ -262,7 +263,11 @@ def _apply_core_decision(
         EvidenceDecisionOutput(
             active_fact_id=state.core_verdict_fact_id,
             assessment=assessment,
-            selected_evidence_ids=list(evidence_ids),
+            selected_evidence_ids=list(
+                evidence_ids
+                if selected_evidence_ids is None
+                else selected_evidence_ids
+            ),
             binding_requirement=binding_requirement,
             remaining_gap=remaining_gap,
             rationale=rationale,
@@ -2337,6 +2342,172 @@ def test_different_capture_cannot_terminally_support_event_attribution() -> None
     assert next(
         fact for fact in state.facts if fact.fact_id == core_id
     ).status == "active"
+
+
+def test_different_capture_can_ground_bounded_event_refinement() -> None:
+    case, state = _runtime_state()
+    for fact in state.facts:
+        if fact.decision_relevance == "decisive":
+            fact.decision_relevance = "supporting"
+        if fact.status == "active":
+            fact.status = "candidate"
+    state.core_verdict_fact_id = None
+    state.decisive_fact_ids = []
+    state.evidence_gaps = []
+    scene = next(
+        fact for fact in state.facts if fact.predicate == "appears_to_depict"
+    )
+    planned = apply_target_planning(
+        state,
+        TargetPlanningOutput(
+            proposals=[
+                TargetFactProposal(
+                    statement=(
+                        "The image depicts NOAA Ship Henry B. Bigelow "
+                        "on the water."
+                    ),
+                    predicate="depicts_event",
+                    parent_fact_ids=[scene.fact_id],
+                    question="Which vessel event does the image depict?",
+                    purpose="Verify the visible vessel-to-event relation.",
+                    suggested_tools=[
+                        "reverse_image_search",
+                        "compare_with_reference",
+                        "text_search",
+                        "visit",
+                    ],
+                    suggested_queries=[],
+                )
+            ]
+        ),
+    )
+    core_id = planned["accepted_fact_ids"][0]
+    task = next(item for item in state.tasks if core_id in item.fact_ids)
+    comparison = {
+        "status": "success",
+        "reference_url": "https://example.org/different-event-photo.jpg",
+        "same_subject_or_scene": True,
+        "same_capture_or_near_duplicate": False,
+        "likely_different_original_capture": True,
+        "edit_evidence_present": False,
+        "edit_evidence_strength": "none",
+        "differences": [],
+        "overall_observation": (
+            "The images show NOAA Ship Henry B. Bigelow during the same survey "
+            "event but are different original photographic captures."
+        ),
+        "confidence": 0.97,
+    }
+    update = record_tool_observation(
+        state,
+        _step(
+            task_id=task.task_id,
+            call_id="call-event-refinement-context",
+            tool_name="compare_with_reference",
+            result=json.dumps(comparison),
+        ),
+        image_sha256=case.image_sha256,
+    )
+    evidence_id = update["created_evidence_ids"][0]
+
+    refined = _apply_core_decision(
+        state,
+        [evidence_id],
+        assessment="insufficient",
+        selected_evidence_ids=[],
+        remaining_gap="Verify the discovered survey event in fetched text.",
+        rationale=(
+            "The comparison identifies a candidate survey event but is a "
+            "different original capture."
+        ),
+        refinement=EvidenceDecisionRefinement(
+            slot="event_identity",
+            statement=(
+                "The image depicts NOAA Ship Henry B. Bigelow during the "
+                "identified survey event."
+            ),
+            predicate="depicts_event",
+            anchor_fact_ids=[scene.fact_id],
+            grounding_evidence_ids=[evidence_id],
+            question=(
+                "Does a fetched source identify NOAA Ship Henry B. Bigelow "
+                "during this survey event?"
+            ),
+            purpose="Verify the discovered event through source text.",
+            suggested_tools=["text_search", "visit"],
+            suggested_queries=["NOAA Ship Henry B. Bigelow survey event"],
+        ),
+    )
+
+    assert refined["accepted"] is True
+    assert refined["accepted_refinement_fact_id"]
+    assert state.core_verdict_fact_id == refined["accepted_refinement_fact_id"]
+
+
+def test_event_refinement_cannot_switch_to_source_record_attribution() -> None:
+    case, state = _runtime_state()
+    core_id = state.core_verdict_fact_id or ""
+    core = next(fact for fact in state.facts if fact.fact_id == core_id)
+    core.predicate = "depicts_event"
+    task = next(item for item in state.tasks if core_id in item.fact_ids)
+    statement = "A second photograph labels this as the same vessel event."
+    update = record_tool_observation(
+        state,
+        _step(
+            task_id=task.task_id,
+            call_id="call-bad-event-source-refinement",
+            tool_name="visit",
+            result=json.dumps(
+                {
+                    "status": "success",
+                    "url": "https://example.org/event",
+                    "selected_url": "https://example.org/event",
+                    "evidence": statement,
+                    "summary": statement,
+                    "relevance": "high",
+                    "stance": "neutral",
+                    "directness": "direct",
+                    "temporal_alignment": "not_applicable",
+                    "artifact_sha256": "b" * 64,
+                    "evidence_span": {"start": 0, "end": len(statement)},
+                    "retrieved_at": datetime.now(timezone.utc).isoformat(),
+                    "injection_flags": [],
+                    "evidence_eligible": True,
+                }
+            ),
+        ),
+        image_sha256=case.image_sha256,
+    )
+    evidence_id = update["created_evidence_ids"][0]
+    anchor = next(
+        fact for fact in state.facts if fact.origin.type == "input_image"
+    )
+
+    result = _apply_core_decision(
+        state,
+        [evidence_id],
+        assessment="insufficient",
+        selected_evidence_ids=[],
+        remaining_gap="Verify the event rather than a publisher record.",
+        rationale="The source suggests an event candidate.",
+        refinement=EvidenceDecisionRefinement(
+            slot="event_identity",
+            statement=(
+                "The image is the exact source record published by Example."
+            ),
+            predicate="source_record_matches",
+            anchor_fact_ids=[anchor.fact_id],
+            grounding_evidence_ids=[evidence_id],
+            question="Does Example publish this exact image?",
+            purpose="Switch the event target to publisher provenance.",
+            suggested_tools=["text_search", "visit"],
+            suggested_queries=["Example exact image"],
+        ),
+    )
+
+    assert result["accepted"] is False
+    assert "event_identity refinement" in result["rejected_reason"]
+    assert state.core_verdict_fact_id == core_id
 
 
 def test_scene_support_requires_near_duplicate_and_source_assertion() -> None:

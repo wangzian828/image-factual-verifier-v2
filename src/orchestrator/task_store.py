@@ -1499,14 +1499,25 @@ def apply_evidence_decision(
         grounding_ids = list(
             dict.fromkeys(refinement.grounding_evidence_ids)
         )
-        if (
-            not set(grounding_ids) <= set(selected_ids)
-            or not set(grounding_ids) <= set(reviewed_ids)
+        if not set(grounding_ids) <= set(reviewed_ids):
+            return {
+                "accepted": False,
+                "rejected_reason": (
+                    "refinement grounding must use newly reviewed Evidence"
+                ),
+            }
+        if not _refinement_slot_preserves_relation(
+            refinement.slot,
+            current_predicate=core.predicate,
+            proposed_predicate=refinement.predicate,
         ):
             return {
                 "accepted": False,
                 "rejected_reason": (
-                    "refinement grounding must use newly reviewed selected Evidence"
+                    f"{refinement.slot} refinement must preserve the active "
+                    "image-world relation; refine the visible subject, place, "
+                    "or event rather than switching to source record, platform, "
+                    "provenance, or other metadata attribution"
                 ),
             }
         if not _valid_visual_refinement_transition(
@@ -1779,6 +1790,34 @@ def _valid_visual_refinement_transition(
             "depicts_event",
         }
     )
+
+
+def _refinement_slot_preserves_relation(
+    slot: str,
+    *,
+    current_predicate: str,
+    proposed_predicate: str,
+) -> bool:
+    """Keep a semantic slot refinement inside the active image-world relation."""
+
+    allowed = {
+        "subject_identity": {
+            current_predicate,
+            "identified_as",
+        },
+        "scene_location": {
+            current_predicate,
+            "located_at",
+            "occurred_at",
+            "depicts_event",
+        },
+        "event_identity": {
+            current_predicate,
+            "occurred_at",
+            "depicts_event",
+        },
+    }
+    return proposed_predicate in allowed.get(slot, set())
 
 
 def _only_different_capture_visual_context(
