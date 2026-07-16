@@ -175,9 +175,11 @@ def pending_discovery_routes(
             pages.append(
                 {
                     "discovery_id": item.discovery_id,
+                    "function_call_id": item.function_call_id,
                     "task_id": item.task_id,
                     "url": item.candidate_url,
                     "title": item.title,
+                    "snippet": item.snippet,
                     "source_class": source_class,
                 }
             )
@@ -194,10 +196,12 @@ def pending_discovery_routes(
             references.append(
                 {
                     "discovery_id": item.discovery_id,
+                    "function_call_id": item.function_call_id,
                     "task_id": item.task_id,
                     "reference_image_url": item.reference_image_url,
                     "page_url": item.candidate_url,
                     "title": item.title,
+                    "snippet": item.snippet,
                     "source_class": source_class,
                 }
             )
@@ -273,6 +277,28 @@ def render_react_context(state: ImageOnlyInvestigationState) -> str:
             item["discovery_id"],
         )
     )
+    executable_page_urls = {
+        canonicalize_url(route.split(":", 2)[2])
+        for route in remaining_routes
+        if route.startswith("visit:") and len(route.split(":", 2)) == 3
+    }
+    executable_reference_urls = {
+        canonicalize_url(route.split(":", 2)[2])
+        for route in remaining_routes
+        if route.startswith("compare_with_reference:")
+        and len(route.split(":", 2)) == 3
+    }
+    pending_pages = [
+        item
+        for item in pending_pages
+        if canonicalize_url(item["url"]) in executable_page_urls
+    ]
+    pending_references = [
+        item
+        for item in pending_references
+        if canonicalize_url(item["reference_image_url"])
+        in executable_reference_urls
+    ]
     discoveries = [
         {
             "discovery_id": item.discovery_id,

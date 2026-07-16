@@ -146,6 +146,8 @@ Implemented:
 - made Planning tools first-hop suggestions while task-owned Discoveries
   deterministically authorize and URL-bind their concrete `visit` or
   `compare_with_reference` follow-up;
+- replaced source-class route gating with one bounded model-selected inspection per
+  retrieval batch; source class remains soft provenance/risk metadata;
 - added `image_only_evidence_decision` and trajectory export;
 - made semantic checkpoints sparse rather than per-Evidence;
 - allowed text-only closure when semantically sufficient;

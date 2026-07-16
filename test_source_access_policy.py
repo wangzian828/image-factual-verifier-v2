@@ -7,6 +7,7 @@ from src.orchestrator.source_access import (
     benchmark_source_access_policy,
     url_variants,
 )
+from src.orchestrator.source_provenance import classify_source
 from src.orchestrator.stage_runner import StageRunner
 from pydantic import ValidationError
 from test_support_models import ToolStageOutput, TruthAptQuestion
@@ -19,6 +20,14 @@ FACT_CHECK_URL = (
     "https://web.archive.org/web/20230424080500/"
     "https://srilanka.factcrescendo.com/english/benchmark-answer/"
 )
+
+
+def test_compound_public_suffix_is_classified_as_official_metadata() -> None:
+    identity = classify_source(
+        "https://www.antarctica.gov.au/about-antarctica/animals/penguins/"
+    )
+
+    assert identity.source_class == "official"
 
 
 class SearchClient:

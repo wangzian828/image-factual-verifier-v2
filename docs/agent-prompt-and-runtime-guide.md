@@ -81,6 +81,12 @@ page and `compare_with_reference` for its validated reference image. The next
 segment exposes only the concrete uninspected route and binds its URL in the native
 tool schema.
 
+Source class is a soft provenance/risk signal, not a retrieval gate. Each new
+retrieval batch exposes at most four concrete candidates, including unknown or UGC
+pages, and Gemini selects one using the active question, title, snippet, and source
+metadata. Inspecting one candidate consumes that batch; a later search batch may
+still contribute a better page without requiring every SERP result to be visited.
+
 The model receives compact active tasks, related fact statements, recent Discoveries,
 eligible Evidence, Findings, Failures, action count, and next Reflection boundary.
 

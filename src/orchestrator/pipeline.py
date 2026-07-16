@@ -27,7 +27,6 @@ from src.orchestrator.image_only_prompts import (
     render_react_context as render_image_only_react_context,
     render_reflection_context as render_image_only_reflection_context,
     render_target_planning_context as render_image_only_target_planning_context,
-    pending_discovery_routes as pending_image_only_discovery_routes,
     select_react_tasks as select_image_only_react_tasks,
 )
 from src.orchestrator.investigation_models import (
@@ -1258,7 +1257,7 @@ class Orchestrator:
                     "Use external source evidence for identity, location, event, "
                     "date, distribution, habitat, or other depicted-world facts."
                 )
-        pending = pending_image_only_discovery_routes(
+        route_constraints = Orchestrator._image_only_tool_argument_constraints(
             investigation,
             task_ids={task_id},
         )
@@ -1272,9 +1271,11 @@ class Orchestrator:
                 else []
             )
             pending_urls = {
-                canonicalize_url(item["url"])
-                for item in pending["pages"]
-                if item.get("url")
+                canonicalize_url(url)
+                for url in route_constraints.get("visit", {}).get(
+                    "url",
+                    [],
+                )
             }
             if (
                 len(requested_urls) != 1
@@ -1290,9 +1291,11 @@ class Orchestrator:
                 str(tool_args.get("reference_url", ""))
             )
             pending_urls = {
-                canonicalize_url(item["reference_image_url"])
-                for item in pending["references"]
-                if item.get("reference_image_url")
+                canonicalize_url(url)
+                for url in route_constraints.get(
+                    "compare_with_reference",
+                    {},
+                ).get("reference_url", [])
             }
             if not reference_url or reference_url not in pending_urls:
                 return (
@@ -1302,24 +1305,18 @@ class Orchestrator:
             return ""
         if tool_name not in {"text_search", "reverse_image_search"}:
             return ""
-        if not (pending["pages"] or pending["references"]):
-            return ""
-        inspected_candidate = False
-        for raw in investigation.attempted_routes:
-            try:
-                route = json.loads(raw)
-            except (TypeError, ValueError):
-                continue
-            if not isinstance(route, dict):
-                continue
-            if (
-                str(route.get("task_id", "")).strip() == task_id
-                and str(route.get("tool", "")).strip()
-                in {"visit", "compare_with_reference"}
-            ):
-                inspected_candidate = True
-                break
-        if inspected_candidate:
+        inspection_tools = {
+            route.split(":", 1)[0]
+            for route in remaining_material_routes(
+                investigation,
+                fact_id=investigation.core_verdict_fact_id or "",
+            )
+            if route.endswith(f":{task_id}")
+            or f":{task_id}:" in route
+        }
+        if not inspection_tools.intersection(
+            {"visit", "compare_with_reference"}
+        ):
             return ""
         return (
             f"Task {task_id!r} already has uninspected candidate pages or "

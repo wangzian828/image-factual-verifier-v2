@@ -46,6 +46,15 @@ UGC_DOMAINS = {
     "youtube.com",
 }
 
+OFFICIAL_PUBLIC_SUFFIXES = {
+    "ac.uk",
+    "edu.au",
+    "edu.cn",
+    "gov.au",
+    "gov.cn",
+    "gov.uk",
+}
+
 MULTIPART_SUFFIXES = {
     "ac.uk",
     "co.jp",
@@ -145,7 +154,14 @@ def classify_source(url: str, *, content: str = "", injection_flags: Optional[It
     if any(domain_matches(hostname, item) for item in UGC_DOMAINS):
         source_class = "ugc"
         flags.add("user_generated_content")
-    elif any(domain_matches(hostname, item) for item in OFFICIAL_DOMAINS) or hostname.endswith((".gov", ".edu", ".int")):
+    elif (
+        any(domain_matches(hostname, item) for item in OFFICIAL_DOMAINS)
+        or any(
+            domain_matches(hostname, item)
+            for item in OFFICIAL_PUBLIC_SUFFIXES
+        )
+        or hostname.endswith((".gov", ".edu", ".int"))
+    ):
         source_class = "official"
     elif any(domain_matches(hostname, item) for item in NEWS_DOMAINS):
         source_class = "news"

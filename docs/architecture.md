@@ -126,6 +126,11 @@ candidate pages enable `visit`, and validated reference images enable
 Discovery URL instead of relying on the model to have predicted every follow-up
 tool during Planning.
 
+Candidate selection is bounded by retrieval batch rather than source class. Up to
+four URLs from the latest uninspected batch are exposed for one model-selected
+inspection. Source class remains evidence provenance and risk metadata; it does not
+discard unknown or UGC leads before their content is checked.
+
 Every real tool call is reduced into separate collections:
 
 | Collection | Meaning |

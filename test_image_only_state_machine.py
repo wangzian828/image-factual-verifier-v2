@@ -785,7 +785,7 @@ def test_failed_lens_keeps_semantic_and_text_routes_executable() -> None:
     assert any(route.startswith("text_search:") for route in routes)
 
 
-def test_one_lead_inspection_releases_retrieval_and_skips_weak_reposts() -> None:
+def test_one_batch_lead_inspection_releases_retrieval() -> None:
     case, state = _runtime_state()
     task = next(
         item
@@ -818,8 +818,9 @@ def test_one_lead_inspection_releases_retrieval_and_skips_weak_reposts() -> None
         fact_id=state.core_verdict_fact_id or "",
     )
 
-    assert len(initial_routes) == 1
-    assert "si.edu" in initial_routes[0]
+    assert len(initial_routes) == 2
+    assert any("si.edu" in route for route in initial_routes)
+    assert any("pinterest.com" in route for route in initial_routes)
     assert Orchestrator._image_only_discovery_route_error(
         state,
         "text_search",
@@ -850,6 +851,130 @@ def test_one_lead_inspection_releases_retrieval_and_skips_weak_reposts() -> None
     )
     assert any(route.startswith("text_search:") for route in routes)
     assert not any("pinterest.com" in route for route in routes)
+
+
+def test_new_search_batch_exposes_relevant_unknown_candidates_after_weak_visit() -> None:
+    case, state = _runtime_state()
+    task = next(
+        item
+        for item in state.tasks
+        if state.core_verdict_fact_id in item.fact_ids
+    )
+    task.suggested_tools = ["text_search"]
+    record_tool_observation(
+        state,
+        _step(
+            task_id=task.task_id,
+            call_id="call-first-search-batch",
+            tool_name="text_search",
+            result=json.dumps(
+                {
+                    "status": "success",
+                    "queries": [
+                        {
+                            "query": "butterflies Antarctica penguins",
+                            "results": [
+                                {
+                                    "title": "Antarctic penguins",
+                                    "url": "https://example.org/penguins",
+                                    "snippet": "A page about penguins only.",
+                                },
+                                {
+                                    "title": "Butterflies in Antarctica",
+                                    "url": "https://example.org/butterflies",
+                                    "snippet": "A possible answer about butterflies.",
+                                },
+                            ],
+                        }
+                    ],
+                }
+            ),
+        ),
+        image_sha256=case.image_sha256,
+    )
+    weak_visit = _step(
+        task_id=task.task_id,
+        call_id="call-weak-page",
+        tool_name="visit",
+        result='{"status":"success","evidence":"","summary":"","relevance":"low"}',
+    )
+    weak_visit.tool_args["url"] = ["https://example.org/penguins"]
+    record_tool_observation(
+        state,
+        weak_visit,
+        image_sha256=case.image_sha256,
+    )
+
+    released_routes = remaining_material_routes(
+        state,
+        fact_id=state.core_verdict_fact_id or "",
+    )
+    assert released_routes == [f"text_search:{task.task_id}"]
+
+    record_tool_observation(
+        state,
+        _step(
+            task_id=task.task_id,
+            call_id="call-second-search-batch",
+            tool_name="text_search",
+            result=json.dumps(
+                {
+                    "status": "success",
+                    "queries": [
+                        {
+                            "query": "are there butterflies in Antarctica",
+                            "results": [
+                                {
+                                    "title": "Are there insects in Antarctica?",
+                                    "url": "https://unknown.example/antarctic-insects",
+                                    "snippet": (
+                                        "There are no butterflies drifting over "
+                                        "the Antarctic ice."
+                                    ),
+                                },
+                                {
+                                    "title": "Butterflies in winter",
+                                    "url": "https://another.example/winter",
+                                    "snippet": (
+                                        "Butterflies occur on every continent "
+                                        "except Antarctica."
+                                    ),
+                                },
+                            ],
+                        }
+                    ],
+                }
+            ),
+        ),
+        image_sha256=case.image_sha256,
+    )
+
+    routes = remaining_material_routes(
+        state,
+        fact_id=state.core_verdict_fact_id or "",
+    )
+    constraints = Orchestrator._image_only_tool_argument_constraints(
+        state,
+        task_ids={task.task_id},
+    )
+
+    assert set(routes) == {
+        (
+            f"visit:{task.task_id}:"
+            "https://unknown.example/antarctic-insects"
+        ),
+        f"visit:{task.task_id}:https://another.example/winter",
+    }
+    assert constraints == {
+        "visit": {
+            "url": [
+                "https://unknown.example/antarctic-insects",
+                "https://another.example/winter",
+            ]
+        }
+    }
+    assert not any("example.org/penguins" in route for route in routes)
+    assert not any("example.org/butterflies" in route for route in routes)
 
 
 def test_failed_comparison_does_not_exhaust_task_with_uninspected_page() -> None:
@@ -948,7 +1073,7 @@ def test_failed_comparison_does_not_exhaust_task_with_uninspected_page() -> None
     assert task.status == "active"
 
 
-def test_pending_discovery_routes_prefer_official_sources() -> None:
+def test_pending_discovery_routes_keep_unknown_and_annotate_source_class() -> None:
     case, state = _antarctic_butterfly_state()
     scene = next(
         fact for fact in state.facts if fact.predicate == "appears_to_depict"
@@ -1022,8 +1147,15 @@ def test_pending_discovery_routes_prefer_official_sources() -> None:
         task_ids={task.task_id},
     )
 
-    assert pending["pages"][0]["source_class"] == "official"
-    assert pending["pages"][0]["url"].startswith("https://www.si.edu/")
+    assert {
+        item["source_class"] for item in pending["pages"]
+    } == {"official", "unknown"}
+    assert {
+        item["url"] for item in pending["pages"]
+    } == {
+        "https://www.quora.com/example",
+        "https://www.si.edu/spotlight/buginfo/monarch",
+    }
 
 
 def test_external_target_demotes_parallel_visual_integrity() -> None:
