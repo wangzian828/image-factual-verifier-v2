@@ -1305,6 +1305,91 @@ def test_empty_batch_inspection_exposes_one_bounded_sibling_fallback() -> None:
     }
 
 
+def test_failed_comparison_skips_same_direction_sibling_but_keeps_distinct_lead() -> None:
+    case, state = _runtime_state()
+    task = next(
+        item
+        for item in state.tasks
+        if state.core_verdict_fact_id in item.fact_ids
+    )
+    task.suggested_tools = ["reverse_image_search", "compare_with_reference"]
+    first_reference = "https://images.example-market.com/item-one.jpg"
+    duplicate_reference = "https://images.example-market.com/item-two.jpg"
+    distinct_reference = "https://images.museum.example/event.jpg"
+    record_tool_observation(
+        state,
+        _step(
+            task_id=task.task_id,
+            call_id="call-clustered-reference-batch",
+            tool_name="reverse_image_search",
+            result=json.dumps(
+                {
+                    "status": "success",
+                    "reference_image_candidates": [
+                        first_reference,
+                        duplicate_reference,
+                        distinct_reference,
+                    ],
+                    "lens_results": [
+                        {
+                            "title": "Blue graphic shirt product listing",
+                            "url": "https://example-market.com/products/item-one",
+                            "image_url": first_reference,
+                        },
+                        {
+                            "title": "Red graphic shirt product listing",
+                            "url": "https://example-market.com/products/item-two",
+                            "image_url": duplicate_reference,
+                        },
+                        {
+                            "title": "Official event photograph",
+                            "url": "https://museum.example/archive/event",
+                            "image_url": distinct_reference,
+                        },
+                    ],
+                }
+            ),
+        ),
+        image_sha256=case.image_sha256,
+    )
+    comparison = _step(
+        task_id=task.task_id,
+        call_id="call-first-cluster-candidate",
+        tool_name="compare_with_reference",
+        result=json.dumps(
+            {
+                "status": "success",
+                "reference_url": first_reference,
+                "same_subject_or_scene": False,
+                "same_capture_or_near_duplicate": False,
+                "likely_different_original_capture": True,
+                "edit_evidence_present": False,
+                "edit_evidence_strength": "none",
+                "differences": [],
+                "overall_observation": "The images are unrelated.",
+                "confidence": 0.99,
+            }
+        ),
+    )
+    comparison.tool_args["reference_url"] = first_reference
+    record_tool_observation(
+        state,
+        comparison,
+        image_sha256=case.image_sha256,
+    )
+
+    routes = remaining_material_routes(
+        state,
+        fact_id=state.core_verdict_fact_id or "",
+    )
+
+    assert not any(duplicate_reference in route for route in routes)
+    assert (
+        f"compare_with_reference:{task.task_id}:{distinct_reference}"
+        in routes
+    )
+
+
 def test_new_search_batch_exposes_relevant_unknown_candidates_after_weak_visit() -> None:
     case, state = _runtime_state()
     task = next(
@@ -3941,6 +4026,86 @@ def test_real_order_atomic_location_refutation_compiles_fake_without_source_bind
     )
     assert verdict == "fake"
     assert basis.fact_ids == [core_id]
+
+
+def test_indirect_explicit_refutation_triggers_semantic_checkpoint() -> None:
+    case, state = _antarctic_butterfly_state()
+    scene = next(
+        fact for fact in state.facts if fact.predicate == "appears_to_depict"
+    )
+    butterfly = next(
+        fact
+        for fact in state.facts
+        if fact.predicate == "visible_in"
+        and "monarch" in fact.statement.casefold()
+    )
+    planned = apply_target_planning(
+        state,
+        TargetPlanningOutput(
+            proposals=[
+                TargetFactProposal(
+                    statement=(
+                        "The visible monarch butterflies naturally occur in "
+                        "the Antarctic environment."
+                    ),
+                    predicate="located_at",
+                    parent_fact_ids=[scene.fact_id, butterfly.fact_id],
+                    question=(
+                        "Do monarch butterflies naturally occur in Antarctica?"
+                    ),
+                    purpose="Verify the visible ecological relation.",
+                    suggested_tools=["text_search", "visit"],
+                )
+            ]
+        ),
+    )
+    task = next(
+        item
+        for item in state.tasks
+        if planned["accepted_fact_ids"][0] in item.fact_ids
+    )
+    statement = (
+        "Butterflies are found on every continent except Antarctica."
+    )
+    update = record_tool_observation(
+        state,
+        _step(
+            task_id=task.task_id,
+            call_id="call-indirect-explicit-refute",
+            tool_name="visit",
+            result=json.dumps(
+                {
+                    "status": "success",
+                    "url": "https://zoo.example/butterfly-range",
+                    "selected_url": "https://zoo.example/butterfly-range",
+                    "evidence": statement,
+                    "summary": statement,
+                    "relevance": "high",
+                    "stance": "refute",
+                    "directness": "indirect",
+                    "temporal_alignment": "not_applicable",
+                    "artifact_sha256": "b" * 64,
+                    "evidence_span": {"start": 0, "end": len(statement)},
+                    "retrieved_at": datetime.now(timezone.utc).isoformat(),
+                    "injection_flags": [],
+                    "evidence_eligible": True,
+                }
+            ),
+        ),
+        image_sha256=case.image_sha256,
+    )
+
+    evidence = next(
+        item
+        for item in state.evidence
+        if item.evidence_id == update["created_evidence_ids"][0]
+    )
+    assert evidence.directness == "indirect"
+    assert evidence.stance == "refute"
+    assert evidence_decision_checkpoint_reason(
+        state,
+        update=update,
+    ) == "decisive_evidence"
 
 
 def test_evidence_decision_refines_unknown_subject_without_expanding_scope() -> None:

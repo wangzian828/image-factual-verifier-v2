@@ -186,3 +186,140 @@ def test_process_scorer_matches_fact_evidence_and_basis(
     assert metrics["score_metadata"]["evaluation_gold"]["sha256"] == "b" * 64
     assert score["components"]["result_reward"] == 1.0
     assert score["total"] > 4.0
+
+
+def test_process_scorer_accepts_semantic_refutation_with_text_sufficient_bridge() -> None:
+    fact_id = "fact-monarch-antarctic-relation"
+    task_id = "task-monarch-range"
+    evidence_id = "evidence-butterflies-except-antarctica"
+    finding_id = "finding-monarch-refuted"
+    call_id = "call-monarch-source"
+    runtime_fact = {
+        "fact_id": fact_id,
+        "kind": "relation",
+        "statement": (
+            "The monarch butterfly naturally co-occurs with a penguin in an "
+            "Antarctic environment."
+        ),
+        "predicate": "depicts_relation",
+        "status": "refuted",
+    }
+    evidence = {
+        "evidence_id": evidence_id,
+        "task_id": task_id,
+        "fact_ids": [fact_id],
+        "function_call_id": call_id,
+        "tool_name": "visit",
+        "source_url": "https://zoo.example/butterfly",
+        "source_family": "domain:zoo.example",
+        "source_class": "unknown",
+        "exact_text": (
+            "Butterflies are found on every continent except Antarctica."
+        ),
+        "stance": "refute",
+        "quality": "moderate",
+        "directness": "indirect",
+        "claim_binding": "source_assertion",
+        "risk_flags": [],
+    }
+    trace = {
+        "image_id": "case-monarch-semantic-match",
+        "verdict": "fake",
+        "termination": "success",
+        "verdict_basis": {
+            "fact_ids": [fact_id],
+            "finding_ids": [finding_id],
+            "evidence_ids": [evidence_id],
+        },
+        "state": {
+            "all_steps": [
+                {
+                    "stage": "image_only_investigation",
+                    "action_type": "tool_call",
+                    "tool_name": "visit",
+                    "tool_args": {
+                        "__question_id": task_id,
+                        "url": ["https://zoo.example/butterfly"],
+                    },
+                    "tool_result": json.dumps({"status": "success"}),
+                    "metadata": {
+                        "function_call_id": call_id,
+                        "investigation_state_update": {
+                            "created_evidence_ids": [evidence_id],
+                            "created_finding_ids": [finding_id],
+                            "fact_statuses": {fact_id: "refuted"},
+                        },
+                    },
+                }
+            ],
+            "investigation_state": {
+                "facts": [runtime_fact],
+                "decisive_fact_ids": [fact_id],
+                "tasks": [
+                    {
+                        "task_id": task_id,
+                        "fact_ids": [fact_id],
+                        "suggested_tools": ["text_search", "visit"],
+                    }
+                ],
+                "evidence": [evidence],
+                "findings": [
+                    {
+                        "finding_id": finding_id,
+                        "task_id": task_id,
+                        "fact_ids": [fact_id],
+                        "evidence_ids": [evidence_id],
+                    }
+                ],
+                "evidence_decisions": [
+                    {
+                        "output": {
+                            "active_fact_id": fact_id,
+                            "assessment": "refuted",
+                            "selected_evidence_ids": [evidence_id],
+                            "binding_requirement": "text_sufficient",
+                        }
+                    }
+                ],
+                "coverage_audits": [
+                    {
+                        "facts": [
+                            {
+                                "fact_id": fact_id,
+                                "status": "refuted",
+                                "winning_evidence_ids": [evidence_id],
+                                "conflict_resolution": "refute_wins",
+                            }
+                        ]
+                    }
+                ],
+                "action_count": 1,
+            },
+        },
+    }
+    gold = {
+        "case_id": "case-monarch-semantic-match",
+        "factual_status": "refuted",
+        "decisive_facts": [
+            {
+                "fact_id": "gold-monarch-antarctica",
+                "kind": "relation",
+                "statement": (
+                    "Millions of monarch butterflies migrate to Antarctica "
+                    "during the winter."
+                ),
+                "expected_status": "refuted",
+                "visual_anchor": {
+                    "type": "scene_or_text",
+                    "description": "The butterflies are in Antarctica.",
+                },
+            }
+        ],
+    }
+
+    metrics, score = score_process_trace(trace, gold)
+
+    assert metrics["decisive_fact_alignment"] == 1.0
+    assert metrics["evidence_to_vision_bridge_completion"] == 1.0
+    assert metrics["verdict_basis_alignment"] == 1.0
+    assert score["training_eligible"] is True

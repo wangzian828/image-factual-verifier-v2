@@ -30,11 +30,37 @@ def _rows(value: Any) -> List[Mapping[str, Any]]:
 
 
 def _tokens(value: Any) -> set[str]:
-    return {
-        token
-        for token in re.findall(r"[a-z0-9]+", str(value or "").casefold())
-        if token not in {"the", "a", "an", "is", "are", "at", "in", "of", "to"}
-    }
+    result: set[str] = set()
+    for token in re.findall(r"[a-z0-9]+", str(value or "").casefold()):
+        if token in {
+            "the",
+            "a",
+            "an",
+            "is",
+            "are",
+            "at",
+            "in",
+            "of",
+            "to",
+            "ve",
+            "vf",
+            "rf",
+        }:
+            continue
+        if re.fullmatch(r"[0-9a-f]{12,}", token):
+            continue
+        normalized = _light_fact_stem(token)
+        if normalized:
+            result.add(normalized)
+    return result
+
+
+def _light_fact_stem(token: str) -> str:
+    for suffix in ("ies", "ing", "ed", "es", "s"):
+        if token.endswith(suffix) and len(token) > len(suffix) + 3:
+            stem = token[: -len(suffix)]
+            return stem + "y" if suffix == "ies" else stem
+    return token
 
 
 def _token_f1(left: Any, right: Any) -> float:
@@ -42,12 +68,36 @@ def _token_f1(left: Any, right: Any) -> float:
     right_tokens = _tokens(right)
     if not left_tokens or not right_tokens:
         return 0.0
-    overlap = len(left_tokens & right_tokens)
+    unmatched_right = set(right_tokens)
+    overlap = 0
+    for left_token in sorted(left_tokens):
+        matched = next(
+            (
+                right_token
+                for right_token in sorted(unmatched_right)
+                if _fact_tokens_equivalent(left_token, right_token)
+            ),
+            None,
+        )
+        if matched is not None:
+            overlap += 1
+            unmatched_right.remove(matched)
     if not overlap:
         return 0.0
     precision = overlap / len(left_tokens)
     recall = overlap / len(right_tokens)
     return 2 * precision * recall / (precision + recall)
+
+
+def _fact_tokens_equivalent(left: str, right: str) -> bool:
+    if left == right:
+        return True
+    shorter, longer = sorted((left, right), key=len)
+    return (
+        len(shorter) >= 6
+        and len(longer) - len(shorter) <= 2
+        and longer.startswith(shorter)
+    )
 
 
 def _fact_similarity(
@@ -292,6 +342,8 @@ def _first_error(
 def _has_actual_visual_bridge(
     fact: Mapping[str, Any],
     related_evidence: Sequence[Mapping[str, Any]],
+    *,
+    semantic_decision: Mapping[str, Any] | None = None,
 ) -> bool:
     predicate = str(fact.get("predicate", ""))
     status = str(fact.get("status", ""))
@@ -305,6 +357,25 @@ def _has_actual_visual_bridge(
     if status == "supported" and predicate in {"visible_in", "reads"}:
         return bool(bindings & {"pixel_observation", "same_capture"})
     if status == "refuted":
+        decision_output = _mapping(
+            _mapping(semantic_decision).get("output")
+        )
+        selected_ids = {
+            str(item)
+            for item in decision_output.get("selected_evidence_ids", []) or []
+        }
+        if (
+            decision_output.get("assessment") == "refuted"
+            and decision_output.get("binding_requirement") == "text_sufficient"
+            and any(
+                str(item.get("evidence_id", "")) in selected_ids
+                and str(item.get("claim_binding", "")) == "source_assertion"
+                and str(item.get("quality", "")) in {"strong", "moderate"}
+                and not item.get("risk_flags")
+                for item in related_evidence
+            )
+        ):
+            return True
         return any(
             str(item.get("claim_binding", ""))
             in {"pixel_observation", "same_capture", "source_assertion"}
@@ -415,6 +486,12 @@ def score_process_trace(
         if str(item.get("evidence_id", ""))
     }
     findings = _rows(investigation.get("findings"))
+    evidence_decisions = _rows(investigation.get("evidence_decisions"))
+    latest_decision_by_fact = {
+        str(_mapping(item.get("output")).get("active_fact_id", "")): item
+        for item in evidence_decisions
+        if str(_mapping(item.get("output")).get("active_fact_id", ""))
+    }
     findings_by_id = {
         str(item.get("finding_id", "")): item
         for item in findings
@@ -484,6 +561,9 @@ def score_process_trace(
             and _has_actual_visual_bridge(
                 runtime_fact,
                 related_evidence,
+                semantic_decision=latest_decision_by_fact.get(
+                    runtime_fact_id
+                ),
             )
         ):
             bridge_hits += 1

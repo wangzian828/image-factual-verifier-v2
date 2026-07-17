@@ -1570,6 +1570,17 @@ def evidence_decision_checkpoint_reason(
 
     core_id = state.core_verdict_fact_id or ""
     prior = latest_evidence_decision(state, fact_id=core_id)
+    if any(
+        item.tool_name == "visit"
+        and item.stance == "refute"
+        and item.quality in {"strong", "moderate"}
+        for item in new_rows
+    ):
+        # The extractor only proposes a query-relative stance. An explicit
+        # contradiction is important enough to send to the semantic checkpoint
+        # even when the selected passage was marked indirect; Gemini still owns
+        # the actual proposition-level verdict.
+        return "decisive_evidence"
     directly_inspected = [
         item
         for item in new_rows
@@ -3735,6 +3746,19 @@ def _pending_inspection_batches(
 
     pending: List[List[str]] = []
     for discoveries in discovery_batches.values():
+        discovery_by_inspection_url = {
+            canonicalize_url(
+                item.candidate_url
+                if tool_name == "visit"
+                else item.reference_image_url
+            ): item
+            for item in discoveries
+            if canonicalize_url(
+                item.candidate_url
+                if tool_name == "visit"
+                else item.reference_image_url
+            )
+        }
         paired_page_by_reference = {
             canonicalize_url(item.reference_image_url): canonicalize_url(
                 item.candidate_url
@@ -3816,6 +3840,27 @@ def _pending_inspection_batches(
         remaining = [
             url for url in candidate_urls if url not in attempted_outcomes
         ]
+        unsuccessful_candidates = [
+            discovery_by_inspection_url[url]
+            for url in candidate_urls
+            if url in attempted_outcomes
+            and attempted_outcomes[url] in {"empty", "failed", "context"}
+            and url in discovery_by_inspection_url
+        ]
+        if unsuccessful_candidates:
+            remaining = [
+                url
+                for url in remaining
+                if not any(
+                    _same_inspection_source_family(
+                        discovery_by_inspection_url[url],
+                        attempted,
+                        tool_name=tool_name,
+                    )
+                    for attempted in unsuccessful_candidates
+                    if url in discovery_by_inspection_url
+                )
+            ]
         if not remaining:
             continue
         prefix = "visit" if tool_name == "visit" else "compare_with_reference"
@@ -3826,3 +3871,35 @@ def _pending_inspection_batches(
             ]
         )
     return pending
+
+
+def _same_inspection_source_family(
+    left: InvestigationDiscovery,
+    right: InvestigationDiscovery,
+    *,
+    tool_name: str,
+) -> bool:
+    """Spend a reference fallback on a different source family.
+
+    Reverse-image batches often contain several visually unrelated product
+    results served by one CDN. After one failed comparison, another asset from
+    that same family is not a distinct recovery route. Page visits retain their
+    existing bounded sibling behavior because two pages on one site can contain
+    materially different assertions.
+    """
+
+    if tool_name != "compare_with_reference":
+        return False
+    left_resource = (
+        left.reference_image_url
+    )
+    right_resource = (
+        right.reference_image_url
+    )
+    left_identity = classify_source(left_resource)
+    right_identity = classify_source(right_resource)
+    return bool(
+        left_identity.source_family
+        and left_identity.source_family == right_identity.source_family
+        and left.candidate_type == right.candidate_type
+    )
