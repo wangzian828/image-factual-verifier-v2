@@ -4513,7 +4513,7 @@ def _remaining_task_material_routes(
     if (
         "text_search" in allowed
         and task.query_replan_count
-        and text_search_count == MAX_TEXT_SEARCH_ROUTES_PER_TASK
+        and _current_replan_query_is_pending(task, attempts)
     ):
         # A newly accepted semantic replan is the next action, rather than one
         # more optional branch from the stale plan. Once attempted, the normal
@@ -4527,8 +4527,8 @@ def _remaining_task_material_routes(
                 )
     if (
         "text_search" in allowed
-        and text_search_count
-        < MAX_TEXT_SEARCH_ROUTES_PER_TASK + task.query_replan_count
+        and not task.query_replan_count
+        and text_search_count < MAX_TEXT_SEARCH_ROUTES_PER_TASK
     ):
         routes.append(f"text_search:{task.task_id}")
     for tool_name in (
@@ -4541,6 +4541,35 @@ def _remaining_task_material_routes(
         if tool_name in allowed and tool_name not in one_shot_tools:
             routes.append(f"{tool_name}:{task.task_id}")
     return routes
+
+
+def _current_replan_query_is_pending(
+    task: ResearchTask,
+    attempts: Sequence[Mapping[str, Any]],
+) -> bool:
+    """Return whether the one accepted replacement query still needs execution."""
+
+    if task.query_replan_count <= 0 or not task.suggested_queries:
+        return False
+    replacement = task.suggested_queries[0]
+    for route in attempts:
+        if str(route.get("tool", "")).strip() != "text_search":
+            continue
+        queries = route.get("queries", []) or []
+        if isinstance(queries, str):
+            queries = [queries]
+        if any(
+            routes_semantically_equivalent(
+                "text_search",
+                {"queries": [replacement]},
+                "text_search",
+                {"queries": [str(query)]},
+            )
+            for query in queries
+            if str(query).strip()
+        ):
+            return False
+    return True
 
 
 def _pending_inspection_batches(

@@ -2450,6 +2450,90 @@ def test_stagnation_reflection_replans_once_without_resetting_budget() -> None:
     ) == [f"text_search:{task.task_id}"]
 
 
+def test_interval_replan_query_is_exposed_once_even_when_accepted_early() -> None:
+    case, state = _runtime_state()
+    task = next(
+        item
+        for item in state.tasks
+        if state.core_verdict_fact_id in item.fact_ids
+    )
+    task.suggested_tools = ["text_search"]
+    first_query = "visible subject narrow literal relation"
+    search = _step(
+        task_id=task.task_id,
+        call_id="call-early-replan-initial",
+        tool_name="text_search",
+        result=json.dumps(
+            {
+                "status": "success",
+                "queries": [{"query": first_query, "results": []}],
+            }
+        ),
+    )
+    search.tool_args["queries"] = [first_query]
+    record_tool_observation(
+        state,
+        search,
+        image_sha256=case.image_sha256,
+    )
+    state.action_count = 4
+    audit_coverage(state)
+    audit_coverage(state, decision_checkpoint=True)
+    audit_coverage(state, decision_checkpoint=True)
+
+    replacement = "authoritative event account actual relation"
+    reflection = apply_reflection(
+        state,
+        ReflectionOutput(
+            strategy_decision="replan",
+            strategy_task_id=task.task_id,
+            replacement_query=replacement,
+            expected_information=(
+                "An authoritative account of the event and the actual relation."
+            ),
+            strategy_rationale=(
+                "Replace a narrow literal search with an event-account route."
+            ),
+        ),
+        evidence_gain=False,
+        decision_gain=False,
+        trigger="interval",
+    )
+
+    assert reflection.accepted_strategy_decision == "replan"
+    assert remaining_material_routes(
+        state,
+        fact_id=state.core_verdict_fact_id or "",
+    ) == [f"text_search:{task.task_id}"]
+
+    replacement_search = _step(
+        task_id=task.task_id,
+        call_id="call-early-replan-replacement",
+        tool_name="text_search",
+        result=json.dumps(
+            {
+                "status": "success",
+                "queries": [{"query": replacement, "results": []}],
+            }
+        ),
+    )
+    replacement_search.tool_args["queries"] = [replacement]
+    record_tool_observation(
+        state,
+        replacement_search,
+        image_sha256=case.image_sha256,
+    )
+
+    assert f"text_search:{task.task_id}" not in remaining_material_routes(
+        state,
+        fact_id=state.core_verdict_fact_id or "",
+    )
+    assert Orchestrator._image_only_tool_argument_constraints(
+        state,
+        task_ids={task.task_id},
+    ).get("text_search") is None
+
+
 def test_stagnation_reflection_cannot_replan_twice() -> None:
     _, state = _runtime_state()
     task = next(
