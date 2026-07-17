@@ -372,6 +372,7 @@ class TargetPlanningOutput(StrictModel):
 class EvidenceDecisionRefinement(StrictModel):
     slot: Literal[
         "subject_identity",
+        "object_category",
         "scene_location",
         "event_identity",
     ]

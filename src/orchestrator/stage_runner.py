@@ -2361,6 +2361,33 @@ class StageRunner:
     def _compact_visit_result(self, data: Any) -> Any:
         if not isinstance(data, dict):
             return data
+        evidence_records = [
+            {
+                "url": item.get("url", data.get("url", "")),
+                "selected_url": item.get(
+                    "selected_url",
+                    data.get("selected_url", "") or data.get("url", ""),
+                ),
+                "evidence": str(item.get("evidence", "")),
+                "relevance": item.get("relevance", "low"),
+                "stance": item.get("stance", "unclear"),
+                "directness": item.get("directness", "none"),
+                "context_only": bool(item.get("context_only", False)),
+                "temporal_alignment": item.get(
+                    "temporal_alignment",
+                    "not_applicable",
+                ),
+                "artifact_sha256": item.get("artifact_sha256", ""),
+                "evidence_span": item.get("evidence_span", {}),
+                "retrieved_at": item.get("retrieved_at", ""),
+                "injection_flags": item.get("injection_flags", []),
+                "evidence_eligible": bool(
+                    item.get("evidence_eligible", False)
+                ),
+            }
+            for item in (data.get("evidence_records", []) or [])[:3]
+            if isinstance(item, dict)
+        ]
         visits = []
         for item in (data.get("visits", []) or [])[:3]:
             if isinstance(item, dict):
@@ -2401,6 +2428,7 @@ class StageRunner:
             "retrieved_at": data.get("retrieved_at", ""),
             "injection_flags": data.get("injection_flags", []),
             "evidence_eligible": bool(data.get("evidence_eligible", False)),
+            "evidence_records": evidence_records,
             "visits": visits,
             "validated_claim_state": self._claim_control_states(),
         }

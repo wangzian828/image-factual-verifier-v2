@@ -2206,9 +2206,9 @@ def apply_evidence_decision(
                 "accepted": False,
                 "rejected_reason": (
                     f"{refinement.slot} refinement must preserve the active "
-                    "image-world relation; refine the visible subject, place, "
-                    "or event rather than switching to source record, platform, "
-                    "provenance, or other metadata attribution"
+                    "image-world relation; refine the visible subject, object "
+                    "category, place, or event rather than switching to source "
+                    "record, platform, provenance, or other metadata attribution"
                 ),
             }
         if not _valid_visual_refinement_transition(
@@ -2231,9 +2231,56 @@ def apply_evidence_decision(
                     "refinement must remain one image-visible factual relation"
                 ),
             }
+        removable_named_values: set[str] = set()
+        if refinement.slot == "object_category":
+            object_entity = next(
+                (
+                    item
+                    for item in state.entities
+                    if item.entity_id == core.object_entity_id
+                ),
+                None,
+            )
+            if (
+                object_entity is None
+                or not any(
+                    item.origin.type == "input_image"
+                    and item.subject_entity_id == object_entity.entity_id
+                    for item in anchors
+                )
+            ):
+                return {
+                    "accepted": False,
+                    "rejected_reason": (
+                        "object_category refinement must be anchored to the "
+                        "same visible object entity"
+                    ),
+                }
+            removable_named_values = _attribution_tokens(
+                object_entity.name
+            )
+            grounding_text = " ".join(
+                evidence_by_id[item].exact_text
+                for item in grounding_ids
+                if item in evidence_by_id
+            )
+            if not _object_category_is_evidence_grounded(
+                core.statement,
+                refinement.statement,
+                grounding_text,
+            ):
+                return {
+                    "accepted": False,
+                    "rejected_reason": (
+                        "object_category refinement introduces category terms "
+                        "that are not grounded in the newly reviewed exact "
+                        "Evidence spans"
+                    ),
+                }
         if not _refinement_preserves_core_scope(
             core.statement,
             refinement.statement,
+            removable_named_values=removable_named_values,
         ):
             return {
                 "accepted": False,
@@ -2555,6 +2602,11 @@ def _refinement_slot_preserves_relation(
             current_predicate,
             "identified_as",
         },
+        "object_category": (
+            {"depicts_relation"}
+            if current_predicate == "depicts_relation"
+            else set()
+        ),
         "scene_location": {
             current_predicate,
             "located_at",
@@ -2613,6 +2665,8 @@ _REFINEMENT_SCOPE_STOPWORDS = {
 def _refinement_preserves_core_scope(
     current_statement: str,
     proposed_statement: str,
+    *,
+    removable_named_values: set[str] | None = None,
 ) -> bool:
     """Reject obvious relation replacement while allowing one slot to narrow.
 
@@ -2642,7 +2696,42 @@ def _refinement_preserves_core_scope(
         )
         if item.casefold() not in {"the", "this", "image", "input"}
     }
-    return preserved_named_values <= proposed_tokens
+    required_named_values = preserved_named_values - set(
+        removable_named_values or set()
+    )
+    return required_named_values <= proposed_tokens
+
+
+def _object_category_is_evidence_grounded(
+    current_statement: str,
+    proposed_statement: str,
+    grounding_text: str,
+) -> bool:
+    """Require every newly introduced category term to occur in exact Evidence."""
+
+    current = _semantic_token_roots(current_statement)
+    proposed = _semantic_token_roots(proposed_statement)
+    evidence = _semantic_token_roots(grounding_text)
+    new_terms = proposed - current - _REFINEMENT_SCOPE_STOPWORDS
+    return bool(new_terms) and new_terms <= evidence
+
+
+def _semantic_token_roots(value: str) -> set[str]:
+    roots: set[str] = set()
+    for token in re.findall(
+        r"[a-z0-9]+",
+        str(value or "").casefold(),
+    ):
+        if not token:
+            continue
+        if len(token) > 4 and token.endswith("ies"):
+            token = token[:-3] + "y"
+        elif len(token) > 4 and token.endswith("es"):
+            token = token[:-2]
+        elif len(token) > 3 and token.endswith("s"):
+            token = token[:-1]
+        roots.add(token)
+    return roots
 
 
 def _refinement_is_peripheral_metadata(statement: str) -> bool:
@@ -3661,6 +3750,12 @@ def _visual_evidence_record(
 
 def _web_evidence_records(value: Any) -> Iterator[Mapping[str, Any]]:
     if isinstance(value, Mapping):
+        bundled = value.get("evidence_records")
+        if isinstance(bundled, list) and bundled:
+            for record in bundled:
+                if isinstance(record, Mapping):
+                    yield record
+            return
         if (
             "evidence" in value
             and "evidence_eligible" in value

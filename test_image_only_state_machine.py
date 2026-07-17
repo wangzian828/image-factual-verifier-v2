@@ -232,6 +232,74 @@ def _antarctic_butterfly_state():
     return case, state
 
 
+def _planned_sponsored_product_state():
+    case = ImageOnlyRuntimeCase(
+        case_id="case-sponsored-product",
+        image_path="sponsored-product.jpg",
+        image_sha256="f" * 64,
+    )
+    perception = PerceptionReport(
+        scene_description=(
+            "A sponsored social media advertisement shows Romanian TV "
+            "presenter Andreea Esca holding a Dr. Oetker Bicarbonat de Sodiu "
+            "packet."
+        ),
+        image_type="screenshot",
+        entities=[
+            Entity(
+                name="Andreea Esca",
+                entity_type="person",
+                bbox=[0.05, 0.2, 0.55, 0.95],
+                confidence=0.98,
+            ),
+            Entity(
+                name="Dr. Oetker Bicarbonat de Sodiu",
+                entity_type="object",
+                bbox=[0.55, 0.45, 0.85, 0.9],
+                confidence=0.96,
+            ),
+        ],
+    )
+    state = state_from_bootstrap(
+        build_bootstrap_investigation(case, perception)
+    )
+    visible = [
+        fact
+        for fact in state.facts
+        if fact.predicate == "visible_in"
+    ]
+    planned = apply_target_planning(
+        state,
+        TargetPlanningOutput(
+            proposals=[
+                TargetFactProposal(
+                    statement=(
+                        "The image depicts Romanian TV presenter Andreea Esca "
+                        "endorsing or promoting Dr. Oetker Bicarbonat de Sodiu "
+                        "in a sponsored social media advertisement."
+                    ),
+                    predicate="depicts_relation",
+                    parent_fact_ids=[item.fact_id for item in visible],
+                    question=(
+                        "Is Andreea Esca genuinely endorsing the shown product?"
+                    ),
+                    purpose=(
+                        "Verify the visible person-to-product endorsement "
+                        "relation."
+                    ),
+                    suggested_tools=["text_search", "visit"],
+                    suggested_queries=[
+                        "Andreea Esca sponsored product advertisement"
+                    ],
+                )
+            ]
+        ),
+    )
+    assert planned["accepted_fact_ids"]
+    activate_initial_decisive_facts(state)
+    return case, state
+
+
 def _ceremonial_bus_state():
     case = ImageOnlyRuntimeCase(
         case_id="case-ceremonial-bus",
@@ -4354,6 +4422,176 @@ def test_evidence_decision_refines_unknown_subject_without_expanding_scope() -> 
         for item in state.tasks
         if item.status == "active"
     }
+
+
+def test_evidence_decision_can_generalize_visible_object_to_grounded_category() -> None:
+    case, state = _planned_sponsored_product_state()
+    core_id = state.core_verdict_fact_id or ""
+    core = next(item for item in state.facts if item.fact_id == core_id)
+    task = next(item for item in state.tasks if core_id in item.fact_ids)
+    object_anchor = next(
+        item
+        for item in state.facts
+        if item.origin.type == "input_image"
+        and item.subject_entity_id == core.object_entity_id
+    )
+    statement = (
+        "Sponsored health-related scams impersonate Andreea Esca to promote "
+        "medical supplements."
+    )
+    update = record_tool_observation(
+        state,
+        _step(
+            task_id=task.task_id,
+            call_id="call-ground-product-category",
+            tool_name="visit",
+            result=json.dumps(
+                {
+                    "status": "success",
+                    "url": "https://security.example/health-scams",
+                    "selected_url": "https://security.example/health-scams",
+                    "evidence": statement,
+                    "summary": statement,
+                    "relevance": "high",
+                    "stance": "refute",
+                    "directness": "direct",
+                    "temporal_alignment": "not_applicable",
+                    "artifact_sha256": "8" * 64,
+                    "evidence_span": {"start": 0, "end": len(statement)},
+                    "retrieved_at": datetime.now(timezone.utc).isoformat(),
+                    "injection_flags": [],
+                    "evidence_eligible": True,
+                }
+            ),
+        ),
+        image_sha256=case.image_sha256,
+    )
+    evidence_id = update["created_evidence_ids"][0]
+
+    result = _apply_core_decision(
+        state,
+        [evidence_id],
+        assessment="insufficient",
+        selected_evidence_ids=[],
+        remaining_gap=(
+            "Evaluate the same endorsement relation at the grounded medical "
+            "supplement category."
+        ),
+        rationale=(
+            "The source establishes a category-level impersonation pattern but "
+            "does not name the visible packet SKU."
+        ),
+        refinement=EvidenceDecisionRefinement(
+            slot="object_category",
+            statement=(
+                "The image depicts Romanian TV presenter Andreea Esca "
+                "endorsing or promoting the shown medical supplement in a "
+                "sponsored social media advertisement."
+            ),
+            predicate="depicts_relation",
+            anchor_fact_ids=[object_anchor.fact_id],
+            grounding_evidence_ids=[evidence_id],
+            question=(
+                "Is Andreea Esca genuinely endorsing the shown medical "
+                "supplement?"
+            ),
+            purpose=(
+                "Verify the same visible person-to-product relation at the "
+                "smallest evidence-grounded object category."
+            ),
+            suggested_tools=["text_search", "visit"],
+            suggested_queries=[
+                "Andreea Esca medical supplement sponsored advertisement"
+            ],
+        ),
+    )
+
+    assert result["accepted"] is True
+    refined = next(
+        item
+        for item in state.facts
+        if item.fact_id == result["accepted_refinement_fact_id"]
+    )
+    assert refined.subject_entity_id == core.subject_entity_id
+    assert refined.object_entity_id == core.object_entity_id
+    assert "medical supplement" in refined.statement
+    assert "Dr. Oetker" not in refined.statement
+
+
+def test_object_category_refinement_rejects_category_absent_from_exact_evidence() -> None:
+    case, state = _planned_sponsored_product_state()
+    core_id = state.core_verdict_fact_id or ""
+    core = next(item for item in state.facts if item.fact_id == core_id)
+    task = next(item for item in state.tasks if core_id in item.fact_ids)
+    object_anchor = next(
+        item
+        for item in state.facts
+        if item.origin.type == "input_image"
+        and item.subject_entity_id == core.object_entity_id
+    )
+    statement = (
+        "Sponsored health-related scams impersonate Andreea Esca to promote "
+        "medical supplements."
+    )
+    update = record_tool_observation(
+        state,
+        _step(
+            task_id=task.task_id,
+            call_id="call-ungrounded-product-category",
+            tool_name="visit",
+            result=json.dumps(
+                {
+                    "status": "success",
+                    "url": "https://security.example/health-scams",
+                    "selected_url": "https://security.example/health-scams",
+                    "evidence": statement,
+                    "summary": statement,
+                    "relevance": "high",
+                    "stance": "refute",
+                    "directness": "direct",
+                    "temporal_alignment": "not_applicable",
+                    "artifact_sha256": "7" * 64,
+                    "evidence_span": {"start": 0, "end": len(statement)},
+                    "retrieved_at": datetime.now(timezone.utc).isoformat(),
+                    "injection_flags": [],
+                    "evidence_eligible": True,
+                }
+            ),
+        ),
+        image_sha256=case.image_sha256,
+    )
+    evidence_id = update["created_evidence_ids"][0]
+
+    result = _apply_core_decision(
+        state,
+        [evidence_id],
+        assessment="insufficient",
+        selected_evidence_ids=[],
+        remaining_gap="Verify the proposed category.",
+        rationale="The source does not mention investments.",
+        refinement=EvidenceDecisionRefinement(
+            slot="object_category",
+            statement=(
+                "The image depicts Romanian TV presenter Andreea Esca "
+                "endorsing or promoting the shown financial investment product "
+                "in a sponsored social media advertisement."
+            ),
+            predicate="depicts_relation",
+            anchor_fact_ids=[object_anchor.fact_id],
+            grounding_evidence_ids=[evidence_id],
+            question=(
+                "Is Andreea Esca genuinely endorsing the shown financial "
+                "investment product?"
+            ),
+            purpose="Replace the visible object with an unsupported category.",
+            suggested_tools=["text_search", "visit"],
+            suggested_queries=["Andreea Esca investment product"],
+        ),
+    )
+
+    assert result["accepted"] is False
+    assert "not grounded" in result["rejected_reason"]
+    assert state.core_verdict_fact_id == core_id
 
 
 def test_evidence_decision_rejects_peripheral_metadata_as_core_refinement() -> None:

@@ -248,12 +248,18 @@ def test_extractor_preserves_related_context_when_no_passage_directly_resolves_g
 
     def select_no_direct_passage(formatted: str, _goal: str) -> dict:
         assert target in formatted
+        match = re.search(
+            r"\[PASSAGE (\d+)\] (Monarch butterflies[^\n]+)",
+            formatted,
+        )
+        assert match is not None
         return {
             "rationale": (
                 "The page gives relevant migration and overwintering context "
                 "but does not explicitly mention Antarctica."
             ),
             "passage_id": -1,
+            "supporting_passage_ids": [int(match.group(1))],
             "summary": "Monarchs migrate to overwintering sites in Mexico.",
             "relevance": "low",
             "stance": "unclear",
@@ -272,6 +278,93 @@ def test_extractor_preserves_related_context_when_no_passage_directly_resolves_g
     assert result["context_only"] is True
     span = result["evidence_span"]
     assert document[span["start"] : span["end"]] == target
+
+
+def test_extractor_does_not_invent_context_when_no_passage_is_selected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = JinaReaderClient(fetch_provider="jina")
+    page = (
+        "An article about a public figure.\n\n"
+        "What is the difference between baking powder and baking soda?"
+    )
+    monkeypatch.setattr(
+        client,
+        "_extract_with_llm",
+        lambda _content, _goal: {
+            "rationale": "No supplied passage answers the goal.",
+            "passage_id": -1,
+            "supporting_passage_ids": [],
+            "summary": "No relevant evidence.",
+            "relevance": "low",
+            "stance": "unclear",
+            "directness": "none",
+            "temporal_alignment": "not_applicable",
+        },
+    )
+
+    result = client.extract_goal_evidence(
+        page,
+        "Did the public figure authorize the shown product advertisement?",
+    )
+
+    assert result["evidence"] == ""
+    assert result["evidence_span"] == {}
+    assert result["evidence_records"] == []
+
+
+def test_extractor_returns_independent_primary_and_supporting_exact_spans(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = JinaReaderClient(fetch_provider="jina")
+    scope = (
+        "Researchers analyzed sponsored health-related scams promoting medical "
+        "supplements on social media."
+    )
+    identity = (
+        "Impersonated figures in Romania include Andreea Esca."
+    )
+    page = scope + "\n\n" + identity
+
+    def select_chain(formatted: str, _goal: str) -> dict:
+        scope_match = re.search(
+            r"\[PASSAGE (\d+)\] (Researchers analyzed[^\n]+)",
+            formatted,
+        )
+        identity_match = re.search(
+            r"\[PASSAGE (\d+)\] (Impersonated figures[^\n]+)",
+            formatted,
+        )
+        assert scope_match is not None
+        assert identity_match is not None
+        return {
+            "rationale": "The two passages form one exact evidence chain.",
+            "passage_id": int(identity_match.group(1)),
+            "supporting_passage_ids": [int(scope_match.group(1))],
+            "summary": "Andreea Esca is impersonated in health-product scams.",
+            "relevance": "high",
+            "stance": "refute",
+            "directness": "direct",
+            "temporal_alignment": "not_applicable",
+        }
+
+    monkeypatch.setattr(client, "_extract_with_llm", select_chain)
+    result = client.extract_goal_evidence(
+        page,
+        "Is Andreea Esca genuinely endorsing the shown health product?",
+    )
+    document = client._prepare_evidence_document(page)
+
+    assert result["evidence"] == identity
+    assert len(result["evidence_records"]) == 2
+    assert result["evidence_records"][0]["stance"] == "refute"
+    assert result["evidence_records"][0]["context_only"] is False
+    assert result["evidence_records"][1]["stance"] == "unclear"
+    assert result["evidence_records"][1]["context_only"] is True
+    assert {
+        document[item["evidence_span"]["start"] : item["evidence_span"]["end"]]
+        for item in result["evidence_records"]
+    } == {scope, identity}
 
 
 def test_jina_failure_falls_back_to_direct_and_records_attempts(

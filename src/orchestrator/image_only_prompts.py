@@ -102,9 +102,15 @@ relation can be text-sufficient refutation.
 
 If the evidence reveals a more specific visible subject, place, or event but does
 not yet resolve the active relation, you may propose one narrower refinement grounded
-in supplied pixel/OCR anchor facts and Evidence. Creator, title, platform, upload
-date, and asset metadata are retrieval context unless visibly part of the image.
-Do not invent facts, ids, sources, or a requirement for a second source.
+in supplied pixel/OCR anchor facts and Evidence. You may instead use object_category
+once to replace a visible product or object SKU with the smallest category needed by
+the evidence, but only while preserving the same visible subject, object entity, and
+relation. For example, a named packet may become "the shown health product" when
+exact Evidence establishes that category-level impersonation relation. Do not
+generalize to every product, replace the subject, or switch to authenticity,
+provenance, creator, or platform questions. Creator, title, platform, upload date,
+and asset metadata are retrieval context unless visibly part of the image. Do not
+invent facts, ids, sources, or a requirement for a second source.
 
 When newly reviewed Evidence introduces a concrete hypothesis about a property
 that should be visible in the original pixels, request visual_reinspection before

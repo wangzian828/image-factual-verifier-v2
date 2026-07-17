@@ -174,6 +174,23 @@ def test_visit_canonical_payload_preserves_exact_passage_and_span() -> None:
         "retrieved_at": "2026-07-16T00:00:00+00:00",
         "injection_flags": [],
         "evidence_eligible": True,
+        "evidence_records": [
+            {
+                "url": "https://example.test/evidence",
+                "selected_url": "https://example.test/evidence",
+                "evidence": "Supporting exact span.",
+                "relevance": "medium",
+                "stance": "unclear",
+                "directness": "indirect",
+                "context_only": True,
+                "temporal_alignment": "not_applicable",
+                "artifact_sha256": "a" * 64,
+                "evidence_span": {"start": 1800, "end": 1822},
+                "retrieved_at": "2026-07-16T00:00:00+00:00",
+                "injection_flags": [],
+                "evidence_eligible": True,
+            }
+        ],
         "subcalls": [
             {
                 "kind": "page_fetch",
@@ -191,6 +208,13 @@ def test_visit_canonical_payload_preserves_exact_passage_and_span() -> None:
         canonical["evidence_span"]["end"]
         - canonical["evidence_span"]["start"]
     )
+    assert canonical["evidence_records"][0]["evidence"] == (
+        "Supporting exact span."
+    )
+    assert canonical["evidence_records"][0]["evidence_span"] == {
+        "start": 1800,
+        "end": 1822,
+    }
 
 
 def test_crop_and_inspect_rejects_reversed_or_negative_bbox() -> None:
