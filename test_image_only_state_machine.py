@@ -5472,3 +5472,209 @@ def test_visual_reinspection_rejects_terminal_and_duplicate_requests() -> None:
     assert first["accepted"] is True
     assert duplicate["accepted"] is False
     assert "equivalent visual question" in duplicate["rejected_reason"]
+
+
+def _record_different_capture_bridge(case, state) -> tuple[str, str, str]:
+    core_id = state.core_verdict_fact_id or ""
+    core = next(item for item in state.facts if item.fact_id == core_id)
+    core.predicate = "depicts_event"
+    task = next(item for item in state.tasks if core_id in item.fact_ids)
+    update = record_tool_observation(
+        state,
+        _step(
+            task_id=task.task_id,
+            call_id=f"call-different-capture-{state.action_count}",
+            tool_name="compare_with_reference",
+            result=json.dumps(
+                {
+                    "status": "success",
+                    "reference_url": "https://example.org/event-reference.jpg",
+                    "resolved_reference_url": (
+                        "https://example.org/event-reference.jpg"
+                    ),
+                    "same_subject_or_scene": True,
+                    "same_capture_or_near_duplicate": False,
+                    "likely_different_original_capture": True,
+                    "edit_evidence_present": False,
+                    "edit_evidence_strength": "none",
+                    "differences": [
+                        "The reference uses a different viewpoint and crowd."
+                    ],
+                    "overall_observation": (
+                        "Both images show the same visible place and event, "
+                        "but they are different original captures."
+                    ),
+                    "confidence": 0.96,
+                }
+            ),
+        ),
+        image_sha256=case.image_sha256,
+    )
+    anchor = next(
+        item
+        for item in state.facts
+        if item.origin.type == "input_image"
+    )
+    return core_id, update["created_evidence_ids"][0], anchor.fact_id
+
+
+def test_visible_world_fact_cannot_turn_exact_capture_into_open_requirement() -> None:
+    case, state = _runtime_state()
+    core_id, evidence_id, _ = _record_different_capture_bridge(case, state)
+
+    result = apply_evidence_decision(
+        state,
+        EvidenceDecisionOutput(
+            active_fact_id=core_id,
+            assessment="insufficient",
+            selected_evidence_ids=[],
+            binding_requirement="same_capture_required",
+            remaining_gap=(
+                "Find the exact publication record and photographer for the "
+                "input image."
+            ),
+            rationale=(
+                "The reference is a different capture, so exact-source recovery "
+                "is still required."
+            ),
+            refinement=None,
+            visual_reinspection=None,
+        ),
+        reviewed_evidence_ids=[evidence_id],
+        trigger="decisive_evidence",
+    )
+
+    assert result["accepted"] is False
+    assert "cannot become the mandatory remaining gap" in result["rejected_reason"]
+
+
+def test_different_capture_bridge_requires_model_authored_visual_reinspection() -> None:
+    case, state = _runtime_state()
+    core_id, evidence_id, anchor_id = _record_different_capture_bridge(
+        case,
+        state,
+    )
+    skipped = apply_evidence_decision(
+        state,
+        EvidenceDecisionOutput(
+            active_fact_id=core_id,
+            assessment="insufficient",
+            selected_evidence_ids=[],
+            binding_requirement="same_capture_helpful",
+            remaining_gap=(
+                "Search for an exact source image or determine whether the "
+                "input is AI-generated."
+            ),
+            rationale=(
+                "The reference depicts the same event but is a different "
+                "capture."
+            ),
+            refinement=None,
+            visual_reinspection=None,
+        ),
+        reviewed_evidence_ids=[evidence_id],
+        trigger="decisive_evidence",
+    )
+
+    assert skipped["accepted"] is False
+    assert "request visual_reinspection" in skipped["rejected_reason"]
+
+    accepted = apply_evidence_decision(
+        state,
+        EvidenceDecisionOutput(
+            active_fact_id=core_id,
+            assessment="insufficient",
+            selected_evidence_ids=[],
+            binding_requirement="same_capture_helpful",
+            remaining_gap=(
+                "Check whether the original pixels share the candidate event's "
+                "visible place and crowd configuration."
+            ),
+            rationale=(
+                "The different-capture comparison introduces a concrete, "
+                "visually testable event hypothesis."
+            ),
+            refinement=None,
+            visual_reinspection=VisualReinspectionRequest(
+                reason="event",
+                scope="relation",
+                question=(
+                    "Does the input visibly show the same landmark, wall, and "
+                    "crowd-on-wall relation as the candidate event?"
+                ),
+                expected_property=(
+                    "The landmark, wall structure, and crowd placement form the "
+                    "same visible event configuration."
+                ),
+                anchor_fact_ids=[anchor_id],
+                grounding_evidence_ids=[evidence_id],
+            ),
+        ),
+        reviewed_evidence_ids=[evidence_id],
+        trigger="decisive_evidence",
+    )
+
+    assert accepted["accepted"] is True
+    assert accepted["accepted_visual_question_id"]
+    assert pending_visual_reinspection(state) is not None
+
+
+def test_source_record_fact_may_keep_exact_capture_as_open_requirement() -> None:
+    case, state = _runtime_state()
+    core_id = state.core_verdict_fact_id or ""
+    core = next(item for item in state.facts if item.fact_id == core_id)
+    core.predicate = "source_record_matches"
+    task = next(item for item in state.tasks if core_id in item.fact_ids)
+    statement = (
+        "A candidate publisher page describes a related image, but the exact "
+        "visible source record has not yet been matched."
+    )
+    update = record_tool_observation(
+        state,
+        _step(
+            task_id=task.task_id,
+            call_id="call-source-record-context",
+            tool_name="visit",
+            result=json.dumps(
+                {
+                    "status": "success",
+                    "url": "https://example.org/candidate-record",
+                    "selected_url": "https://example.org/candidate-record",
+                    "evidence": statement,
+                    "summary": statement,
+                    "relevance": "medium",
+                    "stance": "neutral",
+                    "directness": "indirect",
+                    "temporal_alignment": "not_applicable",
+                    "artifact_sha256": "a" * 64,
+                    "evidence_span": {"start": 0, "end": len(statement)},
+                    "retrieved_at": datetime.now(timezone.utc).isoformat(),
+                    "injection_flags": [],
+                    "evidence_eligible": True,
+                }
+            ),
+        ),
+        image_sha256=case.image_sha256,
+    )
+    evidence_id = update["created_evidence_ids"][0]
+
+    result = apply_evidence_decision(
+        state,
+        EvidenceDecisionOutput(
+            active_fact_id=core_id,
+            assessment="insufficient",
+            selected_evidence_ids=[],
+            binding_requirement="same_capture_required",
+            remaining_gap="Match the exact visible source record.",
+            rationale=(
+                "The active proposition itself asks whether a public source "
+                "record corresponds to this exact image."
+            ),
+            refinement=None,
+            visual_reinspection=None,
+        ),
+        reviewed_evidence_ids=[evidence_id],
+        trigger="decisive_evidence",
+    )
+
+    assert result["accepted"] is True
