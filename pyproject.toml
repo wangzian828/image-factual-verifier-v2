@@ -1,7 +1,7 @@
 [project]
 name = "image-factual-verifier"
-version = "3.0.0"
-description = "VisualFact-driven image factual verification runtime"
+version = "4.0.0"
+description = "Discrepancy-first multimodal image factual verification runtime"
 requires-python = ">=3.11"
 dependencies = [
     "httpx>=0.25.0",
