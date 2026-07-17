@@ -747,11 +747,9 @@ class Orchestrator:
             )
             if (
                 replan_candidates
+                and new_replan_evidence_ids
                 and (
-                    (
-                        reflection_boundary
-                        and new_replan_evidence_ids
-                    )
+                    reflection_boundary
                     or not remaining_material_routes(
                         investigation,
                         fact_id=investigation.core_verdict_fact_id or "",
@@ -763,11 +761,7 @@ class Orchestrator:
                     investigation,
                     task_id=replan_candidates[0],
                     new_evidence_ids=new_replan_evidence_ids,
-                    trigger=(
-                        "evidence_boundary"
-                        if new_replan_evidence_ids
-                        else "route_exhaustion"
-                    ),
+                    trigger="evidence_boundary",
                 )
 
             audit_coverage(
@@ -1052,58 +1046,56 @@ class Orchestrator:
     ) -> bool:
         """Ask for one bounded evidence-led change in search direction."""
 
-        if new_evidence_ids:
-            concept_runner = StageRunner(
-                llm=self.llm,
-                system_prompt=self._sp(
-                    IMAGE_ONLY_QUERY_CONCEPT_EXTRACTION_PROMPT
-                ),
-                tools=[],
-                output_schema=QueryConceptExtractionOutput,
-                max_rounds=2,
-                stage_name="image_only_query_concept_extraction",
-                attach_image=False,
-                output_validator=lambda parsed, _steps: (
-                    self._validate_image_only_query_concept_extraction(
-                        investigation,
-                        parsed,
-                        task_id=task_id,
-                        new_evidence_ids=new_evidence_ids,
-                    )
-                ),
-                max_output_tokens=self._stage_output_tokens(
-                    "QUERY_CONCEPT_EXTRACTION",
-                    2048,
-                ),
-                generation_config={
-                    "thinking_level": self._stage_thinking_level(
-                        "QUERY_CONCEPT_EXTRACTION"
-                    )
-                },
+        if not new_evidence_ids:
+            raise RuntimeError(
+                "image-only Query Replan requires new core Evidence"
             )
-            concept_extraction, concept_steps = await concept_runner.run(
-                render_image_only_query_concept_extraction_context(
+        concept_runner = StageRunner(
+            llm=self.llm,
+            system_prompt=self._sp(
+                IMAGE_ONLY_QUERY_CONCEPT_EXTRACTION_PROMPT
+            ),
+            tools=[],
+            output_schema=QueryConceptExtractionOutput,
+            max_rounds=2,
+            stage_name="image_only_query_concept_extraction",
+            attach_image=False,
+            output_validator=lambda parsed, _steps: (
+                self._validate_image_only_query_concept_extraction(
                     investigation,
+                    parsed,
                     task_id=task_id,
                     new_evidence_ids=new_evidence_ids,
                 )
-            )
-            for step in concept_steps:
-                if step.action_type == "output_rejected":
-                    step.action_type = "query_concept_extraction_revision"
-                    step.metadata["query_concept_extraction_revision_reason"] = (
-                        step.metadata.get("rejection_reason", "")
-                    )
-            self._record_stage_steps(state, concept_steps)
-            if concept_extraction is None:
-                raise RuntimeError(
-                    "image-only Query Concept Extraction did not produce valid "
-                    "structured output"
+            ),
+            max_output_tokens=self._stage_output_tokens(
+                "QUERY_CONCEPT_EXTRACTION",
+                2048,
+            ),
+            generation_config={
+                "thinking_level": self._stage_thinking_level(
+                    "QUERY_CONCEPT_EXTRACTION"
                 )
-        else:
-            concept_extraction = QueryConceptExtractionOutput(
+            },
+        )
+        concept_extraction, concept_steps = await concept_runner.run(
+            render_image_only_query_concept_extraction_context(
+                investigation,
                 task_id=task_id,
-                concepts=[],
+                new_evidence_ids=new_evidence_ids,
+            )
+        )
+        for step in concept_steps:
+            if step.action_type == "output_rejected":
+                step.action_type = "query_concept_extraction_revision"
+                step.metadata["query_concept_extraction_revision_reason"] = (
+                    step.metadata.get("rejection_reason", "")
+                )
+        self._record_stage_steps(state, concept_steps)
+        if concept_extraction is None or not concept_extraction.concepts:
+            raise RuntimeError(
+                "image-only Query Concept Extraction did not produce a usable "
+                "Evidence-derived concept"
             )
 
         runner = StageRunner(

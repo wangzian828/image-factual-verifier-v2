@@ -343,9 +343,8 @@ class QueryConceptExtractionOutput(StrictModel):
 
 class QueryReplanOutput(StrictModel):
     task_id: str = Field(min_length=1, max_length=100)
-    selected_concept_id: str = Field(default="", max_length=100)
-    replacement_query: str = Field(default="", max_length=500)
-    ready_to_finish: bool = False
+    selected_concept_id: str = Field(min_length=1, max_length=100)
+    replacement_query: str = Field(min_length=1, max_length=500)
     rationale: str = Field(min_length=1, max_length=800)
 
 
@@ -534,7 +533,7 @@ class ReflectionRecord(StrictModel):
 class QueryReplanRecord(StrictModel):
     replan_id: str = Field(min_length=1, max_length=100)
     action_count: int = Field(ge=1)
-    trigger: Literal["evidence_boundary", "route_exhaustion"]
+    trigger: Literal["evidence_boundary"] = "evidence_boundary"
     new_evidence_ids: List[str] = Field(default_factory=list, max_length=40)
     concept_extraction: QueryConceptExtractionOutput
     output: QueryReplanOutput

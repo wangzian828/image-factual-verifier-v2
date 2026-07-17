@@ -47,8 +47,9 @@ than repeating subjects, products, places, or relations already explicit in the
 active proposition or attempted queries. Include each materially distinct novel
 concept that could open a different retrieval direction. Each concept must cite one
 supplied Evidence id, copy a short exact evidence phrase, and normalize it into a
-concise search term. Do not choose the next query, judge the proposition, or add
-knowledge absent from the Evidence.
+concise search term intended for direct use in a web query. The search term may
+translate or condense the exact phrase, but must preserve its meaning. Do not choose
+the next query, judge the proposition, or add knowledge absent from the Evidence.
 """
 
 
@@ -58,8 +59,8 @@ the active proposition, then write one complete replacement web query.
 
 The query must remain about the active proposition while changing the stalled
 direction represented by the attempted queries. This is a retrieval hypothesis, not
-a verdict. If none of the supplied concepts offers a materially better direction,
-leave selected_concept_id and replacement_query empty and set ready_to_finish=true.
+a verdict. Select exactly one candidate concept and use its supplied search_term in
+the replacement query.
 """
 
 

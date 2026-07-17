@@ -5283,15 +5283,18 @@ def test_query_replan_rejects_second_replan_and_fourth_search_route() -> None:
         )
 
     state.action_count = max(4, state.action_count)
+    evidence = _append_query_replan_evidence(state, task)
     record = apply_query_replan(
         state,
-        _query_concepts(task),
+        _query_concepts(task, evidence),
         QueryReplanOutput(
             task_id=task.task_id,
+            selected_concept_id="concept-fisheries-survey",
+            replacement_query="marked research vessel fisheries survey ship",
             rationale="Try again.",
         ),
-        trigger="route_exhaustion",
-        new_evidence_ids=[],
+        trigger="evidence_boundary",
+        new_evidence_ids=[evidence.evidence_id],
     )
 
     assert not record.accepted_queries
@@ -5413,65 +5416,6 @@ def test_query_replan_validator_rejects_semantic_duplicate() -> None:
 
     assert valid is False
     assert reason == "proposed no genuinely new semantic query"
-
-
-def test_route_exhaustion_query_replan_can_explicitly_finish() -> None:
-    case, state = _runtime_state()
-    task = next(
-        item
-        for item in state.tasks
-        if state.core_verdict_fact_id in item.fact_ids
-    )
-    task.suggested_tools = ["text_search"]
-    for index in range(2):
-        query = f"exhausted direction {index}"
-        step = _step(
-            task_id=task.task_id,
-            call_id=f"call-route-exhaustion-{index}",
-            tool_name="text_search",
-            result=json.dumps(
-                {
-                    "status": "success",
-                    "queries": [{"query": query, "results": []}],
-                }
-            ),
-        )
-        step.tool_args["queries"] = [query]
-        record_tool_observation(
-            state,
-            step,
-            image_sha256=case.image_sha256,
-        )
-
-    invalid, invalid_reason = Orchestrator._validate_image_only_query_replan(
-        state,
-        _query_concepts(task),
-        QueryReplanOutput(
-            task_id=task.task_id,
-            ready_to_finish=False,
-            rationale="No decision was made.",
-        ),
-        task_id=task.task_id,
-        new_evidence_ids=[],
-        trigger="route_exhaustion",
-    )
-    finish_valid, finish_reason = Orchestrator._validate_image_only_query_replan(
-        state,
-        _query_concepts(task),
-        QueryReplanOutput(
-            task_id=task.task_id,
-            ready_to_finish=True,
-            rationale="No distinct semantic search direction remains.",
-        ),
-        task_id=task.task_id,
-        new_evidence_ids=[],
-        trigger="route_exhaustion",
-    )
-
-    assert invalid is False
-    assert "requires every retrieval slot" in invalid_reason
-    assert finish_valid is True
-    assert finish_reason == ""
 
 
 def test_visual_scene_identity_is_not_blocked_by_source_record_predicate() -> None:

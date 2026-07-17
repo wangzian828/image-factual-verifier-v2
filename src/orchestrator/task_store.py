@@ -3208,16 +3208,6 @@ def _compose_query_replan(
 ) -> tuple[str, str]:
     """Validate one evidence-grounded query without interpreting its domain."""
 
-    slot_values = (
-        output.selected_concept_id,
-        output.replacement_query,
-    )
-    if output.ready_to_finish:
-        if any(str(item).strip() for item in slot_values):
-            return "", "ready_to_finish requires empty query-replan slots"
-        return "", ""
-    if not all(str(item).strip() for item in slot_values):
-        return "", "query replan requires every retrieval slot"
     if concept_extraction.task_id != task.task_id:
         return "", "query concepts must belong to the replanned task"
     concepts_by_id = {
@@ -3231,6 +3221,9 @@ def _compose_query_replan(
         return "", "selected query concept is not grounded in new Evidence"
 
     query = " ".join(output.replacement_query.split())
+    search_term = _normalized_replan_text(selected.search_term)
+    if not search_term or search_term not in _normalized_replan_text(query):
+        return "", "replacement query does not use the selected concept search term"
     novel = _novel_replan_query(state, task, query)
     if not novel:
         return "", "proposed no genuinely new semantic query"
@@ -3243,10 +3236,9 @@ def _query_replan_error(
     proposed_queries: Sequence[str],
     *,
     trigger: str,
-    ready_to_finish: bool,
 ) -> str:
-    if trigger not in {"evidence_boundary", "route_exhaustion"}:
-        return "query replan has an unknown trigger"
+    if trigger != "evidence_boundary":
+        return "query replan requires an evidence boundary"
     if task.query_replan_count >= 1:
         return "already used its one semantic query replan"
     if "text_search" not in runtime_task_tool_names(state, task):
@@ -3263,8 +3255,8 @@ def _query_replan_error(
     )
     if core is None or core.status in {"supported", "refuted"}:
         return "cannot replan queries after the core fact is resolved"
-    if not proposed_queries and not ready_to_finish:
-        return "must propose a genuinely new query or finish the replan"
+    if not proposed_queries:
+        return "must propose one genuinely new query"
 
     attempts = _attempted_routes_by_task(state).get(task.task_id, [])
     text_search_count = sum(
@@ -3343,7 +3335,6 @@ def apply_query_replan(
                 task,
                 [accepted_query] if accepted_query else [],
                 trigger=trigger,
-                ready_to_finish=output.ready_to_finish,
             )
 
     valid_evidence_ids = {
@@ -3382,9 +3373,6 @@ def apply_query_replan(
                     or "Query Replan replaced the stalled search direction."
                 ),
             )
-        elif trigger == "route_exhaustion" and output.ready_to_finish:
-            task.status = "exhausted"
-
     record = QueryReplanRecord(
         replan_id=stable_id(
             "query-replan",

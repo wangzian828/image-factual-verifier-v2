@@ -313,24 +313,34 @@ def test_query_replan_does_not_replace_interval_reflection_boundary(
         },
     ]
     task_id = investigation["tasks"][0]["task_id"]
+    evidence_id = investigation["evidence"][0]["evidence_id"]
+    evidence_text = investigation["evidence"][0]["exact_text"]
+    evidence_phrase = evidence_text.split()[0]
     investigation["query_replans"] = [
         {
             "replan_id": "query-replan-between-boundaries",
             "action_count": 6,
-            "trigger": "route_exhaustion",
-            "new_evidence_ids": [],
+            "trigger": "evidence_boundary",
+            "new_evidence_ids": [evidence_id],
             "concept_extraction": {
                 "task_id": task_id,
-                "concepts": [],
+                "concepts": [
+                    {
+                        "concept_id": "concept-between-boundaries",
+                        "evidence_id": evidence_id,
+                        "evidence_phrase": evidence_phrase,
+                        "search_term": evidence_phrase,
+                        "role": "other",
+                    }
+                ],
             },
             "output": {
                 "task_id": task_id,
-                "selected_concept_id": "",
-                "replacement_query": "",
-                "ready_to_finish": True,
-                "rationale": "No materially better search direction remains.",
+                "selected_concept_id": "concept-between-boundaries",
+                "replacement_query": f"example {evidence_phrase}",
+                "rationale": "New Evidence changed the search direction.",
             },
-            "accepted_queries": [],
+            "accepted_queries": [f"example {evidence_phrase}"],
             "rejected_reason": "",
         }
     ]

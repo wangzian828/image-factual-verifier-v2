@@ -147,7 +147,6 @@ def test_exporter_keeps_query_replan_as_its_own_policy_example(
                 "task_id": "task-example",
                 "selected_concept_id": "concept-example",
                 "replacement_query": "example evidence-led query",
-                "ready_to_finish": False,
                 "rationale": "New Evidence changed the searchable framing.",
             },
             "tokens": {"prompt": 10, "completion": 5, "thought": 0},
@@ -170,7 +169,6 @@ def test_exporter_keeps_query_replan_as_its_own_policy_example(
                         "task_id": "task-example",
                         "selected_concept_id": "concept-example",
                         "replacement_query": "example evidence-led query",
-                        "ready_to_finish": False,
                         "rationale": (
                             "New Evidence changed the searchable framing."
                         ),

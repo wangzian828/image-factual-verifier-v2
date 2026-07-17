@@ -962,24 +962,50 @@ def _audit_image_only_trace(
         selected_concept_id = str(
             output.get("selected_concept_id", "")
         ).strip()
-        ready_to_finish = bool(output.get("ready_to_finish", False))
-        if selected_concept_id and selected_concept_id not in concept_by_id:
+        if selected_concept_id not in concept_by_id:
             _issue(
                 report,
                 "QUERY_REPLAN_CONCEPT_UNKNOWN",
                 "Query Replan selected a concept absent from its extraction",
                 location=location,
             )
-        if (
-            not ready_to_finish
-            and not str(output.get("replacement_query", "")).strip()
-        ):
+        replacement_query = str(
+            output.get("replacement_query", "")
+        ).strip()
+        if not replacement_query:
             _issue(
                 report,
                 "QUERY_REPLAN_QUERY_MISSING",
-                "Non-finishing Query Replan must contain one replacement query",
+                "Query Replan must contain one replacement query",
                 location=location,
             )
+        elif selected_concept_id in concept_by_id:
+            search_term = " ".join(
+                re.findall(
+                    r"[\w]+",
+                    str(
+                        concept_by_id[selected_concept_id].get(
+                            "search_term",
+                            "",
+                        )
+                    ).casefold(),
+                    flags=re.UNICODE,
+                )
+            )
+            normalized_query = " ".join(
+                re.findall(
+                    r"[\w]+",
+                    replacement_query.casefold(),
+                    flags=re.UNICODE,
+                )
+            )
+            if not search_term or search_term not in normalized_query:
+                _issue(
+                    report,
+                    "QUERY_REPLAN_CONCEPT_UNUSED",
+                    "Query Replan must use the selected concept search term",
+                    location=location,
+                )
         accepted_queries = [
             str(item).strip()
             for item in replan.get("accepted_queries", []) or []
