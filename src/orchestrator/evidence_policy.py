@@ -24,6 +24,7 @@ _ANOMALY_TOOLS: Final = {
 _REFERENCE_TOOLS: Final = {"compare_with_reference"}
 _REGION_TOOLS: Final = {
     "crop_and_inspect",
+    "focused_visual_inspection",
     "count_objects",
     "ocr_with_position",
 }
@@ -50,6 +51,8 @@ def tool_can_decide_claim(tool_name: str, claim_scope: str) -> bool:
     if tool in _REFERENCE_TOOLS:
         return scope in {IMAGE_AUTHENTICITY, IMAGE_PROVENANCE, VISIBLE_CONTENT}
     if tool == "crop_and_inspect":
+        return scope in {IMAGE_AUTHENTICITY, VISIBLE_CONTENT}
+    if tool == "focused_visual_inspection":
         return scope in {IMAGE_AUTHENTICITY, VISIBLE_CONTENT}
     if tool == "ocr_with_position":
         return scope == VISIBLE_CONTENT

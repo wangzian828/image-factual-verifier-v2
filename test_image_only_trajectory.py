@@ -133,6 +133,7 @@ class AdaptiveImageOnlyBackend:
                         )
                     ),
                     "refinement": None,
+                    "visual_reinspection": None,
                 },
             )
         if "structured Reflection step" in system:
@@ -378,6 +379,7 @@ class ScreenshotBackend:
                         "visible account, post text, and date."
                     ),
                     "refinement": None,
+                    "visual_reinspection": None,
                 },
             )
         if "initial target-planning step" in system:

@@ -25,6 +25,7 @@ from src.orchestrator.investigation_models import (
     TargetPlanningOutput,
     TaskUpdate,
     VisualFact,
+    VisualReinspectionRequest,
 )
 from src.orchestrator.pipeline import Orchestrator
 from src.orchestrator.image_only_prompts import (
@@ -46,6 +47,7 @@ from src.orchestrator.task_store import (
     evidence_decision_checkpoint_reason,
     next_action_boundary,
     pending_evidence_decision_ids,
+    pending_visual_reinspection,
     remaining_material_routes,
     record_tool_observation,
     state_from_bootstrap,
@@ -5219,3 +5221,254 @@ def test_conflict_requires_discriminating_evidence_before_resolution() -> None:
 
     assert resolved.status == "refuted"
     assert resolved.conflict_resolution == "refute_wins"
+
+
+def _record_visual_hypothesis_evidence(case, state) -> tuple[str, str]:
+    core_id = state.core_verdict_fact_id or ""
+    task = next(item for item in state.tasks if core_id in item.fact_ids)
+    statement = (
+        "The source identifies a candidate vessel whose visible hull markings "
+        "should distinguish it from similar research ships."
+    )
+    update = record_tool_observation(
+        state,
+        _step(
+            task_id=task.task_id,
+            call_id=f"call-visual-hypothesis-{state.action_count}",
+            tool_name="visit",
+            result=json.dumps(
+                {
+                    "status": "success",
+                    "url": "https://example.org/vessel-candidate",
+                    "selected_url": "https://example.org/vessel-candidate",
+                    "evidence": statement,
+                    "summary": statement,
+                    "relevance": "high",
+                    "stance": "neutral",
+                    "directness": "direct",
+                    "temporal_alignment": "not_applicable",
+                    "artifact_sha256": "d" * 64,
+                    "evidence_span": {"start": 0, "end": len(statement)},
+                    "retrieved_at": datetime.now(timezone.utc).isoformat(),
+                    "injection_flags": [],
+                    "evidence_eligible": True,
+                }
+            ),
+        ),
+        image_sha256=case.image_sha256,
+    )
+    return core_id, update["created_evidence_ids"][0]
+
+
+def _vessel_visual_anchor(state):
+    vessel_ids = {
+        item.entity_id
+        for item in state.entities
+        if item.name == "NOAA Ship Henry B. Bigelow"
+    }
+    return next(
+        fact
+        for fact in state.facts
+        if fact.predicate == "visible_in"
+        and fact.subject_entity_id in vessel_ids
+    )
+
+
+def test_visual_reinspection_request_creates_task_without_replacing_core() -> None:
+    case, state = _runtime_state()
+    core_id, evidence_id = _record_visual_hypothesis_evidence(case, state)
+    anchor = _vessel_visual_anchor(state)
+    result = apply_evidence_decision(
+        state,
+        EvidenceDecisionOutput(
+            active_fact_id=core_id,
+            assessment="insufficient",
+            selected_evidence_ids=[],
+            binding_requirement="same_capture_helpful",
+            remaining_gap="Check whether the candidate's visible markings match.",
+            rationale=(
+                "The source introduces a concrete visible identity hypothesis "
+                "that the original pixels can discriminate."
+            ),
+            refinement=None,
+            visual_reinspection=VisualReinspectionRequest(
+                reason="identity",
+                scope="subject",
+                question=(
+                    "Do the visible hull markings match the newly identified "
+                    "vessel candidate?"
+                ),
+                expected_property=(
+                    "The candidate's distinctive vessel name and hull markings "
+                    "are visibly present."
+                ),
+                anchor_fact_ids=[anchor.fact_id],
+                grounding_evidence_ids=[evidence_id],
+            ),
+        ),
+        reviewed_evidence_ids=[evidence_id],
+        trigger="decisive_evidence",
+    )
+
+    assert result["accepted"] is True
+    assert state.core_verdict_fact_id == core_id
+    assert next(fact for fact in state.facts if fact.fact_id == core_id).status == "active"
+    request = pending_visual_reinspection(state)
+    assert request is not None
+    assert request.visual_question_id == result["accepted_visual_question_id"]
+    assert request.anchor_regions == [[0.1, 0.2, 0.9, 0.9]]
+    visual_task = next(
+        item for item in state.tasks if item.task_id == request.task_id
+    )
+    assert visual_task.fact_ids == [core_id]
+    assert visual_task.suggested_tools == ["focused_visual_inspection"]
+    assert state.core_fact_refinement_count == 0
+
+
+def test_visual_reinspection_result_becomes_pixel_evidence() -> None:
+    case, state = _runtime_state()
+    core_id, evidence_id = _record_visual_hypothesis_evidence(case, state)
+    anchor = _vessel_visual_anchor(state)
+    decision = apply_evidence_decision(
+        state,
+        EvidenceDecisionOutput(
+            active_fact_id=core_id,
+            assessment="insufficient",
+            selected_evidence_ids=[],
+            binding_requirement="same_capture_helpful",
+            remaining_gap="Inspect the candidate markings.",
+            rationale="The proposed identity has a visible discriminator.",
+            refinement=None,
+            visual_reinspection=VisualReinspectionRequest(
+                reason="identity",
+                scope="subject",
+                question="Are the candidate vessel markings visible?",
+                expected_property="The vessel name and hull number match.",
+                anchor_fact_ids=[anchor.fact_id],
+                grounding_evidence_ids=[evidence_id],
+            ),
+        ),
+        reviewed_evidence_ids=[evidence_id],
+        trigger="decisive_evidence",
+    )
+    visual = pending_visual_reinspection(state)
+    assert visual is not None
+    visual_update = record_tool_observation(
+        state,
+        _step(
+            task_id=visual.task_id,
+            call_id="call-focused-visual",
+            tool_name="focused_visual_inspection",
+            result=json.dumps(
+                {
+                    "status": "success",
+                    "visual_question_id": visual.visual_question_id,
+                    "question": visual.request.question,
+                    "expected_property": visual.request.expected_property,
+                    "scope": visual.request.scope,
+                    "answer_status": "observed",
+                    "summary": (
+                        "The vessel name and hull number are legible in the "
+                        "original."
+                    ),
+                    "observations": [
+                        {
+                            "view_index": 1,
+                            "view_kind": "anchor_detail",
+                            "region": [0.04, 0.14, 0.96, 0.96],
+                            "statement": (
+                                "The hull reads HENRY B. BIGELOW and R 225."
+                            ),
+                            "property_status": "observed",
+                            "confidence": 0.97,
+                        }
+                    ],
+                    "limitations": [],
+                    "views": [],
+                }
+            ),
+        ),
+        image_sha256=case.image_sha256,
+    )
+
+    assert decision["accepted"] is True
+    assert len(visual_update["created_evidence_ids"]) == 1
+    pixel_evidence = next(
+        item
+        for item in state.evidence
+        if item.evidence_id == visual_update["created_evidence_ids"][0]
+    )
+    assert pixel_evidence.evidence_kind == "image_region"
+    assert pixel_evidence.claim_binding == "pixel_observation"
+    assert pixel_evidence.visual_answer_status == "observed"
+    assert pixel_evidence.visual_observations[0].view_kind == "anchor_detail"
+    assert pending_visual_reinspection(state) is None
+    assert visual.status == "resolved"
+    assert evidence_decision_checkpoint_reason(
+        state,
+        update=visual_update,
+    ) == "decisive_evidence"
+
+
+def test_visual_reinspection_rejects_terminal_and_duplicate_requests() -> None:
+    case, state = _runtime_state()
+    core_id, evidence_id = _record_visual_hypothesis_evidence(case, state)
+    request = VisualReinspectionRequest(
+        reason="identity",
+        scope="subject",
+        question="Does the original image visibly match this candidate identity?",
+        expected_property="The candidate's visible identifying features are present.",
+        anchor_fact_ids=[_vessel_visual_anchor(state).fact_id],
+        grounding_evidence_ids=[evidence_id],
+    )
+    terminal = apply_evidence_decision(
+        state.model_copy(deep=True),
+        EvidenceDecisionOutput(
+            active_fact_id=core_id,
+            assessment="supported",
+            selected_evidence_ids=[evidence_id],
+            binding_requirement="text_sufficient",
+            remaining_gap="",
+            rationale="The source directly supports the proposition.",
+            refinement=None,
+            visual_reinspection=request,
+        ),
+        reviewed_evidence_ids=[evidence_id],
+        trigger="decisive_evidence",
+    )
+    assert terminal["accepted"] is False
+    assert "resolved fact must stop" in terminal["rejected_reason"]
+
+    first = apply_evidence_decision(
+        state,
+        EvidenceDecisionOutput(
+            active_fact_id=core_id,
+            assessment="insufficient",
+            selected_evidence_ids=[],
+            binding_requirement="same_capture_helpful",
+            remaining_gap="Reinspect the visible candidate features.",
+            rationale="The identity hypothesis is visually discriminable.",
+            refinement=None,
+            visual_reinspection=request,
+        ),
+        reviewed_evidence_ids=[evidence_id],
+        trigger="decisive_evidence",
+    )
+    duplicate = apply_evidence_decision(
+        state,
+        EvidenceDecisionOutput(
+            active_fact_id=core_id,
+            assessment="insufficient",
+            selected_evidence_ids=[],
+            binding_requirement="same_capture_helpful",
+            remaining_gap="Reinspect the same candidate features.",
+            rationale="The same visual question remains.",
+            refinement=None,
+            visual_reinspection=request,
+        ),
+        reviewed_evidence_ids=[evidence_id],
+        trigger="decisive_evidence",
+    )
+    assert first["accepted"] is True
+    assert duplicate["accepted"] is False
+    assert "equivalent visual question" in duplicate["rejected_reason"]

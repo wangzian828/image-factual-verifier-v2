@@ -33,6 +33,7 @@ STAGE_TOOLS: Dict[str, List[str]] = {
 
 REQUIRED_TOOLS = (
     "perceive_scene",
+    "focused_visual_inspection",
     "ocr_with_position",
     "text_search",
     "visit",
@@ -119,6 +120,17 @@ def build_all_tools_with_health(
         ),
     )
     register(
+        "focused_visual_inspection",
+        lambda: __import__(
+            "src.tools.focused_visual_inspection",
+            fromlist=["FocusedVisualInspectionTool"],
+        ).FocusedVisualInspectionTool(
+            client=sync_vlm_client(),
+            provider=vlm_provider,
+            model_name=vlm_model,
+        ),
+    )
+    register(
         "crop_and_search",
         lambda: __import__("src.tools.crop_and_search", fromlist=["CropAndSearchTool"]).CropAndSearchTool(
             vlm_client=sync_vlm_client(),
@@ -197,6 +209,26 @@ def _validate_structured_vision_client(
         raise RuntimeError(
             f"{provider} vision client lacks structured-output parameters: "
             + ", ".join(missing)
+        )
+    multi_view = getattr(client, "create_images_json", None)
+    if not callable(multi_view):
+        raise RuntimeError(
+            f"{provider} vision client does not implement create_images_json."
+        )
+    multi_parameters = inspect.signature(multi_view).parameters
+    multi_required = {
+        "system_prompt",
+        "user_text",
+        "image_inputs",
+        "max_tokens",
+        "response_schema",
+    }
+    multi_missing = sorted(multi_required - set(multi_parameters))
+    if multi_missing:
+        raise RuntimeError(
+            f"{provider} vision client lacks multi-view structured-output "
+            "parameters: "
+            + ", ".join(multi_missing)
         )
     if not str(getattr(client, "api_key", "") or "").strip():
         env_name = (

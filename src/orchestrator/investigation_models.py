@@ -191,6 +191,34 @@ class InvestigationDiscovery(StrictModel):
     abandonment_reason: str = Field(default="", max_length=800)
 
 
+class VisualObservation(StrictModel):
+    view_index: int = Field(ge=0, le=4)
+    view_kind: Literal[
+        "original",
+        "anchor_detail",
+        "relation_context",
+    ]
+    region: List[float]
+    statement: str = Field(min_length=1, max_length=600)
+    property_status: Literal[
+        "observed",
+        "not_observed",
+        "ambiguous",
+    ]
+    confidence: float = Field(ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def validate_region(self) -> "VisualObservation":
+        if len(self.region) != 4:
+            raise ValueError("VisualObservation.region must be [x1,y1,x2,y2]")
+        x1, y1, x2, y2 = [float(value) for value in self.region]
+        if not (0 <= x1 < x2 <= 1 and 0 <= y1 < y2 <= 1):
+            raise ValueError(
+                "VisualObservation.region must be normalized and non-empty"
+            )
+        return self
+
+
 class InvestigationEvidence(StrictModel):
     evidence_id: str = Field(min_length=1, max_length=100)
     task_id: str = Field(min_length=1, max_length=100)
@@ -234,6 +262,17 @@ class InvestigationEvidence(StrictModel):
     confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     temporal_alignment: str = Field(default="", max_length=100)
     risk_flags: List[str] = Field(default_factory=list, max_length=12)
+    visual_question_id: Optional[str] = Field(default=None, max_length=100)
+    visual_scope: Optional[
+        Literal["subject", "relation", "scene", "text", "integrity"]
+    ] = None
+    visual_answer_status: Optional[
+        Literal["observed", "not_observed", "ambiguous"]
+    ] = None
+    visual_observations: List[VisualObservation] = Field(
+        default_factory=list,
+        max_length=8,
+    )
 
     @model_validator(mode="after")
     def validate_locator(self) -> "InvestigationEvidence":
@@ -365,6 +404,28 @@ class EvidenceDecisionRefinement(StrictModel):
     suggested_queries: List[str] = Field(default_factory=list, max_length=3)
 
 
+class VisualReinspectionRequest(StrictModel):
+    reason: Literal[
+        "identity",
+        "relation",
+        "location",
+        "event",
+        "text",
+        "integrity",
+    ]
+    scope: Literal[
+        "subject",
+        "relation",
+        "scene",
+        "text",
+        "integrity",
+    ]
+    question: str = Field(min_length=1, max_length=800)
+    expected_property: str = Field(min_length=1, max_length=800)
+    anchor_fact_ids: List[str] = Field(min_length=1, max_length=6)
+    grounding_evidence_ids: List[str] = Field(min_length=1, max_length=8)
+
+
 class EvidenceDecisionOutput(StrictModel):
     active_fact_id: str = Field(min_length=1, max_length=100)
     assessment: Literal[
@@ -383,6 +444,24 @@ class EvidenceDecisionOutput(StrictModel):
     remaining_gap: str = Field(default="", max_length=800)
     rationale: str = Field(min_length=1, max_length=1600)
     refinement: Optional[EvidenceDecisionRefinement] = None
+    visual_reinspection: Optional[VisualReinspectionRequest] = None
+
+
+class VisualReinspectionRecord(StrictModel):
+    visual_question_id: str = Field(min_length=1, max_length=100)
+    task_id: str = Field(min_length=1, max_length=100)
+    fact_id: str = Field(min_length=1, max_length=100)
+    created_action_count: int = Field(ge=1, le=24)
+    request: VisualReinspectionRequest
+    anchor_regions: List[List[float]] = Field(default_factory=list, max_length=4)
+    status: Literal[
+        "pending",
+        "running",
+        "resolved",
+        "failed",
+    ] = "pending"
+    evidence_ids: List[str] = Field(default_factory=list, max_length=8)
+    failure_ids: List[str] = Field(default_factory=list, max_length=4)
 
 
 class EvidenceDecisionRecord(StrictModel):
@@ -398,6 +477,14 @@ class EvidenceDecisionRecord(StrictModel):
     output: EvidenceDecisionOutput
     finding_ids: List[str] = Field(default_factory=list, max_length=12)
     accepted_refinement_fact_id: Optional[str] = Field(
+        default=None,
+        max_length=100,
+    )
+    accepted_visual_question_id: Optional[str] = Field(
+        default=None,
+        max_length=100,
+    )
+    accepted_visual_task_id: Optional[str] = Field(
         default=None,
         max_length=100,
     )
@@ -545,6 +632,10 @@ class ImageOnlyInvestigationState(StrictModel):
     evidence_decisions: List[EvidenceDecisionRecord] = Field(
         default_factory=list,
         max_length=24,
+    )
+    visual_reinspections: List[VisualReinspectionRecord] = Field(
+        default_factory=list,
+        max_length=2,
     )
     coverage_audits: List[ImageOnlyCoverage] = Field(
         default_factory=list,

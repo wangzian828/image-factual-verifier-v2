@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, Mapping, Optional, Sequence
 
 from src.integrations.gemini import missing_required_paths, normalize_json_schema
 from src.integrations.llm.openai_compatible import OpenAICompatibleChatClient, resolve_qwen_api_key
@@ -31,10 +31,33 @@ class QwenVLClient:
         temperature: float = 0.0,
         response_schema: Optional[Mapping[str, Any]] = None,
     ) -> Dict[str, Any]:
+        return self.create_images_json(
+            system_prompt=system_prompt,
+            user_text=user_text,
+            image_inputs=[image_input],
+            max_tokens=max_tokens,
+            model_name=model_name,
+            temperature=temperature,
+            response_schema=response_schema,
+        )
+
+    def create_images_json(
+        self,
+        *,
+        system_prompt: str,
+        user_text: str,
+        image_inputs: Sequence[str],
+        max_tokens: int,
+        model_name: Optional[str] = None,
+        temperature: float = 0.0,
+        response_schema: Optional[Mapping[str, Any]] = None,
+    ) -> Dict[str, Any]:
         if not self.api_key:
             raise RuntimeError("QWEN_API_KEY is not set. Add it to the environment before using Qwen VL tools.")
 
-        image_url = image_to_data_url(image_input)
+        images = [str(item).strip() for item in image_inputs if str(item).strip()]
+        if not images:
+            raise ValueError("create_images_json requires at least one image input.")
         chat = OpenAICompatibleChatClient(
             api_key=self.api_key,
             base_url=self.base_url,
@@ -68,7 +91,13 @@ class QwenVLClient:
                     "role": "user",
                     "content": [
                         {"type": "text", "text": user_text},
-                        {"type": "image_url", "image_url": {"url": image_url}},
+                        *[
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": image_to_data_url(image_input)},
+                            }
+                            for image_input in images
+                        ],
                     ],
                 },
             ],

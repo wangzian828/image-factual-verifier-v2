@@ -703,6 +703,7 @@ def _audit_image_only_trace(
         "failures",
         "reflections",
         "evidence_decisions",
+        "visual_reinspections",
         "coverage_audits",
     )
     for name in collection_names:
@@ -724,6 +725,9 @@ def _audit_image_only_trace(
     failures = _rows(investigation.get("failures"))
     reflections = _rows(investigation.get("reflections"))
     evidence_decisions = _rows(investigation.get("evidence_decisions"))
+    visual_reinspections = _rows(
+        investigation.get("visual_reinspections")
+    )
     coverage_audits = _rows(investigation.get("coverage_audits"))
 
     entity_by_id = _unique_index(
@@ -784,6 +788,12 @@ def _audit_image_only_trace(
         evidence_decisions,
         id_field="decision_id",
         location_prefix="state.investigation_state.evidence_decisions",
+        report=report,
+    )
+    visual_reinspection_by_id = _unique_index(
+        visual_reinspections,
+        id_field="visual_question_id",
+        location_prefix="state.investigation_state.visual_reinspections",
         report=report,
     )
     _unique_index(
@@ -978,6 +988,58 @@ def _audit_image_only_trace(
                     ),
                     location=location,
                 )
+        accepted_visual_id = str(
+            decision.get("accepted_visual_question_id") or ""
+        ).strip()
+        accepted_visual_task_id = str(
+            decision.get("accepted_visual_task_id") or ""
+        ).strip()
+        visual_request = _mapping(output.get("visual_reinspection"))
+        if accepted_visual_id:
+            visual_record = visual_reinspection_by_id.get(accepted_visual_id)
+            if visual_record is None:
+                _issue(
+                    report,
+                    "VISUAL_REINSPECTION_RECORD_UNKNOWN",
+                    (
+                        "Evidence decision accepted unknown visual question "
+                        f"{accepted_visual_id!r}"
+                    ),
+                    location=location,
+                )
+            if not visual_request:
+                _issue(
+                    report,
+                    "VISUAL_REINSPECTION_OUTPUT_MISSING",
+                    (
+                        "Accepted visual reinspection requires a structured "
+                        "visual_reinspection request"
+                    ),
+                    location=location,
+                )
+            if visual_record is not None and (
+                str(visual_record.get("task_id", "")).strip()
+                != accepted_visual_task_id
+            ):
+                _issue(
+                    report,
+                    "VISUAL_REINSPECTION_TASK_MISMATCH",
+                    (
+                        "Accepted visual task id does not match its persisted "
+                        "visual reinspection record"
+                    ),
+                    location=location,
+                )
+        if accepted_visual_id and accepted_refinement_id:
+            _issue(
+                report,
+                "VISUAL_REINSPECTION_REFINEMENT_CONFLICT",
+                (
+                    "One Evidence decision cannot accept both visual "
+                    "reinspection and core refinement"
+                ),
+                location=location,
+            )
         unknown_findings = sorted(
             {
                 str(item)
@@ -991,6 +1053,113 @@ def _audit_image_only_trace(
                 "EVIDENCE_DECISION_FINDING_UNKNOWN",
                 "Evidence decision cites unknown Findings: "
                 + ", ".join(unknown_findings),
+                location=location,
+            )
+
+    visual_tool_steps = {
+        str(_mapping(step.get("metadata")).get("visual_question_id", "")).strip(): step
+        for step in steps
+        if str(step.get("stage", "")) == "image_only_visual_reinspection"
+        and str(step.get("action_type", "")) == "tool_call"
+        and str(_mapping(step.get("metadata")).get("visual_question_id", "")).strip()
+    }
+    for visual_question_id, visual_record in visual_reinspection_by_id.items():
+        location = _location(
+            "state.investigation_state.visual_reinspections",
+            visual_question_id,
+        )
+        task_id = str(visual_record.get("task_id", "")).strip()
+        fact_id = str(visual_record.get("fact_id", "")).strip()
+        request = _mapping(visual_record.get("request"))
+        if task_id not in task_by_id:
+            _issue(
+                report,
+                "VISUAL_REINSPECTION_TASK_UNKNOWN",
+                f"Visual reinspection references unknown task {task_id!r}",
+                location=location,
+            )
+        elif fact_id not in {
+            str(item)
+            for item in task_by_id[task_id].get("fact_ids", []) or []
+        }:
+            _issue(
+                report,
+                "VISUAL_REINSPECTION_FACT_OWNERSHIP_INVALID",
+                "Visual reinspection fact must be owned by its ResearchTask",
+                location=location,
+            )
+        invalid_anchors = sorted(
+            str(item)
+            for item in request.get("anchor_fact_ids", []) or []
+            if str(item) not in fact_by_id
+            or str(
+                _mapping(fact_by_id[str(item)].get("origin")).get("type", "")
+            )
+            not in {"input_image", "ocr"}
+        )
+        if invalid_anchors:
+            _issue(
+                report,
+                "VISUAL_REINSPECTION_ANCHOR_INVALID",
+                (
+                    "Visual reinspection anchors must be pixel/OCR facts: "
+                    + ", ".join(invalid_anchors)
+                ),
+                location=location,
+            )
+        grounding_ids = {
+            str(item)
+            for item in request.get("grounding_evidence_ids", []) or []
+        }
+        if not grounding_ids or not grounding_ids <= set(evidence_by_id):
+            _issue(
+                report,
+                "VISUAL_REINSPECTION_GROUNDING_INVALID",
+                "Visual reinspection grounding Evidence is missing or unknown",
+                location=location,
+            )
+        evidence_ids = {
+            str(item)
+            for item in visual_record.get("evidence_ids", []) or []
+        }
+        failure_ids = {
+            str(item)
+            for item in visual_record.get("failure_ids", []) or []
+        }
+        if not evidence_ids <= set(evidence_by_id):
+            _issue(
+                report,
+                "VISUAL_REINSPECTION_EVIDENCE_UNKNOWN",
+                "Visual reinspection cites unknown Evidence",
+                location=location,
+            )
+        if not failure_ids <= set(failure_by_id):
+            _issue(
+                report,
+                "VISUAL_REINSPECTION_FAILURE_UNKNOWN",
+                "Visual reinspection cites unknown failures",
+                location=location,
+            )
+        status = str(visual_record.get("status", "")).strip()
+        if status == "resolved" and not evidence_ids:
+            _issue(
+                report,
+                "VISUAL_REINSPECTION_RESOLUTION_EMPTY",
+                "Resolved visual reinspection must produce Evidence",
+                location=location,
+            )
+        if status == "failed" and not failure_ids:
+            _issue(
+                report,
+                "VISUAL_REINSPECTION_FAILURE_EMPTY",
+                "Failed visual reinspection must record a failure",
+                location=location,
+            )
+        if status in {"resolved", "failed"} and visual_question_id not in visual_tool_steps:
+            _issue(
+                report,
+                "VISUAL_REINSPECTION_TOOL_STEP_MISSING",
+                "Completed visual reinspection lacks its dedicated tool step",
                 location=location,
             )
 
@@ -1212,7 +1381,11 @@ def _audit_image_only_trace(
     investigation_tool_steps = [
         step
         for step in steps
-        if str(step.get("stage", "")) == "image_only_investigation"
+        if str(step.get("stage", ""))
+        in {
+            "image_only_investigation",
+            "image_only_visual_reinspection",
+        }
         and str(step.get("action_type", "")) == "tool_call"
     ]
     action_count = int(investigation.get("action_count", 0) or 0)
@@ -1547,6 +1720,7 @@ def _audit_image_only_trace(
             "findings": len(findings),
             "reflections": len(reflections),
             "evidence_decisions": len(evidence_decisions),
+            "visual_reinspections": len(visual_reinspections),
             "core_refinements": refinement_count,
             "decisive_facts": len(decisive_ids),
             "image_only_actions": action_count,

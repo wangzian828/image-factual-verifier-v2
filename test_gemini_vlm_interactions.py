@@ -134,6 +134,38 @@ def test_gemini_vlm_uses_custom_schema_and_uri(monkeypatch) -> None:
     assert "image_url" not in request["input"][1]
 
 
+def test_gemini_vlm_supports_ordered_multi_view_input(monkeypatch) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    requests = []
+    fake_client = FakeAsyncClient(requests)
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: fake_client)
+
+    client = build_vlm_client(provider="gemini", model_name="gemini-test")
+    result = client.create_images_json(
+        system_prompt="Compare the supplied views as JSON.",
+        user_text="The first image is the original.",
+        image_inputs=[
+            "https://example.test/original.png",
+            "https://example.test/detail.png",
+        ],
+        max_tokens=128,
+    )
+
+    assert result["scene"] == "test"
+    request = requests[0]["body"]
+    assert request["input"] == [
+        {"type": "text", "text": "The first image is the original."},
+        {
+            "type": "image",
+            "uri": "https://example.test/original.png",
+        },
+        {
+            "type": "image",
+            "uri": "https://example.test/detail.png",
+        },
+    ]
+
+
 def test_gemini_vlm_rejects_missing_required_schema_paths(monkeypatch) -> None:
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     requests = []

@@ -361,7 +361,11 @@ def _duplicate_action_rate(
     routes: List[tuple[str, Mapping[str, Any]]] = []
     for step in steps:
         if (
-            str(step.get("stage", "")) == "image_only_investigation"
+            str(step.get("stage", ""))
+            in {
+                "image_only_investigation",
+                "image_only_visual_reinspection",
+            }
             and str(step.get("action_type", "")) == "tool_call"
         ):
             routes.append(
@@ -520,7 +524,11 @@ def _low_value_action_count(
     count = 0
     for step in steps:
         if (
-            str(step.get("stage", "")) != "image_only_investigation"
+            str(step.get("stage", ""))
+            not in {
+                "image_only_investigation",
+                "image_only_visual_reinspection",
+            }
             or str(step.get("action_type", "")) != "tool_call"
         ):
             continue

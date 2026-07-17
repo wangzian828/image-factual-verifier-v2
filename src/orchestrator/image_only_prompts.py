@@ -91,6 +91,16 @@ not yet resolve the active relation, you may propose one narrower refinement gro
 in supplied pixel/OCR anchor facts and Evidence. Creator, title, platform, upload
 date, and asset metadata are retrieval context unless visibly part of the image.
 Do not invent facts, ids, sources, or a requirement for a second source.
+
+When newly reviewed Evidence introduces a concrete hypothesis about a property
+that should be visible in the original pixels, request visual_reinspection before
+refining or continuing broad search if a focused re-observation could materially
+confirm, contradict, or disambiguate that hypothesis. This includes newly learned
+subject identity, visible relation, scene/location cue, event cue, text, or image
+integrity. Do not request it for creator, upload date, hidden provenance, or other
+facts the image cannot show. Do not request it merely for reassurance after the
+active proposition is already supported or refuted. A decision must choose either
+visual_reinspection or refinement, never both.
 """
 
 
@@ -569,6 +579,10 @@ def render_evidence_decision_context(
             "prior_evidence_decisions": [
                 item.model_dump(mode="json")
                 for item in state.evidence_decisions[-4:]
+            ],
+            "visual_reinspections": [
+                item.model_dump(mode="json")
+                for item in state.visual_reinspections
             ],
             "current_evidence_gaps": [
                 item.model_dump(mode="json")

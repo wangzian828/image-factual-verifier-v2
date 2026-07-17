@@ -83,3 +83,27 @@ class DatasetPerceptionExample(PerceptionExample):
     )
     split: Literal["train", "validation", "test"]
     split_group_id: str = Field(min_length=1, max_length=100)
+
+
+class VisualReinspectionExample(StrictModel):
+    trajectory_version: Literal["ifv-visual-reinspection-v1"] = (
+        "ifv-visual-reinspection-v1"
+    )
+    episode_id: str = Field(min_length=1, max_length=200)
+    visual_question_id: str = Field(min_length=1, max_length=200)
+    source_run_id: str = Field(default="", max_length=300)
+    runtime_commit: str = Field(default="", max_length=100)
+    release_id: str = Field(default="", max_length=300)
+    runtime_contract_version: str = Field(default="", max_length=200)
+    image_path: str = Field(min_length=1)
+    image_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    instruction: str = Field(min_length=1)
+    active_fact: str = Field(min_length=1, max_length=1200)
+    question: str = Field(min_length=1, max_length=800)
+    expected_property: str = Field(min_length=1, max_length=800)
+    scope: Literal["subject", "relation", "scene", "text", "integrity"]
+    anchor_regions: List[List[float]] = Field(default_factory=list, max_length=4)
+    grounding_evidence_ids: List[str] = Field(default_factory=list, max_length=8)
+    evidence_context: str = Field(default="", max_length=4000)
+    view_plan: List[Dict[str, Any]] = Field(default_factory=list, max_length=5)
+    target: Dict[str, Any]

@@ -9,6 +9,10 @@ from src.trajectory.perception_exporter import (
     export_perception_example,
  )
 from src.trajectory.scoring import score_process_trace
+from src.trajectory.visual_reinspection_exporter import (
+    VISUAL_REINSPECTION_INSTRUCTION,
+    export_visual_reinspection_examples,
+)
 from test_image_only_trajectory import (
     test_scripted_image_only_complete_trajectory,
 )
@@ -120,6 +124,102 @@ def test_perception_exporter_keeps_only_public_image_and_report(
     assert example.perception_report == trace["state"]["perception"]
     assert "investigation_state" not in example.model_dump()
     assert "judgment" not in example.model_dump()
+
+
+def test_visual_reinspection_exporter_keeps_multimodal_stage_separate(
+    tmp_path: Path,
+) -> None:
+    trace = _trace(tmp_path)
+    investigation = trace["state"]["investigation_state"]
+    core = next(
+        item
+        for item in investigation["facts"]
+        if item["fact_id"] == investigation["core_verdict_fact_id"]
+    )
+    grounding_id = investigation["evidence"][0]["evidence_id"]
+    visual_question_id = "visual-question-export"
+    investigation["visual_reinspections"] = [
+        {
+            "visual_question_id": visual_question_id,
+            "task_id": investigation["tasks"][0]["task_id"],
+            "fact_id": core["fact_id"],
+            "created_action_count": 2,
+            "request": {
+                "reason": "identity",
+                "scope": "subject",
+                "question": "Do the visible markings match the candidate?",
+                "expected_property": "The candidate markings are visible.",
+                "anchor_fact_ids": [core["basis_ids"][0]],
+                "grounding_evidence_ids": [grounding_id],
+            },
+            "anchor_regions": [[0.1, 0.2, 0.9, 0.9]],
+            "status": "resolved",
+            "evidence_ids": [grounding_id],
+            "failure_ids": [],
+        }
+    ]
+    result = {
+        "status": "success",
+        "visual_question_id": visual_question_id,
+        "question": "Do the visible markings match the candidate?",
+        "expected_property": "The candidate markings are visible.",
+        "scope": "subject",
+        "answer_status": "observed",
+        "summary": "The candidate markings are visible.",
+        "observations": [
+            {
+                "view_index": 1,
+                "view_kind": "anchor_detail",
+                "region": [0.04, 0.14, 0.96, 0.96],
+                "statement": "The relevant markings are legible.",
+                "property_status": "observed",
+                "confidence": 0.95,
+            }
+        ],
+        "limitations": [],
+        "views": [
+            {
+                "view_index": 0,
+                "kind": "original",
+                "region": [0.0, 0.0, 1.0, 1.0],
+            },
+            {
+                "view_index": 1,
+                "kind": "anchor_detail",
+                "region": [0.04, 0.14, 0.96, 0.96],
+            },
+        ],
+    }
+    trace["state"]["all_steps"].append(
+        {
+            "round": 3,
+            "stage": "image_only_visual_reinspection",
+            "action_type": "tool_call",
+            "tool_name": "focused_visual_inspection",
+            "tool_args": {
+                "visual_question_id": visual_question_id,
+                "active_fact": core["statement"],
+                "evidence_context": "A source introduced the candidate.",
+            },
+            "tool_result": json.dumps(result),
+            "tokens": {},
+            "metadata": {"visual_question_id": visual_question_id},
+        }
+    )
+
+    visual_examples = export_visual_reinspection_examples(trace)
+    policy_examples = export_policy_examples(trace)
+
+    assert len(visual_examples) == 1
+    example = visual_examples[0]
+    assert example.instruction == VISUAL_REINSPECTION_INSTRUCTION
+    assert example.scope == "subject"
+    assert example.view_plan[0]["kind"] == "original"
+    assert example.target["answer_status"] == "observed"
+    assert all(
+        item.example_type != "visual_reinspection"
+        for item in policy_examples
+    )
 
 
 def test_process_scorer_matches_fact_evidence_and_basis(

@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 from dataclasses import dataclass
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, Mapping, Optional, Sequence
 
 from src.integrations.gemini import (
     GeminiInteractionsClient,
@@ -60,6 +60,27 @@ class OpenAIVisionClient:
         temperature: float = 0.0,
         response_schema: Optional[Mapping[str, Any]] = None,
     ) -> Dict[str, Any]:
+        return self.create_images_json(
+            system_prompt=system_prompt,
+            user_text=user_text,
+            image_inputs=[image_input],
+            max_tokens=max_tokens,
+            model_name=model_name,
+            temperature=temperature,
+            response_schema=response_schema,
+        )
+
+    def create_images_json(
+        self,
+        *,
+        system_prompt: str,
+        user_text: str,
+        image_inputs: Sequence[str],
+        max_tokens: int,
+        model_name: Optional[str] = None,
+        temperature: float = 0.0,
+        response_schema: Optional[Mapping[str, Any]] = None,
+    ) -> Dict[str, Any]:
         if not self.api_key:
             if self.provider == "lmdeploy":
                 self.api_key = "none"
@@ -73,23 +94,25 @@ class OpenAIVisionClient:
                 else:
                     env_name = "OPENAI_API_KEY"
                 raise RuntimeError(f"{env_name} is not set. Add it to the environment before using vision tools.")
+        images = [str(item).strip() for item in image_inputs if str(item).strip()]
+        if not images:
+            raise ValueError("create_images_json requires at least one image input.")
 
         if self.provider == "gemini":
             minimum_tokens = max(
                 1,
                 int(os.getenv("GEMINI_VISION_MIN_OUTPUT_TOKENS", "8192")),
             )
-            return self._create_gemini_interactions_image_json(
+            return self._create_gemini_interactions_images_json(
                 system_prompt=system_prompt,
                 user_text=user_text,
-                image_input=image_input,
+                image_inputs=images,
                 max_tokens=max(max_tokens, minimum_tokens),
                 model_name=model_name or self.model_name,
                 temperature=temperature,
                 response_schema=response_schema,
             )
 
-        image_url = image_to_data_url(image_input)
         chat = OpenAICompatibleChatClient(
             api_key=self.api_key,
             base_url=self.base_url,
@@ -103,7 +126,13 @@ class OpenAIVisionClient:
                 "role": "user",
                 "content": [
                     {"type": "text", "text": user_text},
-                    {"type": "image_url", "image_url": {"url": image_url}},
+                    *[
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": image_to_data_url(image_input)},
+                        }
+                        for image_input in images
+                    ],
                 ],
             },
         ]
@@ -118,12 +147,12 @@ class OpenAIVisionClient:
             raise RuntimeError("Vision model did not return a valid JSON object.")
         return parsed
 
-    def _create_gemini_interactions_image_json(
+    def _create_gemini_interactions_images_json(
         self,
         *,
         system_prompt: str,
         user_text: str,
-        image_input: str,
+        image_inputs: Sequence[str],
         max_tokens: int,
         model_name: str,
         temperature: float,
@@ -134,7 +163,6 @@ class OpenAIVisionClient:
                 "Gemini vision requires wire_api='interactions'; protocol fallback is disabled."
             )
 
-        image_item = self._to_interactions_image(image_input)
         schema = normalize_json_schema(
             DEFAULT_JSON_OBJECT_SCHEMA if response_schema is None else response_schema,
             require_all_properties=response_schema is not None,
@@ -150,7 +178,10 @@ class OpenAIVisionClient:
                     model=model_name,
                     input=[
                         {"type": "text", "text": user_text},
-                        image_item,
+                        *[
+                            self._to_interactions_image(image_input)
+                            for image_input in image_inputs
+                        ],
                     ],
                     system_instruction=(
                         f"{system_prompt}\n\n"

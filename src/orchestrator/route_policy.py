@@ -77,15 +77,25 @@ def route_signature(tool_name: str, tool_args: Mapping[str, Any]) -> dict[str, A
     elif tool in {
         "crop_and_search",
         "crop_and_inspect",
+        "focused_visual_inspection",
         "count_objects",
         "ocr_with_position",
     }:
-        signature["bbox"] = _normalized_bbox(args.get("bbox"))
+        if tool == "focused_visual_inspection":
+            signature["scope"] = str(args.get("scope", "")).strip().lower()
+            signature["regions"] = [
+                _normalized_bbox(item)
+                for item in args.get("anchor_regions", []) or []
+            ]
+        else:
+            signature["bbox"] = _normalized_bbox(args.get("bbox"))
         signature["focus"] = " ".join(
             _semantic_tokens(
                 str(
                     args.get("goal")
                     or args.get("focus_question")
+                    or args.get("question")
+                    or args.get("expected_property")
                     or args.get("target_object")
                     or ""
                 )
@@ -172,9 +182,29 @@ def routes_semantically_equivalent(
     if tool in {
         "crop_and_search",
         "crop_and_inspect",
+        "focused_visual_inspection",
         "count_objects",
         "ocr_with_position",
     }:
+        if tool == "focused_visual_inspection":
+            left_regions = left.get("regions", [])
+            right_regions = right.get("regions", [])
+            regions_match = (
+                left_regions == right_regions
+                or (
+                    not left_regions
+                    and not right_regions
+                )
+            )
+            return (
+                left.get("scope") == right.get("scope")
+                and regions_match
+                and _text_similarity(
+                    str(left.get("focus", "")),
+                    str(right.get("focus", "")),
+                )
+                >= 0.65
+            )
         return (
             _bbox_overlap(left.get("bbox"), right.get("bbox")) >= 0.9
             and _text_similarity(

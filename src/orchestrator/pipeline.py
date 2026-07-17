@@ -68,6 +68,7 @@ from src.orchestrator.task_store import (
     evidence_decision_checkpoint_reason,
     next_action_boundary,
     pending_evidence_decision_ids,
+    pending_visual_reinspection,
     query_refresh_candidate_task_ids,
     remaining_material_routes,
     record_tool_observation,
@@ -142,6 +143,7 @@ class Orchestrator:
             "text_search",
             "visit",
             "crop_and_inspect",
+            "focused_visual_inspection",
             "check_consistency",
             "analyze_visual_anomalies",
         }
@@ -153,6 +155,7 @@ class Orchestrator:
             "visit": 16,
             "compare_with_reference": 6,
             "crop_and_inspect": 4,
+            "focused_visual_inspection": 2,
             "check_consistency": 3,
             "analyze_visual_anomalies": 3,
         }
@@ -456,6 +459,34 @@ class Orchestrator:
         audit_coverage(investigation)
         while not investigation.stop_reason:
             self._check_timeout(started, state)
+            visual_request = pending_visual_reinspection(investigation)
+            if visual_request is not None:
+                observation_update = (
+                    await self._run_image_only_visual_reinspection(
+                        state,
+                        investigation,
+                        image_path=image_path,
+                        runtime_case=runtime_case,
+                        visual_question_id=visual_request.visual_question_id,
+                    )
+                )
+                decision_trigger = evidence_decision_checkpoint_reason(
+                    investigation,
+                    update=observation_update,
+                )
+                if decision_trigger:
+                    await self._run_image_only_evidence_decision(
+                        state,
+                        investigation,
+                        trigger=decision_trigger,
+                        required=True,
+                    )
+                audit_coverage(
+                    investigation,
+                    decision_checkpoint=bool(decision_trigger),
+                )
+                self._sync_image_only_state(state, investigation)
+                continue
             if investigation.action_count >= MAX_TOOL_ACTIONS:
                 await self._run_image_only_evidence_decision(
                     state,
@@ -768,6 +799,108 @@ class Orchestrator:
                     investigation
                 )
                 self._sync_image_only_state(state, investigation)
+
+    async def _run_image_only_visual_reinspection(
+        self,
+        state: VerificationState,
+        investigation: ImageOnlyInvestigationState,
+        *,
+        image_path: str,
+        runtime_case: ImageOnlyRuntimeCase,
+        visual_question_id: str,
+    ) -> Dict[str, Any]:
+        """Execute one accepted visual question outside the text-search ReAct loop."""
+
+        record = next(
+            (
+                item
+                for item in investigation.visual_reinspections
+                if item.visual_question_id == visual_question_id
+            ),
+            None,
+        )
+        if record is None or record.status != "pending":
+            raise RuntimeError(
+                "visual reinspection request is missing or no longer pending"
+            )
+        task = next(
+            (
+                item
+                for item in investigation.tasks
+                if item.task_id == record.task_id
+            ),
+            None,
+        )
+        core = next(
+            (
+                item
+                for item in investigation.facts
+                if item.fact_id == record.fact_id
+            ),
+            None,
+        )
+        if task is None or core is None:
+            raise RuntimeError(
+                "visual reinspection lost its task or active fact"
+            )
+        evidence_by_id = {
+            item.evidence_id: item
+            for item in investigation.evidence
+        }
+        evidence_context = [
+            {
+                "evidence_id": evidence_id,
+                "source_class": evidence_by_id[evidence_id].source_class,
+                "source_url": evidence_by_id[evidence_id].source_url,
+                "text": evidence_by_id[evidence_id].exact_text[:900],
+            }
+            for evidence_id in record.request.grounding_evidence_ids
+            if evidence_id in evidence_by_id
+        ]
+        tool_args: Dict[str, Any] = {
+            "visual_question_id": record.visual_question_id,
+            "question": record.request.question,
+            "expected_property": record.request.expected_property,
+            "scope": record.request.scope,
+            "anchor_regions": record.anchor_regions,
+            "active_fact": core.statement,
+            "evidence_context": json.dumps(
+                evidence_context,
+                ensure_ascii=False,
+            )[:4000],
+        }
+        record.status = "running"
+        tool_result, metadata = await self._execute_tool(
+            "focused_visual_inspection",
+            tool_args,
+            image_path,
+        )
+        step = StageStep(
+            round=investigation.action_count + 1,
+            stage_name="image_only_visual_reinspection",
+            action_type="tool_call",
+            tool_name="focused_visual_inspection",
+            tool_args={
+                **tool_args,
+                "image_input": image_path,
+                "__question_id": task.task_id,
+            },
+            tool_result=tool_result,
+            metadata={
+                "stage": "image_only_visual_reinspection",
+                "visual_question_id": record.visual_question_id,
+                **metadata,
+            },
+        )
+        update = record_tool_observation(
+            investigation,
+            step,
+            image_sha256=runtime_case.image_sha256,
+        )
+        step.metadata["investigation_state_update"] = update
+        self._record_stage_steps(state, [step])
+        self._sync_image_only_state(state, investigation)
+        return update
 
     async def _run_image_only_evidence_decision(
         self,

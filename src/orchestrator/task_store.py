@@ -25,6 +25,9 @@ from src.orchestrator.investigation_models import (
     TargetFactProposal,
     TargetPlanningOutput,
     VisualFact,
+    VisualObservation,
+    VisualReinspectionRecord,
+    VisualReinspectionRequest,
 )
 from src.orchestrator.evidence_adjudication import assess_fact
 from src.orchestrator.route_policy import (
@@ -48,6 +51,7 @@ MAX_TEXT_SEARCH_ROUTES_PER_TASK = 2
 MAX_CORE_FACT_REFINEMENTS = 1
 MAX_INSPECTION_CANDIDATES_PER_BATCH = 4
 MAX_INSPECTION_ATTEMPTS_PER_BATCH = 2
+MAX_VISUAL_REINSPECTIONS = 2
 
 
 def stable_id(prefix: str, *parts: object) -> str:
@@ -500,8 +504,45 @@ def record_tool_observation(
     if route not in state.attempted_routes:
         state.attempted_routes.append(route)
 
+    visual_reinspection = next(
+        (
+            item
+            for item in state.visual_reinspections
+            if item.task_id == task.task_id
+        ),
+        None,
+    )
+    if visual_reinspection is not None:
+        visual_reinspection.evidence_ids = list(
+            dict.fromkeys(
+                [
+                    *visual_reinspection.evidence_ids,
+                    *evidence_ids,
+                ]
+            )
+        )[:8]
+        visual_reinspection.failure_ids = list(
+            dict.fromkeys(
+                [
+                    *visual_reinspection.failure_ids,
+                    *failure_ids,
+                ]
+            )
+        )[:4]
+        visual_reinspection.status = (
+            "resolved"
+            if evidence_ids
+            else "failed"
+            if failure_ids or not succeeded
+            else "failed"
+        )
+
     _refresh_fact_states(state)
-    if finding_ids and not _task_has_unresolved_decisive_fact(state, task):
+    if visual_reinspection is not None and evidence_ids:
+        task.status = "resolved"
+    elif visual_reinspection is not None:
+        task.status = "exhausted"
+    elif finding_ids and not _task_has_unresolved_decisive_fact(state, task):
         task.finding_ids = list(dict.fromkeys([*task.finding_ids, *finding_ids]))
         task.status = "resolved"
     elif finding_ids:
@@ -1579,6 +1620,116 @@ def pending_evidence_decision_ids(
     ]
 
 
+def pending_visual_reinspection(
+    state: ImageOnlyInvestigationState,
+) -> VisualReinspectionRecord | None:
+    """Return the oldest accepted visual question that still needs execution."""
+
+    return next(
+        (
+            item
+            for item in state.visual_reinspections
+            if item.status == "pending"
+        ),
+        None,
+    )
+
+
+def _visual_reinspection_anchor_regions(
+    state: ImageOnlyInvestigationState,
+    anchor_fact_ids: Sequence[str],
+) -> List[List[float]]:
+    """Resolve stable detail regions from the request's pixel/OCR fact anchors."""
+
+    fact_by_id = {item.fact_id: item for item in state.facts}
+    entity_by_id = {item.entity_id: item for item in state.entities}
+    retrieval_by_id = {
+        item.anchor_id: item
+        for item in state.retrieval_anchors
+    }
+    regions: List[List[float]] = []
+    for fact_id in anchor_fact_ids:
+        fact = fact_by_id.get(fact_id)
+        if fact is None:
+            continue
+        candidate_ids = [
+            fact.subject_entity_id,
+            fact.object_entity_id or "",
+            *fact.basis_ids,
+            *fact.origin.origin_ids,
+        ]
+        for candidate_id in candidate_ids:
+            entity = entity_by_id.get(candidate_id)
+            region = (
+                list(entity.region)
+                if entity is not None and entity.region is not None
+                else None
+            )
+            retrieval = retrieval_by_id.get(candidate_id)
+            if region is None and retrieval is not None:
+                region = (
+                    list(retrieval.region)
+                    if retrieval.region is not None
+                    else None
+                )
+            if region is None or region == [0.0, 0.0, 1.0, 1.0]:
+                continue
+            normalized = [round(float(item), 6) for item in region]
+            if normalized not in regions:
+                regions.append(normalized)
+    return regions[:4]
+
+
+def _visual_reinspection_requests_equivalent(
+    left: VisualReinspectionRequest,
+    right: VisualReinspectionRequest,
+) -> bool:
+    """Reject repeated visual questions without constraining their semantics."""
+
+    if left.scope != right.scope:
+        return False
+    left_anchors = set(left.anchor_fact_ids)
+    right_anchors = set(right.anchor_fact_ids)
+    if left_anchors and right_anchors and not left_anchors & right_anchors:
+        return False
+    left_tokens = _semantic_request_tokens(
+        left.question + " " + left.expected_property
+    )
+    right_tokens = _semantic_request_tokens(
+        right.question + " " + right.expected_property
+    )
+    if not left_tokens or not right_tokens:
+        return False
+    return (
+        len(left_tokens & right_tokens)
+        / len(left_tokens | right_tokens)
+        >= 0.65
+    )
+
+
+def _semantic_request_tokens(value: str) -> set[str]:
+    text = str(value or "").casefold()
+    tokens = {
+        token
+        for token in re.findall(
+            r"[\w]+",
+            text,
+            flags=re.UNICODE,
+        )
+        if len(token) > 1
+    }
+    cjk = "".join(
+        character
+        for character in text
+        if "\u3400" <= character <= "\u9fff"
+    )
+    tokens.update(
+        cjk[index : index + 3]
+        for index in range(max(0, len(cjk) - 2))
+    )
+    return tokens
+
+
 def evidence_decision_checkpoint_reason(
     state: ImageOnlyInvestigationState,
     *,
@@ -1643,11 +1794,17 @@ def evidence_decision_checkpoint_reason(
             "visit",
             "compare_with_reference",
             "crop_and_inspect",
+            "focused_visual_inspection",
         }
         and item.directness == "direct"
         and item.quality in {"strong", "moderate"}
     ]
     if directly_inspected and prior is None:
+        return "decisive_evidence"
+    if any(
+        item.tool_name == "focused_visual_inspection"
+        for item in directly_inspected
+    ):
         return "decisive_evidence"
     if (
         prior is not None
@@ -1847,6 +2004,158 @@ def apply_evidence_decision(
                 "select factual source Evidence or keep the fact insufficient"
             ),
         }
+
+    accepted_visual_question_id = ""
+    accepted_visual_task_id = ""
+    visual_request = output.visual_reinspection
+    if visual_request is not None:
+        if output.refinement is not None:
+            return {
+                "accepted": False,
+                "rejected_reason": (
+                    "one Evidence decision cannot both replace the active fact "
+                    "and request visual reinspection; inspect the pixels before "
+                    "deciding whether a refinement is warranted"
+                ),
+            }
+        if output.assessment not in {"insufficient", "conflicted"}:
+            return {
+                "accepted": False,
+                "rejected_reason": (
+                    "a resolved fact must stop instead of opening visual "
+                    "reinspection"
+                ),
+            }
+        if state.action_count >= MAX_TOOL_ACTIONS:
+            return {
+                "accepted": False,
+                "rejected_reason": (
+                    "the tool-action budget cannot execute another visual "
+                    "reinspection"
+                ),
+            }
+        if len(state.visual_reinspections) >= MAX_VISUAL_REINSPECTIONS:
+            return {
+                "accepted": False,
+                "rejected_reason": (
+                    "the bounded visual-reinspection budget is exhausted"
+                ),
+            }
+        if len(state.tasks) >= TOTAL_TASKS_MAX:
+            return {
+                "accepted": False,
+                "rejected_reason": (
+                    "task budget cannot hold the visual reinspection"
+                ),
+            }
+        anchor_ids = list(dict.fromkeys(visual_request.anchor_fact_ids))
+        anchors = [
+            fact_by_id[item]
+            for item in anchor_ids
+            if item in fact_by_id
+        ]
+        if len(anchors) != len(anchor_ids) or not all(
+            item.origin.type in {"input_image", "ocr"}
+            for item in anchors
+        ):
+            return {
+                "accepted": False,
+                "rejected_reason": (
+                    "visual reinspection anchors must be existing pixel/OCR facts"
+                ),
+            }
+        grounding_ids = list(
+            dict.fromkeys(visual_request.grounding_evidence_ids)
+        )
+        if not set(grounding_ids) <= set(reviewed_ids):
+            return {
+                "accepted": False,
+                "rejected_reason": (
+                    "visual reinspection grounding must use newly reviewed Evidence"
+                ),
+            }
+        if any(
+            core.fact_id not in evidence_by_id[item].fact_ids
+            for item in grounding_ids
+        ):
+            return {
+                "accepted": False,
+                "rejected_reason": (
+                    "visual reinspection grounding is outside the active core fact"
+                ),
+            }
+        if any(
+            _visual_reinspection_requests_equivalent(
+                prior.request,
+                visual_request,
+            )
+            for prior in state.visual_reinspections
+        ):
+            return {
+                "accepted": False,
+                "rejected_reason": (
+                    "an equivalent visual question has already been requested"
+                ),
+            }
+
+        anchor_regions = _visual_reinspection_anchor_regions(
+            state,
+            anchor_ids,
+        )
+        visual_question_id = stable_id(
+            "visual-question",
+            state.brief.case_id,
+            core.fact_id,
+            visual_request.model_dump(mode="json"),
+        )
+        visual_task = ResearchTask(
+            task_id=stable_id(
+                "task",
+                visual_question_id,
+                "focused-visual-inspection",
+            ),
+            fact_ids=[core.fact_id],
+            question=visual_request.question,
+            purpose=(
+                "Reinspect the original pixels after web investigation introduced "
+                "a concrete visible hypothesis."
+            ),
+            priority=1,
+            status="active",
+            parent_task_id=None,
+            origin_ids=list(
+                dict.fromkeys(
+                    [
+                        core.fact_id,
+                        *anchor_ids,
+                        *grounding_ids,
+                    ]
+                )
+            )[:12],
+            suggested_tools=["focused_visual_inspection"],
+            suggested_queries=[],
+        )
+        state.tasks.append(visual_task)
+        state.visual_reinspections.append(
+            VisualReinspectionRecord(
+                visual_question_id=visual_question_id,
+                task_id=visual_task.task_id,
+                fact_id=core.fact_id,
+                created_action_count=state.action_count,
+                request=visual_request,
+                anchor_regions=anchor_regions,
+            )
+        )
+        state.recommended_next_task_ids = list(
+            dict.fromkeys(
+                [
+                    visual_task.task_id,
+                    *state.recommended_next_task_ids,
+                ]
+            )
+        )[:4]
+        accepted_visual_question_id = visual_question_id
+        accepted_visual_task_id = visual_task.task_id
 
     accepted_refinement_fact_id = ""
     accepted_refinement_task_id = ""
@@ -2147,6 +2456,12 @@ def apply_evidence_decision(
         accepted_refinement_fact_id=(
             accepted_refinement_fact_id or None
         ),
+        accepted_visual_question_id=(
+            accepted_visual_question_id or None
+        ),
+        accepted_visual_task_id=(
+            accepted_visual_task_id or None
+        ),
     )
     state.evidence_decisions.append(decision)
     if not accepted_refinement_fact_id:
@@ -2163,6 +2478,8 @@ def apply_evidence_decision(
         "finding_ids": finding_ids,
         "accepted_refinement_fact_id": accepted_refinement_fact_id,
         "accepted_refinement_task_id": accepted_refinement_task_id,
+        "accepted_visual_question_id": accepted_visual_question_id,
+        "accepted_visual_task_id": accepted_visual_task_id,
         "reviewed_evidence_ids": reviewed_ids,
     }
 
@@ -2185,6 +2502,7 @@ def apply_evidence_decision_with_refinement_fallback(
     if (
         update.get("accepted", False)
         or output.refinement is None
+        or output.visual_reinspection is not None
         or output.assessment not in {"insufficient", "conflicted"}
     ):
         return update
@@ -3198,6 +3516,18 @@ def _visual_evidence_record(
         statement = str(
             data.get("answer", "") or data.get("description", "")
         ).strip()
+    elif tool_name == "focused_visual_inspection":
+        summary = str(data.get("summary", "")).strip()
+        observations = [
+            str(item.get("statement", "")).strip()
+            for item in data.get("observations", []) or []
+            if isinstance(item, Mapping)
+            and str(item.get("statement", "")).strip()
+        ]
+        statement = "\n".join(
+            dict.fromkeys([summary, *observations])
+        ).strip()
+        region = [0.0, 0.0, 1.0, 1.0]
     elif tool_name == "ocr_with_position":
         statement = str(data.get("full_text", "")).strip()
     else:
@@ -3283,6 +3613,30 @@ def _visual_evidence_record(
             else None
         ),
         risk_flags=list(identity.risk_flags) if identity is not None else [],
+        visual_question_id=(
+            str(data.get("visual_question_id", "")).strip() or None
+            if tool_name == "focused_visual_inspection"
+            else None
+        ),
+        visual_scope=(
+            str(data.get("scope", "")).strip() or None
+            if tool_name == "focused_visual_inspection"
+            else None
+        ),
+        visual_answer_status=(
+            str(data.get("answer_status", "")).strip() or None
+            if tool_name == "focused_visual_inspection"
+            else None
+        ),
+        visual_observations=(
+            [
+                VisualObservation.model_validate(item)
+                for item in data.get("observations", []) or []
+                if isinstance(item, Mapping)
+            ]
+            if tool_name == "focused_visual_inspection"
+            else []
+        ),
     )
     finding = None
     if stance in {"support", "refute"}:
@@ -3457,6 +3811,15 @@ def _is_empty_result(tool_name: str, data: Mapping[str, Any]) -> bool:
         )
     if tool_name == "visit":
         return not str(data.get("evidence", "")).strip()
+    if tool_name == "focused_visual_inspection":
+        return not (
+            str(data.get("summary", "")).strip()
+            or any(
+                isinstance(item, Mapping)
+                and str(item.get("statement", "")).strip()
+                for item in data.get("observations", []) or []
+            )
+        )
     return False
 
 
@@ -3749,6 +4112,7 @@ def _remaining_task_material_routes(
     for tool_name in (
         "ocr_with_position",
         "crop_and_inspect",
+        "focused_visual_inspection",
         "check_consistency",
         "analyze_visual_anomalies",
     ):
