@@ -1734,53 +1734,6 @@ def _semantic_request_tokens(value: str) -> set[str]:
     return tokens
 
 
-def _different_capture_requires_visual_reinspection(
-    state: ImageOnlyInvestigationState,
-    *,
-    core: VisualFact,
-    output: EvidenceDecisionOutput,
-    reviewed_evidence_ids: Sequence[str],
-    evidence_by_id: Mapping[str, InvestigationEvidence],
-) -> bool:
-    """Keep visible-world inquiry from drifting into exact-source recovery."""
-
-    if (
-        output.assessment not in {"insufficient", "conflicted"}
-        or output.visual_reinspection is not None
-        or output.refinement is not None
-        or core.predicate in _SOURCE_BINDING_PREDICATES
-    ):
-        return False
-    if len(state.visual_reinspections) >= MAX_VISUAL_REINSPECTIONS:
-        return False
-    if any(
-        item.fact_id == core.fact_id
-        for item in state.visual_reinspections
-    ):
-        return False
-    if any(
-        item.tool_name == "focused_visual_inspection"
-        and core.fact_id in item.fact_ids
-        for item in state.evidence
-    ):
-        return False
-    reviewed = [
-        evidence_by_id[item]
-        for item in reviewed_evidence_ids
-        if item in evidence_by_id
-    ]
-    return any(
-        item.evidence_kind == "reference_comparison"
-        and item.same_subject_or_scene is True
-        and item.same_capture_or_near_duplicate is not True
-        and (
-            item.likely_different_original_capture is True
-            or item.claim_binding == "same_subject"
-        )
-        for item in reviewed
-    )
-
-
 def evidence_decision_checkpoint_reason(
     state: ImageOnlyInvestigationState,
     *,
@@ -2072,26 +2025,6 @@ def apply_evidence_decision(
                 "select factual source Evidence or keep the fact insufficient"
             ),
         }
-    if _different_capture_requires_visual_reinspection(
-        state,
-        core=core,
-        output=output,
-        reviewed_evidence_ids=reviewed_ids,
-        evidence_by_id=evidence_by_id,
-    ):
-        return {
-            "accepted": False,
-            "rejected_reason": (
-                "New Evidence identifies the same visible subject, place, or "
-                "event in a different original capture. Before broadening the "
-                "search to exact-source, photographer, or AI-authenticity "
-                "questions, request visual_reinspection grounded in that new "
-                "Evidence and existing pixel/OCR anchor facts. The focused "
-                "question should test the candidate's image-visible "
-                "discriminators against the original input."
-            ),
-        }
-
     accepted_visual_question_id = ""
     accepted_visual_task_id = ""
     visual_request = output.visual_reinspection
