@@ -40,6 +40,7 @@ from src.orchestrator.state import (
 )
 from src.orchestrator.task_store import (
     apply_evidence_decision,
+    apply_evidence_decision_with_refinement_fallback,
     apply_reflection,
     apply_target_planning,
     evidence_decision_checkpoint_reason,
@@ -3936,6 +3937,88 @@ def test_evidence_decision_rejects_peripheral_metadata_as_core_refinement() -> N
     assert result["accepted"] is False
     assert "image-visible factual relation" in result["rejected_reason"]
     assert state.core_verdict_fact_id == core.fact_id
+    assert {fact.fact_id for fact in state.facts} == before_fact_ids
+
+
+def test_evidence_decision_keeps_insufficient_when_optional_refinement_is_invalid() -> None:
+    case, state = _runtime_state()
+    core_id = state.core_verdict_fact_id
+    core = next(fact for fact in state.facts if fact.fact_id == core_id)
+    task = next(item for item in state.tasks if core_id in item.fact_ids)
+    statement = "The page credits photographer Jane Example."
+    update = record_tool_observation(
+        state,
+        _step(
+            task_id=task.task_id,
+            call_id="call-fallback-photographer-metadata",
+            tool_name="visit",
+            result=json.dumps(
+                {
+                    "status": "success",
+                    "url": "https://example.org/photo",
+                    "selected_url": "https://example.org/photo",
+                    "evidence": statement,
+                    "summary": statement,
+                    "relevance": "high",
+                    "stance": "neutral",
+                    "directness": "direct",
+                    "temporal_alignment": "not_applicable",
+                    "artifact_sha256": "c" * 64,
+                    "evidence_span": {
+                        "start": 0,
+                        "end": len(statement),
+                    },
+                    "retrieved_at": datetime.now(timezone.utc).isoformat(),
+                    "injection_flags": [],
+                    "evidence_eligible": True,
+                }
+            ),
+        ),
+        image_sha256=case.image_sha256,
+    )
+    evidence_id = update["created_evidence_ids"][0]
+    anchor = next(
+        fact
+        for fact in state.facts
+        if fact.origin.type == "input_image"
+    )
+    before_fact_ids = {fact.fact_id for fact in state.facts}
+    output = EvidenceDecisionOutput(
+        active_fact_id=core.fact_id,
+        assessment="insufficient",
+        selected_evidence_ids=[],
+        binding_requirement="none",
+        remaining_gap="The visible image-world relation remains unresolved.",
+        rationale="The creator credit is peripheral retrieval context.",
+        refinement=EvidenceDecisionRefinement(
+            slot="subject_identity",
+            statement="The photograph was created by photographer Jane Example.",
+            predicate="identified_as",
+            anchor_fact_ids=[anchor.fact_id],
+            grounding_evidence_ids=[evidence_id],
+            question="Who created this photograph?",
+            purpose="Promote creator metadata.",
+            suggested_tools=["text_search", "visit"],
+            suggested_queries=["Jane Example photographer"],
+        ),
+    )
+
+    result = apply_evidence_decision_with_refinement_fallback(
+        state,
+        output,
+        reviewed_evidence_ids=[evidence_id],
+        trigger="before_unverifiable",
+    )
+
+    assert result["accepted"] is True
+    assert "image-visible factual relation" in result[
+        "discarded_refinement_reason"
+    ]
+    assert result["discarded_refinement"]["predicate"] == "identified_as"
+    assert state.evidence_decisions[-1].output.assessment == "insufficient"
+    assert state.evidence_decisions[-1].output.refinement is None
+    assert state.core_verdict_fact_id == core.fact_id
+    assert core.status == "active"
     assert {fact.fact_id for fact in state.facts} == before_fact_ids
 
 

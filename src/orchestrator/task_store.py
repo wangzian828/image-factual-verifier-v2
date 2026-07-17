@@ -2079,6 +2079,45 @@ def apply_evidence_decision(
     }
 
 
+def apply_evidence_decision_with_refinement_fallback(
+    state: ImageOnlyInvestigationState,
+    output: EvidenceDecisionOutput,
+    *,
+    reviewed_evidence_ids: Sequence[str],
+    trigger: str,
+) -> Dict[str, Any]:
+    """Preserve a valid unresolved decision when only its optional refinement fails."""
+
+    update = apply_evidence_decision(
+        state,
+        output,
+        reviewed_evidence_ids=reviewed_evidence_ids,
+        trigger=trigger,
+    )
+    if (
+        update.get("accepted", False)
+        or output.refinement is None
+        or output.assessment not in {"insufficient", "conflicted"}
+    ):
+        return update
+
+    rejected_reason = str(
+        update.get("rejected_reason", "optional refinement was rejected")
+    )
+    stripped_output = output.model_copy(update={"refinement": None})
+    fallback = apply_evidence_decision(
+        state,
+        stripped_output,
+        reviewed_evidence_ids=reviewed_evidence_ids,
+        trigger=trigger,
+    )
+    if not fallback.get("accepted", False):
+        return update
+    fallback["discarded_refinement_reason"] = rejected_reason
+    fallback["discarded_refinement"] = output.refinement.model_dump(mode="json")
+    return fallback
+
+
 def _valid_visual_refinement_transition(
     current_predicate: str,
     proposed_predicate: str,

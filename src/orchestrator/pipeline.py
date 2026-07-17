@@ -62,6 +62,7 @@ from src.orchestrator.task_store import (
     MAX_TOOL_ACTIONS,
     REFLECTION_INTERVAL,
     apply_evidence_decision,
+    apply_evidence_decision_with_refinement_fallback,
     apply_reflection,
     apply_target_planning,
     evidence_decision_checkpoint_reason,
@@ -820,7 +821,7 @@ class Orchestrator:
                     "mandatory semantic Evidence decision did not validate"
                 )
             return False
-        update = apply_evidence_decision(
+        update = apply_evidence_decision_with_refinement_fallback(
             investigation,
             parsed,
             reviewed_evidence_ids=reviewed_evidence_ids,
@@ -1028,7 +1029,7 @@ class Orchestrator:
         trigger: str,
     ) -> tuple[bool, str]:
         candidate = investigation.model_copy(deep=True)
-        update = apply_evidence_decision(
+        update = apply_evidence_decision_with_refinement_fallback(
             candidate,
             parsed,
             reviewed_evidence_ids=reviewed_evidence_ids,
