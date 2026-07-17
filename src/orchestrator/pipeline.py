@@ -893,12 +893,10 @@ class Orchestrator:
         )
         self._record_stage_steps(state, steps)
         if parsed is None:
-            investigation.reflection_failure_streak += 1
-            if investigation.reflection_failure_streak >= 2:
-                raise RuntimeError(
-                    "two consecutive image-only Reflection calls failed"
-                )
-            return
+            raise RuntimeError(
+                "mandatory image-only Reflection did not produce valid "
+                "structured output"
+            )
         apply_reflection(
             investigation,
             parsed,

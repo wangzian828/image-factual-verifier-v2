@@ -23,7 +23,12 @@ from src.integrations.search.visual_search import (
 )
 from src.orchestrator.pipeline import Orchestrator
 from src.orchestrator.stage_runner import StageRunner, StageStep
-from src.orchestrator.state import VerificationState
+from src.orchestrator.state import (
+    Entity,
+    ImageOnlyRuntimeCase,
+    PerceptionReport,
+    VerificationState,
+)
 from src.orchestrator.tool_cache import ToolResultCache
 from src.orchestrator.tool_health import ToolHealth
 from src.orchestrator.tool_registry import REQUIRED_TOOLS
@@ -31,6 +36,8 @@ from src.orchestrator.tool_result import (
     ToolResultContractError,
     serialize_tool_result,
 )
+from src.orchestrator.bootstrap import build_bootstrap_investigation
+from src.orchestrator.task_store import state_from_bootstrap
 from src.redaction import REDACTED, sanitize_for_persistence
 from src.tools.base import BaseTool
 from src.tools.compare_reference import CompareWithReferenceTool
@@ -118,6 +125,76 @@ def test_image_only_investigation_requires_a_successful_tool_result() -> None:
         )
     )
     Orchestrator._require_successful_image_only_investigation(state)
+
+
+def test_required_reflection_fails_closed_on_invalid_structured_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class InvalidReflectionRunner:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        async def run(self, _context: str) -> tuple[None, list[StageStep]]:
+            return None, [
+                StageStep(
+                    stage_name="image_only_reflection",
+                    action_type="output_rejected",
+                    metadata={"rejection_reason": "invalid structured output"},
+                )
+            ]
+
+    case = ImageOnlyRuntimeCase(
+        case_id="case-reflection-failure",
+        image_path="fixture.jpg",
+        image_sha256="a" * 64,
+    )
+    investigation = state_from_bootstrap(
+        build_bootstrap_investigation(
+            case,
+            PerceptionReport(
+                scene_description="A person holds a packaged product.",
+                entities=[
+                    Entity(
+                        name="person",
+                        entity_type="person",
+                        bbox=[0.1, 0.1, 0.6, 0.9],
+                        confidence=0.9,
+                    )
+                ],
+            ),
+        )
+    )
+    state = VerificationState(
+        image_path=case.image_path,
+        image_id=case.case_id,
+        runtime_case=case,
+    )
+    orchestrator = object.__new__(Orchestrator)
+    orchestrator.provider = "gemini"
+    orchestrator.llm = type("LLM", (), {"wire_api": "interactions"})()
+    orchestrator.date_prefix = ""
+    monkeypatch.setattr(pipeline_module, "StageRunner", InvalidReflectionRunner)
+
+    with pytest.raises(
+        RuntimeError,
+        match="mandatory image-only Reflection did not produce valid structured output",
+    ):
+        asyncio.run(
+            orchestrator._run_image_only_reflection(
+                state,
+                investigation,
+                evidence_gain=False,
+                decision_gain=False,
+                route_exhaustion=True,
+            )
+        )
+
+    assert investigation.reflections == []
+    assert any(
+        step.stage_name == "image_only_reflection"
+        and step.action_type == "output_rejected"
+        for step in state.all_steps
+    )
 
 
 def test_required_tool_failure_aborts_startup(
