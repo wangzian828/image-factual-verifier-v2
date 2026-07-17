@@ -1790,6 +1790,17 @@ def evidence_decision_checkpoint_reason(
         # even when the selected passage was marked indirect; Gemini still owns
         # the actual proposition-level verdict.
         return "decisive_evidence"
+    if any(
+        item.tool_name == "visit"
+        and item.evidence_kind == "web_span"
+        and item.directness == "direct"
+        and item.quality in {"strong", "moderate"}
+        for item in new_rows
+    ):
+        # One directly inspected exact span is a material semantic boundary.
+        # The checkpoint may accept, reject, contextualize, or replan it; the
+        # extractor's source class and query-relative stance do not decide.
+        return "decisive_evidence"
     directly_inspected = [
         item
         for item in new_rows

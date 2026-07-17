@@ -4289,6 +4289,94 @@ def test_indirect_explicit_refutation_triggers_semantic_checkpoint() -> None:
     ) == "decisive_evidence"
 
 
+def test_direct_web_span_rechecks_after_prior_insufficient_decision() -> None:
+    case, state = _runtime_state()
+    core_id = state.core_verdict_fact_id or ""
+    task = next(item for item in state.tasks if core_id in item.fact_ids)
+    first_statement = "A related page mentions the visible subject."
+    first_update = record_tool_observation(
+        state,
+        _step(
+            task_id=task.task_id,
+            call_id="call-prior-insufficient-context",
+            tool_name="visit",
+            result=json.dumps(
+                {
+                    "status": "success",
+                    "url": "https://example.org/context",
+                    "selected_url": "https://example.org/context",
+                    "evidence": first_statement,
+                    "summary": first_statement,
+                    "relevance": "low",
+                    "stance": "unclear",
+                    "directness": "none",
+                    "context_only": True,
+                    "temporal_alignment": "not_applicable",
+                    "artifact_sha256": "4" * 64,
+                    "evidence_span": {
+                        "start": 0,
+                        "end": len(first_statement),
+                    },
+                    "retrieved_at": datetime.now(timezone.utc).isoformat(),
+                    "injection_flags": [],
+                    "evidence_eligible": True,
+                }
+            ),
+        ),
+        image_sha256=case.image_sha256,
+    )
+    first_id = first_update["created_evidence_ids"][0]
+    prior = _apply_core_decision(
+        state,
+        [first_id],
+        assessment="insufficient",
+        selected_evidence_ids=[],
+        binding_requirement="text_sufficient",
+        remaining_gap="Inspect a direct factual source.",
+        rationale="The first span is context only.",
+    )
+    assert prior["accepted"] is True
+
+    direct_statement = (
+        "The official record directly identifies the visible vessel."
+    )
+    direct_update = record_tool_observation(
+        state,
+        _step(
+            task_id=task.task_id,
+            call_id="call-direct-after-insufficient",
+            tool_name="visit",
+            result=json.dumps(
+                {
+                    "status": "success",
+                    "url": "https://example.gov/direct",
+                    "selected_url": "https://example.gov/direct",
+                    "evidence": direct_statement,
+                    "summary": direct_statement,
+                    "relevance": "high",
+                    "stance": "support",
+                    "directness": "direct",
+                    "temporal_alignment": "not_applicable",
+                    "artifact_sha256": "5" * 64,
+                    "evidence_span": {
+                        "start": 0,
+                        "end": len(direct_statement),
+                    },
+                    "retrieved_at": datetime.now(timezone.utc).isoformat(),
+                    "injection_flags": [],
+                    "evidence_eligible": True,
+                }
+            ),
+        ),
+        image_sha256=case.image_sha256,
+    )
+
+    assert evidence_decision_checkpoint_reason(
+        state,
+        update=direct_update,
+    ) == "decisive_evidence"
+
+
 def test_evidence_decision_refines_unknown_subject_without_expanding_scope() -> None:
     case, state = _antarctic_butterfly_state()
     scene = next(

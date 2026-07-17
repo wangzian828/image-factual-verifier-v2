@@ -804,13 +804,32 @@ class JinaReaderClient:
             evidence_document.encode("utf-8")
         ).hexdigest()
         evidence_records: List[Dict[str, Any]] = []
-        selected_ids = (
+        selected_passages = [
+            passages[selected_id]
+            for selected_id in (
             ([passage_id] if passage_id >= 0 else [])
             + supporting_passage_ids
-        )
-        for selected_id in selected_ids:
-            passage = passages[selected_id]
-            primary = selected_id == passage_id and passage_id >= 0
+            )
+        ]
+        if (
+            passage_id >= 0
+            and selected_passages
+            and self._passage_has_unresolved_referent(
+                selected_passages[0]["text"]
+            )
+        ):
+            antecedent = self._preceding_passage(
+                all_passages,
+                selected_passages[0],
+            )
+            if antecedent is not None and all(
+                item["start"] != antecedent["start"]
+                for item in selected_passages
+            ):
+                selected_passages.insert(1, antecedent)
+        selected_passages = selected_passages[:3]
+        for index, passage in enumerate(selected_passages):
+            primary = index == 0 and passage_id >= 0
             evidence_records.append(
                 {
                     "evidence": passage["text"],
@@ -852,6 +871,43 @@ class JinaReaderClient:
             }
         )
         return extracted
+
+    @staticmethod
+    def _passage_has_unresolved_referent(value: str) -> bool:
+        """Detect a passage whose central media/event referent lives upstream."""
+
+        text = " ".join(str(value or "").casefold().split())
+        patterns = (
+            r"\b(?:this|that|said|such|the\s+aforementioned)\s+"
+            r"(?:video|image|photo|post|advertisement|ad|campaign|event|record)\b",
+            r"\b(?:video|image|photo|post|advertisement|ad|campaign|event)\s+"
+            r"(?:in\s+question|mentioned\s+above)\b",
+            r"\b(?:videoclipul|clipul|materialul|imaginea|fotografia|reclama|"
+            r"campania|postarea)\s+(?:respectiv(?:ă|a|ul)?|menționat(?:ă|a|ul)?)\b",
+            r"\b(?:acest|această|acel|acea)\s+"
+            r"(?:videoclip|clip|material|imagine|fotografie|reclamă|campanie|postare)\b",
+        )
+        return any(re.search(pattern, text, flags=re.UNICODE) for pattern in patterns)
+
+    @staticmethod
+    def _preceding_passage(
+        passages: List[Dict[str, Any]],
+        current: Mapping[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        """Return the nearest non-empty paragraph before a deictic passage."""
+
+        current_start = int(current.get("start", 0) or 0)
+        candidates = [
+            passage
+            for passage in passages
+            if int(passage.get("end", 0) or 0) <= current_start
+            and str(passage.get("text", "")).strip()
+        ]
+        if not candidates:
+            return None
+        return dict(
+            max(candidates, key=lambda item: int(item.get("end", 0) or 0))
+        )
 
     @classmethod
     def _select_goal_passages(

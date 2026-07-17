@@ -367,6 +367,51 @@ def test_extractor_returns_independent_primary_and_supporting_exact_spans(
     } == {scope, identity}
 
 
+def test_extractor_attaches_preceding_exact_span_for_deictic_primary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = JinaReaderClient(fetch_provider="jina")
+    antecedent = (
+        "Unknown people created a deepfake video in which Andreea Esca "
+        "appears to promote a financial application."
+    )
+    primary = (
+        "PRO TV states that the aforementioned video is false and that "
+        "Andreea Esca's image was used illegally."
+    )
+    page = antecedent + "\n\n" + primary
+
+    def select_primary(formatted: str, _goal: str) -> dict:
+        match = re.search(
+            r"\[PASSAGE (\d+)\] (PRO TV states[^\n]+)",
+            formatted,
+        )
+        assert match is not None
+        return {
+            "rationale": "The primary paragraph contains the public denial.",
+            "passage_id": int(match.group(1)),
+            "supporting_passage_ids": [],
+            "summary": "PRO TV denies the referenced video.",
+            "relevance": "high",
+            "stance": "refute",
+            "directness": "direct",
+            "temporal_alignment": "not_applicable",
+        }
+
+    monkeypatch.setattr(client, "_extract_with_llm", select_primary)
+    result = client.extract_goal_evidence(
+        page,
+        "Did Andreea Esca endorse the shown product?",
+    )
+
+    assert [item["evidence"] for item in result["evidence_records"]] == [
+        primary,
+        antecedent,
+    ]
+    assert result["evidence_records"][1]["context_only"] is True
+    assert result["evidence_records"][1]["directness"] == "indirect"
+
+
 def test_jina_failure_falls_back_to_direct_and_records_attempts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
