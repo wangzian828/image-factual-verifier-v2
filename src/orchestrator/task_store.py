@@ -620,9 +620,9 @@ def apply_target_planning(
             grounding_text=grounding_text,
         )
         proposal = _normalize_target_authenticity_wrapper(proposal)
-        unobserved_named_values = _unobserved_named_values(
+        unobserved_statement_values = _unobserved_named_values(
             proposal.statement,
-            proposal.suggested_queries,
+            (),
             grounding_text,
         )
         invalid_initial_scope = (
@@ -632,39 +632,21 @@ def apply_target_planning(
             )
         )
         if invalid_initial_scope:
-            reasons = [
+            rejected_reasons.append(
                 "target describes an unseen original, unaltered, or "
                 "counterfactual media state instead of the visible positive "
-                "subject-object, person-product, place, or event relation"
-            ]
-            if unobserved_named_values:
-                rendered_values = ", ".join(unobserved_named_values[:4])
-                reasons.append(
-                    "target introduces named value(s) absent from image/OCR "
-                    f"grounding: {rendered_values}"
-                )
-            rejected_reasons.append(
-                "; ".join(reasons)
-                + ". Preserve the visible relation and remove only unsupported "
-                "values; do not replace it with hidden source-image details or "
-                "incidental OCR metadata"
-            )
-            continue
-        if (
-            proposal.predicate != "visual_integrity"
-            and unobserved_named_values
-        ):
-            rendered_values = ", ".join(unobserved_named_values[:4])
-            rejected_reasons.append(
-                "target introduces named value(s) absent from image/OCR "
-                f"grounding: {rendered_values}. Remove only the unsupported "
-                "value(s) while preserving the visible subject, object, place, "
-                "and event relation; do not replace the relation with incidental "
-                "OCR metadata"
+                "subject-object, person-product, place, or event relation. "
+                "Preserve the visible relation; do not replace it with hidden "
+                "source-image details or incidental OCR metadata"
             )
             continue
         proposal = _normalize_initial_visual_identity_predicate(
             proposal,
+            parents=parents,
+        )
+        proposal = _normalize_single_subject_visual_relation(
+            proposal,
+            state=state,
             parents=parents,
         )
         if (
@@ -810,6 +792,7 @@ def apply_target_planning(
             proposal.predicate
             in {"source_record_matches", "provenance_matches"}
             and not has_visible_source_anchor
+            and not unobserved_statement_values
         ):
             core_candidate_requested = False
         if existing is None:
@@ -838,6 +821,14 @@ def apply_target_planning(
             object_entity_id = parent.object_entity_id
             if relation_entities is not None:
                 subject_entity_id, object_entity_id = relation_entities
+            elif proposal.predicate == "identified_as":
+                visible_subject_ids = _visible_parent_entity_ids(
+                    state,
+                    parents,
+                )
+                if len(visible_subject_ids) == 1:
+                    subject_entity_id = visible_subject_ids[0]
+                    object_entity_id = None
             fact = VisualFact(
                 fact_id=stable_id(
                     "vf",
@@ -1025,6 +1016,39 @@ def _normalize_initial_visual_identity_predicate(
                 f"identity: {proposal.statement.rstrip('.')}?"
             )[:800],
             "purpose": "Verify the visible subject or scene identity.",
+        }
+    )
+
+
+def _normalize_single_subject_visual_relation(
+    proposal: TargetFactProposal,
+    *,
+    state: ImageOnlyInvestigationState,
+    parents: Sequence[VisualFact],
+) -> TargetFactProposal:
+    """Represent a one-subject scene hypothesis without inventing a second entity."""
+
+    if proposal.predicate != "depicts_relation":
+        return proposal
+    visible_entity_ids = _visible_parent_entity_ids(state, parents)
+    if len(visible_entity_ids) != 1:
+        return proposal
+    all_visible_entity_ids = {
+        item.entity_id
+        for item in state.entities
+        if item.origin == "input_image"
+        and item.entity_type.casefold() != "image"
+    }
+    if all_visible_entity_ids != set(visible_entity_ids):
+        return proposal
+    return proposal.model_copy(
+        update={
+            "kind": "attribute",
+            "predicate": "identified_as",
+            "purpose": (
+                proposal.purpose
+                or "Verify the visible subject or scene identity."
+            ),
         }
     )
 
@@ -1223,22 +1247,6 @@ _TARGET_GENERIC_CAPITALIZED_WORDS = {
 }
 
 
-def _target_introduces_unobserved_named_values(
-    statement: str,
-    queries: Sequence[str],
-    grounding_text: str,
-) -> bool:
-    """Reject model-memory proper names and dates from pixel-only planning."""
-
-    return bool(
-        _unobserved_named_values(
-            statement,
-            queries,
-            grounding_text,
-        )
-    )
-
-
 def _unobserved_named_values(
     statement: str,
     queries: Sequence[str],
@@ -1327,19 +1335,10 @@ def _visible_relation_entities(
 ) -> tuple[str, str] | None:
     """Bind a visible relation to two actual image entities, not the canvas."""
 
-    entities = {item.entity_id: item for item in state.entities}
-    visible_entity_ids = list(
-        dict.fromkeys(
-            parent.subject_entity_id
-            for parent in parents
-            if parent.predicate == "visible_in"
-            and parent.origin.type == "input_image"
-            and parent.subject_entity_id in entities
-            and entities[parent.subject_entity_id].entity_type != "image"
-        )
-    )
+    visible_entity_ids = _visible_parent_entity_ids(state, parents)
     if len(visible_entity_ids) < 2:
         return None
+    entities = {item.entity_id: item for item in state.entities}
 
     def subject_rank(entity_id: str) -> tuple[int, int]:
         entity_type = entities[entity_id].entity_type.casefold()
@@ -1355,6 +1354,25 @@ def _visible_relation_entities(
         if entity_id != subject_entity_id
     )
     return subject_entity_id, object_entity_id
+
+
+def _visible_parent_entity_ids(
+    state: ImageOnlyInvestigationState,
+    parents: Sequence[VisualFact],
+) -> List[str]:
+    """Return non-canvas visible entities explicitly owned by parent facts."""
+
+    entities = {item.entity_id: item for item in state.entities}
+    return list(
+        dict.fromkeys(
+            parent.subject_entity_id
+            for parent in parents
+            if parent.predicate == "visible_in"
+            and parent.origin.type == "input_image"
+            and parent.subject_entity_id in entities
+            and entities[parent.subject_entity_id].entity_type != "image"
+        )
+    )
 
 
 def _contains_visual_integrity_scope(value: str) -> bool:

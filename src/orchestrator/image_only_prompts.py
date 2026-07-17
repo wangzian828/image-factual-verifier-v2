@@ -86,10 +86,13 @@ shown product or whether the visible species naturally occurs in the depicted pl
 
 Do not plan image authenticity, manipulation, AI generation, compositing, creator,
 title, platform, software, or earliest-source metadata. Those may be later retrieval
-context, but they are not the initial factual target. Do not assume public-web facts
-or add named values absent from pixel/OCR state. The target statement must be a
-positive atomic proposition that later Evidence can support or refute. The runtime
-validates grounding, atomicity, task state, and output structure.
+context, but they are not the initial factual target. Ground the proposition in at
+least one salient visible subject or scene. An external identity, instrument, place,
+event, date, or source may be a tentative hypothesis when it directly identifies
+that subject; it need not be printed in the pixels and remains open to refutation.
+For one visible subject, use identified_as rather than inventing a second entity.
+Keep the target positive and atomic. The runtime validates grounding, evidence
+ownership, task state, and output structure.
 """
 
 

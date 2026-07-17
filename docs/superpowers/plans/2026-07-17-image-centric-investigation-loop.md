@@ -231,3 +231,24 @@ another case-specific prompt clause.
 5. Remove superseded stages and validators.
 6. Update architecture, prompt/runtime, operations, and trajectory documents.
 7. Run deterministic suite and real acceptance set.
+
+## 7. Dynamic adjustment: visually anchored external hypotheses
+
+The Pillars of Creation canary exposed an over-constrained Planning boundary. The
+policy correctly recognized the scene and proposed JWST, NIRCam, and release-year
+hypotheses, but deterministic validation required every named value to already
+appear in pixels or OCR and then required a two-entity relation for the fallback.
+
+Planning now distinguishes visual grounding from prior confirmation:
+
+- at least one salient subject or scene must be anchored in image/OCR state;
+- an external identity, instrument, place, event, date, or source may be proposed
+  as a tentative hypothesis and must later be supported or refuted by Evidence;
+- source-record hypotheses without visible text may own the core only when they
+  name a specific candidate rather than request generic provenance discovery;
+- a one-subject scene relation is represented as `identified_as`, while
+  `depicts_relation` remains reserved for two visible entities;
+- disconnected hypotheses and queries without any visible anchor still fail.
+
+This removes lexical model-memory policing from Planning without weakening
+Evidence ownership, source binding, action budgets, or final verdict validation.

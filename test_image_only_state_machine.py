@@ -237,6 +237,32 @@ def _antarctic_butterfly_state():
     return case, state
 
 
+def _pillars_state():
+    case = ImageOnlyRuntimeCase(
+        case_id="case-pillars",
+        image_path="pillars.jpg",
+        image_sha256="e" * 64,
+    )
+    perception = PerceptionReport(
+        scene_description=(
+            "A detailed near-infrared view of the Pillars of Creation in the "
+            "Eagle Nebula, showing columns of interstellar gas and dust."
+        ),
+        entities=[
+            Entity(
+                name="Pillars of Creation",
+                entity_type="scene_element",
+                bbox=[0.0, 0.16, 0.91, 1.0],
+                confidence=0.99,
+            ),
+        ],
+    )
+    state = state_from_bootstrap(
+        build_bootstrap_investigation(case, perception)
+    )
+    return case, state
+
+
 def _planned_sponsored_product_state():
     case = ImageOnlyRuntimeCase(
         case_id="case-sponsored-product",
@@ -754,7 +780,54 @@ def test_generic_source_search_target_stays_supporting_for_photo() -> None:
     assert state.decisive_fact_ids == [scene.fact_id]
 
 
-def test_target_planning_rejects_unobserved_named_metadata() -> None:
+def test_target_planning_allows_grounded_external_source_hypothesis() -> None:
+    _, state = _pillars_state()
+    scene = next(
+        fact for fact in state.facts if fact.predicate == "appears_to_depict"
+    )
+
+    update = apply_target_planning(
+        state,
+        TargetPlanningOutput(
+            proposals=[
+                TargetFactProposal(
+                    statement=(
+                        "The input image is the official near-infrared NIRCam "
+                        "image of the Pillars of Creation captured by the James "
+                        "Webb Space Telescope and released in October 2022."
+                    ),
+                    predicate="source_record_matches",
+                    parent_fact_ids=[scene.fact_id],
+                    question=(
+                        "Does the input image match the official NIRCam image "
+                        "of the Pillars of Creation released in 2022?"
+                    ),
+                    purpose="Verify the candidate visual source identity.",
+                    suggested_tools=[
+                        "reverse_image_search",
+                        "text_search",
+                        "compare_with_reference",
+                    ],
+                    suggested_queries=[
+                        "James Webb Pillars of Creation NIRCam 2022"
+                    ],
+                )
+            ]
+        ),
+    )
+
+    assert len(update["accepted_fact_ids"]) == 1
+    core = next(
+        fact
+        for fact in state.facts
+        if fact.fact_id == state.core_verdict_fact_id
+    )
+    assert core.predicate == "identified_as"
+    assert core.decision_relevance == "decisive"
+    assert "James Webb Space Telescope" in core.statement
+
+
+def test_target_planning_rejects_external_hypothesis_without_visual_anchor() -> None:
     _, state = _antarctic_butterfly_state()
     scene = next(
         fact for fact in state.facts if fact.predicate == "appears_to_depict"
@@ -772,7 +845,7 @@ def test_target_planning_rejects_unobserved_named_metadata() -> None:
                     predicate="identified_as",
                     parent_fact_ids=[scene.fact_id],
                     question="Who created the artwork and which museum holds it?",
-                    purpose="Test remembered attribution metadata.",
+                    purpose="Test an unrelated attribution hypothesis.",
                     suggested_tools=["text_search", "visit"],
                     suggested_queries=[
                         '"Linda Nez" 1994 "Stark Museum of Art"'
@@ -784,9 +857,56 @@ def test_target_planning_rejects_unobserved_named_metadata() -> None:
 
     assert not update["accepted_fact_ids"]
     assert any(
-        "absent from image/OCR grounding" in reason
+        "not grounded in visible facts or anchors" in reason
+        or "search query introduces terms absent from visible anchors" in reason
         for reason in update["rejected_reasons"]
     )
+
+
+def test_target_planning_normalizes_one_subject_relation_to_identity() -> None:
+    _, state = _pillars_state()
+    scene = next(
+        fact for fact in state.facts if fact.predicate == "appears_to_depict"
+    )
+    visible = next(
+        fact for fact in state.facts if fact.predicate == "visible_in"
+    )
+
+    update = apply_target_planning(
+        state,
+        TargetPlanningOutput(
+            proposals=[
+                TargetFactProposal(
+                    statement=(
+                        "The input image depicts the Pillars of Creation in "
+                        "near-infrared light."
+                    ),
+                    predicate="depicts_relation",
+                    parent_fact_ids=[scene.fact_id, visible.fact_id],
+                    question=(
+                        "Does the input image depict the Pillars of Creation "
+                        "in near-infrared light?"
+                    ),
+                    purpose="Verify the visible astronomical scene identity.",
+                    suggested_tools=["reverse_image_search", "text_search"],
+                    suggested_queries=[
+                        "Pillars of Creation near-infrared"
+                    ],
+                )
+            ]
+        ),
+    )
+
+    assert len(update["accepted_fact_ids"]) == 1
+    core = next(
+        fact
+        for fact in state.facts
+        if fact.fact_id == state.core_verdict_fact_id
+    )
+    assert core.predicate == "identified_as"
+    assert core.kind == "attribute"
+    assert core.subject_entity_id == visible.subject_entity_id
+    assert core.object_entity_id is None
 
 
 def test_target_planning_strips_ungrounded_scientific_binomial_alias() -> None:
@@ -920,14 +1040,15 @@ def test_target_planning_strips_authenticity_wrapper_and_keeps_world_relation() 
     )
 
 
-def test_target_planning_revision_names_only_unsupported_modifier() -> None:
+def test_target_planning_allows_unobserved_modifier_as_search_hypothesis() -> None:
     _, state = _ceremonial_bus_state()
     scene = next(
         fact for fact in state.facts if fact.predicate == "appears_to_depict"
     )
 
-    rejected = apply_target_planning(
-        state.model_copy(deep=True),
+    candidate = state.model_copy(deep=True)
+    update = apply_target_planning(
+        candidate,
         TargetPlanningOutput(
             proposals=[
                 TargetFactProposal(
@@ -960,15 +1081,13 @@ def test_target_planning_revision_names_only_unsupported_modifier() -> None:
         ),
     )
 
-    assert not rejected["accepted_fact_ids"]
-    assert rejected["rejected_reasons"] == [
-        (
-            "target introduces named value(s) absent from image/OCR grounding: "
-            "London. Remove only the unsupported value(s) while preserving the "
-            "visible subject, object, place, and event relation; do not replace "
-            "the relation with incidental OCR metadata"
-        )
-    ]
+    assert len(update["accepted_fact_ids"]) == 1
+    core = next(
+        fact
+        for fact in candidate.facts
+        if fact.fact_id == candidate.core_verdict_fact_id
+    )
+    assert "London" in core.statement
 
 
 def test_target_planning_corrected_event_keeps_person_vehicle_and_date() -> None:
