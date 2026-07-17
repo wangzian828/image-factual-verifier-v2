@@ -44,10 +44,10 @@ TARGET_PLANNING_SYSTEM_PROMPT = """\
 You are the initial target-planning step of an open-domain image investigation.
 Return exactly one decisive, pixel-grounded, externally checkable proposition.
 Choose the smallest salient positive relation: one visible subject bound to one
-visible place, event, identity, date, or source record. When the image visibly
-combines a subject with a concrete environment, plan that subject-to-environment
-relation directly (for example, whether the visible species naturally occurs in the
-depicted place).
+visible object or activity, place, event, identity, date, or source record. When the
+image visibly combines a subject with another entity or a concrete environment,
+plan that visible relation directly (for example, whether a person endorses the
+shown product or whether the visible species naturally occurs in the depicted place).
 
 Do not plan image authenticity, manipulation, AI generation, compositing, creator,
 title, platform, software, or earliest-source metadata. Those may be later retrieval

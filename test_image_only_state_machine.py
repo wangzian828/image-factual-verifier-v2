@@ -958,7 +958,7 @@ def test_target_planning_keeps_visible_person_product_ad_relation() -> None:
                         "The sponsored post shows Andreea Esca endorsing "
                         "Dr. Oetker Bicarbonat de Sodiu."
                     ),
-                    predicate="identified_as",
+                    predicate="depicts_relation",
                     parent_fact_ids=parents[:4],
                     question=(
                         "Does Andreea Esca endorse the Dr. Oetker product "
@@ -988,7 +988,50 @@ def test_target_planning_keeps_visible_person_product_ad_relation() -> None:
     assert "endorsing" in fact.statement
     assert "sponsored post" in fact.statement
     assert "original" not in fact.statement.casefold()
+    assert fact.predicate == "depicts_relation"
+    assert fact.subject_entity_id != fact.object_entity_id
+    entities = {item.entity_id: item for item in state.entities}
+    assert entities[fact.subject_entity_id].name == "Andreea Esca"
+    assert entities[fact.object_entity_id].name == (
+        "Dr. Oetker Bicarbonat de Sodiu"
+    )
     assert "endorse" in task.question
+
+
+def test_target_planning_rejects_relation_without_two_visible_entities() -> None:
+    _, state = _sponsored_product_state()
+    scene = next(
+        fact for fact in state.facts if fact.predicate == "appears_to_depict"
+    )
+    person = next(
+        fact
+        for fact in state.facts
+        if fact.predicate == "visible_in"
+        and "Andreea Esca" in fact.statement
+    )
+
+    update = apply_target_planning(
+        state,
+        TargetPlanningOutput(
+            proposals=[
+                TargetFactProposal(
+                    statement=(
+                        "The sponsored post shows Andreea Esca endorsing "
+                        "Dr. Oetker Bicarbonat de Sodiu."
+                    ),
+                    predicate="depicts_relation",
+                    parent_fact_ids=[scene.fact_id, person.fact_id],
+                    question="Does Andreea Esca endorse the shown product?",
+                    purpose="Verify the visible person-product relation.",
+                    suggested_tools=["text_search", "visit"],
+                    suggested_queries=["Andreea Esca Dr Oetker"],
+                )
+            ]
+        ),
+    )
+
+    assert not update["accepted_fact_ids"]
+    assert "two different visible entities" in update["rejected_reasons"][0]
 
 
 def test_pending_search_candidate_requires_inspection_before_retrieval() -> None:

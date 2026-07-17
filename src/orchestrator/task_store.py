@@ -83,12 +83,14 @@ _CORE_BINDING_PREDICATES = {
     "source_record_matches",
     "provenance_matches",
     "identified_as",
+    "depicts_relation",
 }
 _CORE_REFINEMENT_PREDICATES = {
     "appears_to_depict",
     "source_record_matches",
     "provenance_matches",
     "identified_as",
+    "depicts_relation",
     "located_at",
     "occurred_at",
     "depicts_event",
@@ -620,6 +622,15 @@ def apply_target_planning(
                 "multi-entity location conjunctions are not atomic"
             )
             continue
+        relation_entities = None
+        if proposal.predicate == "depicts_relation":
+            relation_entities = _visible_relation_entities(state, parents)
+            if proposal.kind != "relation" or relation_entities is None:
+                rejected_reasons.append(
+                    "depicts_relation must bind two different visible entities "
+                    "from image-grounded parent facts"
+                )
+                continue
         if (
             proposal.predicate == "source_record_matches"
             and _contains_visual_integrity_scope(
@@ -758,6 +769,10 @@ def apply_target_planning(
                 if any(item.origin.type == "ocr" for item in parents)
                 else "input_image"
             )
+            subject_entity_id = parent.subject_entity_id
+            object_entity_id = parent.object_entity_id
+            if relation_entities is not None:
+                subject_entity_id, object_entity_id = relation_entities
             fact = VisualFact(
                 fact_id=stable_id(
                     "vf",
@@ -772,9 +787,9 @@ def apply_target_planning(
                     " ",
                     proposal.statement,
                 ).strip(),
-                subject_entity_id=parent.subject_entity_id,
+                subject_entity_id=subject_entity_id,
                 predicate=proposal.predicate,
-                object_entity_id=parent.object_entity_id,
+                object_entity_id=object_entity_id,
                 status="active",
                 basis_ids=basis_ids,
                 decision_relevance="supporting",
@@ -1189,6 +1204,42 @@ def _located_at_target_is_overbroad(
         )
     )
     return visible_subject_count > 1 or generic_location
+
+
+def _visible_relation_entities(
+    state: ImageOnlyInvestigationState,
+    parents: Sequence[VisualFact],
+) -> tuple[str, str] | None:
+    """Bind a visible relation to two actual image entities, not the canvas."""
+
+    entities = {item.entity_id: item for item in state.entities}
+    visible_entity_ids = list(
+        dict.fromkeys(
+            parent.subject_entity_id
+            for parent in parents
+            if parent.predicate == "visible_in"
+            and parent.origin.type == "input_image"
+            and parent.subject_entity_id in entities
+            and entities[parent.subject_entity_id].entity_type != "image"
+        )
+    )
+    if len(visible_entity_ids) < 2:
+        return None
+
+    def subject_rank(entity_id: str) -> tuple[int, int]:
+        entity_type = entities[entity_id].entity_type.casefold()
+        return (
+            0 if entity_type in {"person", "animal", "organization"} else 1,
+            visible_entity_ids.index(entity_id),
+        )
+
+    subject_entity_id = min(visible_entity_ids, key=subject_rank)
+    object_entity_id = next(
+        entity_id
+        for entity_id in visible_entity_ids
+        if entity_id != subject_entity_id
+    )
+    return subject_entity_id, object_entity_id
 
 
 def _contains_visual_integrity_scope(value: str) -> bool:
@@ -2032,10 +2083,11 @@ def _valid_visual_refinement_transition(
     if proposed_predicate == current_predicate:
         return True
     return (
-        current_predicate == "appears_to_depict"
+        current_predicate in {"appears_to_depict", "depicts_relation"}
         and proposed_predicate
         in {
             "identified_as",
+            "depicts_relation",
             "located_at",
             "depicts_event",
         }

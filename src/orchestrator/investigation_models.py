@@ -287,6 +287,7 @@ class TargetFactProposal(StrictModel):
         "visual_integrity",
         "provenance_matches",
         "identified_as",
+        "depicts_relation",
         "located_at",
         "dated_as",
         "depicts_event",
@@ -330,6 +331,7 @@ class EvidenceDecisionRefinement(StrictModel):
     statement: str = Field(min_length=1, max_length=1200)
     predicate: Literal[
         "identified_as",
+        "depicts_relation",
         "located_at",
         "occurred_at",
         "depicts_event",
