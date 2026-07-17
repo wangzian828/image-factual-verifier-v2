@@ -418,20 +418,27 @@ Gemini calls remain separate. If a tool action ends at a deterministic segment
 boundary, its pending `function_result` is submitted with the next main-chain
 `user_input` step. Trace snapshots store a `runtime_image` reference, not image
 base64.
-Gemini model and vision requests use a separate bounded request timeout (90 seconds
-by default) and three retries. Configure them with
-`AGENT_LLM_REQUEST_TIMEOUT_SECONDS`, `AGENT_LLM_REQUEST_MAX_RETRIES`,
-`VLM_TOOL_REQUEST_TIMEOUT_SECONDS`, `VLM_TOOL_REQUEST_MAX_RETRIES`, or
-`GEMINI_VISION_TIMEOUT_SECONDS` when a provider needs a different limit. This is
-separate from the 1,800-second per-image budget: one stalled network request becomes
-a recoverable failure instead of holding the full case open.
+Gemini main-chain requests use a 90-second per-attempt HTTP timeout, twelve retries,
+and a 900-second outer stage deadline by default. Retry delays grow exponentially,
+include jitter, and honor provider `Retry-After` or `google.rpc.RetryInfo` hints up
+to the configured maximum delay.
+Configure them with `AGENT_LLM_REQUEST_TIMEOUT_SECONDS`,
+`AGENT_LLM_REQUEST_MAX_RETRIES`, `AGENT_STAGE_REQUEST_TIMEOUT_SECONDS`,
+`GEMINI_RETRY_BASE_DELAY_SECONDS`, `GEMINI_RETRY_JITTER_SECONDS`, and
+`GEMINI_RETRY_MAX_DELAY_SECONDS`. Tool-internal vision calls keep their separate
+`VLM_TOOL_REQUEST_TIMEOUT_SECONDS`, `VLM_TOOL_REQUEST_MAX_RETRIES`, and
+`GEMINI_VISION_TIMEOUT_SECONDS` limits. This remains inside the 1,800-second
+per-image budget: a transient 429 continues the same stored Interaction instead of
+discarding completed Agent actions, while a provider outage that exceeds the
+bounded retry window still produces a diagnostic error trace.
 Coverage runs after every accepted action and stops immediately when the one core fact
 and its required evidence gaps resolve. It also stops as `information_saturated` when
 no executable core-gap route remains or when two consecutive action checkpoints make
 no qualified core progress. Open-ended ReAct turns use a 16,384-token output budget;
 Reflection and Judgment use 8,192. All active
-Gemini stages require minimal thinking. Interactions failures remain hard failures,
-and the error trace retains completed calls. Evaluation also rejects queries that
+Gemini stages require minimal thinking. Interactions failures that exhaust the
+bounded retry window remain hard failures, and the error trace retains completed
+calls and retry diagnostics. Evaluation also rejects queries that
 explicitly target policy-excluded fact-check domains before Serper.
 
 Run a foreground no-mock canary first. It validates provider configuration, launches

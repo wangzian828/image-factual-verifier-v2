@@ -291,7 +291,7 @@ def test_retries_only_documented_http_statuses_with_delay_and_jitter(
         "attempt": len(statuses) + 1,
     }
     assert attempts == len(statuses) + 1
-    assert delays == [3.75] * len(statuses)
+    assert delays == [3.75, 6.75, 12.75, 24.75, 48.75]
 
 
 @pytest.mark.parametrize("status_code", [400, 408, 501])
@@ -406,6 +406,103 @@ def test_exhausted_http_retry_preserves_response_body(
     )
     assert error.value.response_body in str(error.value)
     assert DEFAULT_INTERACTIONS_URL in str(error.value)
+    assert error.value.retry_attempts == 1
+    assert error.value.retry_delays
+    assert "after 1 retry" in str(error.value)
+
+
+def test_429_honors_retry_after_header(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    set_test_key(monkeypatch)
+    attempts = 0
+    delays: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        delays.append(delay)
+
+    async def scenario() -> dict[str, Any]:
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                return httpx.Response(
+                    429,
+                    request=request,
+                    headers={"Retry-After": "17"},
+                    json={"error": {"code": 429, "message": "rate limited"}},
+                )
+            return httpx.Response(
+                200,
+                request=request,
+                json={"id": "interaction-recovered", "status": "completed"},
+            )
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            client = GeminiInteractionsClient(
+                client=http,
+                max_retries=1,
+                retry_delay=1.0,
+                retry_jitter=0.0,
+                sleep=fake_sleep,
+            )
+            return await client.create(model="model", input="prompt")
+
+    assert run(scenario())["id"] == "interaction-recovered"
+    assert delays == [17.0]
+
+
+def test_429_honors_google_retry_info(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    set_test_key(monkeypatch)
+    attempts = 0
+    delays: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        delays.append(delay)
+
+    async def scenario() -> dict[str, Any]:
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                return httpx.Response(
+                    429,
+                    request=request,
+                    json={
+                        "error": {
+                            "code": 429,
+                            "message": "resource exhausted",
+                            "details": [
+                                {
+                                    "@type": (
+                                        "type.googleapis.com/google.rpc.RetryInfo"
+                                    ),
+                                    "retryDelay": "42s",
+                                }
+                            ],
+                        }
+                    },
+                )
+            return httpx.Response(
+                200,
+                request=request,
+                json={"id": "interaction-recovered", "status": "completed"},
+            )
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            client = GeminiInteractionsClient(
+                client=http,
+                max_retries=1,
+                retry_delay=1.0,
+                retry_jitter=0.0,
+                sleep=fake_sleep,
+            )
+            return await client.create(model="model", input="prompt")
+
+    assert run(scenario())["id"] == "interaction-recovered"
+    assert delays == [42.0]
 
 
 def test_successful_invalid_json_is_a_response_error_without_retry(

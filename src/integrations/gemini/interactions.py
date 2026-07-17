@@ -6,6 +6,8 @@ import asyncio
 import os
 import random
 from collections.abc import Awaitable, Iterator, Mapping, Sequence
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any, Callable, Optional
 
 import httpx
@@ -28,14 +30,31 @@ class GeminiInteractionsError(RuntimeError):
 class GeminiInteractionsHTTPError(GeminiInteractionsError):
     """Non-success HTTP response with its body retained for diagnostics."""
 
-    def __init__(self, status_code: int, response_body: str, url: str) -> None:
+    def __init__(
+        self,
+        status_code: int,
+        response_body: str,
+        url: str,
+        *,
+        retry_attempts: int = 0,
+        retry_delays: Sequence[float] = (),
+    ) -> None:
         self.status_code = status_code
         self.response_body = response_body
         self.url = url
+        self.retry_attempts = max(0, int(retry_attempts))
+        self.retry_delays = tuple(max(0.0, float(value)) for value in retry_delays)
         body = response_body.strip() or "<empty response body>"
+        retry_summary = ""
+        if self.retry_attempts:
+            noun = "retry" if self.retry_attempts == 1 else "retries"
+            retry_summary = (
+                f" after {self.retry_attempts} {noun}"
+                f" ({sum(self.retry_delays):.1f}s scheduled backoff)"
+            )
         super().__init__(
             f"Gemini Interactions request to {url} failed with HTTP "
-            f"{status_code}. Response body: {body}"
+            f"{status_code}{retry_summary}. Response body: {body}"
         )
 
 
@@ -58,6 +77,7 @@ class GeminiInteractionsClient:
         max_retries: int = 8,
         retry_delay: float = 3.0,
         retry_jitter: float = 2.0,
+        retry_max_delay: float = 60.0,
         client: Optional[httpx.AsyncClient] = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         random_uniform: Callable[[float, float], float] = random.uniform,
@@ -68,6 +88,8 @@ class GeminiInteractionsClient:
             raise ValueError("retry_delay must be non-negative.")
         if retry_jitter < 0:
             raise ValueError("retry_jitter must be non-negative.")
+        if retry_max_delay <= 0:
+            raise ValueError("retry_max_delay must be positive.")
 
         self._api_key = _resolve_api_key()
         configured_url = base_url or os.getenv("GEMINI_INTERACTIONS_URL") or ""
@@ -75,6 +97,7 @@ class GeminiInteractionsClient:
         self.max_retries = max_retries
         self.retry_delay = retry_delay
         self.retry_jitter = retry_jitter
+        self.retry_max_delay = retry_max_delay
         self._sleep = sleep
         self._random_uniform = random_uniform
         self._client = client or httpx.AsyncClient(timeout=timeout)
@@ -241,6 +264,7 @@ class GeminiInteractionsClient:
             "x-goog-api-key": self._api_key,
             "Content-Type": "application/json",
         }
+        retry_delays: list[float] = []
 
         for attempt in range(self.max_retries + 1):
             try:
@@ -252,14 +276,20 @@ class GeminiInteractionsClient:
             except httpx.TransportError:
                 if attempt >= self.max_retries:
                     raise
-                await self._wait_before_retry()
+                retry_delays.append(await self._wait_before_retry(attempt))
                 continue
 
             if response.status_code in RETRYABLE_HTTP_STATUSES:
                 if attempt < self.max_retries:
-                    await self._wait_before_retry()
+                    retry_delays.append(
+                        await self._wait_before_retry(attempt, response=response)
+                    )
                     continue
-                raise _http_error(response)
+                raise _http_error(
+                    response,
+                    retry_attempts=attempt,
+                    retry_delays=retry_delays,
+                )
 
             if not response.is_success:
                 raise _http_error(response)
@@ -281,9 +311,26 @@ class GeminiInteractionsClient:
 
         raise AssertionError("Retry loop exited unexpectedly.")
 
-    async def _wait_before_retry(self) -> None:
-        delay = self.retry_delay + self._random_uniform(0.0, self.retry_jitter)
+    async def _wait_before_retry(
+        self,
+        attempt: int,
+        *,
+        response: Optional[httpx.Response] = None,
+    ) -> float:
+        exponential = min(
+            self.retry_max_delay,
+            self.retry_delay * (2 ** max(0, int(attempt))),
+        )
+        delay = min(
+            self.retry_max_delay,
+            exponential + self._random_uniform(0.0, self.retry_jitter),
+        )
+        if response is not None:
+            retry_hint = _response_retry_delay(response)
+            if retry_hint is not None:
+                delay = min(self.retry_max_delay, max(delay, retry_hint))
         await self._sleep(delay)
+        return delay
 
 
 def extract_text(payload: Mapping[str, Any]) -> str:
@@ -458,12 +505,84 @@ def _resolve_api_key() -> str:
     )
 
 
-def _http_error(response: httpx.Response) -> GeminiInteractionsHTTPError:
+def _http_error(
+    response: httpx.Response,
+    *,
+    retry_attempts: int = 0,
+    retry_delays: Sequence[float] = (),
+) -> GeminiInteractionsHTTPError:
     return GeminiInteractionsHTTPError(
         response.status_code,
         response.text,
         str(response.request.url),
+        retry_attempts=retry_attempts,
+        retry_delays=retry_delays,
     )
+
+
+def _response_retry_delay(response: httpx.Response) -> Optional[float]:
+    """Return a provider-advised retry delay from headers or google.rpc.RetryInfo."""
+
+    header_delay = _parse_retry_after(response.headers.get("retry-after", ""))
+    detail_delay: Optional[float] = None
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = None
+    if isinstance(payload, Mapping):
+        error = payload.get("error")
+        if isinstance(error, Mapping):
+            details = error.get("details")
+            if isinstance(details, Sequence) and not isinstance(
+                details,
+                (str, bytes, bytearray),
+            ):
+                for detail in details:
+                    if not isinstance(detail, Mapping):
+                        continue
+                    detail_type = str(detail.get("@type", ""))
+                    if not detail_type.endswith("google.rpc.RetryInfo"):
+                        continue
+                    parsed = _parse_duration_seconds(
+                        str(detail.get("retryDelay", ""))
+                    )
+                    if parsed is not None:
+                        detail_delay = max(detail_delay or 0.0, parsed)
+    delays = [
+        value
+        for value in (header_delay, detail_delay)
+        if value is not None
+    ]
+    return max(delays) if delays else None
+
+
+def _parse_retry_after(value: str) -> Optional[float]:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return max(0.0, float(text))
+    except ValueError:
+        pass
+    try:
+        target = parsedate_to_datetime(text)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if target.tzinfo is None:
+        target = target.replace(tzinfo=timezone.utc)
+    return max(0.0, (target - datetime.now(timezone.utc)).total_seconds())
+
+
+def _parse_duration_seconds(value: str) -> Optional[float]:
+    text = str(value or "").strip().lower()
+    if not text:
+        return None
+    if text.endswith("s"):
+        text = text[:-1].strip()
+    try:
+        return max(0.0, float(text))
+    except ValueError:
+        return None
 
 
 def _extract_content_type(

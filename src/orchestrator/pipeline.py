@@ -129,7 +129,7 @@ class Orchestrator:
         )
         self.stage_request_timeout_seconds = self._runtime_timeout(
             "AGENT_STAGE_REQUEST_TIMEOUT_SECONDS",
-            120.0,
+            900.0 if self.provider == "gemini" else 120.0,
         )
         cache_namespace = os.getenv("TOOL_CACHE_NAMESPACE", "").strip() or "|".join(
             [
@@ -183,7 +183,10 @@ class Orchestrator:
                 os.getenv("AGENT_LLM_REQUEST_TIMEOUT_SECONDS", "90")
             ),
             max_retries=int(
-                os.getenv("AGENT_LLM_REQUEST_MAX_RETRIES", "3")
+                os.getenv(
+                    "AGENT_LLM_REQUEST_MAX_RETRIES",
+                    "12" if self.provider == "gemini" else "3",
+                )
             ),
         )
         self.all_tools, self.tool_health = build_all_tools_with_health(

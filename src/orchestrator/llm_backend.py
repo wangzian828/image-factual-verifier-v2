@@ -402,6 +402,15 @@ class APIBackend(LLMBackend):
             base_url=self._interactions_base_url(),
             timeout=self.timeout,
             max_retries=self.max_retries,
+            retry_delay=float(
+                os.getenv("GEMINI_RETRY_BASE_DELAY_SECONDS", "3")
+            ),
+            retry_jitter=float(
+                os.getenv("GEMINI_RETRY_JITTER_SECONDS", "2")
+            ),
+            retry_max_delay=float(
+                os.getenv("GEMINI_RETRY_MAX_DELAY_SECONDS", "60")
+            ),
             client=self._get_shared_client(),
         )
         return await client.create(
