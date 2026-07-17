@@ -2740,6 +2740,35 @@ def test_target_planning_rejects_negative_integrity_and_slotless_provenance() ->
     assert "positive image claim" in negative_world_fact["rejected_reasons"][0]
 
 
+def test_target_planning_validator_distinguishes_supporting_metadata() -> None:
+    _, state = _runtime_state()
+    parent_fact_ids = state.decisive_fact_ids[:1]
+    valid, reason = Orchestrator._validate_image_only_target_planning(
+        state,
+        TargetPlanningOutput(
+            proposals=[
+                TargetFactProposal(
+                    statement=(
+                        "The visible vehicle displays the registration LPT 123."
+                    ),
+                    predicate="depicts_relation",
+                    parent_fact_ids=parent_fact_ids,
+                    question="Does the vehicle display LPT 123?",
+                    purpose="Use the visible registration as a retrieval anchor.",
+                    suggested_tools=["text_search"],
+                    suggested_queries=['"LPT 123" vehicle'],
+                    decision_relevance="supporting",
+                )
+            ]
+        ),
+    )
+
+    assert valid is False
+    assert "decisive central image relation" in reason
+    assert "incidental OCR detail" in reason
+    assert "visual-integrity diagnostic" not in reason
+
+
 def test_reflection_cannot_spawn_same_fact_search_without_new_grounding() -> None:
     _, state = _runtime_state()
     fact_id = state.decisive_fact_ids[0]

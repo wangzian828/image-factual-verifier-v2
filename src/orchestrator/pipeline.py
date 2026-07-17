@@ -413,7 +413,10 @@ class Orchestrator:
             system_prompt=self._sp(IMAGE_ONLY_TARGET_PLANNING_PROMPT),
             tools=[],
             output_schema=TargetPlanningOutput,
-            max_rounds=2,
+            # Initial proposal plus three bounded correction opportunities.
+            # Planning remains finite, while one repeated supporting/metadata
+            # proposal does not make the whole case an engineering failure.
+            max_rounds=3,
             image_path=effective_image_path,
             stage_name="image_only_planning",
             attach_image=bool(effective_image_path),
@@ -1406,10 +1409,13 @@ class Orchestrator:
                 "or source-record proposition"
             )
         proposal = parsed.proposals[0]
-        if (
-            proposal.decision_relevance != "decisive"
-            or proposal.predicate == "visual_integrity"
-        ):
+        if proposal.decision_relevance != "decisive":
+            return False, (
+                "Target Planning must choose a decisive central image relation; "
+                "a supporting attribute, serial number, label, or incidental OCR "
+                "detail may guide retrieval but cannot own the verdict"
+            )
+        if proposal.predicate == "visual_integrity":
             return False, (
                 "Target Planning must return one decisive externally checkable "
                 "proposition, not a visual-integrity diagnostic"
