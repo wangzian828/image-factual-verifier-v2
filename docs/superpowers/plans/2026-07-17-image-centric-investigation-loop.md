@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-17
 
-**Status:** persistent-image main chain implemented; real-provider validation pending
+**Status:** persistent-image main chain implemented; bounded strategy checkpoint in progress
 
 ## 1. Problem
 
@@ -124,7 +124,31 @@ The runtime must not continue after an accepted terminal checkpoint. It also mus
 not stop merely because a numeric score, source class, missing same-capture image,
 or fixed prompt heuristic says so.
 
-### 3.5 Keep reliable deterministic boundaries
+### 3.5 Bounded continue / replan / stop control
+
+The existing low-gain and route-exhaustion signals are inputs to semantic strategy,
+not verdicts by themselves. At an interval boundary, or once immediately before an
+unresolved terminal outcome, Reflection chooses:
+
+- `continue`: name the concrete remaining route and expected information;
+- `replan`: replace the current search direction with one genuinely different
+  query and state what decisive information it should recover;
+- `stop_unresolved`: declare that bounded search has no worthwhile new direction.
+
+Termination remains provable:
+
+- total accepted tool actions never exceed 24;
+- each task has one immutable semantic replan allowance shared by evidence-led and
+  stagnation-led replanning;
+- at most one non-interval saturation Reflection may run per case;
+- an accepted replan does not reset actions, attempts, route history, Evidence, or
+  low-gain history;
+- the replacement query must pass runtime novelty validation;
+- stale candidates from the replaced direction are abandoned;
+- a rejected or unavailable final replan falls through to
+  `information_saturated`.
+
+### 3.6 Keep reliable deterministic boundaries
 
 Retain:
 
