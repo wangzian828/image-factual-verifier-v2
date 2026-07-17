@@ -58,6 +58,7 @@ from src.orchestrator.tool_registry import (
 )
 from src.orchestrator.tool_result import parse_tool_result, serialize_tool_result
 from src.orchestrator.task_store import (
+    MAX_REFLECTIONS,
     MAX_TOOL_ACTIONS,
     REFLECTION_INTERVAL,
     apply_evidence_decision,
@@ -66,6 +67,7 @@ from src.orchestrator.task_store import (
     evidence_decision_checkpoint_reason,
     next_action_boundary,
     pending_evidence_decision_ids,
+    query_refresh_candidate_task_ids,
     remaining_material_routes,
     record_tool_observation,
     runtime_task_tool_names,
@@ -697,6 +699,35 @@ class Orchestrator:
                     required=decision_trigger == "before_unverifiable",
                 )
 
+            route_exhaustion_reflection = False
+            if (
+                not remaining_material_routes(
+                    investigation,
+                    fact_id=investigation.core_verdict_fact_id or "",
+                )
+                and query_refresh_candidate_task_ids(investigation)
+                and len(investigation.reflections) < MAX_REFLECTIONS
+            ):
+                evidence_gain = len(investigation.evidence) > prior_evidence_count
+                decision_gain = (
+                    len(investigation.findings) > prior_finding_count
+                    or self._image_only_fact_signature(investigation)
+                    != prior_fact_signature
+                )
+                await self._run_image_only_reflection(
+                    state,
+                    investigation,
+                    evidence_gain=evidence_gain,
+                    decision_gain=decision_gain,
+                    route_exhaustion=True,
+                )
+                route_exhaustion_reflection = True
+                prior_evidence_count = len(investigation.evidence)
+                prior_finding_count = len(investigation.findings)
+                prior_fact_signature = self._image_only_fact_signature(
+                    investigation
+                )
+
             audit_coverage(
                 investigation,
                 decision_checkpoint=True,
@@ -706,6 +737,7 @@ class Orchestrator:
             if (
                 reflection_boundary
                 and not investigation.stop_reason
+                and not route_exhaustion_reflection
             ):
                 evidence_gain = len(investigation.evidence) > prior_evidence_count
                 decision_gain = (
@@ -818,6 +850,7 @@ class Orchestrator:
         *,
         evidence_gain: bool,
         decision_gain: bool,
+        route_exhaustion: bool = False,
     ) -> None:
         runner = StageRunner(
             llm=self.llm,
@@ -833,6 +866,7 @@ class Orchestrator:
                     parsed,
                     evidence_gain=evidence_gain,
                     decision_gain=decision_gain,
+                    route_exhaustion=route_exhaustion,
                 )
             ),
             max_output_tokens=self._stage_output_tokens("REFLECTION", 8192),
@@ -908,6 +942,7 @@ class Orchestrator:
         *,
         evidence_gain: bool,
         decision_gain: bool,
+        route_exhaustion: bool = False,
     ) -> tuple[bool, str]:
         candidate = investigation.model_copy(deep=True)
         record = apply_reflection(
@@ -920,8 +955,32 @@ class Orchestrator:
             parsed.task_updates
             or parsed.new_tasks
         )
+        proposed_query_refresh_task_ids = {
+            update.task_id
+            for update in parsed.task_updates
+            if update.replacement_queries is not None
+        }
+        rejected_query_refresh_task_ids = (
+            proposed_query_refresh_task_ids
+            - set(record.accepted_query_refresh_task_ids)
+        )
+        if rejected_query_refresh_task_ids:
+            return False, "; ".join(record.rejected_reasons) or (
+                "Reflection proposed an invalid semantic query refresh"
+            )
+        if (
+            route_exhaustion
+            and query_refresh_candidate_task_ids(investigation)
+            and not record.accepted_query_refresh_task_ids
+            and not parsed.ready_to_finish
+        ):
+            return False, (
+                "Route-exhaustion Reflection must either submit one valid "
+                "replacement query or set ready_to_finish=true."
+            )
         accepted_changes = bool(
             record.accepted_task_update_ids
+            or record.accepted_query_refresh_task_ids
             or record.accepted_new_task_ids
         )
         if proposed_changes and not accepted_changes:
@@ -1163,6 +1222,12 @@ class Orchestrator:
         branches: List[str] = []
         pages: List[str] = []
         references: List[str] = []
+        refreshed_queries: List[str] = []
+        task_by_id = {
+            task.task_id: task
+            for task in investigation.tasks
+            if task.task_id in task_ids
+        }
         for route in remaining_material_routes(
             investigation,
             fact_id=core_id,
@@ -1179,6 +1244,10 @@ class Orchestrator:
             elif parts[0] == "compare_with_reference" and len(parts) == 3:
                 if parts[1] in task_ids:
                     references.append(parts[2])
+            elif parts[0] == "text_search" and len(parts) == 2:
+                task = task_by_id.get(parts[1])
+                if task is not None and task.query_refresh_count:
+                    refreshed_queries.extend(task.suggested_queries)
         constraints: Dict[str, Dict[str, List[Any]]] = {}
         if branches:
             constraints["reverse_image_search"] = {
@@ -1191,6 +1260,10 @@ class Orchestrator:
         if references:
             constraints["compare_with_reference"] = {
                 "reference_url": list(dict.fromkeys(references))
+            }
+        if refreshed_queries:
+            constraints["text_search"] = {
+                "queries": list(dict.fromkeys(refreshed_queries))
             }
         return constraints
 

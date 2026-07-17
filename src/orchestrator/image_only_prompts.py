@@ -10,7 +10,10 @@ from src.orchestrator.investigation_models import (
     ImageOnlyInvestigationState,
     VerdictBasis,
 )
-from src.orchestrator.task_store import remaining_material_routes
+from src.orchestrator.task_store import (
+    query_refresh_candidate_task_ids,
+    remaining_material_routes,
+)
 from src.orchestrator.source_provenance import classify_source
 from src.orchestrator.source_provenance import canonicalize_url
 
@@ -28,10 +31,15 @@ the runtime owns task state, evidence, duplicate control, source policy, and ver
 
 REFLECTION_SYSTEM_PROMPT = """\
 You are the structured Reflection step of an image-only factual investigation.
-Review the global state after a four-action interval.
+Review the global state after a scheduled interval or when bounded retrieval
+routes are exhausted.
 
 You may reprioritize tasks, add up to three grounded tasks that serve the open core
 evidence gaps, recommend next tasks, and identify remaining gaps.
+
+When inspected search leads do not address the open core gap, you may replace one
+task's suggested queries with a genuinely different semantic search direction.
+This is a one-time bounded replan, not a paraphrase of an attempted query.
 
 You may not create Evidence or Findings, write a verdict, modify the immutable
 brief, delete history, cite unknown ids, change task status, or change the core
@@ -162,7 +170,7 @@ def pending_discovery_routes(
     seen_pages: set[str] = set()
     seen_references: set[str] = set()
     for item in state.discoveries:
-        if item.task_id not in active_task_ids:
+        if item.task_id not in active_task_ids or item.abandoned:
             continue
         page_url = canonicalize_url(item.candidate_url)
         if (
@@ -309,6 +317,7 @@ def render_react_context(state: ImageOnlyInvestigationState) -> str:
             "type": item.candidate_type,
         }
         for item in state.discoveries[-16:]
+        if not item.abandoned
     ]
     evidence = [
         {
@@ -430,6 +439,12 @@ def render_target_planning_context(
 
 
 def render_reflection_context(state: ImageOnlyInvestigationState) -> str:
+    attempted_routes = []
+    for route in state.attempted_routes[-16:]:
+        try:
+            attempted_routes.append(json.loads(route))
+        except (TypeError, ValueError):
+            continue
     return json.dumps(
         {
             "brief": state.brief.model_dump(mode="json"),
@@ -446,6 +461,15 @@ def render_reflection_context(state: ImageOnlyInvestigationState) -> str:
                 item.model_dump(mode="json")
                 for item in state.findings
             ],
+            "recent_discoveries": [
+                item.model_dump(mode="json")
+                for item in state.discoveries[-20:]
+            ],
+            "recent_evidence": [
+                item.model_dump(mode="json")
+                for item in state.evidence[-12:]
+            ],
+            "attempted_routes": attempted_routes,
             "source_families": sorted(
                 {
                     item.source_family
@@ -461,6 +485,17 @@ def render_reflection_context(state: ImageOnlyInvestigationState) -> str:
                 gap.model_dump(mode="json")
                 for gap in state.evidence_gaps
             ],
+            "remaining_material_routes": (
+                remaining_material_routes(
+                    state,
+                    fact_id=state.core_verdict_fact_id or "",
+                )
+                if state.core_verdict_fact_id
+                else []
+            ),
+            "query_refresh_candidate_task_ids": (
+                query_refresh_candidate_task_ids(state)
+            ),
             "remaining_actions": max(0, 24 - state.action_count),
         },
         ensure_ascii=False,

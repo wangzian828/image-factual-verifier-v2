@@ -155,6 +155,7 @@ class ResearchTask(StrictModel):
     origin_ids: List[str] = Field(min_length=1, max_length=12)
     suggested_tools: List[str] = Field(default_factory=list, max_length=4)
     suggested_queries: List[str] = Field(default_factory=list, max_length=3)
+    query_refresh_count: int = Field(default=0, ge=0, le=1)
     attempt_count: int = Field(default=0, ge=0)
     finding_ids: List[str] = Field(default_factory=list, max_length=20)
 
@@ -186,6 +187,8 @@ class InvestigationDiscovery(StrictModel):
     snippet: str = Field(default="", max_length=2000)
     candidate_type: Literal["serp", "reverse_image", "visual_reference"]
     promoted_evidence_id: Optional[str] = Field(default=None, max_length=100)
+    abandoned: bool = False
+    abandonment_reason: str = Field(default="", max_length=800)
 
 
 class InvestigationEvidence(StrictModel):
@@ -268,6 +271,11 @@ class InvestigationFailure(StrictModel):
 class TaskUpdate(StrictModel):
     task_id: str = Field(min_length=1, max_length=100)
     priority: Optional[int] = Field(default=None, ge=1, le=3)
+    replacement_queries: Optional[List[str]] = Field(
+        default=None,
+        min_length=1,
+        max_length=1,
+    )
     reason: str = Field(default="", max_length=800)
 
 
@@ -405,6 +413,10 @@ class ReflectionRecord(StrictModel):
     action_count: int = Field(ge=1)
     output: ReflectionOutput
     accepted_task_update_ids: List[str] = Field(default_factory=list, max_length=12)
+    accepted_query_refresh_task_ids: List[str] = Field(
+        default_factory=list,
+        max_length=4,
+    )
     accepted_new_task_ids: List[str] = Field(default_factory=list, max_length=3)
     rejected_reasons: List[str] = Field(default_factory=list, max_length=20)
     evidence_gain: bool = False

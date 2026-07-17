@@ -27,7 +27,10 @@ from src.orchestrator.investigation_models import (
     VisualFact,
 )
 from src.orchestrator.evidence_adjudication import assess_fact
-from src.orchestrator.route_policy import route_signature
+from src.orchestrator.route_policy import (
+    route_signature,
+    routes_semantically_equivalent,
+)
 from src.orchestrator.source_provenance import (
     canonicalize_url,
     classify_source,
@@ -2390,6 +2393,7 @@ def apply_reflection(
         *failure_ids,
     }
     accepted_updates: List[str] = []
+    accepted_query_refreshes: List[str] = []
     accepted_new: List[str] = []
     rejected: List[str] = []
 
@@ -2417,11 +2421,43 @@ def apply_reflection(
         if task is None:
             rejected.append(f"unknown task update {update.task_id}")
             continue
-        if update.priority is None:
-            rejected.append(f"{update.task_id} proposed no priority change")
+        proposed_queries = _novel_replacement_queries(
+            state,
+            task,
+            update.replacement_queries,
+        )
+        wants_query_refresh = update.replacement_queries is not None
+        if update.priority is None and not wants_query_refresh:
+            rejected.append(f"{update.task_id} proposed no state change")
             continue
-        task.priority = update.priority
-        accepted_updates.append(update.task_id)
+        changed = False
+        if update.priority is not None:
+            task.priority = update.priority
+            changed = True
+        if wants_query_refresh:
+            refresh_error = _query_refresh_error(
+                state,
+                task,
+                proposed_queries,
+            )
+            if refresh_error:
+                rejected.append(f"{update.task_id} {refresh_error}")
+            else:
+                task.suggested_queries = proposed_queries
+                task.query_refresh_count += 1
+                task.status = "active"
+                _abandon_stale_discoveries(
+                    state,
+                    task,
+                    reason=(
+                        update.reason
+                        or "Reflection replaced the exhausted search direction."
+                    ),
+                )
+                accepted_query_refreshes.append(task.task_id)
+                changed = True
+        if changed:
+            accepted_updates.append(update.task_id)
 
     semantic_keys = {
         _semantic_task_key(task.question): task.task_id
@@ -2496,6 +2532,7 @@ def apply_reflection(
         action_count=state.action_count,
         output=bounded_output,
         accepted_task_update_ids=accepted_updates,
+        accepted_query_refresh_task_ids=accepted_query_refreshes,
         accepted_new_task_ids=accepted_new,
         rejected_reasons=rejected,
         evidence_gain=evidence_gain,
@@ -2504,6 +2541,121 @@ def apply_reflection(
     state.reflections.append(record)
     state.reflection_failure_streak = 0
     return record
+
+
+def _novel_replacement_queries(
+    state: ImageOnlyInvestigationState,
+    task: ResearchTask,
+    proposed: Sequence[str] | None,
+) -> List[str]:
+    if proposed is None:
+        return []
+    attempted = _attempted_routes_by_task(state).get(task.task_id, [])
+    prior_queries: List[str] = list(task.suggested_queries)
+    for route in attempted:
+        if str(route.get("tool", "")).strip() != "text_search":
+            continue
+        values = route.get("queries", []) or []
+        if isinstance(values, str):
+            values = [values]
+        prior_queries.extend(str(value) for value in values)
+
+    accepted: List[str] = []
+    for raw_query in proposed:
+        query = " ".join(str(raw_query).split())
+        if not query:
+            continue
+        if any(
+            routes_semantically_equivalent(
+                "text_search",
+                {"queries": [query]},
+                "text_search",
+                {"queries": [prior]},
+            )
+            for prior in [*prior_queries, *accepted]
+            if prior
+        ):
+            continue
+        accepted.append(query)
+    return accepted[:3]
+
+
+def _query_refresh_error(
+    state: ImageOnlyInvestigationState,
+    task: ResearchTask,
+    proposed_queries: Sequence[str],
+) -> str:
+    if task.query_refresh_count >= 1:
+        return "already used its one semantic query refresh"
+    if "text_search" not in runtime_task_tool_names(state, task):
+        return "cannot refresh queries because text_search is not enabled"
+    if state.core_verdict_fact_id not in task.fact_ids:
+        return "cannot refresh queries for a task outside the open core fact"
+    core = next(
+        (
+            fact
+            for fact in state.facts
+            if fact.fact_id == state.core_verdict_fact_id
+        ),
+        None,
+    )
+    if core is None or core.status in {"supported", "refuted"}:
+        return "cannot refresh queries after the core fact is resolved"
+    if not proposed_queries:
+        return "proposed no genuinely new semantic query"
+
+    attempts = _attempted_routes_by_task(state).get(task.task_id, [])
+    text_search_count = sum(
+        str(route.get("tool", "")).strip() == "text_search"
+        for route in attempts
+    )
+    if text_search_count < MAX_TEXT_SEARCH_ROUTES_PER_TASK:
+        return (
+            "cannot refresh before the initial text-search allowance is "
+            "exhausted"
+        )
+    latest_text_search_index = max(
+        (
+            index
+            for index, route in enumerate(attempts)
+            if str(route.get("tool", "")).strip() == "text_search"
+        ),
+        default=-1,
+    )
+    latest_search_outcome = (
+        str(attempts[latest_text_search_index].get("outcome", "")).strip()
+        if latest_text_search_index >= 0
+        else ""
+    )
+    inspected_after_latest_search = any(
+        str(route.get("tool", "")).strip()
+        in {"visit", "compare_with_reference"}
+        for route in attempts[latest_text_search_index + 1 :]
+    )
+    if (
+        latest_search_outcome == "discovery"
+        and not inspected_after_latest_search
+    ):
+        return (
+            "cannot abandon the latest search batch before inspecting at "
+            "least one candidate"
+        )
+    return ""
+
+
+def _abandon_stale_discoveries(
+    state: ImageOnlyInvestigationState,
+    task: ResearchTask,
+    *,
+    reason: str,
+) -> None:
+    for discovery in state.discoveries:
+        if (
+            discovery.task_id == task.task_id
+            and not discovery.abandoned
+        ):
+            discovery.abandoned = True
+            discovery.abandonment_reason = reason[:800]
 
 
 def _record_discoveries(
@@ -3213,6 +3365,50 @@ def remaining_material_routes(
     return list(dict.fromkeys(routes))
 
 
+def query_refresh_candidate_task_ids(
+    state: ImageOnlyInvestigationState,
+) -> List[str]:
+    """Return unresolved core tasks eligible for one exhausted-route replan."""
+
+    core_id = state.core_verdict_fact_id
+    core = next(
+        (fact for fact in state.facts if fact.fact_id == core_id),
+        None,
+    )
+    if core is None or core.status in {"supported", "refuted"}:
+        return []
+
+    attempts_by_task = _attempted_routes_by_task(state)
+    eligible: List[str] = []
+    for task in state.tasks:
+        if (
+            core_id not in task.fact_ids
+            or task.query_refresh_count >= 1
+            or "text_search" not in runtime_task_tool_names(state, task)
+        ):
+            continue
+        attempts = attempts_by_task.get(task.task_id, [])
+        text_search_indexes = [
+            index
+            for index, route in enumerate(attempts)
+            if str(route.get("tool", "")).strip() == "text_search"
+        ]
+        if len(text_search_indexes) < MAX_TEXT_SEARCH_ROUTES_PER_TASK:
+            continue
+        latest_index = text_search_indexes[-1]
+        latest_outcome = str(
+            attempts[latest_index].get("outcome", "")
+        ).strip()
+        if latest_outcome == "discovery" and not any(
+            str(route.get("tool", "")).strip()
+            in {"visit", "compare_with_reference"}
+            for route in attempts[latest_index + 1 :]
+        ):
+            continue
+        eligible.append(task.task_id)
+    return eligible
+
+
 def runtime_task_tool_names(
     state: ImageOnlyInvestigationState,
     task: ResearchTask,
@@ -3226,7 +3422,7 @@ def runtime_task_tool_names(
 
     allowed = set(task.suggested_tools)
     for discovery in state.discoveries:
-        if discovery.task_id != task.task_id:
+        if discovery.task_id != task.task_id or discovery.abandoned:
             continue
         if canonicalize_url(discovery.candidate_url):
             allowed.add("visit")
@@ -3338,7 +3534,8 @@ def _remaining_task_material_routes(
                 )
     if (
         "text_search" in allowed
-        and text_search_count < MAX_TEXT_SEARCH_ROUTES_PER_TASK
+        and text_search_count
+        < MAX_TEXT_SEARCH_ROUTES_PER_TASK + task.query_refresh_count
     ):
         routes.append(f"text_search:{task.task_id}")
     for tool_name in (
@@ -3387,7 +3584,7 @@ def _pending_inspection_batches(
 
     discovery_batches: Dict[str, List[InvestigationDiscovery]] = {}
     for discovery in state.discoveries:
-        if discovery.task_id == task.task_id:
+        if discovery.task_id == task.task_id and not discovery.abandoned:
             discovery_batches.setdefault(
                 discovery.function_call_id,
                 [],

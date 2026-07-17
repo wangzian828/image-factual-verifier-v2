@@ -4078,6 +4078,443 @@ def test_task_exhausts_when_finite_routes_are_consumed() -> None:
     )
 
 
+def test_reflection_refreshes_exhausted_search_direction_once() -> None:
+    case, state = _runtime_state()
+    task = next(
+        item
+        for item in state.tasks
+        if state.core_verdict_fact_id in item.fact_ids
+    )
+    task.suggested_tools = ["text_search", "visit"]
+    task.suggested_queries = ["Andreea Esca bicarbonat"]
+
+    for index, query in enumerate(
+        [
+            "Andreea Esca bicarbonat",
+            "Andreea Esca Dr Oetker",
+        ]
+    ):
+        url = f"https://example.org/irrelevant-{index}"
+        search_step = _step(
+            task_id=task.task_id,
+            call_id=f"call-search-{index}",
+            tool_name="text_search",
+            result=json.dumps(
+                {
+                    "status": "success",
+                    "queries": [
+                        {
+                            "query": query,
+                            "results": [
+                                {
+                                    "title": "Unrelated profile",
+                                    "url": url,
+                                    "snippet": "A different capture and topic.",
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ),
+        )
+        search_step.tool_args["queries"] = [query]
+        record_tool_observation(
+            state,
+            search_step,
+            image_sha256=case.image_sha256,
+        )
+        visit_step = _step(
+            task_id=task.task_id,
+            call_id=f"call-visit-{index}",
+            tool_name="visit",
+            result=json.dumps(
+                {
+                    "status": "success",
+                    "url": url,
+                    "selected_url": url,
+                    "evidence": "",
+                }
+            ),
+        )
+        visit_step.tool_args["url"] = url
+        record_tool_observation(
+            state,
+            visit_step,
+            image_sha256=case.image_sha256,
+        )
+
+    assert not remaining_material_routes(
+        state,
+        fact_id=state.core_verdict_fact_id or "",
+    )
+    state.action_count = max(4, state.action_count)
+    record = apply_reflection(
+        state,
+        ReflectionOutput(
+            task_updates=[
+                TaskUpdate(
+                    task_id=task.task_id,
+                    replacement_queries=[
+                        "Andreea Esca impersonation supplement scam"
+                    ],
+                    reason=(
+                        "The product-name route found unrelated captures; "
+                        "test whether the visible endorsement is an impersonation."
+                    ),
+                )
+            ]
+        ),
+        evidence_gain=False,
+        decision_gain=False,
+    )
+
+    assert record.accepted_query_refresh_task_ids == [task.task_id]
+    assert task.query_refresh_count == 1
+    assert task.suggested_queries == [
+        "Andreea Esca impersonation supplement scam"
+    ]
+    assert task.status == "active"
+    assert state.discoveries
+    assert all(item.abandoned for item in state.discoveries)
+    assert remaining_material_routes(
+        state,
+        fact_id=state.core_verdict_fact_id or "",
+    ) == [f"text_search:{task.task_id}"]
+    assert Orchestrator._image_only_tool_argument_constraints(
+        state,
+        task_ids={task.task_id},
+    ) == {
+        "text_search": {
+            "queries": [
+                "Andreea Esca impersonation supplement scam"
+            ]
+        }
+    }
+    assert pending_discovery_routes(
+        state,
+        task_ids={task.task_id},
+    ) == {"pages": [], "references": []}
+
+
+def test_reflection_rejects_second_query_refresh_and_third_search_route() -> None:
+    case, state = _runtime_state()
+    task = next(
+        item
+        for item in state.tasks
+        if state.core_verdict_fact_id in item.fact_ids
+    )
+    task.suggested_tools = ["text_search"]
+    task.query_refresh_count = 1
+    task.suggested_queries = ["new semantic direction"]
+    for index, query in enumerate(["old one", "old two", "new semantic direction"]):
+        step = _step(
+            task_id=task.task_id,
+            call_id=f"call-search-{index}",
+            tool_name="text_search",
+            result=json.dumps(
+                {
+                    "status": "success",
+                    "queries": [{"query": query, "results": []}],
+                }
+            ),
+        )
+        step.tool_args["queries"] = [query]
+        record_tool_observation(
+            state,
+            step,
+            image_sha256=case.image_sha256,
+        )
+
+    state.action_count = max(4, state.action_count)
+    record = apply_reflection(
+        state,
+        ReflectionOutput(
+            task_updates=[
+                TaskUpdate(
+                    task_id=task.task_id,
+                    replacement_queries=["another unrelated direction"],
+                    reason="Try again.",
+                )
+            ]
+        ),
+        evidence_gain=False,
+        decision_gain=False,
+    )
+
+    assert not record.accepted_query_refresh_task_ids
+    assert any(
+        "already used its one semantic query refresh" in reason
+        for reason in record.rejected_reasons
+    )
+    assert not remaining_material_routes(
+        state,
+        fact_id=state.core_verdict_fact_id or "",
+    )
+
+
+def test_reflection_rejects_semantic_duplicate_query_refresh() -> None:
+    case, state = _runtime_state()
+    task = next(
+        item
+        for item in state.tasks
+        if state.core_verdict_fact_id in item.fact_ids
+    )
+    task.suggested_tools = ["text_search"]
+    task.suggested_queries = ["Andreea Esca fake health advertisement"]
+    for index, query in enumerate(
+        [
+            "Andreea Esca fake health advertisement",
+            "Andreea Esca health ad fake",
+        ]
+    ):
+        step = _step(
+            task_id=task.task_id,
+            call_id=f"call-search-{index}",
+            tool_name="text_search",
+            result=json.dumps(
+                {
+                    "status": "success",
+                    "queries": [{"query": query, "results": []}],
+                }
+            ),
+        )
+        step.tool_args["queries"] = [query]
+        record_tool_observation(
+            state,
+            step,
+            image_sha256=case.image_sha256,
+        )
+
+    state.action_count = max(4, state.action_count)
+    record = apply_reflection(
+        state,
+        ReflectionOutput(
+            task_updates=[
+                TaskUpdate(
+                    task_id=task.task_id,
+                    replacement_queries=[
+                        "fake advertisement health Andreea Esca"
+                    ],
+                    reason="Paraphrase the same route.",
+                )
+            ]
+        ),
+        evidence_gain=False,
+        decision_gain=False,
+    )
+
+    assert not record.accepted_query_refresh_task_ids
+    assert any(
+        "no genuinely new semantic query" in reason
+        for reason in record.rejected_reasons
+    )
+    assert task.query_refresh_count == 0
+
+
+def test_reflection_validator_rejects_invalid_refresh_despite_priority_change() -> None:
+    case, state = _runtime_state()
+    task = next(
+        item
+        for item in state.tasks
+        if state.core_verdict_fact_id in item.fact_ids
+    )
+    task.suggested_tools = ["text_search"]
+    task.suggested_queries = ["Andreea Esca fake health advertisement"]
+    for index, query in enumerate(
+        [
+            "Andreea Esca fake health advertisement",
+            "Andreea Esca health ad fake",
+        ]
+    ):
+        step = _step(
+            task_id=task.task_id,
+            call_id=f"call-validator-search-{index}",
+            tool_name="text_search",
+            result=json.dumps(
+                {
+                    "status": "success",
+                    "queries": [{"query": query, "results": []}],
+                }
+            ),
+        )
+        step.tool_args["queries"] = [query]
+        record_tool_observation(
+            state,
+            step,
+            image_sha256=case.image_sha256,
+        )
+
+    valid, reason = Orchestrator._validate_image_only_reflection(
+        state,
+        ReflectionOutput(
+            task_updates=[
+                TaskUpdate(
+                    task_id=task.task_id,
+                    priority=2,
+                    replacement_queries=[
+                        "fake advertisement health Andreea Esca"
+                    ],
+                    reason="The same route with a priority change.",
+                )
+            ]
+        ),
+        evidence_gain=False,
+        decision_gain=False,
+    )
+
+    assert valid is False
+    assert "no genuinely new semantic query" in reason
+
+
+def test_route_exhaustion_reflection_requires_refresh_or_explicit_finish() -> None:
+    case, state = _runtime_state()
+    task = next(
+        item
+        for item in state.tasks
+        if state.core_verdict_fact_id in item.fact_ids
+    )
+    task.suggested_tools = ["text_search"]
+    for index in range(2):
+        query = f"exhausted direction {index}"
+        step = _step(
+            task_id=task.task_id,
+            call_id=f"call-route-exhaustion-{index}",
+            tool_name="text_search",
+            result=json.dumps(
+                {
+                    "status": "success",
+                    "queries": [{"query": query, "results": []}],
+                }
+            ),
+        )
+        step.tool_args["queries"] = [query]
+        record_tool_observation(
+            state,
+            step,
+            image_sha256=case.image_sha256,
+        )
+
+    valid, reason = Orchestrator._validate_image_only_reflection(
+        state,
+        ReflectionOutput(
+            task_updates=[
+                TaskUpdate(
+                    task_id=task.task_id,
+                    priority=2,
+                    reason="Only reprioritize the exhausted task.",
+                )
+            ]
+        ),
+        evidence_gain=False,
+        decision_gain=False,
+        route_exhaustion=True,
+    )
+    finish_valid, finish_reason = Orchestrator._validate_image_only_reflection(
+        state,
+        ReflectionOutput(
+            ready_to_finish=True,
+            remaining_gaps=["No distinct semantic search direction remains."],
+        ),
+        evidence_gain=False,
+        decision_gain=False,
+        route_exhaustion=True,
+    )
+
+    assert valid is False
+    assert "replacement query or set ready_to_finish=true" in reason
+    assert finish_valid is True
+    assert finish_reason == ""
+
+
+def test_reflection_cannot_abandon_uninspected_latest_search_batch() -> None:
+    case, state = _runtime_state()
+    task = next(
+        item
+        for item in state.tasks
+        if state.core_verdict_fact_id in item.fact_ids
+    )
+    task.suggested_tools = ["text_search", "visit"]
+    for index in range(2):
+        query = f"search direction {index}"
+        step = _step(
+            task_id=task.task_id,
+            call_id=f"call-search-{index}",
+            tool_name="text_search",
+            result=json.dumps(
+                {
+                    "status": "success",
+                    "queries": [
+                        {
+                            "query": query,
+                            "results": [
+                                {
+                                    "title": "Candidate",
+                                    "url": f"https://example.org/candidate-{index}",
+                                    "snippet": "Potentially relevant.",
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ),
+        )
+        step.tool_args["queries"] = [query]
+        record_tool_observation(
+            state,
+            step,
+            image_sha256=case.image_sha256,
+        )
+        if index == 0:
+            visit = _step(
+                task_id=task.task_id,
+                call_id="call-visit-first",
+                tool_name="visit",
+                result=json.dumps(
+                    {
+                        "status": "success",
+                        "url": "https://example.org/candidate-0",
+                        "selected_url": "https://example.org/candidate-0",
+                        "evidence": "",
+                    }
+                ),
+            )
+            visit.tool_args["url"] = "https://example.org/candidate-0"
+            record_tool_observation(
+                state,
+                visit,
+                image_sha256=case.image_sha256,
+            )
+
+    state.action_count = max(4, state.action_count)
+    record = apply_reflection(
+        state,
+        ReflectionOutput(
+            task_updates=[
+                TaskUpdate(
+                    task_id=task.task_id,
+                    replacement_queries=["new fraud investigation direction"],
+                    reason="Change direction.",
+                )
+            ]
+        ),
+        evidence_gain=False,
+        decision_gain=False,
+    )
+
+    assert not record.accepted_query_refresh_task_ids
+    assert any(
+        "before inspecting at least one candidate" in reason
+        for reason in record.rejected_reasons
+    )
+    assert any(
+        route.startswith(f"visit:{task.task_id}:")
+        for route in remaining_material_routes(
+            state,
+            fact_id=state.core_verdict_fact_id or "",
+        )
+    )
+
+
 def test_conflict_requires_discriminating_evidence_before_resolution() -> None:
     fact = VisualFact(
         fact_id="fact-conflict",
