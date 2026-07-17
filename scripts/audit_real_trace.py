@@ -592,10 +592,17 @@ def _audit_image_only_interaction_chains(
     steps: Sequence[Mapping[str, Any]],
     report: TraceReport,
 ) -> None:
+    main_chain_stages = {
+        "image_only_planning",
+        "image_only_investigation",
+        "image_only_evidence_decision",
+        "image_only_reflection",
+        "image_only_judgment",
+    }
     stage_steps = [
         (index, step)
         for index, step in enumerate(steps)
-        if str(step.get("stage", "")) == "image_only_investigation"
+        if str(step.get("stage", "")) in main_chain_stages
     ]
     native_step_count = sum(
         bool(_mapping(step.get("metadata")).get("native_interactions"))
@@ -605,19 +612,15 @@ def _audit_image_only_interaction_chains(
         _issue(
             report,
             "IMAGE_ONLY_INTERACTIONS_MISSING",
-            "image-only trace contains no native investigation interactions",
+            "image-only trace contains no native main-chain interactions",
             location="state.all_steps",
         )
         return
 
     previous: str | None = None
-    segment_count = 0
+    root_count = 0
     for index, step in stage_steps:
         metadata = _mapping(step.get("metadata"))
-        if metadata.get("deterministic_segment_boundary"):
-            previous = None
-            segment_count += 1
-            continue
         if not metadata.get("native_interactions"):
             continue
         interaction_id = str(metadata.get("interaction_id", "")).strip()
@@ -641,11 +644,19 @@ def _audit_image_only_interaction_chains(
                 location=location,
             )
         if previous is None:
+            root_count += 1
             if parent:
                 _issue(
                     report,
                     "INTERACTION_CHAIN_ROOT_INVALID",
-                    f"image-only segment root must have null parent, got {parent!r}",
+                    f"image-only main-chain root must have null parent, got {parent!r}",
+                    location=location,
+                )
+            if str(step.get("stage", "")) != "image_only_planning":
+                _issue(
+                    report,
+                    "INTERACTION_CHAIN_ROOT_STAGE_INVALID",
+                    "image-only main chain must begin at Target Planning",
                     location=location,
                 )
         elif parent != previous:
@@ -656,12 +667,9 @@ def _audit_image_only_interaction_chains(
                 location=location,
             )
         previous = interaction_id
-        if str(step.get("action_type", "")) == "output":
-            previous = None
-            segment_count += 1
 
     report.stats["image_only_interaction_steps"] = native_step_count
-    report.stats["image_only_interaction_segments"] = max(1, segment_count)
+    report.stats["image_only_interaction_segments"] = root_count
 
 
 def _audit_image_only_trace(

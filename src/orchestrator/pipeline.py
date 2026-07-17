@@ -45,7 +45,11 @@ from src.orchestrator.investigation_models import (
     TargetPlanningOutput,
 )
 from src.orchestrator.llm_backend import APIBackend
-from src.orchestrator.stage_runner import StageRunner, StageStep
+from src.orchestrator.stage_runner import (
+    InteractionSession,
+    StageRunner,
+    StageStep,
+)
 from src.orchestrator.source_access import SourceAccessPolicy
 from src.orchestrator.source_provenance import canonicalize_url
 from src.orchestrator.state import (
@@ -304,15 +308,19 @@ class Orchestrator:
             investigation = state_from_bootstrap(bootstrap)
             state.investigation_state = investigation
             self._sync_image_only_state(state, investigation)
+            investigation_session = InteractionSession()
             await self._run_image_only_target_planning(
                 state,
                 investigation,
+                image_path=image_path,
+                interaction_session=investigation_session,
             )
             await self._run_image_only_investigation(
                 state,
                 investigation,
                 image_path,
                 runtime_case,
+                interaction_session=investigation_session,
             )
             self._require_successful_image_only_investigation(state)
             coverage = (
@@ -327,6 +335,7 @@ class Orchestrator:
                 coverage,
                 compiled_verdict,
                 basis,
+                interaction_session=investigation_session,
             )
             judgment = self._normalize_incomplete_judgment(
                 investigation,
@@ -392,17 +401,23 @@ class Orchestrator:
         self,
         state: VerificationState,
         investigation: ImageOnlyInvestigationState,
+        *,
+        image_path: str = "",
+        interaction_session: Optional[InteractionSession] = None,
     ) -> None:
         """Let the policy induce bounded factual targets from visible state."""
 
+        effective_image_path = image_path or state.image_path
         runner = StageRunner(
             llm=self.llm,
             system_prompt=self._sp(IMAGE_ONLY_TARGET_PLANNING_PROMPT),
             tools=[],
             output_schema=TargetPlanningOutput,
             max_rounds=2,
+            image_path=effective_image_path,
             stage_name="image_only_planning",
-            attach_image=False,
+            attach_image=bool(effective_image_path),
+            interaction_session=interaction_session,
             output_validator=lambda parsed, _steps: (
                 self._validate_image_only_target_planning(
                     investigation,
@@ -458,6 +473,8 @@ class Orchestrator:
         investigation: ImageOnlyInvestigationState,
         image_path: str,
         runtime_case: ImageOnlyRuntimeCase,
+        *,
+        interaction_session: InteractionSession,
     ) -> None:
         started = time.time()
         prior_evidence_count = len(investigation.evidence)
@@ -489,6 +506,7 @@ class Orchestrator:
                         investigation,
                         trigger=decision_trigger,
                         required=True,
+                        interaction_session=interaction_session,
                     )
                 audit_coverage(
                     investigation,
@@ -502,6 +520,7 @@ class Orchestrator:
                     investigation,
                     trigger="before_unverifiable",
                     required=True,
+                    interaction_session=interaction_session,
                 )
                 audit_coverage(investigation)
                 break
@@ -514,6 +533,7 @@ class Orchestrator:
                     investigation,
                     trigger="before_unverifiable",
                     required=True,
+                    interaction_session=interaction_session,
                 )
                 if reviewed and any(
                     task.status in {"active", "pending"}
@@ -538,6 +558,7 @@ class Orchestrator:
                     investigation,
                     trigger="before_unverifiable",
                     required=True,
+                    interaction_session=interaction_session,
                 )
                 if reviewed and select_image_only_react_tasks(investigation):
                     audit_coverage(investigation)
@@ -555,6 +576,7 @@ class Orchestrator:
                     investigation,
                     trigger="before_unverifiable",
                     required=True,
+                    interaction_session=interaction_session,
                 )
                 if reviewed:
                     refreshed_tasks = select_image_only_react_tasks(
@@ -672,6 +694,7 @@ class Orchestrator:
                 max_protocol_corrections=4,
                 max_tool_calls_per_turn=1,
                 force_tool_each_round=True,
+                interaction_session=interaction_session,
                 question_is_active=lambda task_id: any(
                     task.task_id == task_id
                     and task.status in {"active", "pending"}
@@ -738,6 +761,7 @@ class Orchestrator:
                     investigation,
                     trigger=decision_trigger,
                     required=decision_trigger == "before_unverifiable",
+                    interaction_session=interaction_session,
                 )
 
             query_replan_ran = False
@@ -785,6 +809,7 @@ class Orchestrator:
                     investigation,
                     evidence_gain=evidence_gain,
                     decision_gain=decision_gain,
+                    interaction_session=interaction_session,
                 )
                 audit_coverage(
                     investigation,
@@ -916,6 +941,7 @@ class Orchestrator:
         *,
         trigger: str,
         required: bool,
+        interaction_session: Optional[InteractionSession] = None,
     ) -> bool:
         """Review accumulated Evidence only at a material control boundary."""
 
@@ -933,6 +959,7 @@ class Orchestrator:
             max_rounds=2,
             stage_name="image_only_evidence_decision",
             attach_image=False,
+            interaction_session=interaction_session,
             output_validator=lambda parsed, _steps: (
                 self._validate_image_only_evidence_decision(
                     investigation,
@@ -997,6 +1024,7 @@ class Orchestrator:
         *,
         evidence_gain: bool,
         decision_gain: bool,
+        interaction_session: Optional[InteractionSession] = None,
     ) -> None:
         runner = StageRunner(
             llm=self.llm,
@@ -1006,6 +1034,7 @@ class Orchestrator:
             max_rounds=1,
             stage_name="image_only_reflection",
             attach_image=False,
+            interaction_session=interaction_session,
             output_validator=lambda parsed, _steps: (
                 self._validate_image_only_reflection(
                     investigation,
@@ -1161,6 +1190,8 @@ class Orchestrator:
         coverage: Any,
         compiled_verdict: str,
         basis: Any,
+        *,
+        interaction_session: InteractionSession,
     ) -> ImageOnlyJudgment:
         runner = StageRunner(
             llm=self.llm,
@@ -1170,6 +1201,7 @@ class Orchestrator:
             max_rounds=1,
             stage_name="image_only_judgment",
             attach_image=False,
+            interaction_session=interaction_session,
             output_validator=lambda parsed, _steps: (
                 self._validate_image_only_judgment(
                     parsed,

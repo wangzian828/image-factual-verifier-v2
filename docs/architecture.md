@@ -23,7 +23,10 @@ ImageOnlyRuntimeCase
   -> layered ocr_with_position (optional PP-OCR service, EasyOCR fallback)
   -> deterministic InvestigationBrief / VisualEntity / VisualFact bootstrap
   -> deterministic initial ResearchTasks (maximum 4)
-  -> model-driven target Planning grounded in visible facts and OCR
+  -> stateful Gemini main investigation chain
+       Target Planning receives the original image once
+       later policy stages inherit that image through previous_interaction_id
+  -> model-driven target Planning grounded in image, visible facts, and OCR
   -> one stable CoreVerdictFact + bounded EvidenceGaps
   -> native Gemini Interactions ReAct
        model selects the first evidence route
@@ -42,6 +45,15 @@ The hard action budget is 24. Every accepted ReAct tool call counts as one actio
 the first route is selected by Planning/ReAct and is not fixed to reverse-image
 search. Structured output, Planning, Reflection, Judgment, rejected calls, and
 protocol corrections do not count as tool actions.
+
+The original image is not uploaded again for every stage. Target Planning creates
+the one stored main-chain root with the image attached. ReAct, Evidence Decision,
+Reflection, and Judgment continue from that root through
+`previous_interaction_id`. Query Concept Extraction, Query Replan, webpage
+extraction, OCR, and tool-internal VLM calls remain independent auxiliary
+interactions. A tool-bearing segment may leave one pending `function_result`; the
+next main-chain stage submits it together with a `user_input` step containing the
+new structured runtime context.
 
 ## 3. Runtime input and isolation
 
@@ -104,8 +116,9 @@ known active task ID as `question_id`; deterministic code validates schemas, sou
 policy, semantic route duplicates across segments, budgets, and provider selection
 before execution.
 
-Before ReAct begins, Target Planning must establish one atomic, externally checkable
-core proposition grounded in pixel/OCR facts. Bootstrap `appears_to_depict` prose
+Before ReAct begins, Target Planning sees the original image and must establish one
+atomic, externally checkable core proposition grounded in the image and pixel/OCR
+facts. Bootstrap `appears_to_depict` prose
 remains perception state and cannot own the verdict. If the bounded Planning
 correction cannot produce a valid core, the runtime fails explicitly as an
 engineering error.
@@ -273,8 +286,9 @@ The verdict compiler is deterministic:
 
 It compiles `VerdictBasis` from the smallest sufficient winning
 fact/Finding/Evidence chain. A fake basis contains one strongest decisive refutation.
-The final Gemini `ImageOnlyJudgment` must return the same verdict, policy, ID sets,
-and unresolved gaps. Model prose cannot add facts or citations.
+The final Gemini `ImageOnlyJudgment` continues the stored main investigation chain
+and must return the same verdict, policy, ID sets, and unresolved gaps. Model prose
+cannot add facts or citations.
 
 The strict chain is:
 
@@ -349,6 +363,11 @@ Judgment request/action boundaries. Bootstrap remains deterministic. Discovery s
 separate from Evidence. Public title, creator, date, platform, and asset metadata may
 remain retrieval context or supporting trace records, but cannot replace the core
 fact. Only the one bounded visual-slot refinement described above may do so.
+
+Policy snapshots preserve the text, schemas, interaction IDs, and a
+`runtime_image=true` media reference. They never persist the original image base64
+inside the trace or tokenize it as text. The public runtime case and perception
+trajectory retain the corresponding `image_path` and `image_sha256`.
 
 Initial Planning may propose alternatives, but the runtime selects one core factual
 relation. Other facets remain supporting. For example, a screenshot can yield:

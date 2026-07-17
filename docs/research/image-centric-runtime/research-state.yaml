@@ -7,10 +7,10 @@ baseline_commit: 5f4ac7e
 active_hypothesis: H1
 hypotheses:
   H1:
-    status: planned
+    status: implemented_pending_real_validation
     prediction: >
-      Multimodal Planning, ReAct, semantic checkpoints, and Judgment preserve
-      salient image relations better than text-only policy stages.
+      A single image-bearing Planning root followed by a stateful main policy chain
+      preserves salient image relations better than isolated text-only stages.
   H2:
     status: pending
     prediction: >
@@ -23,4 +23,3 @@ metrics:
   - low_value_actions
   - strict_trace_audit
   - llm_api_calls
-

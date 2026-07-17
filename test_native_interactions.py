@@ -8,7 +8,11 @@ import pytest
 from pydantic import BaseModel, Field
 
 from src.orchestrator.source_access import SourceAccessPolicy
-from src.orchestrator.stage_runner import StageRunner, StageStep
+from src.orchestrator.stage_runner import (
+    InteractionSession,
+    StageRunner,
+    StageStep,
+)
 from src.tools.base import BaseTool
 from src.tools.visit import VisitTool
 from test_support_models import ToolStageOutput
@@ -207,6 +211,91 @@ def test_native_function_call_round_trip() -> None:
     assert returned["function_call_id"] == "call-1"
     assert "directly answers" in json.dumps(returned["result"])
     assert "is_error" not in function_result
+
+
+def test_shared_session_carries_pending_function_result_into_next_stage() -> None:
+    backend = NativeFakeBackend(
+        [
+            _function_call_response(),
+            {
+                "id": "checkpoint-interaction",
+                "status": "completed",
+                "usage": {
+                    "total_input_tokens": 25,
+                    "total_output_tokens": 10,
+                },
+                "steps": [
+                    {
+                        "type": "model_output",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": json.dumps(
+                                    {"value": "reviewed tool observation"}
+                                ),
+                            }
+                        ],
+                    }
+                ],
+            },
+        ]
+    )
+    session = InteractionSession(previous_interaction_id="planning-interaction")
+    tool = RecordingTool()
+    react = StageRunner(
+        llm=backend,
+        system_prompt="Choose one investigation tool.",
+        tools=[tool],
+        output_schema=NativeStructuredOutput,
+        max_rounds=1,
+        stage_name="verification",
+        min_tool_calls=1,
+        attach_image=False,
+        interaction_session=session,
+        force_tool_each_round=True,
+        should_stop=lambda steps: any(
+            step.action_type == "tool_call" for step in steps
+        ),
+        stop_output_factory=lambda: NativeStructuredOutput(value="boundary"),
+    )
+    checkpoint = StageRunner(
+        llm=backend,
+        system_prompt="Review the tool observation.",
+        tools=[],
+        output_schema=NativeStructuredOutput,
+        max_rounds=1,
+        stage_name="checkpoint",
+        attach_image=False,
+        interaction_session=session,
+    )
+
+    react_output, react_steps = asyncio.run(
+        react.run("Investigation questions:\n- [q1] inspect the source")
+    )
+    assert react_output is not None
+    assert react_steps[0].action_type == "tool_call"
+    assert session.previous_interaction_id == "interaction-1"
+    assert len(session.pending_input) == 1
+
+    checkpoint_output, _ = asyncio.run(
+        checkpoint.run("Current evidence checkpoint context")
+    )
+
+    assert checkpoint_output is not None
+    react_request, checkpoint_request = backend.requests
+    assert react_request["previous_interaction_id"] == "planning-interaction"
+    assert checkpoint_request["previous_interaction_id"] == "interaction-1"
+    checkpoint_input = checkpoint_request["input_payload"]
+    assert [item["type"] for item in checkpoint_input] == [
+        "function_result",
+        "user_input",
+    ]
+    assert checkpoint_input[0]["call_id"] == "call-1"
+    assert checkpoint_input[1]["content"] == [
+        {"type": "text", "text": "Current evidence checkpoint context"}
+    ]
+    assert session.previous_interaction_id == "checkpoint-interaction"
+    assert session.pending_input == []
 
 
 def test_native_schema_rejects_non_numeric_array_items() -> None:

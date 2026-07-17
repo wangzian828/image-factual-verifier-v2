@@ -517,6 +517,7 @@ def _validate_input_item_kinds(value: Any) -> None:
     step_types = {
         "function_result",
         "function_call",
+        "user_input",
         "message",
         "model_output",
         "thought",

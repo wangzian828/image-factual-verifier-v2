@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-17
 
-**Status:** active implementation plan
+**Status:** persistent-image main chain implemented; real-provider validation pending
 
 ## 1. Problem
 
@@ -49,16 +49,17 @@ conclusions may cite only real observations.
 
 ### 3.1 Image visibility
 
-The original image must be attached to:
+The original image is attached once to Target Planning, which creates the stored
+Gemini main investigation chain. ReAct, Evidence Decision, Reflection, and Judgment
+inherit it through `previous_interaction_id`; they do not upload it again.
 
-- Target Planning;
-- every ReAct action selection;
-- every investigation checkpoint;
-- final Judgment.
+Query Concept Extraction, Query Replan, OCR, webpage extraction, and tool-internal
+visual calls remain independent. Tool-internal visual calls are still used for
+focused crops, semantic image retrieval, and reference comparison.
 
-Tool-internal visual calls remain available for focused crops, semantic image
-retrieval, and reference comparison. They complement rather than replace the
-shared original-image context.
+When a one-action ReAct segment ends after a function call, the pending
+`function_result` is submitted with the next main-chain `user_input`. This preserves
+the native tool protocol across deterministic state boundaries.
 
 ### 3.2 Replace the frozen target with a revision history
 
@@ -151,11 +152,12 @@ Remove or retire:
 Prediction: attaching the original image at semantic and action-selection
 boundaries preserves event/relation qualifiers without sample-specific rules.
 
-First ablation:
+Implemented first change:
 
 - no changes to search providers, Evidence provenance, source policy, or action
   budget;
-- make Planning, ReAct, existing semantic checkpoints, and Judgment multimodal;
+- attach the original image once at Planning and keep the main policy chain stateful;
+- keep Query Replan and other auxiliary interactions independent;
 - compare target statements and route choices against the current baseline.
 
 The ablation is diagnostic, not the final architecture. If information still
@@ -172,7 +174,9 @@ the current separate Evidence Decision, Reflection, and Query Replan stages.
 Deterministic:
 
 - all existing provenance, release, tool, and engineering-failure tests pass;
-- policy snapshots prove image attachment at all required stages;
+- policy snapshots prove one image-bearing Planning root and a continuous parent-ID
+  chain across later main policy stages;
+- policy snapshots replace image base64 with a `runtime_image` reference;
 - every target revision cites valid image anchors and Evidence IDs;
 - no duplicate, unknown, or post-stop tool route is accepted;
 - no sample-specific string or domain rule is added.
@@ -203,4 +207,3 @@ another case-specific prompt clause.
 5. Remove superseded stages and validators.
 6. Update architecture, prompt/runtime, operations, and trajectory documents.
 7. Run deterministic suite and real acceptance set.
-

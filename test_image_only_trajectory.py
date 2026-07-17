@@ -71,6 +71,25 @@ def _call(
     }
 
 
+def _interaction_text(raw: Any) -> str:
+    """Return the current stage text from a mixed Interactions input."""
+
+    if isinstance(raw, str):
+        return raw
+    if isinstance(raw, list):
+        for item in reversed(raw):
+            if not isinstance(item, dict):
+                continue
+            if (
+                item.get("type") == "text"
+                and isinstance(item.get("text"), str)
+            ):
+                return item["text"]
+            if item.get("type") == "user_input":
+                return _interaction_text(item.get("content", []))
+    return json.dumps(raw)
+
+
 class AdaptiveImageOnlyBackend:
     provider = "gemini"
     wire_api = "interactions"
@@ -86,7 +105,7 @@ class AdaptiveImageOnlyBackend:
         self.counter += 1
         system = str(kwargs.get("system_instruction", ""))
         raw = kwargs.get("input_payload", "")
-        text = raw if isinstance(raw, str) else json.dumps(raw)
+        text = _interaction_text(raw)
         interaction_id = f"interaction-{self.counter}"
         if "semantic decision checkpoint" in system:
             context = json.loads(text)
@@ -356,7 +375,7 @@ class ScreenshotBackend:
         interaction_id = f"screenshot-interaction-{self.counter}"
         system = str(kwargs.get("system_instruction", ""))
         raw = kwargs.get("input_payload", "")
-        text = raw if isinstance(raw, str) else json.dumps(raw)
+        text = _interaction_text(raw)
         if "semantic decision checkpoint" in system:
             context = json.loads(text)
             active = context["active_fact"]

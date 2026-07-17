@@ -53,7 +53,18 @@ class PlanningBoundaryBackend:
         system = str(kwargs.get("system_instruction", ""))
         if "initial target-planning step" in system:
             raw = kwargs.get("input_payload", "")
-            text = raw if isinstance(raw, str) else json.dumps(raw)
+            if isinstance(raw, list):
+                text = next(
+                    (
+                        str(item.get("text", ""))
+                        for item in raw
+                        if isinstance(item, dict)
+                        and item.get("type") == "text"
+                    ),
+                    json.dumps(raw),
+                )
+            else:
+                text = raw
             context = json.loads(text)
             facts = context["pixel_grounded_facts"]
             vessel_fact = next(

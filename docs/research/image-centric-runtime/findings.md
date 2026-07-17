@@ -2,21 +2,28 @@
 
 ## Current understanding
 
-The current runtime is a deterministic coordinator of isolated Gemini stages, not
-one continuous multimodal investigator. Initial perception sees the image, while
-Target Planning, ReAct, Evidence Decision, Reflection, Query Replan, and Judgment
-normally consume text-only state.
+The baseline runtime was a deterministic coordinator of isolated Gemini stages.
+Initial perception saw the image, while Target Planning, ReAct, Evidence Decision,
+Reflection, Query Replan, and Judgment normally consumed text-only state.
 
 The highest-risk boundary is Target Planning: it freezes one core proposition from
 a lossy visual summary. Downstream search may then be internally correct while
 investigating an underspecified or wrong relation.
+
+The first structural repair is implemented: Target Planning receives the original
+image once and creates a stored main Interactions chain. ReAct, Evidence Decision,
+Reflection, and Judgment inherit it through `previous_interaction_id`. Query Replan
+and auxiliary extraction/tool calls remain independent. The deterministic suite is
+green; real-provider target fidelity remains unmeasured.
 
 ## Lessons and constraints
 
 - Do not add case-, person-, domain-, or keyword-specific prompt rules.
 - Do not treat deterministic tests as real trajectory acceptance.
 - Preserve exact Evidence provenance and engineering-failure visibility.
-- Image attachment alone is an ablation, not assumed to be the final solution.
+- Re-uploading the same image to every call is unnecessary; persistent main-chain
+  visual context is the current ablation.
+- Image persistence alone is not assumed to solve frozen target ownership.
 - Stop only after reviewing target fidelity, evidence sufficiency, and remaining
   image-grounded uncertainty together.
 
@@ -27,4 +34,3 @@ investigating an underspecified or wrong relation.
   creator, title, date, or source metadata?
 - Can one multimodal checkpoint replace three overlapping policy stages while
   reducing calls and improving trace clarity?
-

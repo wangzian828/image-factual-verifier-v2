@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 from typing import Any, Dict, List
 
-from src.orchestrator.stage_runner import StageRunner
+from src.orchestrator.stage_runner import InteractionSession, StageRunner
 from test_support_models import StructuredJudgmentOutput
 
 
@@ -140,6 +141,75 @@ def test_empty_object_cannot_become_default_judgment() -> None:
     assert parsed.verdict == "unverifiable"
     assert steps[0].action_type == "output_rejected"
     assert len(backend.requests) == 2
+
+
+def test_shared_interaction_session_attaches_image_once_then_reuses_parent(
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "image.png"
+    image_path.write_bytes(
+        bytes.fromhex(
+            "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
+            "0000000d49444154789c6360000000020001e221bc330000000049454e44ae426082"
+        )
+    )
+    backend = StructuredFakeBackend(
+        [
+            response("planning-interaction", valid_judgment()),
+            response("checkpoint-interaction", valid_judgment()),
+        ]
+    )
+    session = InteractionSession()
+    planning = StageRunner(
+        llm=backend,
+        system_prompt="Plan from the original image.",
+        tools=[],
+        output_schema=StructuredJudgmentOutput,
+        max_rounds=1,
+        image_path=str(image_path),
+        stage_name="planning",
+        attach_image=True,
+        interaction_session=session,
+    )
+    checkpoint = StageRunner(
+        llm=backend,
+        system_prompt="Review the accumulated evidence.",
+        tools=[],
+        output_schema=StructuredJudgmentOutput,
+        max_rounds=1,
+        stage_name="checkpoint",
+        attach_image=False,
+        interaction_session=session,
+    )
+
+    _, planning_steps = asyncio.run(
+        planning.run("Initial image-grounded planning context")
+    )
+    asyncio.run(checkpoint.run("Evidence checkpoint context"))
+
+    planning_request, checkpoint_request = backend.requests
+    assert planning_request["previous_interaction_id"] is None
+    assert isinstance(planning_request["input_payload"], list)
+    assert [item["type"] for item in planning_request["input_payload"]] == [
+        "text",
+        "image",
+    ]
+    assert checkpoint_request["previous_interaction_id"] == (
+        "planning-interaction"
+    )
+    assert checkpoint_request["input_payload"] == "Evidence checkpoint context"
+    snapshot = planning_steps[0].metadata["policy_input"]["input_payload"]
+    assert snapshot == [
+        {"type": "text", "text": "Initial image-grounded planning context"},
+        {
+            "type": "image",
+            "runtime_image": True,
+            "mime_type": "image/png",
+        },
+    ]
+    assert "data" not in json.dumps(snapshot)
+    assert session.previous_interaction_id == "checkpoint-interaction"
+    assert session.pending_input == []
 
 
 if __name__ == "__main__":

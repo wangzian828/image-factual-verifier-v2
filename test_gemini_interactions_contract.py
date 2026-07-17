@@ -143,6 +143,50 @@ def test_create_rejects_unknown_fields_and_mixed_input(
     run(client.aclose())
 
 
+def test_create_accepts_function_result_followed_by_user_input_step(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    set_test_key(monkeypatch)
+    captured: list[dict[str, Any]] = []
+
+    async def scenario() -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured.append(json.loads(request.content))
+            return httpx.Response(
+                200,
+                request=request,
+                json={"id": "interaction-2", "status": "completed"},
+            )
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            client = GeminiInteractionsClient(client=http)
+            await client.create(
+                model="gemini-test-model",
+                previous_interaction_id="interaction-1",
+                input=[
+                    {
+                        "type": "function_result",
+                        "name": "search",
+                        "call_id": "call-1",
+                        "result": [{"type": "text", "text": "tool result"}],
+                    },
+                    {
+                        "type": "user_input",
+                        "content": [
+                            {"type": "text", "text": "Review current evidence."}
+                        ],
+                    },
+                ],
+            )
+
+    run(scenario())
+
+    assert captured[0]["input"][1] == {
+        "type": "user_input",
+        "content": [{"type": "text", "text": "Review current evidence."}],
+    }
+
+
 def test_image_and_video_helpers_build_media_payloads(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -11,14 +11,14 @@ deterministic code.
 | Scene perception | Gemini tool prompt | Image | Literal entities, boxes, scene, image type |
 | OCR | PP-OCR service when configured, otherwise EasyOCR | Image or crop | Accepted positioned text plus isolated low-confidence candidates |
 | Bootstrap | Deterministic | Case + perception/OCR | Brief, entities, facts, anchors, initial tasks |
-| Target Planning | Gemini structured output + deterministic validator | Visible facts, OCR, anchors, tasks | One core fact and candidate evidence routes |
-| ReAct | Gemini native function calling | Compact current investigation | One tool action, then segment output |
+| Target Planning | Gemini structured output + deterministic validator | Original image + visible facts, OCR, anchors, tasks | One core fact and candidate evidence routes |
+| ReAct | Gemini native function calling | Stored original-image chain + compact current investigation | One tool action, then segment output |
 | Observation reduction | Deterministic | Tool result + task/fact state | Discovery/Evidence/Finding/Failure updates |
-| Evidence Decision | Gemini structured output + deterministic validator | Active fact + qualified Evidence + pixel/OCR anchors | Semantic assessment, binding requirement, optional one-slot refinement |
-| Reflection | Gemini structured output + deterministic validator | Global state every four actions | Bounded task-order and route delta |
+| Evidence Decision | Gemini structured output + deterministic validator | Stored original-image chain + active fact + qualified Evidence + pixel/OCR anchors | Semantic assessment, binding requirement, optional one-slot refinement |
+| Reflection | Gemini structured output + deterministic validator | Stored original-image chain + global state every four actions | Bounded task-order and route delta |
 | Coverage | Deterministic | Facts, Findings, Evidence, tasks, budget | Stop state and fact coverage |
 | Verdict basis | Deterministic | One core fact and its evidence gaps | Allowed verdict and exact basis IDs |
-| Judgment | Gemini structured output + deterministic validator | Allowed basis only | Matching `ImageOnlyJudgment` |
+| Judgment | Gemini structured output + deterministic validator | Stored original-image chain + allowed basis | Matching `ImageOnlyJudgment` |
 | Scoring/export | Deterministic, post-rollout | Trace + private references | Metrics, teacher score, policy examples |
 
 ## Perception
@@ -48,6 +48,13 @@ Target Planning then selects one image-grounded, evidence-routable
 `CoreVerdictFact`. There is no mandatory first reverse-image search: Planning and
 ReAct choose the first route from the open evidence gap. Reverse-image results, when
 requested, remain Discovery.
+
+Target Planning is also the root of the stateful main Gemini Interactions chain. The
+original image is attached to that request once. ReAct, Evidence Decision,
+Reflection, and Judgment inherit the stored visual context through
+`previous_interaction_id`; they do not repeatedly upload or re-run perception on the
+same image. Query Concept Extraction, Query Replan, OCR, webpage extraction, and
+tool-internal visual calls remain independent auxiliary interactions.
 
 The broad bootstrap `appears_to_depict` sentence is perception context only. It is
 never promoted as a fallback core. Target Planning must establish exactly one
@@ -99,16 +106,17 @@ eligible Evidence, Findings, Failures, action count, and next Reflection boundar
 
 For a tool-bearing segment:
 
-1. Create an Interactions request with system prompt, compact context, native function
-   schemas, and `store=true`.
+1. Continue the stored main investigation Interaction with system prompt, compact
+   context, native function schemas, and `store=true`.
 2. Read `function_call`.
 3. Validate call ID, tool name, recursive argument schema, task ID, duplicate route,
    per-tool budget, source policy, and one-call-per-turn constraint.
 4. Execute the selected tool.
 5. Serialize `status=success|error`.
 6. Reduce the observation into runtime state.
-7. Send `function_result` with `previous_interaction_id`.
-8. Run deterministic observation reduction.
+7. Retain the `function_result` at the deterministic action boundary.
+8. The next main-chain policy stage sends that `function_result` and one `user_input`
+   step containing its newly compiled context with `previous_interaction_id`.
 9. At a material boundary, run a sparse Evidence Decision over accumulated qualified
    Evidence; otherwise retain the prior semantic decision.
 10. Run Coverage immediately. Continue only if the core fact remains unresolved and
@@ -116,6 +124,11 @@ For a tool-bearing segment:
 
 Corrections remain in the same interaction chain. The runtime never changes provider,
 model, protocol, or thinking policy to hide a failure.
+
+There is one main-chain root per case. The strict auditor requires it to begin at
+Target Planning and verifies parent-ID continuity across Planning, ReAct, Evidence
+Decision, Reflection, and Judgment. Deterministic one-action segments are state
+boundaries, not new conversation roots.
 
 ## Observation reducer
 
@@ -231,9 +244,9 @@ The runtime first compiles the smallest sufficient winning chain:
 - fake mechanism where applicable;
 - fact-specific unresolved gaps.
 
-Gemini receives only those allowed objects and must reproduce the deterministic result.
-Any mismatch is rejected. Judgment is explanatory synthesis, not a second decision
-maker.
+Gemini receives those allowed objects in the stored original-image chain and must
+reproduce the deterministic result. Any mismatch is rejected. Judgment is
+explanatory synthesis, not a second decision maker.
 
 ## Tool-internal model prompts
 
@@ -275,6 +288,11 @@ They produce no classification prediction.
 
 Actual model-visible `policy_input` and `policy_action` snapshots are captured on
 Target Planning, ReAct, Evidence Decision, Reflection, and Judgment steps.
+
+The actual Planning request contains the original image. Its persisted snapshot
+replaces binary image bytes with a `runtime_image=true` reference so canonical
+traces and text tokenization do not duplicate the base64 payload. The runtime case
+and multimodal trajectory artifacts retain `image_path` and `image_sha256`.
 
 Exporter behavior:
 

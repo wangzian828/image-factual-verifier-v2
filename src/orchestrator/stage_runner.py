@@ -68,6 +68,14 @@ class StageStep:
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass
+class InteractionSession:
+    """State shared by policy stages in one Gemini Interactions investigation."""
+
+    previous_interaction_id: Optional[str] = None
+    pending_input: List[Dict[str, Any]] = field(default_factory=list)
+
+
 class StageRunner:
     """A compact multi-round agent loop for one stage."""
 
@@ -113,6 +121,7 @@ class StageRunner:
         tool_argument_constraints: Optional[
             Dict[str, Dict[str, List[Any]]]
         ] = None,
+        interaction_session: Optional[InteractionSession] = None,
     ):
         self.llm = llm
         self.system_prompt = system_prompt
@@ -168,6 +177,7 @@ class StageRunner:
         self.tool_argument_constraints = deepcopy(
             tool_argument_constraints or {}
         )
+        self.interaction_session = interaction_session
         self.request_timeout_seconds = _bounded_timeout(
             request_timeout_seconds,
             env_name="AGENT_STAGE_REQUEST_TIMEOUT_SECONDS",
@@ -427,8 +437,8 @@ class StageRunner:
     ) -> Tuple[Optional[BaseModel], List[StageStep]]:
         """Run a no-tool stage with Interactions JSON schema output."""
         steps: List[StageStep] = []
-        previous_interaction_id: Optional[str] = None
-        next_input: Any = self._build_native_input(input_context)
+        previous_interaction_id = self._session_previous_interaction_id()
+        next_input: Any = self._build_session_input(input_context)
 
         for round_num in range(1, self.max_rounds + 2):
             request_previous_interaction_id = previous_interaction_id
@@ -446,6 +456,7 @@ class StageRunner:
                 generation_config=self.generation_config,
             )
             interaction_id, status = validate_interaction_response(payload)
+            self._advance_interaction_session(interaction_id)
             if self._extract_native_function_calls(payload):
                 raise RuntimeError("No-tool stage received an unexpected function_call response.")
             if status != "completed":
@@ -506,8 +517,8 @@ class StageRunner:
         """Run a ReAct loop using Gemini Interactions native function calls."""
         steps: List[StageStep] = []
         evidence_so_far: List[str] = []
-        previous_interaction_id: Optional[str] = None
-        next_input: Any = self._build_native_input(input_context)
+        previous_interaction_id = self._session_previous_interaction_id()
+        next_input: Any = self._build_session_input(input_context)
         native_tools = self._build_native_tool_schemas()
         system_suffix = ""
 
@@ -580,6 +591,7 @@ class StageRunner:
             except Exception as exc:
                 self._attach_partial_steps(exc, steps)
                 raise
+            self._advance_interaction_session(interaction_id)
 
             usage = payload.get("usage", {}) if isinstance(payload.get("usage"), dict) else {}
             tokens = self._usage_tokens(usage)
@@ -797,6 +809,7 @@ class StageRunner:
                 next_input = function_results
                 system_suffix = ""
                 if self.should_stop and self.should_stop(steps):
+                    self._set_session_pending_input(function_results)
                     if self.stop_output_factory is not None:
                         parsed = self.stop_output_factory()
                         steps.append(
@@ -1155,6 +1168,42 @@ class StageRunner:
             {"type": "image", "mime_type": mime_type, "data": data},
         ]
 
+    def _session_previous_interaction_id(self) -> Optional[str]:
+        if self.interaction_session is None:
+            return None
+        return self.interaction_session.previous_interaction_id
+
+    def _build_session_input(self, input_context: str) -> Any:
+        current_input = self._build_native_input(input_context)
+        if (
+            self.interaction_session is None
+            or not self.interaction_session.pending_input
+        ):
+            return current_input
+        pending = deepcopy(self.interaction_session.pending_input)
+        if isinstance(current_input, list):
+            user_content = current_input
+        else:
+            user_content = [{"type": "text", "text": str(current_input)}]
+        return [
+            *pending,
+            {"type": "user_input", "content": user_content},
+        ]
+
+    def _advance_interaction_session(self, interaction_id: str) -> None:
+        if self.interaction_session is None:
+            return
+        self.interaction_session.previous_interaction_id = interaction_id
+        self.interaction_session.pending_input = []
+
+    def _set_session_pending_input(
+        self,
+        pending_input: List[Dict[str, Any]],
+    ) -> None:
+        if self.interaction_session is None:
+            return
+        self.interaction_session.pending_input = deepcopy(pending_input)
+
     @staticmethod
     def _coerce_native_arguments(arguments: Any) -> Dict[str, Any]:
         if isinstance(arguments, dict):
@@ -1445,13 +1494,38 @@ class StageRunner:
         tools: List[Dict[str, Any]],
         response_format: Optional[Dict[str, Any]],
     ) -> Dict[str, Any]:
-        """Persist the exact model-visible request without transport-only fields."""
+        """Persist model-visible structure without embedding binary media payloads."""
 
         return {
             "system_instruction": system_instruction,
-            "input_payload": deepcopy(input_payload),
+            "input_payload": StageRunner._snapshot_input_payload(input_payload),
             "tools": deepcopy(tools),
             "response_format": deepcopy(response_format),
+        }
+
+    @staticmethod
+    def _snapshot_input_payload(value: Any) -> Any:
+        """Replace image bytes/URIs with a stable runtime-image reference."""
+
+        if isinstance(value, list):
+            return [
+                StageRunner._snapshot_input_payload(item)
+                for item in value
+            ]
+        if not isinstance(value, dict):
+            return deepcopy(value)
+        if str(value.get("type", "")).strip().lower() == "image":
+            snapshot: Dict[str, Any] = {
+                "type": "image",
+                "runtime_image": True,
+            }
+            mime_type = str(value.get("mime_type", "")).strip()
+            if mime_type:
+                snapshot["mime_type"] = mime_type
+            return snapshot
+        return {
+            key: StageRunner._snapshot_input_payload(item)
+            for key, item in value.items()
         }
 
     def _normalized_output_schema(self) -> Dict[str, Any]:

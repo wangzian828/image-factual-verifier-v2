@@ -409,6 +409,15 @@ The v3 runtime allows at most 24 real tool actions. Initial target Planning choo
 the evidence target, and ReAct selects the first tool route; there is no fixed initial
 reverse-image call. Structured Reflection runs after accepted actions 4, 8, 12, 16,
 20, and 24.
+
+Target Planning uploads the original image once as the root of the stored Gemini
+Interactions main chain. ReAct, Evidence Decision, Reflection, and Judgment continue
+through `previous_interaction_id`; they do not upload the same image again.
+Query Concept Extraction, Query Replan, OCR, webpage extraction, and tool-internal
+Gemini calls remain separate. If a tool action ends at a deterministic segment
+boundary, its pending `function_result` is submitted with the next main-chain
+`user_input` step. Trace snapshots store a `runtime_image` reference, not image
+base64.
 Gemini model and vision requests use a separate bounded request timeout (90 seconds
 by default) and three retries. Configure them with
 `AGENT_LLM_REQUEST_TIMEOUT_SECONDS`, `AGENT_LLM_REQUEST_MAX_RETRIES`,

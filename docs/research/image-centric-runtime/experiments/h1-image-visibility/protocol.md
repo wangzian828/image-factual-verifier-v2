@@ -1,10 +1,22 @@
 # H1 Protocol — Persistent Image Visibility
 
+## Protocol amendment before real-provider execution
+
+The original wording proposed attaching the image independently to every policy
+stage. API and architecture review showed that this would repeatedly encode the same
+static image and still leave isolated conversations. The implemented treatment is:
+
+- attach the original image once to Target Planning;
+- preserve one stored main Interactions chain across ReAct, Evidence Decision,
+  Reflection, and Judgment;
+- keep Query Concept Extraction/Replan and other auxiliary calls independent;
+- use focused visual tools only when the investigation introduces a new visual
+  question.
+
 ## Change
 
-Attach the original image to Target Planning, each ReAct action-selection segment,
-Evidence Decision, Reflection, Query Concept Extraction/Replan while they remain in
-the runtime, and final Judgment.
+Keep the original image available to the main policy through one stateful
+Interactions chain without re-uploading it at every stage.
 
 Do not change:
 
@@ -38,4 +50,3 @@ a better target but the run still cannot adopt it, that supports H2.
   evidence; proceed to H2.
 - Negative: image access does not change target fidelity; inspect prompt/context
   composition or model transport before changing target semantics.
-
