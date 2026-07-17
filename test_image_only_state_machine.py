@@ -2342,6 +2342,208 @@ def test_low_gain_does_not_saturate_while_material_core_routes_remain() -> None:
     )
 
 
+def test_stagnation_reflection_replans_once_without_resetting_budget() -> None:
+    case, state = _runtime_state()
+    task = next(
+        item
+        for item in state.tasks
+        if state.core_verdict_fact_id in item.fact_ids
+    )
+    task.suggested_tools = ["text_search", "visit"]
+    initial_queries = [
+        "Queen Elizabeth II coronation double decker bus 1953",
+        "Queen Elizabeth II coronation bus AI generated",
+    ]
+    for index, query in enumerate(initial_queries):
+        url = f"https://example.org/stalled-{index}"
+        search = _step(
+            task_id=task.task_id,
+            call_id=f"call-stalled-search-{index}",
+            tool_name="text_search",
+            result=json.dumps(
+                {
+                    "status": "success",
+                    "queries": [
+                        {
+                            "query": query,
+                            "results": [
+                                {
+                                    "title": "Irrelevant result",
+                                    "url": url,
+                                    "snippet": "No decisive information.",
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ),
+        )
+        search.tool_args["queries"] = [query]
+        record_tool_observation(
+            state,
+            search,
+            image_sha256=case.image_sha256,
+        )
+        visit = _step(
+            task_id=task.task_id,
+            call_id=f"call-stalled-visit-{index}",
+            tool_name="visit",
+            result=json.dumps(
+                {
+                    "status": "success",
+                    "url": url,
+                    "selected_url": url,
+                    "evidence": "",
+                }
+            ),
+        )
+        visit.tool_args["url"] = url
+        record_tool_observation(
+            state,
+            visit,
+            image_sha256=case.image_sha256,
+        )
+
+    audit_coverage(state)
+    audit_coverage(state, decision_checkpoint=True)
+    audit_coverage(state, decision_checkpoint=True)
+    action_count = state.action_count
+    assert not remaining_material_routes(
+        state,
+        fact_id=state.core_verdict_fact_id or "",
+    )
+
+    state.stop_reason = "information_saturated"
+    record = apply_reflection(
+        state,
+        ReflectionOutput(
+            strategy_decision="replan",
+            strategy_task_id=task.task_id,
+            replacement_query=(
+                "Queen Elizabeth II 1953 coronation transport official account"
+            ),
+            expected_information=(
+                "An authoritative description of the transport used in the "
+                "coronation procession."
+            ),
+            strategy_rationale=(
+                "The prior queries searched for bus occurrences instead of an "
+                "authoritative event account."
+            ),
+        ),
+        evidence_gain=False,
+        decision_gain=False,
+        trigger="saturation",
+    )
+
+    assert record.accepted_strategy_decision == "replan"
+    assert record.accepted_replan_query == (
+        "Queen Elizabeth II 1953 coronation transport official account"
+    )
+    assert task.query_replan_count == 1
+    assert state.action_count == action_count
+    assert state.stop_reason == ""
+    assert all(item.abandoned for item in state.discoveries)
+    assert remaining_material_routes(
+        state,
+        fact_id=state.core_verdict_fact_id or "",
+    ) == [f"text_search:{task.task_id}"]
+
+
+def test_stagnation_reflection_cannot_replan_twice() -> None:
+    _, state = _runtime_state()
+    task = next(
+        item
+        for item in state.tasks
+        if state.core_verdict_fact_id in item.fact_ids
+    )
+    task.suggested_tools = ["text_search"]
+    task.query_replan_count = 1
+    state.action_count = 8
+    audit_coverage(state)
+    audit_coverage(state, decision_checkpoint=True)
+    audit_coverage(state, decision_checkpoint=True)
+    state.stop_reason = "information_saturated"
+
+    record = apply_reflection(
+        state,
+        ReflectionOutput(
+            strategy_decision="replan",
+            strategy_task_id=task.task_id,
+            replacement_query="a second attempted semantic direction",
+            expected_information="More information.",
+            strategy_rationale="Try another direction.",
+        ),
+        evidence_gain=False,
+        decision_gain=False,
+        trigger="saturation",
+    )
+
+    assert record.accepted_strategy_decision == "continue"
+    assert record.accepted_replan_query == ""
+    assert "already used its one semantic replan" in (
+        record.strategy_rejected_reason
+    )
+    assert task.query_replan_count == 1
+    assert state.stop_reason == "information_saturated"
+
+
+def test_saturation_reflection_cannot_continue_without_a_route() -> None:
+    case, state = _runtime_state()
+    task = next(
+        item
+        for item in state.tasks
+        if state.core_verdict_fact_id in item.fact_ids
+    )
+    task.suggested_tools = ["text_search"]
+    for index in range(2):
+        search = _step(
+            task_id=task.task_id,
+            call_id=f"call-empty-search-{index}",
+            tool_name="text_search",
+            result=json.dumps(
+                {
+                    "status": "success",
+                    "queries": [
+                        {
+                            "query": f"empty direction {index}",
+                            "results": [],
+                        }
+                    ],
+                }
+            ),
+        )
+        search.tool_args["queries"] = [f"empty direction {index}"]
+        record_tool_observation(
+            state,
+            search,
+            image_sha256=case.image_sha256,
+        )
+    audit_coverage(state)
+    audit_coverage(state, decision_checkpoint=True)
+    audit_coverage(state, decision_checkpoint=True)
+    state.stop_reason = "information_saturated"
+
+    record = apply_reflection(
+        state,
+        ReflectionOutput(
+            strategy_decision="continue",
+            expected_information="A useful result might still appear.",
+            strategy_rationale="Continue searching.",
+        ),
+        evidence_gain=False,
+        decision_gain=False,
+        trigger="saturation",
+    )
+
+    assert record.accepted_strategy_decision == "continue"
+    assert (
+        record.strategy_rejected_reason
+        == "saturation Reflection cannot continue without an executable route"
+    )
+    assert state.stop_reason == "information_saturated"
+
+
 def test_discovery_is_not_evidence_and_reflection_only_reprioritizes() -> None:
     case, state = _runtime_state()
     provenance = state.tasks[0]

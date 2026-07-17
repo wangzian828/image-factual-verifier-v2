@@ -46,7 +46,7 @@ from src.orchestrator.tool_result import parse_tool_result
 
 MAX_TOOL_ACTIONS = 24
 REFLECTION_INTERVAL = 4
-MAX_REFLECTIONS = 6
+MAX_REFLECTIONS = 7
 INITIAL_TASKS_MAX = 4
 TOTAL_TASKS_MAX = 12
 NEW_TASKS_PER_REFLECTION_MAX = 3
@@ -2936,11 +2936,18 @@ def apply_reflection(
     *,
     evidence_gain: bool,
     decision_gain: bool,
+    trigger: str = "interval",
 ) -> ReflectionRecord:
     """Validate and apply a bounded Reflection delta."""
 
     if len(state.reflections) >= MAX_REFLECTIONS:
         raise RuntimeError("maximum image-only Reflection count is exhausted")
+    if trigger not in {"interval", "saturation"}:
+        raise ValueError(f"unsupported Reflection trigger: {trigger}")
+    if trigger == "saturation" and any(
+        item.trigger == "saturation" for item in state.reflections
+    ):
+        raise RuntimeError("the one saturation Reflection is already exhausted")
     task_by_id = {task.task_id: task for task in state.tasks}
     fact_by_id = {fact.fact_id: fact for fact in state.facts}
     finding_ids = {item.finding_id for item in state.findings}
@@ -3058,6 +3065,108 @@ def apply_reflection(
     state.recommended_next_task_ids = list(
         dict.fromkeys([*model_recommendations, *core_task_ids])
     )[:4]
+    accepted_strategy = "continue"
+    accepted_replan_query = ""
+    strategy_rejected_reason = ""
+    strategy = bounded_output.strategy_decision
+    core = fact_by_id.get(state.core_verdict_fact_id or "")
+    latest_coverage = (
+        state.coverage_audits[-1] if state.coverage_audits else None
+    )
+    low_gain_intervals = (
+        latest_coverage.low_gain_intervals if latest_coverage is not None else 0
+    )
+
+    if strategy == "replan":
+        task = task_by_id.get(bounded_output.strategy_task_id or "")
+        if task is None:
+            strategy_rejected_reason = (
+                "strategy replan must name an existing task"
+            )
+        elif state.core_verdict_fact_id not in task.fact_ids:
+            strategy_rejected_reason = (
+                "strategy replan task must own the unresolved core fact"
+            )
+        elif task.status not in {"active", "pending", "exhausted"}:
+            strategy_rejected_reason = (
+                "strategy replan task is not available for investigation"
+            )
+        elif task.query_replan_count >= 1:
+            strategy_rejected_reason = (
+                "the task already used its one semantic replan"
+            )
+        elif "text_search" not in runtime_task_tool_names(state, task):
+            strategy_rejected_reason = (
+                "strategy replan requires a text-search-capable task"
+            )
+        elif low_gain_intervals < 2 and trigger != "saturation":
+            strategy_rejected_reason = (
+                "strategy replan requires sustained low information gain"
+            )
+        else:
+            accepted_replan_query = _novel_replan_query(
+                state,
+                task,
+                bounded_output.replacement_query,
+            )
+            if not accepted_replan_query:
+                strategy_rejected_reason = (
+                    "strategy replan proposed no genuinely new semantic query"
+                )
+            else:
+                task.query_replan_count += 1
+                task.suggested_queries = [accepted_replan_query]
+                task.status = "active"
+                state.recommended_next_task_ids = list(
+                    dict.fromkeys(
+                        [
+                            task.task_id,
+                            *state.recommended_next_task_ids,
+                        ]
+                    )
+                )[:4]
+                _abandon_stale_discoveries(
+                    state,
+                    task,
+                    reason=(
+                        bounded_output.strategy_rationale
+                        or "Reflection replaced a stalled search direction."
+                    ),
+                )
+                accepted_strategy = "replan"
+                state.stop_reason = ""
+    elif strategy == "stop_unresolved":
+        if core is not None and core.status in {"supported", "refuted"}:
+            strategy_rejected_reason = (
+                "an already resolved core fact cannot stop as unresolved"
+            )
+        elif low_gain_intervals < 2 and trigger != "saturation":
+            strategy_rejected_reason = (
+                "stop_unresolved requires sustained low information gain"
+            )
+        else:
+            accepted_strategy = "stop_unresolved"
+            state.stop_reason = "information_saturated"
+    else:
+        routes = (
+            remaining_material_routes(
+                state,
+                fact_id=state.core_verdict_fact_id or "",
+            )
+            if state.core_verdict_fact_id
+            else []
+        )
+        if trigger == "saturation" and not routes:
+            strategy_rejected_reason = (
+                "saturation Reflection cannot continue without an executable route"
+            )
+        else:
+            accepted_strategy = "continue"
+            if routes and state.stop_reason == "information_saturated":
+                state.stop_reason = ""
+
+    if strategy_rejected_reason:
+        rejected.append(strategy_rejected_reason)
     record = ReflectionRecord(
         reflection_id=stable_id(
             "reflection",
@@ -3066,11 +3175,14 @@ def apply_reflection(
             len(state.reflections) + 1,
         ),
         action_count=state.action_count,
-        trigger="interval",
+        trigger=trigger,
         output=bounded_output,
         accepted_task_update_ids=accepted_updates,
         accepted_new_task_ids=accepted_new,
         rejected_reasons=rejected,
+        accepted_strategy_decision=accepted_strategy,
+        accepted_replan_query=accepted_replan_query,
+        strategy_rejected_reason=strategy_rejected_reason,
         evidence_gain=evidence_gain,
         decision_gain=decision_gain,
     )

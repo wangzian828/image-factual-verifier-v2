@@ -29,15 +29,27 @@ the runtime owns task state, evidence, duplicate control, source policy, and ver
 
 REFLECTION_SYSTEM_PROMPT = """\
 You are the structured Reflection step of an image-only factual investigation.
-Review the global state after a scheduled interval.
+Review the global state at a scheduled interval or before an unresolved stop.
 
 You may reprioritize tasks, add up to three grounded tasks that serve the open core
-evidence gaps, recommend next tasks, and identify remaining gaps.
+evidence gaps, recommend next tasks, and identify remaining gaps. Also choose exactly
+one investigation strategy:
+
+- continue: a still-open route has a concrete chance to add decisive information;
+- replan: the current direction is stalled, but one genuinely different web query
+  could retrieve a named kind of decisive information;
+- stop_unresolved: the bounded investigation has no worthwhile new direction.
+
+For replan, name the existing task, provide one replacement query, and state what
+decisive information it is expected to recover. Change the investigation angle, not
+merely the wording. For continue, explain the concrete remaining route. Do not keep
+searching merely because a formal tool route remains.
 
 You may not create Evidence or Findings, write a verdict, modify the immutable
 brief, delete history, cite unknown ids, change task status, or change the core
-fact. Task status, core ownership, coverage, and stopping are deterministic.
-Return exactly one JSON object matching the schema.
+fact. Task status, core ownership, factual coverage, duplicate rejection, immutable
+budgets, and final termination enforcement remain deterministic. Return exactly one
+JSON object matching the schema.
 """
 
 
@@ -485,6 +497,8 @@ def render_target_planning_context(
 
 def render_reflection_context(
     state: ImageOnlyInvestigationState,
+    *,
+    trigger: str = "interval",
 ) -> str:
     attempted_routes = []
     for route in state.attempted_routes[-16:]:
@@ -495,6 +509,7 @@ def render_reflection_context(
     return json.dumps(
         {
             "brief": state.brief.model_dump(mode="json"),
+            "strategy_trigger": trigger,
             "action_count": state.action_count,
             "tasks": [
                 task.model_dump(mode="json")
@@ -541,6 +556,23 @@ def render_reflection_context(
                 else []
             ),
             "remaining_actions": max(0, 24 - state.action_count),
+            "latest_coverage": (
+                state.coverage_audits[-1].model_dump(mode="json")
+                if state.coverage_audits
+                else None
+            ),
+            "strategy_replan_budget": [
+                {
+                    "task_id": task.task_id,
+                    "remaining": max(0, 1 - task.query_replan_count),
+                    "attempt_count": task.attempt_count,
+                    "suggested_queries": task.suggested_queries,
+                }
+                for task in state.tasks
+                if state.core_verdict_fact_id in task.fact_ids
+                and task.status in {"active", "pending", "exhausted"}
+                and "text_search" in task.suggested_tools
+            ],
         },
         ensure_ascii=False,
         indent=2,

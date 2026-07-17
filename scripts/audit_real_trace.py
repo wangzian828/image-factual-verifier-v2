@@ -1655,11 +1655,16 @@ def _audit_image_only_trace(
         for item in reflections
         if str(item.get("trigger", "interval")).strip() == "interval"
     ]
+    saturation_reflection_counts = [
+        int(item.get("action_count", 0) or 0)
+        for item in reflections
+        if str(item.get("trigger", "interval")).strip() == "saturation"
+    ]
     unknown_reflection_triggers = [
         str(item.get("trigger", "")).strip()
         for item in reflections
         if str(item.get("trigger", "interval")).strip()
-        != "interval"
+        not in {"interval", "saturation"}
     ]
     if unknown_reflection_triggers:
         _issue(
@@ -1667,6 +1672,22 @@ def _audit_image_only_trace(
             "IMAGE_ONLY_REFLECTION_TRIGGER_INVALID",
             "unknown Reflection trigger(s): "
             + ", ".join(unknown_reflection_triggers),
+            location="state.investigation_state.reflections",
+        )
+    if len(saturation_reflection_counts) > 1:
+        _issue(
+            report,
+            "IMAGE_ONLY_REFLECTION_CADENCE_INVALID",
+            "at most one saturation Reflection is allowed; "
+            f"found {saturation_reflection_counts}",
+            location="state.investigation_state.reflections",
+        )
+    if any(count <= 0 for count in saturation_reflection_counts):
+        _issue(
+            report,
+            "IMAGE_ONLY_REFLECTION_CADENCE_INVALID",
+            "saturation Reflection action counts must be positive; "
+            f"found {saturation_reflection_counts}",
             location="state.investigation_state.reflections",
         )
     invalid_interval_counts = [
@@ -1685,13 +1706,23 @@ def _audit_image_only_trace(
     terminal_stop = str(investigation.get("stop_reason", "")) in {
         "coverage_complete",
         "verdict_determined",
+        "information_saturated",
+        "hard_budget_exhausted",
     }
-    reflection_limit = (
+    required_reflection_limit = (
         action_count - 1
         if terminal_stop and action_count % 4 == 0
         else action_count
     )
-    expected_boundaries = list(range(4, reflection_limit + 1, 4))
+    expected_boundaries = list(
+        range(4, required_reflection_limit + 1, 4)
+    )
+    allowed_boundaries = set(expected_boundaries)
+    if terminal_stop and action_count > 0 and action_count % 4 == 0:
+        # The terminal condition may be accepted immediately after the action,
+        # or after the scheduled Reflection at that same boundary. Both orders
+        # are valid; earlier scheduled boundaries remain mandatory.
+        allowed_boundaries.add(action_count)
     missing_boundaries = [
         boundary
         for boundary in expected_boundaries
@@ -1700,7 +1731,7 @@ def _audit_image_only_trace(
     unexpected_interval_counts = [
         count
         for count in interval_reflection_counts
-        if count not in expected_boundaries
+        if count not in allowed_boundaries
     ]
     if missing_boundaries or unexpected_interval_counts:
         _issue(

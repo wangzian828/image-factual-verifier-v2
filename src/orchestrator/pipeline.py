@@ -545,6 +545,12 @@ class Orchestrator:
                 audit_coverage(investigation)
                 if not investigation.stop_reason:
                     investigation.stop_reason = "information_saturated"
+                if await self._try_image_only_saturation_reflection(
+                    state,
+                    investigation,
+                    interaction_session=interaction_session,
+                ):
+                    continue
                 break
 
             segment_stop_action = next_action_boundary(
@@ -565,6 +571,12 @@ class Orchestrator:
                     self._sync_image_only_state(state, investigation)
                     continue
                 audit_coverage(investigation)
+                if await self._try_image_only_saturation_reflection(
+                    state,
+                    investigation,
+                    interaction_session=interaction_session,
+                ):
+                    continue
                 break
             executable_tool_names = self._image_only_executable_tool_names(
                 investigation,
@@ -593,6 +605,12 @@ class Orchestrator:
                         self._sync_image_only_state(state, investigation)
                         continue
                 audit_coverage(investigation)
+                if await self._try_image_only_saturation_reflection(
+                    state,
+                    investigation,
+                    interaction_session=interaction_session,
+                ):
+                    continue
                 break
             task_claims = self._image_only_task_claims(
                 investigation,
@@ -788,11 +806,25 @@ class Orchestrator:
                     trigger="evidence_boundary",
                 )
 
-            audit_coverage(
+            coverage_audit = audit_coverage(
                 investigation,
                 decision_checkpoint=True,
             )
             self._sync_image_only_state(state, investigation)
+            if (
+                coverage_audit.stop_reason == "information_saturated"
+                and await self._try_image_only_saturation_reflection(
+                    state,
+                    investigation,
+                    interaction_session=interaction_session,
+                )
+            ):
+                prior_evidence_count = len(investigation.evidence)
+                prior_finding_count = len(investigation.findings)
+                prior_fact_signature = self._image_only_fact_signature(
+                    investigation
+                )
+                continue
 
             if (
                 reflection_boundary
@@ -1024,14 +1056,15 @@ class Orchestrator:
         *,
         evidence_gain: bool,
         decision_gain: bool,
+        trigger: str = "interval",
         interaction_session: Optional[InteractionSession] = None,
-    ) -> None:
+    ) -> Any:
         runner = StageRunner(
             llm=self.llm,
             system_prompt=self._sp(IMAGE_ONLY_REFLECTION_PROMPT),
             tools=[],
             output_schema=ReflectionOutput,
-            max_rounds=1,
+            max_rounds=2,
             stage_name="image_only_reflection",
             attach_image=False,
             interaction_session=interaction_session,
@@ -1041,6 +1074,7 @@ class Orchestrator:
                     parsed,
                     evidence_gain=evidence_gain,
                     decision_gain=decision_gain,
+                    trigger=trigger,
                 )
             ),
             max_output_tokens=self._stage_output_tokens("REFLECTION", 8192),
@@ -1049,7 +1083,10 @@ class Orchestrator:
             },
         )
         parsed, steps = await runner.run(
-            render_image_only_reflection_context(investigation)
+            render_image_only_reflection_context(
+                investigation,
+                trigger=trigger,
+            )
         )
         self._record_stage_steps(state, steps)
         if parsed is None:
@@ -1057,12 +1094,68 @@ class Orchestrator:
                 "mandatory image-only Reflection did not produce valid "
                 "structured output"
             )
-        apply_reflection(
+        record = apply_reflection(
             investigation,
             parsed,
             evidence_gain=evidence_gain,
             decision_gain=decision_gain,
+            trigger=trigger,
         )
+        self._sync_image_only_state(state, investigation)
+        return record
+
+    async def _try_image_only_saturation_reflection(
+        self,
+        state: VerificationState,
+        investigation: ImageOnlyInvestigationState,
+        *,
+        interaction_session: InteractionSession,
+    ) -> bool:
+        """Offer one bounded semantic pivot before an unresolved terminal stop."""
+
+        if (
+            investigation.action_count >= MAX_TOOL_ACTIONS
+            or any(
+                item.trigger == "saturation"
+                for item in investigation.reflections
+            )
+            or investigation.stop_reason
+            in {
+                "verdict_determined",
+                "coverage_complete",
+                "hard_budget_exhausted",
+            }
+        ):
+            return False
+        if not investigation.stop_reason:
+            investigation.stop_reason = "information_saturated"
+        record = await self._run_image_only_reflection(
+            state,
+            investigation,
+            evidence_gain=False,
+            decision_gain=False,
+            trigger="saturation",
+            interaction_session=interaction_session,
+        )
+        routes = remaining_material_routes(
+            investigation,
+            fact_id=investigation.core_verdict_fact_id or "",
+        )
+        if (
+            record.accepted_strategy_decision in {"continue", "replan"}
+            and routes
+            and not investigation.stop_reason
+        ):
+            audit_coverage(
+                investigation,
+                reflection_checkpoint=True,
+            )
+            self._sync_image_only_state(state, investigation)
+            return not investigation.stop_reason
+        if not investigation.stop_reason:
+            investigation.stop_reason = "information_saturated"
+        self._sync_image_only_state(state, investigation)
+        return False
 
     async def _run_image_only_query_replan(
         self,
@@ -1236,6 +1329,7 @@ class Orchestrator:
         *,
         evidence_gain: bool,
         decision_gain: bool,
+        trigger: str = "interval",
     ) -> tuple[bool, str]:
         candidate = investigation.model_copy(deep=True)
         record = apply_reflection(
@@ -1243,6 +1337,7 @@ class Orchestrator:
             parsed,
             evidence_gain=evidence_gain,
             decision_gain=decision_gain,
+            trigger=trigger,
         )
         proposed_changes = bool(
             parsed.task_updates
@@ -1256,6 +1351,8 @@ class Orchestrator:
             return False, "; ".join(record.rejected_reasons) or (
                 "Reflection proposed no valid state transition"
             )
+        if record.strategy_rejected_reason:
+            return False, record.strategy_rejected_reason
         return True, ""
 
     @staticmethod

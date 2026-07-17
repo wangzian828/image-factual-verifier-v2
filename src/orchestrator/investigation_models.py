@@ -318,6 +318,15 @@ class ReflectionOutput(StrictModel):
     new_tasks: List[ResearchTask] = Field(default_factory=list)
     recommended_next_task_ids: List[str] = Field(default_factory=list)
     remaining_gaps: List[str] = Field(default_factory=list)
+    strategy_decision: Literal[
+        "continue",
+        "replan",
+        "stop_unresolved",
+    ] = "continue"
+    strategy_task_id: Optional[str] = Field(default=None, max_length=100)
+    replacement_query: str = Field(default="", max_length=500)
+    expected_information: str = Field(default="", max_length=800)
+    strategy_rationale: str = Field(default="", max_length=1200)
     ready_to_finish: bool = False
 
 
@@ -521,11 +530,18 @@ class InvestigationSegmentOutput(StrictModel):
 class ReflectionRecord(StrictModel):
     reflection_id: str = Field(min_length=1, max_length=100)
     action_count: int = Field(ge=1)
-    trigger: Literal["interval"] = "interval"
+    trigger: Literal["interval", "saturation"] = "interval"
     output: ReflectionOutput
     accepted_task_update_ids: List[str] = Field(default_factory=list, max_length=12)
     accepted_new_task_ids: List[str] = Field(default_factory=list, max_length=3)
     rejected_reasons: List[str] = Field(default_factory=list, max_length=20)
+    accepted_strategy_decision: Literal[
+        "continue",
+        "replan",
+        "stop_unresolved",
+    ] = "continue"
+    accepted_replan_query: str = Field(default="", max_length=500)
+    strategy_rejected_reason: str = Field(default="", max_length=800)
     evidence_gain: bool = False
     decision_gain: bool = False
 
@@ -658,7 +674,7 @@ class ImageOnlyInvestigationState(StrictModel):
     )
     findings: List[Finding] = Field(default_factory=list, max_length=120)
     failures: List[InvestigationFailure] = Field(default_factory=list, max_length=120)
-    reflections: List[ReflectionRecord] = Field(default_factory=list, max_length=6)
+    reflections: List[ReflectionRecord] = Field(default_factory=list, max_length=7)
     query_replans: List[QueryReplanRecord] = Field(
         default_factory=list,
         max_length=12,
