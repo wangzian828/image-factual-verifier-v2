@@ -142,20 +142,25 @@ class PerceiveSceneTool(BaseTool):
             return error
 
         entities = []
-        for ent in parsed.get("entities", []):
+        bbox_warnings = []
+        for index, ent in enumerate(parsed.get("entities", [])):
             if not isinstance(ent, dict):
                 continue
             try:
                 bbox = normalize_entity_bbox(ent.get("bbox", []))
             except ValueError as exc:
-                return {
-                    "status": "error",
-                    "error": f"Scene perception returned an invalid entity bbox: {exc}",
-                    "entities": [],
-                    "scene_description": "",
-                    "image_type": "unknown",
-                    RUNTIME_METRICS_KEY: parsed.get(RUNTIME_METRICS_KEY, {}),
-                }
+                # A model may return one malformed or mixed-scale region while
+                # still producing a useful literal scene report. Never guess or
+                # repair that geometry: retain the entity as an unlocalized
+                # observation and keep every valid sibling bbox.
+                bbox = []
+                bbox_warnings.append(
+                    {
+                        "entity_index": index,
+                        "entity_name": str(ent.get("name", "")).strip()[:100],
+                        "error": str(exc),
+                    }
+                )
             entities.append(
                 {
                     "name": str(ent.get("name", "")).strip(),
@@ -172,6 +177,7 @@ class PerceiveSceneTool(BaseTool):
             "scene_description": str(parsed.get("scene_description", "")).strip(),
             "image_type": str(parsed.get("image_type", "photo")).strip(),
             "total_entities": len(entities[:8]),
+            "bbox_warnings": bbox_warnings[:8],
             RUNTIME_METRICS_KEY: parsed.get(RUNTIME_METRICS_KEY, {}),
         }
 
@@ -194,6 +200,12 @@ def normalize_entity_bbox(raw_bbox: Any) -> List[float]:
     values = [float(value) for value in raw_bbox]
     if not all(math.isfinite(value) for value in values):
         raise ValueError("bbox coordinates must be finite")
+    if any(0.0 < value < 1.0 for value in values) and any(
+        value > 1.0 for value in values
+    ):
+        raise ValueError(
+            "bbox mixes normalized and Gemini 0..1000 coordinate scales"
+        )
 
     if all(0.0 <= value <= 1.0 for value in values):
         x1, y1, x2, y2 = values
