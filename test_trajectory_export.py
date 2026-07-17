@@ -85,6 +85,126 @@ def test_fatal_boundary_is_zero_masked(tmp_path: Path) -> None:
     )
 
 
+def test_exporter_keeps_query_replan_as_its_own_policy_example(
+    tmp_path: Path,
+) -> None:
+    trace = _trace(tmp_path)
+    query_steps = [
+        {
+            "round": 1,
+            "stage": "image_only_query_concept_extraction",
+            "action_type": "output",
+            "output": {
+                "task_id": "task-example",
+                "concepts": [
+                    {
+                        "concept_id": "concept-example",
+                        "evidence_id": "evidence-example",
+                        "evidence_phrase": "diagnostic concept",
+                        "search_term": "diagnostic concept",
+                        "role": "other",
+                    }
+                ],
+            },
+            "tokens": {"prompt": 10, "completion": 5, "thought": 0},
+            "metadata": {
+                "interaction_id": "query-concept-interaction",
+                "policy_input": {
+                    "input_payload": {
+                        "task_id": "task-example",
+                        "new_evidence": [
+                            {
+                                "evidence_id": "evidence-example",
+                                "exact_text": "A newly observed diagnostic concept.",
+                            }
+                        ],
+                    }
+                },
+                "policy_action": {
+                    "type": "output",
+                    "value": {
+                        "task_id": "task-example",
+                        "concepts": [
+                            {
+                                "concept_id": "concept-example",
+                                "evidence_id": "evidence-example",
+                                "evidence_phrase": "diagnostic concept",
+                                "search_term": "diagnostic concept",
+                                "role": "other",
+                            }
+                        ],
+                    },
+                },
+            },
+        },
+    ]
+    query_steps.append(
+        {
+            "round": 1,
+            "stage": "image_only_query_replan",
+            "action_type": "output",
+            "output": {
+                "task_id": "task-example",
+                "selected_concept_id": "concept-example",
+                "preserved_subject": "example",
+                "stale_query_slot": "old direction",
+                "replacement_query": "example evidence-led query",
+                "ready_to_finish": False,
+                "rationale": "New Evidence changed the searchable framing.",
+            },
+            "tokens": {"prompt": 10, "completion": 5, "thought": 0},
+            "metadata": {
+                "interaction_id": "query-replan-interaction",
+                "policy_input": {
+                    "input_payload": {
+                        "task_id": "task-example",
+                        "new_evidence": [
+                            {
+                                "evidence_id": "evidence-example",
+                                "exact_text": "A newly observed diagnostic concept.",
+                            }
+                        ],
+                    }
+                },
+                "policy_action": {
+                    "type": "output",
+                    "value": {
+                        "task_id": "task-example",
+                        "selected_concept_id": "concept-example",
+                        "preserved_subject": "example",
+                        "stale_query_slot": "old direction",
+                        "replacement_query": "example evidence-led query",
+                        "ready_to_finish": False,
+                        "rationale": (
+                            "New Evidence changed the searchable framing."
+                        ),
+                    },
+                },
+            },
+        },
+    )
+    for step in query_steps:
+        trace["state"]["all_steps"].insert(-1, step)
+
+    examples = export_policy_examples(trace)
+    concept_examples = [
+        item
+        for item in examples
+        if item.example_type == "query_concept_extraction"
+    ]
+    replans = [
+        item
+        for item in examples
+        if item.example_type == "query_replan"
+    ]
+
+    assert len(concept_examples) == 1
+    assert concept_examples[0].policy_action["type"] == "output"
+    assert len(replans) == 1
+    assert replans[0].policy_action["type"] == "output"
+    assert replans[0].action_valid is True
+
+
 def test_exporter_rejects_evaluator_private_leak(tmp_path: Path) -> None:
     trace = _trace(tmp_path)
     step = next(

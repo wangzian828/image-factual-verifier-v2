@@ -155,7 +155,7 @@ class ResearchTask(StrictModel):
     origin_ids: List[str] = Field(min_length=1, max_length=12)
     suggested_tools: List[str] = Field(default_factory=list, max_length=4)
     suggested_queries: List[str] = Field(default_factory=list, max_length=3)
-    query_refresh_count: int = Field(default=0, ge=0, le=1)
+    query_replan_count: int = Field(default=0, ge=0, le=1)
     attempt_count: int = Field(default=0, ge=0)
     finding_ids: List[str] = Field(default_factory=list, max_length=20)
 
@@ -310,11 +310,6 @@ class InvestigationFailure(StrictModel):
 class TaskUpdate(StrictModel):
     task_id: str = Field(min_length=1, max_length=100)
     priority: Optional[int] = Field(default=None, ge=1, le=3)
-    replacement_queries: Optional[List[str]] = Field(
-        default=None,
-        min_length=1,
-        max_length=3,
-    )
     reason: str = Field(default="", max_length=800)
 
 
@@ -324,6 +319,36 @@ class ReflectionOutput(StrictModel):
     recommended_next_task_ids: List[str] = Field(default_factory=list)
     remaining_gaps: List[str] = Field(default_factory=list)
     ready_to_finish: bool = False
+
+
+class QueryConcept(StrictModel):
+    concept_id: str = Field(min_length=1, max_length=100)
+    evidence_id: str = Field(min_length=1, max_length=100)
+    evidence_phrase: str = Field(min_length=1, max_length=800)
+    search_term: str = Field(min_length=1, max_length=300)
+    role: Literal[
+        "use_or_category",
+        "identity",
+        "place_or_event",
+        "relation_context",
+        "presentation_or_mechanics",
+        "other",
+    ] = "other"
+
+
+class QueryConceptExtractionOutput(StrictModel):
+    task_id: str = Field(min_length=1, max_length=100)
+    concepts: List[QueryConcept] = Field(default_factory=list, max_length=8)
+
+
+class QueryReplanOutput(StrictModel):
+    task_id: str = Field(min_length=1, max_length=100)
+    selected_concept_id: str = Field(default="", max_length=100)
+    preserved_subject: str = Field(default="", max_length=300)
+    stale_query_slot: str = Field(default="", max_length=300)
+    replacement_query: str = Field(default="", max_length=500)
+    ready_to_finish: bool = False
+    rationale: str = Field(min_length=1, max_length=800)
 
 
 class TargetFactProposal(StrictModel):
@@ -499,17 +524,24 @@ class InvestigationSegmentOutput(StrictModel):
 class ReflectionRecord(StrictModel):
     reflection_id: str = Field(min_length=1, max_length=100)
     action_count: int = Field(ge=1)
-    trigger: Literal["interval", "route_exhaustion"] = "interval"
+    trigger: Literal["interval"] = "interval"
     output: ReflectionOutput
     accepted_task_update_ids: List[str] = Field(default_factory=list, max_length=12)
-    accepted_query_refresh_task_ids: List[str] = Field(
-        default_factory=list,
-        max_length=4,
-    )
     accepted_new_task_ids: List[str] = Field(default_factory=list, max_length=3)
     rejected_reasons: List[str] = Field(default_factory=list, max_length=20)
     evidence_gain: bool = False
     decision_gain: bool = False
+
+
+class QueryReplanRecord(StrictModel):
+    replan_id: str = Field(min_length=1, max_length=100)
+    action_count: int = Field(ge=1)
+    trigger: Literal["evidence_boundary", "route_exhaustion"]
+    new_evidence_ids: List[str] = Field(default_factory=list, max_length=40)
+    concept_extraction: QueryConceptExtractionOutput
+    output: QueryReplanOutput
+    accepted_queries: List[str] = Field(default_factory=list, max_length=1)
+    rejected_reason: str = Field(default="", max_length=800)
 
 
 class EvidenceGap(StrictModel):
@@ -630,6 +662,10 @@ class ImageOnlyInvestigationState(StrictModel):
     findings: List[Finding] = Field(default_factory=list, max_length=120)
     failures: List[InvestigationFailure] = Field(default_factory=list, max_length=120)
     reflections: List[ReflectionRecord] = Field(default_factory=list, max_length=6)
+    query_replans: List[QueryReplanRecord] = Field(
+        default_factory=list,
+        max_length=12,
+    )
     evidence_decisions: List[EvidenceDecisionRecord] = Field(
         default_factory=list,
         max_length=24,

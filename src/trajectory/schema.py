@@ -28,6 +28,8 @@ class PolicyExample(StrictModel):
         "planning",
         "react",
         "evidence_decision",
+        "query_concept_extraction",
+        "query_replan",
         "reflection",
         "judgment",
     ]

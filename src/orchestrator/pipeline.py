@@ -20,11 +20,15 @@ from src.orchestrator.runtime_case import verify_case_image
 from src.orchestrator.image_only_prompts import (
     EVIDENCE_DECISION_SYSTEM_PROMPT as IMAGE_ONLY_EVIDENCE_DECISION_PROMPT,
     JUDGMENT_SYSTEM_PROMPT as IMAGE_ONLY_JUDGMENT_PROMPT,
+    QUERY_CONCEPT_EXTRACTION_SYSTEM_PROMPT as IMAGE_ONLY_QUERY_CONCEPT_EXTRACTION_PROMPT,
+    QUERY_REPLAN_SYSTEM_PROMPT as IMAGE_ONLY_QUERY_REPLAN_PROMPT,
     REACT_SYSTEM_PROMPT as IMAGE_ONLY_REACT_PROMPT,
     REFLECTION_SYSTEM_PROMPT as IMAGE_ONLY_REFLECTION_PROMPT,
     TARGET_PLANNING_SYSTEM_PROMPT as IMAGE_ONLY_TARGET_PLANNING_PROMPT,
     render_evidence_decision_context as render_image_only_evidence_decision_context,
     render_judgment_context as render_image_only_judgment_context,
+    render_query_concept_extraction_context as render_image_only_query_concept_extraction_context,
+    render_query_replan_context as render_image_only_query_replan_context,
     render_react_context as render_image_only_react_context,
     render_reflection_context as render_image_only_reflection_context,
     render_target_planning_context as render_image_only_target_planning_context,
@@ -35,6 +39,8 @@ from src.orchestrator.investigation_models import (
     ImageOnlyInvestigationState,
     ImageOnlyJudgment,
     InvestigationSegmentOutput,
+    QueryConceptExtractionOutput,
+    QueryReplanOutput,
     ReflectionOutput,
     TargetPlanningOutput,
 )
@@ -63,13 +69,16 @@ from src.orchestrator.task_store import (
     REFLECTION_INTERVAL,
     apply_evidence_decision,
     apply_evidence_decision_with_refinement_fallback,
+    apply_query_replan,
     apply_reflection,
     apply_target_planning,
     evidence_decision_checkpoint_reason,
     next_action_boundary,
     pending_evidence_decision_ids,
+    pending_query_replan_evidence_ids,
     pending_visual_reinspection,
-    query_refresh_candidate_task_ids,
+    query_concept_extraction_error,
+    query_replan_candidate_task_ids,
     remaining_material_routes,
     record_tool_observation,
     runtime_task_tool_names,
@@ -731,33 +740,34 @@ class Orchestrator:
                     required=decision_trigger == "before_unverifiable",
                 )
 
-            route_exhaustion_reflection = False
+            query_replan_ran = False
+            replan_candidates = query_replan_candidate_task_ids(investigation)
+            new_replan_evidence_ids = pending_query_replan_evidence_ids(
+                investigation
+            )
             if (
-                not remaining_material_routes(
-                    investigation,
-                    fact_id=investigation.core_verdict_fact_id or "",
+                replan_candidates
+                and (
+                    (
+                        reflection_boundary
+                        and new_replan_evidence_ids
+                    )
+                    or not remaining_material_routes(
+                        investigation,
+                        fact_id=investigation.core_verdict_fact_id or "",
+                    )
                 )
-                and query_refresh_candidate_task_ids(investigation)
-                and len(investigation.reflections) < MAX_REFLECTIONS
             ):
-                evidence_gain = len(investigation.evidence) > prior_evidence_count
-                decision_gain = (
-                    len(investigation.findings) > prior_finding_count
-                    or self._image_only_fact_signature(investigation)
-                    != prior_fact_signature
-                )
-                await self._run_image_only_reflection(
+                query_replan_ran = await self._run_image_only_query_replan(
                     state,
                     investigation,
-                    evidence_gain=evidence_gain,
-                    decision_gain=decision_gain,
-                    route_exhaustion=True,
-                )
-                route_exhaustion_reflection = True
-                prior_evidence_count = len(investigation.evidence)
-                prior_finding_count = len(investigation.findings)
-                prior_fact_signature = self._image_only_fact_signature(
-                    investigation
+                    task_id=replan_candidates[0],
+                    new_evidence_ids=new_replan_evidence_ids,
+                    trigger=(
+                        "evidence_boundary"
+                        if new_replan_evidence_ids
+                        else "route_exhaustion"
+                    ),
                 )
 
             audit_coverage(
@@ -769,13 +779,6 @@ class Orchestrator:
             if (
                 reflection_boundary
                 and not investigation.stop_reason
-                and not route_exhaustion_reflection
-                and not any(
-                    item.trigger == "route_exhaustion"
-                    and item.action_count
-                    > investigation.action_count - REFLECTION_INTERVAL
-                    for item in investigation.reflections
-                )
             ):
                 evidence_gain = len(investigation.evidence) > prior_evidence_count
                 decision_gain = (
@@ -799,6 +802,16 @@ class Orchestrator:
                     investigation
                 )
                 self._sync_image_only_state(state, investigation)
+
+            if (
+                query_replan_ran
+                and remaining_material_routes(
+                    investigation,
+                    fact_id=investigation.core_verdict_fact_id or "",
+                )
+            ):
+                self._sync_image_only_state(state, investigation)
+                continue
 
     async def _run_image_only_visual_reinspection(
         self,
@@ -990,7 +1003,6 @@ class Orchestrator:
         *,
         evidence_gain: bool,
         decision_gain: bool,
-        route_exhaustion: bool = False,
     ) -> None:
         runner = StageRunner(
             llm=self.llm,
@@ -1006,7 +1018,6 @@ class Orchestrator:
                     parsed,
                     evidence_gain=evidence_gain,
                     decision_gain=decision_gain,
-                    route_exhaustion=route_exhaustion,
                 )
             ),
             max_output_tokens=self._stage_output_tokens("REFLECTION", 8192),
@@ -1015,14 +1026,7 @@ class Orchestrator:
             },
         )
         parsed, steps = await runner.run(
-            render_image_only_reflection_context(
-                investigation,
-                trigger=(
-                    "route_exhaustion"
-                    if route_exhaustion
-                    else "interval"
-                ),
-            )
+            render_image_only_reflection_context(investigation)
         )
         self._record_stage_steps(state, steps)
         if parsed is None:
@@ -1035,12 +1039,128 @@ class Orchestrator:
             parsed,
             evidence_gain=evidence_gain,
             decision_gain=decision_gain,
-            trigger=(
-                "route_exhaustion"
-                if route_exhaustion
-                else "interval"
-            ),
         )
+
+    async def _run_image_only_query_replan(
+        self,
+        state: VerificationState,
+        investigation: ImageOnlyInvestigationState,
+        *,
+        task_id: str,
+        new_evidence_ids: List[str],
+        trigger: str,
+    ) -> bool:
+        """Ask for one bounded evidence-led change in search direction."""
+
+        if new_evidence_ids:
+            concept_runner = StageRunner(
+                llm=self.llm,
+                system_prompt=self._sp(
+                    IMAGE_ONLY_QUERY_CONCEPT_EXTRACTION_PROMPT
+                ),
+                tools=[],
+                output_schema=QueryConceptExtractionOutput,
+                max_rounds=2,
+                stage_name="image_only_query_concept_extraction",
+                attach_image=False,
+                output_validator=lambda parsed, _steps: (
+                    self._validate_image_only_query_concept_extraction(
+                        investigation,
+                        parsed,
+                        task_id=task_id,
+                        new_evidence_ids=new_evidence_ids,
+                    )
+                ),
+                max_output_tokens=self._stage_output_tokens(
+                    "QUERY_CONCEPT_EXTRACTION",
+                    2048,
+                ),
+                generation_config={
+                    "thinking_level": self._stage_thinking_level(
+                        "QUERY_CONCEPT_EXTRACTION"
+                    )
+                },
+            )
+            concept_extraction, concept_steps = await concept_runner.run(
+                render_image_only_query_concept_extraction_context(
+                    investigation,
+                    task_id=task_id,
+                    new_evidence_ids=new_evidence_ids,
+                )
+            )
+            for step in concept_steps:
+                if step.action_type == "output_rejected":
+                    step.action_type = "query_concept_extraction_revision"
+                    step.metadata["query_concept_extraction_revision_reason"] = (
+                        step.metadata.get("rejection_reason", "")
+                    )
+            self._record_stage_steps(state, concept_steps)
+            if concept_extraction is None:
+                raise RuntimeError(
+                    "image-only Query Concept Extraction did not produce valid "
+                    "structured output"
+                )
+        else:
+            concept_extraction = QueryConceptExtractionOutput(
+                task_id=task_id,
+                concepts=[],
+            )
+
+        runner = StageRunner(
+            llm=self.llm,
+            system_prompt=self._sp(IMAGE_ONLY_QUERY_REPLAN_PROMPT),
+            tools=[],
+            output_schema=QueryReplanOutput,
+            max_rounds=2,
+            stage_name="image_only_query_replan",
+            attach_image=False,
+            output_validator=lambda parsed, _steps: (
+                self._validate_image_only_query_replan(
+                    investigation,
+                    concept_extraction,
+                    parsed,
+                    task_id=task_id,
+                    new_evidence_ids=new_evidence_ids,
+                    trigger=trigger,
+                )
+            ),
+            max_output_tokens=self._stage_output_tokens("QUERY_REPLAN", 2048),
+            generation_config={
+                "thinking_level": self._stage_thinking_level("QUERY_REPLAN")
+            },
+        )
+        parsed, steps = await runner.run(
+            render_image_only_query_replan_context(
+                investigation,
+                task_id=task_id,
+                concept_extraction=concept_extraction,
+            )
+        )
+        for step in steps:
+            if step.action_type == "output_rejected":
+                step.action_type = "query_replan_revision"
+                step.metadata["query_replan_revision_reason"] = (
+                    step.metadata.get("rejection_reason", "")
+                )
+        self._record_stage_steps(state, steps)
+        if parsed is None:
+            raise RuntimeError(
+                "image-only Query Replan did not produce valid structured output"
+            )
+        record = apply_query_replan(
+            investigation,
+            concept_extraction,
+            parsed,
+            trigger=trigger,
+            new_evidence_ids=new_evidence_ids,
+        )
+        if record.rejected_reason:
+            raise RuntimeError(
+                "image-only Query Replan was rejected: "
+                + record.rejected_reason
+            )
+        self._sync_image_only_state(state, investigation)
+        return bool(record.accepted_queries)
 
     async def _run_image_only_judgment(
         self,
@@ -1092,7 +1212,6 @@ class Orchestrator:
         *,
         evidence_gain: bool,
         decision_gain: bool,
-        route_exhaustion: bool = False,
     ) -> tuple[bool, str]:
         candidate = investigation.model_copy(deep=True)
         record = apply_reflection(
@@ -1100,48 +1219,59 @@ class Orchestrator:
             parsed,
             evidence_gain=evidence_gain,
             decision_gain=decision_gain,
-            trigger=(
-                "route_exhaustion"
-                if route_exhaustion
-                else "interval"
-            ),
         )
         proposed_changes = bool(
             parsed.task_updates
             or parsed.new_tasks
         )
-        proposed_query_refresh_task_ids = {
-            update.task_id
-            for update in parsed.task_updates
-            if update.replacement_queries is not None
-        }
-        rejected_query_refresh_task_ids = (
-            proposed_query_refresh_task_ids
-            - set(record.accepted_query_refresh_task_ids)
-        )
-        if rejected_query_refresh_task_ids:
-            return False, "; ".join(record.rejected_reasons) or (
-                "Reflection proposed an invalid semantic query refresh"
-            )
-        if (
-            route_exhaustion
-            and query_refresh_candidate_task_ids(investigation)
-            and not record.accepted_query_refresh_task_ids
-            and not parsed.ready_to_finish
-        ):
-            return False, (
-                "Route-exhaustion Reflection must either submit one valid "
-                "replacement query or set ready_to_finish=true."
-            )
         accepted_changes = bool(
             record.accepted_task_update_ids
-            or record.accepted_query_refresh_task_ids
             or record.accepted_new_task_ids
         )
         if proposed_changes and not accepted_changes:
             return False, "; ".join(record.rejected_reasons) or (
                 "Reflection proposed no valid state transition"
             )
+        return True, ""
+
+    @staticmethod
+    def _validate_image_only_query_concept_extraction(
+        investigation: ImageOnlyInvestigationState,
+        parsed: QueryConceptExtractionOutput,
+        *,
+        task_id: str,
+        new_evidence_ids: List[str],
+    ) -> tuple[bool, str]:
+        reason = query_concept_extraction_error(
+            investigation,
+            parsed,
+            task_id=task_id,
+            new_evidence_ids=new_evidence_ids,
+        )
+        return not reason, reason
+
+    @staticmethod
+    def _validate_image_only_query_replan(
+        investigation: ImageOnlyInvestigationState,
+        concept_extraction: QueryConceptExtractionOutput,
+        parsed: QueryReplanOutput,
+        *,
+        task_id: str,
+        new_evidence_ids: List[str],
+        trigger: str,
+    ) -> tuple[bool, str]:
+        if parsed.task_id != task_id:
+            return False, "Query Replan must update the supplied task_id"
+        candidate = investigation.model_copy(deep=True)
+        record = apply_query_replan(
+            candidate,
+            concept_extraction,
+            parsed,
+            trigger=trigger,
+            new_evidence_ids=new_evidence_ids,
+        )
+        if record.rejected_reason:
+            return False, record.rejected_reason
         return True, ""
 
     @staticmethod
@@ -1377,7 +1507,7 @@ class Orchestrator:
         branches: List[str] = []
         pages: List[str] = []
         references: List[str] = []
-        refreshed_queries: List[str] = []
+        replanned_queries: List[str] = []
         task_by_id = {
             task.task_id: task
             for task in investigation.tasks
@@ -1401,8 +1531,8 @@ class Orchestrator:
                     references.append(parts[2])
             elif parts[0] == "text_search" and len(parts) == 2:
                 task = task_by_id.get(parts[1])
-                if task is not None and task.query_refresh_count:
-                    refreshed_queries.extend(task.suggested_queries)
+                if task is not None and task.query_replan_count:
+                    replanned_queries.extend(task.suggested_queries)
         constraints: Dict[str, Dict[str, List[Any]]] = {}
         if branches:
             constraints["reverse_image_search"] = {
@@ -1416,9 +1546,9 @@ class Orchestrator:
             constraints["compare_with_reference"] = {
                 "reference_url": list(dict.fromkeys(references))
             }
-        if refreshed_queries:
+        if replanned_queries:
             constraints["text_search"] = {
-                "queries": list(dict.fromkeys(refreshed_queries))
+                "queries": list(dict.fromkeys(replanned_queries))
             }
         return constraints
 

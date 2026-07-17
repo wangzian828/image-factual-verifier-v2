@@ -261,7 +261,7 @@ def test_strict_audit_rejects_unanchored_refinement(
     assert "EVIDENCE_REFINEMENT_ANCHOR_INVALID" in codes
 
 
-def test_route_exhaustion_reflection_can_cover_next_interval_boundary(
+def test_query_replan_does_not_replace_interval_reflection_boundary(
     tmp_path: Path,
 ) -> None:
     trace_path = _scripted_trace(tmp_path)
@@ -293,28 +293,48 @@ def test_route_exhaustion_reflection_can_cover_next_interval_boundary(
                 "ready_to_finish": False,
             },
             "accepted_task_update_ids": [],
-            "accepted_query_refresh_task_ids": [],
             "accepted_new_task_ids": [],
             "rejected_reasons": [],
         },
         {
-            "reflection_id": "reflection-route-6",
-            "action_count": 6,
-            "trigger": "route_exhaustion",
+            "reflection_id": "reflection-interval-8",
+            "action_count": 8,
+            "trigger": "interval",
             "output": {
                 "task_updates": [],
                 "new_tasks": [],
                 "recommended_next_task_ids": [],
-                "remaining_gaps": [
-                    "The exhausted route was reviewed before the next boundary."
-                ],
-                "ready_to_finish": True,
+                "remaining_gaps": [],
+                "ready_to_finish": False,
             },
             "accepted_task_update_ids": [],
-            "accepted_query_refresh_task_ids": [],
             "accepted_new_task_ids": [],
             "rejected_reasons": [],
         },
+    ]
+    task_id = investigation["tasks"][0]["task_id"]
+    investigation["query_replans"] = [
+        {
+            "replan_id": "query-replan-between-boundaries",
+            "action_count": 6,
+            "trigger": "route_exhaustion",
+            "new_evidence_ids": [],
+            "concept_extraction": {
+                "task_id": task_id,
+                "concepts": [],
+            },
+            "output": {
+                "task_id": task_id,
+                "selected_concept_id": "",
+                "preserved_subject": "",
+                "stale_query_slot": "",
+                "replacement_query": "",
+                "ready_to_finish": True,
+                "rationale": "No materially better search direction remains.",
+            },
+            "accepted_queries": [],
+            "rejected_reason": "",
+        }
     ]
     trace_path.write_text(
         json.dumps(trace, ensure_ascii=False, indent=2),

@@ -19,6 +19,9 @@ from src.orchestrator.investigation_models import (
     InvestigationEvidence,
     InvestigationSegmentOutput,
     ImageOnlyJudgment,
+    QueryConcept,
+    QueryConceptExtractionOutput,
+    QueryReplanOutput,
     ReflectionOutput,
     ResearchTask,
     TargetFactProposal,
@@ -43,6 +46,7 @@ from src.orchestrator.state import (
 from src.orchestrator.task_store import (
     apply_evidence_decision,
     apply_evidence_decision_with_refinement_fallback,
+    apply_query_replan,
     apply_reflection,
     apply_target_planning,
     evidence_decision_checkpoint_reason,
@@ -415,6 +419,64 @@ def _step(
             "function_call_id": call_id,
             "observed_at": datetime.now(timezone.utc).isoformat(),
         },
+    )
+
+
+def _append_query_replan_evidence(
+    state,
+    task,
+    *,
+    evidence_id: str = "evidence-query-replan",
+    exact_text: str = (
+        "The marked vessel is a fisheries survey ship used for marine research."
+    ),
+) -> InvestigationEvidence:
+    evidence = InvestigationEvidence(
+        evidence_id=evidence_id,
+        task_id=task.task_id,
+        fact_ids=[state.core_verdict_fact_id],
+        function_call_id=f"call-{evidence_id}",
+        tool_name="compare_with_reference",
+        evidence_kind="reference_comparison",
+        source_url="https://example.org/reference.jpg",
+        source_family="domain:example.org",
+        source_class="unknown",
+        exact_text=exact_text,
+        artifact_sha256="d" * 64,
+        retrieved_at=datetime.now(timezone.utc).isoformat(),
+        stance="neutral",
+        quality="moderate",
+        directness="direct",
+        claim_binding="same_subject",
+        same_subject_or_scene=True,
+        same_capture_or_near_duplicate=False,
+        likely_different_original_capture=True,
+        edit_evidence_present=False,
+        confidence=0.95,
+    )
+    state.evidence.append(evidence)
+    return evidence
+
+
+def _query_concepts(
+    task,
+    evidence: InvestigationEvidence | None = None,
+) -> QueryConceptExtractionOutput:
+    return QueryConceptExtractionOutput(
+        task_id=task.task_id,
+        concepts=(
+            [
+                QueryConcept(
+                    concept_id="concept-fisheries-survey",
+                    evidence_id=evidence.evidence_id,
+                    evidence_phrase="fisheries survey ship",
+                    search_term="fisheries survey ship",
+                    role="use_or_category",
+                )
+            ]
+            if evidence is not None
+            else []
+        ),
     )
 
 
@@ -2416,7 +2478,6 @@ def test_reflection_cannot_spawn_same_fact_search_without_new_grounding() -> Non
         ),
         evidence_gain=False,
         decision_gain=False,
-        trigger="route_exhaustion",
     )
 
     assert record.accepted_new_task_ids == []
@@ -4974,7 +5035,7 @@ def test_task_exhausts_when_finite_routes_are_consumed() -> None:
     )
 
 
-def test_reflection_refreshes_exhausted_search_direction_once() -> None:
+def test_query_replan_reopens_exhausted_search_direction_once() -> None:
     case, state = _runtime_state()
     task = next(
         item
@@ -4982,12 +5043,12 @@ def test_reflection_refreshes_exhausted_search_direction_once() -> None:
         if state.core_verdict_fact_id in item.fact_ids
     )
     task.suggested_tools = ["text_search", "visit"]
-    task.suggested_queries = ["Andreea Esca bicarbonat"]
+    task.suggested_queries = ["marked research vessel R 225"]
 
     for index, query in enumerate(
         [
-            "Andreea Esca bicarbonat",
-            "Andreea Esca Dr Oetker",
+            "marked research vessel R 225",
+            "marked research vessel HENRY B BIGELOW",
         ]
     ):
         url = f"https://example.org/irrelevant-{index}"
@@ -5044,31 +5105,34 @@ def test_reflection_refreshes_exhausted_search_direction_once() -> None:
         fact_id=state.core_verdict_fact_id or "",
     )
     state.action_count = max(4, state.action_count)
-    record = apply_reflection(
+    evidence = _append_query_replan_evidence(state, task)
+    record = apply_query_replan(
         state,
-        ReflectionOutput(
-            task_updates=[
-                TaskUpdate(
-                    task_id=task.task_id,
-                    replacement_queries=[
-                        "Andreea Esca impersonation supplement scam"
-                    ],
-                    reason=(
-                        "The product-name route found unrelated captures; "
-                        "test whether the visible endorsement is an impersonation."
-                    ),
-                )
-            ]
+        _query_concepts(task, evidence),
+        QueryReplanOutput(
+            task_id=task.task_id,
+            selected_concept_id="concept-fisheries-survey",
+            preserved_subject="marked research vessel",
+            stale_query_slot="R 225",
+            replacement_query=(
+                "marked research vessel fisheries survey ship identity"
+            ),
+            rationale=(
+                "Replace the exhausted hull-number route with the newly observed "
+                "vessel category while preserving the visible subject."
+            ),
         ),
-        evidence_gain=False,
-        decision_gain=False,
-        trigger="route_exhaustion",
+        trigger="evidence_boundary",
+        new_evidence_ids=[evidence.evidence_id],
     )
 
-    assert record.accepted_query_refresh_task_ids == [task.task_id]
-    assert task.query_refresh_count == 1
+    assert record.rejected_reason == ""
+    assert record.accepted_queries == [
+        "marked research vessel fisheries survey ship identity"
+    ]
+    assert task.query_replan_count == 1
     assert task.suggested_queries == [
-        "Andreea Esca impersonation supplement scam"
+        "marked research vessel fisheries survey ship identity"
     ]
     assert task.status == "active"
     assert state.discoveries
@@ -5083,7 +5147,7 @@ def test_reflection_refreshes_exhausted_search_direction_once() -> None:
     ) == {
         "text_search": {
             "queries": [
-                "Andreea Esca impersonation supplement scam"
+                "marked research vessel fisheries survey ship identity"
             ]
         }
     }
@@ -5093,7 +5157,7 @@ def test_reflection_refreshes_exhausted_search_direction_once() -> None:
     ) == {"pages": [], "references": []}
 
 
-def test_reflection_can_offer_three_queries_but_reopens_one_search_action() -> None:
+def test_query_replan_composes_one_query_and_reopens_one_search_action() -> None:
     case, state = _runtime_state()
     task = next(
         item
@@ -5122,29 +5186,28 @@ def test_reflection_can_offer_three_queries_but_reopens_one_search_action() -> N
         )
 
     state.action_count = max(4, state.action_count)
-    candidates = [
-        "Andreea Esca false advertisement",
-        "Andreea Esca impersonation scam",
-        "Andreea Esca unauthorized product promotion",
-    ]
-    record = apply_reflection(
+    evidence = _append_query_replan_evidence(state, task)
+    record = apply_query_replan(
         state,
-        ReflectionOutput(
-            task_updates=[
-                TaskUpdate(
-                    task_id=task.task_id,
-                    replacement_queries=candidates,
-                    reason="Offer bounded alternatives for one semantic replan.",
-                )
-            ]
+        _query_concepts(task, evidence),
+        QueryReplanOutput(
+            task_id=task.task_id,
+            selected_concept_id="concept-fisheries-survey",
+            preserved_subject="marked research vessel",
+            stale_query_slot="narrow direction 1",
+            replacement_query=(
+                "marked research vessel fisheries survey ship identity"
+            ),
+            rationale="Replace the exhausted narrow slot with the observed category.",
         ),
-        evidence_gain=False,
-        decision_gain=False,
-        trigger="route_exhaustion",
+        trigger="evidence_boundary",
+        new_evidence_ids=[evidence.evidence_id],
     )
 
-    assert record.accepted_query_refresh_task_ids == [task.task_id]
-    assert task.suggested_queries == candidates
+    expected = "marked research vessel fisheries survey ship identity"
+    assert record.rejected_reason == ""
+    assert record.accepted_queries == [expected]
+    assert task.suggested_queries == [expected]
     assert remaining_material_routes(
         state,
         fact_id=state.core_verdict_fact_id or "",
@@ -5152,10 +5215,10 @@ def test_reflection_can_offer_three_queries_but_reopens_one_search_action() -> N
     assert Orchestrator._image_only_tool_argument_constraints(
         state,
         task_ids={task.task_id},
-    ) == {"text_search": {"queries": candidates}}
+    ) == {"text_search": {"queries": [expected]}}
 
 
-def test_reflection_rejects_second_query_refresh_and_third_search_route() -> None:
+def test_query_replan_rejects_second_replan_and_fourth_search_route() -> None:
     case, state = _runtime_state()
     task = next(
         item
@@ -5163,7 +5226,7 @@ def test_reflection_rejects_second_query_refresh_and_third_search_route() -> Non
         if state.core_verdict_fact_id in item.fact_ids
     )
     task.suggested_tools = ["text_search"]
-    task.query_refresh_count = 1
+    task.query_replan_count = 1
     task.suggested_queries = ["new semantic direction"]
     for index, query in enumerate(["old one", "old two", "new semantic direction"]):
         step = _step(
@@ -5185,34 +5248,26 @@ def test_reflection_rejects_second_query_refresh_and_third_search_route() -> Non
         )
 
     state.action_count = max(4, state.action_count)
-    record = apply_reflection(
+    record = apply_query_replan(
         state,
-        ReflectionOutput(
-            task_updates=[
-                TaskUpdate(
-                    task_id=task.task_id,
-                    replacement_queries=["another unrelated direction"],
-                    reason="Try again.",
-                )
-            ]
+        _query_concepts(task),
+        QueryReplanOutput(
+            task_id=task.task_id,
+            rationale="Try again.",
         ),
-        evidence_gain=False,
-        decision_gain=False,
         trigger="route_exhaustion",
+        new_evidence_ids=[],
     )
 
-    assert not record.accepted_query_refresh_task_ids
-    assert any(
-        "already used its one semantic query refresh" in reason
-        for reason in record.rejected_reasons
-    )
+    assert not record.accepted_queries
+    assert "already used its one semantic query replan" in record.rejected_reason
     assert not remaining_material_routes(
         state,
         fact_id=state.core_verdict_fact_id or "",
     )
 
 
-def test_reflection_rejects_semantic_duplicate_query_refresh() -> None:
+def test_query_replan_rejects_semantic_duplicate_queries() -> None:
     case, state = _runtime_state()
     task = next(
         item
@@ -5220,11 +5275,13 @@ def test_reflection_rejects_semantic_duplicate_query_refresh() -> None:
         if state.core_verdict_fact_id in item.fact_ids
     )
     task.suggested_tools = ["text_search"]
-    task.suggested_queries = ["Andreea Esca fake health advertisement"]
+    task.suggested_queries = [
+        "marked research vessel fisheries survey ship identity R 225"
+    ]
     for index, query in enumerate(
         [
-            "Andreea Esca fake health advertisement",
-            "Andreea Esca health ad fake",
+            "marked research vessel fisheries survey ship identity R 225",
+            "marked research vessel alternate registry",
         ]
     ):
         step = _step(
@@ -5246,33 +5303,33 @@ def test_reflection_rejects_semantic_duplicate_query_refresh() -> None:
         )
 
     state.action_count = max(4, state.action_count)
-    record = apply_reflection(
+    evidence = _append_query_replan_evidence(state, task)
+    record = apply_query_replan(
         state,
-        ReflectionOutput(
-            task_updates=[
-                TaskUpdate(
-                    task_id=task.task_id,
-                    replacement_queries=[
-                        "fake advertisement health Andreea Esca"
-                    ],
-                    reason="Paraphrase the same route.",
-                )
-            ]
+        _query_concepts(task, evidence),
+        QueryReplanOutput(
+            task_id=task.task_id,
+            selected_concept_id="concept-fisheries-survey",
+            preserved_subject="marked research vessel",
+            stale_query_slot="R 225",
+            replacement_query=(
+                "marked research vessel fisheries survey ship identity R 225"
+            ),
+            rationale="Paraphrase the same route.",
         ),
-        evidence_gain=False,
-        decision_gain=False,
-        trigger="route_exhaustion",
+        trigger="evidence_boundary",
+        new_evidence_ids=[evidence.evidence_id],
     )
 
-    assert not record.accepted_query_refresh_task_ids
-    assert any(
-        "no genuinely new semantic query" in reason
-        for reason in record.rejected_reasons
-    )
-    assert task.query_refresh_count == 0
+    assert not record.accepted_queries
+    assert record.rejected_reason in {
+        "replacement query retains the complete stale query slot",
+        "proposed no genuinely new semantic query",
+    }
+    assert task.query_replan_count == 0
 
 
-def test_reflection_validator_rejects_invalid_refresh_despite_priority_change() -> None:
+def test_query_replan_validator_rejects_semantic_duplicate() -> None:
     case, state = _runtime_state()
     task = next(
         item
@@ -5280,11 +5337,13 @@ def test_reflection_validator_rejects_invalid_refresh_despite_priority_change() 
         if state.core_verdict_fact_id in item.fact_ids
     )
     task.suggested_tools = ["text_search"]
-    task.suggested_queries = ["Andreea Esca fake health advertisement"]
+    task.suggested_queries = [
+        "marked research vessel fisheries survey ship identity R 225"
+    ]
     for index, query in enumerate(
         [
-            "Andreea Esca fake health advertisement",
-            "Andreea Esca health ad fake",
+            "marked research vessel fisheries survey ship identity R 225",
+            "marked research vessel alternate registry",
         ]
     ):
         step = _step(
@@ -5305,30 +5364,33 @@ def test_reflection_validator_rejects_invalid_refresh_despite_priority_change() 
             image_sha256=case.image_sha256,
         )
 
-    valid, reason = Orchestrator._validate_image_only_reflection(
+    evidence = _append_query_replan_evidence(state, task)
+    valid, reason = Orchestrator._validate_image_only_query_replan(
         state,
-        ReflectionOutput(
-            task_updates=[
-                TaskUpdate(
-                    task_id=task.task_id,
-                    priority=2,
-                    replacement_queries=[
-                        "fake advertisement health Andreea Esca"
-                    ],
-                    reason="The same route with a priority change.",
-                )
-            ]
+        _query_concepts(task, evidence),
+        QueryReplanOutput(
+            task_id=task.task_id,
+            selected_concept_id="concept-fisheries-survey",
+            preserved_subject="marked research vessel",
+            stale_query_slot="R 225",
+            replacement_query=(
+                "marked research vessel fisheries survey ship identity R 225"
+            ),
+            rationale="The same semantic route.",
         ),
-        evidence_gain=False,
-        decision_gain=False,
-        route_exhaustion=True,
+        task_id=task.task_id,
+        new_evidence_ids=[evidence.evidence_id],
+        trigger="evidence_boundary",
     )
 
     assert valid is False
-    assert "no genuinely new semantic query" in reason
+    assert reason in {
+        "replacement query retains the complete stale query slot",
+        "proposed no genuinely new semantic query",
+    }
 
 
-def test_route_exhaustion_reflection_requires_refresh_or_explicit_finish() -> None:
+def test_route_exhaustion_query_replan_can_explicitly_finish() -> None:
     case, state = _runtime_state()
     task = next(
         item
@@ -5356,34 +5418,33 @@ def test_route_exhaustion_reflection_requires_refresh_or_explicit_finish() -> No
             image_sha256=case.image_sha256,
         )
 
-    valid, reason = Orchestrator._validate_image_only_reflection(
+    invalid, invalid_reason = Orchestrator._validate_image_only_query_replan(
         state,
-        ReflectionOutput(
-            task_updates=[
-                TaskUpdate(
-                    task_id=task.task_id,
-                    priority=2,
-                    reason="Only reprioritize the exhausted task.",
-                )
-            ]
+        _query_concepts(task),
+        QueryReplanOutput(
+            task_id=task.task_id,
+            ready_to_finish=False,
+            rationale="No decision was made.",
         ),
-        evidence_gain=False,
-        decision_gain=False,
-        route_exhaustion=True,
+        task_id=task.task_id,
+        new_evidence_ids=[],
+        trigger="route_exhaustion",
     )
-    finish_valid, finish_reason = Orchestrator._validate_image_only_reflection(
+    finish_valid, finish_reason = Orchestrator._validate_image_only_query_replan(
         state,
-        ReflectionOutput(
+        _query_concepts(task),
+        QueryReplanOutput(
+            task_id=task.task_id,
             ready_to_finish=True,
-            remaining_gaps=["No distinct semantic search direction remains."],
+            rationale="No distinct semantic search direction remains.",
         ),
-        evidence_gain=False,
-        decision_gain=False,
-        route_exhaustion=True,
+        task_id=task.task_id,
+        new_evidence_ids=[],
+        trigger="route_exhaustion",
     )
 
-    assert valid is False
-    assert "replacement query or set ready_to_finish=true" in reason
+    assert invalid is False
+    assert "requires every retrieval slot" in invalid_reason
     assert finish_valid is True
     assert finish_reason == ""
 
@@ -5458,7 +5519,7 @@ def test_visual_scene_identity_is_not_blocked_by_source_record_predicate() -> No
     assert "source" not in task.purpose.casefold()
 
 
-def test_reflection_cannot_abandon_uninspected_latest_search_batch() -> None:
+def test_query_replan_cannot_abandon_uninspected_latest_search_batch() -> None:
     case, state = _runtime_state()
     task = next(
         item
@@ -5518,27 +5579,26 @@ def test_reflection_cannot_abandon_uninspected_latest_search_batch() -> None:
             )
 
     state.action_count = max(4, state.action_count)
-    record = apply_reflection(
+    evidence = _append_query_replan_evidence(state, task)
+    record = apply_query_replan(
         state,
-        ReflectionOutput(
-            task_updates=[
-                TaskUpdate(
-                    task_id=task.task_id,
-                    replacement_queries=["new fraud investigation direction"],
-                    reason="Change direction.",
-                )
-            ]
+        _query_concepts(task, evidence),
+        QueryReplanOutput(
+            task_id=task.task_id,
+            selected_concept_id="concept-fisheries-survey",
+            preserved_subject="marked research vessel",
+            stale_query_slot="direction 1",
+            replacement_query=(
+                "marked research vessel fisheries survey ship identity"
+            ),
+            rationale="Change direction.",
         ),
-        evidence_gain=False,
-        decision_gain=False,
-        trigger="route_exhaustion",
+        trigger="evidence_boundary",
+        new_evidence_ids=[evidence.evidence_id],
     )
 
-    assert not record.accepted_query_refresh_task_ids
-    assert any(
-        "before inspecting at least one candidate" in reason
-        for reason in record.rejected_reasons
-    )
+    assert not record.accepted_queries
+    assert "before inspecting at least one candidate" in record.rejected_reason
     assert any(
         route.startswith(f"visit:{task.task_id}:")
         for route in remaining_material_routes(

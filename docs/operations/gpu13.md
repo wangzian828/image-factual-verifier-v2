@@ -18,6 +18,17 @@ other credential.
 7. Keep credentials in an untracked server `.env` or process environment. Never put
    them in Git, shell scripts, notebooks, traces, or this document.
 
+The maintained gpu-13 wrappers automatically set `IFV_ENV_FILE` to the following
+private file when it exists:
+
+```text
+/gs/home/wza/.config/image-factual-verifier/runtime.env
+```
+
+The Python runtime loads that dotenv file without overriding explicitly supplied
+process variables. The wrapper exports only the file path; it does not print or copy
+credential values. Use mode `600` for this file.
+
 ## Verified Topology
 
 Verified on 2026-07-11:
@@ -187,7 +198,8 @@ unavailable, it records the failed PP-OCR subcall and falls back to EasyOCR with
 changing the Gemini environment.
 
 Use `scripts/server/run_gpu13.sh` for project commands. It always sources the
-required proxy and threading environment and fails if the OMP value is not `1`.
+required proxy, credential-file path, and threading environment and fails if the
+OMP value is not `1`.
 
 ## Server Data Root
 

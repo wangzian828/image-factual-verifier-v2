@@ -702,6 +702,7 @@ def _audit_image_only_trace(
         "findings",
         "failures",
         "reflections",
+        "query_replans",
         "evidence_decisions",
         "visual_reinspections",
         "coverage_audits",
@@ -724,6 +725,7 @@ def _audit_image_only_trace(
     findings = _rows(investigation.get("findings"))
     failures = _rows(investigation.get("failures"))
     reflections = _rows(investigation.get("reflections"))
+    query_replans = _rows(investigation.get("query_replans"))
     evidence_decisions = _rows(investigation.get("evidence_decisions"))
     visual_reinspections = _rows(
         investigation.get("visual_reinspections")
@@ -784,6 +786,12 @@ def _audit_image_only_trace(
         location_prefix="state.investigation_state.reflections",
         report=report,
     )
+    query_replan_by_id = _unique_index(
+        query_replans,
+        id_field="replan_id",
+        location_prefix="state.investigation_state.query_replans",
+        report=report,
+    )
     decision_by_id = _unique_index(
         evidence_decisions,
         id_field="decision_id",
@@ -822,6 +830,169 @@ def _audit_image_only_trace(
         str(_mapping(investigation.get("brief")).get("case_id", "")).strip(),
     }
     all_known_origins.discard("")
+
+    replanned_task_ids: set[str] = set()
+    for replan_id, replan in query_replan_by_id.items():
+        location = _location(
+            "state.investigation_state.query_replans",
+            replan_id,
+        )
+        output = _mapping(replan.get("output"))
+        task_id = str(output.get("task_id", "")).strip()
+        if task_id not in task_by_id:
+            _issue(
+                report,
+                "QUERY_REPLAN_TASK_UNKNOWN",
+                f"Query Replan targets unknown task {task_id!r}",
+                location=location,
+            )
+        elif task_id in replanned_task_ids:
+            _issue(
+                report,
+                "QUERY_REPLAN_REPEATED",
+                f"Task {task_id!r} received more than one Query Replan",
+                location=location,
+            )
+        replanned_task_ids.add(task_id)
+        evidence_ids = {
+            str(item)
+            for item in replan.get("new_evidence_ids", []) or []
+        }
+        unknown_evidence = sorted(evidence_ids - set(evidence_by_id))
+        if unknown_evidence:
+            _issue(
+                report,
+                "QUERY_REPLAN_EVIDENCE_UNKNOWN",
+                "Query Replan cites unknown Evidence: "
+                + ", ".join(unknown_evidence),
+                location=location,
+            )
+        if str(replan.get("trigger", "")).strip() == "evidence_boundary":
+            if not evidence_ids:
+                _issue(
+                    report,
+                    "QUERY_REPLAN_EVIDENCE_MISSING",
+                    "Evidence-boundary Query Replan requires new Evidence",
+                    location=location,
+                )
+            elif task_id in task_by_id:
+                task_fact_ids = {
+                    str(item)
+                    for item in task_by_id[task_id].get("fact_ids", []) or []
+                }
+                if any(
+                    not task_fact_ids
+                    & {
+                        str(item)
+                        for item in evidence_by_id[evidence_id].get(
+                            "fact_ids",
+                            [],
+                        )
+                        or []
+                    }
+                    for evidence_id in evidence_ids & set(evidence_by_id)
+                ):
+                    _issue(
+                        report,
+                        "QUERY_REPLAN_EVIDENCE_OWNERSHIP_INVALID",
+                        "Query Replan Evidence must belong to its task fact",
+                        location=location,
+                    )
+        extraction = _mapping(replan.get("concept_extraction"))
+        if str(extraction.get("task_id", "")).strip() != task_id:
+            _issue(
+                report,
+                "QUERY_CONCEPT_TASK_MISMATCH",
+                "Query Concept Extraction must belong to the replanned task",
+                location=location,
+            )
+        concept_by_id: dict[str, Mapping[str, Any]] = {}
+        for concept in _rows(extraction.get("concepts")):
+            concept_id = str(concept.get("concept_id", "")).strip()
+            if not concept_id:
+                _issue(
+                    report,
+                    "QUERY_CONCEPT_ID_MISSING",
+                    "Query Concept must have a non-empty concept_id",
+                    location=location,
+                )
+                continue
+            if concept_id in concept_by_id:
+                _issue(
+                    report,
+                    "QUERY_CONCEPT_ID_DUPLICATE",
+                    f"Duplicate Query Concept id {concept_id!r}",
+                    location=location,
+                )
+                continue
+            concept_by_id[concept_id] = concept
+            evidence_id = str(concept.get("evidence_id", "")).strip()
+            if evidence_id not in evidence_ids:
+                _issue(
+                    report,
+                    "QUERY_CONCEPT_EVIDENCE_OUT_OF_SCOPE",
+                    f"Query Concept {concept_id!r} does not cite new Evidence",
+                    location=location,
+                )
+                continue
+            evidence_row = evidence_by_id.get(evidence_id)
+            if evidence_row is None:
+                continue
+            phrase = " ".join(
+                re.findall(
+                    r"[\w]+",
+                    str(concept.get("evidence_phrase", "")).casefold(),
+                    flags=re.UNICODE,
+                )
+            )
+            exact_text = " ".join(
+                re.findall(
+                    r"[\w]+",
+                    str(evidence_row.get("exact_text", "")).casefold(),
+                    flags=re.UNICODE,
+                )
+            )
+            if not phrase or phrase not in exact_text:
+                _issue(
+                    report,
+                    "QUERY_CONCEPT_PHRASE_UNGROUNDED",
+                    f"Query Concept {concept_id!r} lacks an exact Evidence phrase",
+                    location=location,
+                )
+        selected_concept_id = str(
+            output.get("selected_concept_id", "")
+        ).strip()
+        ready_to_finish = bool(output.get("ready_to_finish", False))
+        if selected_concept_id and selected_concept_id not in concept_by_id:
+            _issue(
+                report,
+                "QUERY_REPLAN_CONCEPT_UNKNOWN",
+                "Query Replan selected a concept absent from its extraction",
+                location=location,
+            )
+        if (
+            not ready_to_finish
+            and not str(output.get("replacement_query", "")).strip()
+        ):
+            _issue(
+                report,
+                "QUERY_REPLAN_QUERY_MISSING",
+                "Non-finishing Query Replan must contain one replacement query",
+                location=location,
+            )
+        accepted_queries = [
+            str(item).strip()
+            for item in replan.get("accepted_queries", []) or []
+            if str(item).strip()
+        ]
+        rejected_reason = str(replan.get("rejected_reason", "")).strip()
+        if rejected_reason and accepted_queries:
+            _issue(
+                report,
+                "QUERY_REPLAN_REJECTED_WITH_QUERIES",
+                "Rejected Query Replan cannot expose accepted queries",
+                location=location,
+            )
 
     accepted_refinement_ids: list[str] = []
     for decision_id, decision in decision_by_id.items():
@@ -1455,17 +1626,11 @@ def _audit_image_only_trace(
         for item in reflections
         if str(item.get("trigger", "interval")).strip() == "interval"
     ]
-    route_exhaustion_counts = [
-        int(item.get("action_count", 0) or 0)
-        for item in reflections
-        if str(item.get("trigger", "interval")).strip()
-        == "route_exhaustion"
-    ]
     unknown_reflection_triggers = [
         str(item.get("trigger", "")).strip()
         for item in reflections
         if str(item.get("trigger", "interval")).strip()
-        not in {"interval", "route_exhaustion"}
+        != "interval"
     ]
     if unknown_reflection_triggers:
         _issue(
@@ -1502,10 +1667,6 @@ def _audit_image_only_trace(
         boundary
         for boundary in expected_boundaries
         if boundary not in interval_reflection_counts
-        and not any(
-            boundary - 4 < count <= boundary
-            for count in route_exhaustion_counts
-        )
     ]
     unexpected_interval_counts = [
         count
@@ -1517,12 +1678,10 @@ def _audit_image_only_trace(
             report,
             "IMAGE_ONLY_REFLECTION_CADENCE_INVALID",
             (
-                "scheduled Reflection boundaries must be covered by an interval "
-                "Reflection or a preceding route-exhaustion Reflection; "
+                "scheduled Reflection boundaries require an interval Reflection; "
                 f"missing={missing_boundaries}, "
                 f"unexpected_interval={unexpected_interval_counts}, "
-                f"interval={interval_reflection_counts}, "
-                f"route_exhaustion={route_exhaustion_counts}"
+                f"interval={interval_reflection_counts}"
             ),
             location="state.investigation_state.reflections",
         )
@@ -1719,6 +1878,7 @@ def _audit_image_only_trace(
             "image_only_evidence": len(evidence),
             "findings": len(findings),
             "reflections": len(reflections),
+            "query_replans": len(query_replans),
             "evidence_decisions": len(evidence_decisions),
             "visual_reinspections": len(visual_reinspections),
             "core_refinements": refinement_count,

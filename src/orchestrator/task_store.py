@@ -19,6 +19,9 @@ from src.orchestrator.investigation_models import (
     InvestigationDiscovery,
     InvestigationEvidence,
     InvestigationFailure,
+    QueryConceptExtractionOutput,
+    QueryReplanOutput,
+    QueryReplanRecord,
     ReflectionOutput,
     ReflectionRecord,
     ResearchTask,
@@ -1624,6 +1627,27 @@ def pending_evidence_decision_ids(
     ]
 
 
+def pending_query_replan_evidence_ids(
+    state: ImageOnlyInvestigationState,
+) -> List[str]:
+    """Return core Evidence not yet exposed to a search-direction replan."""
+
+    core_id = state.core_verdict_fact_id
+    if not core_id:
+        return []
+    reviewed = {
+        evidence_id
+        for item in state.query_replans
+        for evidence_id in item.new_evidence_ids
+    }
+    return [
+        item.evidence_id
+        for item in state.evidence
+        if core_id in item.fact_ids
+        and item.evidence_id not in reviewed
+    ]
+
+
 def pending_visual_reinspection(
     state: ImageOnlyInvestigationState,
 ) -> VisualReinspectionRecord | None:
@@ -2912,7 +2936,6 @@ def apply_reflection(
     *,
     evidence_gain: bool,
     decision_gain: bool,
-    trigger: str = "interval",
 ) -> ReflectionRecord:
     """Validate and apply a bounded Reflection delta."""
 
@@ -2939,7 +2962,6 @@ def apply_reflection(
         *failure_ids,
     }
     accepted_updates: List[str] = []
-    accepted_query_refreshes: List[str] = []
     accepted_new: List[str] = []
     rejected: List[str] = []
 
@@ -2967,44 +2989,11 @@ def apply_reflection(
         if task is None:
             rejected.append(f"unknown task update {update.task_id}")
             continue
-        proposed_queries = _novel_replacement_queries(
-            state,
-            task,
-            update.replacement_queries,
-        )
-        wants_query_refresh = update.replacement_queries is not None
-        if update.priority is None and not wants_query_refresh:
+        if update.priority is None:
             rejected.append(f"{update.task_id} proposed no state change")
             continue
-        changed = False
-        if update.priority is not None:
-            task.priority = update.priority
-            changed = True
-        if wants_query_refresh:
-            refresh_error = _query_refresh_error(
-                state,
-                task,
-                proposed_queries,
-                trigger=trigger,
-            )
-            if refresh_error:
-                rejected.append(f"{update.task_id} {refresh_error}")
-            else:
-                task.suggested_queries = proposed_queries
-                task.query_refresh_count += 1
-                task.status = "active"
-                _abandon_stale_discoveries(
-                    state,
-                    task,
-                    reason=(
-                        update.reason
-                        or "Reflection replaced the exhausted search direction."
-                    ),
-                )
-                accepted_query_refreshes.append(task.task_id)
-                changed = True
-        if changed:
-            accepted_updates.append(update.task_id)
+        task.priority = update.priority
+        accepted_updates.append(update.task_id)
 
     semantic_keys = {
         _semantic_task_key(task.question): task.task_id
@@ -3077,14 +3066,9 @@ def apply_reflection(
             len(state.reflections) + 1,
         ),
         action_count=state.action_count,
-        trigger=(
-            "route_exhaustion"
-            if trigger == "route_exhaustion"
-            else "interval"
-        ),
+        trigger="interval",
         output=bounded_output,
         accepted_task_update_ids=accepted_updates,
-        accepted_query_refresh_task_ids=accepted_query_refreshes,
         accepted_new_task_ids=accepted_new,
         rejected_reasons=rejected,
         evidence_gain=evidence_gain,
@@ -3095,13 +3079,11 @@ def apply_reflection(
     return record
 
 
-def _novel_replacement_queries(
+def _novel_replan_query(
     state: ImageOnlyInvestigationState,
     task: ResearchTask,
-    proposed: Sequence[str] | None,
-) -> List[str]:
-    if proposed is None:
-        return []
+    proposed: str,
+) -> str:
     attempted = _attempted_routes_by_task(state).get(task.task_id, [])
     prior_queries: List[str] = list(task.suggested_queries)
     for route in attempted:
@@ -3112,41 +3094,180 @@ def _novel_replacement_queries(
             values = [values]
         prior_queries.extend(str(value) for value in values)
 
-    accepted: List[str] = []
-    for raw_query in proposed:
-        query = " ".join(str(raw_query).split())
-        if not query:
-            continue
-        if any(
-            routes_semantically_equivalent(
-                "text_search",
-                {"queries": [query]},
-                "text_search",
-                {"queries": [prior]},
+    query = " ".join(str(proposed).split())
+    if not query:
+        return ""
+    if any(
+        routes_semantically_equivalent(
+            "text_search",
+            {"queries": [query]},
+            "text_search",
+            {"queries": [prior]},
+        )
+        for prior in prior_queries
+        if prior
+    ):
+        return ""
+    return query
+
+
+def _normalized_replan_tokens(value: str) -> set[str]:
+    return {
+        token
+        for token in re.findall(
+            r"[\w]+",
+            str(value or "").casefold(),
+            flags=re.UNICODE,
+        )
+        if len(token) > 1
+    }
+
+
+def _normalized_replan_text(value: str) -> str:
+    return " ".join(
+        re.findall(
+            r"[\w]+",
+            str(value or "").casefold(),
+            flags=re.UNICODE,
+        )
+    )
+
+
+def query_concept_extraction_error(
+    state: ImageOnlyInvestigationState,
+    output: QueryConceptExtractionOutput,
+    *,
+    task_id: str,
+    new_evidence_ids: Sequence[str],
+) -> str:
+    """Validate that extracted concepts are traceable to supplied exact Evidence."""
+
+    if output.task_id != task_id:
+        return "query concepts must use the supplied task_id"
+    valid_evidence = {
+        item.evidence_id: item
+        for item in state.evidence
+        if state.core_verdict_fact_id in item.fact_ids
+        and item.evidence_id in set(new_evidence_ids)
+    }
+    seen_concept_ids: set[str] = set()
+    for concept in output.concepts:
+        if concept.concept_id in seen_concept_ids:
+            return f"duplicate query concept id {concept.concept_id}"
+        seen_concept_ids.add(concept.concept_id)
+        evidence = valid_evidence.get(concept.evidence_id)
+        if evidence is None:
+            return (
+                f"query concept {concept.concept_id} cites Evidence that was not "
+                "supplied for the active fact"
             )
-            for prior in [*prior_queries, *accepted]
-            if prior
-        ):
+        phrase = _normalized_replan_text(concept.evidence_phrase)
+        if not phrase or phrase not in _normalized_replan_text(evidence.exact_text):
+            return (
+                f"query concept {concept.concept_id} does not copy an exact "
+                "Evidence phrase"
+            )
+    return ""
+
+
+def _compose_query_replan(
+    state: ImageOnlyInvestigationState,
+    task: ResearchTask,
+    concept_extraction: QueryConceptExtractionOutput,
+    output: QueryReplanOutput,
+    *,
+    new_evidence_ids: Sequence[str],
+) -> tuple[str, str]:
+    """Validate one evidence-grounded query without interpreting its domain."""
+
+    slot_values = (
+        output.selected_concept_id,
+        output.preserved_subject,
+        output.stale_query_slot,
+        output.replacement_query,
+    )
+    if output.ready_to_finish:
+        if any(str(item).strip() for item in slot_values):
+            return "", "ready_to_finish requires empty query-replan slots"
+        return "", ""
+    if not all(str(item).strip() for item in slot_values):
+        return "", "query replan requires every retrieval slot"
+    if concept_extraction.task_id != task.task_id:
+        return "", "query concepts must belong to the replanned task"
+    concepts_by_id = {
+        item.concept_id: item
+        for item in concept_extraction.concepts
+    }
+    selected = concepts_by_id.get(output.selected_concept_id)
+    if selected is None:
+        return "", "selected query concept was not supplied"
+    if selected.evidence_id not in set(new_evidence_ids):
+        return "", "selected query concept is not grounded in new Evidence"
+
+    core = next(
+        (
+            fact
+            for fact in state.facts
+            if fact.fact_id == state.core_verdict_fact_id
+        ),
+        None,
+    )
+    if core is None:
+        return "", "query replan has no active core fact"
+    subject_text = _normalized_replan_text(output.preserved_subject)
+    if not subject_text or subject_text not in _normalized_replan_text(
+        core.statement
+    ):
+        return "", "preserved subject is not present in the active proposition"
+
+    attempted = _attempted_routes_by_task(state).get(task.task_id, [])
+    attempted_query_tokens: List[set[str]] = []
+    for route in attempted:
+        if str(route.get("tool", "")).strip() != "text_search":
             continue
-        accepted.append(query)
-    return accepted[:3]
+        values = route.get("queries", []) or []
+        if isinstance(values, str):
+            values = [values]
+        attempted_query_tokens.extend(
+            _normalized_replan_tokens(str(value))
+            for value in values
+            if str(value).strip()
+        )
+    stale_tokens = _normalized_replan_tokens(output.stale_query_slot)
+    subject_tokens = _normalized_replan_tokens(output.preserved_subject)
+    if not stale_tokens or stale_tokens & subject_tokens:
+        return "", "stale query slot must exclude the preserved subject"
+    if not any(stale_tokens <= query_tokens for query_tokens in attempted_query_tokens):
+        return "", "stale query slot is not grounded in an attempted query"
+
+    query = " ".join(output.replacement_query.split())
+    query_tokens = _normalized_replan_tokens(query)
+    if not subject_tokens <= query_tokens:
+        return "", "replacement query does not preserve the visible subject"
+    if stale_tokens <= query_tokens:
+        return "", "replacement query retains the complete stale query slot"
+    novel = _novel_replan_query(state, task, query)
+    if not novel:
+        return "", "proposed no genuinely new semantic query"
+    return novel, ""
 
 
-def _query_refresh_error(
+def _query_replan_error(
     state: ImageOnlyInvestigationState,
     task: ResearchTask,
     proposed_queries: Sequence[str],
     *,
     trigger: str,
+    ready_to_finish: bool,
 ) -> str:
-    if trigger != "route_exhaustion":
-        return "query refresh is available only at route exhaustion"
-    if task.query_refresh_count >= 1:
-        return "already used its one semantic query refresh"
+    if trigger not in {"evidence_boundary", "route_exhaustion"}:
+        return "query replan has an unknown trigger"
+    if task.query_replan_count >= 1:
+        return "already used its one semantic query replan"
     if "text_search" not in runtime_task_tool_names(state, task):
-        return "cannot refresh queries because text_search is not enabled"
+        return "cannot replan queries because text_search is not enabled"
     if state.core_verdict_fact_id not in task.fact_ids:
-        return "cannot refresh queries for a task outside the open core fact"
+        return "cannot replan queries for a task outside the open core fact"
     core = next(
         (
             fact
@@ -3156,9 +3277,9 @@ def _query_refresh_error(
         None,
     )
     if core is None or core.status in {"supported", "refuted"}:
-        return "cannot refresh queries after the core fact is resolved"
-    if not proposed_queries:
-        return "proposed no genuinely new semantic query"
+        return "cannot replan queries after the core fact is resolved"
+    if not proposed_queries and not ready_to_finish:
+        return "must propose a genuinely new query or finish the replan"
 
     attempts = _attempted_routes_by_task(state).get(task.task_id, [])
     text_search_count = sum(
@@ -3167,7 +3288,7 @@ def _query_refresh_error(
     )
     if text_search_count < MAX_TEXT_SEARCH_ROUTES_PER_TASK:
         return (
-            "cannot refresh before the initial text-search allowance is "
+            "cannot replan before the initial text-search allowance is "
             "exhausted"
         )
     latest_text_search_index = max(
@@ -3193,10 +3314,110 @@ def _query_refresh_error(
         and not inspected_after_latest_search
     ):
         return (
-            "cannot abandon the latest search batch before inspecting at "
+            "cannot replan away from the latest search batch before inspecting at "
             "least one candidate"
         )
     return ""
+
+
+def apply_query_replan(
+    state: ImageOnlyInvestigationState,
+    concept_extraction: QueryConceptExtractionOutput,
+    output: QueryReplanOutput,
+    *,
+    trigger: str,
+    new_evidence_ids: Sequence[str],
+) -> QueryReplanRecord:
+    """Apply one model-proposed search-direction update without judging facts."""
+
+    task = _task_by_id(state, output.task_id)
+    accepted_query = ""
+    rejected_reason = ""
+    if task is None:
+        rejected_reason = f"unknown task {output.task_id}"
+    elif task.query_replan_count >= 1:
+        rejected_reason = "already used its one semantic query replan"
+    else:
+        rejected_reason = query_concept_extraction_error(
+            state,
+            concept_extraction,
+            task_id=task.task_id,
+            new_evidence_ids=new_evidence_ids,
+        )
+        if not rejected_reason:
+            accepted_query, rejected_reason = _compose_query_replan(
+                state,
+                task,
+                concept_extraction,
+                output,
+                new_evidence_ids=new_evidence_ids,
+            )
+        if not rejected_reason:
+            rejected_reason = _query_replan_error(
+                state,
+                task,
+                [accepted_query] if accepted_query else [],
+                trigger=trigger,
+                ready_to_finish=output.ready_to_finish,
+            )
+
+    valid_evidence_ids = {
+        item.evidence_id
+        for item in state.evidence
+        if state.core_verdict_fact_id in item.fact_ids
+    }
+    grounded_evidence_ids = [
+        item
+        for item in dict.fromkeys(new_evidence_ids)
+        if item in valid_evidence_ids
+    ][:40]
+    if trigger == "evidence_boundary" and not grounded_evidence_ids:
+        rejected_reason = rejected_reason or (
+            "evidence-boundary replan requires new core Evidence"
+        )
+
+    if task is not None and not rejected_reason:
+        task.query_replan_count += 1
+        if accepted_query:
+            task.suggested_queries = [accepted_query]
+            task.status = "active"
+            state.recommended_next_task_ids = list(
+                dict.fromkeys(
+                    [
+                        task.task_id,
+                        *state.recommended_next_task_ids,
+                    ]
+                )
+            )[:4]
+            _abandon_stale_discoveries(
+                state,
+                task,
+                reason=(
+                    output.rationale
+                    or "Query Replan replaced the stalled search direction."
+                ),
+            )
+        elif trigger == "route_exhaustion" and output.ready_to_finish:
+            task.status = "exhausted"
+
+    record = QueryReplanRecord(
+        replan_id=stable_id(
+            "query-replan",
+            state.brief.case_id,
+            state.action_count,
+            len(state.query_replans) + 1,
+            output.model_dump(mode="json"),
+        ),
+        action_count=state.action_count,
+        trigger=trigger,
+        new_evidence_ids=grounded_evidence_ids,
+        concept_extraction=concept_extraction,
+        output=output,
+        accepted_queries=[accepted_query] if accepted_query and not rejected_reason else [],
+        rejected_reason=rejected_reason,
+    )
+    state.query_replans.append(record)
+    return record
 
 
 def _inherit_refinement_discoveries(
@@ -4042,10 +4263,10 @@ def remaining_material_routes(
     return list(dict.fromkeys(routes))
 
 
-def query_refresh_candidate_task_ids(
+def query_replan_candidate_task_ids(
     state: ImageOnlyInvestigationState,
 ) -> List[str]:
-    """Return unresolved core tasks eligible for one exhausted-route replan."""
+    """Return unresolved core tasks eligible for one evidence-led replan."""
 
     core_id = state.core_verdict_fact_id
     core = next(
@@ -4060,7 +4281,8 @@ def query_refresh_candidate_task_ids(
     for task in state.tasks:
         if (
             core_id not in task.fact_ids
-            or task.query_refresh_count >= 1
+            or task.status not in {"active", "pending", "exhausted"}
+            or task.query_replan_count >= 1
             or "text_search" not in runtime_task_tool_names(state, task)
         ):
             continue
@@ -4203,6 +4425,15 @@ def _remaining_task_material_routes(
         return pending_routes
 
     routes: List[str] = []
+    if (
+        "text_search" in allowed
+        and task.query_replan_count
+        and text_search_count == MAX_TEXT_SEARCH_ROUTES_PER_TASK
+    ):
+        # A newly accepted semantic replan is the next action, rather than one
+        # more optional branch from the stale plan. Once attempted, the normal
+        # route inventory resumes.
+        return [f"text_search:{task.task_id}"]
     if "reverse_image_search" in allowed:
         for branch in ("lens", "semantic"):
             if branch not in global_reverse_branches:
@@ -4212,7 +4443,7 @@ def _remaining_task_material_routes(
     if (
         "text_search" in allowed
         and text_search_count
-        < MAX_TEXT_SEARCH_ROUTES_PER_TASK + task.query_refresh_count
+        < MAX_TEXT_SEARCH_ROUTES_PER_TASK + task.query_replan_count
     ):
         routes.append(f"text_search:{task.task_id}")
     for tool_name in (

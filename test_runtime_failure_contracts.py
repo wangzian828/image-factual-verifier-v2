@@ -185,7 +185,6 @@ def test_required_reflection_fails_closed_on_invalid_structured_output(
                 investigation,
                 evidence_gain=False,
                 decision_gain=False,
-                route_exhaustion=True,
             )
         )
 

@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-16
 
-**Status:** implemented locally; gpu-13 Monarch acceptance pending
+**Status:** route controller implemented; evidence-led Query Replan acceptance pending
 
 ## Why
 
@@ -161,3 +161,32 @@ Implemented:
 
 Local deterministic validation is complete; real acceptance remains the Monarch,
 Berlin Wall, and Queen bus sequence on the clean gpu-13 worktree.
+
+## 2026-07-17 dynamic adjustment: evidence-led Query Replan
+
+The Andreea trace exposed a separate route-control failure. Exact Evidence had
+already introduced useful searchable concepts, but Reflection retained the stale
+query framing until the route budget was exhausted. A single model call that both
+interpreted Evidence and wrote a query proved unstable: it either retained the
+over-specific product slot or generalized to unrelated scams.
+
+The repair separates scheduled task Reflection from one bounded search replan:
+
+```text
+new exact Evidence
+  -> extract traceable candidate search concepts
+  -> select one concept against the active proposition and remaining gap
+  -> write one complete replacement query
+  -> execute one text-search action
+```
+
+The reducer validates Evidence IDs, exact Evidence phrases, selected concept IDs,
+the preserved visible subject, the stale attempted-query slot, semantic novelty,
+and the one-replan budget. It does not encode people, products, domains, verdicts,
+or required query vocabulary. Concept extraction and final query selection are
+both retained as policy-training examples.
+
+Acceptance requires the real Andreea case to retrieve the matching health-product
+impersonation evidence, avoid binding an unrelated financial scam, return `fake`,
+pass strict trace audit, and stop once the core relation is refuted. Three additional
+v4 cases of different types then serve as regression canaries.

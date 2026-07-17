@@ -8,12 +8,10 @@ from typing import Any, Dict, Iterable, List
 from src.orchestrator.investigation_models import (
     ImageOnlyCoverage,
     ImageOnlyInvestigationState,
+    QueryConceptExtractionOutput,
     VerdictBasis,
 )
-from src.orchestrator.task_store import (
-    query_refresh_candidate_task_ids,
-    remaining_material_routes,
-)
+from src.orchestrator.task_store import remaining_material_routes
 from src.orchestrator.source_provenance import classify_source
 from src.orchestrator.source_provenance import canonicalize_url
 
@@ -31,21 +29,35 @@ the runtime owns task state, evidence, duplicate control, source policy, and ver
 
 REFLECTION_SYSTEM_PROMPT = """\
 You are the structured Reflection step of an image-only factual investigation.
-Review the global state after a scheduled interval or when bounded retrieval
-routes are exhausted.
+Review the global state after a scheduled interval.
 
 You may reprioritize tasks, add up to three grounded tasks that serve the open core
 evidence gaps, recommend next tasks, and identify remaining gaps.
-
-Only when reflection_trigger is route_exhaustion may you replace one listed
-query_refresh_candidate_task_id's suggested queries with a genuinely different
-semantic search direction. This is a one-time bounded replan, not a paraphrase of
-an attempted query. At an interval reflection, replacement_queries must be null.
 
 You may not create Evidence or Findings, write a verdict, modify the immutable
 brief, delete history, cite unknown ids, change task status, or change the core
 fact. Task status, core ownership, coverage, and stopping are deterministic.
 Return exactly one JSON object matching the schema.
+"""
+
+
+QUERY_CONCEPT_EXTRACTION_SYSTEM_PROMPT = """\
+Extract a small set of searchable concepts from the supplied exact Evidence. Each
+concept must cite one supplied Evidence id, copy a short exact evidence phrase, and
+normalize it into a concise search term. Describe the concept's role; do not choose
+the next query, judge the proposition, or add knowledge absent from the Evidence.
+"""
+
+
+QUERY_REPLAN_SYSTEM_PROMPT = """\
+Choose one supplied Evidence-derived concept that best closes the remaining gap in
+the active proposition, then write one complete replacement web query.
+
+Preserve a visible subject phrase from the proposition and identify the stale
+non-subject slot in an attempted query. The new query should change that stalled
+direction while retaining the relation being investigated. This is a retrieval
+hypothesis, not a verdict. If none of the supplied concepts offers a materially
+better direction, leave the query fields empty and set ready_to_finish=true.
 """
 
 
@@ -471,8 +483,6 @@ def render_target_planning_context(
 
 def render_reflection_context(
     state: ImageOnlyInvestigationState,
-    *,
-    trigger: str = "interval",
 ) -> str:
     attempted_routes = []
     for route in state.attempted_routes[-16:]:
@@ -483,7 +493,6 @@ def render_reflection_context(
     return json.dumps(
         {
             "brief": state.brief.model_dump(mode="json"),
-            "reflection_trigger": trigger,
             "action_count": state.action_count,
             "tasks": [
                 task.model_dump(mode="json")
@@ -529,12 +538,98 @@ def render_reflection_context(
                 if state.core_verdict_fact_id
                 else []
             ),
-            "query_refresh_candidate_task_ids": (
-                query_refresh_candidate_task_ids(state)
-                if trigger == "route_exhaustion"
-                else []
-            ),
             "remaining_actions": max(0, 24 - state.action_count),
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
+def render_query_concept_extraction_context(
+    state: ImageOnlyInvestigationState,
+    *,
+    task_id: str,
+    new_evidence_ids: List[str],
+) -> str:
+    evidence_ids = set(new_evidence_ids)
+    return json.dumps(
+        {
+            "task_id": task_id,
+            "new_evidence": [
+                {
+                    "evidence_id": item.evidence_id,
+                    "evidence_kind": item.evidence_kind,
+                    "claim_binding": item.claim_binding,
+                    "exact_text": item.exact_text,
+                }
+                for item in state.evidence
+                if item.evidence_id in evidence_ids
+                and state.core_verdict_fact_id in item.fact_ids
+            ],
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
+def render_query_replan_context(
+    state: ImageOnlyInvestigationState,
+    *,
+    task_id: str,
+    concept_extraction: QueryConceptExtractionOutput,
+) -> str:
+    task = next(
+        (item for item in state.tasks if item.task_id == task_id),
+        None,
+    )
+    core = next(
+        (
+            item
+            for item in state.facts
+            if item.fact_id == state.core_verdict_fact_id
+        ),
+        None,
+    )
+    attempted_queries: List[str] = []
+    for raw in state.attempted_routes:
+        try:
+            route = json.loads(raw)
+        except (TypeError, ValueError):
+            continue
+        if (
+            route.get("task_id") != task_id
+            or route.get("tool") != "text_search"
+        ):
+            continue
+        values = route.get("queries", []) or []
+        if isinstance(values, str):
+            values = [values]
+        attempted_queries.extend(
+            str(value).strip()
+            for value in values
+            if str(value).strip()
+        )
+    decision = next(
+        (
+            item
+            for item in reversed(state.evidence_decisions)
+            if item.output.active_fact_id == state.core_verdict_fact_id
+        ),
+        None,
+    )
+    return json.dumps(
+        {
+            "task_id": task_id,
+            "active_proposition": core.statement if core is not None else "",
+            "task_question": task.question if task is not None else "",
+            "attempted_queries": list(dict.fromkeys(attempted_queries)),
+            "candidate_concepts": [
+                item.model_dump(mode="json")
+                for item in concept_extraction.concepts
+            ],
+            "remaining_gap": (
+                decision.output.remaining_gap if decision is not None else ""
+            ),
         },
         ensure_ascii=False,
         indent=2,

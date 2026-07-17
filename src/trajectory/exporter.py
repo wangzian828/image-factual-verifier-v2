@@ -111,6 +111,10 @@ def _example_type(stage: str) -> str | None:
         return "judgment"
     if stage == "image_only_evidence_decision":
         return "evidence_decision"
+    if stage == "image_only_query_concept_extraction":
+        return "query_concept_extraction"
+    if stage == "image_only_query_replan":
+        return "query_replan"
     if stage in {
         "image_only_planning",
         "image_only_attribution_planning",
