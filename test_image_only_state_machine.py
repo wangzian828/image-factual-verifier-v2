@@ -4279,6 +4279,67 @@ def test_reflection_refreshes_exhausted_search_direction_once() -> None:
     ) == {"pages": [], "references": []}
 
 
+def test_reflection_can_offer_three_queries_but_reopens_one_search_action() -> None:
+    case, state = _runtime_state()
+    task = next(
+        item
+        for item in state.tasks
+        if state.core_verdict_fact_id in item.fact_ids
+    )
+    task.suggested_tools = ["text_search"]
+    for index in range(2):
+        query = f"initial narrow direction {index}"
+        step = _step(
+            task_id=task.task_id,
+            call_id=f"call-three-query-refresh-{index}",
+            tool_name="text_search",
+            result=json.dumps(
+                {
+                    "status": "success",
+                    "queries": [{"query": query, "results": []}],
+                }
+            ),
+        )
+        step.tool_args["queries"] = [query]
+        record_tool_observation(
+            state,
+            step,
+            image_sha256=case.image_sha256,
+        )
+
+    state.action_count = max(4, state.action_count)
+    candidates = [
+        "Andreea Esca false advertisement",
+        "Andreea Esca impersonation scam",
+        "Andreea Esca unauthorized product promotion",
+    ]
+    record = apply_reflection(
+        state,
+        ReflectionOutput(
+            task_updates=[
+                TaskUpdate(
+                    task_id=task.task_id,
+                    replacement_queries=candidates,
+                    reason="Offer bounded alternatives for one semantic replan.",
+                )
+            ]
+        ),
+        evidence_gain=False,
+        decision_gain=False,
+    )
+
+    assert record.accepted_query_refresh_task_ids == [task.task_id]
+    assert task.suggested_queries == candidates
+    assert remaining_material_routes(
+        state,
+        fact_id=state.core_verdict_fact_id or "",
+    ) == [f"text_search:{task.task_id}"]
+    assert Orchestrator._image_only_tool_argument_constraints(
+        state,
+        task_ids={task.task_id},
+    ) == {"text_search": {"queries": candidates}}
+
+
 def test_reflection_rejects_second_query_refresh_and_third_search_route() -> None:
     case, state = _runtime_state()
     task = next(

@@ -274,7 +274,7 @@ class TaskUpdate(StrictModel):
     replacement_queries: Optional[List[str]] = Field(
         default=None,
         min_length=1,
-        max_length=1,
+        max_length=3,
     )
     reason: str = Field(default="", max_length=800)
 
