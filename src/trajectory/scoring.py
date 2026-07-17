@@ -103,10 +103,23 @@ def _fact_tokens_equivalent(left: str, right: str) -> bool:
 def _fact_similarity(
     runtime_fact: Mapping[str, Any],
     gold_fact: Mapping[str, Any],
+    *,
+    recovered_source_context: str = "",
 ) -> float:
-    score = _token_f1(
-        runtime_fact.get("statement"),
-        gold_fact.get("statement"),
+    statement = runtime_fact.get("statement")
+    score = max(
+        _token_f1(statement, gold_fact.get("statement")),
+        _token_f1(
+            " ".join(
+                item
+                for item in (
+                    str(statement or "").strip(),
+                    str(recovered_source_context or "").strip(),
+                )
+                if item
+            ),
+            gold_fact.get("statement"),
+        ),
     )
     if str(runtime_fact.get("kind", "")) == str(gold_fact.get("kind", "")):
         score = min(1.0, score + 0.1)
@@ -116,7 +129,10 @@ def _fact_similarity(
 def _match_gold_facts(
     runtime_facts: Sequence[Mapping[str, Any]],
     gold_facts: Sequence[Mapping[str, Any]],
+    *,
+    recovered_source_context_by_fact: Mapping[str, str] | None = None,
 ) -> List[Dict[str, Any]]:
+    context_by_fact = recovered_source_context_by_fact or {}
     available = {
         str(item.get("fact_id", "")).strip(): item
         for item in runtime_facts
@@ -126,7 +142,18 @@ def _match_gold_facts(
     for gold in gold_facts:
         ranked = sorted(
             (
-                (_fact_similarity(runtime, gold), fact_id, runtime)
+                (
+                    _fact_similarity(
+                        runtime,
+                        gold,
+                        recovered_source_context=context_by_fact.get(
+                            fact_id,
+                            "",
+                        ),
+                    ),
+                    fact_id,
+                    runtime,
+                )
                 for fact_id, runtime in available.items()
             ),
             key=lambda item: (-item[0], item[1]),
@@ -158,6 +185,66 @@ def _match_gold_facts(
             }
         )
     return matches
+
+
+def _basis_same_capture_source_context(
+    investigation: Mapping[str, Any],
+    basis: Mapping[str, Any],
+) -> Dict[str, str]:
+    """Recover source-page context only from selected same-capture Evidence."""
+
+    basis_evidence_ids = {
+        str(item) for item in basis.get("evidence_ids", []) or []
+    }
+    evidence = {
+        str(item.get("evidence_id", "")): item
+        for item in _rows(investigation.get("evidence"))
+        if str(item.get("evidence_id", ""))
+    }
+    discoveries = _rows(investigation.get("discoveries"))
+    context_by_fact: Dict[str, List[str]] = {}
+    for evidence_id in basis_evidence_ids:
+        item = evidence.get(evidence_id)
+        if item is None or not (
+            str(item.get("claim_binding", "")) == "same_capture"
+            and item.get("same_capture_or_near_duplicate") is True
+            and item.get("likely_different_original_capture") is not True
+        ):
+            continue
+        reference_url = _canonical_url(item.get("source_url"))
+        task_id = str(item.get("task_id", ""))
+        fact_ids = {
+            str(fact_id) for fact_id in item.get("fact_ids", []) or []
+        }
+        if not reference_url or not task_id or not fact_ids:
+            continue
+        for discovery in discoveries:
+            if (
+                str(discovery.get("task_id", "")) != task_id
+                or _canonical_url(discovery.get("reference_image_url"))
+                != reference_url
+                or not fact_ids
+                & {
+                    str(fact_id)
+                    for fact_id in discovery.get("fact_ids", []) or []
+                }
+            ):
+                continue
+            source_context = " ".join(
+                str(discovery.get(key, "") or "").strip()
+                for key in ("title", "candidate_url", "snippet")
+                if str(discovery.get(key, "") or "").strip()
+            )
+            if not source_context:
+                continue
+            for fact_id in fact_ids:
+                context_by_fact.setdefault(fact_id, []).append(
+                    source_context
+                )
+    return {
+        fact_id: " ".join(dict.fromkeys(contexts))
+        for fact_id, contexts in context_by_fact.items()
+    }
 
 
 def _canonical_url(value: Any) -> str:
@@ -514,8 +601,19 @@ def score_process_trace(
         evidence,
         successful_calls,
     )
+    basis = _mapping(
+        trace.get("verdict_basis") or investigation.get("verdict_basis")
+    )
+    recovered_source_context_by_fact = _basis_same_capture_source_context(
+        investigation,
+        basis,
+    )
     gold_facts = _rows(gold.get("decisive_facts"))
-    fact_matches = _match_gold_facts(decisive_facts, gold_facts)
+    fact_matches = _match_gold_facts(
+        decisive_facts,
+        gold_facts,
+        recovered_source_context_by_fact=recovered_source_context_by_fact,
+    )
     matched_count = sum(
         item["runtime_fact_id"] is not None for item in fact_matches
     )
@@ -572,9 +670,6 @@ def score_process_trace(
         bridge_hits / len(gold_facts) if gold_facts else 1.0
     )
 
-    basis = _mapping(
-        trace.get("verdict_basis") or investigation.get("verdict_basis")
-    )
     basis_fact_ids = {
         str(item) for item in basis.get("fact_ids", []) or []
     }

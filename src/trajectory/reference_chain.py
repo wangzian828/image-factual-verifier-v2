@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Mapping, Protocol, Sequence
 
 from src.orchestrator.llm_backend import LLMBackend
 from src.trajectory.scoring import (
+    _basis_same_capture_source_context,
     _canonical_url,
     _evidence_matches_reference,
     _family_key,
@@ -365,14 +366,22 @@ async def score_reference_chain_trace(
         evidence_by_id,
         successful_calls,
     )
-    gold_facts = _rows(gold.get("decisive_facts"))
-    fact_matches = _match_gold_facts(decisive_facts, gold_facts)
-    fact_match_by_gold = {
-        str(item["gold_fact_id"]): item for item in fact_matches
-    }
     basis = _mapping(
         trace.get("verdict_basis") or investigation.get("verdict_basis")
     )
+    recovered_source_context_by_fact = _basis_same_capture_source_context(
+        investigation,
+        basis,
+    )
+    gold_facts = _rows(gold.get("decisive_facts"))
+    fact_matches = _match_gold_facts(
+        decisive_facts,
+        gold_facts,
+        recovered_source_context_by_fact=recovered_source_context_by_fact,
+    )
+    fact_match_by_gold = {
+        str(item["gold_fact_id"]): item for item in fact_matches
+    }
     basis_evidence_ids = {
         str(item) for item in basis.get("evidence_ids", []) or []
     }

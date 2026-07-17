@@ -323,3 +323,165 @@ def test_process_scorer_accepts_semantic_refutation_with_text_sufficient_bridge(
     assert metrics["evidence_to_vision_bridge_completion"] == 1.0
     assert metrics["verdict_basis_alignment"] == 1.0
     assert score["training_eligible"] is True
+
+
+def test_process_scorer_uses_only_basis_same_capture_source_context() -> None:
+    fact_id = "fact-visible-store-event"
+    task_id = "task-visible-store-event"
+    evidence_id = "evidence-same-capture"
+    finding_id = "finding-store-event"
+    reference_url = "https://images.example.org/store-opening.jpg"
+    source_url = (
+        "https://company.example/news/2023/store-tysons-corner-reopens"
+    )
+    trace = {
+        "image_id": "case-source-context",
+        "verdict": "real",
+        "termination": "success",
+        "verdict_basis": {
+            "fact_ids": [fact_id],
+            "finding_ids": [finding_id],
+            "evidence_ids": [evidence_id],
+        },
+        "state": {
+            "all_steps": [
+                {
+                    "stage": "image_only_investigation",
+                    "action_type": "tool_call",
+                    "tool_name": "compare_with_reference",
+                    "tool_args": {
+                        "__question_id": task_id,
+                        "reference_url": reference_url,
+                    },
+                    "tool_result": json.dumps({"status": "success"}),
+                    "metadata": {
+                        "function_call_id": "call-same-capture",
+                        "investigation_state_update": {
+                            "created_evidence_ids": [evidence_id],
+                            "created_finding_ids": [finding_id],
+                            "fact_statuses": {fact_id: "supported"},
+                        },
+                    },
+                }
+            ],
+            "investigation_state": {
+                "facts": [
+                    {
+                        "fact_id": fact_id,
+                        "kind": "relation",
+                        "statement": (
+                            "The image depicts an Apple Store reopening event "
+                            "with employees greeting first customers."
+                        ),
+                        "predicate": "depicts_event",
+                        "status": "supported",
+                    }
+                ],
+                "decisive_fact_ids": [fact_id],
+                "tasks": [
+                    {
+                        "task_id": task_id,
+                        "fact_ids": [fact_id],
+                        "suggested_tools": [
+                            "reverse_image_search",
+                            "compare_with_reference",
+                        ],
+                    }
+                ],
+                "discoveries": [
+                    {
+                        "discovery_id": "discovery-selected-source",
+                        "task_id": task_id,
+                        "fact_ids": [fact_id],
+                        "candidate_url": source_url,
+                        "reference_image_url": reference_url,
+                        "title": (
+                            "Apple Tysons Corner reopens in Virginia in 2023"
+                        ),
+                        "snippet": "",
+                    },
+                    {
+                        "discovery_id": "discovery-unselected-noise",
+                        "task_id": task_id,
+                        "fact_ids": [fact_id],
+                        "candidate_url": (
+                            "https://noise.example/unrelated-regent-street"
+                        ),
+                        "reference_image_url": (
+                            "https://noise.example/unselected.jpg"
+                        ),
+                        "title": "Apple Regent Street opening in London",
+                        "snippet": "",
+                    },
+                ],
+                "evidence": [
+                    {
+                        "evidence_id": evidence_id,
+                        "task_id": task_id,
+                        "fact_ids": [fact_id],
+                        "function_call_id": "call-same-capture",
+                        "tool_name": "compare_with_reference",
+                        "source_url": reference_url,
+                        "source_family": "domain:images.example.org",
+                        "source_class": "unknown",
+                        "exact_text": "The images are the same original capture.",
+                        "stance": "support",
+                        "quality": "moderate",
+                        "directness": "direct",
+                        "claim_binding": "same_capture",
+                        "same_capture_or_near_duplicate": True,
+                        "likely_different_original_capture": False,
+                        "risk_flags": [],
+                    }
+                ],
+                "findings": [
+                    {
+                        "finding_id": finding_id,
+                        "task_id": task_id,
+                        "fact_ids": [fact_id],
+                        "evidence_ids": [evidence_id],
+                    }
+                ],
+                "coverage_audits": [
+                    {
+                        "facts": [
+                            {
+                                "fact_id": fact_id,
+                                "status": "supported",
+                                "winning_evidence_ids": [evidence_id],
+                                "conflict_resolution": "support_wins",
+                            }
+                        ]
+                    }
+                ],
+                "action_count": 1,
+            },
+        },
+    }
+    gold = {
+        "case_id": "case-source-context",
+        "factual_status": "supported",
+        "decisive_facts": [
+            {
+                "fact_id": "gold-tysons-corner",
+                "kind": "relation",
+                "statement": (
+                    "This photograph shows Apple Tysons Corner in Virginia "
+                    "during its 2023 reopening."
+                ),
+                "expected_status": "supported",
+                "visual_anchor": {"type": "visible_anchors"},
+            }
+        ],
+    }
+
+    metrics, score = score_process_trace(trace, gold)
+
+    assert metrics["decisive_fact_alignment"] == 1.0
+    assert metrics["evidence_to_vision_bridge_completion"] == 1.0
+    assert metrics["verdict_basis_alignment"] == 1.0
+    assert score["training_eligible"] is True
+
+    trace["verdict_basis"]["evidence_ids"] = []
+    without_selected_bridge, _ = score_process_trace(trace, gold)
+    assert without_selected_bridge["decisive_fact_alignment"] == 0.0
