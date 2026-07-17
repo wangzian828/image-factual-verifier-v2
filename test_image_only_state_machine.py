@@ -2260,6 +2260,7 @@ def test_reflection_cannot_spawn_same_fact_search_without_new_grounding() -> Non
         ),
         evidence_gain=False,
         decision_gain=False,
+        trigger="route_exhaustion",
     )
 
     assert record.accepted_new_task_ids == []
@@ -3378,6 +3379,214 @@ def test_scene_support_requires_near_duplicate_and_source_assertion() -> None:
     assert coverage.facts[0].winning_evidence_ids == basis.evidence_ids
 
 
+def test_context_only_web_span_is_reviewable_but_not_prejudged_as_a_finding() -> None:
+    case, state = _antarctic_butterfly_state()
+    scene = next(
+        fact for fact in state.facts if fact.predicate == "appears_to_depict"
+    )
+    butterfly = next(
+        fact
+        for fact in state.facts
+        if fact.predicate == "visible_in"
+        and "monarch" in fact.statement.casefold()
+    )
+    apply_target_planning(
+        state,
+        TargetPlanningOutput(
+            proposals=[
+                TargetFactProposal(
+                    statement=(
+                        "The visible monarch butterflies occur in the depicted "
+                        "Antarctic landscape."
+                    ),
+                    predicate="located_at",
+                    parent_fact_ids=[scene.fact_id, butterfly.fact_id],
+                    question=(
+                        "Do monarch butterflies naturally occur in Antarctica?"
+                    ),
+                    purpose="Verify the visible ecological relation.",
+                    suggested_tools=["text_search", "visit"],
+                    suggested_queries=[
+                        "monarch butterfly migration overwintering range"
+                    ],
+                )
+            ]
+        ),
+    )
+    task = next(
+        item
+        for item in state.tasks
+        if state.core_verdict_fact_id in item.fact_ids
+    )
+    statement = (
+        "Monarch butterflies cannot survive cold northern winters and migrate "
+        "south each autumn to overwinter in central Mexico."
+    )
+    update = record_tool_observation(
+        state,
+        _step(
+            task_id=task.task_id,
+            call_id="call-monarch-context",
+            tool_name="visit",
+            result=json.dumps(
+                {
+                    "status": "success",
+                    "url": "https://www.fws.gov/story/monarch-migration",
+                    "selected_url": "https://www.fws.gov/story/monarch-migration",
+                    "evidence": statement,
+                    "summary": "Monarchs migrate to Mexico for winter.",
+                    "relevance": "low",
+                    "stance": "unclear",
+                    "directness": "none",
+                    "context_only": True,
+                    "temporal_alignment": "not_applicable",
+                    "artifact_sha256": "f" * 64,
+                    "evidence_span": {"start": 0, "end": len(statement)},
+                    "retrieved_at": datetime.now(timezone.utc).isoformat(),
+                    "injection_flags": [],
+                    "evidence_eligible": True,
+                }
+            ),
+        ),
+        image_sha256=case.image_sha256,
+    )
+
+    assert len(update["created_evidence_ids"]) == 1
+    evidence = next(
+        item
+        for item in state.evidence
+        if item.evidence_id == update["created_evidence_ids"][0]
+    )
+    assert evidence.quality == "weak"
+    assert evidence.directness == "indirect"
+    assert evidence.stance == "neutral"
+    assert update["created_finding_ids"] == []
+    assert pending_evidence_decision_ids(state) == [evidence.evidence_id]
+    assert evidence_decision_checkpoint_reason(
+        state,
+        update=update,
+    ) == ""
+    assert json.loads(state.attempted_routes[-1])["outcome"] == "context"
+
+
+def test_visual_refinement_inherits_grounding_source_page_for_inspection() -> None:
+    case, state = _runtime_state()
+    core_id = state.core_verdict_fact_id or ""
+    core = next(fact for fact in state.facts if fact.fact_id == core_id)
+    core.predicate = "appears_to_depict"
+    core.statement = (
+        "The man in the white t-shirt is entering the depicted retail store."
+    )
+    task = next(item for item in state.tasks if core_id in item.fact_ids)
+    page_url = "https://www.apple.com/newsroom/store-reopening/"
+    image_url = "https://www.apple.com/newsroom/images/store-reopening.jpg"
+    search_update = record_tool_observation(
+        state,
+        _step(
+            task_id=task.task_id,
+            call_id="call-apple-reverse",
+            tool_name="reverse_image_search",
+            result=json.dumps(
+                {
+                    "status": "success",
+                    "reference_image_candidates": [image_url],
+                    "lens_results": [
+                        {
+                            "title": "Apple store reopening",
+                            "url": page_url,
+                            "snippet": "Apple Tysons Corner reopens.",
+                            "image_url": image_url,
+                        }
+                    ],
+                    "semantic_results": [],
+                }
+            ),
+        ),
+        image_sha256=case.image_sha256,
+    )
+    assert search_update["created_discovery_ids"]
+    comparison_update = record_tool_observation(
+        state,
+        _step(
+            task_id=task.task_id,
+            call_id="call-apple-compare",
+            tool_name="compare_with_reference",
+            result=json.dumps(
+                {
+                    "status": "success",
+                    "reference_url": image_url,
+                    "resolved_reference_url": image_url,
+                    "same_subject_or_scene": True,
+                    "same_capture_or_near_duplicate": True,
+                    "likely_different_original_capture": False,
+                    "edit_evidence_present": False,
+                    "edit_evidence_strength": "none",
+                    "differences": [],
+                    "overall_observation": (
+                        "The reference and input are the same original capture."
+                    ),
+                    "confidence": 0.99,
+                }
+            ),
+        ),
+        image_sha256=case.image_sha256,
+    )
+    evidence_id = comparison_update["created_evidence_ids"][0]
+    anchor = next(
+        fact for fact in state.facts if fact.origin.type == "input_image"
+    )
+    result = _apply_core_decision(
+        state,
+        [evidence_id],
+        assessment="insufficient",
+        selected_evidence_ids=[],
+        binding_requirement="same_capture_helpful",
+        remaining_gap=(
+            "Inspect the linked source page to verify the visible store event."
+        ),
+        rationale=(
+            "The comparison identifies a source page for the same capture."
+        ),
+        refinement=EvidenceDecisionRefinement(
+            slot="event_identity",
+            statement=(
+                "The man in the white t-shirt is entering Apple Tysons "
+                "Corner during its reopening."
+            ),
+            predicate="depicts_event",
+            anchor_fact_ids=[anchor.fact_id],
+            grounding_evidence_ids=[evidence_id],
+            question=(
+                "Does the linked Apple page identify this capture as the "
+                "Tysons Corner reopening?"
+            ),
+            purpose="Verify the visible store event.",
+            suggested_tools=["text_search", "visit"],
+            suggested_queries=["Apple Tysons Corner reopening"],
+        ),
+    )
+
+    assert result["accepted"] is True
+    refinement_task_id = result["accepted_refinement_task_id"]
+    refinement_task = next(
+        item for item in state.tasks if item.task_id == refinement_task_id
+    )
+    inherited = [
+        item
+        for item in state.discoveries
+        if item.task_id == refinement_task_id and not item.abandoned
+    ]
+    assert [item.candidate_url for item in inherited] == [page_url]
+    assert all(not item.reference_image_url for item in inherited)
+    assert (
+        f"visit:{refinement_task_id}:{page_url.rstrip('/')}"
+        in remaining_material_routes(
+            state,
+            fact_id=state.core_verdict_fact_id or "",
+        )
+    )
+
+
 def test_generic_official_support_cannot_resolve_scene_without_visual_bridge() -> None:
     case, state = _runtime_state()
     for task in state.tasks:
@@ -4249,6 +4458,7 @@ def test_reflection_refreshes_exhausted_search_direction_once() -> None:
         ),
         evidence_gain=False,
         decision_gain=False,
+        trigger="route_exhaustion",
     )
 
     assert record.accepted_query_refresh_task_ids == [task.task_id]
@@ -4326,6 +4536,7 @@ def test_reflection_can_offer_three_queries_but_reopens_one_search_action() -> N
         ),
         evidence_gain=False,
         decision_gain=False,
+        trigger="route_exhaustion",
     )
 
     assert record.accepted_query_refresh_task_ids == [task.task_id]
@@ -4383,6 +4594,7 @@ def test_reflection_rejects_second_query_refresh_and_third_search_route() -> Non
         ),
         evidence_gain=False,
         decision_gain=False,
+        trigger="route_exhaustion",
     )
 
     assert not record.accepted_query_refresh_task_ids
@@ -4445,6 +4657,7 @@ def test_reflection_rejects_semantic_duplicate_query_refresh() -> None:
         ),
         evidence_gain=False,
         decision_gain=False,
+        trigger="route_exhaustion",
     )
 
     assert not record.accepted_query_refresh_task_ids
@@ -4504,6 +4717,7 @@ def test_reflection_validator_rejects_invalid_refresh_despite_priority_change() 
         ),
         evidence_gain=False,
         decision_gain=False,
+        route_exhaustion=True,
     )
 
     assert valid is False
@@ -4643,6 +4857,7 @@ def test_reflection_cannot_abandon_uninspected_latest_search_batch() -> None:
         ),
         evidence_gain=False,
         decision_gain=False,
+        trigger="route_exhaustion",
     )
 
     assert not record.accepted_query_refresh_task_ids

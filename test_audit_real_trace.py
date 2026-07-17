@@ -259,3 +259,72 @@ def test_strict_audit_rejects_unanchored_refinement(
     }
 
     assert "EVIDENCE_REFINEMENT_ANCHOR_INVALID" in codes
+
+
+def test_route_exhaustion_reflection_can_cover_next_interval_boundary(
+    tmp_path: Path,
+) -> None:
+    trace_path = _scripted_trace(tmp_path)
+    trace = json.loads(trace_path.read_text(encoding="utf-8"))
+    investigation = trace["state"]["investigation_state"]
+    template_step = next(
+        step
+        for step in trace["state"]["all_steps"]
+        if step.get("stage") == "image_only_investigation"
+        and step.get("action_type") == "tool_call"
+    )
+    for index in range(5):
+        step = json.loads(json.dumps(template_step))
+        step["round"] = 100 + index
+        step["metadata"]["function_call_id"] = f"call-cadence-{index}"
+        trace["state"]["all_steps"].append(step)
+    investigation["action_count"] = 8
+    investigation["stop_reason"] = "information_saturated"
+    investigation["reflections"] = [
+        {
+            "reflection_id": "reflection-interval-4",
+            "action_count": 4,
+            "trigger": "interval",
+            "output": {
+                "task_updates": [],
+                "new_tasks": [],
+                "recommended_next_task_ids": [],
+                "remaining_gaps": [],
+                "ready_to_finish": False,
+            },
+            "accepted_task_update_ids": [],
+            "accepted_query_refresh_task_ids": [],
+            "accepted_new_task_ids": [],
+            "rejected_reasons": [],
+        },
+        {
+            "reflection_id": "reflection-route-6",
+            "action_count": 6,
+            "trigger": "route_exhaustion",
+            "output": {
+                "task_updates": [],
+                "new_tasks": [],
+                "recommended_next_task_ids": [],
+                "remaining_gaps": [
+                    "The exhausted route was reviewed before the next boundary."
+                ],
+                "ready_to_finish": True,
+            },
+            "accepted_task_update_ids": [],
+            "accepted_query_refresh_task_ids": [],
+            "accepted_new_task_ids": [],
+            "rejected_reasons": [],
+        },
+    ]
+    trace_path.write_text(
+        json.dumps(trace, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    report = audit_trace(trace_path)
+    codes = {
+        issue.code
+        for issue in report.failures(strict_scheduler=True)
+    }
+
+    assert "IMAGE_ONLY_REFLECTION_CADENCE_INVALID" not in codes

@@ -472,8 +472,18 @@ def record_tool_observation(
 
     route_payload = route_signature(tool_name, tool_args)
     route_payload["function_call_id"] = call_id
+    created_evidence = [
+        item
+        for item in state.evidence
+        if item.evidence_id in set(evidence_ids)
+    ]
     route_payload["outcome"] = (
         "evidence"
+        if any(
+            item.quality in {"strong", "moderate"}
+            for item in created_evidence
+        )
+        else "context"
         if evidence_ids
         else "discovery"
         if discovery_ids
@@ -1951,7 +1961,6 @@ def apply_evidence_decision(
         else:
             refinement_task = existing_task
             refinement_task.status = "active"
-
         accepted_core, reason = reconcile_core_verdict_fact(
             state,
             refinement_fact,
@@ -1968,6 +1977,20 @@ def apply_evidence_decision(
                 "accepted": False,
                 "rejected_reason": reason,
             }
+        inherited_discovery_ids = _inherit_refinement_discoveries(
+            state,
+            refinement_task,
+            refinement_fact_id=refinement_fact.fact_id,
+            grounding_evidence_ids=grounding_ids,
+        )
+        refinement_task.origin_ids = list(
+            dict.fromkeys(
+                [
+                    *refinement_task.origin_ids,
+                    *inherited_discovery_ids,
+                ]
+            )
+        )[:12]
         state.recommended_next_task_ids = list(
             dict.fromkeys(
                 [
@@ -2406,6 +2429,7 @@ def apply_reflection(
     *,
     evidence_gain: bool,
     decision_gain: bool,
+    trigger: str = "interval",
 ) -> ReflectionRecord:
     """Validate and apply a bounded Reflection delta."""
 
@@ -2478,6 +2502,7 @@ def apply_reflection(
                 state,
                 task,
                 proposed_queries,
+                trigger=trigger,
             )
             if refresh_error:
                 rejected.append(f"{update.task_id} {refresh_error}")
@@ -2569,6 +2594,11 @@ def apply_reflection(
             len(state.reflections) + 1,
         ),
         action_count=state.action_count,
+        trigger=(
+            "route_exhaustion"
+            if trigger == "route_exhaustion"
+            else "interval"
+        ),
         output=bounded_output,
         accepted_task_update_ids=accepted_updates,
         accepted_query_refresh_task_ids=accepted_query_refreshes,
@@ -2623,7 +2653,11 @@ def _query_refresh_error(
     state: ImageOnlyInvestigationState,
     task: ResearchTask,
     proposed_queries: Sequence[str],
+    *,
+    trigger: str,
 ) -> str:
+    if trigger != "route_exhaustion":
+        return "query refresh is available only at route exhaustion"
     if task.query_refresh_count >= 1:
         return "already used its one semantic query refresh"
     if "text_search" not in runtime_task_tool_names(state, task):
@@ -2680,6 +2714,65 @@ def _query_refresh_error(
             "least one candidate"
         )
     return ""
+
+
+def _inherit_refinement_discoveries(
+    state: ImageOnlyInvestigationState,
+    task: ResearchTask,
+    *,
+    refinement_fact_id: str,
+    grounding_evidence_ids: Sequence[str],
+) -> List[str]:
+    """Carry source pages linked by grounding Evidence into a refinement task."""
+
+    evidence_by_id = {
+        item.evidence_id: item
+        for item in state.evidence
+    }
+    grounding = [
+        evidence_by_id[item]
+        for item in grounding_evidence_ids
+        if item in evidence_by_id
+    ]
+    created: List[str] = []
+    existing = {item.discovery_id for item in state.discoveries}
+    for evidence in grounding:
+        evidence_url = canonicalize_url(evidence.source_url)
+        if not evidence_url:
+            continue
+        for source in list(state.discoveries):
+            if source.task_id != evidence.task_id or source.abandoned:
+                continue
+            if evidence_url not in {
+                canonicalize_url(source.candidate_url),
+                canonicalize_url(source.reference_image_url),
+            }:
+                continue
+            discovery_id = stable_id(
+                "discovery",
+                "refinement-inheritance",
+                task.task_id,
+                source.discovery_id,
+            )
+            if discovery_id in existing:
+                continue
+            state.discoveries.append(
+                InvestigationDiscovery(
+                    discovery_id=discovery_id,
+                    task_id=task.task_id,
+                    fact_ids=[refinement_fact_id],
+                    function_call_id=source.function_call_id,
+                    tool_name=source.tool_name,
+                    candidate_url=source.candidate_url,
+                    reference_image_url="",
+                    title=source.title,
+                    snippet=source.snippet,
+                    candidate_type=source.candidate_type,
+                )
+            )
+            existing.add(discovery_id)
+            created.append(discovery_id)
+    return created
 
 
 def _abandon_stale_discoveries(
@@ -2865,12 +2958,20 @@ def _record_evidence_and_findings(
             source_url,
             injection_flags=record.get("injection_flags", []),
         )
-        stance = {
-            "support": "support",
-            "refute": "refute",
-        }.get(str(record.get("stance", "")).strip().lower(), "neutral")
+        context_only = bool(record.get("context_only", False))
+        stance = (
+            "neutral"
+            if context_only
+            else {
+                "support": "support",
+                "refute": "refute",
+            }.get(str(record.get("stance", "")).strip().lower(), "neutral")
+        )
         relevance = str(record.get("relevance", "")).strip().lower()
         quality = (
+            "weak"
+            if context_only
+            else
             "strong"
             if identity.source_class == "official"
             and relevance == "high"
@@ -2909,8 +3010,11 @@ def _record_evidence_and_findings(
                     quality=quality,
                     directness=(
                         "direct"
-                        if str(record.get("directness", "")).strip().lower()
-                        == "direct"
+                        if (
+                            not context_only
+                            and str(record.get("directness", "")).strip().lower()
+                            == "direct"
+                        )
                         else "indirect"
                     ),
                     claim_binding="source_assertion",

@@ -739,6 +739,12 @@ class Orchestrator:
                 reflection_boundary
                 and not investigation.stop_reason
                 and not route_exhaustion_reflection
+                and not any(
+                    item.trigger == "route_exhaustion"
+                    and item.action_count
+                    > investigation.action_count - REFLECTION_INTERVAL
+                    for item in investigation.reflections
+                )
             ):
                 evidence_gain = len(investigation.evidence) > prior_evidence_count
                 decision_gain = (
@@ -876,7 +882,14 @@ class Orchestrator:
             },
         )
         parsed, steps = await runner.run(
-            render_image_only_reflection_context(investigation)
+            render_image_only_reflection_context(
+                investigation,
+                trigger=(
+                    "route_exhaustion"
+                    if route_exhaustion
+                    else "interval"
+                ),
+            )
         )
         self._record_stage_steps(state, steps)
         if parsed is None:
@@ -891,6 +904,11 @@ class Orchestrator:
             parsed,
             evidence_gain=evidence_gain,
             decision_gain=decision_gain,
+            trigger=(
+                "route_exhaustion"
+                if route_exhaustion
+                else "interval"
+            ),
         )
 
     async def _run_image_only_judgment(
@@ -951,6 +969,11 @@ class Orchestrator:
             parsed,
             evidence_gain=evidence_gain,
             decision_gain=decision_gain,
+            trigger=(
+                "route_exhaustion"
+                if route_exhaustion
+                else "interval"
+            ),
         )
         proposed_changes = bool(
             parsed.task_updates

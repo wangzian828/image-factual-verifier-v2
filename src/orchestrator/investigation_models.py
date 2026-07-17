@@ -411,6 +411,7 @@ class InvestigationSegmentOutput(StrictModel):
 class ReflectionRecord(StrictModel):
     reflection_id: str = Field(min_length=1, max_length=100)
     action_count: int = Field(ge=1)
+    trigger: Literal["interval", "route_exhaustion"] = "interval"
     output: ReflectionOutput
     accepted_task_update_ids: List[str] = Field(default_factory=list, max_length=12)
     accepted_query_refresh_task_ids: List[str] = Field(

@@ -37,9 +37,10 @@ routes are exhausted.
 You may reprioritize tasks, add up to three grounded tasks that serve the open core
 evidence gaps, recommend next tasks, and identify remaining gaps.
 
-When inspected search leads do not address the open core gap, you may replace one
-task's suggested queries with a genuinely different semantic search direction.
-This is a one-time bounded replan, not a paraphrase of an attempted query.
+Only when reflection_trigger is route_exhaustion may you replace one listed
+query_refresh_candidate_task_id's suggested queries with a genuinely different
+semantic search direction. This is a one-time bounded replan, not a paraphrase of
+an attempted query. At an interval reflection, replacement_queries must be null.
 
 You may not create Evidence or Findings, write a verdict, modify the immutable
 brief, delete history, cite unknown ids, change task status, or change the core
@@ -438,7 +439,11 @@ def render_target_planning_context(
     )
 
 
-def render_reflection_context(state: ImageOnlyInvestigationState) -> str:
+def render_reflection_context(
+    state: ImageOnlyInvestigationState,
+    *,
+    trigger: str = "interval",
+) -> str:
     attempted_routes = []
     for route in state.attempted_routes[-16:]:
         try:
@@ -448,6 +453,7 @@ def render_reflection_context(state: ImageOnlyInvestigationState) -> str:
     return json.dumps(
         {
             "brief": state.brief.model_dump(mode="json"),
+            "reflection_trigger": trigger,
             "action_count": state.action_count,
             "tasks": [
                 task.model_dump(mode="json")
@@ -495,6 +501,8 @@ def render_reflection_context(state: ImageOnlyInvestigationState) -> str:
             ),
             "query_refresh_candidate_task_ids": (
                 query_refresh_candidate_task_ids(state)
+                if trigger == "route_exhaustion"
+                else []
             ),
             "remaining_actions": max(0, 24 - state.action_count),
         },

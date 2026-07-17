@@ -413,6 +413,7 @@ class JinaReaderClient:
             "relevance": extracted.get("relevance", "medium"),
             "stance": extracted.get("stance", "unclear"),
             "directness": extracted.get("directness", "none"),
+            "context_only": bool(extracted.get("context_only", False)),
             "temporal_alignment": extracted.get(
                 "temporal_alignment",
                 "not_applicable",
@@ -748,15 +749,27 @@ class JinaReaderClient:
             passage = passages[passage_id]
             evidence = passage["text"]
             evidence_span = {"start": passage["start"], "end": passage["end"]}
+            context_only = False
         else:
-            evidence = ""
-            evidence_span = {}
+            passage = self._best_context_passage(passages, goal)
+            if passage is None:
+                evidence = ""
+                evidence_span = {}
+                context_only = False
+            else:
+                evidence = passage["text"]
+                evidence_span = {
+                    "start": passage["start"],
+                    "end": passage["end"],
+                }
+                context_only = True
         extracted.update(
             {
                 "evidence": evidence,
                 "relevance": relevance,
                 "stance": stance,
                 "directness": directness,
+                "context_only": context_only,
                 "temporal_alignment": temporal_alignment,
                 "artifact_sha256": hashlib.sha256(
                     evidence_document.encode("utf-8")
@@ -782,17 +795,11 @@ class JinaReaderClient:
         goal_tokens = cls._ranking_tokens(goal)
         ranked: List[tuple[float, int, Dict[str, Any]]] = []
         for index, passage in enumerate(passages):
-            text = str(passage.get("text", ""))
-            tokens = cls._ranking_tokens(text)
-            overlap = len(goal_tokens & tokens)
-            coverage = overlap / max(1, len(goal_tokens))
-            density = overlap / max(1, len(tokens))
-            phrase_bonus = sum(
-                1.0
-                for phrase in re.findall(r'"([^"]{3,})"', str(goal or ""))
-                if phrase.casefold() in text.casefold()
+            score = cls._goal_passage_score(
+                passage,
+                goal,
+                goal_tokens=goal_tokens,
             )
-            score = (8.0 * coverage) + (2.0 * density) + (4.0 * phrase_bonus)
             ranked.append((score, index, passage))
         ranked.sort(key=lambda item: (-item[0], item[1]))
 
@@ -811,6 +818,60 @@ class JinaReaderClient:
         for passage_id, passage in enumerate(selected):
             passage["passage_id"] = passage_id
         return selected
+
+    @classmethod
+    def _best_context_passage(
+        cls,
+        passages: List[Dict[str, Any]],
+        goal: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Keep related source text even when it is not terminal evidence."""
+
+        goal_tokens = cls._ranking_tokens(goal)
+        ranked = [
+            (
+                cls._goal_passage_score(
+                    passage,
+                    goal,
+                    goal_tokens=goal_tokens,
+                ),
+                index,
+                passage,
+            )
+            for index, passage in enumerate(passages)
+        ]
+        if not ranked:
+            return None
+        score, _index, passage = max(
+            ranked,
+            key=lambda item: (item[0], -item[1]),
+        )
+        return dict(passage) if score > 0 else None
+
+    @classmethod
+    def _goal_passage_score(
+        cls,
+        passage: Dict[str, Any],
+        goal: str,
+        *,
+        goal_tokens: Optional[set[str]] = None,
+    ) -> float:
+        text = str(passage.get("text", ""))
+        resolved_goal_tokens = (
+            goal_tokens
+            if goal_tokens is not None
+            else cls._ranking_tokens(goal)
+        )
+        tokens = cls._ranking_tokens(text)
+        overlap = len(resolved_goal_tokens & tokens)
+        coverage = overlap / max(1, len(resolved_goal_tokens))
+        density = overlap / max(1, len(tokens))
+        phrase_bonus = sum(
+            1.0
+            for phrase in re.findall(r'"([^"]{3,})"', str(goal or ""))
+            if phrase.casefold() in text.casefold()
+        )
+        return (8.0 * coverage) + (2.0 * density) + (4.0 * phrase_bonus)
 
     @staticmethod
     def _ranking_tokens(value: str) -> set[str]:

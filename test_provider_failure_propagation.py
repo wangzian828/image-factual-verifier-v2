@@ -190,6 +190,53 @@ def test_long_document_ranking_can_select_evidence_after_first_12k(
     assert document[span["start"] : span["end"]] == target
 
 
+def test_extractor_preserves_related_context_when_no_passage_directly_resolves_goal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = JinaReaderClient(
+        fetch_provider="jina",
+        max_chars=12000,
+        extract_max_chars=6000,
+    )
+    target = (
+        "Monarch butterflies cannot survive the cold winters of northern "
+        "climates, so they migrate south and west each autumn. Most monarchs "
+        "overwinter in central Mexico."
+    )
+    page = (
+        "Background material about unrelated insects.\n\n"
+        + target
+        + "\n\nAdditional conservation information."
+    )
+
+    def select_no_direct_passage(formatted: str, _goal: str) -> dict:
+        assert target in formatted
+        return {
+            "rationale": (
+                "The page gives relevant migration and overwintering context "
+                "but does not explicitly mention Antarctica."
+            ),
+            "passage_id": -1,
+            "summary": "Monarchs migrate to overwintering sites in Mexico.",
+            "relevance": "low",
+            "stance": "unclear",
+            "directness": "none",
+            "temporal_alignment": "not_applicable",
+        }
+
+    monkeypatch.setattr(client, "_extract_with_llm", select_no_direct_passage)
+    result = client.extract_goal_evidence(
+        page,
+        "Do monarch butterflies naturally occur in Antarctica?",
+    )
+    document = client._prepare_evidence_document(page)
+
+    assert result["evidence"] == target
+    assert result["context_only"] is True
+    span = result["evidence_span"]
+    assert document[span["start"] : span["end"]] == target
+
+
 def test_jina_failure_falls_back_to_direct_and_records_attempts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

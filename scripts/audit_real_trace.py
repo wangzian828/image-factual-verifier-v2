@@ -1277,9 +1277,44 @@ def _audit_image_only_trace(
                 location=f"image_only_tool_steps[{index}]",
             )
 
-    reflection_counts = [
-        int(item.get("action_count", 0) or 0) for item in reflections
+    interval_reflection_counts = [
+        int(item.get("action_count", 0) or 0)
+        for item in reflections
+        if str(item.get("trigger", "interval")).strip() == "interval"
     ]
+    route_exhaustion_counts = [
+        int(item.get("action_count", 0) or 0)
+        for item in reflections
+        if str(item.get("trigger", "interval")).strip()
+        == "route_exhaustion"
+    ]
+    unknown_reflection_triggers = [
+        str(item.get("trigger", "")).strip()
+        for item in reflections
+        if str(item.get("trigger", "interval")).strip()
+        not in {"interval", "route_exhaustion"}
+    ]
+    if unknown_reflection_triggers:
+        _issue(
+            report,
+            "IMAGE_ONLY_REFLECTION_TRIGGER_INVALID",
+            "unknown Reflection trigger(s): "
+            + ", ".join(unknown_reflection_triggers),
+            location="state.investigation_state.reflections",
+        )
+    invalid_interval_counts = [
+        count
+        for count in interval_reflection_counts
+        if count <= 0 or count % 4 != 0
+    ]
+    if invalid_interval_counts:
+        _issue(
+            report,
+            "IMAGE_ONLY_REFLECTION_CADENCE_INVALID",
+            "interval Reflection action counts must be positive multiples of 4; "
+            f"found {invalid_interval_counts}",
+            location="state.investigation_state.reflections",
+        )
     terminal_stop = str(investigation.get("stop_reason", "")) in {
         "coverage_complete",
         "verdict_determined",
@@ -1289,12 +1324,33 @@ def _audit_image_only_trace(
         if terminal_stop and action_count % 4 == 0
         else action_count
     )
-    expected_reflections = list(range(4, reflection_limit + 1, 4))
-    if reflection_counts != expected_reflections:
+    expected_boundaries = list(range(4, reflection_limit + 1, 4))
+    missing_boundaries = [
+        boundary
+        for boundary in expected_boundaries
+        if boundary not in interval_reflection_counts
+        and not any(
+            boundary - 4 < count <= boundary
+            for count in route_exhaustion_counts
+        )
+    ]
+    unexpected_interval_counts = [
+        count
+        for count in interval_reflection_counts
+        if count not in expected_boundaries
+    ]
+    if missing_boundaries or unexpected_interval_counts:
         _issue(
             report,
             "IMAGE_ONLY_REFLECTION_CADENCE_INVALID",
-            f"Reflection action counts must be {expected_reflections}, found {reflection_counts}",
+            (
+                "scheduled Reflection boundaries must be covered by an interval "
+                "Reflection or a preceding route-exhaustion Reflection; "
+                f"missing={missing_boundaries}, "
+                f"unexpected_interval={unexpected_interval_counts}, "
+                f"interval={interval_reflection_counts}, "
+                f"route_exhaustion={route_exhaustion_counts}"
+            ),
             location="state.investigation_state.reflections",
         )
 
