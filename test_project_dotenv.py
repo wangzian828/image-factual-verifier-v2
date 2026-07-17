@@ -2,10 +2,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from src import project_dotenv_candidates
 
 
-def test_linked_worktree_discovers_main_repository_dotenv(tmp_path: Path) -> None:
+def test_linked_worktree_discovers_main_repository_dotenv(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("IFV_ENV_FILE", raising=False)
     main = tmp_path / "main"
     worktree = tmp_path / "worktrees" / "v3"
     git_dir = main / ".git" / "worktrees" / "v3"
