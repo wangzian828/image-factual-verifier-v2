@@ -3150,6 +3150,29 @@ def query_concept_extraction_error(
         if state.core_verdict_fact_id in item.fact_ids
         and item.evidence_id in set(new_evidence_ids)
     }
+    core = next(
+        (
+            fact
+            for fact in state.facts
+            if fact.fact_id == state.core_verdict_fact_id
+        ),
+        None,
+    )
+    known_texts = [
+        core.statement if core is not None else "",
+    ]
+    for route in _attempted_routes_by_task(state).get(task_id, []):
+        if str(route.get("tool", "")).strip() != "text_search":
+            continue
+        values = route.get("queries", []) or []
+        if isinstance(values, str):
+            values = [values]
+        known_texts.extend(str(value) for value in values)
+    normalized_known = [
+        _normalized_replan_text(value)
+        for value in known_texts
+        if _normalized_replan_text(value)
+    ]
     seen_concept_ids: set[str] = set()
     for concept in output.concepts:
         if concept.concept_id in seen_concept_ids:
@@ -3167,6 +3190,11 @@ def query_concept_extraction_error(
                 f"query concept {concept.concept_id} does not copy an exact "
                 "Evidence phrase"
             )
+        if any(phrase in known for known in normalized_known):
+            return (
+                f"query concept {concept.concept_id} repeats information already "
+                "explicit in the proposition or attempted queries"
+            )
     return ""
 
 
@@ -3182,8 +3210,6 @@ def _compose_query_replan(
 
     slot_values = (
         output.selected_concept_id,
-        output.preserved_subject,
-        output.stale_query_slot,
         output.replacement_query,
     )
     if output.ready_to_finish:
@@ -3204,48 +3230,7 @@ def _compose_query_replan(
     if selected.evidence_id not in set(new_evidence_ids):
         return "", "selected query concept is not grounded in new Evidence"
 
-    core = next(
-        (
-            fact
-            for fact in state.facts
-            if fact.fact_id == state.core_verdict_fact_id
-        ),
-        None,
-    )
-    if core is None:
-        return "", "query replan has no active core fact"
-    subject_text = _normalized_replan_text(output.preserved_subject)
-    if not subject_text or subject_text not in _normalized_replan_text(
-        core.statement
-    ):
-        return "", "preserved subject is not present in the active proposition"
-
-    attempted = _attempted_routes_by_task(state).get(task.task_id, [])
-    attempted_query_tokens: List[set[str]] = []
-    for route in attempted:
-        if str(route.get("tool", "")).strip() != "text_search":
-            continue
-        values = route.get("queries", []) or []
-        if isinstance(values, str):
-            values = [values]
-        attempted_query_tokens.extend(
-            _normalized_replan_tokens(str(value))
-            for value in values
-            if str(value).strip()
-        )
-    stale_tokens = _normalized_replan_tokens(output.stale_query_slot)
-    subject_tokens = _normalized_replan_tokens(output.preserved_subject)
-    if not stale_tokens or stale_tokens & subject_tokens:
-        return "", "stale query slot must exclude the preserved subject"
-    if not any(stale_tokens <= query_tokens for query_tokens in attempted_query_tokens):
-        return "", "stale query slot is not grounded in an attempted query"
-
     query = " ".join(output.replacement_query.split())
-    query_tokens = _normalized_replan_tokens(query)
-    if not subject_tokens <= query_tokens:
-        return "", "replacement query does not preserve the visible subject"
-    if stale_tokens <= query_tokens:
-        return "", "replacement query retains the complete stale query slot"
     novel = _novel_replan_query(state, task, query)
     if not novel:
         return "", "proposed no genuinely new semantic query"

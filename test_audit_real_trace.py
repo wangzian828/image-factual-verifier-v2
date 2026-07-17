@@ -326,8 +326,6 @@ def test_query_replan_does_not_replace_interval_reflection_boundary(
             "output": {
                 "task_id": task_id,
                 "selected_concept_id": "",
-                "preserved_subject": "",
-                "stale_query_slot": "",
                 "replacement_query": "",
                 "ready_to_finish": True,
                 "rationale": "No materially better search direction remains.",

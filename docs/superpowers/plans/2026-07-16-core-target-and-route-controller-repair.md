@@ -181,10 +181,11 @@ new exact Evidence
 ```
 
 The reducer validates Evidence IDs, exact Evidence phrases, selected concept IDs,
-the preserved visible subject, the stale attempted-query slot, semantic novelty,
-and the one-replan budget. It does not encode people, products, domains, verdicts,
-or required query vocabulary. Concept extraction and final query selection are
-both retained as policy-training examples.
+semantic novelty, and the one-replan budget. It rejects concepts that merely repeat
+the active proposition or attempted queries, but it does not parse query slots,
+encode people, products, domains, verdicts, or require specific query vocabulary.
+Concept extraction and final query selection are both retained as policy-training
+examples.
 
 Acceptance requires the real Andreea case to retrieve the matching health-product
 impersonation evidence, avoid binding an unrelated financial scam, return `fake`,

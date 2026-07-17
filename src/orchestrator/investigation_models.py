@@ -344,8 +344,6 @@ class QueryConceptExtractionOutput(StrictModel):
 class QueryReplanOutput(StrictModel):
     task_id: str = Field(min_length=1, max_length=100)
     selected_concept_id: str = Field(default="", max_length=100)
-    preserved_subject: str = Field(default="", max_length=300)
-    stale_query_slot: str = Field(default="", max_length=300)
     replacement_query: str = Field(default="", max_length=500)
     ready_to_finish: bool = False
     rationale: str = Field(min_length=1, max_length=800)

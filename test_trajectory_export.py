@@ -146,8 +146,6 @@ def test_exporter_keeps_query_replan_as_its_own_policy_example(
             "output": {
                 "task_id": "task-example",
                 "selected_concept_id": "concept-example",
-                "preserved_subject": "example",
-                "stale_query_slot": "old direction",
                 "replacement_query": "example evidence-led query",
                 "ready_to_finish": False,
                 "rationale": "New Evidence changed the searchable framing.",
@@ -171,8 +169,6 @@ def test_exporter_keeps_query_replan_as_its_own_policy_example(
                     "value": {
                         "task_id": "task-example",
                         "selected_concept_id": "concept-example",
-                        "preserved_subject": "example",
-                        "stale_query_slot": "old direction",
                         "replacement_query": "example evidence-led query",
                         "ready_to_finish": False,
                         "rationale": (

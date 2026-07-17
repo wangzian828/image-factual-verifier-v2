@@ -53,6 +53,7 @@ from src.orchestrator.task_store import (
     next_action_boundary,
     pending_evidence_decision_ids,
     pending_visual_reinspection,
+    query_concept_extraction_error,
     remaining_material_routes,
     record_tool_observation,
     state_from_bootstrap,
@@ -5112,8 +5113,6 @@ def test_query_replan_reopens_exhausted_search_direction_once() -> None:
         QueryReplanOutput(
             task_id=task.task_id,
             selected_concept_id="concept-fisheries-survey",
-            preserved_subject="marked research vessel",
-            stale_query_slot="R 225",
             replacement_query=(
                 "marked research vessel fisheries survey ship identity"
             ),
@@ -5157,6 +5156,44 @@ def test_query_replan_reopens_exhausted_search_direction_once() -> None:
     ) == {"pages": [], "references": []}
 
 
+def test_query_concept_extraction_rejects_already_known_subject() -> None:
+    _, state = _runtime_state()
+    task = next(
+        item
+        for item in state.tasks
+        if state.core_verdict_fact_id in item.fact_ids
+    )
+    evidence = _append_query_replan_evidence(
+        state,
+        task,
+        exact_text=(
+            "The marked research vessel appears beside a fisheries survey ship "
+            "used for marine research."
+        ),
+    )
+    output = QueryConceptExtractionOutput(
+        task_id=task.task_id,
+        concepts=[
+            QueryConcept(
+                concept_id="concept-known-subject",
+                evidence_id=evidence.evidence_id,
+                evidence_phrase="marked research vessel",
+                search_term="marked research vessel",
+                role="identity",
+            )
+        ],
+    )
+
+    reason = query_concept_extraction_error(
+        state,
+        output,
+        task_id=task.task_id,
+        new_evidence_ids=[evidence.evidence_id],
+    )
+
+    assert "repeats information already explicit" in reason
+
+
 def test_query_replan_composes_one_query_and_reopens_one_search_action() -> None:
     case, state = _runtime_state()
     task = next(
@@ -5193,8 +5230,6 @@ def test_query_replan_composes_one_query_and_reopens_one_search_action() -> None
         QueryReplanOutput(
             task_id=task.task_id,
             selected_concept_id="concept-fisheries-survey",
-            preserved_subject="marked research vessel",
-            stale_query_slot="narrow direction 1",
             replacement_query=(
                 "marked research vessel fisheries survey ship identity"
             ),
@@ -5310,8 +5345,6 @@ def test_query_replan_rejects_semantic_duplicate_queries() -> None:
         QueryReplanOutput(
             task_id=task.task_id,
             selected_concept_id="concept-fisheries-survey",
-            preserved_subject="marked research vessel",
-            stale_query_slot="R 225",
             replacement_query=(
                 "marked research vessel fisheries survey ship identity R 225"
             ),
@@ -5322,10 +5355,7 @@ def test_query_replan_rejects_semantic_duplicate_queries() -> None:
     )
 
     assert not record.accepted_queries
-    assert record.rejected_reason in {
-        "replacement query retains the complete stale query slot",
-        "proposed no genuinely new semantic query",
-    }
+    assert record.rejected_reason == "proposed no genuinely new semantic query"
     assert task.query_replan_count == 0
 
 
@@ -5371,8 +5401,6 @@ def test_query_replan_validator_rejects_semantic_duplicate() -> None:
         QueryReplanOutput(
             task_id=task.task_id,
             selected_concept_id="concept-fisheries-survey",
-            preserved_subject="marked research vessel",
-            stale_query_slot="R 225",
             replacement_query=(
                 "marked research vessel fisheries survey ship identity R 225"
             ),
@@ -5384,10 +5412,7 @@ def test_query_replan_validator_rejects_semantic_duplicate() -> None:
     )
 
     assert valid is False
-    assert reason in {
-        "replacement query retains the complete stale query slot",
-        "proposed no genuinely new semantic query",
-    }
+    assert reason == "proposed no genuinely new semantic query"
 
 
 def test_route_exhaustion_query_replan_can_explicitly_finish() -> None:
@@ -5586,8 +5611,6 @@ def test_query_replan_cannot_abandon_uninspected_latest_search_batch() -> None:
         QueryReplanOutput(
             task_id=task.task_id,
             selected_concept_id="concept-fisheries-survey",
-            preserved_subject="marked research vessel",
-            stale_query_slot="direction 1",
             replacement_query=(
                 "marked research vessel fisheries survey ship identity"
             ),

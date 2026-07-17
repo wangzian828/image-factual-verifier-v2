@@ -42,10 +42,13 @@ Return exactly one JSON object matching the schema.
 
 
 QUERY_CONCEPT_EXTRACTION_SYSTEM_PROMPT = """\
-Extract a small set of searchable concepts from the supplied exact Evidence. Each
-concept must cite one supplied Evidence id, copy a short exact evidence phrase, and
-normalize it into a concise search term. Describe the concept's role; do not choose
-the next query, judge the proposition, or add knowledge absent from the Evidence.
+Extract searchable concepts newly introduced by the supplied exact Evidence, rather
+than repeating subjects, products, places, or relations already explicit in the
+active proposition or attempted queries. Include each materially distinct novel
+concept that could open a different retrieval direction. Each concept must cite one
+supplied Evidence id, copy a short exact evidence phrase, and normalize it into a
+concise search term. Do not choose the next query, judge the proposition, or add
+knowledge absent from the Evidence.
 """
 
 
@@ -53,11 +56,10 @@ QUERY_REPLAN_SYSTEM_PROMPT = """\
 Choose one supplied Evidence-derived concept that best closes the remaining gap in
 the active proposition, then write one complete replacement web query.
 
-Preserve a visible subject phrase from the proposition and identify the stale
-non-subject slot in an attempted query. The new query should change that stalled
-direction while retaining the relation being investigated. This is a retrieval
-hypothesis, not a verdict. If none of the supplied concepts offers a materially
-better direction, leave the query fields empty and set ready_to_finish=true.
+The query must remain about the active proposition while changing the stalled
+direction represented by the attempted queries. This is a retrieval hypothesis, not
+a verdict. If none of the supplied concepts offers a materially better direction,
+leave selected_concept_id and replacement_query empty and set ready_to_finish=true.
 """
 
 
@@ -551,10 +553,44 @@ def render_query_concept_extraction_context(
     task_id: str,
     new_evidence_ids: List[str],
 ) -> str:
+    task = next(
+        (item for item in state.tasks if item.task_id == task_id),
+        None,
+    )
+    core = next(
+        (
+            item
+            for item in state.facts
+            if item.fact_id == state.core_verdict_fact_id
+        ),
+        None,
+    )
     evidence_ids = set(new_evidence_ids)
+    attempted_queries: List[str] = []
+    for raw in state.attempted_routes:
+        try:
+            route = json.loads(raw)
+        except (TypeError, ValueError):
+            continue
+        if (
+            route.get("task_id") != task_id
+            or route.get("tool") != "text_search"
+        ):
+            continue
+        values = route.get("queries", []) or []
+        if isinstance(values, str):
+            values = [values]
+        attempted_queries.extend(
+            str(value).strip()
+            for value in values
+            if str(value).strip()
+        )
     return json.dumps(
         {
             "task_id": task_id,
+            "active_proposition": core.statement if core is not None else "",
+            "task_question": task.question if task is not None else "",
+            "attempted_queries": list(dict.fromkeys(attempted_queries)),
             "new_evidence": [
                 {
                     "evidence_id": item.evidence_id,
