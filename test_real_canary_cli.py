@@ -65,3 +65,21 @@ def test_real_canary_binds_clean_actual_commit(monkeypatch) -> None:
     )
 
     assert run_real_canary._require_clean_runtime_checkout() == "actual"
+
+
+def test_real_canary_accepts_visual_or_page_evidence_routes() -> None:
+    assert run_real_canary._missing_required_tool_classes(
+        {"reverse_image_search", "compare_with_reference"}
+    ) == []
+    assert run_real_canary._missing_required_tool_classes(
+        {"text_search", "visit"}
+    ) == []
+
+
+def test_real_canary_rejects_retrieval_without_evidence_inspection() -> None:
+    assert run_real_canary._missing_required_tool_classes(
+        {"reverse_image_search", "ocr_with_position"}
+    ) == ["evidence inspection"]
+    assert run_real_canary._missing_required_tool_classes(
+        {"visit", "compare_with_reference"}
+    ) == ["search"]

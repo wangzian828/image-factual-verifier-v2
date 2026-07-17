@@ -27,16 +27,13 @@ load_project_dotenv(REPO_ROOT)
 
 
 SEARCH_TOOLS = frozenset({"reverse_image_search", "text_search", "crop_and_search"})
-REVERSE_IMAGE_TOOLS = frozenset({"reverse_image_search"})
 VISIT_TOOLS = frozenset({"visit"})
-VISUAL_TOOLS = frozenset(
+EVIDENCE_INSPECTION_TOOLS = VISIT_TOOLS | frozenset(
     {
-        "ocr_with_position",
         "compare_with_reference",
         "crop_and_inspect",
         "check_consistency",
         "analyze_visual_anomalies",
-        "count_objects",
     }
 )
 
@@ -147,6 +144,23 @@ def _accepted_tools(trace: Mapping[str, Any]) -> set[str]:
     }
 
 
+def _missing_required_tool_classes(tools: set[str]) -> list[str]:
+    """Require a real retrieval route and one route-specific evidence check.
+
+    An image identity case may close through reverse search plus same-capture
+    comparison, while a geographic or ecological case may close through text
+    search plus page inspection. Requiring both visit and visual comparison in
+    every canary would force unnecessary post-determination actions.
+    """
+
+    missing_classes = []
+    if not tools.intersection(SEARCH_TOOLS):
+        missing_classes.append("search")
+    if not tools.intersection(EVIDENCE_INSPECTION_TOOLS):
+        missing_classes.append("evidence inspection")
+    return missing_classes
+
+
 def _require_real_run_artifacts(
     run_dir: Path,
 ) -> dict[str, Any]:
@@ -205,15 +219,7 @@ def _require_real_run_artifacts(
             raise RuntimeError(f"trace recorded no real model calls: {path.name}")
         tools.update(_accepted_tools(trace))
 
-    missing_classes = []
-    if not tools.intersection(SEARCH_TOOLS):
-        missing_classes.append("search")
-    if not tools.intersection(REVERSE_IMAGE_TOOLS):
-        missing_classes.append("reverse-image search and image upload")
-    if not tools.intersection(VISIT_TOOLS):
-        missing_classes.append("visit")
-    if not tools.intersection(VISUAL_TOOLS):
-        missing_classes.append("visual observation")
+    missing_classes = _missing_required_tool_classes(tools)
     if missing_classes:
         raise RuntimeError(
             "real canary did not exercise required tool classes: "
