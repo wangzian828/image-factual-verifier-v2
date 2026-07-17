@@ -97,6 +97,47 @@ The client prompts for the password without echo. For unattended automation, inj
 `JUPYTER_REMOTE_PASSWORD` from a secret manager for that process only; do not persist
 it in a profile or script.
 
+### PowerShell-to-Bash quoting rule
+
+When invoking `jupyter_remote.py --shell` from PowerShell, pass the complete remote
+Bash command as one single-quoted PowerShell argument. Never place Bash variables,
+command substitutions, or escaped double quotes inside a double-quoted PowerShell
+string. PowerShell expands `$release`, `$out`, `$env`, and `$(...)` locally before
+the command reaches gpu-13, which can split the positional command and silently
+replace remote paths with empty strings.
+
+Forbidden:
+
+```powershell
+python scripts/server/jupyter_remote.py --kernel-name ifv-agent --shell `
+  "release=/remote/release; out=/remote/run; command --input `"$release/file`" --output `"$out`""
+```
+
+Required—prefer explicit absolute paths:
+
+```powershell
+python scripts/server/jupyter_remote.py --kernel-name ifv-agent --shell `
+  'cd /gs/home/wza/projects/image-factual-verifier-v2-worktrees/visual-fact-search-agent && scripts/server/run_gpu13.sh command --input /absolute/remote/input --output /absolute/remote/output'
+```
+
+If remote Bash variables are genuinely useful, the outer PowerShell argument must
+still be single-quoted:
+
+```powershell
+python scripts/server/jupyter_remote.py --kernel-name ifv-agent --shell `
+  'release=/absolute/remote/release; out=/absolute/remote/run; command --input "$release/file" --output "$out"'
+```
+
+Inside that outer single-quoted PowerShell argument, write Bash double quotes
+normally as `"..."`. Do not write `\"...\"`: the backslashes reach Bash literally,
+prevent the quotes from grouping metacharacters, and can turn `|`, `&&`, or spaces
+inside an intended argument into separate shell syntax.
+
+Before executing a long or destructive remote command, first use the same quoting
+form with a harmless `printf` or path-existence check. Treat any
+`unrecognized arguments` error from `jupyter_remote.py` as a local quoting failure;
+the intended remote command did not run.
+
 On 2026-07-15, the `8333` path was authenticated and verified with
 `hostname=gpu-13`, `id -un=wza`, and the `ifv-agent` kernel. Credentials were supplied
 only to the controlling process and were not written to the checkout, logs, or this
