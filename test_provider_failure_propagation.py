@@ -190,6 +190,43 @@ def test_long_document_ranking_can_select_evidence_after_first_12k(
     assert document[span["start"] : span["end"]] == target
 
 
+def test_goal_passage_selection_bounds_footer_noise_but_keeps_direct_body() -> None:
+    client = JinaReaderClient(
+        extract_max_chars=60000,
+        extract_max_passages=12,
+    )
+    target = (
+        "Andreea Esca says her image was used illegally in a fabricated "
+        "advertisement and denies involvement."
+    )
+    page = "\n\n".join(
+        [
+            "Article title about Andreea Esca and an online scam.",
+            target,
+            "What is the difference between baking powder and baking soda?",
+            *[
+                f"Recommended article {index} about unrelated Romanian news."
+                for index in range(80)
+            ],
+        ]
+    )
+    passages = client._build_evidence_passages(
+        client._prepare_evidence_document(page)
+    )
+    selected = client._select_goal_passages(
+        passages,
+        (
+            "Did Andreea Esca authorize the advertisement, or was her image "
+            "used illegally?"
+        ),
+        max_chars=client.extract_max_chars,
+        max_passages=client.extract_max_passages,
+    )
+
+    assert len(selected) <= 12
+    assert any(item["text"] == target for item in selected)
+
+
 def test_extractor_preserves_related_context_when_no_passage_directly_resolves_goal(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

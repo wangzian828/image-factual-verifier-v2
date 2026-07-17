@@ -30,6 +30,7 @@ from src.orchestrator.investigation_models import (
 from src.orchestrator.pipeline import Orchestrator
 from src.orchestrator.image_only_prompts import (
     pending_discovery_routes,
+    render_evidence_decision_context,
     render_react_context,
     select_react_tasks,
 )
@@ -2926,7 +2927,7 @@ def test_unrelated_reference_image_is_not_promoted_to_evidence() -> None:
     assert route["outcome"] == "empty"
 
 
-def test_different_capture_cannot_terminally_support_event_attribution() -> None:
+def test_different_capture_can_terminally_support_visible_event_relation() -> None:
     case, state = _runtime_state()
     for fact in state.facts:
         if fact.decision_relevance == "decisive":
@@ -3003,11 +3004,24 @@ def test_different_capture_cannot_terminally_support_event_attribution() -> None
         rationale="The other photograph shows the same vessel scene.",
     )
 
-    assert terminal["accepted"] is False
-    assert "different original capture" in terminal["rejected_reason"]
+    assert terminal["accepted"] is True
     assert next(
         fact for fact in state.facts if fact.fact_id == core_id
-    ).status == "active"
+    ).status == "supported"
+    evidence = next(
+        item for item in state.evidence if item.evidence_id == evidence_id
+    )
+    assert evidence.stance == "neutral"
+    finding = next(
+        item
+        for item in state.findings
+        if item.finding_id in terminal["finding_ids"]
+    )
+    assert finding.statement == (
+        "Semantic Evidence Decision: the active proposition was supported "
+        "by the selected Evidence."
+    )
+    assert "other photograph" not in finding.statement
 
 
 def test_different_capture_cannot_terminally_refute_event_attribution() -> None:
@@ -3051,7 +3065,7 @@ def test_different_capture_cannot_terminally_refute_event_attribution() -> None:
     )
 
     assert terminal["accepted"] is False
-    assert "different original capture" in terminal["rejected_reason"]
+    assert "without explicit edit evidence" in terminal["rejected_reason"]
     assert core.status == "active"
     assert next(
         item for item in state.evidence if item.evidence_id == evidence_id
@@ -3149,6 +3163,103 @@ def test_different_capture_can_assist_independent_source_assertion() -> None:
 
     assert terminal["accepted"] is True
     assert core.status == "refuted"
+
+
+def test_evidence_decision_context_excludes_retrieval_side_semantics() -> None:
+    case, state = _runtime_state()
+    core_id = state.core_verdict_fact_id or ""
+    task = next(item for item in state.tasks if core_id in item.fact_ids)
+    search_update = record_tool_observation(
+        state,
+        _step(
+            task_id=task.task_id,
+            call_id="call-sensitive-discovery",
+            tool_name="text_search",
+            result=json.dumps(
+                {
+                    "status": "success",
+                    "queries": [
+                        {
+                            "query": "candidate lookup",
+                            "results": [
+                                {
+                                    "url": (
+                                        "https://example.org/"
+                                        "secret-verdict-in-url"
+                                    ),
+                                    "title": (
+                                        "Search title says the claim is false"
+                                    ),
+                                    "snippet": (
+                                        "Unvisited snippet claims hidden facts."
+                                    ),
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ),
+        ),
+        image_sha256=case.image_sha256,
+    )
+    assert search_update["created_discovery_ids"]
+    exact_span = "The selected webpage span discusses baking soda."
+    visit_update = record_tool_observation(
+        state,
+        _step(
+            task_id=task.task_id,
+            call_id="call-exact-span-only",
+            tool_name="visit",
+            result=json.dumps(
+                {
+                    "status": "success",
+                    "url": "https://example.org/secret-verdict-in-url",
+                    "selected_url": (
+                        "https://example.org/secret-verdict-in-url"
+                    ),
+                    "evidence": exact_span,
+                    "summary": "A model summary adds unsupported details.",
+                    "rationale": "A model rationale says the claim is false.",
+                    "relevance": "low",
+                    "stance": "unclear",
+                    "directness": "none",
+                    "context_only": True,
+                    "temporal_alignment": "not_applicable",
+                    "artifact_sha256": "b" * 64,
+                    "evidence_span": {
+                        "start": 0,
+                        "end": len(exact_span),
+                    },
+                    "retrieved_at": datetime.now(
+                        timezone.utc
+                    ).isoformat(),
+                    "injection_flags": [],
+                    "evidence_eligible": True,
+                }
+            ),
+        ),
+        image_sha256=case.image_sha256,
+    )
+    evidence_id = visit_update["created_evidence_ids"][0]
+
+    rendered = json.loads(
+        render_evidence_decision_context(
+            state,
+            reviewed_evidence_ids=[evidence_id],
+        )
+    )
+    serialized = json.dumps(rendered)
+
+    assert "related_discoveries_for_context_only" not in rendered
+    assert "secret-verdict-in-url" not in serialized
+    assert "Search title says the claim is false" not in serialized
+    assert "Unvisited snippet claims hidden facts" not in serialized
+    assert "A model summary adds unsupported details" not in serialized
+    assert "A model rationale says the claim is false" not in serialized
+    assert rendered["eligible_evidence"][0]["exact_text"] == exact_span
+    assert "stance" not in rendered["eligible_evidence"][0]
+    assert "quality" not in rendered["eligible_evidence"][0]
+    assert "directness" not in rendered["eligible_evidence"][0]
 
 
 def test_same_capture_without_edit_evidence_cannot_terminally_refute() -> None:

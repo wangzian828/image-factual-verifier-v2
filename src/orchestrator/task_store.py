@@ -1974,23 +1974,6 @@ def apply_evidence_decision(
         if evidence_by_id[item].evidence_kind != "reference_comparison"
     ]
     if (
-        output.assessment in {"supported", "refuted"}
-        and not selected_non_reference_evidence
-        and any(
-            not _reference_comparison_is_same_capture(item)
-            for item in selected_reference_evidence
-        )
-    ):
-        return {
-            "accepted": False,
-            "rejected_reason": (
-                "a different original capture of the same subject or event is "
-                "a discovery/refinement bridge, not terminal Evidence; select "
-                "fetched source Evidence, same-capture Evidence, or keep the "
-                "fact insufficient and refine the discovered visual slot"
-            ),
-        }
-    if (
         output.assessment == "supported"
         and not selected_non_reference_evidence
         and any(
@@ -2406,12 +2389,6 @@ def apply_evidence_decision(
             if output.assessment == "supported"
             else "refute"
         )
-        # Evidence text, offsets, URL, artifact, and call provenance remain
-        # unchanged. Stance is the audited interpretation relative to the
-        # current active proposition, so the semantic checkpoint may correct
-        # the extractor's query-relative label.
-        for evidence_id in selected_ids:
-            evidence_by_id[evidence_id].stance = stance
         evidence_ids_by_task: Dict[str, List[str]] = {}
         for evidence_id in selected_ids:
             evidence_ids_by_task.setdefault(
@@ -2436,7 +2413,10 @@ def apply_evidence_decision(
                         finding_id=finding_id,
                         task_id=task_id,
                         fact_ids=[core.fact_id],
-                        statement=output.rationale,
+                        statement=(
+                            "Semantic Evidence Decision: the active proposition "
+                            f"was {output.assessment} by the selected Evidence."
+                        ),
                         stance=stance,
                         evidence_ids=owned_ids,
                         source_family_ids=list(

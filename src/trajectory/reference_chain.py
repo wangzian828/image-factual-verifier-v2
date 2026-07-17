@@ -248,6 +248,51 @@ def _qualified_semantic_candidate(
     )
 
 
+def _semantic_stance_by_evidence(
+    investigation: Mapping[str, Any],
+    *,
+    valid_finding_ids: set[str],
+) -> Dict[str, str]:
+    """Recover accepted proposition-relative direction without mutating Evidence."""
+
+    resolved: Dict[str, str] = {}
+    for decision in _rows(investigation.get("evidence_decisions")):
+        output = _mapping(decision.get("output"))
+        assessment = str(output.get("assessment", "")).strip()
+        if assessment not in {"supported", "refuted"}:
+            continue
+        finding_ids = {
+            str(item)
+            for item in decision.get("finding_ids", []) or []
+            if str(item)
+        }
+        if finding_ids and not finding_ids & valid_finding_ids:
+            continue
+        stance = "support" if assessment == "supported" else "refute"
+        for evidence_id in output.get("selected_evidence_ids", []) or []:
+            rendered = str(evidence_id).strip()
+            if rendered:
+                resolved[rendered] = stance
+    return resolved
+
+
+def _semantic_evidence_view(
+    evidence_by_id: Mapping[str, Mapping[str, Any]],
+    *,
+    semantic_stance_by_evidence: Mapping[str, str],
+) -> Dict[str, Dict[str, Any]]:
+    """Create scorer-only Evidence rows with accepted semantic direction."""
+
+    result: Dict[str, Dict[str, Any]] = {}
+    for evidence_id, evidence in evidence_by_id.items():
+        row = dict(evidence)
+        semantic_stance = semantic_stance_by_evidence.get(evidence_id)
+        if semantic_stance:
+            row["stance"] = semantic_stance
+        result[evidence_id] = row
+    return result
+
+
 def _deterministic_semantic_match(
     evidence: Mapping[str, Any],
     reference: Mapping[str, Any],
@@ -366,6 +411,13 @@ async def score_reference_chain_trace(
         evidence_by_id,
         successful_calls,
     )
+    semantic_evidence_by_id = _semantic_evidence_view(
+        evidence_by_id,
+        semantic_stance_by_evidence=_semantic_stance_by_evidence(
+            investigation,
+            valid_finding_ids=valid_finding_ids,
+        ),
+    )
     basis = _mapping(
         trace.get("verdict_basis") or investigation.get("verdict_basis")
     )
@@ -407,10 +459,10 @@ async def score_reference_chain_trace(
         ]
         related_evidence = list(
             {
-                str(evidence_id): evidence_by_id[str(evidence_id)]
+                str(evidence_id): semantic_evidence_by_id[str(evidence_id)]
                 for finding in related_findings
                 for evidence_id in finding.get("evidence_ids", []) or []
-                if str(evidence_id) in evidence_by_id
+                if str(evidence_id) in semantic_evidence_by_id
             }.values()
         )
 
@@ -469,9 +521,9 @@ async def score_reference_chain_trace(
         # same-family, same-direction, and complementary. Generic off-chain
         # pages and unrelated extra evidence remain unmatched.
         recovered_rows = [
-            evidence_by_id[evidence_id]
+            semantic_evidence_by_id[evidence_id]
             for evidence_id in fact_recovered_evidence_ids
-            if evidence_id in evidence_by_id
+            if evidence_id in semantic_evidence_by_id
         ]
         recovered_families = {
             _family_key(item.get("source_family"))

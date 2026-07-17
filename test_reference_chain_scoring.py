@@ -70,6 +70,10 @@ def test_semantic_recovery_accepts_same_source_capture_without_exact_snapshot(
     tmp_path: Path,
 ) -> None:
     trace = _trace(tmp_path)
+    raw_stances = {
+        item["evidence_id"]: item["stance"]
+        for item in trace["state"]["investigation_state"]["evidence"]
+    }
     metrics = asyncio.run(
         score_reference_chain_trace(trace, _gold_for_trace(trace))
     )
@@ -86,6 +90,10 @@ def test_semantic_recovery_accepts_same_source_capture_without_exact_snapshot(
     }
     assert "same_source_same_capture" in methods
     assert metrics["semantic_matcher"]["enabled"] is False
+    assert {
+        item["evidence_id"]: item["stance"]
+        for item in trace["state"]["investigation_state"]["evidence"]
+    } == raw_stances
 
 
 def test_semantic_recovery_accepts_same_source_page_version(

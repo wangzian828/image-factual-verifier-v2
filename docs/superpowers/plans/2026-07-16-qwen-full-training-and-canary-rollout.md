@@ -138,8 +138,10 @@ Acceptance is not classification-only:
 
 1. the core proposition must preserve the salient visible relation;
 2. unrelated reference images cannot become verdict Evidence;
-3. a different capture may provide discovery context but cannot be the sole terminal
-   basis;
+3. same-capture recovery is optional unless the active proposition itself concerns
+   an exact source record or provenance; a different capture may be terminal
+   Evidence when its actual observation directly answers a stable visible identity,
+   place, event, or relation;
 4. the evidence chain should recover the construction chain or a semantically
    equivalent source, not merely any source that yields the same label;
 5. no post-determination actions, protocol rejections, or unbounded sibling sweeps;
@@ -166,10 +168,17 @@ Andreea
 
 NASA
   latest run: real, 3 actions, strict audit, training_eligible=true
-  candidate pass: same-capture visual bridge was valid
+  candidate pass: the same-capture visual bridge was valid but not a general
+  runtime requirement
   final chain audit still needs an official NASA or semantically equivalent
   construction-chain source
 ```
+
+Real benchmark images may be AI-generated or otherwise lack a historical photographic
+original. Runtime acceptance therefore evaluates the decisive depicted fact, not
+whether an exact original image can be recovered. AI generation, compositing, or a
+different capture is not itself a fake verdict; those properties matter only when
+the active proposition specifically concerns image integrity or provenance.
 
 Runtime repairs already committed:
 

@@ -74,11 +74,25 @@ the wording of the search query that found it. Decide whether the proposition is
 supported, refuted, materially conflicted, or still insufficient, and cite only
 supplied Evidence ids.
 
+Only the exact webpage span or visual observation contained in eligible_evidence is
+factual input. Source class and source family are provenance metadata, not additional
+page content. Do not fill gaps from source names, URL wording, search-result
+titles/snippets, prior model explanations, or outside knowledge. If the supplied
+Evidence text does not itself establish the claimed relation or a logically
+incompatible fact, keep the proposition insufficient.
+
 Decide flexibly whether the proposition needs source-to-image binding. Reliable text
 can be sufficient for ecological, geographic, temporal, or other world relations.
 A same-capture image is required only when the conclusion depends on proving that a
 source assertion describes this exact input image; the absence of a reference image
 is not itself a reason to keep searching.
+
+Whether a reference is the same photographic capture is not a general quality gate.
+A different capture may directly establish a stable visible identity, place, event,
+or relation when its actual observation answers the active proposition. It cannot by
+itself establish hidden authorization, creator, upload history, provenance, or the
+existence of an exact source image. Failure to find an exact capture is never
+refutation of a visible-world proposition.
 
 Judge the supplied active proposition as written. Do not replace a subject-to-place,
 event, identity, or date relation with the different question of whether the whole
@@ -545,14 +559,11 @@ def render_evidence_decision_context(
     ]
     evidence_rows = [
         {
-            **item.model_dump(mode="json"),
+            **_render_semantic_evidence(item),
             "new_since_last_decision": item.evidence_id in reviewed,
         }
         for item in core_evidence[-24:]
     ]
-    relevant_task_ids = {
-        item.task_id for item in core_evidence
-    }
     pixel_facts = [
         fact.model_dump(mode="json")
         for fact in state.facts
@@ -571,27 +582,64 @@ def render_evidence_decision_context(
             ],
             "evidence_under_review_ids": reviewed_evidence_ids,
             "eligible_evidence": evidence_rows,
-            "related_discoveries_for_context_only": [
-                item.model_dump(mode="json")
-                for item in state.discoveries[-16:]
-                if item.task_id in relevant_task_ids
-            ],
             "prior_evidence_decisions": [
-                item.model_dump(mode="json")
+                {
+                    "decision_id": item.decision_id,
+                    "action_count": item.action_count,
+                    "trigger": item.trigger,
+                    "reviewed_evidence_ids": item.reviewed_evidence_ids,
+                    "assessment": item.output.assessment,
+                    "selected_evidence_ids": item.output.selected_evidence_ids,
+                    "binding_requirement": item.output.binding_requirement,
+                }
                 for item in state.evidence_decisions[-4:]
             ],
-            "visual_reinspections": [
-                item.model_dump(mode="json")
-                for item in state.visual_reinspections
-            ],
             "current_evidence_gaps": [
-                item.model_dump(mode="json")
+                {
+                    "gap_id": item.gap_id,
+                    "fact_id": item.fact_id,
+                    "kind": item.kind,
+                    "status": item.status,
+                    "evidence_ids": item.evidence_ids,
+                }
                 for item in state.evidence_gaps
             ],
         },
         ensure_ascii=False,
         indent=2,
     )
+
+
+def _render_semantic_evidence(item: Any) -> Dict[str, Any]:
+    """Expose evidence content without retrieval-side semantic leakage."""
+
+    return {
+        "evidence_id": item.evidence_id,
+        "task_id": item.task_id,
+        "fact_ids": item.fact_ids,
+        "tool_name": item.tool_name,
+        "evidence_kind": item.evidence_kind,
+        "source_family": item.source_family,
+        "source_class": item.source_class,
+        "exact_text": item.exact_text,
+        "claim_binding": item.claim_binding,
+        "same_subject_or_scene": item.same_subject_or_scene,
+        "same_capture_or_near_duplicate": item.same_capture_or_near_duplicate,
+        "likely_different_original_capture": (
+            item.likely_different_original_capture
+        ),
+        "edit_evidence_present": item.edit_evidence_present,
+        "confidence": item.confidence,
+        "temporal_alignment": item.temporal_alignment,
+        "risk_flags": item.risk_flags,
+        "visual_question_id": item.visual_question_id,
+        "visual_scope": item.visual_scope,
+        "visual_answer_status": item.visual_answer_status,
+        "visual_observations": [
+            observation.model_dump(mode="json")
+            for observation in item.visual_observations
+        ],
+    }
 
 
 def render_judgment_context(
@@ -611,7 +659,7 @@ def render_judgment_context(
         if item.finding_id in basis.finding_ids
     }
     allowed_evidence = {
-        item.evidence_id: item.model_dump(mode="json")
+        item.evidence_id: _render_semantic_evidence(item)
         for item in state.evidence
         if item.evidence_id in basis.evidence_ids
     }
