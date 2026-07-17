@@ -4949,6 +4949,76 @@ def test_route_exhaustion_reflection_requires_refresh_or_explicit_finish() -> No
     assert finish_reason == ""
 
 
+def test_visual_scene_identity_is_not_blocked_by_source_record_predicate() -> None:
+    case = ImageOnlyRuntimeCase(
+        case_id="case-visible-scene-identity",
+        image_path="pillars.png",
+        image_sha256="b" * 64,
+    )
+    state = state_from_bootstrap(
+        build_bootstrap_investigation(
+            case,
+            PerceptionReport(
+                scene_description=(
+                    "A near-infrared view of the Pillars of Creation in the "
+                    "Eagle Nebula."
+                ),
+                entities=[
+                    Entity(
+                        name="Pillars of Creation",
+                        entity_type="scene_element",
+                        bbox=[0.0, 0.1, 0.9, 1.0],
+                        confidence=0.99,
+                    )
+                ],
+            ),
+        )
+    )
+    scene_fact = next(
+        fact for fact in state.facts if fact.predicate == "appears_to_depict"
+    )
+
+    update = apply_target_planning(
+        state,
+        TargetPlanningOutput(
+            proposals=[
+                TargetFactProposal(
+                    statement=(
+                        "The input image is a near-infrared capture of the "
+                        "Pillars of Creation in the Eagle Nebula."
+                    ),
+                    predicate="source_record_matches",
+                    parent_fact_ids=[scene_fact.fact_id],
+                    question=(
+                        "Does the input image depict the Pillars of Creation "
+                        "in the Eagle Nebula?"
+                    ),
+                    purpose="Verify the visible astronomical scene identity.",
+                    suggested_tools=[
+                        "reverse_image_search",
+                        "compare_with_reference",
+                        "text_search",
+                    ],
+                    suggested_queries=[
+                        "Pillars of Creation Eagle Nebula near-infrared"
+                    ],
+                )
+            ]
+        ),
+    )
+
+    assert update["rejected_reasons"] == []
+    assert update["accepted_fact_ids"]
+    core = next(
+        fact for fact in state.facts if fact.fact_id == state.core_verdict_fact_id
+    )
+    task = next(item for item in state.tasks if core.fact_id in item.fact_ids)
+    assert core.predicate == "identified_as"
+    assert "Pillars of Creation" in core.statement
+    assert "visual identity" in task.question
+    assert "source" not in task.purpose.casefold()
+
+
 def test_reflection_cannot_abandon_uninspected_latest_search_batch() -> None:
     case, state = _runtime_state()
     task = next(

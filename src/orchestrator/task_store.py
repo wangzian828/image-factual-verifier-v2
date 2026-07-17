@@ -615,6 +615,10 @@ def apply_target_planning(
                 "OCR metadata"
             )
             continue
+        proposal = _normalize_initial_visual_identity_predicate(
+            proposal,
+            parents=parents,
+        )
         if (
             proposal.predicate == "visual_integrity"
             and _visual_integrity_target_contains_world_relation(proposal)
@@ -923,6 +927,56 @@ def _normalize_target_parenthetical_alias(
             "statement": statement,
             "question": question,
             "purpose": purpose,
+        }
+    )
+
+
+def _normalize_initial_visual_identity_predicate(
+    proposal: TargetFactProposal,
+    *,
+    parents: Sequence[VisualFact],
+) -> TargetFactProposal:
+    """Keep visible scene identity separate from source-record attribution.
+
+    A policy may use ``source_record_matches`` while stating only what the image
+    visibly depicts. Without a visible OCR/source anchor, that proposition is a
+    scene or subject identity, not a source-record claim. Normalize the predicate
+    instead of rejecting an otherwise grounded target or allowing unseen
+    publisher metadata to own the verdict.
+    """
+
+    if proposal.predicate != "source_record_matches":
+        return proposal
+    if any(
+        parent.origin.type == "ocr" or parent.predicate == "reads"
+        for parent in parents
+    ):
+        return proposal
+    statement = " ".join(str(proposal.statement or "").casefold().split())
+    source_scope = (
+        "source record",
+        "official record",
+        "public record",
+        "published by",
+        "released by",
+        "posted by",
+        "uploaded by",
+        "source page",
+        "web page",
+        "website",
+        "account",
+        "post text",
+    )
+    if any(phrase in statement for phrase in source_scope):
+        return proposal
+    return proposal.model_copy(
+        update={
+            "predicate": "identified_as",
+            "question": (
+                "Does reliable evidence support this image-grounded visual "
+                f"identity: {proposal.statement.rstrip('.')}?"
+            )[:800],
+            "purpose": "Verify the visible subject or scene identity.",
         }
     )
 
