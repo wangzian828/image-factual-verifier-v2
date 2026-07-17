@@ -2,7 +2,11 @@
 
 **Date:** 2026-07-16
 
-**Status:** route controller implemented; evidence-led Query Replan acceptance pending
+**Status:** superseded by the image-centric investigation-loop plan
+
+> The active runtime redesign is
+> `docs/superpowers/plans/2026-07-17-image-centric-investigation-loop.md`.
+> This file remains the implementation record for the stable-core route controller.
 
 ## Why
 

@@ -1,0 +1,26 @@
+project: image-centric-runtime
+question: >
+  Does persistent original-image access plus a unified multimodal investigation
+  checkpoint prevent target-information loss and improve evidence-grounded stopping?
+status: active
+baseline_commit: 5f4ac7e
+active_hypothesis: H1
+hypotheses:
+  H1:
+    status: planned
+    prediction: >
+      Multimodal Planning, ReAct, semantic checkpoints, and Judgment preserve
+      salient image relations better than text-only policy stages.
+  H2:
+    status: pending
+    prediction: >
+      A unified multimodal checkpoint can revise an underspecified target and
+      stop on decisive evidence without separate Reflection and Query Replan.
+metrics:
+  - target_relation_preserved
+  - correct_verdict
+  - post_determination_actions
+  - low_value_actions
+  - strict_trace_audit
+  - llm_api_calls
+
