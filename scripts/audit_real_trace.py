@@ -980,15 +980,10 @@ def _audit_image_only_trace(
                 location=location,
             )
         elif selected_concept_id in concept_by_id:
-            search_term = " ".join(
+            concept_term = " ".join(
                 re.findall(
                     r"[\w]+",
-                    str(
-                        concept_by_id[selected_concept_id].get(
-                            "search_term",
-                            "",
-                        )
-                    ).casefold(),
+                    str(output.get("concept_term", "")).casefold(),
                     flags=re.UNICODE,
                 )
             )
@@ -999,11 +994,11 @@ def _audit_image_only_trace(
                     flags=re.UNICODE,
                 )
             )
-            if not search_term or search_term not in normalized_query:
+            if not concept_term or concept_term not in normalized_query:
                 _issue(
                     report,
                     "QUERY_REPLAN_CONCEPT_UNUSED",
-                    "Query Replan must use the selected concept search term",
+                    "Query Replan must use its declared concept term",
                     location=location,
                 )
         accepted_queries = [

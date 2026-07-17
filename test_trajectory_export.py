@@ -101,7 +101,6 @@ def test_exporter_keeps_query_replan_as_its_own_policy_example(
                         "concept_id": "concept-example",
                         "evidence_id": "evidence-example",
                         "evidence_phrase": "diagnostic concept",
-                        "search_term": "diagnostic concept",
                         "role": "other",
                     }
                 ],
@@ -129,7 +128,6 @@ def test_exporter_keeps_query_replan_as_its_own_policy_example(
                                 "concept_id": "concept-example",
                                 "evidence_id": "evidence-example",
                                 "evidence_phrase": "diagnostic concept",
-                                "search_term": "diagnostic concept",
                                 "role": "other",
                             }
                         ],
@@ -146,6 +144,7 @@ def test_exporter_keeps_query_replan_as_its_own_policy_example(
             "output": {
                 "task_id": "task-example",
                 "selected_concept_id": "concept-example",
+                "concept_term": "diagnostic concept",
                 "replacement_query": "example evidence-led query",
                 "rationale": "New Evidence changed the searchable framing.",
             },
@@ -168,6 +167,7 @@ def test_exporter_keeps_query_replan_as_its_own_policy_example(
                     "value": {
                         "task_id": "task-example",
                         "selected_concept_id": "concept-example",
+                        "concept_term": "diagnostic concept",
                         "replacement_query": "example evidence-led query",
                         "rationale": (
                             "New Evidence changed the searchable framing."

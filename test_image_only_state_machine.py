@@ -471,7 +471,6 @@ def _query_concepts(
                     concept_id="concept-fisheries-survey",
                     evidence_id=evidence.evidence_id,
                     evidence_phrase="fisheries survey ship",
-                    search_term="fisheries survey ship",
                     role="use_or_category",
                 )
             ]
@@ -5113,6 +5112,7 @@ def test_query_replan_reopens_exhausted_search_direction_once() -> None:
         QueryReplanOutput(
             task_id=task.task_id,
             selected_concept_id="concept-fisheries-survey",
+            concept_term="fisheries survey ship",
             replacement_query=(
                 "marked research vessel fisheries survey ship identity"
             ),
@@ -5178,7 +5178,6 @@ def test_query_concept_extraction_rejects_already_known_subject() -> None:
                 concept_id="concept-known-subject",
                 evidence_id=evidence.evidence_id,
                 evidence_phrase="marked research vessel",
-                search_term="marked research vessel",
                 role="identity",
             )
         ],
@@ -5230,6 +5229,7 @@ def test_query_replan_composes_one_query_and_reopens_one_search_action() -> None
         QueryReplanOutput(
             task_id=task.task_id,
             selected_concept_id="concept-fisheries-survey",
+            concept_term="fisheries survey ship",
             replacement_query=(
                 "marked research vessel fisheries survey ship identity"
             ),
@@ -5290,6 +5290,7 @@ def test_query_replan_rejects_second_replan_and_fourth_search_route() -> None:
         QueryReplanOutput(
             task_id=task.task_id,
             selected_concept_id="concept-fisheries-survey",
+            concept_term="fisheries survey ship",
             replacement_query="marked research vessel fisheries survey ship",
             rationale="Try again.",
         ),
@@ -5348,6 +5349,7 @@ def test_query_replan_rejects_semantic_duplicate_queries() -> None:
         QueryReplanOutput(
             task_id=task.task_id,
             selected_concept_id="concept-fisheries-survey",
+            concept_term="fisheries survey ship",
             replacement_query=(
                 "marked research vessel fisheries survey ship identity R 225"
             ),
@@ -5404,6 +5406,7 @@ def test_query_replan_validator_rejects_semantic_duplicate() -> None:
         QueryReplanOutput(
             task_id=task.task_id,
             selected_concept_id="concept-fisheries-survey",
+            concept_term="fisheries survey ship",
             replacement_query=(
                 "marked research vessel fisheries survey ship identity R 225"
             ),
@@ -5555,6 +5558,7 @@ def test_query_replan_cannot_abandon_uninspected_latest_search_batch() -> None:
         QueryReplanOutput(
             task_id=task.task_id,
             selected_concept_id="concept-fisheries-survey",
+            concept_term="fisheries survey ship",
             replacement_query=(
                 "marked research vessel fisheries survey ship identity"
             ),

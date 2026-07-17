@@ -3221,9 +3221,9 @@ def _compose_query_replan(
         return "", "selected query concept is not grounded in new Evidence"
 
     query = " ".join(output.replacement_query.split())
-    search_term = _normalized_replan_text(selected.search_term)
-    if not search_term or search_term not in _normalized_replan_text(query):
-        return "", "replacement query does not use the selected concept search term"
+    concept_term = _normalized_replan_text(output.concept_term)
+    if not concept_term or concept_term not in _normalized_replan_text(query):
+        return "", "replacement query does not use its declared concept term"
     novel = _novel_replan_query(state, task, query)
     if not novel:
         return "", "proposed no genuinely new semantic query"

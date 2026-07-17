@@ -329,7 +329,6 @@ def test_query_replan_does_not_replace_interval_reflection_boundary(
                         "concept_id": "concept-between-boundaries",
                         "evidence_id": evidence_id,
                         "evidence_phrase": evidence_phrase,
-                        "search_term": evidence_phrase,
                         "role": "other",
                     }
                 ],
@@ -337,6 +336,7 @@ def test_query_replan_does_not_replace_interval_reflection_boundary(
             "output": {
                 "task_id": task_id,
                 "selected_concept_id": "concept-between-boundaries",
+                "concept_term": evidence_phrase,
                 "replacement_query": f"example {evidence_phrase}",
                 "rationale": "New Evidence changed the search direction.",
             },

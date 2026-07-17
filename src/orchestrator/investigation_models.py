@@ -325,7 +325,6 @@ class QueryConcept(StrictModel):
     concept_id: str = Field(min_length=1, max_length=100)
     evidence_id: str = Field(min_length=1, max_length=100)
     evidence_phrase: str = Field(min_length=1, max_length=800)
-    search_term: str = Field(min_length=1, max_length=300)
     role: Literal[
         "use_or_category",
         "identity",
@@ -344,6 +343,7 @@ class QueryConceptExtractionOutput(StrictModel):
 class QueryReplanOutput(StrictModel):
     task_id: str = Field(min_length=1, max_length=100)
     selected_concept_id: str = Field(min_length=1, max_length=100)
+    concept_term: str = Field(min_length=1, max_length=300)
     replacement_query: str = Field(min_length=1, max_length=500)
     rationale: str = Field(min_length=1, max_length=800)
 
