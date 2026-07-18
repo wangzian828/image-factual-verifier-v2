@@ -140,6 +140,8 @@ class VisualFact(StrictModel):
 class ResearchTask(StrictModel):
     task_id: str = Field(min_length=1, max_length=100)
     fact_ids: List[str] = Field(min_length=1, max_length=6)
+    claim_ids: List[str] = Field(default_factory=list, max_length=3)
+    hypothesis_id: Optional[str] = Field(default=None, max_length=100)
     question: str = Field(min_length=1, max_length=800)
     purpose: str = Field(min_length=1, max_length=800)
     priority: int = Field(default=1, ge=1, le=3)
@@ -400,6 +402,137 @@ class TargetPlanningOutput(StrictModel):
     )
 
 
+class ImageClaimProposal(StrictModel):
+    claim_key: str = Field(
+        min_length=1,
+        max_length=80,
+        pattern=r"^[a-z0-9][a-z0-9_-]*$",
+    )
+    statement: str = Field(min_length=1, max_length=1200)
+    kind: Literal["attribute", "relation", "internal_consistency", "text_claim"]
+    predicate: str = Field(min_length=1, max_length=100)
+    anchor_fact_ids: List[str] = Field(min_length=1, max_length=12)
+    salience: Literal["high", "medium"] = "high"
+    verification_question: str = Field(min_length=1, max_length=800)
+
+
+class SearchHypothesisProposal(StrictModel):
+    hypothesis_key: str = Field(
+        min_length=1,
+        max_length=80,
+        pattern=r"^[a-z0-9][a-z0-9_-]*$",
+    )
+    claim_keys: List[str] = Field(min_length=1, max_length=3)
+    statement: str = Field(min_length=1, max_length=1200)
+    queries: List[str] = Field(default_factory=list, max_length=3)
+    expected_information: str = Field(min_length=1, max_length=800)
+    suggested_tools: List[
+        Literal[
+            "reverse_image_search",
+            "text_search",
+            "visit",
+            "compare_with_reference",
+            "check_consistency",
+            "analyze_visual_anomalies",
+            "crop_and_inspect",
+            "ocr_with_position",
+        ]
+    ] = Field(min_length=1, max_length=4)
+    priority: int = Field(default=1, ge=1, le=3)
+
+    @model_validator(mode="after")
+    def validate_first_hop(self) -> "SearchHypothesisProposal":
+        if not set(self.suggested_tools) & {
+            "reverse_image_search",
+            "text_search",
+            "check_consistency",
+            "analyze_visual_anomalies",
+            "crop_and_inspect",
+            "ocr_with_position",
+        }:
+            raise ValueError(
+                "search hypothesis requires an executable first-hop tool"
+            )
+        return self
+
+
+class ImageAccountPlanningOutput(StrictModel):
+    account_summary: str = Field(min_length=1, max_length=1600)
+    image_claims: List[ImageClaimProposal] = Field(min_length=1, max_length=3)
+    search_hypotheses: List[SearchHypothesisProposal] = Field(
+        default_factory=list,
+        max_length=6,
+    )
+
+    @model_validator(mode="after")
+    def validate_references(self) -> "ImageAccountPlanningOutput":
+        claim_keys = [item.claim_key for item in self.image_claims]
+        if len(claim_keys) != len(set(claim_keys)):
+            raise ValueError("image claim keys must be unique")
+        hypothesis_keys = [
+            item.hypothesis_key for item in self.search_hypotheses
+        ]
+        if len(hypothesis_keys) != len(set(hypothesis_keys)):
+            raise ValueError("search hypothesis keys must be unique")
+        known_claims = set(claim_keys)
+        for hypothesis in self.search_hypotheses:
+            if not set(hypothesis.claim_keys) <= known_claims:
+                raise ValueError(
+                    "search hypotheses must reference supplied image claim keys"
+                )
+        high_claims = {
+            item.claim_key
+            for item in self.image_claims
+            if item.salience == "high"
+        }
+        if not high_claims:
+            raise ValueError("image account requires a high-salience claim")
+        covered_claims = {
+            claim_key
+            for hypothesis in self.search_hypotheses
+            for claim_key in hypothesis.claim_keys
+        }
+        if not high_claims <= covered_claims:
+            raise ValueError(
+                "every high-salience image claim requires a search hypothesis"
+            )
+        return self
+
+
+class ImageClaim(StrictModel):
+    claim_id: str = Field(min_length=1, max_length=100)
+    fact_id: str = Field(min_length=1, max_length=100)
+    statement: str = Field(min_length=1, max_length=1200)
+    anchor_fact_ids: List[str] = Field(min_length=1, max_length=12)
+    salience: Literal["high", "medium"] = "high"
+    status: Literal[
+        "open",
+        "supported",
+        "refuted",
+        "conflicted",
+        "unresolved",
+    ] = "open"
+    task_ids: List[str] = Field(default_factory=list, max_length=8)
+
+
+class SearchHypothesis(StrictModel):
+    hypothesis_id: str = Field(min_length=1, max_length=100)
+    claim_ids: List[str] = Field(min_length=1, max_length=3)
+    statement: str = Field(min_length=1, max_length=1200)
+    queries: List[str] = Field(default_factory=list, max_length=3)
+    expected_information: str = Field(min_length=1, max_length=800)
+    suggested_tools: List[str] = Field(min_length=1, max_length=4)
+    priority: int = Field(default=1, ge=1, le=3)
+    status: Literal[
+        "open",
+        "active",
+        "exhausted",
+        "retired",
+    ] = "open"
+    task_id: Optional[str] = Field(default=None, max_length=100)
+    attempt_count: int = Field(default=0, ge=0)
+
+
 class EvidenceDecisionRefinement(StrictModel):
     slot: Literal[
         "subject_identity",
@@ -458,6 +591,212 @@ class VisualReinspectionRequest(StrictModel):
     grounding_evidence_ids: List[str] = Field(min_length=1, max_length=8)
 
 
+class ClaimAssessmentProposal(StrictModel):
+    claim_id: str = Field(min_length=1, max_length=100)
+    assessment: Literal[
+        "supported",
+        "refuted",
+        "conflicted",
+        "insufficient",
+    ]
+    selected_evidence_ids: List[str] = Field(default_factory=list, max_length=20)
+    remaining_gap: str = Field(default="", max_length=800)
+    rationale: str = Field(min_length=1, max_length=1600)
+
+
+class MaterialDiscrepancyProposal(StrictModel):
+    statement: str = Field(min_length=1, max_length=1600)
+    affected_claim_ids: List[str] = Field(min_length=1, max_length=3)
+    visual_anchor_fact_ids: List[str] = Field(min_length=1, max_length=12)
+    evidence_ids: List[str] = Field(min_length=1, max_length=20)
+    materiality: Literal["decisive", "supporting"] = "decisive"
+    status: Literal["established", "conflicted"] = "established"
+    rationale: str = Field(min_length=1, max_length=1600)
+
+
+class NewSearchHypothesis(StrictModel):
+    claim_ids: List[str] = Field(min_length=1, max_length=3)
+    statement: str = Field(min_length=1, max_length=1200)
+    queries: List[str] = Field(default_factory=list, max_length=3)
+    expected_information: str = Field(min_length=1, max_length=800)
+    suggested_tools: List[
+        Literal[
+            "reverse_image_search",
+            "text_search",
+            "visit",
+            "compare_with_reference",
+            "check_consistency",
+            "analyze_visual_anomalies",
+            "crop_and_inspect",
+            "ocr_with_position",
+        ]
+    ] = Field(min_length=1, max_length=4)
+    priority: int = Field(default=1, ge=1, le=3)
+
+    @model_validator(mode="after")
+    def validate_first_hop(self) -> "NewSearchHypothesis":
+        if not set(self.suggested_tools) & {
+            "reverse_image_search",
+            "text_search",
+            "check_consistency",
+            "analyze_visual_anomalies",
+            "crop_and_inspect",
+            "ocr_with_position",
+        }:
+            raise ValueError(
+                "new search hypothesis requires an executable first-hop tool"
+            )
+        return self
+
+
+class DiscrepancyDecisionOutput(StrictModel):
+    claim_assessments: List[ClaimAssessmentProposal] = Field(
+        default_factory=list,
+        max_length=3,
+    )
+    material_discrepancy: Optional[MaterialDiscrepancyProposal] = None
+    retire_hypothesis_ids: List[str] = Field(default_factory=list, max_length=6)
+    new_hypotheses: List[NewSearchHypothesis] = Field(
+        default_factory=list,
+        max_length=3,
+    )
+    visual_reinspection: Optional[VisualReinspectionRequest] = None
+    verdict_proposal: Literal[
+        "continue",
+        "fake",
+        "real",
+        "unverifiable",
+    ] = "continue"
+    rationale: str = Field(min_length=1, max_length=2000)
+
+    @model_validator(mode="after")
+    def validate_references(self) -> "DiscrepancyDecisionOutput":
+        assessment_claim_ids = [item.claim_id for item in self.claim_assessments]
+        if len(assessment_claim_ids) != len(set(assessment_claim_ids)):
+            raise ValueError("a decision may assess each image claim at most once")
+        if len(self.retire_hypothesis_ids) != len(
+            set(self.retire_hypothesis_ids)
+        ):
+            raise ValueError("retired search hypothesis IDs must be unique")
+        return self
+
+
+class ClaimAssessment(StrictModel):
+    assessment_id: str = Field(min_length=1, max_length=100)
+    claim_id: str = Field(min_length=1, max_length=100)
+    action_count: int = Field(ge=0, le=24)
+    assessment: Literal[
+        "supported",
+        "refuted",
+        "conflicted",
+        "insufficient",
+    ]
+    evidence_ids: List[str] = Field(default_factory=list, max_length=20)
+    remaining_gap: str = Field(default="", max_length=800)
+    rationale: str = Field(min_length=1, max_length=1600)
+
+
+class MaterialDiscrepancy(StrictModel):
+    discrepancy_id: str = Field(min_length=1, max_length=100)
+    statement: str = Field(min_length=1, max_length=1600)
+    affected_claim_ids: List[str] = Field(min_length=1, max_length=3)
+    visual_anchor_fact_ids: List[str] = Field(min_length=1, max_length=12)
+    evidence_ids: List[str] = Field(min_length=1, max_length=20)
+    materiality: Literal["decisive", "supporting"] = "decisive"
+    status: Literal["established", "conflicted"] = "established"
+    rationale: str = Field(min_length=1, max_length=1600)
+
+
+class DiscrepancyDecisionRecord(StrictModel):
+    decision_id: str = Field(min_length=1, max_length=100)
+    action_count: int = Field(ge=0, le=24)
+    trigger: Literal[
+        "qualified_evidence",
+        "scheduled_boundary",
+        "before_unresolved",
+    ]
+    reviewed_evidence_ids: List[str] = Field(default_factory=list, max_length=40)
+    output: DiscrepancyDecisionOutput
+    accepted_assessment_ids: List[str] = Field(default_factory=list, max_length=3)
+    accepted_discrepancy_id: Optional[str] = Field(default=None, max_length=100)
+    accepted_hypothesis_ids: List[str] = Field(default_factory=list, max_length=3)
+    retired_hypothesis_ids: List[str] = Field(default_factory=list, max_length=6)
+    accepted_visual_question_id: Optional[str] = Field(
+        default=None,
+        max_length=100,
+    )
+    rejected_reasons: List[str] = Field(default_factory=list, max_length=20)
+
+
+class ImageClaimCoverage(StrictModel):
+    claim_id: str = Field(min_length=1, max_length=100)
+    salience: Literal["high", "medium"]
+    assessment: Literal[
+        "open",
+        "supported",
+        "refuted",
+        "conflicted",
+        "insufficient",
+    ]
+    evidence_ids: List[str] = Field(default_factory=list, max_length=20)
+    remaining_gap: str = Field(default="", max_length=800)
+    route_status: Literal["open", "closed"] = "open"
+
+
+class DiscrepancyCoverageAudit(StrictModel):
+    audit_id: str = Field(min_length=1, max_length=100)
+    action_count: int = Field(ge=0, le=24)
+    claims: List[ImageClaimCoverage] = Field(default_factory=list, max_length=3)
+    decisive_discrepancy_ids: List[str] = Field(
+        default_factory=list,
+        max_length=12,
+    )
+    proposed_verdict: Literal[
+        "",
+        "continue",
+        "fake",
+        "real",
+        "unverifiable",
+    ] = ""
+    complete: bool = False
+    stop_reason: Literal[
+        "continue",
+        "verdict_determined",
+        "information_saturated",
+        "hard_budget_exhausted",
+    ] = "continue"
+    decision_checkpoint: bool = False
+    substantive_gain: bool = False
+    reason: str = Field(default="", max_length=1200)
+
+
+class DiscrepancyVerdictBasis(StrictModel):
+    policy_rule_id: Literal["discrepancy-first-v4"] = "discrepancy-first-v4"
+    verdict_target: str = Field(min_length=1, max_length=1600)
+    claim_ids: List[str] = Field(default_factory=list, max_length=3)
+    discrepancy_ids: List[str] = Field(default_factory=list, max_length=12)
+    visual_anchor_fact_ids: List[str] = Field(default_factory=list, max_length=24)
+    finding_ids: List[str] = Field(default_factory=list, max_length=20)
+    evidence_ids: List[str] = Field(default_factory=list, max_length=40)
+    unresolved_gaps: List[str] = Field(default_factory=list, max_length=12)
+
+
+class DiscrepancyJudgment(StrictModel):
+    verdict: Literal["real", "fake", "unverifiable"]
+    confidence: float = Field(ge=0.0, le=1.0)
+    policy_rule_id: Literal["discrepancy-first-v4"] = "discrepancy-first-v4"
+    selected_claim_ids: List[str] = Field(default_factory=list, max_length=3)
+    selected_discrepancy_ids: List[str] = Field(default_factory=list, max_length=12)
+    selected_visual_anchor_fact_ids: List[str] = Field(
+        default_factory=list,
+        max_length=24,
+    )
+    selected_finding_ids: List[str] = Field(default_factory=list, max_length=20)
+    selected_evidence_ids: List[str] = Field(default_factory=list, max_length=40)
+    overall_assessment: str = Field(min_length=1, max_length=2000)
+    unresolved_gaps: List[str] = Field(default_factory=list, max_length=12)
+
+
 class EvidenceDecisionOutput(StrictModel):
     active_fact_id: str = Field(min_length=1, max_length=100)
     assessment: Literal[
@@ -483,7 +822,7 @@ class VisualReinspectionRecord(StrictModel):
     visual_question_id: str = Field(min_length=1, max_length=100)
     task_id: str = Field(min_length=1, max_length=100)
     fact_id: str = Field(min_length=1, max_length=100)
-    created_action_count: int = Field(ge=1, le=24)
+    created_action_count: int = Field(ge=0, le=24)
     request: VisualReinspectionRequest
     anchor_regions: List[List[float]] = Field(default_factory=list, max_length=4)
     status: Literal[
@@ -691,6 +1030,37 @@ class ImageOnlyInvestigationState(StrictModel):
         default_factory=list,
         max_length=32,
     )
+    image_account_summary: str = Field(default="", max_length=1600)
+    image_claims: List[ImageClaim] = Field(default_factory=list, max_length=3)
+    search_hypotheses: List[SearchHypothesis] = Field(
+        default_factory=list,
+        max_length=12,
+    )
+    claim_assessments: List[ClaimAssessment] = Field(
+        default_factory=list,
+        max_length=72,
+    )
+    material_discrepancies: List[MaterialDiscrepancy] = Field(
+        default_factory=list,
+        max_length=12,
+    )
+    discrepancy_decisions: List[DiscrepancyDecisionRecord] = Field(
+        default_factory=list,
+        max_length=24,
+    )
+    discrepancy_coverage_audits: List[DiscrepancyCoverageAudit] = Field(
+        default_factory=list,
+        max_length=32,
+    )
+    discrepancy_verdict_basis: Optional[DiscrepancyVerdictBasis] = None
+    discrepancy_judgment: Optional[DiscrepancyJudgment] = None
+    proposed_verdict: Literal[
+        "",
+        "continue",
+        "fake",
+        "real",
+        "unverifiable",
+    ] = ""
     core_verdict_fact_id: Optional[str] = Field(
         default=None,
         max_length=100,
@@ -729,6 +1099,142 @@ class ImageOnlyInvestigationState(StrictModel):
         elif self.decisive_fact_ids:
             raise ValueError(
                 "decisive_fact_ids requires core_verdict_fact_id"
+            )
+        facts = {fact.fact_id for fact in self.facts}
+        if len(facts) != len(self.facts):
+            raise ValueError("VisualFact IDs must be unique")
+        claims = {claim.claim_id: claim for claim in self.image_claims}
+        if len(claims) != len(self.image_claims):
+            raise ValueError("ImageClaim IDs must be unique")
+        if any(claim.fact_id not in facts for claim in claims.values()):
+            raise ValueError("image claims must reference existing VisualFacts")
+        fact_by_id = {fact.fact_id: fact for fact in self.facts}
+        if any(
+            not set(claim.anchor_fact_ids) <= facts
+            or any(
+                fact_by_id[fact_id].origin.type not in {"input_image", "ocr"}
+                for fact_id in claim.anchor_fact_ids
+            )
+            for claim in claims.values()
+        ):
+            raise ValueError(
+                "image claim anchors must reference pixel/OCR VisualFacts"
+            )
+        hypotheses = {
+            hypothesis.hypothesis_id: hypothesis
+            for hypothesis in self.search_hypotheses
+        }
+        if len(hypotheses) != len(self.search_hypotheses):
+            raise ValueError("SearchHypothesis IDs must be unique")
+        if any(
+            not set(hypothesis.claim_ids) <= set(claims)
+            for hypothesis in hypotheses.values()
+        ):
+            raise ValueError(
+                "search hypotheses must reference existing image claims"
+            )
+        tasks = {task.task_id: task for task in self.tasks}
+        if len(tasks) != len(self.tasks):
+            raise ValueError("ResearchTask IDs must be unique")
+        if any(
+            not set(task.claim_ids) <= set(claims)
+            or (
+                task.hypothesis_id is not None
+                and task.hypothesis_id not in hypotheses
+            )
+            for task in tasks.values()
+        ):
+            raise ValueError(
+                "research tasks must reference existing claims and hypotheses"
+            )
+        if any(
+            not set(claim.task_ids) <= set(tasks)
+            for claim in claims.values()
+        ):
+            raise ValueError("image claim task_ids must reference existing tasks")
+        if any(
+            hypothesis.task_id is not None
+            and (
+                hypothesis.task_id not in tasks
+                or tasks[hypothesis.task_id].hypothesis_id
+                != hypothesis.hypothesis_id
+                or set(tasks[hypothesis.task_id].claim_ids)
+                != set(hypothesis.claim_ids)
+            )
+            for hypothesis in hypotheses.values()
+        ):
+            raise ValueError(
+                "search hypothesis tasks must preserve hypothesis and claim ownership"
+            )
+        assessment_ids = {
+            assessment.assessment_id for assessment in self.claim_assessments
+        }
+        if len(assessment_ids) != len(self.claim_assessments):
+            raise ValueError("ClaimAssessment IDs must be unique")
+        evidence = {item.evidence_id for item in self.evidence}
+        if any(
+            assessment.claim_id not in claims
+            or not set(assessment.evidence_ids) <= evidence
+            for assessment in self.claim_assessments
+        ):
+            raise ValueError(
+                "claim assessments must reference existing claims and Evidence"
+            )
+        discrepancy_ids = {
+            item.discrepancy_id for item in self.material_discrepancies
+        }
+        if len(discrepancy_ids) != len(self.material_discrepancies):
+            raise ValueError("MaterialDiscrepancy IDs must be unique")
+        if any(
+            not set(item.affected_claim_ids) <= set(claims)
+            or not set(item.visual_anchor_fact_ids) <= facts
+            or any(
+                fact_by_id[fact_id].origin.type not in {"input_image", "ocr"}
+                for fact_id in item.visual_anchor_fact_ids
+            )
+            or not set(item.evidence_ids) <= evidence
+            for item in self.material_discrepancies
+        ):
+            raise ValueError(
+                "material discrepancies must reference claims, VisualFacts, and Evidence"
+            )
+        visual_questions = {
+            item.visual_question_id for item in self.visual_reinspections
+        }
+        if len(visual_questions) != len(self.visual_reinspections):
+            raise ValueError("visual reinspection IDs must be unique")
+        if any(
+            item.task_id not in tasks
+            or item.fact_id not in facts
+            or not set(item.request.anchor_fact_ids) <= facts
+            or not set(item.request.grounding_evidence_ids) <= evidence
+            for item in self.visual_reinspections
+        ):
+            raise ValueError(
+                "visual reinspections must reference tasks, facts, and Evidence"
+            )
+        decision_ids = {
+            item.decision_id for item in self.discrepancy_decisions
+        }
+        if len(decision_ids) != len(self.discrepancy_decisions):
+            raise ValueError("DiscrepancyDecision IDs must be unique")
+        if any(
+            not set(item.reviewed_evidence_ids) <= evidence
+            or not set(item.accepted_assessment_ids) <= assessment_ids
+            or (
+                item.accepted_discrepancy_id is not None
+                and item.accepted_discrepancy_id not in discrepancy_ids
+            )
+            or not set(item.accepted_hypothesis_ids) <= set(hypotheses)
+            or not set(item.retired_hypothesis_ids) <= set(hypotheses)
+            or (
+                item.accepted_visual_question_id is not None
+                and item.accepted_visual_question_id not in visual_questions
+            )
+            for item in self.discrepancy_decisions
+        ):
+            raise ValueError(
+                "discrepancy decisions must reference accepted state records"
             )
         return self
 

@@ -13,7 +13,7 @@ from src.orchestrator.state import ImageOnlyRuntimeCase
 RELEASE_SCHEMA_VERSION = "ifv-image-only-benchmark-release-v0.3"
 RUNTIME_CONTRACT_VERSION = "ifv-image-only-runtime-v1"
 INPUT_MODE = "image_only"
-DECISION_POLICY_VERSION = "reinspect-v2"
+DECISION_POLICY_VERSION = "discrepancy-first-v4"
 RUNTIME_CASE_KEYS = frozenset({"case_id", "image_path", "image_sha256"})
 
 

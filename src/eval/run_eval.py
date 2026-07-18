@@ -585,9 +585,8 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
                     )
                 )
                 trajectory_scores.append(teacher_score)
-                policy_trajectories.extend(
-                    item.model_dump(mode="json")
-                    for item in export_policy_examples(
+                try:
+                    exported_policy = export_policy_examples(
                         trace,
                         source_metadata={
                             "source_run_id": manifest["run_id"],
@@ -604,6 +603,23 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
                             ),
                         },
                     )
+                except ValueError as exc:
+                    metrics["training_eligible"] = False
+                    reasons = list(
+                        metrics.get("training_exclusion_reasons", []) or []
+                    )
+                    reasons.append(f"policy_export_rejected: {exc}")
+                    metrics["training_exclusion_reasons"] = list(
+                        dict.fromkeys(reasons)
+                    )
+                    teacher_score["training_eligible"] = False
+                    teacher_score["training_exclusion_reasons"] = list(
+                        metrics["training_exclusion_reasons"]
+                    )
+                    exported_policy = []
+                policy_trajectories.extend(
+                    item.model_dump(mode="json")
+                    for item in exported_policy
                 )
             else:
                 process_metrics.append(

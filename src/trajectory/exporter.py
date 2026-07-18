@@ -6,6 +6,7 @@ import json
 from typing import Any, Dict, Iterable, List, Mapping, Protocol, Sequence
 
 from src.trajectory.schema import PolicyExample
+from src.orchestrator.tool_result import parse_tool_result
 
 
 FORBIDDEN_PRIVATE_KEYS = frozenset(
@@ -103,7 +104,10 @@ def _observation_refs(policy_input: Mapping[str, Any]) -> List[str]:
 
 
 def _example_type(stage: str) -> str | None:
-    if stage == "image_only_investigation":
+    if stage in {
+        "image_only_investigation",
+        "image_only_discrepancy_investigation",
+    }:
         return "react"
     if stage == "image_only_reflection":
         return "reflection"
@@ -111,6 +115,8 @@ def _example_type(stage: str) -> str | None:
         return "judgment"
     if stage == "image_only_evidence_decision":
         return "evidence_decision"
+    if stage == "image_only_discrepancy_decision":
+        return "discrepancy_decision"
     if stage == "image_only_query_concept_extraction":
         return "query_concept_extraction"
     if stage == "image_only_query_replan":
@@ -120,7 +126,153 @@ def _example_type(stage: str) -> str | None:
         "image_only_attribution_planning",
     }:
         return "planning"
+    if stage == "image_account_planning":
+        return "image_account_planning"
+    if stage == "image_only_discrepancy_judgment":
+        return "judgment"
     return None
+
+
+def _v4_quality_gate(trace: Mapping[str, Any], state: Mapping[str, Any]) -> None:
+    """Reject v4 episodes that cannot teach claim/discrepancy alignment."""
+
+    if str(trace.get("termination", "")) != "success":
+        raise ValueError("v4 policy export requires a successful trace")
+    investigation = _mapping(state.get("investigation_state"))
+    claims = {
+        str(item.get("claim_id", "")): item
+        for item in _rows(investigation.get("image_claims"))
+        if str(item.get("claim_id", ""))
+    }
+    hypotheses = {
+        str(item.get("hypothesis_id", "")): item
+        for item in _rows(investigation.get("search_hypotheses"))
+        if str(item.get("hypothesis_id", ""))
+    }
+    tasks = {
+        str(item.get("task_id", "")): item
+        for item in _rows(investigation.get("tasks"))
+        if str(item.get("task_id", ""))
+    }
+    evidence = {
+        str(item.get("evidence_id", "")): item
+        for item in _rows(investigation.get("evidence"))
+        if str(item.get("evidence_id", ""))
+    }
+    successful_call_ids: set[str] = set()
+    for step in _rows(state.get("all_steps")):
+        if str(step.get("action_type", "")) != "tool_call":
+            continue
+        metadata = _mapping(step.get("metadata"))
+        call_id = str(metadata.get("function_call_id", "")).strip()
+        try:
+            _, succeeded = parse_tool_result(str(step.get("tool_result", "")))
+        except Exception:
+            succeeded = False
+        if call_id and succeeded and metadata.get("tool_success") is not False:
+            successful_call_ids.add(call_id)
+    if any(
+        not str(item.get("function_call_id", "")).strip()
+        or str(item.get("function_call_id", "")).strip() not in successful_call_ids
+        for item in evidence.values()
+    ):
+        raise ValueError("v4 policy export rejects Evidence without a successful call")
+    facts = {
+        str(item.get("fact_id", "")): item
+        for item in _rows(investigation.get("facts"))
+        if str(item.get("fact_id", ""))
+    }
+    if not claims or not any(
+        str(item.get("salience", "")) == "high" for item in claims.values()
+    ):
+        raise ValueError("v4 policy export requires high-salience ImageClaims")
+    if investigation.get("core_verdict_fact_id"):
+        raise ValueError("v4 policy export rejects active legacy core ownership")
+    for hypothesis_id, hypothesis in hypotheses.items():
+        claim_ids = {str(item) for item in hypothesis.get("claim_ids", []) or []}
+        task = tasks.get(str(hypothesis.get("task_id", "")))
+        if (
+            not claim_ids
+            or not claim_ids <= set(claims)
+            or task is None
+            or str(task.get("hypothesis_id", "")) != hypothesis_id
+            or {str(item) for item in task.get("claim_ids", []) or []}
+            != claim_ids
+        ):
+            raise ValueError("v4 policy export rejects invalid hypothesis ownership")
+    for discrepancy in _rows(investigation.get("material_discrepancies")):
+        claim_ids = {
+            str(item) for item in discrepancy.get("affected_claim_ids", []) or []
+        }
+        anchor_ids = {
+            str(item)
+            for item in discrepancy.get("visual_anchor_fact_ids", []) or []
+        }
+        evidence_ids = {
+            str(item) for item in discrepancy.get("evidence_ids", []) or []
+        }
+        if not claim_ids or not claim_ids <= set(claims):
+            raise ValueError("v4 policy export rejects unowned discrepancy claims")
+        if not evidence_ids or not evidence_ids <= set(evidence):
+            raise ValueError("v4 policy export rejects invalid discrepancy Evidence")
+        if any(
+            not anchor_ids
+            & {str(item) for item in claims[claim_id].get("anchor_fact_ids", []) or []}
+            for claim_id in claim_ids
+        ):
+            raise ValueError("v4 policy export rejects unanchored discrepancy")
+        if any(
+            anchor_id not in facts
+            or str(
+                _mapping(facts[anchor_id].get("origin")).get("type", "")
+            )
+            not in {"input_image", "ocr"}
+            for anchor_id in anchor_ids
+        ):
+            raise ValueError("v4 policy export rejects non-visual discrepancy anchors")
+        if any(
+            not any(
+                claim_id
+                in {
+                    str(item)
+                    for item in tasks.get(
+                        str(evidence[evidence_id].get("task_id", "")),
+                        {},
+                    ).get("claim_ids", [])
+                    or []
+                }
+                for evidence_id in evidence_ids
+            )
+            for claim_id in claim_ids
+        ):
+            raise ValueError("v4 policy export rejects discrepancy Evidence misalignment")
+    audits = _rows(investigation.get("discrepancy_coverage_audits"))
+    terminal = [
+        item
+        for item in audits
+        if item.get("complete") is True
+        and str(item.get("stop_reason", "")) == "verdict_determined"
+    ]
+    if not terminal:
+        raise ValueError("v4 policy export requires terminal discrepancy Coverage")
+    terminal_actions = int(terminal[-1].get("action_count", 0) or 0)
+    action_steps = [
+        item
+        for item in _rows(state.get("all_steps"))
+        if str(item.get("stage", ""))
+        in {
+            "image_only_discrepancy_investigation",
+            "image_only_visual_reinspection",
+        }
+        and str(item.get("action_type", "")) == "tool_call"
+    ]
+    if len(action_steps) > terminal_actions:
+        raise ValueError("v4 policy export rejects post-verdict actions")
+    if any(
+        str(item.get("action_type", "")) in {"format_error", "output_rejected"}
+        for item in _rows(state.get("all_steps"))
+    ):
+        raise ValueError("v4 policy export rejects protocol-rejected episodes")
 
 
 def export_policy_examples(
@@ -136,12 +288,15 @@ def export_policy_examples(
         "image_only"
     ):
         raise ValueError("policy exporter accepts image-only traces only")
-    if str(
+    policy_version = str(
         trace.get("decision_policy_version")
         or state.get("decision_policy_version")
         or ""
-    ) != "reinspect-v2":
-        raise ValueError("policy exporter accepts reinspect-v2 traces only")
+    )
+    if policy_version not in {"reinspect-v2", "discrepancy-first-v4"}:
+        raise ValueError("policy exporter received an unsupported decision policy")
+    if policy_version == "discrepancy-first-v4":
+        _v4_quality_gate(trace, state)
 
     tokenizer = tokenizer or Utf8ByteTokenizer()
     source_metadata = source_metadata or {}
@@ -193,6 +348,11 @@ def export_policy_examples(
         )
         examples.append(
             PolicyExample(
+                trajectory_version=(
+                    "ifv-policy-v2"
+                    if policy_version == "discrepancy-first-v4"
+                    else "ifv-policy-v1"
+                ),
                 tokenizer_id=tokenizer.tokenizer_id,
                 episode_id=episode_id,
                 step_id=step_id,

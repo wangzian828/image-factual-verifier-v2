@@ -15,7 +15,7 @@ The data project owns:
 - classification and process-reference protocols;
 - classification scorer, checksums, licenses, and source snapshots.
 
-The v3 runtime owns:
+The v4 runtime owns:
 
 - strict release and row parsing;
 - path and image-hash validation;
@@ -41,7 +41,7 @@ The evaluator entrypoint is:
   "schema_version": "ifv-image-only-benchmark-release-v0.3",
   "runtime_contract_version": "ifv-image-only-runtime-v1",
   "input_mode": "image_only",
-  "decision_policy_version": "reinspect-v2",
+  "decision_policy_version": "discrepancy-first-v4",
   "runtime_contract": {
     "allowed_keys": ["case_id", "image_path", "image_sha256"],
     "private_keys_absent": true
@@ -49,8 +49,9 @@ The evaluator entrypoint is:
 }
 ```
 
-`reinspect-v2` is the current v3 verdict policy. It does not mean the repository
-supports a v2 runtime.
+`discrepancy-first-v4` selects the ImageClaim/SearchHypothesis/MaterialDiscrepancy
+runtime. A release that still declares `reinspect-v2` is a frozen v3 release and is
+not accepted by the v4 release adapter.
 
 The manifest `artifacts` object supplies release-relative paths for:
 
@@ -93,7 +94,7 @@ re-hashed before execution.
 
 ## Rollout isolation
 
-Before rollout, v3 may read:
+Before rollout, v4 may read:
 
 - public manifest and protocols;
 - public cases and images;
@@ -101,7 +102,7 @@ Before rollout, v3 may read:
 
 It must not read `evaluator_private/gold.jsonl`.
 
-After all rollouts, v3 loads gold, validates the one-to-one `case_id` join, computes
+After all rollouts, v4 loads gold, validates the one-to-one `case_id` join, computes
 process metrics and trajectory scores, and records the gold artifact hash. Gold is
 never copied into model inputs, predictions, or canonical Agent state.
 

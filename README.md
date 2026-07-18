@@ -1,51 +1,32 @@
-# Image Factual Verifier v3
+# Image Factual Verifier v4
 
-VisualFact-driven, image-only factual investigation runtime.
-
-The supported flow is:
+Discrepancy-first, image-only factual investigation runtime.
 
 ```text
 ImageOnlyRuntimeCase
-  -> Gemini perception + layered positioned OCR
-  -> deterministic VisualFact/task bootstrap
-  -> one stable CoreVerdictFact
-  -> native Gemini Interactions ReAct
-  -> Reflection every four real tool actions
-  -> deterministic Coverage after every accepted action
-  -> reinspect-v2 Judgment
+  -> Gemini perception + positioned OCR
+  -> deterministic visual facts and retrieval anchors
+  -> Image Account Planning (1-3 ImageClaims + SearchHypotheses)
+  -> claim/hypothesis-owned native Gemini ReAct
+  -> sparse multimodal Discrepancy Decision
+  -> deterministic Coverage and claim/discrepancy/Evidence basis
+  -> constrained discrepancy-first-v4 Judgment
   -> real | fake | unverifiable
 ```
 
-`reinspect-v2` is the current v3 verdict-policy identifier. It is not support for an
-older project version. Claim-mode inputs and `reinspect-v1` are unsupported.
-
-快速图解：[Agent 五步工作流](docs/agent-overview.html)。
+The default decision policy is `discrepancy-first-v4`. The v3 runtime is frozen at
+tag `runtime-v3-final-20260717`; legacy schemas may remain temporarily for read-only
+trace replay but do not enter the v4 default path.
 
 ## Repository boundary
 
-This repository owns the Agent runtime, tools, canonical traces, strict trace audit,
-post-rollout process scoring, policy-trajectory export, and dataset audit.
+This repository owns the runtime, tools, canonical traces, strict audit,
+post-rollout process scoring, and policy export. Benchmark construction, private gold,
+classification scoring, licenses, and source snapshots belong to the separate data
+pipeline repository and enter only through the immutable release contract.
 
-Benchmark acquisition, construction, review, release packaging, classification gold,
-classification scoring, licenses, and source snapshots belong to the separate
-`image-factual-verifier-data-pipeline` repository. The repositories communicate only
-through the immutable v0.3 release contract in
-`docs/runtime-release-contract.md`.
-
-## Public input
-
-Each runtime row contains exactly:
-
-```json
-{
-  "case_id": "case_...",
-  "image_path": "assets/sha256/...",
-  "image_sha256": "..."
-}
-```
-
-The runtime verifies the image hash before perception. Evaluator-private gold is not
-loaded until all rollouts finish.
+Each public row contains exactly `case_id`, `image_path`, and `image_sha256`.
+Evaluator-private gold is loaded only after every rollout.
 
 ## Local setup
 
@@ -55,19 +36,19 @@ Python 3.11 is required.
 python -m pip install -e ".[dev]"
 $env:GEMINI_API_KEY = "..."
 $env:SERPER_API_KEY = "..."
-$env:IMAGE_UPLOAD_PROVIDER = "oss"
-$env:VISUAL_SEARCH_PROVIDER = "serper_lens"
-$env:BROWSE_FETCH_PROVIDER = "jina"
 python -m src path\to\image.jpg
 ```
 
-Gemini perception receives the image through the Interactions API.
-`ocr_with_position` is a separate positioned observation. It uses a configured
-PP-OCR-compatible service when available and falls back to EasyOCR; decisive small
-text can be checked with a focused Gemini/Qwen visual action. Codex does not manually
-inspect benchmark images during runtime.
+Gemini sees the original image in perception and once at the Image Account Planning
+main-chain root. Later ReAct, Discrepancy Decision, and Judgment calls inherit the
+visual context through `previous_interaction_id`.
 
-## Evaluation
+Search titles, snippets, and reverse-image matches are Discovery only. Verdict
+Evidence must preserve exact fetched text or a successful visual observation,
+provenance, artifact hashes, and successful function-call ownership. Provider or
+protocol failure is an engineering error, never `unverifiable`.
+
+## Evaluation outputs
 
 ```powershell
 python -m src.eval.run_eval `
@@ -75,52 +56,21 @@ python -m src.eval.run_eval `
   --output-dir path\to\new-run
 ```
 
-The run writes:
+Outputs include predictions, run diagnostics, canonical traces, process metrics,
+reference-chain metrics, v4 teacher scores, and `ifv-policy-v2` trajectories. The v4
+training gate focuses on Evidence-chain recovery, discrepancy alignment, stop quality,
+protocol validity, and absence of post-verdict actions.
 
-- `predictions.jsonl`: successful classification rows only, exactly
-  `case_id + verdict`;
-- `run_results.jsonl`: diagnostics, costs, trace paths, and engineering errors;
-- `process_metrics.jsonl`: deterministic per-case process metrics;
-- `reference_chain_metrics.jsonl`: four evaluator-private reference-chain recovery
-  metrics covering facts, recovered evidence, complete chains, and final-basis
-  precision;
-- `trajectory_scores.jsonl`: componentized teacher scores and diagnostics;
-- `policy_trajectories.jsonl`: model-visible request/action examples;
-- `summary.json`, `run_manifest.json`, and canonical `traces/*.json`.
-
-An engineering failure never becomes factual `unverifiable`. It produces no
-classification prediction, so the data-owned scorer counts that case as missing and
-wrong.
-
-Saved runs can be rescored without rerunning the Agent:
-
-```powershell
-python -m src.eval.score_reference_chain --run-dir path\to\existing-run
-```
-
-Add `--semantic-judge` to let an LLM inspect only qualified fact/evidence edges that
-remain unresolved after deterministic matching. Extra investigation material is not
-penalized unless it enters the final verdict basis. Reference-chain scores do not
-override classification and are not a training-admission gate.
-
-## Validation
+## Validation and acceptance
 
 ```powershell
 python -m pytest -q
+python -m compileall -q src scripts
+git diff --check
 python scripts/audit_real_trace.py path\to\traces --json --strict-scheduler
 ```
 
-The active suite contains 179 contract and scripted-state tests. They validate code
-boundaries, not live provider availability.
-
-No-mock acceptance requires:
-
-```powershell
-python scripts/run_real_canary.py `
-  --benchmark path\to\release\runtime_input\cases.jsonl `
-  --output-dir path\to\new-canary-output `
-  --limit 2
-```
-
-The accepted no-mock group-001 run and post-rollout reference-chain replay are
-recorded in `docs/operations/gpu13.md`.
+Local tests are deterministic gates, not production acceptance. v4 completion also
+requires replaying the four frozen historical traces, then one real Gemini canary
+with manual trace review, followed by three to four heterogeneous canaries. Do not
+run a full 20-case batch or Qwen trajectory production before those gates pass.

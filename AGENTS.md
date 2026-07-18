@@ -1,63 +1,56 @@
-# Image Factual Verifier v3 Contributor Guide
+# Image Factual Verifier v4 Contributor Guide
 
 ## Source of truth
 
 Read these active documents before changing the runtime:
 
+- `docs/superpowers/plans/2026-07-17-discrepancy-first-v4.md`
+- `docs/superpowers/plans/2026-07-17-v4-discrepancy-first-implementation-plan.md`
+- `docs/gemini-interaction-sequence.md`
 - `docs/architecture.md`
-- `docs/agent-prompt-and-runtime-guide.md`
 - `docs/runtime-release-contract.md`
-- `docs/superpowers/plans/2026-07-16-search-control-and-tool-correctness-audit.md`
 
 The July 14 implementation plan is a superseded historical record. The implementation
 and contract tests win when an old research note disagrees.
 
 ## Supported boundary
 
-The only supported benchmark path is v0.3 `image_only` with
-`decision_policy_version=reinspect-v2`.
+The default benchmark path is v0.3 `image_only` with
+`decision_policy_version=discrepancy-first-v4`.
 
 Public rows contain exactly `case_id`, `image_path`, and `image_sha256`.
 Do not add claim fields, claim modes, nullable placeholders, construction metadata, or
 gold. Do not restore the removed claim-driven runtime.
 
-`reinspect-v2` is the current v3 decision-policy name, not compatibility with an older
-project version.
+The tagged v3 runtime is frozen at `runtime-v3-final-20260717`. Legacy v3 models and
+reducers may remain for deterministic historical replay while migration finishes,
+but they must not enter the v4 default path.
 
 ## Required control flow
 
 1. Validate and hash-check `ImageOnlyRuntimeCase`.
-2. Run Gemini `perceive_scene` and layered `ocr_with_position` (configured PP-OCR
-   service with EasyOCR fallback).
-3. Deterministically build an immutable `InvestigationBrief`, pixel-grounded
-   `VisualEntity`/`VisualFact` records, retrieval anchors, and at most four initial
-   `ResearchTask` records.
-4. Let Target Planning establish one image-grounded `CoreVerdictFact`; do not run a
-   mandatory first reverse-image search.
-5. Let Gemini choose one native Interactions function call per action turn. One
-   policy action performs one bounded semantic operation.
-6. Deterministically reduce each accepted action into separate Discovery, Evidence,
-   Finding, Failure, task, and fact state.
-7. After each accepted action, deterministically decide whether a sparse semantic
-   Evidence Decision checkpoint is needed. Run it after potentially decisive
-   inspected Evidence, before Reflection, or before an unresolved terminal outcome.
-8. Let Gemini classify the active proposition as
-   `supported|refuted|conflicted|insufficient`, then run deterministic Coverage.
-9. Run structured Reflection after cumulative actions 4, 8, 12, 16, 20, and 24. It
-   may reorder or add bounded routes for the same core fact, but cannot change verdict
-   ownership.
-10. Stop immediately when the core fact resolves, when no executable core route
-   remains, after two action checkpoints without qualified core progress, or at the
-   24-action cap.
-11. Compile the only allowed verdict and basis, then require Gemini Judgment to match
-   them exactly.
+2. Run Gemini `perceive_scene` and positioned OCR.
+3. Deterministically bootstrap literal visual facts and retrieval anchors.
+4. Create the main Interaction root with the original image and run Image Account
+   Planning for one to three ImageClaims plus bounded SearchHypotheses.
+5. Create claim/hypothesis-owned ResearchTasks and execute one bounded native tool
+   call per ReAct action.
+6. Keep Discovery separate from provenance-complete Evidence.
+7. Run sparse multimodal Discrepancy Decision checkpoints after qualified Evidence,
+   at material boundaries, and before unresolved termination.
+8. Apply claim assessment, discrepancy, hypothesis, visual-reinspection, and verdict
+   proposals atomically through deterministic reducers.
+9. Stop immediately on an admissible decisive discrepancy, close all supported
+   high-salience claims for real, or close unresolved high-salience routes for
+   unverifiable.
+10. Compile a claim/discrepancy/Evidence basis and require v4 Judgment to match it.
 
 ## Non-negotiable invariants
 
 - Gemini LLM and vision use the Interactions API. Never switch wire protocols or
   providers after an error.
 - Tool-bearing turns use native `function_call` / `function_result` with
-  `previous_interaction_id`; at most one tool call is accepted per v3 action turn.
+  `previous_interaction_id`; at most one tool call is accepted per v4 action turn.
 - Gemini sees the image in `perceive_scene`. Positioned OCR is a separate observation;
   low-confidence text is isolated and decisive small text may require focused visual
   verification. Manual image inspection is not part of the runtime.
@@ -70,19 +63,17 @@ project version.
 - A Finding must link one ResearchTask and owned fact/evidence IDs.
 - A verdict basis must follow
   `VisualFact -> Finding -> Evidence -> successful tool call`.
-- Exactly one `CoreVerdictFact` owns the verdict. Optional title, creator, date,
-  platform, asset ID, second-source, and general visual-integrity details are
-  supporting by default and cannot delay a resolved verdict.
+- No external SearchHypothesis owns a verdict. ImageClaims and accepted
+  MaterialDiscrepancies are the v4 semantic state.
 - Reliable text may close ecological, geographic, temporal, or other world
   relations. A same-capture bridge is mandatory only when the semantic decision says
   the conclusion depends on binding a source assertion to this exact input image.
-- `fake` requires the core fact to be refuted after conflict adjudication; `real`
-  requires the core fact to be supported with its required source/image binding; all
-  other valid factual outcomes are `unverifiable` because evidence is insufficient.
-- Reflection cannot replace the core fact. At most one Evidence Decision may narrow
-  an unknown visible subject/place/event slot while preserving the original relation,
-  same salient subject, pixel/OCR anchors, and newly reviewed Evidence. It cannot
-  replace location/event scope or promote creator/title/date/platform metadata.
+- `fake` requires an established decisive, Evidence-backed, visually anchored
+  discrepancy affecting a high-salience claim. `real` requires every high-salience
+  claim supported and its meaningful routes closed. `unverifiable` requires an
+  unresolved high-salience claim and exhausted meaningful routes.
+- A Discrepancy Decision may add or retire bounded SearchHypotheses and request one
+  focused visual reinspection, but it cannot silently expand an ImageClaim.
 - General VLM consistency/anomaly opinions are diagnostic and cannot create verdict
   Evidence.
 - `text_search` accepts one query, `visit` one URL, and
@@ -99,13 +90,14 @@ project version.
 
 ## Active modules
 
-- `src/workflow.py`: v3-only public workflow and trace persistence.
-- `src/orchestrator/pipeline.py`: perception, ReAct, Reflection, Coverage, Judgment.
-- `src/orchestrator/state.py`: canonical v3 runtime state.
+- `src/workflow.py`: default v4 public workflow and trace persistence.
+- `src/orchestrator/pipeline.py`: perception, Image Account Planning, v4 ReAct,
+  Discrepancy Decision, and Judgment.
+- `src/orchestrator/state.py`: canonical image-only runtime state.
 - `src/orchestrator/investigation_models.py`: strict VisualFact state schemas.
 - `src/orchestrator/bootstrap.py`: deterministic brief/fact/task bootstrap.
-- `src/orchestrator/task_store.py`: action reducer and bounded Reflection transitions.
-- `src/orchestrator/coverage.py`: one-core-fact coverage and verdict basis.
+- `src/orchestrator/task_store.py`: atomic v4 reducers, action reduction, and routes.
+- `src/orchestrator/discrepancy_coverage.py`: v4 Coverage and verdict basis.
 - `src/orchestrator/stage_runner.py`: native Interactions protocol and tool execution.
 - `src/eval/release_adapter.py`: immutable v0.3 release consumer.
 - `src/eval/run_eval.py`: rollout, post-rollout scoring, and artifacts.

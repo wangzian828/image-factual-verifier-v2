@@ -11,7 +11,10 @@ from src.orchestrator.investigation_models import (
     QueryConceptExtractionOutput,
     VerdictBasis,
 )
-from src.orchestrator.task_store import remaining_material_routes
+from src.orchestrator.task_store import (
+    remaining_claim_hypothesis_routes,
+    remaining_material_routes,
+)
 from src.orchestrator.source_provenance import classify_source
 from src.orchestrator.source_provenance import canonicalize_url
 
@@ -96,6 +99,49 @@ ownership, task state, and output structure.
 """
 
 
+DISCREPANCY_REACT_SYSTEM_PROMPT = """\
+Choose exactly one runtime-authorized tool action that most reduces uncertainty
+about an unresolved ImageClaim through its attached SearchHypothesis. The claim is
+the image account to assess; the hypothesis is only a bounded retrieval route, not
+a conclusion and not permission to expand the claim.
+
+Inspect a promising page or reference image before repeating retrieval for that
+route. Search titles, snippets, and reverse-image matches are Discovery only.
+Qualified Evidence requires a fetched exact span or a successful visual
+observation with recorded provenance. Use only supplied observations, do not decide
+a verdict, and do not introduce external identities or metadata as new
+ImageClaims. The runtime owns IDs, claim/hypothesis ownership, route duplication,
+budgets, Evidence eligibility, state transitions, and stopping.
+"""
+
+
+IMAGE_ACCOUNT_PLANNING_SYSTEM_PROMPT = """\
+You are the Image Account Planning root of a discrepancy-first image
+investigation. State the factual account communicated by the visible pixels and
+reliable embedded text. Return one to three positive, high-value ImageClaims and
+bounded SearchHypotheses that could retrieve discriminating Evidence.
+
+An ImageClaim must describe a salient relation, attribute, textual assertion, or
+internal consistency claim that is visibly anchored in supplied pixel/OCR
+VisualFacts. Cite those anchor_fact_ids. At least one claim must be high salience.
+Do not choose one claim as a verdict owner, and do not decide fake, real, or
+unverifiable.
+
+Keep external people, places, dates, events, photographers, platforms, source
+records, instruments, species names, and other web-derived identities tentative:
+put them in SearchHypotheses unless they are already reliable visible text. A
+SearchHypothesis is a retrieval direction, not an ImageClaim and never a verdict.
+Attach every hypothesis to one or more supplied claim_keys. Give every
+high-salience claim at least one bounded hypothesis.
+
+Do not infer facts from evaluator labels, filenames, remembered benchmark cases,
+or outside knowledge. Do not add image authenticity or synthetic-pixel claims
+merely because the investigation concerns misinformation. The runtime owns IDs,
+references, budgets, Evidence eligibility, state transitions, and verdict
+preconditions. Return exactly one JSON object matching the schema.
+"""
+
+
 EVIDENCE_DECISION_SYSTEM_PROMPT = """\
 You are a semantic decision checkpoint for an image-grounded investigation.
 Evaluate the active proposition against the supplied eligible Evidence, not against
@@ -153,6 +199,35 @@ visual_reinspection or refinement, never both.
 """
 
 
+DISCREPANCY_DECISION_SYSTEM_PROMPT = """\
+You are the sparse multimodal Discrepancy Decision checkpoint in one ongoing
+image investigation. Compare only the supplied qualified Evidence with the
+original image account and visible pixel/OCR anchors inherited in this Interaction.
+
+Assess the affected ImageClaims as supported, refuted, conflicted, or insufficient
+and cite only supplied Evidence IDs. Establish a MaterialDiscrepancy only when its
+statement identifies a material factual difference tied to affected claim IDs,
+visible anchor fact IDs, and qualified Evidence. Search titles, snippets, URLs,
+source names, prior model rationale, and outside knowledge are not Evidence.
+Synthetic pixels alone are not a fake conclusion when the material image account is
+factually supported.
+
+You may retire stale SearchHypotheses, add at most three genuinely different
+bounded hypotheses for unresolved claims, or request one focused visual
+reinspection motivated by reviewed Evidence. A hypothesis is a route, never a new
+ImageClaim or verdict owner. Do not repeat an attempted semantic route.
+
+Propose fake only for an established decisive discrepancy affecting a
+high-salience claim. Propose real only when every high-salience claim is supported,
+no decisive discrepancy remains, and meaningful high-salience routes are closed.
+Propose unverifiable only when a high-salience claim remains insufficient or
+conflicted, no decisive discrepancy is established, and its meaningful routes are
+exhausted. Failure to find a discrepancy is never proof that the image is real.
+The runtime validates every ID, ownership edge, Evidence qualification, budget,
+route, atomic transition, and verdict precondition.
+"""
+
+
 JUDGMENT_SYSTEM_PROMPT = """\
 You are the constrained final synthesizer for reinspect-v2.
 The deterministic runtime has already compiled the only allowed verdict and basis.
@@ -160,6 +235,15 @@ Return exactly that verdict, policy rule, and allowed ids. Explain the conclusio
 concisely using only the supplied facts, Findings, and Evidence. Do not add facts,
 citations, or ids. If the compiled verdict is unverifiable, preserve the supplied
 fact-specific gaps.
+"""
+
+
+DISCREPANCY_JUDGMENT_SYSTEM_PROMPT = """\
+You are the constrained final synthesizer for discrepancy-first-v4. The
+deterministic runtime has already compiled the only allowed verdict and exact
+ImageClaim, MaterialDiscrepancy, visual-anchor, Finding, Evidence, and unresolved
+gap IDs. Return them exactly and explain only that selected basis. Do not reopen
+investigation, add searches, introduce uncited facts, or change the verdict.
 """
 
 
@@ -190,6 +274,45 @@ def select_react_tasks(
         )
     )
     return blocking
+
+
+def select_discrepancy_react_tasks(
+    state: ImageOnlyInvestigationState,
+) -> List[Any]:
+    """Expose only active tasks with valid open claim/hypothesis ownership."""
+
+    claims = {claim.claim_id: claim for claim in state.image_claims}
+    hypotheses = {
+        item.hypothesis_id: item
+        for item in state.search_hypotheses
+        if item.status in {"open", "active"}
+    }
+    active = [
+        task
+        for task in state.tasks
+        if task.status in {"active", "pending"}
+        and task.hypothesis_id in hypotheses
+        and task.claim_ids
+        and set(task.claim_ids) <= set(claims)
+        and set(task.claim_ids) <= set(hypotheses[task.hypothesis_id].claim_ids)
+        and any(
+            claims[claim_id].status in {"open", "conflicted", "unresolved"}
+            for claim_id in task.claim_ids
+        )
+    ]
+    active.sort(
+        key=lambda task: (
+            task.priority,
+            task.task_id not in state.recommended_next_task_ids,
+            min(
+                0 if claims[claim_id].salience == "high" else 1
+                for claim_id in task.claim_ids
+            ),
+            task.attempt_count,
+            task.task_id,
+        )
+    )
+    return active
 
 
 def pending_discovery_routes(
@@ -491,6 +614,281 @@ def render_target_planning_context(
             "bootstrap_tasks": [
                 item.model_dump(mode="json")
                 for item in state.tasks
+            ],
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
+def render_discrepancy_react_context(
+    state: ImageOnlyInvestigationState,
+) -> str:
+    """Render the v4 claim/hypothesis loop without any core-fact fallback."""
+
+    active = select_discrepancy_react_tasks(state)
+    active_task_ids = {task.task_id for task in active}
+    claims = {claim.claim_id: claim for claim in state.image_claims}
+    hypotheses = {
+        item.hypothesis_id: item for item in state.search_hypotheses
+    }
+    pending_routes = pending_discovery_routes(
+        state,
+        task_ids=active_task_ids,
+    )
+    remaining_routes = remaining_claim_hypothesis_routes(
+        state,
+        task_ids=active_task_ids,
+    )
+    executable_page_urls = {
+        canonicalize_url(route.split(":", 2)[2])
+        for route in remaining_routes
+        if route.startswith("visit:") and len(route.split(":", 2)) == 3
+    }
+    executable_reference_urls = {
+        canonicalize_url(route.split(":", 2)[2])
+        for route in remaining_routes
+        if route.startswith("compare_with_reference:")
+        and len(route.split(":", 2)) == 3
+    }
+    attempted_routes: List[Dict[str, Any]] = []
+    for route in state.attempted_routes[-24:]:
+        try:
+            attempted_routes.append(json.loads(route))
+        except (TypeError, ValueError):
+            continue
+    return json.dumps(
+        {
+            "image_account_summary": state.image_account_summary,
+            "image_claims": [
+                claim.model_dump(mode="json")
+                for claim in state.image_claims
+            ],
+            "active_search_hypotheses": [
+                hypothesis.model_dump(mode="json")
+                for hypothesis in state.search_hypotheses
+                if hypothesis.status in {"open", "active"}
+            ],
+            "active_tasks": [
+                {
+                    **task.model_dump(mode="json"),
+                    "owned_claims": [
+                        claims[claim_id].model_dump(mode="json")
+                        for claim_id in task.claim_ids
+                    ],
+                    "owned_hypothesis": hypotheses[
+                        task.hypothesis_id
+                    ].model_dump(mode="json"),
+                }
+                for task in active
+            ],
+            "recent_discoveries": [
+                item.model_dump(mode="json")
+                for item in state.discoveries[-16:]
+                if not item.abandoned
+            ],
+            "eligible_evidence": [
+                item.model_dump(mode="json")
+                for item in state.evidence[-20:]
+            ],
+            "claim_assessments": [
+                item.model_dump(mode="json")
+                for item in state.claim_assessments[-12:]
+            ],
+            "material_discrepancies": [
+                item.model_dump(mode="json")
+                for item in state.material_discrepancies
+            ],
+            "pending_pages": [
+                item
+                for item in pending_routes["pages"]
+                if canonicalize_url(item["url"]) in executable_page_urls
+            ],
+            "pending_reference_images": [
+                item
+                for item in pending_routes["references"]
+                if canonicalize_url(item["reference_image_url"])
+                in executable_reference_urls
+            ],
+            "failures": [
+                item.model_dump(mode="json")
+                for item in state.failures[-12:]
+            ],
+            "remaining_routes": remaining_routes[:16],
+            "attempted_routes": attempted_routes,
+            "action_count": state.action_count,
+            "remaining_action_budget": max(0, 24 - state.action_count),
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
+def render_image_account_planning_context(
+    state: ImageOnlyInvestigationState,
+    *,
+    perception: Any = None,
+) -> str:
+    """Render only public runtime observations for v4 Image Account Planning."""
+
+    perception_payload: Dict[str, Any] = {}
+    if perception is not None:
+        if hasattr(perception, "model_dump"):
+            perception_payload = perception.model_dump(mode="json")
+        elif isinstance(perception, dict):
+            perception_payload = dict(perception)
+    return json.dumps(
+        {
+            "brief": state.brief.model_dump(mode="json"),
+            "perception": {
+                "scene_description": perception_payload.get(
+                    "scene_description",
+                    "",
+                ),
+                "image_type": perception_payload.get(
+                    "image_type",
+                    state.brief.media_type,
+                ),
+                "entities": perception_payload.get("entities", []),
+            },
+            "positioned_ocr": perception_payload.get("text_regions", []),
+            "visual_entities": [
+                item.model_dump(mode="json")
+                for item in state.entities[:24]
+                if item.origin in {"input_image", "ocr"}
+            ],
+            "pixel_ocr_visual_facts": [
+                item.model_dump(mode="json")
+                for item in state.facts
+                if item.origin.type in {"input_image", "ocr"}
+            ][:48],
+            "retrieval_anchors": [
+                item.model_dump(mode="json")
+                for item in state.retrieval_anchors[:24]
+            ],
+            "bootstrap_tasks": [
+                item.model_dump(mode="json")
+                for item in state.tasks[:4]
+            ],
+            "planning_limits": {
+                "image_claims": 3,
+                "search_hypotheses": 6,
+                "queries_per_hypothesis": 3,
+            },
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
+def render_discrepancy_decision_context(
+    state: ImageOnlyInvestigationState,
+    *,
+    reviewed_evidence_ids: Iterable[str],
+    trigger: str,
+) -> str:
+    """Render one sparse v4 decision checkpoint from canonical state only."""
+
+    reviewed = list(dict.fromkeys(str(item) for item in reviewed_evidence_ids))
+    evidence_by_id = {item.evidence_id: item for item in state.evidence}
+    return json.dumps(
+        {
+            "trigger": trigger,
+            "image_account_summary": state.image_account_summary,
+            "image_claims": [
+                item.model_dump(mode="json") for item in state.image_claims
+            ],
+            "search_hypotheses": [
+                item.model_dump(mode="json")
+                for item in state.search_hypotheses
+            ],
+            "reviewed_qualified_evidence": [
+                evidence_by_id[evidence_id].model_dump(mode="json")
+                for evidence_id in reviewed
+                if evidence_id in evidence_by_id
+            ],
+            "prior_claim_assessments": [
+                item.model_dump(mode="json")
+                for item in state.claim_assessments[-12:]
+            ],
+            "prior_material_discrepancies": [
+                item.model_dump(mode="json")
+                for item in state.material_discrepancies
+            ],
+            "pixel_ocr_anchor_facts": [
+                item.model_dump(mode="json")
+                for item in state.facts
+                if item.origin.type in {"input_image", "ocr"}
+            ][:48],
+            "attempted_routes": [
+                json.loads(route)
+                for route in state.attempted_routes[-24:]
+                if _is_json_object(route)
+            ],
+            "remaining_routes": remaining_claim_hypothesis_routes(state)[:16],
+            "action_count": state.action_count,
+            "remaining_action_budget": max(0, 24 - state.action_count),
+            "remaining_hypothesis_budget": max(
+                0,
+                12 - len(state.search_hypotheses),
+            ),
+            "remaining_visual_reinspection_budget": max(
+                0,
+                1 - len(state.visual_reinspections),
+            ),
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
+def _is_json_object(value: Any) -> bool:
+    try:
+        return isinstance(json.loads(str(value)), dict)
+    except (TypeError, ValueError):
+        return False
+
+
+def render_discrepancy_judgment_context(
+    state: ImageOnlyInvestigationState,
+    compiled_verdict: str,
+    basis: Any,
+) -> str:
+    claims = {item.claim_id: item for item in state.image_claims}
+    discrepancies = {
+        item.discrepancy_id: item for item in state.material_discrepancies
+    }
+    findings = {item.finding_id: item for item in state.findings}
+    evidence = {item.evidence_id: item for item in state.evidence}
+    facts = {item.fact_id: item for item in state.facts}
+    return json.dumps(
+        {
+            "compiled_verdict": compiled_verdict,
+            "compiled_basis": basis.model_dump(mode="json"),
+            "selected_claims": [
+                claims[item].model_dump(mode="json")
+                for item in basis.claim_ids
+                if item in claims
+            ],
+            "selected_discrepancies": [
+                discrepancies[item].model_dump(mode="json")
+                for item in basis.discrepancy_ids
+                if item in discrepancies
+            ],
+            "selected_visual_anchors": [
+                facts[item].model_dump(mode="json")
+                for item in basis.visual_anchor_fact_ids
+                if item in facts
+            ],
+            "selected_findings": [
+                findings[item].model_dump(mode="json")
+                for item in basis.finding_ids
+                if item in findings
+            ],
+            "selected_evidence": [
+                evidence[item].model_dump(mode="json")
+                for item in basis.evidence_ids
+                if item in evidence
             ],
         },
         ensure_ascii=False,

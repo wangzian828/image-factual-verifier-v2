@@ -9,6 +9,264 @@ from test_image_only_trajectory import (
 )
 
 
+def _v4_trace(tmp_path: Path) -> Path:
+    claim_id = "claim-v4"
+    hypothesis_id = "hypothesis-v4"
+    task_id = "task-v4"
+    evidence_id = "evidence-v4"
+    discrepancy_id = "discrepancy-v4"
+    anchor_id = "fact-anchor-v4"
+    claim_fact_id = "fact-claim-v4"
+    finding_id = "finding-v4"
+    basis = {
+        "policy_rule_id": "discrepancy-first-v4",
+        "verdict_target": "The shown packet replaces the source microphone.",
+        "claim_ids": [claim_id],
+        "discrepancy_ids": [discrepancy_id],
+        "visual_anchor_fact_ids": [anchor_id],
+        "finding_ids": [finding_id],
+        "evidence_ids": [evidence_id],
+        "unresolved_gaps": [],
+    }
+    judgment = {
+        "verdict": "fake",
+        "confidence": 0.99,
+        "policy_rule_id": "discrepancy-first-v4",
+        "selected_claim_ids": [claim_id],
+        "selected_discrepancy_ids": [discrepancy_id],
+        "selected_visual_anchor_fact_ids": [anchor_id],
+        "selected_finding_ids": [finding_id],
+        "selected_evidence_ids": [evidence_id],
+        "overall_assessment": "The selected source Evidence establishes the edit.",
+        "unresolved_gaps": [],
+    }
+    investigation = {
+        "brief": {"brief_id": "brief-v4", "case_id": "case-v4-audit"},
+        "facts": [
+            {
+                "fact_id": anchor_id,
+                "origin": {"type": "input_image", "origin_ids": ["image-v4"]},
+            },
+            {
+                "fact_id": claim_fact_id,
+                "origin": {"type": "input_image", "origin_ids": [anchor_id]},
+            },
+        ],
+        "tasks": [
+            {
+                "task_id": task_id,
+                "fact_ids": [claim_fact_id],
+                "claim_ids": [claim_id],
+                "hypothesis_id": hypothesis_id,
+            }
+        ],
+        "evidence": [
+            {
+                "evidence_id": evidence_id,
+                "task_id": task_id,
+                "fact_ids": [claim_fact_id],
+                "function_call_id": "call-visit-v4",
+                "tool_name": "visit",
+            }
+        ],
+        "findings": [
+            {
+                "finding_id": finding_id,
+                "task_id": task_id,
+                "fact_ids": [claim_fact_id],
+                "evidence_ids": [evidence_id],
+            }
+        ],
+        "image_claims": [
+            {
+                "claim_id": claim_id,
+                "fact_id": claim_fact_id,
+                "statement": "The person is holding the shown packet.",
+                "anchor_fact_ids": [anchor_id],
+                "salience": "high",
+                "status": "refuted",
+                "task_ids": [task_id],
+            }
+        ],
+        "search_hypotheses": [
+            {
+                "hypothesis_id": hypothesis_id,
+                "claim_ids": [claim_id],
+                "statement": "A source image may show the original held object.",
+                "status": "exhausted",
+                "task_id": task_id,
+            }
+        ],
+        "claim_assessments": [
+            {
+                "assessment_id": "assessment-v4",
+                "claim_id": claim_id,
+                "assessment": "refuted",
+                "evidence_ids": [evidence_id],
+            }
+        ],
+        "material_discrepancies": [
+            {
+                "discrepancy_id": discrepancy_id,
+                "statement": "The packet replaces the source microphone.",
+                "affected_claim_ids": [claim_id],
+                "visual_anchor_fact_ids": [anchor_id],
+                "evidence_ids": [evidence_id],
+                "materiality": "decisive",
+                "status": "established",
+            }
+        ],
+        "discrepancy_decisions": [
+            {
+                "decision_id": "decision-v4",
+                "reviewed_evidence_ids": [evidence_id],
+                "output": {
+                    "claim_assessments": [
+                        {
+                            "claim_id": claim_id,
+                            "selected_evidence_ids": [evidence_id],
+                        }
+                    ],
+                    "material_discrepancy": {
+                        "evidence_ids": [evidence_id],
+                    },
+                },
+            }
+        ],
+        "discrepancy_coverage_audits": [
+            {
+                "audit_id": "coverage-v4",
+                "action_count": 2,
+                "complete": True,
+                "stop_reason": "verdict_determined",
+            }
+        ],
+        "discrepancy_verdict_basis": basis,
+        "discrepancy_judgment": judgment,
+        "core_verdict_fact_id": None,
+        "action_count": 2,
+    }
+    steps = [
+        {
+            "round": 1,
+            "stage": "image_account_planning",
+            "action_type": "output",
+            "tokens": {"thought": 0},
+            "metadata": {
+                "native_interactions": True,
+                "interaction_id": "interaction-plan-v4",
+                "previous_interaction_id": None,
+            },
+        },
+        {
+            "round": 1,
+            "stage": "image_only_discrepancy_investigation",
+            "action_type": "tool_call",
+            "tool_name": "text_search",
+            "tool_result": json.dumps({"status": "success", "queries": []}),
+            "tokens": {"thought": 0},
+            "metadata": {
+                "native_interactions": True,
+                "interaction_id": "interaction-search-v4",
+                "previous_interaction_id": "interaction-plan-v4",
+                "function_call_id": "call-search-v4",
+                "tool_success": True,
+            },
+        },
+        {
+            "round": 2,
+            "stage": "image_only_discrepancy_investigation",
+            "action_type": "tool_call",
+            "tool_name": "visit",
+            "tool_result": json.dumps({"status": "success", "evidence": "exact"}),
+            "tokens": {"thought": 0},
+            "metadata": {
+                "native_interactions": True,
+                "interaction_id": "interaction-visit-v4",
+                "previous_interaction_id": "interaction-search-v4",
+                "function_call_id": "call-visit-v4",
+                "tool_success": True,
+            },
+        },
+        {
+            "round": 1,
+            "stage": "image_only_discrepancy_decision",
+            "action_type": "output",
+            "tokens": {"thought": 0},
+            "metadata": {
+                "native_interactions": True,
+                "interaction_id": "interaction-decision-v4",
+                "previous_interaction_id": "interaction-visit-v4",
+            },
+        },
+        {
+            "round": 1,
+            "stage": "image_only_discrepancy_judgment",
+            "action_type": "output",
+            "tokens": {"thought": 0},
+            "metadata": {
+                "native_interactions": True,
+                "interaction_id": "interaction-judgment-v4",
+                "previous_interaction_id": "interaction-decision-v4",
+            },
+        },
+    ]
+    trace = {
+        "image_id": "case-v4-audit",
+        "input_mode": "image_only",
+        "decision_policy_version": "discrepancy-first-v4",
+        "verdict": "fake",
+        "verdict_basis": basis,
+        "judgment": judgment,
+        "termination": "success",
+        "token_usage": {"thought": 0},
+        "state": {
+            "image_id": "case-v4-audit",
+            "input_mode": "image_only",
+            "decision_policy_version": "discrepancy-first-v4",
+            "termination": "success",
+            "token_usage": {"thought": 0},
+            "all_steps": steps,
+            "investigation_state": investigation,
+            "judgment": judgment,
+        },
+    }
+    path = tmp_path / "v4-trace.json"
+    path.write_text(json.dumps(trace, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
+
+
+def test_strict_audit_accepts_discrepancy_first_v4_trace(tmp_path: Path) -> None:
+    report = audit_trace(_v4_trace(tmp_path))
+
+    assert not report.failures(strict_scheduler=True)
+    assert report.stats["image_claims"] == 1
+    assert report.stats["material_discrepancies"] == 1
+    assert report.stats["v4_actions"] == 2
+
+
+def test_strict_audit_rejects_v4_discrepancy_alignment_tampering(
+    tmp_path: Path,
+) -> None:
+    trace_path = _v4_trace(tmp_path)
+    trace = json.loads(trace_path.read_text(encoding="utf-8"))
+    investigation = trace["state"]["investigation_state"]
+    investigation["material_discrepancies"][0]["visual_anchor_fact_ids"] = [
+        "fact-claim-v4"
+    ]
+    investigation["evidence"][0]["task_id"] = "unknown-task"
+    trace_path.write_text(
+        json.dumps(trace, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    report = audit_trace(trace_path)
+    codes = {issue.code for issue in report.failures(strict_scheduler=True)}
+
+    assert "V4_DISCREPANCY_ANCHOR_MISALIGNED" in codes
+    assert "V4_DISCREPANCY_EVIDENCE_OWNERSHIP_INVALID" in codes
+
+
 def _scripted_trace(tmp_path: Path) -> Path:
     test_scripted_image_only_complete_trajectory(tmp_path)
     return tmp_path / "traces" / "case_scripted_v3.json"

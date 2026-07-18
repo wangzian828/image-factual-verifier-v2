@@ -561,6 +561,18 @@ def score_process_trace(
     """Score one post-rollout trace against evaluator-private references."""
 
     state = _mapping(trace.get("state"))
+    policy_version = str(
+        trace.get("decision_policy_version")
+        or state.get("decision_policy_version")
+        or ""
+    )
+    if policy_version == "discrepancy-first-v4":
+        return _score_discrepancy_trace(
+            trace,
+            gold,
+            score_metadata=score_metadata,
+        )
+
     investigation = _mapping(state.get("investigation_state"))
     facts = _rows(investigation.get("facts"))
     decisive_ids = {
@@ -968,6 +980,231 @@ def score_process_trace(
             ),
             "engineering_error": engineering_error,
             "first_error": first_error,
+        },
+    }
+    return process_metrics, teacher_score
+
+
+def _score_discrepancy_trace(
+    trace: Mapping[str, Any],
+    gold: Mapping[str, Any],
+    *,
+    score_metadata: Mapping[str, Any] | None = None,
+) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    """Score v4 alignment and stop quality without legacy core-fact ownership."""
+
+    state = _mapping(trace.get("state"))
+    investigation = _mapping(state.get("investigation_state"))
+    claims = {
+        str(item.get("claim_id", "")): item
+        for item in _rows(investigation.get("image_claims"))
+        if str(item.get("claim_id", ""))
+    }
+    tasks = {
+        str(item.get("task_id", "")): item
+        for item in _rows(investigation.get("tasks"))
+        if str(item.get("task_id", ""))
+    }
+    evidence = {
+        str(item.get("evidence_id", "")): item
+        for item in _rows(investigation.get("evidence"))
+        if str(item.get("evidence_id", ""))
+    }
+    discrepancies = _rows(investigation.get("material_discrepancies"))
+    steps = _rows(state.get("all_steps"))
+    successful_calls = _successful_call_ids(steps)
+    decisive = [
+        item
+        for item in discrepancies
+        if str(item.get("materiality", "")) == "decisive"
+        and str(item.get("status", "")) == "established"
+    ]
+    basis = _mapping(
+        trace.get("verdict_basis")
+        or investigation.get("discrepancy_verdict_basis")
+    )
+    expected_verdict = LABEL_TO_VERDICT.get(
+        str(gold.get("factual_status", "")),
+        "",
+    )
+    engineering_error = (
+        str(trace.get("termination", "")) != "success"
+        or str(state.get("termination", "")) != "success"
+    )
+    result_correct = (
+        not engineering_error
+        and bool(expected_verdict)
+        and str(trace.get("verdict", "")) == expected_verdict
+    )
+
+    aligned_discrepancy_ids: List[str] = []
+    invalid_discrepancy_ids: List[str] = []
+    for item in discrepancies:
+        discrepancy_id = str(item.get("discrepancy_id", ""))
+        claim_ids = {
+            str(value) for value in item.get("affected_claim_ids", []) or []
+        }
+        anchor_ids = {
+            str(value)
+            for value in item.get("visual_anchor_fact_ids", []) or []
+        }
+        evidence_ids = {
+            str(value) for value in item.get("evidence_ids", []) or []
+        }
+        aligned = bool(
+            claim_ids
+            and claim_ids <= set(claims)
+            and evidence_ids
+            and evidence_ids <= set(evidence)
+            and all(
+                anchor_ids
+                & {
+                    str(value)
+                    for value in claims[claim_id].get("anchor_fact_ids", []) or []
+                }
+                for claim_id in claim_ids
+            )
+            and all(
+                any(
+                    claim_id
+                    in {
+                        str(value)
+                        for value in tasks.get(
+                            str(evidence[evidence_id].get("task_id", "")),
+                            {},
+                        ).get("claim_ids", [])
+                        or []
+                    }
+                    for evidence_id in evidence_ids
+                )
+                for claim_id in claim_ids
+            )
+        )
+        (aligned_discrepancy_ids if aligned else invalid_discrepancy_ids).append(
+            discrepancy_id
+        )
+
+    selected_evidence_ids = {
+        str(item) for item in basis.get("evidence_ids", []) or []
+    }
+    selected_discrepancy_ids = {
+        str(item) for item in basis.get("discrepancy_ids", []) or []
+    }
+    evidence_chain_recovery = (
+        1.0
+        if selected_evidence_ids
+        and selected_evidence_ids <= set(evidence)
+        and all(
+            str(evidence[evidence_id].get("function_call_id", ""))
+            in successful_calls
+            for evidence_id in selected_evidence_ids
+        )
+        else 0.0
+    )
+    discrepancy_alignment = (
+        len(aligned_discrepancy_ids) / len(discrepancies)
+        if discrepancies
+        else 1.0 if str(trace.get("verdict", "")) != "fake" else 0.0
+    )
+    if str(trace.get("verdict", "")) == "fake":
+        discrepancy_alignment = min(
+            discrepancy_alignment,
+            1.0
+            if selected_discrepancy_ids
+            and selected_discrepancy_ids <= set(aligned_discrepancy_ids)
+            else 0.0,
+        )
+    audits = _rows(investigation.get("discrepancy_coverage_audits"))
+    terminal = [
+        item
+        for item in audits
+        if item.get("complete") is True
+        and str(item.get("stop_reason", "")) == "verdict_determined"
+    ]
+    terminal_action_count = (
+        int(terminal[-1].get("action_count", 0) or 0) if terminal else -1
+    )
+    action_steps = [
+        item
+        for item in steps
+        if str(item.get("stage", ""))
+        in {
+            "image_only_discrepancy_investigation",
+            "image_only_visual_reinspection",
+        }
+        and str(item.get("action_type", "")) == "tool_call"
+    ]
+    post_verdict_actions = max(0, len(action_steps) - terminal_action_count)
+    stop_quality = (
+        1.0
+        if terminal and not post_verdict_actions
+        else 0.0
+    )
+    protocol_rejections = sum(
+        str(item.get("action_type", "")) in {"format_error", "output_rejected"}
+        for item in steps
+    )
+    training_exclusion_reasons: List[str] = []
+    if not result_correct:
+        training_exclusion_reasons.append("incorrect_result")
+    if engineering_error:
+        training_exclusion_reasons.append("engineering_error")
+    if evidence_chain_recovery < 1.0:
+        training_exclusion_reasons.append("evidence_chain_incomplete")
+    if discrepancy_alignment < 1.0:
+        training_exclusion_reasons.append("discrepancy_misaligned")
+    if stop_quality < 1.0:
+        training_exclusion_reasons.append("stop_quality_invalid")
+    if protocol_rejections:
+        training_exclusion_reasons.append("protocol_rejections")
+    if investigation.get("core_verdict_fact_id"):
+        training_exclusion_reasons.append("legacy_core_ownership")
+    training_eligible = not training_exclusion_reasons
+    process_metrics = {
+        "schema_version": "ifv-process-metrics-v4",
+        "case_id": str(gold.get("case_id") or trace.get("image_id") or ""),
+        "expected_verdict": expected_verdict,
+        "predicted_verdict": str(trace.get("verdict", "")),
+        "result_correct": result_correct,
+        "engineering_error": engineering_error,
+        "evidence_chain_recovery": round(evidence_chain_recovery, 6),
+        "discrepancy_alignment": round(discrepancy_alignment, 6),
+        "stop_quality": round(stop_quality, 6),
+        "image_claim_count": len(claims),
+        "material_discrepancy_count": len(discrepancies),
+        "aligned_discrepancy_count": len(aligned_discrepancy_ids),
+        "invalid_discrepancy_count": len(invalid_discrepancy_ids),
+        "post_determination_action_count": post_verdict_actions,
+        "tool_actions": int(investigation.get("action_count", 0) or 0),
+        "training_eligible": training_eligible,
+        "training_exclusion_reasons": training_exclusion_reasons,
+    }
+    components = {
+        "result_reward": 1.0 if result_correct else 0.0,
+        "evidence_chain_reward": round(evidence_chain_recovery, 6),
+        "discrepancy_alignment_reward": round(discrepancy_alignment, 6),
+        "stop_quality_reward": round(stop_quality, 6),
+        "protocol_penalty": -1.0 if protocol_rejections else 0.0,
+        "normalized_cost_penalty": round(
+            -0.25 * min(1.0, len(action_steps) / 24.0),
+            6,
+        ),
+    }
+    teacher_score = {
+        "schema_version": "ifv-trajectory-score-v4",
+        "case_id": process_metrics["case_id"],
+        "score_metadata": dict(score_metadata or {}),
+        "components": components,
+        "total": round(sum(components.values()), 6),
+        "training_eligible": training_eligible,
+        "training_exclusion_reasons": training_exclusion_reasons,
+        "diagnostics": {
+            "aligned_discrepancy_ids": aligned_discrepancy_ids,
+            "invalid_discrepancy_ids": invalid_discrepancy_ids,
+            "selected_discrepancy_ids": sorted(selected_discrepancy_ids),
+            "selected_evidence_ids": sorted(selected_evidence_ids),
+            "post_determination_action_count": post_verdict_actions,
+            "protocol_rejections": protocol_rejections,
         },
     }
     return process_metrics, teacher_score

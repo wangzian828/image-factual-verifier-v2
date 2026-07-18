@@ -28,6 +28,7 @@ from src.orchestrator.task_store import (
     apply_target_planning,
     state_from_bootstrap,
 )
+from test_frozen_v3_runtime import install_frozen_v3_runtime
 
 
 class StaticTool(BaseTool):
@@ -582,6 +583,7 @@ def test_image_only_workflow_persists_bootstrap_before_investigation_boundary(
         name: {"available": True, "error": ""}
         for name in orchestrator.all_tools
     }
+    install_frozen_v3_runtime(orchestrator)
     workflow._orchestrator = orchestrator
 
     with pytest.raises(RuntimeError, match="controlled investigation boundary"):

@@ -672,6 +672,456 @@ def _audit_image_only_interaction_chains(
     report.stats["image_only_interaction_segments"] = root_count
 
 
+def _audit_discrepancy_interaction_chains(
+    steps: Sequence[Mapping[str, Any]],
+    report: TraceReport,
+) -> None:
+    stages = {
+        "image_account_planning",
+        "image_only_discrepancy_investigation",
+        "image_only_discrepancy_decision",
+        "image_only_discrepancy_judgment",
+    }
+    native = [
+        (index, step)
+        for index, step in enumerate(steps)
+        if str(step.get("stage", "")) in stages
+        and _mapping(step.get("metadata")).get("native_interactions")
+    ]
+    if not native:
+        _issue(
+            report,
+            "V4_INTERACTIONS_MISSING",
+            "v4 trace contains no native main-chain interactions",
+            location="state.all_steps",
+        )
+        return
+    previous = ""
+    for position, (index, step) in enumerate(native):
+        metadata = _mapping(step.get("metadata"))
+        interaction_id = str(metadata.get("interaction_id", "")).strip()
+        raw_parent = metadata.get("previous_interaction_id")
+        parent = "" if raw_parent is None else str(raw_parent).strip()
+        location = _step_label(index, step)
+        if not interaction_id:
+            _issue(
+                report,
+                "INTERACTION_ID_MISSING",
+                "v4 main-chain interaction_id is missing",
+                location=location,
+            )
+            continue
+        if position == 0:
+            if parent:
+                _issue(
+                    report,
+                    "INTERACTION_CHAIN_ROOT_INVALID",
+                    "v4 Image Account Planning root must have a null parent",
+                    location=location,
+                )
+            if str(step.get("stage", "")) != "image_account_planning":
+                _issue(
+                    report,
+                    "INTERACTION_CHAIN_ROOT_STAGE_INVALID",
+                    "v4 main chain must begin at Image Account Planning",
+                    location=location,
+                )
+        elif parent != previous:
+            _issue(
+                report,
+                "INTERACTION_CHAIN_BROKEN",
+                f"expected previous_interaction_id {previous!r}, got {parent!r}",
+                location=location,
+            )
+        previous = interaction_id
+    report.stats["v4_interaction_steps"] = len(native)
+
+
+def _audit_discrepancy_trace(
+    trace: Mapping[str, Any],
+    state: Mapping[str, Any],
+    steps: Sequence[Mapping[str, Any]],
+    report: TraceReport,
+) -> None:
+    investigation = _mapping(state.get("investigation_state"))
+    if not investigation:
+        _issue(
+            report,
+            "V4_STATE_MISSING",
+            "v4 trace must contain state.investigation_state",
+            location="state.investigation_state",
+        )
+        return
+    if investigation.get("core_verdict_fact_id"):
+        _issue(
+            report,
+            "V4_LEGACY_CORE_ACTIVE",
+            "v4 main state must not select core_verdict_fact_id",
+            location="state.investigation_state.core_verdict_fact_id",
+        )
+
+    facts = _rows(investigation.get("facts"))
+    tasks = _rows(investigation.get("tasks"))
+    evidence = _rows(investigation.get("evidence"))
+    findings = _rows(investigation.get("findings"))
+    claims = _rows(investigation.get("image_claims"))
+    hypotheses = _rows(investigation.get("search_hypotheses"))
+    assessments = _rows(investigation.get("claim_assessments"))
+    discrepancies = _rows(investigation.get("material_discrepancies"))
+    decisions = _rows(investigation.get("discrepancy_decisions"))
+    audits = _rows(investigation.get("discrepancy_coverage_audits"))
+
+    fact_by_id = _unique_index(
+        facts,
+        id_field="fact_id",
+        location_prefix="state.investigation_state.facts",
+        report=report,
+    )
+    task_by_id = _unique_index(
+        tasks,
+        id_field="task_id",
+        location_prefix="state.investigation_state.tasks",
+        report=report,
+    )
+    evidence_by_id = _unique_index(
+        evidence,
+        id_field="evidence_id",
+        location_prefix="state.investigation_state.evidence",
+        report=report,
+    )
+    finding_by_id = _unique_index(
+        findings,
+        id_field="finding_id",
+        location_prefix="state.investigation_state.findings",
+        report=report,
+    )
+    claim_by_id = _unique_index(
+        claims,
+        id_field="claim_id",
+        location_prefix="state.investigation_state.image_claims",
+        report=report,
+    )
+    hypothesis_by_id = _unique_index(
+        hypotheses,
+        id_field="hypothesis_id",
+        location_prefix="state.investigation_state.search_hypotheses",
+        report=report,
+    )
+    assessment_by_id = _unique_index(
+        assessments,
+        id_field="assessment_id",
+        location_prefix="state.investigation_state.claim_assessments",
+        report=report,
+    )
+    discrepancy_by_id = _unique_index(
+        discrepancies,
+        id_field="discrepancy_id",
+        location_prefix="state.investigation_state.material_discrepancies",
+        report=report,
+    )
+    decision_by_id = _unique_index(
+        decisions,
+        id_field="decision_id",
+        location_prefix="state.investigation_state.discrepancy_decisions",
+        report=report,
+    )
+    _unique_index(
+        audits,
+        id_field="audit_id",
+        location_prefix="state.investigation_state.discrepancy_coverage_audits",
+        report=report,
+    )
+
+    if not claim_by_id:
+        _issue(report, "V4_CLAIMS_MISSING", "v4 trace requires ImageClaims")
+    high_claim_ids = {
+        claim_id
+        for claim_id, claim in claim_by_id.items()
+        if str(claim.get("salience", "")) == "high"
+    }
+    if not high_claim_ids:
+        _issue(
+            report,
+            "V4_HIGH_SALIENCE_CLAIM_MISSING",
+            "v4 Image Account requires a high-salience ImageClaim",
+        )
+    for claim_id, claim in claim_by_id.items():
+        location = _location("state.investigation_state.image_claims", claim_id)
+        claim_fact_id = str(claim.get("fact_id", "")).strip()
+        if claim_fact_id not in fact_by_id:
+            _issue(
+                report,
+                "V4_CLAIM_FACT_UNKNOWN",
+                f"ImageClaim cites unknown fact {claim_fact_id!r}",
+                location=location,
+            )
+        anchor_ids = {str(item) for item in claim.get("anchor_fact_ids", []) or []}
+        invalid = sorted(
+            item
+            for item in anchor_ids
+            if item not in fact_by_id
+            or str(_mapping(fact_by_id[item].get("origin")).get("type", ""))
+            not in {"input_image", "ocr"}
+        )
+        if not anchor_ids or invalid:
+            _issue(
+                report,
+                "V4_CLAIM_ANCHOR_INVALID",
+                "ImageClaim anchors must be existing pixel/OCR VisualFacts",
+                location=location,
+            )
+
+    for hypothesis_id, hypothesis in hypothesis_by_id.items():
+        location = _location(
+            "state.investigation_state.search_hypotheses",
+            hypothesis_id,
+        )
+        owned_claim_ids = {
+            str(item) for item in hypothesis.get("claim_ids", []) or []
+        }
+        if not owned_claim_ids or not owned_claim_ids <= set(claim_by_id):
+            _issue(
+                report,
+                "V4_HYPOTHESIS_CLAIM_INVALID",
+                "SearchHypothesis must reference existing ImageClaims",
+                location=location,
+            )
+        task_id = str(hypothesis.get("task_id", "")).strip()
+        task = task_by_id.get(task_id)
+        if (
+            task is None
+            or str(task.get("hypothesis_id", "")).strip() != hypothesis_id
+            or {str(item) for item in task.get("claim_ids", []) or []}
+            != owned_claim_ids
+        ):
+            _issue(
+                report,
+                "V4_HYPOTHESIS_TASK_OWNERSHIP_INVALID",
+                "SearchHypothesis task must preserve claim/hypothesis ownership",
+                location=location,
+            )
+
+    _audit_evidence_calls(
+        evidence,
+        steps,
+        report,
+        location_prefix="state.investigation_state.evidence",
+        tool_field="tool_name",
+        stat_key="v4_successful_evidence_calls",
+    )
+    for assessment_id, assessment in assessment_by_id.items():
+        location = _location(
+            "state.investigation_state.claim_assessments",
+            assessment_id,
+        )
+        claim_id = str(assessment.get("claim_id", "")).strip()
+        selected = {str(item) for item in assessment.get("evidence_ids", []) or []}
+        if claim_id not in claim_by_id:
+            _issue(
+                report,
+                "V4_ASSESSMENT_CLAIM_UNKNOWN",
+                f"ClaimAssessment cites unknown claim {claim_id!r}",
+                location=location,
+            )
+        if not selected <= set(evidence_by_id):
+            _issue(
+                report,
+                "V4_ASSESSMENT_EVIDENCE_UNKNOWN",
+                "ClaimAssessment cites unknown Evidence",
+                location=location,
+            )
+
+    for discrepancy_id, discrepancy in discrepancy_by_id.items():
+        location = _location(
+            "state.investigation_state.material_discrepancies",
+            discrepancy_id,
+        )
+        affected = {
+            str(item) for item in discrepancy.get("affected_claim_ids", []) or []
+        }
+        anchors = {
+            str(item)
+            for item in discrepancy.get("visual_anchor_fact_ids", []) or []
+        }
+        evidence_ids = {
+            str(item) for item in discrepancy.get("evidence_ids", []) or []
+        }
+        if not affected or not affected <= set(claim_by_id):
+            _issue(
+                report,
+                "V4_DISCREPANCY_CLAIM_INVALID",
+                "MaterialDiscrepancy must reference existing ImageClaims",
+                location=location,
+            )
+        if not evidence_ids or not evidence_ids <= set(evidence_by_id):
+            _issue(
+                report,
+                "V4_DISCREPANCY_EVIDENCE_INVALID",
+                "MaterialDiscrepancy must cite existing Evidence",
+                location=location,
+            )
+        for claim_id in affected & set(claim_by_id):
+            claim_anchors = {
+                str(item)
+                for item in claim_by_id[claim_id].get("anchor_fact_ids", []) or []
+            }
+            if not anchors & claim_anchors:
+                _issue(
+                    report,
+                    "V4_DISCREPANCY_ANCHOR_MISALIGNED",
+                    f"Discrepancy is not visibly anchored to claim {claim_id!r}",
+                    location=location,
+                )
+            if not any(
+                claim_id
+                in {
+                    str(item)
+                    for item in task_by_id.get(
+                        str(evidence_by_id[evidence_id].get("task_id", "")),
+                        {},
+                    ).get("claim_ids", [])
+                    or []
+                }
+                for evidence_id in evidence_ids & set(evidence_by_id)
+            ):
+                _issue(
+                    report,
+                    "V4_DISCREPANCY_EVIDENCE_OWNERSHIP_INVALID",
+                    f"Discrepancy Evidence is not owned by claim {claim_id!r}",
+                    location=location,
+                )
+
+    for decision_id, decision in decision_by_id.items():
+        location = _location(
+            "state.investigation_state.discrepancy_decisions",
+            decision_id,
+        )
+        reviewed = {
+            str(item) for item in decision.get("reviewed_evidence_ids", []) or []
+        }
+        output = _mapping(decision.get("output"))
+        cited = {
+            str(item)
+            for row in _rows(output.get("claim_assessments"))
+            for item in row.get("selected_evidence_ids", []) or []
+        }
+        cited.update(
+            str(item)
+            for item in _mapping(output.get("material_discrepancy")).get(
+                "evidence_ids",
+                [],
+            )
+            or []
+        )
+        if not reviewed <= set(evidence_by_id) or not cited <= reviewed:
+            _issue(
+                report,
+                "V4_DECISION_EVIDENCE_SCOPE_INVALID",
+                "Discrepancy Decision may cite only reviewed existing Evidence",
+                location=location,
+            )
+
+    basis = _mapping(
+        trace.get("verdict_basis")
+        or investigation.get("discrepancy_verdict_basis")
+    )
+    judgment = _mapping(
+        trace.get("judgment")
+        or state.get("judgment")
+        or investigation.get("discrepancy_judgment")
+    )
+    verdict = str(trace.get("verdict", judgment.get("verdict", ""))).strip()
+    if str(basis.get("policy_rule_id", "")) != "discrepancy-first-v4":
+        _issue(
+            report,
+            "V4_VERDICT_BASIS_POLICY_INVALID",
+            "v4 verdict_basis must use discrepancy-first-v4",
+            location="verdict_basis.policy_rule_id",
+        )
+    if verdict == "fake" and not basis.get("discrepancy_ids"):
+        _issue(
+            report,
+            "V4_FAKE_BASIS_DISCREPANCY_MISSING",
+            "fake verdict requires a selected MaterialDiscrepancy",
+            location="verdict_basis.discrepancy_ids",
+        )
+    basis_checks = (
+        ("claim", "claim_ids", claim_by_id),
+        ("discrepancy", "discrepancy_ids", discrepancy_by_id),
+        ("evidence", "evidence_ids", evidence_by_id),
+        ("finding", "finding_ids", finding_by_id),
+        ("visual anchor", "visual_anchor_fact_ids", fact_by_id),
+    )
+    for name, field, known in basis_checks:
+        selected = {str(item) for item in basis.get(field, []) or []}
+        if not selected <= set(known):
+            _issue(
+                report,
+                f"V4_VERDICT_{field.upper()}_UNKNOWN",
+                f"v4 verdict basis cites unknown {name} IDs",
+                location=f"verdict_basis.{field}",
+            )
+        judgment_field = f"selected_{field}"
+        if {str(item) for item in judgment.get(judgment_field, []) or []} != selected:
+            _issue(
+                report,
+                "V4_JUDGMENT_BASIS_MISMATCH",
+                f"Judgment {judgment_field} must match verdict_basis",
+                location=f"judgment.{judgment_field}",
+            )
+    if str(judgment.get("verdict", "")) != verdict:
+        _issue(
+            report,
+            "V4_JUDGMENT_VERDICT_MISMATCH",
+            "Judgment verdict must match compiled verdict",
+            location="judgment.verdict",
+        )
+
+    terminal_audits = [
+        item
+        for item in audits
+        if item.get("complete") is True
+        and str(item.get("stop_reason", "")) == "verdict_determined"
+    ]
+    if not terminal_audits:
+        _issue(
+            report,
+            "V4_TERMINAL_COVERAGE_MISSING",
+            "v4 successful trace requires complete terminal Coverage",
+        )
+    else:
+        terminal_action_count = int(terminal_audits[-1].get("action_count", 0) or 0)
+        action_steps = [
+            step
+            for step in steps
+            if str(step.get("stage", ""))
+            in {
+                "image_only_discrepancy_investigation",
+                "image_only_visual_reinspection",
+            }
+            and step.get("action_type") == "tool_call"
+        ]
+        if len(action_steps) > terminal_action_count:
+            _issue(
+                report,
+                "POST_DETERMINATION_ACTION",
+                "v4 trace contains a tool action after terminal Coverage",
+                category=SCHEDULER,
+            )
+
+    report.stats.update(
+        {
+            "image_claims": len(claims),
+            "search_hypotheses": len(hypotheses),
+            "claim_assessments": len(assessments),
+            "material_discrepancies": len(discrepancies),
+            "discrepancy_decisions": len(decisions),
+            "v4_actions": int(investigation.get("action_count", 0) or 0),
+        }
+    )
+    _audit_discrepancy_interaction_chains(steps, report)
+
+
 def _audit_image_only_trace(
     trace: Mapping[str, Any],
     state: Mapping[str, Any],
@@ -1987,7 +2437,15 @@ def audit_trace(path: Path) -> TraceReport:
 
     _audit_termination(payload, state, report)
     _audit_thought_tokens(payload, state, steps, report)
-    _audit_image_only_trace(payload, state, steps, report)
+    policy_version = str(
+        payload.get("decision_policy_version")
+        or state.get("decision_policy_version")
+        or ""
+    )
+    if policy_version == "discrepancy-first-v4":
+        _audit_discrepancy_trace(payload, state, steps, report)
+    else:
+        _audit_image_only_trace(payload, state, steps, report)
     _audit_leaks(payload, report)
     _audit_rejections(steps, report)
     return report

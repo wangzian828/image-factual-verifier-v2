@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from src.orchestrator.investigation_models import (
+    DiscrepancyJudgment,
     Finding,
     ImageOnlyInvestigationState,
     ImageOnlyJudgment,
@@ -79,7 +80,7 @@ class VerificationState:
     image_id: str = ""
     runtime_case: Optional[ImageOnlyRuntimeCase] = None
     input_mode: str = "image_only"
-    decision_policy_version: str = "reinspect-v2"
+    decision_policy_version: str = "discrepancy-first-v4"
     investigation_state: Optional[ImageOnlyInvestigationState] = None
     investigation_brief: Optional[InvestigationBrief] = None
     visual_entities: List[VisualEntity] = field(default_factory=list)
@@ -88,7 +89,7 @@ class VerificationState:
     findings: List[Finding] = field(default_factory=list)
     retrieval_anchors: List[RetrievalAnchor] = field(default_factory=list)
     perception: Optional[PerceptionReport] = None
-    judgment: Optional[ImageOnlyJudgment] = None
+    judgment: Optional[ImageOnlyJudgment | DiscrepancyJudgment] = None
     all_steps: List[Any] = field(default_factory=list)
     stage_timings: Dict[str, float] = field(default_factory=dict)
     total_tool_calls: int = 0

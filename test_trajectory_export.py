@@ -16,6 +16,7 @@ from src.trajectory.visual_reinspection_exporter import (
 from test_image_only_trajectory import (
     test_scripted_image_only_complete_trajectory,
 )
+from test_audit_real_trace import _v4_trace
 
 
 def _trace(tmp_path: Path) -> dict:
@@ -68,6 +69,78 @@ def test_exporter_uses_actual_policy_boundaries_and_aligned_masks(
     }
     assert "__claim_text" not in json.dumps(react_actions)
     assert examples[-1].terminated is True
+
+
+def test_v4_exporter_uses_discrepancy_stage_labels_and_quality_gate(
+    tmp_path: Path,
+) -> None:
+    trace = json.loads(_v4_trace(tmp_path).read_text(encoding="utf-8"))
+    for step in trace["state"]["all_steps"]:
+        metadata = step.setdefault("metadata", {})
+        metadata["policy_input"] = {
+            "input_payload": {
+                "stage": step["stage"],
+                "interaction_id": metadata["interaction_id"],
+            }
+        }
+        metadata["policy_action"] = (
+            {"type": "tool_call", "name": step["tool_name"], "arguments": {}}
+            if step["action_type"] == "tool_call"
+            else {"type": "output", "value": {"stage": step["stage"]}}
+        )
+
+    examples = export_policy_examples(trace)
+
+    assert [item.example_type for item in examples] == [
+        "image_account_planning",
+        "react",
+        "react",
+        "discrepancy_decision",
+        "judgment",
+    ]
+    assert all(item.trajectory_version == "ifv-policy-v2" for item in examples)
+    assert all(set(item.policy_action_loss_mask) == {1} for item in examples)
+
+    trace["state"]["investigation_state"]["material_discrepancies"][0][
+        "visual_anchor_fact_ids"
+    ] = ["fact-claim-v4"]
+    try:
+        export_policy_examples(trace)
+    except ValueError as exc:
+        assert "unanchored discrepancy" in str(exc)
+    else:
+        raise AssertionError("v4 exporter must reject discrepancy misalignment")
+
+
+def test_v4_process_scorer_uses_discrepancy_alignment_and_stop_quality(
+    tmp_path: Path,
+) -> None:
+    trace = json.loads(_v4_trace(tmp_path).read_text(encoding="utf-8"))
+    gold = {
+        "case_id": trace["image_id"],
+        "factual_status": "refuted",
+        "decisive_facts": [],
+    }
+
+    metrics, score = score_process_trace(trace, gold)
+
+    assert metrics["schema_version"] == "ifv-process-metrics-v4"
+    assert metrics["result_correct"] is True
+    assert metrics["evidence_chain_recovery"] == 1.0
+    assert metrics["discrepancy_alignment"] == 1.0
+    assert metrics["stop_quality"] == 1.0
+    assert metrics["training_eligible"] is True
+    assert score["schema_version"] == "ifv-trajectory-score-v4"
+
+    trace["state"]["investigation_state"]["material_discrepancies"][0][
+        "visual_anchor_fact_ids"
+    ] = ["fact-claim-v4"]
+    broken_metrics, broken_score = score_process_trace(trace, gold)
+    assert broken_metrics["discrepancy_alignment"] == 0.0
+    assert broken_metrics["training_eligible"] is False
+    assert "discrepancy_misaligned" in broken_score[
+        "training_exclusion_reasons"
+    ]
 
 
 def test_fatal_boundary_is_zero_masked(tmp_path: Path) -> None:

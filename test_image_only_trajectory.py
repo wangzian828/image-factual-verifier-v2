@@ -26,6 +26,7 @@ from src.orchestrator.task_store import (
 )
 from src.tools.base import BaseTool
 from src.workflow import VerificationWorkflow, WorkflowConfig
+from test_frozen_v3_runtime import install_frozen_v3_runtime
 
 
 def _completed(interaction_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -747,8 +748,10 @@ def test_scripted_image_only_complete_trajectory(tmp_path: Path) -> None:
         WorkflowConfig(
             output_dir=str(tmp_path / "traces"),
             save_traces=True,
+            decision_policy_version="reinspect-v2",
         )
     )
+    install_frozen_v3_runtime(orchestrator)
     workflow._orchestrator = orchestrator
 
     result = asyncio.run(
@@ -1017,8 +1020,10 @@ def test_scripted_screenshot_source_record_trajectory(
         WorkflowConfig(
             output_dir=str(tmp_path / "screenshot-traces"),
             save_traces=True,
+            decision_policy_version="reinspect-v2",
         )
     )
+    install_frozen_v3_runtime(orchestrator)
     workflow._orchestrator = orchestrator
 
     result = asyncio.run(

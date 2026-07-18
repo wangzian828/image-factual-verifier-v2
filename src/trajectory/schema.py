@@ -12,7 +12,9 @@ class StrictModel(BaseModel):
 
 
 class PolicyExample(StrictModel):
-    trajectory_version: Literal["ifv-policy-v1"] = "ifv-policy-v1"
+    trajectory_version: Literal["ifv-policy-v1", "ifv-policy-v2"] = (
+        "ifv-policy-v1"
+    )
     tokenizer_id: str = Field(min_length=1, max_length=200)
     episode_id: str = Field(min_length=1, max_length=200)
     step_id: str = Field(min_length=1, max_length=300)
@@ -26,8 +28,10 @@ class PolicyExample(StrictModel):
     )
     example_type: Literal[
         "planning",
+        "image_account_planning",
         "react",
         "evidence_decision",
+        "discrepancy_decision",
         "query_concept_extraction",
         "query_replan",
         "reflection",

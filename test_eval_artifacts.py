@@ -65,7 +65,7 @@ def _build_release(tmp_path: Path) -> tuple[Path, Path]:
             "release_stage": "development_subset",
             "runtime_contract_version": "ifv-image-only-runtime-v1",
             "input_mode": "image_only",
-            "decision_policy_version": "reinspect-v2",
+            "decision_policy_version": "discrepancy-first-v4",
             "runtime_contract": {
                 "allowed_keys": ["case_id", "image_path", "image_sha256"],
                 "private_keys_absent": True,
@@ -133,13 +133,13 @@ def test_v03_eval_keeps_gold_post_rollout_and_writes_scorer_predictions(
                     {
                         "image_id": case.case_id,
                         "input_mode": "image_only",
-                        "decision_policy_version": "reinspect-v2",
+                        "decision_policy_version": "discrepancy-first-v4",
                         "verdict": "real",
                         "termination": "success",
                         "state": {
                             "image_id": case.case_id,
                             "input_mode": "image_only",
-                            "decision_policy_version": "reinspect-v2",
+                            "decision_policy_version": "discrepancy-first-v4",
                             "runtime_case": case.model_dump(),
                             "investigation_state": {
                                 "facts": [],
@@ -220,7 +220,9 @@ def test_v03_eval_keeps_gold_post_rollout_and_writes_scorer_predictions(
     assert manifest["status"] == "completed"
     assert manifest["benchmark"]["release_id"] == "image-only-eval-fixture"
     assert manifest["benchmark"]["input_mode"] == "image_only"
-    assert manifest["benchmark"]["decision_policy_version"] == "reinspect-v2"
+    assert manifest["benchmark"]["decision_policy_version"] == (
+        "discrepancy-first-v4"
+    )
     assert manifest["benchmark"]["evaluation_gold"]["sha256"] == _sha256(gold)
     assert manifest["source_access_policy"]["active"] is False
     assert manifest["artifacts"]["run_results"] == "run_results.jsonl"

@@ -51,7 +51,7 @@ class WorkflowConfig:
     output_dir: str = field(default_factory=default_trace_dir)
     save_traces: bool = True
     source_access_policy: Optional[SourceAccessPolicy] = None
-    decision_policy_version: str = "reinspect-v2"
+    decision_policy_version: str = "discrepancy-first-v4"
 
     def __post_init__(self) -> None:
         resolved = resolve_provider_settings(

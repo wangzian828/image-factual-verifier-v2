@@ -10,21 +10,29 @@ from typing import Any, Dict, Iterable, Iterator, List, Mapping, Sequence
 
 from src.orchestrator.investigation_models import (
     BootstrapInvestigation,
+    ClaimAssessment,
+    DiscrepancyDecisionOutput,
+    DiscrepancyDecisionRecord,
     EvidenceDecisionOutput,
     EvidenceDecisionRecord,
     FactOrigin,
     Finding,
     EvidenceGap,
+    ImageAccountPlanningOutput,
+    ImageClaim,
     ImageOnlyInvestigationState,
     InvestigationDiscovery,
     InvestigationEvidence,
     InvestigationFailure,
+    MaterialDiscrepancy,
+    NewSearchHypothesis,
     QueryConceptExtractionOutput,
     QueryReplanOutput,
     QueryReplanRecord,
     ReflectionOutput,
     ReflectionRecord,
     ResearchTask,
+    SearchHypothesis,
     TargetFactProposal,
     TargetPlanningOutput,
     VisualFact,
@@ -55,6 +63,10 @@ MAX_CORE_FACT_REFINEMENTS = 1
 MAX_INSPECTION_CANDIDATES_PER_BATCH = 4
 MAX_INSPECTION_ATTEMPTS_PER_BATCH = 2
 MAX_VISUAL_REINSPECTIONS = 2
+MAX_IMAGE_CLAIMS = 3
+MAX_SEARCH_HYPOTHESES = 12
+MAX_NEW_HYPOTHESES_PER_DECISION = 3
+MAX_V4_VISUAL_REINSPECTIONS = 1
 
 
 def stable_id(prefix: str, *parts: object) -> str:
@@ -425,10 +437,35 @@ def record_tool_observation(
         raise RuntimeError(
             f"image-only tool call {call_id} references unknown task_id={task_id!r}"
         )
+    if state.image_claims and (
+        not task.claim_ids
+        or (
+            task.hypothesis_id is None
+            and not any(
+                item.task_id == task.task_id
+                for item in state.visual_reinspections
+            )
+        )
+    ):
+        raise RuntimeError(
+            "v4 investigation actions require claim/hypothesis ownership or "
+            "an accepted visual-reinspection task"
+        )
 
     state.action_count += 1
     task.attempt_count += 1
     task.status = "active"
+    hypothesis = next(
+        (
+            item
+            for item in state.search_hypotheses
+            if item.hypothesis_id == task.hypothesis_id
+        ),
+        None,
+    )
+    if hypothesis is not None:
+        hypothesis.attempt_count += 1
+        hypothesis.status = "active"
     serialized = str(getattr(step, "tool_result", "") or "")
     try:
         data, succeeded = parse_tool_result(serialized)
@@ -560,6 +597,15 @@ def record_tool_observation(
         and not _task_has_remaining_material_route(state, task)
     ):
         task.status = "exhausted"
+    if hypothesis is not None:
+        if task.status in {"resolved", "exhausted", "blocked", "superseded"}:
+            hypothesis.status = (
+                "retired" if task.status == "superseded" else "exhausted"
+            )
+        elif not _task_has_remaining_material_route(state, task):
+            hypothesis.status = "exhausted"
+            if task.status in {"active", "pending"}:
+                task.status = "exhausted"
     return {
         "action_count": state.action_count,
         "task_id": task.task_id,
@@ -574,6 +620,733 @@ def record_tool_observation(
             if fact.fact_id in task.fact_ids
         },
     }
+
+
+def apply_image_account_planning(
+    state: ImageOnlyInvestigationState,
+    output: ImageAccountPlanningOutput,
+) -> Dict[str, Any]:
+    """Atomically install the image account, claims, hypotheses, and tasks."""
+
+    candidate = state.model_copy(deep=True)
+    if candidate.image_claims or candidate.search_hypotheses:
+        return {
+            "accepted": False,
+            "rejected_reason": "image account planning has already been applied",
+        }
+
+    fact_by_id = {fact.fact_id: fact for fact in candidate.facts}
+    if len(candidate.facts) + len(output.image_claims) > 72:
+        return {"accepted": False, "rejected_reason": "VisualFact budget exhausted"}
+    if len(output.image_claims) > MAX_IMAGE_CLAIMS:
+        return {"accepted": False, "rejected_reason": "image claim budget exhausted"}
+    if len(candidate.search_hypotheses) + len(output.search_hypotheses) > MAX_SEARCH_HYPOTHESES:
+        return {"accepted": False, "rejected_reason": "search hypothesis budget exhausted"}
+    if len(candidate.tasks) + len(output.search_hypotheses) > TOTAL_TASKS_MAX:
+        return {"accepted": False, "rejected_reason": "total task budget exhausted"}
+
+    planning_claim_keys = {item.claim_key for item in output.image_claims}
+    covered_claim_keys = {
+        claim_key
+        for hypothesis in output.search_hypotheses
+        for claim_key in hypothesis.claim_keys
+    }
+    high_claim_keys = {
+        item.claim_key
+        for item in output.image_claims
+        if item.salience == "high"
+    }
+    if not high_claim_keys or not high_claim_keys <= covered_claim_keys:
+        return {
+            "accepted": False,
+            "rejected_reason": (
+                "every high-salience image claim requires a search hypothesis"
+            ),
+        }
+    if candidate.proposed_verdict in {"fake", "real", "unverifiable"}:
+        return {
+            "accepted": False,
+            "rejected_reason": "image account planning cannot run after verdict",
+        }
+    if not covered_claim_keys <= planning_claim_keys:
+        return {
+            "accepted": False,
+            "rejected_reason": "search hypothesis cites unknown planning claim",
+        }
+    for index, proposal in enumerate(output.search_hypotheses):
+        if any(
+            set(prior.claim_keys) == set(proposal.claim_keys)
+            and _hypothesis_text_equivalent(prior.statement, proposal.statement)
+            for prior in output.search_hypotheses[:index]
+        ):
+            return {
+                "accepted": False,
+                "rejected_reason": "planning contains duplicate search routes",
+            }
+
+    claim_by_key: Dict[str, ImageClaim] = {}
+    new_fact_ids: List[str] = []
+    new_claim_ids: List[str] = []
+    new_hypothesis_ids: List[str] = []
+    new_task_ids: List[str] = []
+    for proposal in output.image_claims:
+        anchors = [fact_by_id.get(fact_id) for fact_id in proposal.anchor_fact_ids]
+        if any(anchor is None for anchor in anchors):
+            return {
+                "accepted": False,
+                "rejected_reason": "image claim cites unknown visual anchor",
+            }
+        if any(
+            anchor.origin.type not in {"input_image", "ocr"}
+            for anchor in anchors
+            if anchor is not None
+        ):
+            return {
+                "accepted": False,
+                "rejected_reason": "image claim anchor is not image/OCR grounded",
+            }
+        anchor = anchors[0]
+        assert anchor is not None
+        fact_id = stable_id(
+            "vf", candidate.brief.case_id, "image-claim", proposal.claim_key
+        )
+        claim_id = stable_id(
+            "claim", candidate.brief.case_id, proposal.claim_key
+        )
+        fact = VisualFact(
+            fact_id=fact_id,
+            kind=proposal.kind,
+            statement=proposal.statement,
+            subject_entity_id=anchor.subject_entity_id,
+            predicate=proposal.predicate,
+            object_entity_id=anchor.object_entity_id,
+            status="active",
+            basis_ids=list(dict.fromkeys(proposal.anchor_fact_ids))[:12],
+            decision_relevance="supporting",
+            origin=FactOrigin(
+                type=(
+                    "ocr"
+                    if any(item is not None and item.origin.type == "ocr" for item in anchors)
+                    else "input_image"
+                ),
+                origin_ids=list(dict.fromkeys(proposal.anchor_fact_ids))[:8],
+            ),
+        )
+        claim = ImageClaim(
+            claim_id=claim_id,
+            fact_id=fact_id,
+            statement=proposal.statement,
+            anchor_fact_ids=list(dict.fromkeys(proposal.anchor_fact_ids)),
+            salience=proposal.salience,
+        )
+        candidate.facts.append(fact)
+        candidate.image_claims.append(claim)
+        fact_by_id[fact_id] = fact
+        claim_by_key[proposal.claim_key] = claim
+        new_fact_ids.append(fact_id)
+        new_claim_ids.append(claim_id)
+
+    for proposal in output.search_hypotheses:
+        claims = [claim_by_key.get(key) for key in proposal.claim_keys]
+        if any(claim is None for claim in claims):
+            return {
+                "accepted": False,
+                "rejected_reason": "search hypothesis cites unknown planning claim",
+            }
+        claim_ids = [claim.claim_id for claim in claims if claim is not None]
+        hypothesis_id = stable_id(
+            "hypothesis", candidate.brief.case_id, proposal.hypothesis_key
+        )
+        task_id = stable_id("task", hypothesis_id, "claim-route")
+        hypothesis = SearchHypothesis(
+            hypothesis_id=hypothesis_id,
+            claim_ids=claim_ids,
+            statement=proposal.statement,
+            queries=list(dict.fromkeys(proposal.queries)),
+            expected_information=proposal.expected_information,
+            suggested_tools=list(dict.fromkeys(proposal.suggested_tools)),
+            priority=proposal.priority,
+            task_id=task_id,
+        )
+        fact_ids = [claim.fact_id for claim in claims if claim is not None]
+        task = ResearchTask(
+            task_id=task_id,
+            fact_ids=fact_ids,
+            claim_ids=claim_ids,
+            hypothesis_id=hypothesis_id,
+            question=" ".join(
+                claim_proposal.verification_question
+                for claim_proposal in output.image_claims
+                if claim_proposal.claim_key in proposal.claim_keys
+            ),
+            purpose=proposal.expected_information,
+            priority=proposal.priority,
+            status="active",
+            origin_ids=list(dict.fromkeys([hypothesis_id, *claim_ids, *fact_ids]))[:12],
+            suggested_tools=list(dict.fromkeys(proposal.suggested_tools)),
+            suggested_queries=list(dict.fromkeys(proposal.queries)),
+        )
+        candidate.search_hypotheses.append(hypothesis)
+        candidate.tasks.append(task)
+        for claim in claims:
+            if claim is not None and task_id not in claim.task_ids:
+                claim.task_ids.append(task_id)
+        new_hypothesis_ids.append(hypothesis_id)
+        new_task_ids.append(task_id)
+
+    candidate.image_account_summary = output.account_summary
+    try:
+        validated = ImageOnlyInvestigationState.model_validate(candidate.model_dump())
+    except Exception as exc:
+        return {
+            "accepted": False,
+            "rejected_reason": f"invalid image account state: {exc}",
+        }
+    _replace_state(state, validated)
+    return {
+        "accepted": True,
+        "accepted_fact_ids": new_fact_ids,
+        "accepted_claim_ids": new_claim_ids,
+        "accepted_hypothesis_ids": new_hypothesis_ids,
+        "accepted_task_ids": new_task_ids,
+    }
+
+
+def apply_discrepancy_decision(
+    state: ImageOnlyInvestigationState,
+    output: DiscrepancyDecisionOutput,
+    *,
+    reviewed_evidence_ids: Sequence[str],
+    trigger: str,
+) -> Dict[str, Any]:
+    """Validate a discrepancy checkpoint on a copy, then commit it atomically."""
+
+    candidate = state.model_copy(deep=True)
+    if candidate.proposed_verdict in {"fake", "real", "unverifiable"}:
+        return {
+            "accepted": False,
+            "rejected_reason": "no discrepancy decision is allowed after verdict",
+        }
+    if not candidate.image_claims:
+        return {
+            "accepted": False,
+            "rejected_reason": "image account planning must precede discrepancy decision",
+        }
+    claim_by_id = {claim.claim_id: claim for claim in candidate.image_claims}
+    hypothesis_by_id = {
+        hypothesis.hypothesis_id: hypothesis
+        for hypothesis in candidate.search_hypotheses
+    }
+    evidence_by_id = {
+        evidence.evidence_id: evidence for evidence in candidate.evidence
+    }
+    fact_by_id = {fact.fact_id: fact for fact in candidate.facts}
+    task_by_id = {task.task_id: task for task in candidate.tasks}
+    decision_ordinal = len(candidate.discrepancy_decisions)
+    reviewed_ids = list(dict.fromkeys(reviewed_evidence_ids))
+    if any(evidence_id not in evidence_by_id for evidence_id in reviewed_ids):
+        return {"accepted": False, "rejected_reason": "checkpoint cites unknown Evidence"}
+    if trigger not in {"qualified_evidence", "scheduled_boundary", "before_unresolved"}:
+        return {"accepted": False, "rejected_reason": "unknown discrepancy trigger"}
+    if trigger == "qualified_evidence" and not reviewed_ids:
+        return {
+            "accepted": False,
+            "rejected_reason": "qualified Evidence checkpoint requires Evidence",
+        }
+    if any(item.claim_id not in claim_by_id for item in output.claim_assessments):
+        return {"accepted": False, "rejected_reason": "assessment cites unknown ImageClaim"}
+    if any(item not in hypothesis_by_id for item in output.retire_hypothesis_ids):
+        return {"accepted": False, "rejected_reason": "decision cites unknown SearchHypothesis"}
+    if len(output.new_hypotheses) > MAX_NEW_HYPOTHESES_PER_DECISION:
+        return {"accepted": False, "rejected_reason": "new hypothesis decision budget exhausted"}
+    if len(candidate.search_hypotheses) + len(output.new_hypotheses) > MAX_SEARCH_HYPOTHESES:
+        return {"accepted": False, "rejected_reason": "search hypothesis budget exhausted"}
+    if len(candidate.tasks) + len(output.new_hypotheses) > TOTAL_TASKS_MAX:
+        return {"accepted": False, "rejected_reason": "total task budget exhausted"}
+
+    accepted_assessment_ids: List[str] = []
+    for proposal in output.claim_assessments:
+        evidence_ids = list(dict.fromkeys(proposal.selected_evidence_ids))
+        if any(evidence_id not in evidence_by_id for evidence_id in evidence_ids):
+            return {"accepted": False, "rejected_reason": "assessment cites unknown Evidence"}
+        if proposal.assessment != "insufficient" and not evidence_ids:
+            return {"accepted": False, "rejected_reason": "material assessment requires Evidence"}
+        if not set(evidence_ids) <= set(reviewed_ids):
+            return {
+                "accepted": False,
+                "rejected_reason": "assessment must use reviewed Evidence",
+            }
+        claim = claim_by_id[proposal.claim_id]
+        for evidence_id in evidence_ids:
+            evidence = evidence_by_id[evidence_id]
+            task = task_by_id.get(evidence.task_id)
+            if task is None or claim.claim_id not in task.claim_ids:
+                return {
+                    "accepted": False,
+                    "rejected_reason": "Evidence is outside the assessed claim's owned tasks",
+                }
+        assessment_id = stable_id(
+            "assessment",
+            candidate.brief.case_id,
+            candidate.action_count,
+            decision_ordinal,
+            proposal.claim_id,
+            proposal.assessment,
+            evidence_ids,
+        )
+        candidate.claim_assessments.append(
+            ClaimAssessment(
+                assessment_id=assessment_id,
+                claim_id=proposal.claim_id,
+                action_count=candidate.action_count,
+                assessment=proposal.assessment,
+                evidence_ids=evidence_ids,
+                remaining_gap=proposal.remaining_gap,
+                rationale=proposal.rationale,
+            )
+        )
+        claim.status = (
+            "unresolved" if proposal.assessment == "insufficient" else proposal.assessment
+        )
+        fact_by_id[claim.fact_id].status = (
+            "active"
+            if proposal.assessment == "insufficient"
+            else proposal.assessment
+        )
+        accepted_assessment_ids.append(assessment_id)
+
+    discrepancy_id = None
+    discrepancy = output.material_discrepancy
+    if discrepancy is not None:
+        if any(claim_id not in claim_by_id for claim_id in discrepancy.affected_claim_ids):
+            return {"accepted": False, "rejected_reason": "discrepancy cites unknown ImageClaim"}
+        if any(fact_id not in fact_by_id for fact_id in discrepancy.visual_anchor_fact_ids):
+            return {"accepted": False, "rejected_reason": "discrepancy cites unknown visual anchor"}
+        if any(
+            fact_by_id[fact_id].origin.type not in {"input_image", "ocr"}
+            for fact_id in discrepancy.visual_anchor_fact_ids
+        ):
+            return {
+                "accepted": False,
+                "rejected_reason": "discrepancy anchor is not image/OCR grounded",
+            }
+        if any(evidence_id not in evidence_by_id for evidence_id in discrepancy.evidence_ids):
+            return {"accepted": False, "rejected_reason": "discrepancy cites unknown Evidence"}
+        if not set(discrepancy.evidence_ids) <= set(reviewed_ids):
+            return {
+                "accepted": False,
+                "rejected_reason": "discrepancy must use reviewed Evidence",
+            }
+        affected_claim_ids = list(dict.fromkeys(discrepancy.affected_claim_ids))
+        discrepancy_evidence_ids = list(dict.fromkeys(discrepancy.evidence_ids))
+        qualified_discrepancy_evidence_ids = {
+            evidence_id
+            for evidence_id in discrepancy_evidence_ids
+            if evidence_by_id[evidence_id].directness == "direct"
+            and evidence_by_id[evidence_id].quality in {"strong", "moderate"}
+        }
+        if (
+            discrepancy.materiality == "decisive"
+            and discrepancy.status == "established"
+            and not qualified_discrepancy_evidence_ids
+        ):
+            return {
+                "accepted": False,
+                "rejected_reason": (
+                    "established decisive discrepancy requires qualified Evidence"
+                ),
+            }
+        assessment_by_claim_id = {
+            item.claim_id: item for item in output.claim_assessments
+        }
+        if discrepancy.materiality == "decisive":
+            expected_assessment = (
+                "refuted"
+                if discrepancy.status == "established"
+                else "conflicted"
+            )
+            if any(
+                claim_id not in assessment_by_claim_id
+                or assessment_by_claim_id[claim_id].assessment
+                != expected_assessment
+                for claim_id in affected_claim_ids
+            ):
+                return {
+                    "accepted": False,
+                    "rejected_reason": (
+                        "decisive discrepancy status conflicts with claim assessment"
+                    ),
+                }
+        for claim_id in discrepancy.affected_claim_ids:
+            claim = claim_by_id[claim_id]
+            if not set(discrepancy.visual_anchor_fact_ids) & set(claim.anchor_fact_ids):
+                return {
+                    "accepted": False,
+                    "rejected_reason": "discrepancy anchor is outside the affected claim",
+                }
+            if not any(
+                (
+                    task_by_id.get(evidence_by_id[evidence_id].task_id) is not None
+                    and claim_id
+                    in task_by_id[evidence_by_id[evidence_id].task_id].claim_ids
+                )
+                for evidence_id in discrepancy_evidence_ids
+            ):
+                return {
+                    "accepted": False,
+                    "rejected_reason": (
+                        "discrepancy Evidence is outside affected claim tasks"
+                    ),
+                }
+            if (
+                discrepancy.materiality == "decisive"
+                and discrepancy.status == "established"
+                and not any(
+                    evidence_id in qualified_discrepancy_evidence_ids
+                    and claim_id
+                    in task_by_id[evidence_by_id[evidence_id].task_id].claim_ids
+                    for evidence_id in discrepancy_evidence_ids
+                    if evidence_by_id[evidence_id].task_id in task_by_id
+                )
+            ):
+                return {
+                    "accepted": False,
+                    "rejected_reason": (
+                        "each affected claim requires owned qualified discrepancy Evidence"
+                    ),
+                }
+        for evidence_id in discrepancy_evidence_ids:
+            task = task_by_id.get(evidence_by_id[evidence_id].task_id)
+            if task is None or not set(task.claim_ids) & set(affected_claim_ids):
+                return {
+                    "accepted": False,
+                    "rejected_reason": (
+                        "discrepancy Evidence is outside affected claim tasks"
+                    ),
+                }
+        discrepancy_id = stable_id(
+            "discrepancy",
+            candidate.brief.case_id,
+            candidate.action_count,
+            decision_ordinal,
+            discrepancy.statement,
+            discrepancy.affected_claim_ids,
+            discrepancy.evidence_ids,
+        )
+        candidate.material_discrepancies.append(
+            MaterialDiscrepancy(
+                discrepancy_id=discrepancy_id,
+                statement=discrepancy.statement,
+                affected_claim_ids=affected_claim_ids,
+                visual_anchor_fact_ids=list(dict.fromkeys(discrepancy.visual_anchor_fact_ids)),
+                evidence_ids=discrepancy_evidence_ids,
+                materiality=discrepancy.materiality,
+                status=discrepancy.status,
+                rationale=discrepancy.rationale,
+            )
+        )
+
+    retired_ids: List[str] = []
+    for hypothesis_id in output.retire_hypothesis_ids:
+        hypothesis = hypothesis_by_id[hypothesis_id]
+        hypothesis.status = "retired"
+        if hypothesis.task_id is not None:
+            task = task_by_id.get(hypothesis.task_id)
+            if task is not None and task.status in {"pending", "active"}:
+                task.status = "superseded"
+        retired_ids.append(hypothesis_id)
+
+    accepted_hypothesis_ids: List[str] = []
+    for index, proposal in enumerate(output.new_hypotheses):
+        if any(claim_id not in claim_by_id for claim_id in proposal.claim_ids):
+            return {"accepted": False, "rejected_reason": "new hypothesis cites unknown ImageClaim"}
+        proposal_claim_ids = list(dict.fromkeys(proposal.claim_ids))
+        if any(
+            set(item.claim_ids) == set(proposal_claim_ids)
+            and _hypothesis_text_equivalent(item.statement, proposal.statement)
+            for item in candidate.search_hypotheses
+        ):
+            return {
+                "accepted": False,
+                "rejected_reason": "new hypothesis duplicates an existing route",
+            }
+        hypothesis_id = stable_id(
+            "hypothesis",
+            candidate.brief.case_id,
+            candidate.action_count,
+            decision_ordinal,
+            index,
+            proposal.statement,
+        )
+        task_id = stable_id("task", hypothesis_id, "decision-route")
+        hypothesis = SearchHypothesis(
+            hypothesis_id=hypothesis_id,
+            claim_ids=proposal_claim_ids,
+            statement=proposal.statement,
+            queries=list(dict.fromkeys(proposal.queries)),
+            expected_information=proposal.expected_information,
+            suggested_tools=list(dict.fromkeys(proposal.suggested_tools)),
+            priority=proposal.priority,
+            task_id=task_id,
+        )
+        candidate.search_hypotheses.append(hypothesis)
+        candidate.tasks.append(
+            ResearchTask(
+                task_id=task_id,
+                fact_ids=[claim_by_id[item].fact_id for item in hypothesis.claim_ids],
+                claim_ids=hypothesis.claim_ids,
+                hypothesis_id=hypothesis_id,
+                question=proposal.statement,
+                purpose=proposal.expected_information,
+                priority=proposal.priority,
+                origin_ids=list(dict.fromkeys([hypothesis_id, *hypothesis.claim_ids]))[:12],
+                suggested_tools=hypothesis.suggested_tools,
+                suggested_queries=hypothesis.queries,
+            )
+        )
+        for claim_id in hypothesis.claim_ids:
+            claim_by_id[claim_id].task_ids.append(task_id)
+        accepted_hypothesis_ids.append(hypothesis_id)
+
+    accepted_visual_question_id = None
+    if output.visual_reinspection is not None:
+        request = output.visual_reinspection
+        if candidate.action_count >= MAX_TOOL_ACTIONS:
+            return {
+                "accepted": False,
+                "rejected_reason": (
+                    "the tool-action budget cannot execute another visual "
+                    "reinspection"
+                ),
+            }
+        if len(candidate.visual_reinspections) >= MAX_V4_VISUAL_REINSPECTIONS:
+            return {"accepted": False, "rejected_reason": "visual reinspection budget exhausted"}
+        if len(candidate.tasks) >= TOTAL_TASKS_MAX:
+            return {
+                "accepted": False,
+                "rejected_reason": "task budget cannot hold the visual reinspection",
+            }
+        anchor_ids = list(dict.fromkeys(request.anchor_fact_ids))
+        anchors = [fact_by_id.get(fact_id) for fact_id in anchor_ids]
+        if any(anchor is None for anchor in anchors) or any(
+            anchor is not None
+            and anchor.origin.type not in {"input_image", "ocr"}
+            for anchor in anchors
+        ):
+            return {
+                "accepted": False,
+                "rejected_reason": (
+                    "visual reinspection anchors must be existing pixel/OCR facts"
+                ),
+            }
+        grounding_ids = list(dict.fromkeys(request.grounding_evidence_ids))
+        if any(evidence_id not in evidence_by_id for evidence_id in grounding_ids):
+            return {
+                "accepted": False,
+                "rejected_reason": "visual reinspection cites unknown Evidence",
+            }
+        if not set(grounding_ids) <= set(reviewed_ids):
+            return {
+                "accepted": False,
+                "rejected_reason": (
+                    "visual reinspection grounding must use reviewed Evidence"
+                ),
+            }
+        unresolved_assessment_claim_ids = {
+            item.claim_id
+            for item in output.claim_assessments
+            if item.assessment in {"insufficient", "conflicted"}
+        }
+        visual_claim_ids = [
+            claim_id
+            for claim_id in unresolved_assessment_claim_ids
+            if set(anchor_ids) & set(claim_by_id[claim_id].anchor_fact_ids)
+            and any(
+                claim_id
+                in task_by_id[evidence_by_id[evidence_id].task_id].claim_ids
+                for evidence_id in grounding_ids
+                if evidence_by_id[evidence_id].task_id in task_by_id
+            )
+        ]
+        if not visual_claim_ids:
+            return {
+                "accepted": False,
+                "rejected_reason": (
+                    "visual reinspection must serve a reviewed unresolved claim"
+                ),
+            }
+        if any(
+            _visual_reinspection_requests_equivalent(prior.request, request)
+            for prior in candidate.visual_reinspections
+        ):
+            return {
+                "accepted": False,
+                "rejected_reason": (
+                    "an equivalent visual question has already been requested"
+                ),
+            }
+        visual_fact_ids = [claim_by_id[item].fact_id for item in visual_claim_ids]
+        accepted_visual_question_id = stable_id(
+            "visual-question",
+            candidate.brief.case_id,
+            visual_fact_ids,
+            request.model_dump(mode="json"),
+        )
+        visual_task_id = stable_id(
+            "task",
+            accepted_visual_question_id,
+            "focused-visual-inspection",
+        )
+        visual_task = ResearchTask(
+            task_id=visual_task_id,
+            fact_ids=visual_fact_ids,
+            claim_ids=visual_claim_ids,
+            question=request.question,
+            purpose=(
+                "Reinspect the original pixels after Evidence introduced a "
+                "concrete visible hypothesis."
+            ),
+            priority=1,
+            status="active",
+            origin_ids=list(
+                dict.fromkeys(
+                    [*visual_fact_ids, *visual_claim_ids, *anchor_ids, *grounding_ids]
+                )
+            )[:12],
+            suggested_tools=["focused_visual_inspection"],
+        )
+        candidate.tasks.append(visual_task)
+        task_by_id[visual_task_id] = visual_task
+        for claim_id in visual_claim_ids:
+            claim_by_id[claim_id].task_ids.append(visual_task_id)
+        candidate.visual_reinspections.append(
+            VisualReinspectionRecord(
+                visual_question_id=accepted_visual_question_id,
+                task_id=visual_task_id,
+                fact_id=visual_fact_ids[0],
+                created_action_count=candidate.action_count,
+                request=request,
+                anchor_regions=_visual_reinspection_anchor_regions(
+                    candidate,
+                    anchor_ids,
+                ),
+            )
+        )
+        candidate.recommended_next_task_ids = list(
+            dict.fromkeys(
+                [visual_task_id, *candidate.recommended_next_task_ids]
+            )
+        )[:4]
+
+    decisive = [
+        item for item in candidate.material_discrepancies
+        if item.materiality == "decisive" and item.status in {"established", "conflicted"}
+    ]
+    established_decisive = [
+        item for item in decisive if item.status == "established"
+    ]
+    high_claims = [claim for claim in candidate.image_claims if claim.salience == "high"]
+    established_high_discrepancy = any(
+        any(
+            claim_by_id[claim_id].salience == "high"
+            for claim_id in item.affected_claim_ids
+        )
+        for item in established_decisive
+    )
+    if established_high_discrepancy and output.verdict_proposal != "fake":
+        return {
+            "accepted": False,
+            "rejected_reason": (
+                "an established decisive high-salience discrepancy requires fake"
+            ),
+        }
+    if output.verdict_proposal == "fake" and not established_high_discrepancy:
+        return {"accepted": False, "rejected_reason": "fake verdict requires a decisive established discrepancy"}
+    if output.verdict_proposal == "real" and (
+        not high_claims
+        or any(claim.status != "supported" for claim in high_claims)
+        or decisive
+        or any(
+            hypothesis.status in {"open", "active"}
+            and any(
+                claim_by_id[claim_id].salience == "high"
+                for claim_id in hypothesis.claim_ids
+            )
+            for hypothesis in candidate.search_hypotheses
+        )
+    ):
+        return {
+            "accepted": False,
+            "rejected_reason": (
+                "real verdict requires all high-salience claims supported, "
+                "no decisive discrepancy, and no open high-salience route"
+            ),
+        }
+    unresolved_high_claim_ids = {
+        claim.claim_id
+        for claim in high_claims
+        if claim.status in {"unresolved", "conflicted"}
+    }
+    if output.verdict_proposal == "unverifiable" and (
+        not high_claims
+        or not unresolved_high_claim_ids
+        or any(
+            hypothesis.status in {"open", "active"}
+            and bool(set(hypothesis.claim_ids) & unresolved_high_claim_ids)
+            for hypothesis in candidate.search_hypotheses
+        )
+        or established_decisive
+    ):
+        return {"accepted": False, "rejected_reason": "unverifiable verdict requires unresolved high-salience claims and exhausted routes"}
+
+    candidate.proposed_verdict = output.verdict_proposal
+    decision_id = stable_id(
+        "discrepancy-decision",
+        candidate.brief.case_id,
+        candidate.action_count,
+        trigger,
+        reviewed_ids,
+        decision_ordinal,
+    )
+    candidate.discrepancy_decisions.append(
+        DiscrepancyDecisionRecord(
+            decision_id=decision_id,
+            action_count=candidate.action_count,
+            trigger=trigger,
+            reviewed_evidence_ids=reviewed_ids,
+            output=output,
+            accepted_assessment_ids=accepted_assessment_ids,
+            accepted_discrepancy_id=discrepancy_id,
+            accepted_hypothesis_ids=accepted_hypothesis_ids,
+            retired_hypothesis_ids=retired_ids,
+            accepted_visual_question_id=accepted_visual_question_id,
+        )
+    )
+    try:
+        validated = ImageOnlyInvestigationState.model_validate(candidate.model_dump())
+    except Exception as exc:
+        return {"accepted": False, "rejected_reason": f"invalid discrepancy state: {exc}"}
+    _replace_state(state, validated)
+    return {
+        "accepted": True,
+        "decision_id": decision_id,
+        "accepted_assessment_ids": accepted_assessment_ids,
+        "accepted_discrepancy_id": discrepancy_id,
+        "accepted_hypothesis_ids": accepted_hypothesis_ids,
+        "retired_hypothesis_ids": retired_ids,
+        "accepted_visual_question_id": accepted_visual_question_id,
+        "verdict_proposal": output.verdict_proposal,
+    }
+
+
+def _replace_state(
+    state: ImageOnlyInvestigationState,
+    replacement: ImageOnlyInvestigationState,
+) -> None:
+    """Replace a validated mutable Pydantic state without exposing partial writes."""
+
+    for field_name in ImageOnlyInvestigationState.model_fields:
+        setattr(state, field_name, getattr(replacement, field_name))
 
 
 def apply_target_planning(
@@ -1750,6 +2523,20 @@ def _visual_reinspection_requests_equivalent(
         len(left_tokens & right_tokens)
         / len(left_tokens | right_tokens)
         >= 0.65
+    )
+
+
+def _hypothesis_text_equivalent(left: str, right: str) -> bool:
+    """Reject semantically repeated bounded routes without comparing IDs."""
+
+    left_tokens = _semantic_request_tokens(left)
+    right_tokens = _semantic_request_tokens(right)
+    if not left_tokens or not right_tokens:
+        return str(left or "").strip().casefold() == str(right or "").strip().casefold()
+    return (
+        len(left_tokens & right_tokens)
+        / len(left_tokens | right_tokens)
+        >= 0.8
     )
 
 
@@ -4133,6 +4920,22 @@ def _refresh_fact_states(state: ImageOnlyInvestigationState) -> None:
         for fact_id in finding.fact_ids:
             findings_by_fact.setdefault(fact_id, []).append(finding)
     for fact in state.facts:
+        claim = next(
+            (item for item in state.image_claims if item.fact_id == fact.fact_id),
+            None,
+        )
+        if claim is not None:
+            # In v4, fetched Evidence and extractor stance do not decide the
+            # image account. Only the sparse Discrepancy Decision reducer may
+            # change ImageClaim/claim-fact semantics.
+            fact.status = {
+                "open": "active",
+                "unresolved": "active",
+                "supported": "supported",
+                "refuted": "refuted",
+                "conflicted": "conflicted",
+            }[claim.status]
+            continue
         if fact.fact_id == state.core_verdict_fact_id:
             decision = latest_evidence_decision(
                 state,
@@ -4364,6 +5167,128 @@ def remaining_material_routes(
             )
         )
     return list(dict.fromkeys(routes))
+
+
+def remaining_claim_hypothesis_routes(
+    state: ImageOnlyInvestigationState,
+    *,
+    task_ids: set[str] | None = None,
+) -> List[str]:
+    """Return untried routes owned by open v4 claim/hypothesis tasks."""
+
+    known_claim_ids = {claim.claim_id for claim in state.image_claims}
+    known_hypothesis_ids = {
+        hypothesis.hypothesis_id
+        for hypothesis in state.search_hypotheses
+        if hypothesis.status in {"open", "active"}
+    }
+    tasks = [
+        task
+        for task in state.tasks
+        if task.status in {"active", "pending"}
+        and bool(set(task.claim_ids) & known_claim_ids)
+        and task.hypothesis_id in known_hypothesis_ids
+        and (task_ids is None or task.task_id in task_ids)
+    ]
+    attempted = _attempted_routes_by_task(state)
+    global_reverse_branches = _attempted_reverse_branches(state)
+    routes: List[str] = []
+    for task in tasks:
+        routes.extend(
+            _remaining_task_material_routes(
+                state,
+                task,
+                attempted.get(task.task_id, []),
+                global_reverse_branches=global_reverse_branches,
+            )
+        )
+    return list(dict.fromkeys(routes))
+
+
+def pending_discrepancy_evidence_ids(
+    state: ImageOnlyInvestigationState,
+) -> List[str]:
+    """Return v4 Evidence not yet reviewed by a Discrepancy Decision."""
+
+    reviewed = {
+        evidence_id
+        for decision in state.discrepancy_decisions
+        for evidence_id in decision.reviewed_evidence_ids
+    }
+    claim_fact_ids = {claim.fact_id for claim in state.image_claims}
+    claim_task_ids = {
+        task.task_id
+        for task in state.tasks
+        if task.claim_ids
+    }
+    return [
+        item.evidence_id
+        for item in state.evidence
+        if item.evidence_id not in reviewed
+        and item.task_id in claim_task_ids
+        and bool(set(item.fact_ids) & claim_fact_ids)
+    ]
+
+
+def discrepancy_decision_evidence_ids(
+    state: ImageOnlyInvestigationState,
+) -> List[str]:
+    """Return the bounded new-and-prior Evidence context for a v4 checkpoint."""
+
+    claim_fact_ids = {claim.fact_id for claim in state.image_claims}
+    claim_task_ids = {
+        task.task_id
+        for task in state.tasks
+        if task.claim_ids
+    }
+    owned = [
+        item.evidence_id
+        for item in state.evidence
+        if item.task_id in claim_task_ids
+        and bool(set(item.fact_ids) & claim_fact_ids)
+    ]
+    return owned[-40:]
+
+
+def discrepancy_decision_checkpoint_reason(
+    state: ImageOnlyInvestigationState,
+    *,
+    update: Mapping[str, Any] | None = None,
+    before_unresolved: bool = False,
+) -> str:
+    """Choose sparse v4 checkpoints without deciding Evidence semantics."""
+
+    pending_ids = set(pending_discrepancy_evidence_ids(state))
+    if before_unresolved:
+        return "before_unresolved"
+    created_ids = {
+        str(item)
+        for item in (update or {}).get("created_evidence_ids", []) or []
+        if str(item) in pending_ids
+    }
+    if not created_ids:
+        return ""
+    evidence_by_id = {item.evidence_id: item for item in state.evidence}
+    rows = [evidence_by_id[item] for item in created_ids]
+    if any(
+        item.directness == "direct"
+        and item.quality in {"strong", "moderate"}
+        and (
+            item.stance in {"support", "refute"}
+            or item.evidence_kind == "reference_comparison"
+        )
+        for item in rows
+    ):
+        return "qualified_evidence"
+    qualified_since_prior = [
+        evidence_by_id[item]
+        for item in pending_ids
+        if evidence_by_id[item].directness == "direct"
+        and evidence_by_id[item].quality in {"strong", "moderate"}
+    ]
+    if len(qualified_since_prior) >= 2:
+        return "scheduled_boundary"
+    return ""
 
 
 def query_replan_candidate_task_ids(
