@@ -15,8 +15,10 @@ and contract tests win when an old research note disagrees.
 
 ## Supported boundary
 
-The default benchmark path is v0.3 `image_only` with
-`decision_policy_version=discrepancy-first-v4`.
+The benchmark boundary is the data-pipeline v0.3 `image_only` contract with
+`decision_policy_version=reinspect-v2`. That manifest field identifies the data
+protocol; it does not select the Agent implementation. The Agent runtime and its
+canonical traces use `decision_policy_version=discrepancy-first-v4`.
 
 Public rows contain exactly `case_id`, `image_path`, and `image_sha256`.
 Do not add claim fields, claim modes, nullable placeholders, construction metadata, or

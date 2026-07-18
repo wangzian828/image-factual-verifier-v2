@@ -13,7 +13,7 @@ from src.orchestrator.state import ImageOnlyRuntimeCase
 RELEASE_SCHEMA_VERSION = "ifv-image-only-benchmark-release-v0.3"
 RUNTIME_CONTRACT_VERSION = "ifv-image-only-runtime-v1"
 INPUT_MODE = "image_only"
-DECISION_POLICY_VERSION = "discrepancy-first-v4"
+DATA_PIPELINE_DECISION_POLICY_VERSION = "reinspect-v2"
 RUNTIME_CASE_KEYS = frozenset({"case_id", "image_path", "image_sha256"})
 
 
@@ -120,7 +120,7 @@ def load_runtime_release(benchmark_path: Path) -> RuntimeRelease:
         "input_mode": (input_mode, INPUT_MODE),
         "decision_policy_version": (
             decision_policy_version,
-            DECISION_POLICY_VERSION,
+            DATA_PIPELINE_DECISION_POLICY_VERSION,
         ),
     }
     mismatches = [

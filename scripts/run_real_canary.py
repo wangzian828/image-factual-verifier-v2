@@ -20,7 +20,11 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from src import load_project_dotenv  # noqa: E402
-from src.eval.release_adapter import load_runtime_release  # noqa: E402
+from src.eval.release_adapter import (  # noqa: E402
+    DATA_PIPELINE_DECISION_POLICY_VERSION,
+    load_runtime_release,
+)
+from src.workflow import AGENT_DECISION_POLICY_VERSION  # noqa: E402
 from scripts.audit_real_trace import audit_trace, discover_trace_files  # noqa: E402
 
 load_project_dotenv(REPO_ROOT)
@@ -186,9 +190,18 @@ def _require_real_run_artifacts(
         raise RuntimeError("real canary contains engineering errors")
     if benchmark.get("input_mode") != "image_only":
         raise RuntimeError("real canary requires benchmark input_mode=image_only")
-    if benchmark.get("decision_policy_version") != "reinspect-v2":
+    if (
+        benchmark.get("decision_policy_version")
+        != DATA_PIPELINE_DECISION_POLICY_VERSION
+    ):
         raise RuntimeError(
-            "real canary requires decision_policy_version=reinspect-v2"
+            "real canary requires data-pipeline decision_policy_version="
+            f"{DATA_PIPELINE_DECISION_POLICY_VERSION}"
+        )
+    if agent.get("decision_policy_version") != AGENT_DECISION_POLICY_VERSION:
+        raise RuntimeError(
+            "real canary requires Agent decision_policy_version="
+            f"{AGENT_DECISION_POLICY_VERSION}"
         )
 
     trace_files = discover_trace_files(trace_dir)
@@ -205,14 +218,27 @@ def _require_real_run_artifacts(
         state = _mapping(trace.get("state"))
         if trace.get("input_mode") != "image_only":
             raise RuntimeError(f"trace is not image_only: {path.name}")
-        if trace.get("decision_policy_version") != "reinspect-v2":
-            raise RuntimeError(f"trace is not reinspect-v2: {path.name}")
+        if trace.get("decision_policy_version") != AGENT_DECISION_POLICY_VERSION:
+            raise RuntimeError(
+                f"trace is not {AGENT_DECISION_POLICY_VERSION}: {path.name}"
+            )
         investigation = _mapping(state.get("investigation_state"))
-        if not investigation.get("decisive_fact_ids"):
-            raise RuntimeError(f"trace has no decisive VisualFacts: {path.name}")
-        if not _mapping(trace.get("verdict_basis")).get("fact_ids"):
-            if trace.get("verdict") != "unverifiable":
-                raise RuntimeError(f"trace has no verdict basis facts: {path.name}")
+        if investigation.get("core_verdict_fact_id"):
+            raise RuntimeError(f"trace activates a legacy core fact: {path.name}")
+        claims = _rows(investigation.get("image_claims"))
+        if not claims or not any(
+            claim.get("salience") == "high" for claim in claims
+        ):
+            raise RuntimeError(
+                f"trace has no high-salience ImageClaim: {path.name}"
+            )
+        basis = _mapping(trace.get("verdict_basis"))
+        if not basis.get("claim_ids"):
+            raise RuntimeError(f"trace has no verdict basis claims: {path.name}")
+        if trace.get("verdict") == "fake" and not basis.get("discrepancy_ids"):
+            raise RuntimeError(
+                f"fake trace has no selected discrepancy: {path.name}"
+            )
         if trace.get("termination") != "success":
             raise RuntimeError(f"trace did not terminate successfully: {path.name}")
         if int(trace.get("llm_api_calls", 0) or 0) <= 0:
@@ -230,7 +256,10 @@ def _require_real_run_artifacts(
         "run_dir": str(run_dir.resolve()),
         "trace_count": len(trace_files),
         "input_mode": "image_only",
-        "decision_policy_version": "reinspect-v2",
+        "data_pipeline_decision_policy_version": (
+            DATA_PIPELINE_DECISION_POLICY_VERSION
+        ),
+        "agent_decision_policy_version": AGENT_DECISION_POLICY_VERSION,
         "successful_tools": sorted(tools),
         "summary": summary,
     }
@@ -295,8 +324,14 @@ def main(argv: Iterable[str] | None = None) -> int:
     release = load_runtime_release(args.benchmark)
     if release.input_mode != "image_only":
         raise RuntimeError("real canary accepts image-only v0.3 releases only")
-    if release.decision_policy_version != "reinspect-v2":
-        raise RuntimeError("real canary accepts reinspect-v2 releases only")
+    if (
+        release.decision_policy_version
+        != DATA_PIPELINE_DECISION_POLICY_VERSION
+    ):
+        raise RuntimeError(
+            "real canary accepts data-pipeline policy "
+            f"{DATA_PIPELINE_DECISION_POLICY_VERSION} releases only"
+        )
     _validate_provider_environment()
     runtime_commit = _require_clean_runtime_checkout()
     child_env = os.environ.copy()

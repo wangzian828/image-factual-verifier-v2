@@ -2,12 +2,17 @@
 
 ## Supported runtime
 
-The default runtime is the immutable v0.3 `image_only` input contract with
-`decision_policy_version=discrepancy-first-v4`:
+The default input is the immutable data-pipeline v0.3 `image_only` contract with
+`decision_policy_version=reinspect-v2`:
 
 ```text
 case_id + image_path + image_sha256
 ```
+
+The release field identifies the data protocol only. `run_eval` does not pass it
+through as an Agent selector. The v4 Agent and every canonical runtime trace use
+`decision_policy_version=discrepancy-first-v4`; run manifests record the release
+policy under `benchmark` and the effective Agent policy under `agent`.
 
 The tagged v3 implementation is frozen at `runtime-v3-final-20260717`. Legacy
 schemas and reducers remain temporarily for deterministic historical replay; they

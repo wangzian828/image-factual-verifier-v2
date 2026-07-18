@@ -41,7 +41,7 @@ The evaluator entrypoint is:
   "schema_version": "ifv-image-only-benchmark-release-v0.3",
   "runtime_contract_version": "ifv-image-only-runtime-v1",
   "input_mode": "image_only",
-  "decision_policy_version": "discrepancy-first-v4",
+  "decision_policy_version": "reinspect-v2",
   "runtime_contract": {
     "allowed_keys": ["case_id", "image_path", "image_sha256"],
     "private_keys_absent": true
@@ -49,9 +49,12 @@ The evaluator entrypoint is:
 }
 ```
 
-`discrepancy-first-v4` selects the ImageClaim/SearchHypothesis/MaterialDiscrepancy
-runtime. A release that still declares `reinspect-v2` is a frozen v3 release and is
-not accepted by the v4 release adapter.
+The manifest `decision_policy_version=reinspect-v2` identifies the data-pipeline
+release protocol. It is not an Agent implementation selector. The release adapter
+validates that source contract, while `run_eval` independently configures the Agent
+as `discrepancy-first-v4`. Canonical traces therefore declare
+`discrepancy-first-v4`, and the run manifest records both the source release policy
+and the effective Agent policy in separate `benchmark` and `agent` objects.
 
 The manifest `artifacts` object supplies release-relative paths for:
 

@@ -9,8 +9,9 @@
 
 ## 当前执行进度（2026-07-18）
 
-- Phase 0～7：本地实现完成。默认 workflow/release policy 已切换为
-  `discrepancy-first-v4`；公开 `Orchestrator.run()` 不再执行 v3。冻结 v3 仅由测试专用回放
+- Phase 0～7：本地实现完成。默认 Agent workflow policy 已切换为
+  `discrepancy-first-v4`；数据管线 release manifest 继续声明其独立协议 `reinspect-v2`，
+  不作为 Agent selector。公开 `Orchestrator.run()` 不再执行 v3。冻结 v3 仅由测试专用回放
   harness 调用旧 schema/reducer。
 - Phase 1 确定性门禁：原子 Planning/Decision reducer、非法输出零修改、稳定 ID、
   序列化往返、Evidence/Claim/Hypothesis 所有权、单次视觉复查和 post-verdict 禁止均有测试。
@@ -23,8 +24,10 @@
   不含凭据、private gold 或 provider interaction ID。当前 v4 reducer 对 Andreea、Queen、
   Pillars 和 Monarch 双跑状态完全一致，预期 verdict、Evidence 所有权、discrepancy 对齐、
   及时停止、post-verdict 禁止和 strict audit 均通过。
-- Phase 9：未执行。四条历史回放门禁已放行，下一步是提交/同步后运行单条真实 Gemini canary。
-- Phase 10：核心文档已更新；尚未提交代码。当前本地门禁为 `370 passed`、
+- Phase 9：执行中。四条历史回放门禁已放行；数据管线 `reinspect-v2` 协议与 Agent
+  `discrepancy-first-v4` 协议已在 adapter、run manifest 和 canary gate 中解耦，下一步是
+  提交/同步后运行单条真实 Gemini canary。
+- Phase 10：核心文档已更新；v4 主实现已提交。当前本地门禁为 `373 passed`、
   `compileall` 通过、`git diff --check` 通过。
 
 ## 目标

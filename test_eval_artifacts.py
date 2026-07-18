@@ -65,7 +65,7 @@ def _build_release(tmp_path: Path) -> tuple[Path, Path]:
             "release_stage": "development_subset",
             "runtime_contract_version": "ifv-image-only-runtime-v1",
             "input_mode": "image_only",
-            "decision_policy_version": "discrepancy-first-v4",
+            "decision_policy_version": "reinspect-v2",
             "runtime_contract": {
                 "allowed_keys": ["case_id", "image_path", "image_sha256"],
                 "private_keys_absent": True,
@@ -115,6 +115,7 @@ def test_v03_eval_keeps_gold_post_rollout_and_writes_scorer_predictions(
     class ImageOnlyWorkflow:
         def __init__(self, config: Any) -> None:
             self.config = config
+            assert config.decision_policy_version == "discrepancy-first-v4"
 
         async def run_batch(self, **kwargs: Any) -> list[dict[str, Any]]:
             nonlocal rollout_finished
@@ -221,6 +222,9 @@ def test_v03_eval_keeps_gold_post_rollout_and_writes_scorer_predictions(
     assert manifest["benchmark"]["release_id"] == "image-only-eval-fixture"
     assert manifest["benchmark"]["input_mode"] == "image_only"
     assert manifest["benchmark"]["decision_policy_version"] == (
+        "reinspect-v2"
+    )
+    assert manifest["agent"]["decision_policy_version"] == (
         "discrepancy-first-v4"
     )
     assert manifest["benchmark"]["evaluation_gold"]["sha256"] == _sha256(gold)

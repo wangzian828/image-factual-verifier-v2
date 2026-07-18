@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Image-only v3 workflow: the single entry point for factual investigation.
+"""Image-only v4 workflow: the single entry point for factual investigation.
 
 Usage:
     from src.workflow import VerificationWorkflow, WorkflowConfig
@@ -29,6 +29,9 @@ from src.redaction import sanitize_for_persistence
 from src.storage import default_trace_dir
 
 
+AGENT_DECISION_POLICY_VERSION = "discrepancy-first-v4"
+
+
 @dataclass
 class WorkflowConfig:
     """Configuration for the verification workflow."""
@@ -51,7 +54,7 @@ class WorkflowConfig:
     output_dir: str = field(default_factory=default_trace_dir)
     save_traces: bool = True
     source_access_policy: Optional[SourceAccessPolicy] = None
-    decision_policy_version: str = "discrepancy-first-v4"
+    decision_policy_version: str = AGENT_DECISION_POLICY_VERSION
 
     def __post_init__(self) -> None:
         resolved = resolve_provider_settings(

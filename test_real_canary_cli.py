@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -83,3 +85,127 @@ def test_real_canary_rejects_retrieval_without_evidence_inspection() -> None:
     assert run_real_canary._missing_required_tool_classes(
         {"visit", "compare_with_reference"}
     ) == ["search"]
+
+
+def _write_v4_canary_artifacts(
+    tmp_path,
+    *,
+    data_policy: str = "reinspect-v2",
+    agent_policy: str = "discrepancy-first-v4",
+    trace_policy: str = "discrepancy-first-v4",
+) -> None:
+    (tmp_path / "traces").mkdir()
+    (tmp_path / "run_manifest.json").write_text(
+        json.dumps(
+            {
+                "status": "completed",
+                "agent": {
+                    "provider": "gemini",
+                    "profile_id": "teacher-gemini",
+                    "model": "gemini-2.5-flash",
+                    "decision_policy_version": agent_policy,
+                },
+                "benchmark": {
+                    "input_mode": "image_only",
+                    "decision_policy_version": data_policy,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "summary.json").write_text(
+        json.dumps({"num_errors": 0}),
+        encoding="utf-8",
+    )
+    (tmp_path / "traces" / "case-v4.json").write_text(
+        json.dumps(
+            {
+                "image_id": "case-v4",
+                "input_mode": "image_only",
+                "decision_policy_version": trace_policy,
+                "verdict": "fake",
+                "verdict_basis": {
+                    "claim_ids": ["claim-v4"],
+                    "discrepancy_ids": ["discrepancy-v4"],
+                },
+                "termination": "success",
+                "llm_api_calls": 2,
+                "state": {
+                    "investigation_state": {
+                        "core_verdict_fact_id": None,
+                        "image_claims": [
+                            {"claim_id": "claim-v4", "salience": "high"}
+                        ],
+                    },
+                    "all_steps": [
+                        {
+                            "action_type": "tool_call",
+                            "tool_name": "text_search",
+                            "tool_result": json.dumps({"status": "success"}),
+                        },
+                        {
+                            "action_type": "tool_call",
+                            "tool_name": "visit",
+                            "tool_result": json.dumps({"status": "success"}),
+                        },
+                    ],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_real_canary_accepts_discrepancy_first_v4_artifacts(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    _write_v4_canary_artifacts(tmp_path)
+    monkeypatch.setattr(
+        run_real_canary,
+        "audit_trace",
+        lambda path: SimpleNamespace(failures=lambda strict_scheduler: []),
+    )
+
+    result = run_real_canary._require_real_run_artifacts(tmp_path)
+
+    assert result["passed"] is True
+    assert result["data_pipeline_decision_policy_version"] == "reinspect-v2"
+    assert result["agent_decision_policy_version"] == "discrepancy-first-v4"
+    assert result["successful_tools"] == ["text_search", "visit"]
+
+
+def test_real_canary_rejects_agent_policy_mismatch(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    _write_v4_canary_artifacts(
+        tmp_path,
+        agent_policy="reinspect-v2",
+    )
+    monkeypatch.setattr(
+        run_real_canary,
+        "audit_trace",
+        lambda path: SimpleNamespace(failures=lambda strict_scheduler: []),
+    )
+
+    with pytest.raises(RuntimeError, match="discrepancy-first-v4"):
+        run_real_canary._require_real_run_artifacts(tmp_path)
+
+
+def test_real_canary_rejects_data_pipeline_policy_mismatch(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    _write_v4_canary_artifacts(
+        tmp_path,
+        data_policy="discrepancy-first-v4",
+    )
+    monkeypatch.setattr(
+        run_real_canary,
+        "audit_trace",
+        lambda path: SimpleNamespace(failures=lambda strict_scheduler: []),
+    )
+
+    with pytest.raises(RuntimeError, match="data-pipeline.*reinspect-v2"):
+        run_real_canary._require_real_run_artifacts(tmp_path)

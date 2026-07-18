@@ -62,7 +62,7 @@ def _release(tmp_path: Path, *, policy_active: bool = False) -> Path:
             "release_stage": "development_subset",
             "runtime_contract_version": "ifv-image-only-runtime-v1",
             "input_mode": "image_only",
-            "decision_policy_version": "discrepancy-first-v4",
+            "decision_policy_version": "reinspect-v2",
             "runtime_contract": {
                 "allowed_keys": ["case_id", "image_path", "image_sha256"],
                 "private_keys_absent": True,
@@ -95,7 +95,7 @@ def test_v03_manifest_and_three_field_case_are_runtime_owned(
     assert release is not None
     assert release.release_id == "image-only-fixture"
     assert release.input_mode == "image_only"
-    assert release.decision_policy_version == "discrepancy-first-v4"
+    assert release.decision_policy_version == "reinspect-v2"
     assert release.source_access_policy_active is False
     assert release.artifacts.source_access_policy is None
     assert case.case_id == PUBLIC_ROW["case_id"]
@@ -130,7 +130,7 @@ def test_v03_manifest_fails_closed_on_contract_drift(tmp_path: Path) -> None:
     manifest["decision_policy_version"] = "reinspect-v1"
     _write_json(manifest_path, manifest)
 
-    with pytest.raises(ValueError, match="expected 'discrepancy-first-v4'"):
+    with pytest.raises(ValueError, match="expected 'reinspect-v2'"):
         load_runtime_release(benchmark)
 
 

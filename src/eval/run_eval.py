@@ -12,7 +12,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
-from src.workflow import VerificationWorkflow, WorkflowConfig
+from src.workflow import (
+    AGENT_DECISION_POLICY_VERSION,
+    VerificationWorkflow,
+    WorkflowConfig,
+)
 from src.provider_profiles import PROFILE_IDS
 from src.storage import default_eval_root
 from src.eval.release_adapter import (
@@ -379,7 +383,7 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
         vlm_wire_api=getattr(args, "vlm_wire_api", None),
         timeout=args.timeout,
         save_traces=True,
-        decision_policy_version=release.decision_policy_version,
+        decision_policy_version=AGENT_DECISION_POLICY_VERSION,
     )
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -456,6 +460,7 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
         },
         "agent": {
             "profile_id": config.profile_id,
+            "decision_policy_version": config.decision_policy_version,
             "provider": config.provider,
             "model": config.model_name,
             "vlm_provider": config.vlm_provider,
