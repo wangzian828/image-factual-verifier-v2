@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -9,6 +11,7 @@ from src.orchestrator.investigation_models import (
     ClaimAssessmentProposal,
     DiscrepancyDecisionOutput,
     FactOrigin,
+    Finding,
     ImageAccountPlanningOutput,
     ImageClaimProposal,
     ImageOnlyInvestigationState,
@@ -94,6 +97,18 @@ def _planned_state() -> ImageOnlyInvestigationState:
     return state
 
 
+def _semantic_safety_fixture() -> dict[str, object]:
+    path = (
+        Path(__file__).parent
+        / "test_fixtures"
+        / "v4_semantic_safety_regressions.json"
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert isinstance(payload, list) and len(payload) == 1
+    assert isinstance(payload[0], dict)
+    return payload[0]
+
+
 def _append_evidence(state: ImageOnlyInvestigationState) -> InvestigationEvidence:
     claim = state.image_claims[0]
     task = next(task for task in state.tasks if claim.claim_id in task.claim_ids)
@@ -120,6 +135,18 @@ def _append_evidence(state: ImageOnlyInvestigationState) -> InvestigationEvidenc
         confidence=0.99,
     )
     state.evidence.append(evidence)
+    finding = Finding(
+        finding_id="finding-source-comparison",
+        task_id=task.task_id,
+        fact_ids=[claim.fact_id],
+        statement="The qualified comparison refutes the visible relation.",
+        stance="refute",
+        evidence_ids=[evidence.evidence_id],
+        source_family_ids=[evidence.source_family],
+        quality="decisive",
+    )
+    state.findings.append(finding)
+    task.finding_ids.append(finding.finding_id)
     return evidence
 
 
@@ -220,6 +247,164 @@ def test_discrepancy_decision_establishes_fake_atomically() -> None:
     assert basis.evidence_ids == [evidence.evidence_id]
     assert basis.visual_anchor_fact_ids == claim.anchor_fact_ids
     assert state.stop_reason == "verdict_determined"
+
+
+@pytest.mark.parametrize(
+    ("assessment", "stance", "expected_direction"),
+    [
+        ("supported", "refute", "support"),
+        ("refuted", "support", "refute"),
+        ("conflicted", "refute", "support"),
+    ],
+)
+def test_discrepancy_decision_rejects_assessment_without_required_direction(
+    assessment: str,
+    stance: str,
+    expected_direction: str,
+) -> None:
+    state = _planned_state()
+    evidence = _append_evidence(state)
+    evidence.stance = stance
+    state.findings[0].stance = stance
+    if stance == "support":
+        evidence.edit_evidence_present = False
+    claim = state.image_claims[0]
+    before = state.model_dump(mode="json")
+
+    update = apply_discrepancy_decision(
+        state,
+        DiscrepancyDecisionOutput(
+            claim_assessments=[
+                ClaimAssessmentProposal(
+                    claim_id=claim.claim_id,
+                    assessment=assessment,
+                    selected_evidence_ids=[evidence.evidence_id],
+                    rationale="Attempt to promote Evidence in the wrong direction.",
+                )
+            ],
+            rationale="This semantic mismatch must fail closed.",
+        ),
+        reviewed_evidence_ids=[evidence.evidence_id],
+        trigger="qualified_evidence",
+    )
+
+    assert update["accepted"] is False
+    assert f"qualified {expected_direction} Evidence" in update["rejected_reason"]
+    assert state.model_dump(mode="json") == before
+
+
+def test_discrepancy_decision_rejects_neutral_different_capture_canary_state() -> None:
+    state = _planned_state()
+    evidence = _append_evidence(state)
+    fixture = _semantic_safety_fixture()
+    frozen_evidence = fixture["evidence"]
+    rejected_proposal = fixture["rejected_proposal"]
+    assert isinstance(frozen_evidence, dict)
+    assert isinstance(rejected_proposal, dict)
+    for field, value in frozen_evidence.items():
+        setattr(evidence, field, value)
+    state.findings.clear()
+    state.tasks[0].finding_ids.clear()
+    claim = state.image_claims[0]
+    before = state.model_dump(mode="json")
+
+    update = apply_discrepancy_decision(
+        state,
+        DiscrepancyDecisionOutput(
+            claim_assessments=[
+                ClaimAssessmentProposal(
+                    claim_id=claim.claim_id,
+                    assessment=str(rejected_proposal["assessment"]),
+                    selected_evidence_ids=[evidence.evidence_id],
+                    rationale=(
+                        "Incorrectly treat a different unedited capture as proof "
+                        "of compositing."
+                    ),
+                )
+            ],
+            material_discrepancy=MaterialDiscrepancyProposal(
+                statement="The image was digitally composited.",
+                affected_claim_ids=[claim.claim_id],
+                visual_anchor_fact_ids=claim.anchor_fact_ids,
+                evidence_ids=[evidence.evidence_id],
+                materiality=str(rejected_proposal["discrepancy_materiality"]),
+                status=str(rejected_proposal["discrepancy_status"]),
+                rationale="This conclusion is absent from the Evidence.",
+            ),
+            verdict_proposal=str(rejected_proposal["verdict"]),
+            rationale="This mirrors the rejected real-canary semantic upgrade.",
+        ),
+        reviewed_evidence_ids=[evidence.evidence_id],
+        trigger="qualified_evidence",
+    )
+
+    assert update["accepted"] is False
+    assert str(fixture["expected_rejection_contains"]) in update[
+        "rejected_reason"
+    ]
+    assert state.model_dump(mode="json") == before
+
+
+def test_discrepancy_decision_rejects_forged_reference_stance() -> None:
+    state = _planned_state()
+    evidence = _append_evidence(state)
+    evidence.claim_binding = "same_subject"
+    evidence.same_capture_or_near_duplicate = False
+    evidence.likely_different_original_capture = True
+    evidence.edit_evidence_present = True
+    claim = state.image_claims[0]
+    before = state.model_dump(mode="json")
+
+    update = apply_discrepancy_decision(
+        state,
+        DiscrepancyDecisionOutput(
+            claim_assessments=[
+                ClaimAssessmentProposal(
+                    claim_id=claim.claim_id,
+                    assessment="refuted",
+                    selected_evidence_ids=[evidence.evidence_id],
+                    rationale="A forced refute label cannot override capture metadata.",
+                )
+            ],
+            rationale="Reject incoherent reference-comparison semantics.",
+        ),
+        reviewed_evidence_ids=[evidence.evidence_id],
+        trigger="qualified_evidence",
+    )
+
+    assert update["accepted"] is False
+    assert "qualified refute Evidence" in update["rejected_reason"]
+    assert state.model_dump(mode="json") == before
+
+
+def test_discrepancy_decision_requires_finding_evidence_chain() -> None:
+    state = _planned_state()
+    evidence = _append_evidence(state)
+    state.findings.clear()
+    state.tasks[0].finding_ids.clear()
+    claim = state.image_claims[0]
+    before = state.model_dump(mode="json")
+
+    update = apply_discrepancy_decision(
+        state,
+        DiscrepancyDecisionOutput(
+            claim_assessments=[
+                ClaimAssessmentProposal(
+                    claim_id=claim.claim_id,
+                    assessment="refuted",
+                    selected_evidence_ids=[evidence.evidence_id],
+                    rationale="Evidence without a Finding cannot own a verdict.",
+                )
+            ],
+            rationale="Reject the incomplete provenance chain.",
+        ),
+        reviewed_evidence_ids=[evidence.evidence_id],
+        trigger="qualified_evidence",
+    )
+
+    assert update["accepted"] is False
+    assert "Finding -> Evidence chain" in update["rejected_reason"]
+    assert state.model_dump(mode="json") == before
 
 
 def test_discrepancy_decision_rejects_unknown_evidence_without_partial_state() -> None:
@@ -504,6 +689,9 @@ def test_discrepancy_coverage_compiles_real_only_after_routes_close() -> None:
     evidence = _append_evidence(state)
     evidence.stance = "support"
     evidence.exact_text = "The direct source supports the depicted relationship."
+    evidence.edit_evidence_present = False
+    state.findings[0].stance = "support"
+    state.findings[0].statement = "The qualified comparison supports the visible relation."
     claim = state.image_claims[0]
     hypothesis_id = state.search_hypotheses[0].hypothesis_id
 

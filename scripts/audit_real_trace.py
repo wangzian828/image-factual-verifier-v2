@@ -25,6 +25,11 @@ from src.orchestrator.source_access import (  # noqa: E402
 from src.orchestrator.evidence_policy import (  # noqa: E402
     query_targets_fact_check_answer,
 )
+from src.orchestrator.evidence_semantics import (  # noqa: E402
+    evidence_direction_is_coherent,
+    evidence_is_qualified_for_stance,
+    required_assessment_stances,
+)
 from src.orchestrator.tool_result import parse_tool_result  # noqa: E402
 
 
@@ -737,6 +742,52 @@ def _audit_discrepancy_interaction_chains(
     report.stats["v4_interaction_steps"] = len(native)
 
 
+def _v4_claim_has_directional_chain(
+    *,
+    claim_id: str,
+    stance: str,
+    selected_evidence_ids: set[str],
+    claim_by_id: Mapping[str, Mapping[str, Any]],
+    task_by_id: Mapping[str, Mapping[str, Any]],
+    evidence_by_id: Mapping[str, Mapping[str, Any]],
+    finding_by_id: Mapping[str, Mapping[str, Any]],
+    successful_calls: set[str],
+    selected_finding_ids: set[str] | None = None,
+) -> bool:
+    claim = claim_by_id.get(claim_id)
+    if claim is None:
+        return False
+    claim_fact_id = str(claim.get("fact_id", "")).strip()
+    for finding_id, finding in finding_by_id.items():
+        if selected_finding_ids is not None and finding_id not in selected_finding_ids:
+            continue
+        if str(finding.get("stance", "")).strip() != stance:
+            continue
+        task_id = str(finding.get("task_id", "")).strip()
+        task = task_by_id.get(task_id)
+        if task is None or claim_id not in {
+            str(item) for item in task.get("claim_ids", []) or []
+        }:
+            continue
+        if claim_fact_id not in {
+            str(item) for item in finding.get("fact_ids", []) or []
+        }:
+            continue
+        for evidence_id in finding.get("evidence_ids", []) or []:
+            evidence_id = str(evidence_id)
+            evidence = evidence_by_id.get(evidence_id)
+            if (
+                evidence_id in selected_evidence_ids
+                and evidence is not None
+                and str(evidence.get("task_id", "")).strip() == task_id
+                and evidence_is_qualified_for_stance(evidence, stance)
+                and str(evidence.get("function_call_id", "")).strip()
+                in successful_calls
+            ):
+                return True
+    return False
+
+
 def _audit_discrepancy_trace(
     trace: Mapping[str, Any],
     state: Mapping[str, Any],
@@ -762,6 +813,7 @@ def _audit_discrepancy_trace(
 
     facts = _rows(investigation.get("facts"))
     tasks = _rows(investigation.get("tasks"))
+    discoveries = _rows(investigation.get("discoveries"))
     evidence = _rows(investigation.get("evidence"))
     findings = _rows(investigation.get("findings"))
     claims = _rows(investigation.get("image_claims"))
@@ -781,6 +833,12 @@ def _audit_discrepancy_trace(
         tasks,
         id_field="task_id",
         location_prefix="state.investigation_state.tasks",
+        report=report,
+    )
+    discovery_by_id = _unique_index(
+        discoveries,
+        id_field="discovery_id",
+        location_prefix="state.investigation_state.discoveries",
         report=report,
     )
     evidence_by_id = _unique_index(
@@ -886,6 +944,27 @@ def _audit_discrepancy_trace(
                 "SearchHypothesis must reference existing ImageClaims",
                 location=location,
             )
+
+    for discovery_id, discovery in discovery_by_id.items():
+        location = _location(
+            "state.investigation_state.discoveries",
+            discovery_id,
+        )
+        task_id = str(discovery.get("task_id", "")).strip()
+        if task_id not in task_by_id:
+            _issue(
+                report,
+                "V4_DISCOVERY_TASK_UNKNOWN",
+                f"Discovery references unknown task {task_id!r}",
+                location=location,
+            )
+        if str(discovery.get("promoted_evidence_id", "") or "").strip():
+            _issue(
+                report,
+                "V4_DISCOVERY_PROMOTED_IN_PLACE",
+                "Discovery must remain separate from Evidence",
+                location=location,
+            )
         task_id = str(hypothesis.get("task_id", "")).strip()
         task = task_by_id.get(task_id)
         if (
@@ -909,6 +988,107 @@ def _audit_discrepancy_trace(
         tool_field="tool_name",
         stat_key="v4_successful_evidence_calls",
     )
+    successful_calls = {
+        str(_mapping(step.get("metadata")).get("function_call_id", "")).strip()
+        for step in steps
+        if _parse_successful_tool_step(step)
+        and str(_mapping(step.get("metadata")).get("function_call_id", "")).strip()
+    }
+    for evidence_id, item in evidence_by_id.items():
+        location = _location("state.investigation_state.evidence", evidence_id)
+        task_id = str(item.get("task_id", "")).strip()
+        task = task_by_id.get(task_id)
+        evidence_fact_ids = {
+            str(value) for value in item.get("fact_ids", []) or []
+        }
+        if task is None:
+            _issue(
+                report,
+                "V4_EVIDENCE_TASK_UNKNOWN",
+                f"Evidence references unknown task {task_id!r}",
+                location=location,
+            )
+        elif not evidence_fact_ids or not evidence_fact_ids <= {
+            str(value) for value in task.get("fact_ids", []) or []
+        }:
+            _issue(
+                report,
+                "V4_EVIDENCE_FACT_OWNERSHIP_INVALID",
+                "Evidence fact_ids must be owned by its ResearchTask",
+                location=location,
+            )
+        stance = str(item.get("stance", "")).strip()
+        if stance in {"support", "refute"} and not evidence_direction_is_coherent(
+            item,
+            stance,
+        ):
+            _issue(
+                report,
+                "V4_EVIDENCE_DIRECTION_INCOHERENT",
+                "Evidence stance conflicts with its recorded comparison metadata",
+                location=location,
+            )
+
+    for finding_id, finding in finding_by_id.items():
+        location = _location("state.investigation_state.findings", finding_id)
+        task_id = str(finding.get("task_id", "")).strip()
+        task = task_by_id.get(task_id)
+        finding_fact_ids = {
+            str(value) for value in finding.get("fact_ids", []) or []
+        }
+        if task is None:
+            _issue(
+                report,
+                "V4_FINDING_TASK_UNKNOWN",
+                f"Finding references unknown task {task_id!r}",
+                location=location,
+            )
+            continue
+        if not finding_fact_ids or not finding_fact_ids <= {
+            str(value) for value in task.get("fact_ids", []) or []
+        }:
+            _issue(
+                report,
+                "V4_FINDING_FACT_OWNERSHIP_INVALID",
+                "Finding fact_ids must be owned by its ResearchTask",
+                location=location,
+            )
+        finding_stance = str(finding.get("stance", "")).strip()
+        finding_evidence_ids = {
+            str(value) for value in finding.get("evidence_ids", []) or []
+        }
+        if not finding_evidence_ids:
+            _issue(
+                report,
+                "V4_FINDING_EVIDENCE_MISSING",
+                "Finding must cite Evidence",
+                location=location,
+            )
+        for evidence_id in finding_evidence_ids:
+            evidence_row = evidence_by_id.get(evidence_id)
+            if evidence_row is None:
+                _issue(
+                    report,
+                    "V4_FINDING_EVIDENCE_UNKNOWN",
+                    f"Finding references unknown Evidence {evidence_id!r}",
+                    location=location,
+                )
+            elif str(evidence_row.get("task_id", "")).strip() != task_id:
+                _issue(
+                    report,
+                    "V4_FINDING_EVIDENCE_OWNERSHIP_INVALID",
+                    "Finding and Evidence must belong to the same ResearchTask",
+                    location=location,
+                )
+            elif str(evidence_row.get("stance", "")).strip() != finding_stance:
+                _issue(
+                    report,
+                    "V4_FINDING_EVIDENCE_STANCE_MISMATCH",
+                    "Finding stance must match its cited Evidence",
+                    location=location,
+                )
+
+    latest_assessment_by_claim: dict[str, Mapping[str, Any]] = {}
     for assessment_id, assessment in assessment_by_id.items():
         location = _location(
             "state.investigation_state.claim_assessments",
@@ -929,6 +1109,62 @@ def _audit_discrepancy_trace(
                 "V4_ASSESSMENT_EVIDENCE_UNKNOWN",
                 "ClaimAssessment cites unknown Evidence",
                 location=location,
+            )
+        if claim_id in claim_by_id:
+            latest_assessment_by_claim[claim_id] = assessment
+            for evidence_id in selected & set(evidence_by_id):
+                task = task_by_id.get(
+                    str(evidence_by_id[evidence_id].get("task_id", "")).strip()
+                )
+                if task is None or claim_id not in {
+                    str(item) for item in task.get("claim_ids", []) or []
+                }:
+                    _issue(
+                        report,
+                        "V4_ASSESSMENT_EVIDENCE_OWNERSHIP_INVALID",
+                        "ClaimAssessment Evidence is outside the claim's tasks",
+                        location=location,
+                    )
+            for stance in required_assessment_stances(
+                str(assessment.get("assessment", ""))
+            ):
+                if not _v4_claim_has_directional_chain(
+                    claim_id=claim_id,
+                    stance=stance,
+                    selected_evidence_ids=selected,
+                    claim_by_id=claim_by_id,
+                    task_by_id=task_by_id,
+                    evidence_by_id=evidence_by_id,
+                    finding_by_id=finding_by_id,
+                    successful_calls=successful_calls,
+                ):
+                    _issue(
+                        report,
+                        "V4_ASSESSMENT_EVIDENCE_DIRECTION_INVALID",
+                        f"{assessment.get('assessment')} assessment requires an "
+                        f"owned qualified {stance} Finding -> Evidence chain",
+                        location=location,
+                    )
+
+    for claim_id, claim in claim_by_id.items():
+        latest = latest_assessment_by_claim.get(claim_id)
+        if latest is None:
+            continue
+        expected_status = {
+            "supported": "supported",
+            "refuted": "refuted",
+            "conflicted": "conflicted",
+            "insufficient": "unresolved",
+        }.get(str(latest.get("assessment", "")), "")
+        if str(claim.get("status", "")) != expected_status:
+            _issue(
+                report,
+                "V4_CLAIM_ASSESSMENT_STATUS_MISMATCH",
+                "ImageClaim status must match its latest ClaimAssessment",
+                location=_location(
+                    "state.investigation_state.image_claims",
+                    claim_id,
+                ),
             )
 
     for discrepancy_id, discrepancy in discrepancy_by_id.items():
@@ -970,6 +1206,27 @@ def _audit_discrepancy_trace(
                     report,
                     "V4_DISCREPANCY_ANCHOR_MISALIGNED",
                     f"Discrepancy is not visibly anchored to claim {claim_id!r}",
+                    location=location,
+                )
+            if (
+                str(discrepancy.get("materiality", "")) == "decisive"
+                and str(discrepancy.get("status", "")) == "established"
+                and not _v4_claim_has_directional_chain(
+                    claim_id=claim_id,
+                    stance="refute",
+                    selected_evidence_ids=evidence_ids,
+                    claim_by_id=claim_by_id,
+                    task_by_id=task_by_id,
+                    evidence_by_id=evidence_by_id,
+                    finding_by_id=finding_by_id,
+                    successful_calls=successful_calls,
+                )
+            ):
+                _issue(
+                    report,
+                    "V4_DISCREPANCY_EVIDENCE_DIRECTION_INVALID",
+                    f"Established decisive discrepancy lacks an owned qualified "
+                    f"refute chain for claim {claim_id!r}",
                     location=location,
                 )
             if not any(
@@ -1069,6 +1326,61 @@ def _audit_discrepancy_trace(
                 f"Judgment {judgment_field} must match verdict_basis",
                 location=f"judgment.{judgment_field}",
             )
+    basis_claim_ids = {str(item) for item in basis.get("claim_ids", []) or []}
+    basis_evidence_ids = {
+        str(item) for item in basis.get("evidence_ids", []) or []
+    }
+    basis_finding_ids = {
+        str(item) for item in basis.get("finding_ids", []) or []
+    }
+    if basis_evidence_ids & set(discovery_by_id):
+        _issue(
+            report,
+            "V4_DISCOVERY_USED_AS_VERDICT_EVIDENCE",
+            "Discovery IDs cannot appear in verdict_basis.evidence_ids",
+            location="verdict_basis.evidence_ids",
+        )
+    if verdict in {"fake", "real"}:
+        expected_stance = "refute" if verdict == "fake" else "support"
+        if not basis_evidence_ids or not basis_finding_ids:
+            _issue(
+                report,
+                "V4_VERDICT_CHAIN_MISSING",
+                f"{verdict} verdict requires Finding -> Evidence provenance",
+                location="verdict_basis",
+            )
+        for claim_id in basis_claim_ids & set(claim_by_id):
+            if not _v4_claim_has_directional_chain(
+                claim_id=claim_id,
+                stance=expected_stance,
+                selected_evidence_ids=basis_evidence_ids,
+                selected_finding_ids=basis_finding_ids,
+                claim_by_id=claim_by_id,
+                task_by_id=task_by_id,
+                evidence_by_id=evidence_by_id,
+                finding_by_id=finding_by_id,
+                successful_calls=successful_calls,
+            ):
+                _issue(
+                    report,
+                    "V4_VERDICT_CHAIN_INVALID",
+                    f"{verdict} basis lacks an owned qualified chain for "
+                    f"ImageClaim {claim_id!r}",
+                    location="verdict_basis",
+                )
+        linked_basis_evidence = {
+            str(evidence_id)
+            for finding_id in basis_finding_ids & set(finding_by_id)
+            for evidence_id in finding_by_id[finding_id].get("evidence_ids", [])
+            or []
+        }
+        if not basis_evidence_ids <= linked_basis_evidence:
+            _issue(
+                report,
+                "V4_VERDICT_EVIDENCE_WITHOUT_FINDING",
+                "Every selected verdict Evidence must be linked by a selected Finding",
+                location="verdict_basis",
+            )
     if str(judgment.get("verdict", "")) != verdict:
         _issue(
             report,
@@ -1101,6 +1413,29 @@ def _audit_discrepancy_trace(
             }
             and step.get("action_type") == "tool_call"
         ]
+        action_count = int(investigation.get("action_count", 0) or 0)
+        if action_count != len(action_steps):
+            _issue(
+                report,
+                "V4_ACTION_COUNT_MISMATCH",
+                f"action_count={action_count}, but trace records "
+                f"{len(action_steps)} investigation tool calls",
+                location="state.investigation_state.action_count",
+            )
+        if action_count > 24:
+            _issue(
+                report,
+                "V4_ACTION_BUDGET_EXCEEDED",
+                f"v4 investigation used {action_count} actions; maximum is 24",
+                location="state.investigation_state.action_count",
+            )
+        if terminal_action_count != action_count:
+            _issue(
+                report,
+                "V4_TERMINAL_ACTION_COUNT_MISMATCH",
+                "Terminal Coverage action_count must match final v4 action_count",
+                location="state.investigation_state.discrepancy_coverage_audits",
+            )
         if len(action_steps) > terminal_action_count:
             _issue(
                 report,
@@ -1113,6 +1448,7 @@ def _audit_discrepancy_trace(
         {
             "image_claims": len(claims),
             "search_hypotheses": len(hypotheses),
+            "v4_discoveries": len(discoveries),
             "claim_assessments": len(assessments),
             "material_discrepancies": len(discrepancies),
             "discrepancy_decisions": len(decisions),

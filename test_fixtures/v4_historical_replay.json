@@ -3,6 +3,8 @@
     "case_id": "case_8d9e67f836117760",
     "name": "andreea-product-composite",
     "expected_verdict": "fake",
+    "expected_decision": "rejected",
+    "expected_rejection_contains": "qualified refute Evidence",
     "anchor": {
       "entity_name": "visible presenter and product packet",
       "entity_type": "person_product_relation",
@@ -16,16 +18,16 @@
     "source_url": "https://cdn11.bigcommerce.com/s-a9hez161km/images/stencil/1280x1280/products/1129/1451/bakingsoda__79452.1616601792.png?c=1",
     "source_family": "domain:bigcommerce.com",
     "source_class": "visual",
-    "exact_text": "The reference is a clean product shot. Comparison with the input shows that the same packet design was digitally composited into the presenter's hand, creating the appearance that she was holding and promoting it.",
+    "exact_text": "The reference is a separate clean product shot of the same packet design. It is likely a different original capture and does not establish whether the input image was edited.",
     "artifact_sha256": "8a908046f471aa71361d3f5635b39ef189f9f361b4d99aad0309acc342e4b80c",
     "retrieved_at": "2026-07-17T12:59:22.199555+00:00",
-    "stance": "refute",
+    "stance": "neutral",
     "claim_binding": "same_subject",
     "same_subject_or_scene": true,
     "same_capture_or_near_duplicate": false,
     "likely_different_original_capture": true,
     "edit_evidence_present": true,
-    "assessment_rationale": "The direct comparison establishes that the visible held-product relation was created by compositing a separate product image.",
+    "assessment_rationale": "A different original capture without a same-capture alteration baseline cannot establish that the visible held-product relation was composited.",
     "discrepancy": "The shown product packet was composited into the presenter's hand, materially fabricating the visible endorsement relation."
   },
   {

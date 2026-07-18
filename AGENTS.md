@@ -63,6 +63,11 @@ but they must not enter the v4 default path.
 - Web Evidence requires a fetched exact span, offsets, canonical URL, artifact SHA-256,
   retrieval time, directness, stance, and successful function-call provenance.
 - A Finding must link one ResearchTask and owned fact/evidence IDs.
+- Supported and refuted ClaimAssessments require owned qualified Evidence in the
+  matching recorded direction; conflicted requires both directions. Neutral Evidence
+  cannot be promoted into a directional assessment or established discrepancy.
+- A reference comparison may refute alteration only when it records edit evidence on
+  the same capture; a likely different original capture is not an alteration baseline.
 - A verdict basis must follow
   `VisualFact -> Finding -> Evidence -> successful tool call`.
 - No external SearchHypothesis owns a verdict. ImageClaims and accepted

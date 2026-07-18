@@ -128,6 +128,7 @@ def test_v4_process_scorer_uses_discrepancy_alignment_and_stop_quality(
     assert metrics["result_correct"] is True
     assert metrics["evidence_chain_recovery"] == 1.0
     assert metrics["discrepancy_alignment"] == 1.0
+    assert metrics["decision_evidence_consistency"] == 1.0
     assert metrics["stop_quality"] == 1.0
     assert metrics["training_eligible"] is True
     assert score["schema_version"] == "ifv-trajectory-score-v4"
@@ -141,6 +142,89 @@ def test_v4_process_scorer_uses_discrepancy_alignment_and_stop_quality(
     assert "discrepancy_misaligned" in broken_score[
         "training_exclusion_reasons"
     ]
+
+
+def test_v4_process_scorer_excludes_neutral_evidence_semantic_upgrade(
+    tmp_path: Path,
+) -> None:
+    trace = json.loads(_v4_trace(tmp_path).read_text(encoding="utf-8"))
+    evidence = trace["state"]["investigation_state"]["evidence"][0]
+    evidence.update(
+        {
+            "stance": "neutral",
+            "evidence_kind": "reference_comparison",
+            "claim_binding": "same_subject",
+            "same_capture_or_near_duplicate": False,
+            "likely_different_original_capture": True,
+            "edit_evidence_present": False,
+        }
+    )
+    gold = {
+        "case_id": trace["image_id"],
+        "factual_status": "refuted",
+        "decisive_facts": [],
+    }
+
+    metrics, score = score_process_trace(trace, gold)
+
+    assert metrics["result_correct"] is True
+    assert metrics["decision_evidence_consistency"] == 0.0
+    assert metrics["evidence_chain_recovery"] == 0.0
+    assert metrics["discrepancy_alignment"] == 0.0
+    assert metrics["training_eligible"] is False
+    assert "decision_evidence_inconsistent" in score[
+        "training_exclusion_reasons"
+    ]
+    assert "evidence_chain_incomplete" in score["training_exclusion_reasons"]
+    assert "discrepancy_misaligned" in score["training_exclusion_reasons"]
+
+
+def test_v4_policy_export_rejects_neutral_evidence_semantic_upgrade(
+    tmp_path: Path,
+) -> None:
+    trace = json.loads(_v4_trace(tmp_path).read_text(encoding="utf-8"))
+    evidence = trace["state"]["investigation_state"]["evidence"][0]
+    evidence.update(
+        {
+            "stance": "neutral",
+            "evidence_kind": "reference_comparison",
+            "claim_binding": "same_subject",
+            "same_capture_or_near_duplicate": False,
+            "likely_different_original_capture": True,
+            "edit_evidence_present": False,
+        }
+    )
+
+    try:
+        export_policy_examples(trace)
+    except ValueError as exc:
+        assert "ClaimAssessment/Evidence direction mismatch" in str(exc)
+    else:
+        raise AssertionError("v4 exporter must reject a neutral-to-refute upgrade")
+
+
+def test_v4_scoring_and_export_reject_judgment_basis_mismatch(
+    tmp_path: Path,
+) -> None:
+    trace = json.loads(_v4_trace(tmp_path).read_text(encoding="utf-8"))
+    trace["judgment"]["selected_evidence_ids"] = []
+    gold = {
+        "case_id": trace["image_id"],
+        "factual_status": "refuted",
+        "decisive_facts": [],
+    }
+
+    metrics, score = score_process_trace(trace, gold)
+
+    assert metrics["judgment_basis_consistency"] == 0.0
+    assert metrics["training_eligible"] is False
+    assert "judgment_basis_mismatch" in score["training_exclusion_reasons"]
+    try:
+        export_policy_examples(trace)
+    except ValueError as exc:
+        assert "Judgment/verdict-basis mismatch" in str(exc)
+    else:
+        raise AssertionError("v4 exporter must reject Judgment/basis mismatch")
 
 
 def test_fatal_boundary_is_zero_masked(tmp_path: Path) -> None:

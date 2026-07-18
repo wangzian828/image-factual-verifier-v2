@@ -41,6 +41,10 @@ from src.orchestrator.investigation_models import (
     VisualReinspectionRequest,
 )
 from src.orchestrator.evidence_adjudication import assess_fact
+from src.orchestrator.evidence_semantics import (
+    evidence_is_qualified_for_stance,
+    required_assessment_stances,
+)
 from src.orchestrator.route_policy import (
     route_signature,
     routes_semantically_equivalent,
@@ -812,6 +816,40 @@ def apply_image_account_planning(
     }
 
 
+def _claim_directional_chain_ids(
+    state: ImageOnlyInvestigationState,
+    *,
+    claim_id: str,
+    claim_fact_id: str,
+    evidence_ids: Sequence[str],
+    stance: str,
+    evidence_by_id: Mapping[str, InvestigationEvidence],
+    task_by_id: Mapping[str, ResearchTask],
+) -> tuple[set[str], set[str]]:
+    qualified_evidence_ids = {
+        evidence_id
+        for evidence_id in evidence_ids
+        if evidence_id in evidence_by_id
+        and evidence_is_qualified_for_stance(evidence_by_id[evidence_id], stance)
+        and evidence_by_id[evidence_id].task_id in task_by_id
+        and claim_id in task_by_id[evidence_by_id[evidence_id].task_id].claim_ids
+    }
+    finding_ids = {
+        finding.finding_id
+        for finding in state.findings
+        if finding.stance == stance
+        and claim_fact_id in finding.fact_ids
+        and finding.task_id in task_by_id
+        and claim_id in task_by_id[finding.task_id].claim_ids
+        and any(
+            evidence_id in qualified_evidence_ids
+            and evidence_by_id[evidence_id].task_id == finding.task_id
+            for evidence_id in finding.evidence_ids
+        )
+    }
+    return qualified_evidence_ids, finding_ids
+
+
 def apply_discrepancy_decision(
     state: ImageOnlyInvestigationState,
     output: DiscrepancyDecisionOutput,
@@ -896,6 +934,34 @@ def apply_discrepancy_decision(
                         "assessment or select reviewed owned Evidence"
                     ),
                 }
+        for stance in required_assessment_stances(proposal.assessment):
+            qualified_evidence_ids, finding_ids = _claim_directional_chain_ids(
+                candidate,
+                claim_id=claim.claim_id,
+                claim_fact_id=claim.fact_id,
+                evidence_ids=evidence_ids,
+                stance=stance,
+                evidence_by_id=evidence_by_id,
+                task_by_id=task_by_id,
+            )
+            if not qualified_evidence_ids:
+                return {
+                    "accepted": False,
+                    "rejected_reason": (
+                        f"{proposal.assessment} assessment for ImageClaim "
+                        f"{claim.claim_id!r} requires owned qualified {stance} "
+                        "Evidence"
+                    ),
+                }
+            if not finding_ids:
+                return {
+                    "accepted": False,
+                    "rejected_reason": (
+                        f"{proposal.assessment} assessment for ImageClaim "
+                        f"{claim.claim_id!r} requires a {stance} Finding -> "
+                        "Evidence chain"
+                    ),
+                }
         assessment_id = stable_id(
             "assessment",
             candidate.brief.case_id,
@@ -953,8 +1019,10 @@ def apply_discrepancy_decision(
         qualified_discrepancy_evidence_ids = {
             evidence_id
             for evidence_id in discrepancy_evidence_ids
-            if evidence_by_id[evidence_id].directness == "direct"
-            and evidence_by_id[evidence_id].quality in {"strong", "moderate"}
+            if evidence_is_qualified_for_stance(
+                evidence_by_id[evidence_id],
+                "refute",
+            )
         }
         if (
             discrepancy.materiality == "decisive"
@@ -1012,18 +1080,21 @@ def apply_discrepancy_decision(
             if (
                 discrepancy.materiality == "decisive"
                 and discrepancy.status == "established"
-                and not any(
-                    evidence_id in qualified_discrepancy_evidence_ids
-                    and claim_id
-                    in task_by_id[evidence_by_id[evidence_id].task_id].claim_ids
-                    for evidence_id in discrepancy_evidence_ids
-                    if evidence_by_id[evidence_id].task_id in task_by_id
-                )
+                and not _claim_directional_chain_ids(
+                    candidate,
+                    claim_id=claim_id,
+                    claim_fact_id=claim.fact_id,
+                    evidence_ids=discrepancy_evidence_ids,
+                    stance="refute",
+                    evidence_by_id=evidence_by_id,
+                    task_by_id=task_by_id,
+                )[1]
             ):
                 return {
                     "accepted": False,
                     "rejected_reason": (
-                        "each affected claim requires owned qualified discrepancy Evidence"
+                        "each affected claim requires an owned qualified refute "
+                        "Finding -> Evidence discrepancy chain"
                     ),
                 }
         for evidence_id in discrepancy_evidence_ids:

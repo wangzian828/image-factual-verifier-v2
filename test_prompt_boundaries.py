@@ -1,5 +1,6 @@
 from src.integrations.browse.jina_reader import EXTRACT_PROMPT
 from src.orchestrator.image_only_prompts import (
+    DISCREPANCY_DECISION_SYSTEM_PROMPT,
     IMAGE_ACCOUNT_PLANNING_SYSTEM_PROMPT,
     REACT_SYSTEM_PROMPT,
     TARGET_PLANNING_SYSTEM_PROMPT,
@@ -15,6 +16,10 @@ def test_hot_path_prompts_stay_semantic_and_compact() -> None:
             IMAGE_ACCOUNT_PLANNING_SYSTEM_PROMPT,
             1900,
         ),
+        "discrepancy decision": (
+            DISCREPANCY_DECISION_SYSTEM_PROMPT,
+            2600,
+        ),
     }
 
     for name, (prompt, maximum_length) in prompts.items():
@@ -27,6 +32,9 @@ def test_hot_path_prompts_stay_semantic_and_compact() -> None:
     image_account_prompt = " ".join(
         IMAGE_ACCOUNT_PLANNING_SYSTEM_PROMPT.split()
     )
+    discrepancy_prompt = " ".join(
+        DISCREPANCY_DECISION_SYSTEM_PROMPT.split()
+    )
     assert "missing mention is not a refutation" in browse_prompt
     assert "incompatible with the positive goal" in browse_prompt
     assert "runtime owns task state" in react_prompt
@@ -34,3 +42,6 @@ def test_hot_path_prompts_stay_semantic_and_compact() -> None:
     assert "SearchHypothesis is a retrieval direction" in image_account_prompt
     assert "Do not choose one claim as a verdict owner" in image_account_prompt
     assert "Return exactly one JSON object" in image_account_prompt
+    assert "recorded Evidence stance is also authoritative" in discrepancy_prompt
+    assert "Neutral Evidence" in discrepancy_prompt
+    assert "likely different original capture" in discrepancy_prompt

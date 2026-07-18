@@ -114,19 +114,25 @@ bounded globally and per decision; semantically duplicate routes are rejected.
 ## Audit and training
 
 The strict auditor verifies claim/hypothesis/task ownership, successful Evidence
-calls, ClaimAssessment Evidence scope, discrepancy-to-claim anchors, discrepancy
-Evidence ownership, terminal Coverage, basis/Judgment equality, interaction ancestry,
+calls, ClaimAssessment Evidence scope and direction, reference-comparison stance
+coherence, discrepancy-to-claim anchors, qualified refuting discrepancy Evidence,
+the complete `VisualFact -> Finding -> Evidence -> successful call` verdict chain,
+terminal Coverage, basis/Judgment equality, interaction ancestry, action-count parity,
 and absence of post-verdict actions.
 
 `ifv-policy-v2` exports Image Account Planning, v4 ReAct, Discrepancy Decision, and
 v4 Judgment. Training eligibility requires classification correctness, complete
-Evidence chains, discrepancy alignment, stop quality, and no protocol rejection or
-legacy core ownership.
+directionally consistent Evidence chains, discrepancy alignment, stop quality, and
+no protocol rejection or legacy core ownership. The pure policy exporter repeats
+these gates and rejects a trace even if upstream score metadata is wrong.
 
 ## Acceptance status
 
 Local deterministic reducers, mocked native Interactions, the complete default
-workflow, strict audit, scoring, and export tests pass. Production acceptance still
-requires the four frozen trace replays, one real Gemini canary with manual trace
-inspection, and three to four heterogeneous canaries. Unit tests alone do not mark
-v4 complete.
+workflow, strict audit, scoring, and export tests pass. Three frozen historical
+fixtures retain admissible conclusions; the prior Andreea fixture is now a required
+safety rejection because its different-capture Evidence was neutral. The first real
+canary exposed engineering ownership gaps and the second exposed the neutral-Evidence
+semantic upgrade now covered by regression gates. Production acceptance still
+requires one new real Gemini canary with manual trace inspection, followed by three
+to four heterogeneous canaries. Unit tests alone do not mark v4 complete.

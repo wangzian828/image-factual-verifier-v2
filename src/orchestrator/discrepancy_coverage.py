@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import List
 
+from src.orchestrator.evidence_semantics import evidence_is_qualified_for_stance
 from src.orchestrator.investigation_models import (
     DiscrepancyCoverageAudit,
     DiscrepancyVerdictBasis,
@@ -175,7 +176,12 @@ def compile_discrepancy_verdict_basis(
         discrepancy_ids = [selected.discrepancy_id]
         claim_ids = list(selected.affected_claim_ids)
         anchor_ids = list(selected.visual_anchor_fact_ids)
-        evidence_ids = list(selected.evidence_ids)
+        evidence_ids, finding_ids = _directional_verdict_chain(
+            state,
+            claim_ids=claim_ids,
+            candidate_evidence_ids=list(selected.evidence_ids),
+            stance="refute",
+        )
         verdict_target = selected.statement
     elif state.proposed_verdict == "real":
         high_claims = [
@@ -192,12 +198,18 @@ def compile_discrepancy_verdict_basis(
         latest = {}
         for item in state.claim_assessments:
             latest[item.claim_id] = item
-        evidence_ids = list(
+        candidate_evidence_ids = list(
             dict.fromkeys(
                 evidence_id
                 for claim_id in claim_ids
                 for evidence_id in latest[claim_id].evidence_ids
             )
+        )
+        evidence_ids, finding_ids = _directional_verdict_chain(
+            state,
+            claim_ids=claim_ids,
+            candidate_evidence_ids=candidate_evidence_ids,
+            stance="support",
         )
         verdict_target = state.image_account_summary
     else:
@@ -221,12 +233,16 @@ def compile_discrepancy_verdict_basis(
         ]
         verdict_target = state.image_account_summary
 
-    finding_ids = [
-        item.finding_id
-        for item in state.findings
-        if set(item.evidence_ids) & set(evidence_ids)
-        and (not claim_ids or _finding_serves_claims(state, item.task_id, claim_ids))
-    ]
+    if state.proposed_verdict == "unverifiable":
+        finding_ids = [
+            item.finding_id
+            for item in state.findings
+            if set(item.evidence_ids) & set(evidence_ids)
+            and (
+                not claim_ids
+                or _finding_serves_claims(state, item.task_id, claim_ids)
+            )
+        ]
     basis = DiscrepancyVerdictBasis(
         verdict_target=verdict_target,
         claim_ids=claim_ids,
@@ -238,6 +254,58 @@ def compile_discrepancy_verdict_basis(
     )
     state.discrepancy_verdict_basis = basis
     return state.proposed_verdict, basis
+
+
+def _directional_verdict_chain(
+    state: ImageOnlyInvestigationState,
+    *,
+    claim_ids: List[str],
+    candidate_evidence_ids: List[str],
+    stance: str,
+) -> tuple[List[str], List[str]]:
+    claim_by_id = {item.claim_id: item for item in state.image_claims}
+    task_by_id = {item.task_id: item for item in state.tasks}
+    evidence_by_id = {item.evidence_id: item for item in state.evidence}
+    selected_evidence_ids: List[str] = []
+    selected_finding_ids: List[str] = []
+    for claim_id in claim_ids:
+        claim = claim_by_id[claim_id]
+        matched = None
+        for evidence_id in candidate_evidence_ids:
+            evidence = evidence_by_id.get(evidence_id)
+            if evidence is None or not evidence_is_qualified_for_stance(
+                evidence,
+                stance,
+            ):
+                continue
+            task = task_by_id.get(evidence.task_id)
+            if task is None or claim_id not in task.claim_ids:
+                continue
+            finding = next(
+                (
+                    item
+                    for item in state.findings
+                    if item.stance == stance
+                    and item.task_id == task.task_id
+                    and claim.fact_id in item.fact_ids
+                    and evidence_id in item.evidence_ids
+                ),
+                None,
+            )
+            if finding is not None:
+                matched = (evidence_id, finding.finding_id)
+                break
+        if matched is None:
+            raise RuntimeError(
+                f"{stance} verdict basis lacks a qualified Finding -> Evidence "
+                f"chain for ImageClaim {claim_id!r}"
+            )
+        selected_evidence_ids.append(matched[0])
+        selected_finding_ids.append(matched[1])
+    return (
+        list(dict.fromkeys(selected_evidence_ids)),
+        list(dict.fromkeys(selected_finding_ids)),
+    )
 
 
 def _finding_serves_claims(

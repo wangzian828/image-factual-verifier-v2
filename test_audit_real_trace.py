@@ -67,6 +67,11 @@ def _v4_trace(tmp_path: Path) -> Path:
                 "fact_ids": [claim_fact_id],
                 "function_call_id": "call-visit-v4",
                 "tool_name": "visit",
+                "evidence_kind": "web_span",
+                "stance": "refute",
+                "quality": "strong",
+                "directness": "direct",
+                "risk_flags": [],
             }
         ],
         "findings": [
@@ -75,6 +80,7 @@ def _v4_trace(tmp_path: Path) -> Path:
                 "task_id": task_id,
                 "fact_ids": [claim_fact_id],
                 "evidence_ids": [evidence_id],
+                "stance": "refute",
             }
         ],
         "image_claims": [
@@ -265,6 +271,88 @@ def test_strict_audit_rejects_v4_discrepancy_alignment_tampering(
 
     assert "V4_DISCREPANCY_ANCHOR_MISALIGNED" in codes
     assert "V4_DISCREPANCY_EVIDENCE_OWNERSHIP_INVALID" in codes
+
+
+def test_strict_audit_rejects_neutral_evidence_promoted_to_fake(
+    tmp_path: Path,
+) -> None:
+    trace_path = _v4_trace(tmp_path)
+    trace = json.loads(trace_path.read_text(encoding="utf-8"))
+    evidence = trace["state"]["investigation_state"]["evidence"][0]
+    evidence.update(
+        {
+            "stance": "neutral",
+            "evidence_kind": "reference_comparison",
+            "claim_binding": "same_subject",
+            "same_capture_or_near_duplicate": False,
+            "likely_different_original_capture": True,
+            "edit_evidence_present": False,
+        }
+    )
+    trace_path.write_text(
+        json.dumps(trace, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    report = audit_trace(trace_path)
+    codes = {issue.code for issue in report.failures(strict_scheduler=True)}
+
+    assert "V4_ASSESSMENT_EVIDENCE_DIRECTION_INVALID" in codes
+    assert "V4_DISCREPANCY_EVIDENCE_DIRECTION_INVALID" in codes
+    assert "V4_VERDICT_CHAIN_INVALID" in codes
+
+
+def test_strict_audit_rejects_v4_verdict_without_finding_chain(
+    tmp_path: Path,
+) -> None:
+    trace_path = _v4_trace(tmp_path)
+    trace = json.loads(trace_path.read_text(encoding="utf-8"))
+    investigation = trace["state"]["investigation_state"]
+    investigation["findings"] = []
+    for basis in (trace["verdict_basis"], investigation["discrepancy_verdict_basis"]):
+        basis["finding_ids"] = []
+    for judgment in (
+        trace["judgment"],
+        trace["state"]["judgment"],
+        investigation["discrepancy_judgment"],
+    ):
+        judgment["selected_finding_ids"] = []
+    trace_path.write_text(
+        json.dumps(trace, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    report = audit_trace(trace_path)
+    codes = {issue.code for issue in report.failures(strict_scheduler=True)}
+
+    assert "V4_ASSESSMENT_EVIDENCE_DIRECTION_INVALID" in codes
+    assert "V4_DISCREPANCY_EVIDENCE_DIRECTION_INVALID" in codes
+    assert "V4_VERDICT_CHAIN_MISSING" in codes
+
+
+def test_strict_audit_keeps_v4_discovery_separate_from_evidence(
+    tmp_path: Path,
+) -> None:
+    trace_path = _v4_trace(tmp_path)
+    trace = json.loads(trace_path.read_text(encoding="utf-8"))
+    investigation = trace["state"]["investigation_state"]
+    investigation["discoveries"] = [
+        {
+            "discovery_id": "evidence-v4",
+            "task_id": "task-v4",
+            "promoted_evidence_id": "evidence-v4",
+        }
+    ]
+    trace_path.write_text(
+        json.dumps(trace, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    report = audit_trace(trace_path)
+    codes = {issue.code for issue in report.failures(strict_scheduler=True)}
+
+    assert "V4_DISCOVERY_PROMOTED_IN_PLACE" in codes
+    assert "V4_DISCOVERY_USED_AS_VERDICT_EVIDENCE" in codes
 
 
 def _scripted_trace(tmp_path: Path) -> Path:

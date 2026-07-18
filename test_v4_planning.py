@@ -10,6 +10,7 @@ import pytest
 
 from src.orchestrator.investigation_models import (
     FactOrigin,
+    Finding,
     ImageOnlyInvestigationState,
     InvestigationBrief,
     InvestigationEvidence,
@@ -639,6 +640,18 @@ def test_discrepancy_decision_consumes_pending_result_on_same_chain(
         claim_binding="source_assertion",
     )
     investigation.evidence.append(evidence)
+    finding = Finding(
+        finding_id="finding-direct-source",
+        task_id=task.task_id,
+        fact_ids=[claim.fact_id],
+        statement="The direct source refutes the shown held-object relation.",
+        stance="refute",
+        evidence_ids=[evidence.evidence_id],
+        source_family_ids=[evidence.source_family],
+        quality="decisive",
+    )
+    investigation.findings.append(finding)
+    task.finding_ids.append(finding.finding_id)
 
     decision_context = json.loads(
         render_discrepancy_decision_context(

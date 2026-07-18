@@ -6,6 +6,11 @@ import json
 from typing import Any, Dict, Iterable, List, Mapping, Protocol, Sequence
 
 from src.trajectory.schema import PolicyExample
+from src.orchestrator.evidence_semantics import (
+    evidence_direction_is_coherent,
+    evidence_is_qualified_for_stance,
+    required_assessment_stances,
+)
 from src.orchestrator.tool_result import parse_tool_result
 
 
@@ -133,6 +138,52 @@ def _example_type(stage: str) -> str | None:
     return None
 
 
+def _v4_claim_has_directional_chain(
+    *,
+    claim_id: str,
+    stance: str,
+    selected_evidence_ids: set[str],
+    claims: Mapping[str, Mapping[str, Any]],
+    tasks: Mapping[str, Mapping[str, Any]],
+    evidence: Mapping[str, Mapping[str, Any]],
+    findings: Mapping[str, Mapping[str, Any]],
+    successful_call_ids: set[str],
+    selected_finding_ids: set[str] | None = None,
+) -> bool:
+    claim = claims.get(claim_id)
+    if claim is None:
+        return False
+    claim_fact_id = str(claim.get("fact_id", "")).strip()
+    for finding_id, finding in findings.items():
+        if selected_finding_ids is not None and finding_id not in selected_finding_ids:
+            continue
+        if str(finding.get("stance", "")).strip() != stance:
+            continue
+        task_id = str(finding.get("task_id", "")).strip()
+        task = tasks.get(task_id)
+        if task is None or claim_id not in {
+            str(item) for item in task.get("claim_ids", []) or []
+        }:
+            continue
+        if claim_fact_id not in {
+            str(item) for item in finding.get("fact_ids", []) or []
+        }:
+            continue
+        for evidence_id in finding.get("evidence_ids", []) or []:
+            evidence_id = str(evidence_id)
+            row = evidence.get(evidence_id)
+            if (
+                evidence_id in selected_evidence_ids
+                and row is not None
+                and str(row.get("task_id", "")).strip() == task_id
+                and evidence_is_qualified_for_stance(row, stance)
+                and str(row.get("function_call_id", "")).strip()
+                in successful_call_ids
+            ):
+                return True
+    return False
+
+
 def _v4_quality_gate(trace: Mapping[str, Any], state: Mapping[str, Any]) -> None:
     """Reject v4 episodes that cannot teach claim/discrepancy alignment."""
 
@@ -159,6 +210,11 @@ def _v4_quality_gate(trace: Mapping[str, Any], state: Mapping[str, Any]) -> None
         for item in _rows(investigation.get("evidence"))
         if str(item.get("evidence_id", ""))
     }
+    findings = {
+        str(item.get("finding_id", "")): item
+        for item in _rows(investigation.get("findings"))
+        if str(item.get("finding_id", ""))
+    }
     successful_call_ids: set[str] = set()
     for step in _rows(state.get("all_steps")):
         if str(step.get("action_type", "")) != "tool_call":
@@ -177,6 +233,15 @@ def _v4_quality_gate(trace: Mapping[str, Any], state: Mapping[str, Any]) -> None
         for item in evidence.values()
     ):
         raise ValueError("v4 policy export rejects Evidence without a successful call")
+    if any(
+        str(item.get("stance", "")) in {"support", "refute"}
+        and not evidence_direction_is_coherent(
+            item,
+            str(item.get("stance", "")),
+        )
+        for item in evidence.values()
+    ):
+        raise ValueError("v4 policy export rejects incoherent Evidence stance")
     facts = {
         str(item.get("fact_id", "")): item
         for item in _rows(investigation.get("facts"))
@@ -188,6 +253,43 @@ def _v4_quality_gate(trace: Mapping[str, Any], state: Mapping[str, Any]) -> None
         raise ValueError("v4 policy export requires high-salience ImageClaims")
     if investigation.get("core_verdict_fact_id"):
         raise ValueError("v4 policy export rejects active legacy core ownership")
+    for assessment in _rows(investigation.get("claim_assessments")):
+        claim_id = str(assessment.get("claim_id", ""))
+        selected_ids = {
+            str(item) for item in assessment.get("evidence_ids", []) or []
+        }
+        if claim_id not in claims or not selected_ids <= set(evidence):
+            raise ValueError("v4 policy export rejects invalid ClaimAssessment Evidence")
+        if any(
+            claim_id
+            not in {
+                str(item)
+                for item in tasks.get(
+                    str(evidence[evidence_id].get("task_id", "")),
+                    {},
+                ).get("claim_ids", [])
+                or []
+            }
+            for evidence_id in selected_ids
+        ):
+            raise ValueError("v4 policy export rejects unowned ClaimAssessment Evidence")
+        for stance in required_assessment_stances(
+            str(assessment.get("assessment", ""))
+        ):
+            if not _v4_claim_has_directional_chain(
+                claim_id=claim_id,
+                stance=stance,
+                selected_evidence_ids=selected_ids,
+                claims=claims,
+                tasks=tasks,
+                evidence=evidence,
+                findings=findings,
+                successful_call_ids=successful_call_ids,
+            ):
+                raise ValueError(
+                    "v4 policy export rejects ClaimAssessment/Evidence "
+                    "direction mismatch"
+                )
     for hypothesis_id, hypothesis in hypotheses.items():
         claim_ids = {str(item) for item in hypothesis.get("claim_ids", []) or []}
         task = tasks.get(str(hypothesis.get("task_id", "")))
@@ -246,6 +348,89 @@ def _v4_quality_gate(trace: Mapping[str, Any], state: Mapping[str, Any]) -> None
             for claim_id in claim_ids
         ):
             raise ValueError("v4 policy export rejects discrepancy Evidence misalignment")
+        if (
+            str(discrepancy.get("materiality", "")) == "decisive"
+            and str(discrepancy.get("status", "")) == "established"
+            and any(
+                not _v4_claim_has_directional_chain(
+                    claim_id=claim_id,
+                    stance="refute",
+                    selected_evidence_ids=evidence_ids,
+                    claims=claims,
+                    tasks=tasks,
+                    evidence=evidence,
+                    findings=findings,
+                    successful_call_ids=successful_call_ids,
+                )
+                for claim_id in claim_ids
+            )
+        ):
+            raise ValueError(
+                "v4 policy export rejects decisive discrepancy without "
+                "qualified refute Evidence"
+            )
+    verdict = str(trace.get("verdict", ""))
+    basis = _mapping(
+        trace.get("verdict_basis")
+        or investigation.get("discrepancy_verdict_basis")
+    )
+    judgment = _mapping(
+        trace.get("judgment")
+        or state.get("judgment")
+        or investigation.get("discrepancy_judgment")
+    )
+    if str(judgment.get("verdict", "")) != verdict or any(
+        {str(item) for item in judgment.get(judgment_field, []) or []}
+        != {str(item) for item in basis.get(basis_field, []) or []}
+        for judgment_field, basis_field in (
+            ("selected_claim_ids", "claim_ids"),
+            ("selected_discrepancy_ids", "discrepancy_ids"),
+            ("selected_visual_anchor_fact_ids", "visual_anchor_fact_ids"),
+            ("selected_finding_ids", "finding_ids"),
+            ("selected_evidence_ids", "evidence_ids"),
+        )
+    ):
+        raise ValueError("v4 policy export rejects Judgment/verdict-basis mismatch")
+    if verdict in {"fake", "real"}:
+        expected_stance = "refute" if verdict == "fake" else "support"
+        basis_claim_ids = {
+            str(item) for item in basis.get("claim_ids", []) or []
+        }
+        basis_evidence_ids = {
+            str(item) for item in basis.get("evidence_ids", []) or []
+        }
+        basis_finding_ids = {
+            str(item) for item in basis.get("finding_ids", []) or []
+        }
+        linked_evidence_ids = {
+            str(evidence_id)
+            for finding_id in basis_finding_ids & set(findings)
+            for evidence_id in findings[finding_id].get("evidence_ids", []) or []
+        }
+        if (
+            not basis_claim_ids
+            or not basis_evidence_ids
+            or not basis_finding_ids
+            or not basis_evidence_ids <= set(evidence)
+            or not basis_evidence_ids <= linked_evidence_ids
+            or any(
+                not _v4_claim_has_directional_chain(
+                    claim_id=claim_id,
+                    stance=expected_stance,
+                    selected_evidence_ids=basis_evidence_ids,
+                    selected_finding_ids=basis_finding_ids,
+                    claims=claims,
+                    tasks=tasks,
+                    evidence=evidence,
+                    findings=findings,
+                    successful_call_ids=successful_call_ids,
+                )
+                for claim_id in basis_claim_ids
+            )
+        ):
+            raise ValueError(
+                "v4 policy export rejects incomplete verdict Finding/Evidence chain"
+            )
     audits = _rows(investigation.get("discrepancy_coverage_audits"))
     terminal = [
         item

@@ -129,6 +129,9 @@ Core instruction:
 - Purpose:
   - assess affected ImageClaims;
   - determine whether Evidence establishes a material discrepancy;
+  - preserve recorded Evidence direction: support for supported, refute for
+    refuted, and both for conflicted;
+  - keep neutral or different-capture/no-edit comparisons non-terminal;
   - add or retire bounded SearchHypotheses;
   - propose `continue | fake | real | unverifiable`;
   - optionally request focused visual reinspection.

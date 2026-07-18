@@ -145,19 +145,24 @@ def _append_frozen_evidence(
         confidence=0.99,
     )
     state.evidence.append(evidence)
-    state.findings.append(
-        Finding(
-            finding_id=stable_id("finding", fixture["case_id"], evidence.evidence_id),
-            task_id=task.task_id,
-            fact_ids=[claim.fact_id],
-            statement=str(fixture["assessment_rationale"]),
-            stance=str(fixture["stance"]),
-            evidence_ids=[evidence.evidence_id],
-            source_family_ids=[evidence.source_family],
-            quality="decisive",
+    if evidence.stance in {"support", "refute"}:
+        state.findings.append(
+            Finding(
+                finding_id=stable_id(
+                    "finding",
+                    fixture["case_id"],
+                    evidence.evidence_id,
+                ),
+                task_id=task.task_id,
+                fact_ids=[claim.fact_id],
+                statement=str(fixture["assessment_rationale"]),
+                stance=evidence.stance,
+                evidence_ids=[evidence.evidence_id],
+                source_family_ids=[evidence.source_family],
+                quality="decisive",
+            )
         )
-    )
-    task.finding_ids.append(state.findings[-1].finding_id)
+        task.finding_ids.append(state.findings[-1].finding_id)
     state.action_count = 1
     return evidence
 
@@ -332,6 +337,31 @@ def test_v4_historical_trace_replay(
         reviewed_evidence_ids=[evidence.evidence_id],
         trigger="qualified_evidence",
     )
+    if fixture.get("expected_decision") == "rejected":
+        assert decision["accepted"] is False
+        assert str(fixture["expected_rejection_contains"]) in decision[
+            "rejected_reason"
+        ]
+        assert state.proposed_verdict not in {"fake", "real", "unverifiable"}
+        assert state.claim_assessments == []
+        assert state.material_discrepancies == []
+
+        second = _base_state(fixture)
+        second_planning = apply_image_account_planning(
+            second,
+            _planning_output(fixture),
+        )
+        assert second_planning["accepted"] is True
+        second_evidence = _append_frozen_evidence(second, fixture)
+        second_decision = apply_discrepancy_decision(
+            second,
+            _decision_output(second, fixture, second_evidence),
+            reviewed_evidence_ids=[second_evidence.evidence_id],
+            trigger="qualified_evidence",
+        )
+        assert second_decision == decision
+        assert second.model_dump(mode="json") == state.model_dump(mode="json")
+        return
     assert decision["accepted"] is True
 
     terminal = audit_discrepancy_coverage(state, decision_checkpoint=True)

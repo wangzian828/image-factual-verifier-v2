@@ -7,6 +7,10 @@ import re
 from typing import Any, Dict, Iterable, List, Mapping, Sequence
 from urllib.parse import urlsplit, urlunsplit
 
+from src.orchestrator.evidence_semantics import (
+    evidence_is_qualified_for_stance,
+    required_assessment_stances,
+)
 from src.orchestrator.route_policy import semantic_duplicate_count
 from src.orchestrator.tool_result import parse_tool_result
 
@@ -985,6 +989,55 @@ def score_process_trace(
     return process_metrics, teacher_score
 
 
+def _v4_claim_directional_chain_ids(
+    *,
+    claim_id: str,
+    stance: str,
+    selected_evidence_ids: set[str],
+    claims: Mapping[str, Mapping[str, Any]],
+    tasks: Mapping[str, Mapping[str, Any]],
+    evidence: Mapping[str, Mapping[str, Any]],
+    findings: Mapping[str, Mapping[str, Any]],
+    successful_calls: set[str],
+    selected_finding_ids: set[str] | None = None,
+) -> tuple[set[str], set[str]]:
+    claim = claims.get(claim_id)
+    if claim is None:
+        return set(), set()
+    claim_fact_id = str(claim.get("fact_id", "")).strip()
+    matched_evidence_ids: set[str] = set()
+    matched_finding_ids: set[str] = set()
+    for finding_id, finding in findings.items():
+        if selected_finding_ids is not None and finding_id not in selected_finding_ids:
+            continue
+        if str(finding.get("stance", "")).strip() != stance:
+            continue
+        task_id = str(finding.get("task_id", "")).strip()
+        task = tasks.get(task_id)
+        if task is None or claim_id not in {
+            str(item) for item in task.get("claim_ids", []) or []
+        }:
+            continue
+        if claim_fact_id not in {
+            str(item) for item in finding.get("fact_ids", []) or []
+        }:
+            continue
+        for evidence_id in finding.get("evidence_ids", []) or []:
+            evidence_id = str(evidence_id)
+            row = evidence.get(evidence_id)
+            if (
+                evidence_id in selected_evidence_ids
+                and row is not None
+                and str(row.get("task_id", "")).strip() == task_id
+                and evidence_is_qualified_for_stance(row, stance)
+                and str(row.get("function_call_id", "")).strip()
+                in successful_calls
+            ):
+                matched_evidence_ids.add(evidence_id)
+                matched_finding_ids.add(finding_id)
+    return matched_evidence_ids, matched_finding_ids
+
+
 def _score_discrepancy_trace(
     trace: Mapping[str, Any],
     gold: Mapping[str, Any],
@@ -1010,9 +1063,62 @@ def _score_discrepancy_trace(
         for item in _rows(investigation.get("evidence"))
         if str(item.get("evidence_id", ""))
     }
+    findings = {
+        str(item.get("finding_id", "")): item
+        for item in _rows(investigation.get("findings"))
+        if str(item.get("finding_id", ""))
+    }
+    assessments = _rows(investigation.get("claim_assessments"))
     discrepancies = _rows(investigation.get("material_discrepancies"))
     steps = _rows(state.get("all_steps"))
     successful_calls = _successful_call_ids(steps)
+    decision_evidence_consistent = True
+    latest_assessment_by_claim: Dict[str, Mapping[str, Any]] = {}
+    for assessment in assessments:
+        claim_id = str(assessment.get("claim_id", ""))
+        selected_ids = {
+            str(item) for item in assessment.get("evidence_ids", []) or []
+        }
+        if claim_id not in claims or not selected_ids <= set(evidence):
+            decision_evidence_consistent = False
+            continue
+        latest_assessment_by_claim[claim_id] = assessment
+        if any(
+            claim_id
+            not in {
+                str(item)
+                for item in tasks.get(
+                    str(evidence[evidence_id].get("task_id", "")),
+                    {},
+                ).get("claim_ids", [])
+                or []
+            }
+            for evidence_id in selected_ids
+        ):
+            decision_evidence_consistent = False
+        for stance in required_assessment_stances(
+            str(assessment.get("assessment", ""))
+        ):
+            if not _v4_claim_directional_chain_ids(
+                claim_id=claim_id,
+                stance=stance,
+                selected_evidence_ids=selected_ids,
+                claims=claims,
+                tasks=tasks,
+                evidence=evidence,
+                findings=findings,
+                successful_calls=successful_calls,
+            )[1]:
+                decision_evidence_consistent = False
+    for claim_id, assessment in latest_assessment_by_claim.items():
+        expected_status = {
+            "supported": "supported",
+            "refuted": "refuted",
+            "conflicted": "conflicted",
+            "insufficient": "unresolved",
+        }.get(str(assessment.get("assessment", "")), "")
+        if str(claims[claim_id].get("status", "")) != expected_status:
+            decision_evidence_consistent = False
     decisive = [
         item
         for item in discrepancies
@@ -1079,6 +1185,30 @@ def _score_discrepancy_trace(
                 )
                 for claim_id in claim_ids
             )
+            and (
+                str(item.get("materiality", "")) != "decisive"
+                or str(item.get("status", "")) != "established"
+                or all(
+                    _v4_claim_directional_chain_ids(
+                        claim_id=claim_id,
+                        stance="refute",
+                        selected_evidence_ids=evidence_ids,
+                        claims=claims,
+                        tasks=tasks,
+                        evidence=evidence,
+                        findings=findings,
+                        successful_calls=successful_calls,
+                    )[1]
+                    and str(
+                        latest_assessment_by_claim.get(claim_id, {}).get(
+                            "assessment",
+                            "",
+                        )
+                    )
+                    == "refuted"
+                    for claim_id in claim_ids
+                )
+            )
         )
         (aligned_discrepancy_ids if aligned else invalid_discrepancy_ids).append(
             discrepancy_id
@@ -1090,17 +1220,71 @@ def _score_discrepancy_trace(
     selected_discrepancy_ids = {
         str(item) for item in basis.get("discrepancy_ids", []) or []
     }
-    evidence_chain_recovery = (
-        1.0
-        if selected_evidence_ids
-        and selected_evidence_ids <= set(evidence)
-        and all(
-            str(evidence[evidence_id].get("function_call_id", ""))
-            in successful_calls
-            for evidence_id in selected_evidence_ids
-        )
-        else 0.0
+    selected_claim_ids = {str(item) for item in basis.get("claim_ids", []) or []}
+    selected_finding_ids = {
+        str(item) for item in basis.get("finding_ids", []) or []
+    }
+    verdict = str(trace.get("verdict", ""))
+    judgment = _mapping(
+        trace.get("judgment")
+        or state.get("judgment")
+        or investigation.get("discrepancy_judgment")
     )
+    judgment_basis_consistent = bool(
+        str(judgment.get("verdict", "")) == verdict
+        and all(
+            {
+                str(item) for item in judgment.get(judgment_field, []) or []
+            }
+            == {str(item) for item in basis.get(basis_field, []) or []}
+            for judgment_field, basis_field in (
+                ("selected_claim_ids", "claim_ids"),
+                ("selected_discrepancy_ids", "discrepancy_ids"),
+                ("selected_visual_anchor_fact_ids", "visual_anchor_fact_ids"),
+                ("selected_finding_ids", "finding_ids"),
+                ("selected_evidence_ids", "evidence_ids"),
+            )
+        )
+    )
+    if verdict in {"fake", "real"}:
+        expected_stance = "refute" if verdict == "fake" else "support"
+        linked_evidence_ids = {
+            str(evidence_id)
+            for finding_id in selected_finding_ids & set(findings)
+            for evidence_id in findings[finding_id].get("evidence_ids", []) or []
+        }
+        evidence_chain_complete = bool(
+            selected_claim_ids
+            and selected_evidence_ids
+            and selected_finding_ids
+            and selected_evidence_ids <= set(evidence)
+            and selected_evidence_ids <= linked_evidence_ids
+            and all(
+                _v4_claim_directional_chain_ids(
+                    claim_id=claim_id,
+                    stance=expected_stance,
+                    selected_evidence_ids=selected_evidence_ids,
+                    selected_finding_ids=selected_finding_ids,
+                    claims=claims,
+                    tasks=tasks,
+                    evidence=evidence,
+                    findings=findings,
+                    successful_calls=successful_calls,
+                )[1]
+                for claim_id in selected_claim_ids
+            )
+        )
+    else:
+        evidence_chain_complete = bool(
+            selected_evidence_ids
+            and selected_evidence_ids <= set(evidence)
+            and all(
+                str(evidence[evidence_id].get("function_call_id", ""))
+                in successful_calls
+                for evidence_id in selected_evidence_ids
+            )
+        )
+    evidence_chain_recovery = 1.0 if evidence_chain_complete else 0.0
     discrepancy_alignment = (
         len(aligned_discrepancy_ids) / len(discrepancies)
         if discrepancies
@@ -1153,6 +1337,10 @@ def _score_discrepancy_trace(
         training_exclusion_reasons.append("evidence_chain_incomplete")
     if discrepancy_alignment < 1.0:
         training_exclusion_reasons.append("discrepancy_misaligned")
+    if not decision_evidence_consistent:
+        training_exclusion_reasons.append("decision_evidence_inconsistent")
+    if not judgment_basis_consistent:
+        training_exclusion_reasons.append("judgment_basis_mismatch")
     if stop_quality < 1.0:
         training_exclusion_reasons.append("stop_quality_invalid")
     if protocol_rejections:
@@ -1169,6 +1357,10 @@ def _score_discrepancy_trace(
         "engineering_error": engineering_error,
         "evidence_chain_recovery": round(evidence_chain_recovery, 6),
         "discrepancy_alignment": round(discrepancy_alignment, 6),
+        "decision_evidence_consistency": (
+            1.0 if decision_evidence_consistent else 0.0
+        ),
+        "judgment_basis_consistency": 1.0 if judgment_basis_consistent else 0.0,
         "stop_quality": round(stop_quality, 6),
         "image_claim_count": len(claims),
         "material_discrepancy_count": len(discrepancies),
@@ -1203,6 +1395,9 @@ def _score_discrepancy_trace(
             "invalid_discrepancy_ids": invalid_discrepancy_ids,
             "selected_discrepancy_ids": sorted(selected_discrepancy_ids),
             "selected_evidence_ids": sorted(selected_evidence_ids),
+            "selected_finding_ids": sorted(selected_finding_ids),
+            "decision_evidence_consistent": decision_evidence_consistent,
+            "judgment_basis_consistent": judgment_basis_consistent,
             "post_determination_action_count": post_verdict_actions,
             "protocol_rejections": protocol_rejections,
         },

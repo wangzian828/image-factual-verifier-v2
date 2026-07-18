@@ -210,6 +210,12 @@ table is authoritative: every selected Evidence ID must belong to a task that ow
 the assessed claim. claim_assessments is sparse and optional; omit unrelated claims
 or claims with no owned reviewed Evidence. Never emit a material supported,
 refuted, or conflicted assessment with an empty selected_evidence_ids list.
+The recorded Evidence stance is also authoritative: supported requires qualified
+support Evidence, refuted requires qualified refute Evidence, and conflicted requires
+both directions. Neutral Evidence may motivate another route or an insufficient
+assessment, but it cannot be promoted into support, refutation, conflict, or a
+MaterialDiscrepancy. In particular, a likely different original capture with no
+recorded edit evidence does not prove that the input was composited or altered.
 Establish a MaterialDiscrepancy only when its
 statement identifies a material factual difference tied to affected claim IDs,
 visible anchor fact IDs, and qualified Evidence. Search titles, snippets, URLs,
