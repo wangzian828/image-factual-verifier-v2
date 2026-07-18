@@ -195,10 +195,18 @@ class StageRunner:
             getattr(self.llm, "wire_api", "")
         ).lower() != "interactions":
             raise RuntimeError("Gemini stages require wire_api='interactions'.")
+        configured_question_ids = [
+            question_id
+            for question_id in self.question_claims
+            if not self.question_is_active
+            or self.question_is_active(question_id)
+        ]
+        context_question_ids = re.findall(
+            r"\[((?:q[^\]]*)|(?:task-[^\]]+))\]",
+            input_context,
+        )
         self.active_question_ids = list(
-            dict.fromkeys(
-                re.findall(r"\[((?:q[^\]]*)|(?:task-[^\]]+))\]", input_context)
-            )
+            dict.fromkeys(configured_question_ids or context_question_ids)
         )
         if self._uses_native_interactions():
             return await self._run_native_interactions(input_context)
@@ -1001,7 +1009,10 @@ class StageRunner:
             if self.stage_name == "verification":
                 question_schema: Dict[str, Any] = {
                     "type": "string",
-                    "description": "Planning question id advanced by this call, for example q0.",
+                    "description": (
+                        "Active runtime task/question id advanced by this call. "
+                        "When enum values are supplied, use one exactly."
+                    ),
                 }
                 if self.active_question_ids:
                     question_schema["enum"] = self.active_question_ids

@@ -17,6 +17,9 @@ from src.orchestrator.investigation_models import (
     VisualFact,
 )
 from src.orchestrator.pipeline import Orchestrator
+from src.orchestrator.image_only_prompts import (
+    render_discrepancy_decision_context,
+)
 from src.orchestrator.stage_runner import InteractionSession
 from src.orchestrator.runtime_case import image_sha256
 from src.orchestrator.state import (
@@ -636,6 +639,23 @@ def test_discrepancy_decision_consumes_pending_result_on_same_chain(
         claim_binding="source_assertion",
     )
     investigation.evidence.append(evidence)
+
+    decision_context = json.loads(
+        render_discrepancy_decision_context(
+            investigation,
+            reviewed_evidence_ids=[evidence.evidence_id],
+            trigger="qualified_evidence",
+        )
+    )
+    assert decision_context["assessable_claim_ids"] == [claim.claim_id]
+    assert decision_context["reviewed_evidence_ownership"] == [
+        {
+            "evidence_id": evidence.evidence_id,
+            "task_id": task.task_id,
+            "claim_ids": [claim.claim_id],
+            "hypothesis_id": task.hypothesis_id,
+        }
+    ]
 
     update = asyncio.run(
         orchestrator._run_discrepancy_decision(

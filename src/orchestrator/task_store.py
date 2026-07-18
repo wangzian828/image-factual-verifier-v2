@@ -870,7 +870,14 @@ def apply_discrepancy_decision(
         if any(evidence_id not in evidence_by_id for evidence_id in evidence_ids):
             return {"accepted": False, "rejected_reason": "assessment cites unknown Evidence"}
         if proposal.assessment != "insufficient" and not evidence_ids:
-            return {"accepted": False, "rejected_reason": "material assessment requires Evidence"}
+            return {
+                "accepted": False,
+                "rejected_reason": (
+                    "material assessment for ImageClaim "
+                    f"{proposal.claim_id!r} requires Evidence; omit the "
+                    "assessment when no reviewed owned Evidence serves it"
+                ),
+            }
         if not set(evidence_ids) <= set(reviewed_ids):
             return {
                 "accepted": False,
@@ -883,7 +890,11 @@ def apply_discrepancy_decision(
             if task is None or claim.claim_id not in task.claim_ids:
                 return {
                     "accepted": False,
-                    "rejected_reason": "Evidence is outside the assessed claim's owned tasks",
+                    "rejected_reason": (
+                        f"Evidence {evidence_id!r} is outside ImageClaim "
+                        f"{claim.claim_id!r}'s owned tasks; omit that claim "
+                        "assessment or select reviewed owned Evidence"
+                    ),
                 }
         assessment_id = stable_id(
             "assessment",

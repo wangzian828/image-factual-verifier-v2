@@ -204,8 +204,13 @@ You are the sparse multimodal Discrepancy Decision checkpoint in one ongoing
 image investigation. Compare only the supplied qualified Evidence with the
 original image account and visible pixel/OCR anchors inherited in this Interaction.
 
-Assess the affected ImageClaims as supported, refuted, conflicted, or insufficient
-and cite only supplied Evidence IDs. Establish a MaterialDiscrepancy only when its
+Assess only ImageClaims served by reviewed Evidence as supported, refuted,
+conflicted, or insufficient, and cite only supplied Evidence IDs. The ownership
+table is authoritative: every selected Evidence ID must belong to a task that owns
+the assessed claim. claim_assessments is sparse and optional; omit unrelated claims
+or claims with no owned reviewed Evidence. Never emit a material supported,
+refuted, or conflicted assessment with an empty selected_evidence_ids list.
+Establish a MaterialDiscrepancy only when its
 statement identifies a material factual difference tied to affected claim IDs,
 visible anchor fact IDs, and qualified Evidence. Search titles, snippets, URLs,
 source names, prior model rationale, and outside knowledge are not Evidence.
@@ -791,6 +796,26 @@ def render_discrepancy_decision_context(
 
     reviewed = list(dict.fromkeys(str(item) for item in reviewed_evidence_ids))
     evidence_by_id = {item.evidence_id: item for item in state.evidence}
+    task_by_id = {item.task_id: item for item in state.tasks}
+    reviewed_evidence_ownership = []
+    assessable_claim_ids: List[str] = []
+    for evidence_id in reviewed:
+        evidence = evidence_by_id.get(evidence_id)
+        if evidence is None:
+            continue
+        task = task_by_id.get(evidence.task_id)
+        claim_ids = list(task.claim_ids) if task is not None else []
+        assessable_claim_ids.extend(claim_ids)
+        reviewed_evidence_ownership.append(
+            {
+                "evidence_id": evidence_id,
+                "task_id": evidence.task_id,
+                "claim_ids": claim_ids,
+                "hypothesis_id": (
+                    task.hypothesis_id if task is not None else None
+                ),
+            }
+        )
     return json.dumps(
         {
             "trigger": trigger,
@@ -807,6 +832,8 @@ def render_discrepancy_decision_context(
                 for evidence_id in reviewed
                 if evidence_id in evidence_by_id
             ],
+            "reviewed_evidence_ownership": reviewed_evidence_ownership,
+            "assessable_claim_ids": list(dict.fromkeys(assessable_claim_ids)),
             "prior_claim_assessments": [
                 item.model_dump(mode="json")
                 for item in state.claim_assessments[-12:]

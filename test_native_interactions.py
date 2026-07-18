@@ -213,6 +213,33 @@ def test_native_function_call_round_trip() -> None:
     assert "is_error" not in function_result
 
 
+def test_native_tool_schema_uses_runtime_owned_task_ids_without_bracket_hints() -> None:
+    function_call = _function_call_response()
+    function_call["steps"][0]["arguments"]["question_id"] = "task-live"
+    backend = NativeFakeBackend([function_call, _completed_response()])
+    runner = StageRunner(
+        llm=backend,
+        system_prompt="Investigate with tools.",
+        tools=[RecordingTool()],
+        output_schema=ToolStageOutput,
+        max_rounds=3,
+        stage_name="verification",
+        min_tool_calls=1,
+        attach_image=False,
+        question_claims={"task-live": "The runtime-owned claim."},
+    )
+
+    parsed, steps = asyncio.run(
+        runner.run('{"active_tasks":[{"task_id":"task-live"}]}')
+    )
+
+    assert parsed is not None
+    assert steps[0].tool_args["__question_id"] == "task-live"
+    schema = backend.requests[0]["tools"][0]["parameters"]
+    assert schema["properties"]["question_id"]["enum"] == ["task-live"]
+    assert "q0" not in schema["properties"]["question_id"]["description"]
+
+
 def test_shared_session_carries_pending_function_result_into_next_stage() -> None:
     backend = NativeFakeBackend(
         [
