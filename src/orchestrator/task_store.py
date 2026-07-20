@@ -637,6 +637,19 @@ def record_tool_observation(
         task.status = "resolved"
     elif visual_reinspection is not None:
         task.status = "exhausted"
+    elif finding_ids and task.claim_ids:
+        # In v4, extractor Findings are candidate material for the sparse
+        # Discrepancy Decision; they do not resolve an ImageClaim or its search
+        # route by themselves.  Keep investigating while a bounded material
+        # route remains, otherwise record ordinary route exhaustion.  Only the
+        # semantic Decision reducer may assess the Claim or explicitly retire
+        # its SearchHypothesis.
+        task.finding_ids = list(dict.fromkeys([*task.finding_ids, *finding_ids]))
+        task.status = (
+            "active"
+            if _task_has_remaining_material_route(state, task)
+            else "exhausted"
+        )
     elif finding_ids and not _task_has_unresolved_decisive_fact(state, task):
         task.finding_ids = list(dict.fromkeys([*task.finding_ids, *finding_ids]))
         task.status = "resolved"

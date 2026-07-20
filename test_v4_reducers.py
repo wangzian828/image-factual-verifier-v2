@@ -234,6 +234,49 @@ def test_archive_memory_actions_update_memory_state_without_fact_failure() -> No
     assert state.failures == []
 
 
+def test_v4_finding_does_not_resolve_claim_route_before_semantic_decision() -> None:
+    state = _planned_state()
+    task = state.tasks[0]
+    hypothesis = state.search_hypotheses[0]
+    statement = "The presenter appears at the event before the product segment."
+    step = StageStep(
+        action_type="tool_call",
+        tool_name="visit",
+        tool_args={"url": "https://example.org/event", "__question_id": task.task_id},
+        tool_result=json.dumps(
+            {
+                "status": "success",
+                "selected_url": "https://example.org/event",
+                "url": "https://example.org/event",
+                "evidence": statement,
+                "summary": statement,
+                "relevance": "medium",
+                "stance": "refute",
+                "directness": "indirect",
+                "temporal_alignment": "not_applicable",
+                "artifact_sha256": "b" * 64,
+                "evidence_span": {"start": 0, "end": len(statement)},
+                "retrieved_at": datetime.now(timezone.utc).isoformat(),
+                "injection_flags": [],
+                "evidence_eligible": True,
+            }
+        ),
+        metadata={"function_call_id": "call-indirect-v4-finding"},
+    )
+
+    update = record_tool_observation(
+        state,
+        step,
+        image_sha256="a" * 64,
+    )
+
+    assert update["created_finding_ids"]
+    assert state.claim_assessments == []
+    assert task.finding_ids == update["created_finding_ids"]
+    assert task.status == "active"
+    assert hypothesis.status == "active"
+
+
 def test_image_account_planning_creates_stable_owned_graph() -> None:
     first = _state()
     second = _state()
