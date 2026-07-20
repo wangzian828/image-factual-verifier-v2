@@ -847,6 +847,7 @@ html&gt;body{padding:0}&lt;/style&gt;
     &lt;span class=&quot;viz-badge&quot;&gt;图片输入&lt;/span&gt;
     &lt;span class=&quot;viz-badge&quot;&gt;开放网络调查&lt;/span&gt;
     &lt;span class=&quot;viz-badge&quot;&gt;状态可审计&lt;/span&gt;
+    &lt;span class=&quot;viz-badge&quot;&gt;独立阶段 + 工具短链&lt;/span&gt;
     &lt;span class=&quot;viz-badge&quot;&gt;real / fake 二元输出&lt;/span&gt;
   &lt;/div&gt;
 
@@ -876,7 +877,7 @@ html&gt;body{padding:0}&lt;/style&gt;
         &lt;span class=&quot;ifv-arrow&quot; aria-hidden=&quot;true&quot;&gt;→&lt;/span&gt;
         &lt;button class=&quot;btn ifv-stage&quot; type=&quot;button&quot; data-stage=&quot;3&quot; aria-pressed=&quot;false&quot;&gt;
           &lt;i data-lucide=&quot;refresh-cw&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;
-          4 归约 / Coverage
+          4 Decision / Coverage
         &lt;/button&gt;
       &lt;/div&gt;
       &lt;span class=&quot;viz-badge ifv-loop-return&quot;&gt;未决定：Decision 更新路线后 ↺ 回到 ReAct&lt;/span&gt;
@@ -912,7 +913,7 @@ html&gt;body{padding:0}&lt;/style&gt;
     &lt;/div&gt;
     &lt;div class=&quot;ifv-lane&quot;&gt;
       &lt;span class=&quot;viz-badge ifv-lane-label&quot;&gt;Runtime 负责裁决&lt;/span&gt;
-      &lt;span class=&quot;ifv-lane-copy&quot;&gt;协议校验 · 状态归约 · 冲突裁决 · Coverage · basis 编译&lt;/span&gt;
+      &lt;span class=&quot;ifv-lane-copy&quot;&gt;协议校验 · 原子归约 · 路线账本 · Coverage · basis 编译&lt;/span&gt;
     &lt;/div&gt;
   &lt;/div&gt;
 
@@ -969,14 +970,14 @@ html&gt;body{padding:0}&lt;/style&gt;
         {
           icon: &quot;search&quot;,
           label: &quot;围绕一个任务执行一个真实工具动作&quot;,
-          action: &quot;模型在反向搜图、文本搜索、访问网页、裁图搜索和参考图对比中选择一个工具。&quot;,
-          state: &quot;Discovery 或原始工具结果；成功调用 ID 和来源信息&quot;,
+          action: &quot;模型在反向搜图、文本搜索、访问网页、裁图搜索和参考图对比中选择一个工具。每个动作开启独立工具短链，不继承上一动作的隐藏对话。&quot;,
+          state: &quot;显式工作区 · Discovery 或原始工具结果 · 成功调用 ID 和来源信息&quot;,
           example: &quot;反向搜图找到相关 Moon Tree 图片；随后访问 NASA 候选页，取得 Johnson Space Center 的原文。&quot;
         },
         {
           icon: &quot;refresh-cw&quot;,
-          label: &quot;Runtime 归约、裁冲突并检查覆盖&quot;,
-          action: &quot;验证来源和调用链，生成 Evidence、Finding 或 Failure；裁决支持/反驳冲突并运行 Coverage。&quot;,
+          label: &quot;语义 Decision + 确定性 Coverage&quot;,
+          action: &quot;Runtime 验证来源和调用链并生成 Evidence、Finding 或 Failure；独立 Gemini Decision 提议 ClaimAssessment 与 MaterialDiscrepancy；Runtime 原子校验后运行 Coverage。&quot;,
           state: &quot;Evidence · Finding · ClaimAssessment · MaterialDiscrepancy · Coverage&quot;,
           example: &quot;NASA 官方直接说明真实仪式在 Johnson Space Center，反驳 Kennedy 地点；决定性事实变为 refuted，Coverage 已足够判 fake。&quot;
         },

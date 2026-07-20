@@ -2979,7 +2979,7 @@ def discover_trace_files(input_path: Path) -> list[Path]:
     if input_path.name.casefold() == "traces":
         return sorted(
             path
-            for path in input_path.rglob("*.json")
+            for path in input_path.glob("*.json")
             if path.is_file() and not _looks_like_benchmark_artifact(path)
         )
     traces_dirs = sorted(
@@ -2990,7 +2990,7 @@ def discover_trace_files(input_path: Path) -> list[Path]:
             {
                 trace
                 for directory in traces_dirs
-                for trace in directory.rglob("*.json")
+                for trace in directory.glob("*.json")
                 if trace.is_file() and not _looks_like_benchmark_artifact(trace)
             }
         )

@@ -503,7 +503,7 @@ class Orchestrator:
         image_path: str = "",
         interaction_session: Optional[InteractionSession] = None,
     ) -> None:
-        """Create the v4 main Interaction root and atomically install its graph."""
+        """Run standalone v4 Planning and atomically install its claim graph."""
 
         effective_image_path = image_path or state.image_path
         runner = StageRunner(
@@ -1109,7 +1109,7 @@ class Orchestrator:
         *,
         interaction_session: InteractionSession,
     ) -> Dict[str, Any]:
-        """Execute one bounded v4 claim/hypothesis action on the main chain."""
+        """Execute one bounded v4 claim/hypothesis action in a short tool chain."""
 
         if investigation.proposed_verdict in {"fake", "real"}:
             raise RuntimeError("no ReAct action is allowed after a v4 verdict")

@@ -25,7 +25,7 @@ hash-verified original image
   -> Gemini literal scene perception
   -> positioned OCR
   -> deterministic visual facts and retrieval anchors
-  -> Image Account Planning (main Interaction root; original image attached once)
+  -> standalone Image Account Planning (controlled original-image view)
        1-3 ImageClaims
        independently planned, bounded SearchHypotheses
   -> case/hypothesis-owned ReAct action
@@ -35,14 +35,17 @@ hash-verified original image
        optional MaterialDiscrepancy
        bounded hypothesis updates
        optional one focused visual reinspection
-       continue | fake | real | unverifiable proposal
+       continue | fake | real proposal
   -> deterministic discrepancy Coverage and minimal verdict basis
   -> constrained v4 Judgment
 ```
 
-All later main-chain stages inherit the original image through
-`previous_interaction_id`. Tool-internal model calls are independent observations and
-cannot mutate semantic state.
+Planning, every Discrepancy Decision, and Judgment are independent requests built
+from an explicit, versioned workspace handoff. One ReAct action may use
+`previous_interaction_id` only to complete its native
+`function_call -> function_result -> output` protocol. No hidden Interaction history
+crosses an action or stage boundary. Tool-internal model calls are independent
+observations and cannot mutate semantic state.
 
 ## State ownership
 
@@ -104,9 +107,9 @@ and provenance. General anomaly opinions are diagnostic only.
   high-salience ImageClaim and cites qualified Evidence plus visible anchors.
 - `real`: every high-salience ImageClaim is supported, no decisive discrepancy
   remains, meaningful high-salience routes are closed, and Gemini proposes real.
-- `unverifiable`: a high-salience ImageClaim remains insufficient or conflicted, no
-  decisive discrepancy is established, its meaningful routes are closed, and Gemini
-  proposes unverifiable.
+- unresolved or conflicted internal state is retained in the verdict basis. After
+  meaningful routes close or the 24-action cap is reached, bounded Judgment chooses
+  the better-supported binary verdict and reports the unresolved gaps.
 
 Failure to find a discrepancy is not evidence of reality. Provider, protocol,
 runtime, required-tool, and all-tools-failed conditions are engineering errors and
@@ -115,9 +118,12 @@ end before Judgment.
 ## Stop and budgets
 
 The hard action cap is 24. One accepted native tool call is one action. The v4 loop
-stops immediately after terminal Coverage, before any further search. One focused
-visual reinspection may be requested by Discrepancy Decision. New hypotheses are
-bounded globally and per decision; semantically duplicate routes are rejected.
+stops immediately after terminal Coverage, before any further search. Normal stops
+are `verdict_determined`, `meaningful_routes_exhausted`, and
+`hard_budget_exhausted`; provider/protocol failures remain `engineering_error`.
+No-gain streaks are diagnostic only. One focused visual reinspection may be
+requested by Discrepancy Decision. New hypotheses are bounded globally and per
+decision; semantically duplicate routes are rejected.
 
 ## Audit and training
 
@@ -139,8 +145,10 @@ these gates and rejects a trace even if upstream score metadata is wrong.
 Local deterministic reducers, mocked native Interactions, the complete default
 workflow, strict audit, scoring, and export tests pass. Three frozen historical
 fixtures retain admissible conclusions; the prior Andreea fixture is now a required
-safety rejection because its different-capture Evidence was neutral. The first real
-canary exposed engineering ownership gaps and the second exposed the neutral-Evidence
-semantic upgrade now covered by regression gates. Production acceptance still
-requires one new real Gemini canary with manual trace inspection, followed by three
-to four heterogeneous canaries. Unit tests alone do not mark v4 complete.
+safety rejection because its different-capture Evidence was neutral. The 2026-07-20
+Queen canary produced an evidence-determined `fake`, complete
+claim/discrepancy/Evidence alignment, immediate stopping, and no protocol rejection.
+Its first acceptance command exposed nested runtime artifacts being mistaken for
+canonical traces; trace discovery is now limited to direct `traces/*.json` files.
+Production acceptance still requires the corrected strict audit plus three to four
+heterogeneous canaries. Unit tests alone do not mark v4 complete.

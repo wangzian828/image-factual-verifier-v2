@@ -15,7 +15,7 @@
   harness 调用旧 schema/reducer。
 - Phase 1 确定性门禁：原子 Planning/Decision reducer、非法输出零修改、稳定 ID、
   序列化往返、Evidence/Claim/Hypothesis 所有权、单次视觉复查和 post-verdict 禁止均有测试。
-- Phase 2～5：Image Account Planning 原图 root、claim/hypothesis ReAct、稀疏
+- Phase 2～5：Image Account Planning 受控原图 standalone request、claim/hypothesis ReAct 短链、稀疏
   Discrepancy Decision、v4 Coverage/basis/Judgment 已通过完整 mock Interactions 轨迹和
   默认 workflow canonical trace strict audit。
 - Phase 6：v4 strict audit、`ifv-policy-v2`、Evidence-chain/discrepancy/stop-quality
@@ -24,14 +24,18 @@
   不含凭据、private gold 或 provider interaction ID。当前 v4 reducer 对 Andreea、Queen、
   Pillars 和 Monarch 双跑状态完全一致，预期 verdict、Evidence 所有权、discrepancy 对齐、
   及时停止、post-verdict 禁止和 strict audit 均通过。
-- Phase 9：执行中。四条历史回放门禁已放行；Queen 真实 canary 已验证短 Interaction 将
-  最大单请求降到约 36.9k token，但 Evidence/Discrepancy 质量仍未验收通过。
+- Phase 9：执行中。四条历史回放门禁已放行；2026-07-20 Queen 真实 canary 已得到
+  evidence-determined `fake`，Evidence/Discrepancy/停止/训练门禁均为 1.0，0 次协议拒绝。
+  14 次请求累计 prompt token 为 490,691，最大单请求约 41.4k，低于 128k；累计值不能误作
+  单请求上下文。canary 外层 strict audit 失败已定位为递归误扫 `traces/runtime` 中的档案 JSON，
+  现已限制为直接 `traces/*.json` 并补回归测试，待服务器复验。
 - Phase 10：核心文档已更新；v4 主实现已提交。
 - Phase 11～14：上下文测量、不可变档案、显式工作区、按需回读、图像分辨率控制和调查后
   图像重检已实现。
 - Phase 15：进展记账保留；2026-07-20 按最新决策删除无进展 soft checkpoint、grace actions
-  和 `information_saturated` 提前结算。当前本地门禁为 `407 passed`、`compileall` 通过、
-  `git diff --check` 通过。下一步同步 gpu-13 后重新运行 Queen。
+  和 `information_saturated` 提前结算。当前本地门禁为 `422 passed`、`compileall` 通过、
+  `git diff --check` 通过。下一步在 gpu-13 复验 Queen strict audit，再运行 Monarch、Pillars、
+  Andreea 三条异构真实样例。
 
 ### 2026-07-20 决策更新
 

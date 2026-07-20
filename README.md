@@ -11,7 +11,7 @@ ImageOnlyRuntimeCase
   -> sparse multimodal Discrepancy Decision
   -> deterministic Coverage and claim/discrepancy/Evidence basis
   -> constrained discrepancy-first-v4 Judgment
-  -> real | fake | unverifiable
+  -> real | fake
 ```
 
 The default decision policy is `discrepancy-first-v4`. The v3 runtime is frozen at
@@ -39,14 +39,18 @@ $env:SERPER_API_KEY = "..."
 python -m src path\to\image.jpg
 ```
 
-Gemini sees the original image in perception and once at the Image Account Planning
-main-chain root. Later ReAct, Discrepancy Decision, and Judgment calls inherit the
-visual context through `previous_interaction_id`.
+Gemini sees the original image during perception and Planning. Later semantic stages
+receive an explicit context packet assembled from canonical state and the immutable
+runtime archive; focused visual tools can inspect the saved image again. Planning,
+Discrepancy Decision, and Judgment are standalone requests. Each ReAct action uses
+`previous_interaction_id` only inside its native
+`function_call -> function_result` round trip; that short chain does not cross into
+the next action or stage.
 
 Search titles, snippets, and reverse-image matches are Discovery only. Verdict
 Evidence must preserve exact fetched text or a successful visual observation,
 provenance, artifact hashes, and successful function-call ownership. Provider or
-protocol failure is an engineering error, never `unverifiable`.
+protocol failure is an engineering error, never a factual verdict.
 
 ## Evaluation outputs
 

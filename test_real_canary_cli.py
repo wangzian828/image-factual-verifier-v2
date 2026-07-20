@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from scripts import run_real_canary
+from scripts.audit_real_trace import discover_trace_files
 
 
 def test_explicit_canary_cases_are_forwarded_in_order() -> None:
@@ -189,6 +190,29 @@ def test_real_canary_accepts_discrepancy_first_v4_artifacts(
     assert result["data_pipeline_decision_policy_version"] == "reinspect-v2"
     assert result["agent_decision_policy_version"] == "discrepancy-first-v4"
     assert result["successful_tools"] == ["text_search", "visit"]
+
+
+def test_trace_discovery_excludes_nested_runtime_json_artifacts(tmp_path) -> None:
+    _write_v4_canary_artifacts(tmp_path)
+    runtime_artifact = (
+        tmp_path
+        / "traces"
+        / "runtime"
+        / "case-v4"
+        / "artifacts"
+        / "sha256"
+        / "ab"
+        / "abcdef.json"
+    )
+    runtime_artifact.parent.mkdir(parents=True)
+    runtime_artifact.write_text(json.dumps({"status": "success"}), encoding="utf-8")
+
+    assert discover_trace_files(tmp_path / "traces") == [
+        tmp_path / "traces" / "case-v4.json"
+    ]
+    assert discover_trace_files(tmp_path) == [
+        tmp_path / "traces" / "case-v4.json"
+    ]
 
 
 def test_real_canary_accepts_bounded_binary_fake_artifacts(

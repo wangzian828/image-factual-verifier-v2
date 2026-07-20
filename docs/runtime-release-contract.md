@@ -120,7 +120,7 @@ Contains successful classifications only:
 ```
 
 The field set is exactly `case_id` and `verdict`; verdict is
-`real|fake|unverifiable`.
+`real|fake`.
 
 Engineering-error cases are absent from this file. The data-owned classification
 scorer treats the missing case as wrong.

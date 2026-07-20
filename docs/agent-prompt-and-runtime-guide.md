@@ -11,12 +11,12 @@
 | ReAct | Gemini | one claim/hypothesis-owned native tool action, route and provider bounds |
 | Observation reduction | none | Discovery/Evidence/Failure separation and immutable provenance |
 | Discrepancy Decision | Gemini | reviewed Evidence scope, ownership, anchors, budgets, atomic apply |
-| Coverage/basis | none | exact fake/real/unverifiable preconditions and smallest allowed basis |
-| Judgment | Gemini explanation only | exact compiled verdict and ID equality |
+| Coverage/basis | none | exact evidence-determined or bounded-binary boundary and smallest allowed basis |
+| Judgment | Gemini | exact basis/ID equality; select binary verdict only when Evidence did not already determine it |
 
 ## Image Account Planning
 
-Planning is the stored main Interaction root and receives the original image once.
+Planning is a standalone request and receives a controlled original-image view.
 It also receives perception, positioned OCR, pixel/OCR VisualFacts, retrieval
 anchors, and bootstrap tasks. It emits positive ImageClaims and tentative
 SearchHypotheses; it does not create a core verdict fact or verdict. The Planning
@@ -37,8 +37,10 @@ and Judgment remain concise and do not treat hidden reasoning as Evidence.
 
 ## ReAct and native protocol
 
-Each action continues the main Interaction through `previous_interaction_id` and
-selects exactly one active claim/hypothesis task. The runtime dynamically exposes
+Each action starts a fresh native tool round trip and selects exactly one active
+claim/hypothesis task. `previous_interaction_id` is used only between that action's
+`function_call` and `function_result`; it is never passed to the next action or
+semantic stage. The runtime dynamically exposes
 only untried bounded routes. A retrieval batch may enable one concrete `visit` or
 `compare_with_reference` action. Pending candidates are inspected before repeating
 retrieval. Claim/hypothesis ownership preserves lineage; it is not a semantic cage.
@@ -58,15 +60,15 @@ No provider, model, or wire-protocol switch may hide an error.
 
 ## Discrepancy Decision
 
-The checkpoint runs sparsely after qualified direct Evidence, same-capture/reference
+The standalone checkpoint runs sparsely after qualified direct Evidence, same-capture/reference
 comparison, a material Evidence boundary, or immediately before unresolved
 termination. It sees ImageClaims, hypotheses, exact Evidence, visible anchors,
-attempted routes, and remaining budgets in the inherited original-image chain.
+attempted routes, and remaining budgets through the explicit workspace handoff.
 
 It may assess claims, establish or conflict a MaterialDiscrepancy, add/retire bounded
 hypotheses, request one Evidence-motivated visual reinspection, and propose a verdict.
 It may not cite search snippets, invent IDs, expand the image account, or turn
-provider failure into unverifiable.
+provider failure into a factual verdict.
 
 ## Observation semantics
 
@@ -82,7 +84,9 @@ that overlap each claim.
 ## Judgment and export
 
 The deterministic compiler selects the exact claims, discrepancies, visible anchors,
-Findings, Evidence, and unresolved gaps. Judgment reproduces that basis and adds no
-new facts. The strict auditor and `ifv-policy-v2` exporter reject unknown IDs,
+Findings, Evidence, and unresolved gaps. Evidence-determined Judgment reproduces the
+compiled binary verdict; unresolved terminal cases use bounded binary Judgment over
+the same complete basis. Neither mode adds facts. The strict auditor and
+`ifv-policy-v2` exporter reject unknown IDs,
 misalignment, post-verdict actions, protocol rejection, private evaluator data, or
 active legacy core ownership.

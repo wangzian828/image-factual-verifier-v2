@@ -4,25 +4,26 @@
 **Date:** 2026-07-17
 **Status:** living document; update with every prompt or stage-order change
 
-Executable prompt text remains in the referenced Python constants. This document
-is the ordered index: what Gemini sees, why the call happens, what schema it must
-return, and which interaction owns the next call.
+The active short prompts are quoted below. Tool-specific prompt text remains in the
+referenced Python constants. This document records exactly what Gemini sees, why a
+call happens, its schema, and its Interaction lifetime.
 
 ## 1. End-to-end order
 
 ```text
 1. Perceive Scene                         independent multimodal call
-2. Image Account Planning                main Interaction root, original image
-3. Investigation ReAct                   main Interaction continuation
+2. Image Account Planning                standalone, controlled image view
+3. Investigation ReAct                   fresh tool-roundtrip root
 4. Tool execution                        deterministic runtime
-5. Function result                       returned to main Interaction
-6. Discrepancy Decision                  sparse main Interaction continuation
+5. Function result                       returned inside the same short roundtrip
+6. Discrepancy Decision                  standalone sparse checkpoint
 7. Continue from a Search Hypothesis     repeat 3-6 while bounded
-8. Final Judgment                        main Interaction continuation
+8. Final Judgment                        standalone request
 ```
 
 Auxiliary Gemini calls used inside tools do not replace or fork semantic state.
-They return observations to the main chain as tool results.
+They return observations to canonical state as tool results. No hidden Interaction
+history crosses an action or stage boundary.
 
 ## 2. Ordered main chain
 
@@ -49,8 +50,8 @@ Core instruction:
 
 - v4 source: `src/orchestrator/image_only_prompts.py`
 - Replaces: `TARGET_PLANNING_SYSTEM_PROMPT`
-- Interaction: creates the stored main Interaction root
-- Sees original image: yes, attached once
+- Interaction: `standalone_request`
+- Sees original image: yes, controlled view supplied explicitly
 - Thinking: `high` by default; thought tokens are recorded, never Evidence
 - Input:
   - PerceptionReport;
@@ -69,17 +70,21 @@ Core instruction:
 - Next: deterministic Claim, hypothesis, and ResearchTask creation. Initial route
   attachment to the image account is bookkeeping, not a semantic conclusion.
 
-Core instruction:
+Exact instruction:
 
-> State the visually anchored account, then separately plan open routes that
-> establish the underlying facts. The image supplies claims and clues, not the
-> search boundary. Hypotheses remain unverified leads.
+> You are the Image Account Planning root. Plan an open fact-check of the account
+> communicated by the image. State one to three concise, visually anchored
+> ImageClaims. Separately design open SearchHypotheses that establish the underlying
+> real-world facts. The image supplies claims and clues, not the search boundary.
+> Prior knowledge may supply unverified leads; only tool Evidence establishes facts.
+> Hypotheses do not own the verdict. Return the required JSON schema.
 
 ### 3. Investigation ReAct
 
-- Source: `src/orchestrator/image_only_prompts.py::REACT_SYSTEM_PROMPT`
-- Interaction: continues the main Interaction
-- Sees original image: inherited through `previous_interaction_id`
+- Source: `src/orchestrator/image_only_prompts.py::DISCREPANCY_REACT_SYSTEM_PROMPT`
+- Interaction: new `tool_roundtrip` for each action
+- Sees original image: no; current recorded image understanding is explicit, and
+  visual tools can inspect the saved image
 - Input:
   - active ImageClaims;
   - open SearchHypotheses;
@@ -94,18 +99,28 @@ Core instruction:
 - Output: one native function call or bounded segment output
 - Next: deterministic tool execution.
 
-Core instruction:
+Exact instruction:
 
-> Select one runtime-authorized action that most reduces uncertainty about an
-> unresolved ImageClaim. Claim/hypothesis ownership records lineage but does not
-> restrict the query angle. Model knowledge is a lead until tool Evidence verifies
-> it.
+> Choose exactly one runtime-authorized tool action that most reduces uncertainty
+> about an unresolved ImageClaim. Its attached SearchHypothesis supplies context and
+> ownership, not a boundary on the investigation. Use any useful query angle to
+> establish the underlying real-world facts independently of the values proposed by
+> the image. Prior knowledge may supply leads, but only tool Evidence establishes a
+> fact. Do not change the ImageClaim.
+>
+> Inspect a promising page or reference image before repeating retrieval for that
+> route. Search titles, snippets, and reverse-image matches are Discovery only.
+> Qualified Evidence requires a fetched exact span or a successful visual
+> observation with recorded provenance. Use only supplied observations, do not decide
+> a verdict, and do not introduce external identities or metadata as new
+> ImageClaims. The runtime owns IDs, claim/hypothesis ownership, route duplication,
+> budgets, Evidence eligibility, state transitions, and stopping.
 
 ### 4. Tool Function Result
 
 - Prompt: none; deterministic protocol message
-- Interaction: returned to the same main Interaction
-- Sees original image: inherited
+- Interaction: returned only to the function-calling Interaction
+- Sees original image: no hidden inherited image; visual tool results are explicit
 - Input:
   - exact serialized tool result;
   - claim and hypothesis ownership IDs;
@@ -120,8 +135,9 @@ Core instruction:
 
 - v4 source: `src/orchestrator/image_only_prompts.py`
 - Replaces: `EVIDENCE_DECISION_SYSTEM_PROMPT`
-- Interaction: sparse continuation of the main Interaction
-- Sees original image: inherited through `previous_interaction_id`
+- Interaction: `standalone_request`
+- Sees original image: no; receives explicit image understanding, anchors, and any
+  focused visual observations
 - Trigger:
   - new qualified direct Evidence;
   - same-capture/reference comparison;
@@ -140,44 +156,55 @@ Core instruction:
     refuted, and both for conflicted;
   - keep neutral or different-capture/no-edit comparisons non-terminal;
   - add or retire bounded SearchHypotheses;
-  - propose `continue | fake | real | unverifiable`;
+  - propose `continue | fake | real`;
   - optionally request focused visual reinspection.
 - Output: `DiscrepancyDecisionOutput`
 - Next:
   - stop when deterministic verdict preconditions accept the proposal;
   - otherwise return to Investigation ReAct.
 
-Core instruction:
+Exact instruction:
 
-> Compare the supplied Evidence with the original image account. Identify a
-> material factual discrepancy only when it is tied to visible anchors and cited
-> Evidence. Failure to find a discrepancy is not proof that the image is real.
+> You are the sparse multimodal Discrepancy Decision checkpoint. Compare the
+> reviewed qualified Evidence with the current image account. Update only affected
+> Claim assessments; establish a MaterialDiscrepancy only when cited Evidence and
+> visible anchors support it. You may retire or add a bounded, non-duplicate
+> hypothesis or request one Evidence-motivated image reinspection. Omit Claims that
+> have no reviewed owned Evidence. Propose fake for a decisive high-salience
+> discrepancy, real when all high-salience claims are supported and meaningful
+> routes are closed, otherwise continue. Use only supplied IDs and return the
+> required JSON schema.
 
 ### 6. Final Judgment
 
-- Source: `src/orchestrator/image_only_prompts.py::JUDGMENT_SYSTEM_PROMPT`
-- Interaction: final continuation of the main Interaction
-- Sees original image: inherited
+- Source: `src/orchestrator/image_only_prompts.py::DISCREPANCY_JUDGMENT_SYSTEM_PROMPT`
+- Interaction: `standalone_request`
+- Sees original image: no; receives the compiled basis and recorded image understanding
 - Input:
-  - deterministically compiled verdict;
-  - accepted VerdictBasis;
+  - compiled verdict when Evidence already determined one;
+  - accepted `DiscrepancyVerdictBasis`;
   - selected claims, discrepancies, Findings, and Evidence;
   - unresolved gaps.
 - Purpose:
   - explain the already compiled verdict;
   - cite exactly the compiled basis;
   - add no new facts or searches.
-- Output: `ImageOnlyJudgment`
+- Output: `DiscrepancyJudgment`
 - Next: trace persistence, scoring, and export.
 
-Core instruction:
+Exact instruction:
 
-> Return the compiled verdict and explain only the selected basis. Do not reopen
-> investigation or introduce uncited factual claims.
+> You are the constrained final synthesizer for discrepancy-first-v4. Give the final
+> binary fact-check verdict, real or fake, from the supplied complete investigation
+> basis. When compiled_verdict is non-empty, reproduce it. Otherwise weigh the
+> recorded Evidence, image understanding, conflicts, failed routes and unresolved
+> gaps and choose the better-supported binary conclusion. Copy every compiled-basis
+> ID list and unresolved_gaps exactly. The assessment may summarize only supplied
+> material; do not add historical facts or reopen search.
 
 ## 3. Auxiliary Gemini calls
 
-These calls are independent of the stored main Interaction. Their outputs are
+These calls are independent of the semantic-stage Interactions. Their outputs are
 observations, not state transitions.
 
 | Order when invoked | Prompt source | Sees image | Role |
@@ -228,7 +255,8 @@ Every prompt or interaction-order change must update:
 ## 6. Current acceptance status
 
 The local deterministic and mocked-Interactions gates pass for the complete v4
-chain, including original-image root inheritance, claim/hypothesis ownership,
-sparse decision checkpoints, atomic reducers, terminal Coverage, strict audit, and
-policy export. The frozen four-trace replay and real Gemini canary gates remain
-pending; unit tests are not production acceptance.
+chain, including standalone-stage lifecycle checks, short native tool roundtrips,
+claim/hypothesis ownership, sparse decisions, atomic reducers, terminal Coverage,
+strict audit, and policy export. The 2026-07-20 Queen canary produced a correct,
+evidence-determined `fake` with no protocol rejection; corrected strict audit and
+heterogeneous live canaries remain pending.

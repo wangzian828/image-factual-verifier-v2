@@ -15,7 +15,7 @@ original image
   -> bounded retrieval hypotheses
   -> web and visual Evidence
   -> image-aware discrepancy decision
-  -> fake | real | unverifiable
+  -> fake | real
 ```
 
 The runtime looks for a material factual discrepancy tied to visible anchors. A
@@ -79,21 +79,25 @@ The latest Evidence-based state of one ImageClaim.
 
 ## 3. Multimodal decision ownership
 
-The existing Gemini main Interaction keeps the original image visible from
-Planning through investigation. A sparse `DiscrepancyDecision` runs:
+Planning, every semantic decision, and Judgment use standalone Gemini requests with
+explicit context assembled from canonical state and the immutable archive. A ReAct
+action keeps `previous_interaction_id` only inside its native tool round trip. A
+sparse `DiscrepancyDecision` runs:
 
 - after qualified direct Evidence or same-capture comparison;
 - at a scheduled action boundary when material new Evidence exists;
 - before unresolved termination.
 
-It receives the original image, ImageClaims, SearchHypotheses, exact Evidence,
-visual anchors, attempted routes, and remaining budget. It may:
+It receives the recorded image understanding, ImageClaims, SearchHypotheses, exact
+Evidence, visual anchors, attempted routes, and remaining budget. Focused visual
+reinspection supplies a new explicit observation when the pixels must be checked
+again. It may:
 
 - assess claims;
 - establish or reject a material discrepancy;
 - add or retire bounded SearchHypotheses;
 - request one focused visual reinspection;
-- propose `continue | fake | real | unverifiable`.
+- propose `continue | fake | real`.
 
 It does not run after every search result.
 
@@ -119,12 +123,12 @@ One decisive discrepancy is terminal.
 
 Failure to find a discrepancy is never sufficient by itself.
 
-### unverifiable
+### unresolved internal state
 
-- at least one high-salience claim remains insufficient or conflicted;
-- no decisive discrepancy is established;
-- meaningful routes are saturated or exhausted;
-- the image-aware checkpoint proposes unverifiable.
+Insufficient and conflicted remain internal Claim/Evidence states. When meaningful
+routes close or the 24-action safety cap is reached without an evidence-determined
+verdict, bounded Judgment chooses `real | fake` from the complete recorded basis and
+preserves unresolved gaps. A no-gain streak never triggers this exit.
 
 ## 5. Deterministic responsibilities
 

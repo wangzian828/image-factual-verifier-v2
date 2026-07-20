@@ -33,8 +33,8 @@ but they must not enter the v4 default path.
 1. Validate and hash-check `ImageOnlyRuntimeCase`.
 2. Run Gemini `perceive_scene` and positioned OCR.
 3. Deterministically bootstrap literal visual facts and retrieval anchors.
-4. Create the main Interaction root with the original image and run Image Account
-   Planning for one to three ImageClaims plus bounded SearchHypotheses.
+4. Run standalone Image Account Planning with the controlled original-image view and
+   explicit context packet for one to three ImageClaims plus bounded SearchHypotheses.
 5. Create account/hypothesis-owned ResearchTasks without exposing per-Claim binding
    in initial Planning, then execute one bounded native tool call per ReAct action.
 6. Keep Discovery separate from provenance-complete Evidence.
@@ -52,7 +52,9 @@ but they must not enter the v4 default path.
 - Gemini LLM and vision use the Interactions API. Never switch wire protocols or
   providers after an error.
 - Tool-bearing turns use native `function_call` / `function_result` with
-  `previous_interaction_id`; at most one tool call is accepted per v4 action turn.
+  `previous_interaction_id` inside one short action chain; at most one tool call is
+  accepted per v4 action turn. Planning, Decision, and Judgment are standalone and
+  cannot inherit an earlier stage Interaction.
 - Gemini sees the image in `perceive_scene`. Positioned OCR is a separate observation;
   low-confidence text is isolated and decisive small text may require focused visual
   verification. Manual image inspection is not part of the runtime.
