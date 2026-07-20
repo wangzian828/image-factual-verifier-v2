@@ -58,6 +58,12 @@
   待核查的现实命题。当前通用修复只明确 ImageClaim 必须直接表达图像让读者相信的现实命题，
   不得退化为“图片、文字、帖子或广告作出了该声称”的元命题；不修改抽取器 stance，不使用
   字符串门禁。
+- Phase 16 第四轮：现实命题 Planning 已真实生效。Andreea 在 5 个调查动作后得到
+  evidence-determined `fake`，Evidence chain、discrepancy alignment、Decision/basis 一致性和
+  stop quality 均为 1.0，strict audit 通过，0 工程错误、0 post-determination action；整案为
+  7 次工具、13 次 LLM、181.73 秒。照片真实性 Claim 仍未解决，但代言现实命题已有决定性
+  refutation，因此没有继续做完整来源复原。网页抽取首次把 Esca 本人的否认误标为 support，
+  造成一次可恢复的 protocol correction；20 例需继续统计该 stance 噪声和训练排除比例。
 
 ### 2026-07-20 决策更新
 
