@@ -69,8 +69,13 @@ def route_signature(tool_name: str, tool_args: Mapping[str, Any]) -> dict[str, A
                 if canonicalize_url(str(url))
             }
         )
+        signature["claim_id"] = str(
+            args.get("__claim_id") or args.get("claim_id", "")
+        ).strip()
         signature["goal"] = " ".join(
-            _semantic_tokens(str(args.get("goal", "")))
+            _semantic_tokens(
+                str(args.get("retrieval_goal") or args.get("goal", ""))
+            )
         )
     elif tool == "compare_with_reference":
         signature["reference_url"] = canonicalize_url(

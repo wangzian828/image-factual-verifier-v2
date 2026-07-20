@@ -41,6 +41,11 @@
   Evidence 的实际语义覆盖分离，网页 Evidence 不再确定性排除 mixed task 中的 `text_claim`，
   Decision 上下文显式列出每个 Claim 的合法视觉锚点与已审阅定向链。未加入样例专用规则；
   本地更新后门禁为 `424 passed`，下一步重新运行三条真实 canary。
+- Phase 16 复验：Pillars `real` 与 Monarch `fake` 已真实通过 strict audit。Andreea 得到
+  `fake`，但 21-action bounded Judgment 没有 Evidence，且 strict audit 发现一次 URL 与 Task
+  的跨归属组合。后续通用修复把每轮 ReAct 限为一个 task-scoped route family；网页访问由
+  模型从该 Task 拥有的 Claim ID 中选择单一 stance 目标，runtime 注入 Claim 原文，同时保留
+  action 自己的 passage retrieval goal。修复后只重跑 Andreea，再决定是否进入正式 20 例。
 
 ### 2026-07-20 决策更新
 

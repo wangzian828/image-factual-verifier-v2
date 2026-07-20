@@ -826,17 +826,17 @@ def test_native_tool_schema_constrains_array_items() -> None:
     ]
     assert runner._validate_native_tool_args(
         "visit",
-        {
-            "question_id": "q0",
-            "url": ["https://example.org/pending"],
-        },
+            {
+                "question_id": "q0",
+                "url": ["https://example.org/pending"],
+            },
     ) == ""
     assert "must be one of" in runner._validate_native_tool_args(
         "visit",
-        {
-            "question_id": "q0",
-            "url": ["https://example.org/unowned"],
-        },
+            {
+                "question_id": "q0",
+                "url": ["https://example.org/unowned"],
+            },
     )
 
 
@@ -892,20 +892,96 @@ def test_visit_extraction_goal_is_bound_to_runtime_claim() -> None:
         {
             "question_id": "task-1",
             "url": ["https://example.org/source"],
-            "goal": "Model supplied goal",
+            "retrieval_goal": "Find the event's actual transport.",
         },
         "",
     )
 
-    assert "goal" not in prepared
     assert prepared["image_claim"] == "The subject used a bus during the event."
     assert prepared["retrieval_goal"] == (
-        "Find records of the transport actually used."
+        "Find the event's actual transport."
     )
     assert prepared["__claim_text"] == "The subject used a bus during the event."
     assert prepared["__evidence_goal"] == (
         "Find records of the transport actually used."
     )
+
+
+def test_visit_selects_one_runtime_owned_claim_for_stance() -> None:
+    runner = StageRunner(
+        llm=NativeFakeBackend([]),
+        system_prompt="Inspect the selected candidate.",
+        tools=[VisitTool()],
+        stage_name="verification",
+        question_claims={"task-1": "Fallback account summary."},
+        question_claim_options={
+            "task-1": {
+                "claim-text": "The presenter endorses the shown product.",
+                "claim-integrity": "The product photograph is unaltered.",
+            }
+        },
+        question_evidence_goals={"task-1": "Inspect the public statement."},
+        tool_argument_constraints={
+            "visit": {
+                "url": ["https://example.org/statement"],
+                "question_id": ["task-1"],
+            }
+        },
+    )
+    runner.active_question_ids = ["task-1"]
+    schema = runner._build_native_tool_schemas()[0]["parameters"]
+
+    assert schema["properties"]["claim_id"]["enum"] == [
+        "claim-text",
+        "claim-integrity",
+    ]
+    assert "claim_id" in schema["required"]
+    prepared = runner._prepare_tool_args(
+        "visit",
+        {
+            "question_id": "task-1",
+            "claim_id": "claim-text",
+            "url": ["https://example.org/statement"],
+        },
+        "",
+    )
+    assert prepared["image_claim"] == (
+        "The presenter endorses the shown product."
+    )
+    assert prepared["__claim_id"] == "claim-text"
+
+
+def test_visit_route_signature_distinguishes_atomic_claim_targets() -> None:
+    from src.orchestrator.route_policy import route_signature
+
+    first = route_signature(
+        "visit",
+        {
+            "__question_id": "task-1",
+            "__claim_id": "claim-text",
+            "url": ["https://example.org/statement"],
+            "retrieval_goal": "Find whether the endorsement was denied.",
+        },
+    )
+    second = route_signature(
+        "visit",
+        {
+            "__question_id": "task-1",
+            "__claim_id": "claim-integrity",
+            "url": ["https://example.org/statement"],
+            "retrieval_goal": "Find whether the photograph was edited.",
+        },
+    )
+
+    assert first["claim_id"] == "claim-text"
+    assert set(first["goal"].split()) == {
+        "deni",
+        "endorsement",
+        "find",
+        "was",
+        "whether",
+    }
+    assert first != second
 
 
 def test_canonical_reverse_image_result_preserves_validated_references() -> None:

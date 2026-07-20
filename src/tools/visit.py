@@ -40,7 +40,7 @@ class VisitTool(BaseTool):
                 },
                 "retrieval_goal": {
                     "type": "string",
-                    "description": "Runtime-bound goal used only to select relevant passages.",
+                    "description": "Passage sought by this action; used only for extraction.",
                 },
             },
             "required": ["url", "image_claim", "retrieval_goal"],

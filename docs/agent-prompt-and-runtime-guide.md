@@ -48,6 +48,11 @@ Gemini may choose any useful query angle, including an independent question abou
 the underlying real-world fact. Such a query does not change the ImageClaim or
 create Evidence.
 
+One action exposes one task-scoped route family. For webpage inspection Gemini
+selects one Claim ID already owned by that task and writes the passage it wants;
+the runtime binds the exact Claim text for stance extraction. This prevents URL,
+Task and Claim choices from being recombined across unrelated routes.
+
 After Planning, the reducer broadly registers each initial route against the current
 image account so Evidence, budgets, and stopping remain auditable. This internal
 attachment is not shown as a Planning choice and cannot establish a ClaimAssessment

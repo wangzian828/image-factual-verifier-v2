@@ -20,6 +20,8 @@ from src.orchestrator.investigation_models import (
 from src.orchestrator.pipeline import Orchestrator
 from src.orchestrator.image_only_prompts import (
     render_discrepancy_decision_context,
+    render_discrepancy_react_context,
+    select_discrepancy_react_tasks,
 )
 from src.orchestrator.stage_runner import InteractionSession
 from src.orchestrator.runtime_case import image_sha256
@@ -342,7 +344,8 @@ class PlanningThenReactBackend(ImageAccountPlanningBackend):
             context = json.loads(user_input["content"][0]["text"])
         else:
             context = json.loads(payload)
-        self.react_task_id = context["active_tasks"][0]["task_id"]
+        active_task = context["active_tasks"][0]
+        self.react_task_id = active_task["task_id"]
         if self.react_count == 1:
             tool_name = "text_search"
             arguments = {
@@ -354,6 +357,7 @@ class PlanningThenReactBackend(ImageAccountPlanningBackend):
             arguments = {
                 "question_id": self.react_task_id,
                 "url": "https://example.org/source",
+                "claim_id": active_task["owned_claims"][0]["claim_id"],
             }
         return {
             "id": f"discrepancy-react-{self.react_count}",
@@ -575,6 +579,53 @@ def test_planning_to_react_keeps_one_image_chain_and_claim_ownership(
     ]
     assert session.previous_interaction_id == "discrepancy-react-1"
     assert len(session.pending_input) == 1
+
+
+def test_discrepancy_action_selects_one_task_scoped_claim_set(
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "one-task-routes.jpg"
+    image_path.write_bytes(b"one-task-routes")
+    state, investigation = _state(image_path)
+    backend = ImageAccountPlanningBackend()
+    orchestrator = Orchestrator(validate_startup=False)
+    orchestrator.llm = backend
+    asyncio.run(
+        orchestrator._run_image_account_planning(
+            state,
+            investigation,
+            interaction_session=None,
+        )
+    )
+    first = investigation.tasks[0]
+    second = first.model_copy(deep=True)
+    second.task_id = "task-second-route"
+    second.hypothesis_id = "hypothesis-second-route"
+    second.priority = 2
+    investigation.tasks.append(second)
+    second_hypothesis = investigation.search_hypotheses[0].model_copy(deep=True)
+    second_hypothesis.hypothesis_id = second.hypothesis_id
+    second_hypothesis.task_id = second.task_id
+    second_hypothesis.statement = "A second independent route."
+    investigation.search_hypotheses.append(second_hypothesis)
+
+    selected = select_discrepancy_react_tasks(investigation)[:1]
+    assert [task.task_id for task in selected] == [first.task_id]
+    claim_options = orchestrator._discrepancy_task_claim_options(
+        investigation,
+        task_ids={first.task_id},
+    )
+    assert list(claim_options) == [first.task_id]
+    assert set(claim_options[first.task_id]) == set(first.claim_ids)
+    react_context = json.loads(
+        render_discrepancy_react_context(
+            investigation,
+            task_ids={first.task_id},
+        )
+    )
+    assert [item["task_id"] for item in react_context["active_tasks"]] == [
+        first.task_id
+    ]
 
 
 def test_discrepancy_decision_consumes_pending_result_on_same_chain(

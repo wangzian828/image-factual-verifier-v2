@@ -1114,6 +1114,10 @@ class Orchestrator:
         if investigation.proposed_verdict in {"fake", "real"}:
             raise RuntimeError("no ReAct action is allowed after a v4 verdict")
         react_tasks = select_image_only_discrepancy_react_tasks(investigation)
+        # A native tool schema cannot express dependencies between independent
+        # task, URL, reference, and Claim enums. Expose one scheduled task per
+        # action so every advertised combination remains executable.
+        react_tasks = react_tasks[:1]
         task_ids = {task.task_id for task in react_tasks}
         if not task_ids:
             raise RuntimeError("no executable claim/hypothesis task remains")
@@ -1194,6 +1198,10 @@ class Orchestrator:
                 investigation,
                 task_ids=task_ids,
             ),
+            question_claim_options=self._discrepancy_task_claim_options(
+                investigation,
+                task_ids=task_ids,
+            ),
             question_evidence_goals=self._discrepancy_task_evidence_goals(
                 investigation,
                 task_ids=task_ids,
@@ -1237,7 +1245,10 @@ class Orchestrator:
             ),
         )
         parsed, steps = await runner.run(
-            render_image_only_discrepancy_react_context(investigation)
+            render_image_only_discrepancy_react_context(
+                investigation,
+                task_ids=task_ids,
+            )
         )
         for step in steps:
             if step.stage_name == "verification":
@@ -2214,6 +2225,23 @@ class Orchestrator:
                 + " | ".join(owned_claims)
             )[:1800]
         return result
+
+    @staticmethod
+    def _discrepancy_task_claim_options(
+        investigation: ImageOnlyInvestigationState,
+        *,
+        task_ids: set[str],
+    ) -> Dict[str, Dict[str, str]]:
+        claims = {item.claim_id: item for item in investigation.image_claims}
+        return {
+            task.task_id: {
+                claim_id: claims[claim_id].statement
+                for claim_id in task.claim_ids
+                if claim_id in claims
+            }
+            for task in investigation.tasks
+            if task.task_id in task_ids
+        }
 
     @staticmethod
     def _discrepancy_task_evidence_goals(

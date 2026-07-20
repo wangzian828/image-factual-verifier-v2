@@ -96,8 +96,10 @@ Search titles, snippets, and reverse-image matches are Discovery only. Web Evide
 requires a fetched exact span, offsets, canonical source, artifact hash, retrieval
 time, directness, stance, and successful function-call provenance. Page retrieval
 uses an explicit two-field contract: `retrieval_goal` selects relevant passages,
-while stance is judged only against the owning `image_claim`. Both fields remain in
-the canonical tool result and Evidence ledger. Visual Evidence
+while stance is judged only against one model-selected, task-owned `image_claim`
+whose exact text the runtime binds from its Claim ID. Each ReAct action exposes one
+task-scoped route family, preventing invalid cross-task URL/Claim combinations.
+Both fields remain in the canonical tool result and Evidence ledger. Visual Evidence
 requires a successful focused observation or reference comparison with image hashes
 and provenance. General anomaly opinions are diagnostic only.
 

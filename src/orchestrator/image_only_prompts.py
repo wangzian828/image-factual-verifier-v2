@@ -112,6 +112,7 @@ fact. Do not change the ImageClaim.
 
 Inspect a promising page or reference image before repeating retrieval for that
 route. Search titles, snippets, and reverse-image matches are Discovery only.
+For page inspection, select one owned ImageClaim and state the passage sought.
 Qualified Evidence requires a fetched exact span or a successful visual
 observation with recorded provenance. Use only supplied observations, do not decide
 a verdict, and do not introduce external identities or metadata as new
@@ -600,10 +601,14 @@ def render_target_planning_context(
 
 def render_discrepancy_react_context(
     state: ImageOnlyInvestigationState,
+    *,
+    task_ids: set[str] | None = None,
 ) -> str:
     """Render the v4 claim/hypothesis loop without any core-fact fallback."""
 
     active = select_discrepancy_react_tasks(state)
+    if task_ids is not None:
+        active = [task for task in active if task.task_id in task_ids]
     active_task_ids = {task.task_id for task in active}
     claims = {claim.claim_id: claim for claim in state.image_claims}
     hypotheses = {

@@ -533,6 +533,7 @@ def record_tool_observation(
             task,
             function_call_id=call_id,
             tool_name=tool_name,
+            tool_args=tool_args,
             data=data,
             metadata=metadata,
             image_sha256=image_sha256,
@@ -4663,6 +4664,7 @@ def _record_evidence_and_findings(
     *,
     function_call_id: str,
     tool_name: str,
+    tool_args: Mapping[str, Any],
     data: Mapping[str, Any],
     metadata: Mapping[str, Any],
     image_sha256: str,
@@ -4670,11 +4672,21 @@ def _record_evidence_and_findings(
     evidence_ids: List[str] = []
     finding_ids: List[str] = []
     # Task ownership is an auditable eligibility boundary, not a semantic
-    # judgment about which owned Claim the material ultimately affects.  Keep
-    # every owned Claim available to the Discrepancy Decision; in particular,
-    # web retrieval must not discard a text Claim merely because the same task
-    # also owns a relation or attribute Claim.
-    owned_fact_ids = list(task.fact_ids)
+    # judgment about which owned Claim the material ultimately affects. A web
+    # inspection may select one owned Claim as its atomic stance target; other
+    # tools keep the whole task-owned set available to the Decision checkpoint.
+    selected_claim_id = str(tool_args.get("__claim_id", "")).strip()
+    claim_fact_by_id = {
+        claim.claim_id: claim.fact_id
+        for claim in state.image_claims
+        if claim.claim_id in task.claim_ids
+    }
+    owned_fact_ids = (
+        [claim_fact_by_id[selected_claim_id]]
+        if selected_claim_id in claim_fact_by_id
+        and tool_name in {"visit", "crop_and_search"}
+        else list(task.fact_ids)
+    )
 
     for record in _web_evidence_records(data):
         evidence = str(record.get("evidence", "")).strip()

@@ -114,6 +114,7 @@ class StageRunner:
         observation_callback: Optional[Callable[[StageStep, List[StageStep]], Optional[Dict[str, Any]]]] = None,
         visual_call_validator: Optional[Callable[[str, Dict[str, Any]], str]] = None,
         question_claims: Optional[Dict[str, str]] = None,
+        question_claim_options: Optional[Dict[str, Dict[str, str]]] = None,
         priority_question_ids: Optional[List[str]] = None,
         resolved_priority_question_ids: Optional[List[str]] = None,
         supporting_question_ids: Optional[List[str]] = None,
@@ -172,6 +173,7 @@ class StageRunner:
         self.observation_callback = observation_callback
         self.visual_call_validator = visual_call_validator
         self.question_claims = dict(question_claims or {})
+        self.question_claim_options = deepcopy(question_claim_options or {})
         self.priority_question_ids = list(dict.fromkeys(priority_question_ids or []))
         self.resolved_priority_question_ids = set(resolved_priority_question_ids or [])
         self.supporting_question_ids = list(dict.fromkeys(supporting_question_ids or []))
@@ -1125,6 +1127,29 @@ class StageRunner:
                 properties["question_id"] = question_schema
                 if "question_id" not in required:
                     required.append("question_id")
+                claim_ids = list(
+                    dict.fromkeys(
+                        claim_id
+                        for question_id in (
+                            constrained_question_ids or self.active_question_ids
+                        )
+                        for claim_id in self.question_claim_options.get(
+                            question_id,
+                            {},
+                        )
+                    )
+                )
+                if tool.name in {"visit", "crop_and_search"} and claim_ids:
+                    properties["claim_id"] = {
+                        "type": "string",
+                        "enum": claim_ids,
+                        "description": (
+                            "One runtime-owned ImageClaim whose stance this "
+                            "inspection should evaluate."
+                        ),
+                    }
+                    if "claim_id" not in required:
+                        required.append("claim_id")
                 runtime_bound = self._runtime_bound_visual_fields(tool.name)
                 if runtime_bound:
                     required = [name for name in required if name not in runtime_bound]
@@ -1709,7 +1734,14 @@ class StageRunner:
         question_id = str(tool_args.pop("question_id", "")).strip()
         if question_id:
             tool_args["__question_id"] = question_id
-            claim_text = self.question_claims.get(question_id, "").strip()
+            selected_claim_id = str(tool_args.pop("claim_id", "")).strip()
+            claim_options = self.question_claim_options.get(question_id, {})
+            claim_text = str(
+                claim_options.get(selected_claim_id)
+                or self.question_claims.get(question_id, "")
+            ).strip()
+            if selected_claim_id:
+                tool_args["__claim_id"] = selected_claim_id
             if claim_text:
                 tool_args["__claim_text"] = claim_text
             evidence_goal = self.question_evidence_goals.get(question_id, "").strip()
@@ -1729,8 +1761,11 @@ class StageRunner:
                 tool_args.pop("goal", None)
                 if claim_text:
                     tool_args["image_claim"] = claim_text
-                if evidence_goal or claim_text:
-                    tool_args["retrieval_goal"] = evidence_goal or claim_text
+                requested_goal = str(tool_args.get("retrieval_goal", "")).strip()
+                if requested_goal or evidence_goal or claim_text:
+                    tool_args["retrieval_goal"] = (
+                        requested_goal or evidence_goal or claim_text
+                    )
             elif tool_name == "text_search":
                 immutable_goal = evidence_goal or claim_text
                 if immutable_goal:
@@ -1788,16 +1823,23 @@ class StageRunner:
                 bound.setdefault("focus", expected_property[:400])
         return bound
 
-    @staticmethod
-    def _runtime_bound_visual_fields(tool_name: str) -> set[str]:
+    def _runtime_bound_visual_fields(self, tool_name: str) -> set[str]:
         if tool_name == "visit":
-            return {"image_claim", "retrieval_goal"}
+            return (
+                {"image_claim"}
+                if self.question_claim_options
+                else {"image_claim", "retrieval_goal"}
+            )
         if tool_name == "compare_with_reference":
             return {"reference_url"}
         if tool_name == "crop_and_inspect":
             return {"bbox", "focus_question"}
         if tool_name == "crop_and_search":
-            return {"bbox", "image_claim", "retrieval_goal"}
+            return (
+                {"bbox", "image_claim"}
+                if self.question_claim_options
+                else {"bbox", "image_claim", "retrieval_goal"}
+            )
         if tool_name == "ocr_with_position":
             return {"bbox", "goal"}
         if tool_name == "count_objects":
@@ -2341,6 +2383,7 @@ class StageRunner:
     async def _execute_tool(self, tool_name: str, tool_args: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
         tool = self.tools[tool_name]
         tool_args.pop("__question_id", None)
+        tool_args.pop("__claim_id", None)
         tool_args.pop("__claim_text", None)
         tool_args.pop("__evidence_goal", None)
         properties = tool.parameters.get("properties", {})
@@ -2505,6 +2548,7 @@ class StageRunner:
     def _build_cache_args(self, tool_name: str, tool_args: Dict[str, Any]) -> Dict[str, Any]:
         args = dict(tool_args)
         args.pop("__question_id", None)
+        args.pop("__claim_id", None)
         args.pop("__claim_text", None)
         args.pop("__evidence_goal", None)
         if tool_name in {"compare_with_reference", "analyze_visual_anomalies"} and self.image_path:

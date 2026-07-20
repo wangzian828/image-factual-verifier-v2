@@ -110,6 +110,7 @@ Exact instruction:
 >
 > Inspect a promising page or reference image before repeating retrieval for that
 > route. Search titles, snippets, and reverse-image matches are Discovery only.
+> For page inspection, select one owned ImageClaim and state the passage sought.
 > Qualified Evidence requires a fetched exact span or a successful visual
 > observation with recorded provenance. Use only supplied observations, do not decide
 > a verdict, and do not introduce external identities or metadata as new
@@ -222,16 +223,18 @@ observations, not state transitions.
 
 The webpage extractor is an independent request with two trusted fields:
 
-- `image_claim`: the positive account communicated by the image; the extractor's
-  `support | refute | unclear` stance is always relative to this field;
-- `retrieval_goal`: the fact or relation sought on the selected page; it ranks and
-  selects passages but cannot determine stance.
+- `image_claim`: one model-selected, task-owned ImageClaim bound by the runtime;
+  the extractor's `support | refute | unclear` stance is always relative to this
+  atomic field;
+- `retrieval_goal`: the passage sought by the current action. It ranks and selects
+  passages but cannot determine stance or change the ImageClaim.
 
-The runtime binds both fields from the owning ResearchTask. They are not writable
-tool arguments exposed to the investigation model. The webpage body is untrusted
-data. Passage selection reads the cleaned full document up to the 60,000-character
-budget without a fixed passage-count cap, and the returned Evidence records retain
-both trusted fields for audit.
+The model selects only a Claim ID already owned by the scheduled ResearchTask; the
+runtime injects its exact text and records the ID in provenance. One ReAct action
+exposes one task-scoped route family, so URL, reference and Claim choices cannot be
+combined across tasks. The webpage body is untrusted data. Passage selection reads
+the cleaned full document up to the 60,000-character budget without a fixed
+passage-count cap, and returned Evidence records retain both trusted fields for audit.
 
 ## 4. Prompt change checklist
 

@@ -300,6 +300,16 @@ def test_web_evidence_keeps_mixed_text_and_relation_claims_reviewable() -> None:
         tool_args={
             "url": "https://example.org/statement",
             "__question_id": task.task_id,
+            "__claim_id": next(
+                claim.claim_id
+                for claim in state.image_claims
+                if next(
+                    fact
+                    for fact in state.facts
+                    if fact.fact_id == claim.fact_id
+                ).kind
+                == "text_claim"
+            ),
         },
         tool_result=json.dumps(
             {
@@ -338,16 +348,16 @@ def test_web_evidence_keeps_mixed_text_and_relation_claims_reviewable() -> None:
         for item in state.findings
         if item.finding_id in observation["created_finding_ids"]
     )
-    assert set(evidence.fact_ids) == owned_claim_fact_ids
-    assert set(finding.fact_ids) == owned_claim_fact_ids
-    assert any(
-        fact_id in evidence.fact_ids
+    text_claim_fact_id = next(
+        fact_id
         for fact_id in owned_claim_fact_ids
         if next(
             fact for fact in state.facts if fact.fact_id == fact_id
         ).kind
         == "text_claim"
     )
+    assert evidence.fact_ids == [text_claim_fact_id]
+    assert finding.fact_ids == [text_claim_fact_id]
 
 
 def test_image_account_planning_creates_stable_owned_graph() -> None:

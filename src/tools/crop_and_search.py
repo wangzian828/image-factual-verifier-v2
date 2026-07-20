@@ -93,7 +93,7 @@ class CropAndSearchTool(BaseTool):
                 },
                 "retrieval_goal": {
                     "type": "string",
-                    "description": "Runtime-bound goal used for visual and passage retrieval.",
+                    "description": "Information sought by this action for retrieval and extraction.",
                 },
                 "visual_question_id": {"type": "string"},
                 "source_evidence_id": {"type": "string"},

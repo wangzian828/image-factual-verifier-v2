@@ -59,6 +59,8 @@ def test_hot_path_prompts_stay_semantic_and_compact() -> None:
     assert "any useful query angle" in discrepancy_react_prompt
     assert "only tool Evidence establishes a fact" in discrepancy_react_prompt
     assert "Do not change the ImageClaim" in discrepancy_react_prompt
+    assert "select one owned ImageClaim" in discrepancy_react_prompt
+    assert "state the passage sought" in discrepancy_react_prompt
     assert "reviewed Evidence" in discrepancy_prompt
     assert "recorded admissible_stances" in discrepancy_prompt
     assert "neutral Evidence cannot" in discrepancy_prompt

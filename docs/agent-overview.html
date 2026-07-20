@@ -970,8 +970,8 @@ html&gt;body{padding:0}&lt;/style&gt;
         {
           icon: &quot;search&quot;,
           label: &quot;围绕一个任务执行一个真实工具动作&quot;,
-          action: &quot;模型在反向搜图、文本搜索、访问网页、裁图搜索和参考图对比中选择一个工具。每个动作开启独立工具短链，不继承上一动作的隐藏对话。&quot;,
-          state: &quot;显式工作区 · Discovery 或原始工具结果 · 成功调用 ID 和来源信息&quot;,
+          action: &quot;模型在一个 Task 的合法路线中选择一个工具。访问网页时再选择该 Task 拥有的一条 ImageClaim，并说明要从页面寻找什么；Runtime 注入准确的 Claim 原文。每个动作使用独立工具短链。&quot;,
+          state: &quot;Task 绑定的 URL / Claim ID / retrieval goal · Discovery 或原始工具结果 · 成功调用 ID 和来源信息&quot;,
           example: &quot;反向搜图找到相关 Moon Tree 图片；随后访问 NASA 候选页，取得 Johnson Space Center 的原文。&quot;
         },
         {
