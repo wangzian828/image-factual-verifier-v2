@@ -78,8 +78,22 @@ Phase 0～10 保留为重构历史，但下面四项新决定覆盖旧计划中�
 3. 保留确定性的“有意义路线耗尽”停止作为兜底；取消所有由连续无实质进展触发的
    提前结算和 `information_saturated`。进展记账只用于诊断、评估和训练评分，不影响
    v4 控制流。调查仅因证据结论成立、路线账本确实耗尽或 24-action 安全上限而结束。
-4. 先完成上下文管理和停止机制，再运行真实 20 例回归；通过准确率、证据保留、
-   token、停止质量和工程稳定性门禁后，才开始 Qwen SFT/RL 训练基建。
+4. 先完成上下文管理和停止机制。该项原定“先跑 Gemini 20 例再部署 Qwen”的顺序，
+   已被下面 2026-07-21 的 Qwen 部署决策替代。
+
+### 2026-07-21 Qwen 部署决策
+
+Qwen 部署、SFT 与 Agent RL 的唯一执行主计划为
+`2026-07-21-qwen35-9b-deployment-and-training-infrastructure.md`。已确认：
+
+1. 正式学生改为 `Qwen/Qwen3.5-9B`；先用 `Qwen/Qwen3.5-4B` 单卡快速打通
+   环境、协议、v4 adapter 和短训练，再由 9B 原样复验；Qwen3-VL-8B 旧计划不再执行。
+2. gpu-13 只使用物理 GPU `4,5,6,7` 中当时空闲的卡，最多四张，不占用 0～3。
+3. 不先运行 Gemini 完整 20 例。完成 Qwen3.5-9B serving、v4 adapter 和四条 Qwen
+   base canary 后，由 Qwen base 运行完整 20 例；相同冻结评测在 SFT、RL 后重跑。
+4. 20 例是开发评测，不进入训练上下文；Gemini 已通过的四条 canary 保留为教师和基线。
+5. SFT 使用 ms-swift/DeepSpeed 的 Qwen3.5-9B 全参数多模态门禁；Agent RL 保留
+   v4 runtime 环境所有权，以 rLLM/veRL gateway 为首选，不复制第二套状态机。
 
 ## 目标
 
@@ -603,14 +617,17 @@ engineering_error`。尚有档案待精确回读、新 Evidence 待图像重检�
 
 ### Phase 17：训练基建前置门禁
 
-20 例通过后，先清理失效实验脚本、重复 schema、旧生成物和不再进入 v4 主路径的兼容代码，
-但保留冻结 trace、迁移记录和审计工具。随后才按已有训练调研文档选择成熟框架搭建 Qwen：
+本阶段以 `2026-07-21-qwen35-9b-deployment-and-training-infrastructure.md` 为准。
+先清理训练仓库中的失效实验脚本、重复 schema、旧生成物和 Qwen3-VL 过时入口，但保留
+冻结 trace、迁移记录和审计工具。随后部署 Qwen3.5-9B、接入 v4 并由 Qwen 运行 20 例，
+再依次完成 SFT 和 Agent RL：
 
 - SFT 与 RL 共享同一 archive/workspace/action/gain/verdict 轨迹契约；
 - Gemini 在开发阶段负责教师示范、语义评分和过程评审，可生成候选轨迹，但不是唯一真值；
 - Qwen 学生更新后重新采样训练轨迹，Gemini 教师/评分模型冻结用于可比的过程评价；
 - provenance、工程错误、预算、档案和终止门禁仍由确定性运行时执行，不交给学生学习绕过；
-- 未通过 Phase 16 时不得开始批量轨迹生成、SFT 或 RL。
+- Qwen base 四条 canary 通过前不得运行完整 20 例；有意义的 SFT 数据门禁通过前不得正式
+  SFT；SFT checkpoint 通过真实 canary 前不得启动真实工具 RL。
 
 ## gpu-13 实施与验收摘要
 
@@ -630,6 +647,7 @@ engineering_error`。尚有档案待精确回读、新 Evidence 待图像重检�
 正式执行链不依赖单一 core fact 或全案 Gemini 隐藏历史；Planning、调查、回读、图像重检、
 压缩、进展和停止均可追溯且有界；原始材料不可变保存，工作区可压缩，决定性材料可精确
 回读；`real | fake` 二元 Judgment 与内部不确定状态分离；历史回放和四组真实隔离实验通过；
-完整 20 例经人工与 strict audit 验收；单次输入满足 128k 门禁目标；无样例专用规则；
-停止机制不因无进展计数误杀有效调查，且不降低关键证据与结论质量。满足这些条件后才清理冻结 v4 运行边界并
-进入基于成熟框架的 Qwen SFT/RL 训练基建。
+Qwen base、SFT 和 RL 使用相同冻结 20 例完成人工与 strict audit 对照；单次输入满足
+128k 门禁目标；无样例专用规则；停止机制不因无进展计数误杀有效调查，且不降低关键证据
+与结论质量；Qwen SFT/RL 设施按 2026-07-21 统一计划完成保存、恢复、部署、on-policy
+rollout、reward 和重新采样门禁。

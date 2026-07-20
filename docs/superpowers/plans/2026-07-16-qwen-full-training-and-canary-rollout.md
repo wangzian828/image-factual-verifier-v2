@@ -1,7 +1,9 @@
 # Qwen Full-Parameter Training and Canary Rollout Plan
 
 **Date:** 2026-07-16  
-**Status:** active; blocked from Qwen execution until three runtime canaries pass  
+**Status:** superseded on 2026-07-21 by
+`2026-07-21-qwen35-9b-deployment-and-training-infrastructure.md`; retained as research
+and implementation history
 **Runtime repository:** `image-factual-verifier-v3`  
 **Training repository:** separate `image-factual-verifier-training`  
 **Teacher:** Gemini  

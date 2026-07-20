@@ -1,7 +1,9 @@
 # Qwen-VL Student Training Infrastructure Plan
 
 **Date:** 2026-07-15  
-**Status:** in progress — local infrastructure implemented; gpu-13 gates pending
+**Status:** superseded on 2026-07-21 by
+`2026-07-21-qwen35-9b-deployment-and-training-infrastructure.md`; retained as research
+and implementation history
 **Runtime project:** `image-factual-verifier-v3`  
 **Training project:** new, separate `image-factual-verifier-training` repository  
 **Teacher:** Gemini  

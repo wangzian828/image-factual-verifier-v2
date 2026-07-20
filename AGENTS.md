@@ -6,12 +6,16 @@ Read these active documents before changing the runtime:
 
 - `docs/superpowers/plans/2026-07-17-discrepancy-first-v4.md`
 - `docs/superpowers/plans/2026-07-17-v4-discrepancy-first-implementation-plan.md`
+- `docs/superpowers/plans/2026-07-21-qwen35-9b-deployment-and-training-infrastructure.md`
 - `docs/gemini-interaction-sequence.md`
 - `docs/architecture.md`
 - `docs/runtime-release-contract.md`
 
 The July 14 implementation plan is a superseded historical record. The implementation
 and contract tests win when an old research note disagrees.
+
+The July 21 Qwen3.5-9B plan is the source of truth for student deployment, SFT, and
+Agent RL. The July 15/16 Qwen3-VL plans are superseded investigation records.
 
 ## Supported boundary
 
