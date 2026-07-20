@@ -86,7 +86,10 @@ Gemini owns:
 
 Search titles, snippets, and reverse-image matches are Discovery only. Web Evidence
 requires a fetched exact span, offsets, canonical source, artifact hash, retrieval
-time, directness, stance, and successful function-call provenance. Visual Evidence
+time, directness, stance, and successful function-call provenance. Page retrieval
+uses an explicit two-field contract: `retrieval_goal` selects relevant passages,
+while stance is judged only against the owning `image_claim`. Both fields remain in
+the canonical tool result and Evidence ledger. Visual Evidence
 requires a successful focused observation or reference comparison with image hashes
 and provenance. General anomaly opinions are diagnostic only.
 

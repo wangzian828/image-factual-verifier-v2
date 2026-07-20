@@ -35,8 +35,9 @@ def test_hot_path_prompts_stay_semantic_and_compact() -> None:
     discrepancy_prompt = " ".join(
         DISCREPANCY_DECISION_SYSTEM_PROMPT.split()
     )
-    assert "missing mention is not a refutation" in browse_prompt
-    assert "incompatible with the positive goal" in browse_prompt
+    assert "missing mention is not refutation" in browse_prompt
+    assert "conflicting value for the same subject" in browse_prompt
+    assert "need not settle every clause" in browse_prompt
     assert "runtime owns task state" in react_prompt
     assert "validates grounding" in planning_prompt
     assert "Hypotheses guide retrieval" in image_account_prompt

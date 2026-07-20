@@ -17,8 +17,8 @@ class VisitTool(BaseTool):
     source_access_policy: Optional[SourceAccessPolicy] = None
     name: str = "visit"
     description: str = (
-        "Visit one or more webpages with a verification goal and extract "
-        "goal-conditioned evidence, rationale, and summary."
+        "Visit one webpage and extract an exact passage for the runtime-bound "
+        "image claim and retrieval goal."
     )
     parameters: dict = field(
         default_factory=lambda: {
@@ -34,9 +34,16 @@ class VisitTool(BaseTool):
                         "separate policy actions."
                     ),
                 },
-                "goal": {"type": "string", "description": "The verification goal or target claim."},
+                "image_claim": {
+                    "type": "string",
+                    "description": "Runtime-bound image claim used only for evidence stance.",
+                },
+                "retrieval_goal": {
+                    "type": "string",
+                    "description": "Runtime-bound goal used only to select relevant passages.",
+                },
             },
-            "required": ["url", "goal"],
+            "required": ["url", "image_claim", "retrieval_goal"],
         }
     )
 
@@ -52,7 +59,13 @@ class VisitTool(BaseTool):
         if callable(setter):
             setter(policy)
 
-    def visit(self, url: Any, goal: str) -> dict:
+    def visit(
+        self,
+        url: Any,
+        *,
+        image_claim: str,
+        retrieval_goal: str,
+    ) -> dict:
         try:
             if isinstance(url, list):
                 urls = [str(item) for item in url if str(item).strip()]
@@ -71,14 +84,22 @@ class VisitTool(BaseTool):
                         "status": "error",
                         "error": "All requested URLs are blocked by the active source access policy.",
                     }
-                result = self.client.visit(urls[0], goal)
+                result = self.client.visit(
+                    urls[0],
+                    image_claim=image_claim,
+                    retrieval_goal=retrieval_goal,
+                )
             else:
                 if self.source_access_policy is not None and not self.source_access_policy.allows(str(url)):
                     return {
                         "status": "error",
                         "error": "URL blocked by the active source access policy.",
                     }
-                result = self.client.visit(str(url), goal)
+                result = self.client.visit(
+                    str(url),
+                    image_claim=image_claim,
+                    retrieval_goal=retrieval_goal,
+                )
         except Exception as exc:
             result = {
                 "status": "error",
@@ -115,4 +136,8 @@ class VisitTool(BaseTool):
         return {**result, "status": "success"}
 
     def call(self, params: dict) -> dict:
-        return self.visit(url=params["url"], goal=params["goal"])
+        return self.visit(
+            url=params["url"],
+            image_claim=params["image_claim"],
+            retrieval_goal=params["retrieval_goal"],
+        )

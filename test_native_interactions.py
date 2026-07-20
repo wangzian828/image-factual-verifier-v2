@@ -786,7 +786,6 @@ def test_native_tool_schema_constrains_array_items() -> None:
         {
             "question_id": "q0",
             "url": ["https://example.org/pending"],
-            "goal": "Check the claim.",
         },
     ) == ""
     assert "must be one of" in runner._validate_native_tool_args(
@@ -794,8 +793,75 @@ def test_native_tool_schema_constrains_array_items() -> None:
         {
             "question_id": "q0",
             "url": ["https://example.org/unowned"],
-            "goal": "Check the claim.",
         },
+    )
+
+
+def test_native_tool_schema_constrains_question_ids_per_tool() -> None:
+    runner = StageRunner(
+        llm=NativeFakeBackend([]),
+        system_prompt="Inspect the selected candidate.",
+        tools=[VisitTool(), RecordingTool()],
+        stage_name="verification",
+        question_claims={
+            "task-visit": "The depicted event occurred as shown.",
+            "task-search": "The depicted event occurred as shown.",
+        },
+        tool_argument_constraints={
+            "visit": {
+                "url": ["https://example.org/pending"],
+                "question_id": ["task-visit"],
+            },
+            "text_search": {
+                "question_id": ["task-search"],
+            },
+        },
+    )
+    runner.active_question_ids = ["task-visit", "task-search"]
+
+    schemas = {
+        item["name"]: item["parameters"]
+        for item in runner._build_native_tool_schemas()
+    }
+
+    assert schemas["visit"]["properties"]["question_id"]["enum"] == [
+        "task-visit"
+    ]
+    assert schemas["text_search"]["properties"]["question_id"]["enum"] == [
+        "task-search"
+    ]
+
+
+def test_visit_extraction_goal_is_bound_to_runtime_claim() -> None:
+    runner = StageRunner(
+        llm=NativeFakeBackend([]),
+        system_prompt="Inspect the selected candidate.",
+        tools=[VisitTool()],
+        stage_name="verification",
+        question_claims={"task-1": "The subject used a bus during the event."},
+        question_evidence_goals={
+            "task-1": "Find records of the transport actually used."
+        },
+    )
+
+    prepared = runner._prepare_tool_args(
+        "visit",
+        {
+            "question_id": "task-1",
+            "url": ["https://example.org/source"],
+            "goal": "Model supplied goal",
+        },
+        "",
+    )
+
+    assert "goal" not in prepared
+    assert prepared["image_claim"] == "The subject used a bus during the event."
+    assert prepared["retrieval_goal"] == (
+        "Find records of the transport actually used."
+    )
+    assert prepared["__claim_text"] == "The subject used a bus during the event."
+    assert prepared["__evidence_goal"] == (
+        "Find records of the transport actually used."
     )
 
 

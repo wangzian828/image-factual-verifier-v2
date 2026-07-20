@@ -87,16 +87,25 @@ class CropAndSearchTool(BaseTool):
                     "minItems": 4,
                     "maxItems": 4,
                 },
-                "goal": {
+                "image_claim": {
                     "type": "string",
-                    "description": "What you want to identify or verify from the crop.",
+                    "description": "Runtime-bound image claim used for evidence stance.",
+                },
+                "retrieval_goal": {
+                    "type": "string",
+                    "description": "Runtime-bound goal used for visual and passage retrieval.",
                 },
                 "visual_question_id": {"type": "string"},
                 "source_evidence_id": {"type": "string"},
                 "source_discovery_id": {"type": "string"},
                 "expected_property": {"type": "string"},
             },
-            "required": ["image_input", "bbox", "goal"],
+            "required": [
+                "image_input",
+                "bbox",
+                "image_claim",
+                "retrieval_goal",
+            ],
         }
     )
 
@@ -129,7 +138,8 @@ class CropAndSearchTool(BaseTool):
         total_t0 = time.perf_counter()
         image_input = str(params["image_input"])
         raw_bbox = params["bbox"]
-        goal = str(params.get("goal", "")).strip()
+        image_claim = str(params["image_claim"]).strip()
+        retrieval_goal = str(params["retrieval_goal"]).strip()
 
         bboxes = self._normalize_bboxes(raw_bbox)
         if not bboxes:
@@ -149,7 +159,8 @@ class CropAndSearchTool(BaseTool):
             region = self._process_region(
                 image_input=image_input,
                 bbox=bbox,
-                goal=goal,
+                image_claim=image_claim,
+                retrieval_goal=retrieval_goal,
                 region_index=idx,
             )
             regions.append(region)
@@ -174,7 +185,8 @@ class CropAndSearchTool(BaseTool):
         return {
             "status": "success",
             "image_input": image_input,
-            "goal": goal,
+            "image_claim": image_claim,
+            "retrieval_goal": retrieval_goal,
             "regions": regions,
             "best_region": best_region,
             "candidate_page_urls": candidate_page_urls,
@@ -206,7 +218,8 @@ class CropAndSearchTool(BaseTool):
         *,
         image_input: str,
         bbox: List[float],
-        goal: str,
+        image_claim: str,
+        retrieval_goal: str,
         region_index: int,
     ) -> Dict[str, Any]:
         crop_path = None
@@ -224,7 +237,7 @@ class CropAndSearchTool(BaseTool):
             lens_results = visual.get("results", [])
 
             semantic_t0 = time.perf_counter()
-            semantic_query = self._generate_query(crop_path, goal)
+            semantic_query = self._generate_query(crop_path, retrieval_goal)
             query_metrics = dict(getattr(self, "_last_query_runtime_metrics", {}) or {})
             query_error = str(getattr(self, "_last_query_error", "") or "").strip()
             semantic_results = []
@@ -244,10 +257,15 @@ class CropAndSearchTool(BaseTool):
             reference_image_candidates = self._collect_reference_image_candidates(lens_results, semantic_results)
             visit_t0 = time.perf_counter()
             visit_result = (
-                self.browse_client.visit_many(candidate_urls[: self.visit_top_k], goal)
+                self.browse_client.visit_many(
+                    candidate_urls[: self.visit_top_k],
+                    image_claim=image_claim,
+                    retrieval_goal=retrieval_goal,
+                )
                 if candidate_urls
                 else {
-                    "goal": goal,
+                    "image_claim": image_claim,
+                    "retrieval_goal": retrieval_goal,
                     "provider": "jina_reader",
                     "visits": [],
                     "evidence": "",
@@ -268,7 +286,8 @@ class CropAndSearchTool(BaseTool):
 
             result = {
                 "bbox": normalized_bbox,
-                "goal": goal,
+                "image_claim": image_claim,
+                "retrieval_goal": retrieval_goal,
                 "saved_crop_path": saved_crop_path,
                 "crop_query": semantic_query,
                 "vlm_query_error": query_error,

@@ -180,7 +180,20 @@ observations, not state transitions.
 | focused visual inspection | `src/tools/focused_visual_inspection.py::FOCUSED_VISUAL_INSPECTION_PROMPT` | original/crop | answer one Evidence-motivated visual question |
 | reference comparison | `src/tools/compare_reference.py::COMPARE_PROMPT` | original + reference | record same-capture and material-difference observations |
 | visual anomaly scan | `src/tools/visual_anomaly.py` prompts | original | diagnostic pixel observations only |
-| webpage extraction | `src/integrations/browse/jina_reader.py::EXTRACT_PROMPT` | no | select one exact relevant passage |
+| webpage extraction | `src/integrations/browse/jina_reader.py::EXTRACT_PROMPT` | no | use `retrieval_goal` to select exact passages; judge stance only against `image_claim` |
+
+The webpage extractor is an independent request with two trusted fields:
+
+- `image_claim`: the positive account communicated by the image; the extractor's
+  `support | refute | unclear` stance is always relative to this field;
+- `retrieval_goal`: the fact or relation sought on the selected page; it ranks and
+  selects passages but cannot determine stance.
+
+The runtime binds both fields from the owning ResearchTask. They are not writable
+tool arguments exposed to the investigation model. The webpage body is untrusted
+data. Passage selection reads the cleaned full document up to the 60,000-character
+budget without a fixed passage-count cap, and the returned Evidence records retain
+both trusted fields for audit.
 
 ## 4. Prompt change checklist
 

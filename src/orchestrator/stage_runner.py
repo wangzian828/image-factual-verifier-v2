@@ -1105,6 +1105,12 @@ class StageRunner:
             parameters = self._normalize_native_schema(parameters)
             properties = parameters.setdefault("properties", {})
             if self.stage_name == "verification":
+                constrained_question_ids = list(
+                    self.tool_argument_constraints.get(tool.name, {}).get(
+                        "question_id",
+                        [],
+                    )
+                )
                 question_schema: Dict[str, Any] = {
                     "type": "string",
                     "description": (
@@ -1112,7 +1118,9 @@ class StageRunner:
                         "When enum values are supplied, use one exactly."
                     ),
                 }
-                if self.active_question_ids:
+                if constrained_question_ids:
+                    question_schema["enum"] = constrained_question_ids
+                elif self.active_question_ids:
                     question_schema["enum"] = self.active_question_ids
                 properties["question_id"] = question_schema
                 if "question_id" not in required:
@@ -1120,6 +1128,9 @@ class StageRunner:
                 runtime_bound = self._runtime_bound_visual_fields(tool.name)
                 if runtime_bound:
                     required = [name for name in required if name not in runtime_bound]
+                    for name in runtime_bound:
+                        if name in {"image_claim", "retrieval_goal"}:
+                            properties.pop(name, None)
             parameters["required"] = required
             parameters["additionalProperties"] = False
             schemas.append(
@@ -1704,7 +1715,23 @@ class StageRunner:
             evidence_goal = self.question_evidence_goals.get(question_id, "").strip()
             if evidence_goal:
                 tool_args["__evidence_goal"] = evidence_goal
-            if tool_name in {"text_search", "visit", "crop_and_search"}:
+            tool = self.tools.get(tool_name)
+            runtime_properties = (
+                tool.parameters.get("properties", {})
+                if tool is not None
+                else {}
+            )
+            if (
+                tool_name in {"visit", "crop_and_search"}
+                and "image_claim" in runtime_properties
+                and "retrieval_goal" in runtime_properties
+            ):
+                tool_args.pop("goal", None)
+                if claim_text:
+                    tool_args["image_claim"] = claim_text
+                if evidence_goal or claim_text:
+                    tool_args["retrieval_goal"] = evidence_goal or claim_text
+            elif tool_name == "text_search":
                 immutable_goal = evidence_goal or claim_text
                 if immutable_goal:
                     tool_args["goal"] = immutable_goal
@@ -1753,7 +1780,7 @@ class StageRunner:
         if expected_property:
             if tool_name == "crop_and_inspect":
                 bound.setdefault("focus_question", expected_property)
-            elif tool_name in {"ocr_with_position", "crop_and_search"}:
+            elif tool_name == "ocr_with_position":
                 bound.setdefault("goal", expected_property)
             elif tool_name == "count_objects":
                 bound.setdefault("target_object", expected_property[:200])
@@ -1763,11 +1790,15 @@ class StageRunner:
 
     @staticmethod
     def _runtime_bound_visual_fields(tool_name: str) -> set[str]:
+        if tool_name == "visit":
+            return {"image_claim", "retrieval_goal"}
         if tool_name == "compare_with_reference":
             return {"reference_url"}
         if tool_name == "crop_and_inspect":
             return {"bbox", "focus_question"}
-        if tool_name in {"ocr_with_position", "crop_and_search"}:
+        if tool_name == "crop_and_search":
+            return {"bbox", "image_claim", "retrieval_goal"}
+        if tool_name == "ocr_with_position":
             return {"bbox", "goal"}
         if tool_name == "count_objects":
             return {"bbox", "target_object"}
@@ -2310,10 +2341,8 @@ class StageRunner:
     async def _execute_tool(self, tool_name: str, tool_args: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
         tool = self.tools[tool_name]
         tool_args.pop("__question_id", None)
-        claim_text = str(tool_args.pop("__claim_text", "")).strip()
-        evidence_goal = str(tool_args.pop("__evidence_goal", "")).strip()
-        if claim_text and tool_name in {"text_search", "visit", "crop_and_search"}:
-            tool_args["goal"] = evidence_goal or claim_text
+        tool_args.pop("__claim_text", None)
+        tool_args.pop("__evidence_goal", None)
         properties = tool.parameters.get("properties", {})
         if "image_input" in properties:
             tool_args["image_input"] = self.image_path
@@ -2728,6 +2757,8 @@ class StageRunner:
                     data.get("selected_url", "") or data.get("url", ""),
                 ),
                 "evidence": str(item.get("evidence", "")),
+                "image_claim": str(item.get("image_claim", "")),
+                "retrieval_goal": str(item.get("retrieval_goal", "")),
                 "relevance": item.get("relevance", "low"),
                 "stance": item.get("stance", "unclear"),
                 "directness": item.get("directness", "none"),
@@ -2756,6 +2787,8 @@ class StageRunner:
                         "url": item.get("url", ""),
                         "summary": "" if unsafe else str(item.get("summary", ""))[:180],
                         "evidence": "" if unsafe else str(item.get("evidence", ""))[:180],
+                        "image_claim": str(item.get("image_claim", "")),
+                        "retrieval_goal": str(item.get("retrieval_goal", "")),
                         "relevance": item.get("relevance", "low"),
                         "stance": item.get("stance", "unclear"),
                         "directness": item.get("directness", "none"),
@@ -2775,6 +2808,8 @@ class StageRunner:
             "selected_url": data.get("selected_url", ""),
             "summary": "" if unsafe else str(data.get("summary", ""))[:320],
             "evidence": "" if unsafe else str(data.get("evidence", "")),
+            "image_claim": str(data.get("image_claim", "")),
+            "retrieval_goal": str(data.get("retrieval_goal", "")),
             "stance": data.get("stance", "unclear"),
             "directness": data.get("directness", "none"),
             "temporal_alignment": data.get(

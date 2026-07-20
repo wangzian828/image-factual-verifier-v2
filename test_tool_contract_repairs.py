@@ -163,6 +163,8 @@ def test_visit_canonical_payload_preserves_exact_passage_and_span() -> None:
         "url": "https://example.test/evidence",
         "selected_url": "https://example.test/evidence",
         "provider": "direct_reader",
+        "image_claim": "The image claims the subject used a bus.",
+        "retrieval_goal": "Identify the transport actually used.",
         "summary": "Direct source passage.",
         "evidence": evidence,
         "relevance": "high",
@@ -179,6 +181,8 @@ def test_visit_canonical_payload_preserves_exact_passage_and_span() -> None:
                 "url": "https://example.test/evidence",
                 "selected_url": "https://example.test/evidence",
                 "evidence": "Supporting exact span.",
+                "image_claim": "The image claims the subject used a bus.",
+                "retrieval_goal": "Identify the transport actually used.",
                 "relevance": "medium",
                 "stance": "unclear",
                 "directness": "indirect",
@@ -215,6 +219,15 @@ def test_visit_canonical_payload_preserves_exact_passage_and_span() -> None:
         "start": 1800,
         "end": 1822,
     }
+    assert canonical["image_claim"] == (
+        "The image claims the subject used a bus."
+    )
+    assert canonical["retrieval_goal"] == (
+        "Identify the transport actually used."
+    )
+    assert canonical["evidence_records"][0]["image_claim"] == (
+        canonical["image_claim"]
+    )
 
 
 def test_crop_and_inspect_rejects_reversed_or_negative_bbox() -> None:

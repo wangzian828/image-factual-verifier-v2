@@ -54,7 +54,9 @@ def route_signature(tool_name: str, tool_args: Mapping[str, Any]) -> dict[str, A
             }
         )
         signature["goal"] = " ".join(
-            _semantic_tokens(str(args.get("goal", "")))
+            _semantic_tokens(
+                str(args.get("retrieval_goal") or args.get("goal", ""))
+            )
         )
     elif tool == "visit":
         urls = args.get("url", [])

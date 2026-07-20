@@ -1837,6 +1837,8 @@ def test_evidence_consumes_retrieval_batch_without_sibling_sweep() -> None:
                 "selected_url": "https://example.org/direct",
                 "url": "https://example.org/direct",
                 "evidence": statement,
+                "image_claim": "The image shows the subject using a bus.",
+                "retrieval_goal": "Identify the transport used at the event.",
                 "summary": statement,
                 "relevance": "high",
                 "stance": "support",
@@ -1863,6 +1865,13 @@ def test_evidence_consumes_retrieval_batch_without_sibling_sweep() -> None:
     )
 
     assert update["created_evidence_ids"]
+    recorded = next(
+        item
+        for item in state.evidence
+        if item.evidence_id in update["created_evidence_ids"]
+    )
+    assert recorded.image_claim == "The image shows the subject using a bus."
+    assert recorded.retrieval_goal == "Identify the transport used at the event."
     assert not any("example.org/sibling" in route for route in routes)
     assert routes == [f"text_search:{task.task_id}"]
 

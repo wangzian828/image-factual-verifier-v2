@@ -234,14 +234,18 @@ def test_direct_visit_refuses_blocked_url_without_calling_provider() -> None:
     class Provider:
         called = False
 
-        def visit(self, _url, _goal):
+        def visit(self, _url, **_kwargs):
             self.called = True
             raise AssertionError("blocked URL must not reach fetch provider")
 
     provider = Provider()
     tool = VisitTool(client=provider)
     tool.set_source_access_policy(_policy())
-    result = tool.visit(FACT_CHECK_URL, "claim")
+    result = tool.visit(
+        FACT_CHECK_URL,
+        image_claim="claim",
+        retrieval_goal="claim",
+    )
     assert result["status"] == "error"
     assert provider.called is False
 
@@ -411,13 +415,17 @@ def test_agent_control_state_exposes_full_pending_reinspect_spec() -> None:
     assert control["pending_visual_questions"] == [spec]
 
 
-def test_claim_text_replaces_model_goal_before_tool_execution() -> None:
+def test_claim_and_retrieval_goal_are_runtime_bound_before_tool_execution() -> None:
     class Tool:
         name = "visit"
         parameters = {
             "type": "object",
-            "properties": {"url": {"type": "string"}, "goal": {"type": "string"}},
-            "required": ["url", "goal"],
+            "properties": {
+                "url": {"type": "string"},
+                "image_claim": {"type": "string"},
+                "retrieval_goal": {"type": "string"},
+            },
+            "required": ["url", "image_claim", "retrieval_goal"],
         }
 
         def __init__(self):
@@ -435,6 +443,7 @@ def test_claim_text_replaces_model_goal_before_tool_execution() -> None:
         output_schema=ToolStageOutput,
         stage_name="verification",
         question_claims={"q0": "The immutable declarative claim."},
+        question_evidence_goals={"q0": "Find the actual value."},
         attach_image=False,
     )
     args = runner._prepare_tool_args(
@@ -443,7 +452,9 @@ def test_claim_text_replaces_model_goal_before_tool_execution() -> None:
         "",
     )
     asyncio.run(runner._execute_tool("visit", args))
-    assert tool.params["goal"] == "The immutable declarative claim."
+    assert "goal" not in tool.params
+    assert tool.params["image_claim"] == "The immutable declarative claim."
+    assert tool.params["retrieval_goal"] == "Find the actual value."
 
 
 def test_stage_runner_sanitizes_missed_blocked_rows_before_context_or_ledger() -> None:

@@ -242,6 +242,8 @@ class InvestigationEvidence(StrictModel):
         "unknown",
     ] = "unknown"
     exact_text: str = Field(min_length=1, max_length=8000)
+    image_claim: str = Field(default="", max_length=1800)
+    retrieval_goal: str = Field(default="", max_length=1800)
     span_start: Optional[int] = Field(default=None, ge=0)
     span_end: Optional[int] = Field(default=None, ge=1)
     image_region: Optional[List[float]] = None

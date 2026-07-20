@@ -4712,6 +4712,8 @@ def _record_evidence_and_findings(
                     source_family=identity.source_family,
                     source_class=identity.source_class,
                     exact_text=evidence,
+                    image_claim=str(record.get("image_claim", "")),
+                    retrieval_goal=str(record.get("retrieval_goal", "")),
                     span_start=int(span["start"]),
                     span_end=int(span["end"]),
                     artifact_sha256=artifact,

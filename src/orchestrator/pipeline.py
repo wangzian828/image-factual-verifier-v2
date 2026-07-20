@@ -2200,15 +2200,10 @@ class Orchestrator:
         task_ids: set[str],
     ) -> Dict[str, str]:
         claims = {item.claim_id: item for item in investigation.image_claims}
-        hypotheses = {
-            item.hypothesis_id: item
-            for item in investigation.search_hypotheses
-        }
         result: Dict[str, str] = {}
         for task in investigation.tasks:
             if task.task_id not in task_ids:
                 continue
-            hypothesis = hypotheses.get(task.hypothesis_id or "")
             owned_claims = [
                 claims[claim_id].statement
                 for claim_id in task.claim_ids
@@ -2217,8 +2212,6 @@ class Orchestrator:
             result[task.task_id] = (
                 "ImageClaims: "
                 + " | ".join(owned_claims)
-                + "; SearchHypothesis: "
-                + (hypothesis.statement if hypothesis is not None else "missing")
             )[:1800]
         return result
 
@@ -2376,17 +2369,76 @@ class Orchestrator:
             elif parts[0] == "compare_with_reference" and len(parts) == 3:
                 if parts[1] in task_ids:
                     references.append(parts[2])
+        route_task_ids = {
+            str(route.split(":", 2)[2])
+            if route.startswith("reverse_image_search:")
+            and len(route.split(":", 2)) == 3
+            else str(route.split(":", 2)[1])
+            for route in remaining_claim_hypothesis_routes(
+                investigation,
+                task_ids=task_ids,
+            )
+            if len(route.split(":", 2)) >= 2
+        }
         constraints: Dict[str, Dict[str, List[Any]]] = {}
         if branches:
             constraints["reverse_image_search"] = {
-                "branch": list(dict.fromkeys(branches))
+                "branch": list(dict.fromkeys(branches)),
+                "question_id": list(dict.fromkeys(route_task_ids)),
             }
         if pages:
-            constraints["visit"] = {"url": list(dict.fromkeys(pages))}
-        if references:
-            constraints["compare_with_reference"] = {
-                "reference_url": list(dict.fromkeys(references))
+            page_task_ids = list(
+                dict.fromkeys(
+                    route.split(":", 2)[1]
+                    for route in remaining_claim_hypothesis_routes(
+                        investigation,
+                        task_ids=task_ids,
+                    )
+                    if route.startswith("visit:")
+                    and len(route.split(":", 2)) == 3
+                )
+            )
+            constraints["visit"] = {
+                "url": list(dict.fromkeys(pages)),
+                "question_id": page_task_ids,
             }
+        if references:
+            reference_task_ids = list(
+                dict.fromkeys(
+                    route.split(":", 2)[1]
+                    for route in remaining_claim_hypothesis_routes(
+                        investigation,
+                        task_ids=task_ids,
+                    )
+                    if route.startswith("compare_with_reference:")
+                    and len(route.split(":", 2)) == 3
+                )
+            )
+            constraints["compare_with_reference"] = {
+                "reference_url": list(dict.fromkeys(references)),
+                "question_id": reference_task_ids,
+            }
+        for tool_name in Orchestrator._discrepancy_executable_tool_names(
+            investigation,
+            task_ids=task_ids,
+        ):
+            tool_task_ids = list(
+                dict.fromkeys(
+                    (
+                        parts[2]
+                        if tool_name == "reverse_image_search" and len(parts) == 3
+                        else parts[1]
+                    )
+                    for route in remaining_claim_hypothesis_routes(
+                        investigation,
+                        task_ids=task_ids,
+                    )
+                    if (parts := route.split(":", 2))[0] == tool_name
+                    and len(parts) >= 2
+                )
+            )
+            if tool_task_ids:
+                constraints.setdefault(tool_name, {})["question_id"] = tool_task_ids
         return constraints
 
     @staticmethod

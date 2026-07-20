@@ -50,12 +50,36 @@ def _successful_visit(url: str) -> dict:
     }
 
 
+def _extract(client: JinaReaderClient, content: str, claim: str) -> dict:
+    return client.extract_goal_evidence(
+        content,
+        image_claim=claim,
+        retrieval_goal=claim,
+    )
+
+
+def _visit(client: JinaReaderClient, url: str, claim: str) -> dict:
+    return client.visit(
+        url,
+        image_claim=claim,
+        retrieval_goal=claim,
+    )
+
+
+def _visit_many(client: JinaReaderClient, urls: list[str], claim: str) -> dict:
+    return client.visit_many(
+        urls,
+        image_claim=claim,
+        retrieval_goal=claim,
+    )
+
+
 def test_extractor_rejects_unknown_passage_id(monkeypatch: pytest.MonkeyPatch) -> None:
     client = JinaReaderClient(fetch_provider="jina")
     monkeypatch.setattr(
         client,
         "_extract_with_llm",
-        lambda _content, _goal: {
+        lambda _content, **_kwargs: {
             "rationale": "claimed match",
             "passage_id": 999,
             "summary": "Fabricated summary.",
@@ -65,7 +89,7 @@ def test_extractor_rejects_unknown_passage_id(monkeypatch: pytest.MonkeyPatch) -
     )
 
     with pytest.raises(RuntimeError, match="unknown passage_id"):
-        client.extract_goal_evidence("The source page contains a different statement.", "verify")
+        _extract(client, "The source page contains a different statement.", "verify")
 
 
 def test_extractor_rejects_invalid_stance(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -73,7 +97,7 @@ def test_extractor_rejects_invalid_stance(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setattr(
         client,
         "_extract_with_llm",
-        lambda _content, _goal: {
+        lambda _content, **_kwargs: {
             "rationale": "relevant",
             "passage_id": 0,
             "summary": "Relevant statement.",
@@ -83,7 +107,7 @@ def test_extractor_rejects_invalid_stance(monkeypatch: pytest.MonkeyPatch) -> No
     )
 
     with pytest.raises(RuntimeError, match="invalid stance"):
-        client.extract_goal_evidence("The source page contains this statement.", "verify")
+        _extract(client, "The source page contains this statement.", "verify")
 
 
 def test_jina_navigation_is_excluded_from_exact_passage_document(
@@ -109,7 +133,7 @@ Markdown Content:
 NASA describes Artemis II as a crewed lunar flyby around the Moon.
 """
 
-    def select_fact_passage(formatted: str, _goal: str) -> dict:
+    def select_fact_passage(formatted: str, **_kwargs) -> dict:
         assert "URL Source" not in formatted
         assert "NASA Logo" not in formatted
         assert "https://" not in formatted
@@ -129,7 +153,7 @@ NASA describes Artemis II as a crewed lunar flyby around the Moon.
         }
 
     monkeypatch.setattr(client, "_extract_with_llm", select_fact_passage)
-    result = client.extract_goal_evidence(page, "Is Artemis II a crewed lunar flyby?")
+    result = _extract(client, page, "Is Artemis II a crewed lunar flyby?")
     document = client._prepare_evidence_document(page)
 
     assert result["evidence"] == (
@@ -160,7 +184,7 @@ def test_long_document_ranking_can_select_evidence_after_first_12k(
     document = client._prepare_evidence_document(page)
     assert document.index(target) > 12000
 
-    def select_target(formatted: str, _goal: str) -> dict:
+    def select_target(formatted: str, **_kwargs) -> dict:
         assert target in formatted
         match = re.search(
             r"\[PASSAGE (\d+)\] ([^\n]*monarch butterflies[^\n]*)",
@@ -179,7 +203,8 @@ def test_long_document_ranking_can_select_evidence_after_first_12k(
         }
 
     monkeypatch.setattr(client, "_extract_with_llm", select_target)
-    result = client.extract_goal_evidence(
+    result = _extract(
+        client,
         page,
         "Do monarch butterflies migrate to Antarctica?",
     )
@@ -193,7 +218,6 @@ def test_long_document_ranking_can_select_evidence_after_first_12k(
 def test_goal_passage_selection_bounds_footer_noise_but_keeps_direct_body() -> None:
     client = JinaReaderClient(
         extract_max_chars=60000,
-        extract_max_passages=12,
     )
     target = (
         "Andreea Esca says her image was used illegally in a fabricated "
@@ -220,11 +244,110 @@ def test_goal_passage_selection_bounds_footer_noise_but_keeps_direct_body() -> N
             "used illegally?"
         ),
         max_chars=client.extract_max_chars,
-        max_passages=client.extract_max_passages,
     )
 
-    assert len(selected) <= 12
     assert any(item["text"] == target for item in selected)
+
+
+def test_goal_passage_selection_has_no_fixed_passage_count_limit() -> None:
+    client = JinaReaderClient(extract_max_chars=60000)
+    page = "\n\n".join(
+        f"Relevant transport record {index} identifies the vehicle used at the event."
+        for index in range(40)
+    )
+    passages = client._build_evidence_passages(
+        client._prepare_evidence_document(page)
+    )
+
+    selected = client._select_goal_passages(
+        passages,
+        "transport record vehicle used at the event",
+        max_chars=client.extract_max_chars,
+    )
+
+    assert len(selected) == 40
+    assert sum(len(item["text"]) + 32 for item in selected) <= 60000
+
+
+def test_jina_markdown_marker_does_not_discard_first_body_paragraph() -> None:
+    client = JinaReaderClient()
+    first_paragraph = (
+        "Queen Elizabeth II used the Gold State Coach to travel on her "
+        "Coronation day in 1953."
+    )
+    page = (
+        "Title: Gold State Coach\n\n"
+        "URL Source: https://example.test/coach\n\n"
+        "Markdown Content:\n"
+        f"{first_paragraph}\n\n"
+        "The coach is kept at the Royal Mews."
+    )
+
+    document = client._prepare_evidence_document(page)
+
+    assert first_paragraph in document
+    assert "Markdown Content:" not in document
+
+
+def test_retrieval_goal_selects_passage_but_stance_targets_image_claim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = JinaReaderClient(extract_max_chars=1200)
+    image_claim = (
+        "Queen Elizabeth II traveled by bus during her 1953 Coronation."
+    )
+    retrieval_goal = (
+        "What transport did Queen Elizabeth II use on her Coronation day in 1953?"
+    )
+    target = (
+        "Queen Elizabeth II used the Gold State Coach to travel on her "
+        "Coronation day in 1953."
+    )
+    page = "\n\n".join(
+        [
+            *[
+                f"Unrelated royal archive entry {index} discusses ceremonial music."
+                for index in range(80)
+            ],
+            target,
+        ]
+    )
+
+    def extract(formatted: str, **kwargs) -> dict:
+        assert target in formatted
+        assert kwargs == {
+            "image_claim": image_claim,
+            "retrieval_goal": retrieval_goal,
+        }
+        match = re.search(
+            r"\[PASSAGE (\d+)\] (Queen Elizabeth II used the Gold State Coach[^\n]+)",
+            formatted,
+        )
+        assert match is not None
+        return {
+            "rationale": "The page states a conflicting vehicle for the same event.",
+            "passage_id": int(match.group(1)),
+            "supporting_passage_ids": [],
+            "summary": target,
+            "relevance": "high",
+            "stance": "refute",
+            "directness": "direct",
+            "temporal_alignment": "not_applicable",
+        }
+
+    monkeypatch.setattr(client, "_extract_with_llm", extract)
+    result = client.extract_goal_evidence(
+        page,
+        image_claim=image_claim,
+        retrieval_goal=retrieval_goal,
+    )
+
+    assert result["evidence"] == target
+    assert result["stance"] == "refute"
+    assert result["image_claim"] == image_claim
+    assert result["retrieval_goal"] == retrieval_goal
+    assert result["evidence_records"][0]["image_claim"] == image_claim
+    assert result["evidence_records"][0]["retrieval_goal"] == retrieval_goal
 
 
 def test_extractor_preserves_related_context_when_no_passage_directly_resolves_goal(
@@ -246,7 +369,7 @@ def test_extractor_preserves_related_context_when_no_passage_directly_resolves_g
         + "\n\nAdditional conservation information."
     )
 
-    def select_no_direct_passage(formatted: str, _goal: str) -> dict:
+    def select_no_direct_passage(formatted: str, **_kwargs) -> dict:
         assert target in formatted
         match = re.search(
             r"\[PASSAGE (\d+)\] (Monarch butterflies[^\n]+)",
@@ -268,7 +391,8 @@ def test_extractor_preserves_related_context_when_no_passage_directly_resolves_g
         }
 
     monkeypatch.setattr(client, "_extract_with_llm", select_no_direct_passage)
-    result = client.extract_goal_evidence(
+    result = _extract(
+        client,
         page,
         "Do monarch butterflies naturally occur in Antarctica?",
     )
@@ -291,7 +415,7 @@ def test_extractor_does_not_invent_context_when_no_passage_is_selected(
     monkeypatch.setattr(
         client,
         "_extract_with_llm",
-        lambda _content, _goal: {
+        lambda _content, **_kwargs: {
             "rationale": "No supplied passage answers the goal.",
             "passage_id": -1,
             "supporting_passage_ids": [],
@@ -303,7 +427,8 @@ def test_extractor_does_not_invent_context_when_no_passage_is_selected(
         },
     )
 
-    result = client.extract_goal_evidence(
+    result = _extract(
+        client,
         page,
         "Did the public figure authorize the shown product advertisement?",
     )
@@ -326,7 +451,7 @@ def test_extractor_returns_independent_primary_and_supporting_exact_spans(
     )
     page = scope + "\n\n" + identity
 
-    def select_chain(formatted: str, _goal: str) -> dict:
+    def select_chain(formatted: str, **_kwargs) -> dict:
         scope_match = re.search(
             r"\[PASSAGE (\d+)\] (Researchers analyzed[^\n]+)",
             formatted,
@@ -349,7 +474,8 @@ def test_extractor_returns_independent_primary_and_supporting_exact_spans(
         }
 
     monkeypatch.setattr(client, "_extract_with_llm", select_chain)
-    result = client.extract_goal_evidence(
+    result = _extract(
+        client,
         page,
         "Is Andreea Esca genuinely endorsing the shown health product?",
     )
@@ -381,7 +507,7 @@ def test_extractor_attaches_preceding_exact_span_for_deictic_primary(
     )
     page = antecedent + "\n\n" + primary
 
-    def select_primary(formatted: str, _goal: str) -> dict:
+    def select_primary(formatted: str, **_kwargs) -> dict:
         match = re.search(
             r"\[PASSAGE (\d+)\] (PRO TV states[^\n]+)",
             formatted,
@@ -399,7 +525,8 @@ def test_extractor_attaches_preceding_exact_span_for_deictic_primary(
         }
 
     monkeypatch.setattr(client, "_extract_with_llm", select_primary)
-    result = client.extract_goal_evidence(
+    result = _extract(
+        client,
         page,
         "Did Andreea Esca endorse the shown product?",
     )
@@ -429,7 +556,7 @@ def test_jina_failure_falls_back_to_direct_and_records_attempts(
     monkeypatch.setattr(
         client,
         "extract_goal_evidence",
-        lambda _content, _goal: {
+        lambda _content, **_kwargs: {
             "rationale": "Direct fallback contained the target.",
             "evidence": "Direct fallback content about monarch migration.",
             "summary": "Fallback succeeded.",
@@ -442,7 +569,8 @@ def test_jina_failure_falls_back_to_direct_and_records_attempts(
         },
     )
 
-    result = client.visit(
+    result = _visit(
+        client,
         "https://example.test/monarch",
         "Where do monarch butterflies migrate?",
     )
@@ -471,7 +599,8 @@ def test_all_fetch_failures_return_auditable_subcalls(
         lambda _url: (_ for _ in ()).throw(RuntimeError("direct failed")),
     )
 
-    result = client.visit(
+    result = _visit(
+        client,
         "https://example.test/unavailable",
         "Find decisive evidence.",
     )
@@ -504,7 +633,8 @@ def test_extraction_failure_records_fetch_and_extract_subcalls(
         ),
     )
 
-    result = client.visit(
+    result = _visit(
+        client,
         "https://example.test/extractor-failure",
         "Find decisive evidence.",
     )
@@ -537,7 +667,8 @@ def test_blocked_page_is_not_sent_to_extraction_llm(
         ),
     )
 
-    result = client.visit(
+    result = _visit(
+        client,
         "https://example.test/blocked",
         "Find decisive evidence.",
     )
@@ -571,7 +702,8 @@ def test_prompt_injection_page_is_not_sent_to_extraction_llm(
         ),
     )
 
-    result = client.visit(
+    result = _visit(
+        client,
         "https://example.test/injection",
         "Find decisive evidence.",
     )
@@ -588,11 +720,11 @@ def test_prompt_injection_page_is_not_sent_to_extraction_llm(
 def test_jina_visit_many_marks_all_provider_failures_as_error(monkeypatch: pytest.MonkeyPatch) -> None:
     client = JinaReaderClient(fetch_provider="jina")
 
-    def fail(_url: str, _goal: str) -> dict:
+    def fail(_url: str, **_kwargs) -> dict:
         raise RuntimeError("selected Jina provider unavailable")
 
     monkeypatch.setattr(client, "visit", fail)
-    result = client.visit_many(["https://one.example", "https://two.example"], "goal")
+    result = _visit_many(client, ["https://one.example", "https://two.example"], "goal")
 
     assert result["status"] == "error"
     assert "selected Jina provider unavailable" in result["error"]
@@ -603,13 +735,13 @@ def test_jina_visit_many_marks_all_provider_failures_as_error(monkeypatch: pytes
 def test_jina_visit_many_allows_partial_success(monkeypatch: pytest.MonkeyPatch) -> None:
     client = JinaReaderClient(fetch_provider="jina")
 
-    def visit(url: str, _goal: str) -> dict:
+    def visit(url: str, **_kwargs) -> dict:
         if "one.example" in url:
             raise RuntimeError("first page failed")
         return _successful_visit(url)
 
     monkeypatch.setattr(client, "visit", visit)
-    result = client.visit_many(["https://one.example", "https://two.example"], "goal")
+    result = _visit_many(client, ["https://one.example", "https://two.example"], "goal")
 
     assert result["status"] == "success"
     assert "error" not in result
@@ -619,7 +751,7 @@ def test_jina_visit_many_allows_partial_success(monkeypatch: pytest.MonkeyPatch)
 def test_jina_visit_many_treats_all_blocked_pages_as_error(monkeypatch: pytest.MonkeyPatch) -> None:
     client = JinaReaderClient(fetch_provider="jina")
 
-    def blocked(url: str, _goal: str) -> dict:
+    def blocked(url: str, **_kwargs) -> dict:
         return {
             "status": "error",
             "url": url,
@@ -631,7 +763,7 @@ def test_jina_visit_many_treats_all_blocked_pages_as_error(monkeypatch: pytest.M
         }
 
     monkeypatch.setattr(client, "visit", blocked)
-    result = client.visit_many(["https://one.example", "https://two.example"], "goal")
+    result = _visit_many(client, ["https://one.example", "https://two.example"], "goal")
 
     assert result["status"] == "error"
     assert "security verification" in result["error"]
@@ -639,10 +771,14 @@ def test_jina_visit_many_treats_all_blocked_pages_as_error(monkeypatch: pytest.M
 
 def test_visit_tool_converts_single_provider_exception_to_error() -> None:
     class FailingBrowseClient:
-        def visit(self, _url: str, _goal: str) -> dict:
+        def visit(self, _url: str, **_kwargs) -> dict:
             raise RuntimeError("direct provider failed")
 
-    result = VisitTool(client=FailingBrowseClient()).visit("https://example.test", "goal")
+    result = VisitTool(client=FailingBrowseClient()).visit(
+        "https://example.test",
+        image_claim="goal",
+        retrieval_goal="goal",
+    )
 
     assert result == {
         "status": "error",
@@ -661,7 +797,8 @@ def test_visit_tool_rejects_multiple_urls_before_provider_call() -> None:
     client = BrowseClient()
     result = VisitTool(client=client).visit(
         ["https://one.example", "https://two.example"],
-        "goal",
+        image_claim="goal",
+        retrieval_goal="goal",
     )
 
     assert result["status"] == "error"
