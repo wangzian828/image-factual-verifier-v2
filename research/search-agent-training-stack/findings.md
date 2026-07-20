@@ -7,17 +7,50 @@ existing deterministic runtime and Gemini teacher environment?
 
 ## Current Understanding
 
-The initial scan suggests that Qwen multimodal SFT and long-horizon search-agent RL
-are different infrastructure problems. This is exploratory until the repository and
-paper matrix is complete.
+Qwen multimodal SFT and long-horizon search-agent RL are different infrastructure
+problems and should use separate stacks.
+
+The strongest direct precedents agree:
+
+- Vision-DeepResearch uses Megatron-SWIFT for Qwen3-VL SFT and
+  rLLM/veRL/Megatron/SGLang for RL.
+- OpenSearch-VL uses LLaMA-Factory/DeepSpeed for full SFT and
+  rLLM/veRL/Megatron/SGLang for RL.
+- LiteResearcher uses LLaMA-Factory for cold-start SFT and veRL for staged online RL.
+
+For IFV, ms-swift remains the best SFT choice because the existing repository already
+uses its Qwen3-VL processor/template contracts and it supports full multimodal
+DeepSpeed training.
+
+rLLM with the veRL backend is the best initial RL candidate because its model gateway
+can wrap an existing OpenAI-compatible agent runtime and record each independent LLM
+call as a Step. IFV therefore keeps deterministic state reduction, tools, stopping,
+and trace persistence.
 
 ## Key Results
 
-Pending.
+- H1 supported: the split stack has the best evidence and lowest rewrite cost.
+- H2 refuted: a single framework is possible, but it either duplicates IFV's state
+  machine or has weaker direct multimodal-search precedent.
+- H3 supported: IFV's stage boundaries are naturally represented as separate policy
+  Steps inside one episode.
+- The public 7B/8B multimodal search-RL recipes use at least eight large-memory GPUs.
+  Four A100-40GB GPUs are enough to attempt full SFT with ZeRO-3 offload, but do not
+  establish practical full online RL throughput.
 
 ## Patterns and Insights
 
-Pending.
+- Cold-start SFT before online search RL is the dominant successful pattern.
+- Modern agents do not rely on plain GRPO alone. They add RLOO/REINFORCE baselines,
+  DAPO/GSPO variants, adaptive rollout allocation, dynamic filtering, or staged
+  environments.
+- Provider and search infrastructure failures need fatal-aware masking so the policy
+  is not punished for an OSS timeout or inaccessible page.
+- Cached/local-web environments precede live-web RL.
+- External model gateways are a better fit than framework-owned Env loops when an
+  auditable runtime already exists.
+- IFV's online policy calls are text-only. Perception and image-comparison model calls
+  belong to a frozen environment endpoint, even when both endpoints use Qwen.
 
 ## Lessons and Constraints
 
@@ -28,16 +61,39 @@ Pending.
   returns observations, and controls stopping.
 - Do not infer Qwen3-VL support from text-only Qwen support.
 - Do not infer full-parameter training from LoRA examples.
+- Do not send VLM tool-internal calls through the trainable policy gateway.
+- Do not claim that four A100-40GB GPUs reproduce public 8B search-RL recipes.
+- Do not start with live-web RL or plain sparse GRPO on the current small dataset.
+- Do not force the independent IFV stage prompts into an append-only chat transcript.
 
 ## Open Questions
 
-- Which framework has the smallest adapter boundary around an external deterministic
-  runtime?
-- Which framework can preserve per-step image inputs and loss/reward masks?
-- Can one 8B VLM full-parameter policy and rollout engine fit safely on four A100 40GB
-  GPUs, or must SFT and RL use different parallel strategies?
+- Does rLLM's current gateway fully preserve IFV native tool calls and JSON-schema
+  outputs under the selected Qwen serving engine?
+- Can Qwen3-VL-8B full multimodal SFT save/resume on four A100-40GB GPUs with
+  ZeRO-3 offload?
+- Can an 8B language-policy RL smoke fit with three training GPUs plus one rollout GPU,
+  or must the first RL optimizer smoke use a smaller checkpoint?
+- Which initial estimator is most stable for the available rollout group size:
+  RLOO, REINFORCE baseline, or DAPO without group-variance normalization?
 
 ## Optimization Trajectory
 
-No framework selection has been frozen.
+The evidence-backed provisional selection is:
 
+```text
+full multimodal SFT:
+  ms-swift 4.4.1 + DeepSpeed ZeRO-3/offload
+
+online search-agent RL:
+  rLLM model gateway + veRL backend + SGLang/vLLM rollout
+
+fallback:
+  OpenRLHF external agent executor
+
+later scale-up candidate:
+  AReaL 2.0
+```
+
+The RL choice remains conditional on a real gateway protocol smoke and gpu13 memory
+probe.

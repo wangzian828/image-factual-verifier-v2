@@ -37,3 +37,20 @@ Inference-only wrappers are recorded but cannot establish training-stack maturit
 - OpenRLHF
 - ms-swift
 
+## Synthesis
+
+The study supports a split stack rather than a universal framework:
+
+- ms-swift for full Qwen3-VL SFT and checkpoint contracts;
+- rLLM/veRL for online RL around the existing runtime;
+- OpenRLHF as a fallback if rLLM's pre-release dependency surface is unstable;
+- AReaL only after the single-node system needs asynchronous scale.
+
+The implementation gate is not a benchmark score. It is:
+
+1. native tool-call and JSON-schema passthrough;
+2. one episode containing independent stage calls;
+3. environment model calls excluded from policy traces;
+4. fatal search/provider failures masked;
+5. checkpoint save/resume;
+6. measured four-GPU memory behavior.

@@ -15,7 +15,8 @@ RL_PROFILE="$2"
 EXPERIMENT_ID="$3"
 load_profile "$MODEL_PROFILE"
 load_profile "$RL_PROFILE"
-require_two_gpus
+require_training_gpus
+require_full_parameter_profile
 require_model_path
 require_value EXPERIMENT_ID
 
@@ -50,6 +51,9 @@ args=(
   --vllm_server_pass_dataset true
   --enable_thinking false
   --torch_dtype "$IFV_TORCH_DTYPE"
+  --freeze_llm "$IFV_FREEZE_LLM"
+  --freeze_vit "$IFV_FREEZE_VIT"
+  --freeze_aligner "$IFV_FREEZE_ALIGNER"
   --max_steps "$IFV_MAX_STEPS"
   --max_length "$IFV_MAX_LENGTH"
   --max_completion_length "$IFV_MAX_COMPLETION_LENGTH"
@@ -62,6 +66,7 @@ args=(
   --save_total_limit 2
   --logging_steps "$IFV_LOGGING_STEPS"
   --gradient_checkpointing true
+  --vit_gradient_checkpointing "$IFV_VIT_GRADIENT_CHECKPOINTING"
   --deepspeed "$IFV_DEEPSPEED"
   --temperature 1.0
   --log_completions true

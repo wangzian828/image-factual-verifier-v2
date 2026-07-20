@@ -5,7 +5,11 @@ import json
 from pathlib import Path
 
 from .audit import audit_derived_dataset
-from .checkpoints import build_checkpoint_manifest, build_serving_profile
+from .checkpoints import (
+    audit_full_parameter_checkpoint,
+    build_checkpoint_manifest,
+    build_serving_profile,
+)
 from .io import write_json
 from .manifests import write_environment_manifest
 from .perception import convert_perception_runs
@@ -51,6 +55,11 @@ def _parser() -> argparse.ArgumentParser:
         required=True,
     )
 
+    full_audit = subparsers.add_parser("audit-full-checkpoint")
+    full_audit.add_argument("--checkpoint-dir", type=Path, required=True)
+    full_audit.add_argument("--base-model-dir", type=Path, required=True)
+    full_audit.add_argument("--output", type=Path, required=True)
+
     serving = subparsers.add_parser("serving-profile")
     serving.add_argument("--output", type=Path, required=True)
     serving.add_argument("--profile-id", required=True)
@@ -93,6 +102,15 @@ def main() -> None:
             processor_revision=args.processor_revision,
             method=args.method,
         )
+    elif args.command == "audit-full-checkpoint":
+        result = audit_full_parameter_checkpoint(
+            checkpoint_dir=args.checkpoint_dir,
+            base_model_dir=args.base_model_dir,
+            output_path=args.output,
+        )
+        if not result["passed"]:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            raise SystemExit(1)
     elif args.command == "serving-profile":
         result = build_serving_profile(
             output_path=args.output,

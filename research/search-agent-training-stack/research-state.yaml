@@ -17,19 +17,19 @@ literature:
 hypotheses:
   - id: H1
     statement: "Splitting full-parameter SFT onto ms-swift and agent RL onto a veRL-derived agent framework gives the best fit and lowest integration risk."
-    status: active
+    status: supported
     motivation: "Qwen template/training maturity and long-horizon environment maturity may live in different ecosystems."
     parent: null
     priority: high
   - id: H2
     statement: "A single framework can cover both full-parameter Qwen3-VL SFT and search-agent RL without material loss of capability or maintainability."
-    status: pending
+    status: refuted
     motivation: "One stack would reduce environment and checkpoint complexity if its agent abstraction is sufficiently mature."
     parent: null
     priority: medium
   - id: H3
     statement: "Step-level MDP training maps more cleanly to IFV than token-level monolithic rollouts because the runtime already owns actions, observations, state reduction, and stopping."
-    status: active
+    status: supported
     motivation: "The runtime has explicit semantic boundaries that should remain auditable during RL."
     parent: null
     priority: high
@@ -37,14 +37,35 @@ hypotheses:
 experiments:
   proxy_metric: "Evidence-backed framework fit score over SFT, VLM, full-parameter, environment, reward, distributed, recovery, and integration criteria"
   baseline_value: null
-  best_value: null
-  total_runs: 0
-  trajectory: []
+  best_value: "split stack: ms-swift SFT + rLLM/veRL RL"
+  total_runs: 3
+  trajectory:
+    - run_id: "survey_001"
+      hypothesis: "H1"
+      metric_value: "supported"
+      delta: null
+      wall_time_min: null
+      change_summary: "Direct multimodal search projects independently split SFT and RL frameworks."
+      timestamp: "2026-07-17"
+    - run_id: "survey_002"
+      hypothesis: "H2"
+      metric_value: "refuted"
+      delta: null
+      wall_time_min: null
+      change_summary: "Single-framework options either duplicate the runtime loop or lack direct VLM search precedent."
+      timestamp: "2026-07-17"
+    - run_id: "survey_003"
+      hypothesis: "H3"
+      metric_value: "supported"
+      delta: null
+      wall_time_min: null
+      change_summary: "Gateway-captured independent LLM calls preserve IFV stage boundaries without rewriting the state machine."
+      timestamp: "2026-07-17"
 
 outer_loop:
-  cycle: 0
-  last_direction: null
-  last_reflection: ""
+  cycle: 1
+  last_direction: deepen
+  last_reflection: "Adopt a split stack. Validate rLLM gateway protocol and gpu13 memory before freezing the RL backend; keep OpenRLHF as fallback."
 
 workspace:
   findings: "findings.md"

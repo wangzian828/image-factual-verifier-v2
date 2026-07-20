@@ -1,4 +1,5 @@
 # PyTorch is installed separately after checking gpu-13's driver/CUDA.
 ms-swift==4.4.1
+transformers>=4.57,<5
 vllm==0.11.0
 qwen-vl-utils==0.0.14

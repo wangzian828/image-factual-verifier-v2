@@ -24,20 +24,53 @@ require_value() {
   fi
 }
 
-require_two_gpus() {
+require_training_gpus() {
   require_value CUDA_VISIBLE_DEVICES
   IFS=',' read -r -a devices <<<"$CUDA_VISIBLE_DEVICES"
-  if [[ "${#devices[@]}" -ne 2 ]]; then
-    echo "CUDA_VISIBLE_DEVICES must name exactly two GPUs, got: $CUDA_VISIBLE_DEVICES" >&2
+  if [[ "${#devices[@]}" -lt 1 || "${#devices[@]}" -gt 4 ]]; then
+    echo "CUDA_VISIBLE_DEVICES must name between one and four GPUs, got: $CUDA_VISIBLE_DEVICES" >&2
     exit 2
   fi
-  if [[ "${devices[0]}" == "${devices[1]}" ]]; then
-    echo "CUDA_VISIBLE_DEVICES contains the same GPU twice" >&2
-    exit 2
-  fi
-  export NPROC_PER_NODE=2
+  local seen=","
+  local device
+  for device in "${devices[@]}"; do
+    device="${device//[[:space:]]/}"
+    if [[ ! "$device" =~ ^[0-9]+$ ]]; then
+      echo "CUDA_VISIBLE_DEVICES contains an invalid GPU index: $device" >&2
+      exit 2
+    fi
+    if [[ "$seen" == *",$device,"* ]]; then
+      echo "CUDA_VISIBLE_DEVICES contains duplicate GPU index: $device" >&2
+      exit 2
+    fi
+    seen+="$device,"
+  done
+  export NPROC_PER_NODE="${#devices[@]}"
   export OMP_NUM_THREADS=1
   export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
+}
+
+require_full_parameter_profile() {
+  require_value IFV_TUNER_TYPE
+  require_value IFV_FREEZE_LLM
+  require_value IFV_FREEZE_VIT
+  require_value IFV_FREEZE_ALIGNER
+  require_value IFV_DEEPSPEED
+  if [[ "$IFV_TUNER_TYPE" != "full" ]]; then
+    echo "full-parameter training requires IFV_TUNER_TYPE=full" >&2
+    exit 2
+  fi
+  local name
+  for name in IFV_FREEZE_LLM IFV_FREEZE_VIT IFV_FREEZE_ALIGNER; do
+    if [[ "${!name,,}" != "false" ]]; then
+      echo "full-parameter multimodal training requires $name=false" >&2
+      exit 2
+    fi
+  done
+  if [[ "$IFV_DEEPSPEED" != "zero3" && "$IFV_DEEPSPEED" != "zero3_offload" ]]; then
+    echo "full-parameter training requires IFV_DEEPSPEED=zero3 or zero3_offload" >&2
+    exit 2
+  fi
 }
 
 require_model_path() {

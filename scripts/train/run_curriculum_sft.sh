@@ -19,7 +19,8 @@ RESUME_CHECKPOINT="${6:-}"
 
 load_profile "$MODEL_PROFILE"
 load_profile "$SFT_PROFILE"
-require_two_gpus
+require_training_gpus
+require_full_parameter_profile
 require_model_path
 require_value EXPERIMENT_ID
 
@@ -65,12 +66,11 @@ args=(
   --per_device_eval_batch_size "$IFV_EVAL_BATCH_SIZE"
   --gradient_accumulation_steps "$IFV_GRADIENT_ACCUMULATION_STEPS"
   --learning_rate "$IFV_LEARNING_RATE"
-  --lora_rank "$IFV_LORA_RANK"
-  --lora_alpha "$IFV_LORA_ALPHA"
-  --target_modules all-linear
+  --freeze_llm "$IFV_FREEZE_LLM"
   --freeze_vit "$IFV_FREEZE_VIT"
   --freeze_aligner "$IFV_FREEZE_ALIGNER"
   --gradient_checkpointing true
+  --vit_gradient_checkpointing "$IFV_VIT_GRADIENT_CHECKPOINTING"
   --gradient_checkpointing_kwargs '{"use_reentrant": false}'
   --eval_strategy steps
   --eval_steps "$IFV_EVAL_STEPS"
