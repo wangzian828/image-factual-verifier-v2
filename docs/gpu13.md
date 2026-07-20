@@ -1,160 +1,118 @@
-# gpu-13 Qwen 训练与服务
+# gpu-13 Qwen3.5 部署与训练
 
-Gemini 环境 `ifv-agent` 不安装、升级或删除任何包。Qwen 使用：
-
-```text
-ifv-qwen-train
-ifv-qwen-serve
-```
-
-ms-swift 固定为 `4.4.1`。训练入口直接调用 `swift sft` 和 `swift rlhf`；
-没有自定义 Trainer。
-
-环境采用 Python 3.11。该选择与 Gemini 的 `ifv-agent` 无关；它是独立环境，
-并符合 ms-swift 4.4.1 当前安装建议。训练环境不会安装进 `ifv-agent`。
-
-## 1. 选择 GPU
+只使用物理 GPU `4,5,6,7` 中实时空闲的卡，最多四张。所有命令先执行：
 
 ```bash
 cd /gs/home/wza/projects/image-factual-verifier-training
 bash scripts/server/select_idle_gpus.sh
 nvidia-smi
-export CUDA_VISIBLE_DEVICES=<确认空闲卡1>,<确认空闲卡2>
-```
-
-候选列表只按显存和利用率排序，必须再看进程所有者。所有项目进程使用：
-
-```bash
 export OMP_NUM_THREADS=1
 ```
 
-## 2. 环境
+不得修改 `ifv-agent`，不得终止其他用户进程。
 
-先检查 gpu-13 驱动，再显式指定对应的 PyTorch wheel：
+## 1. 环境
+
+gpu-13 已验证 PyTorch 2.13/cu130。建立独立 Python 3.12 环境：
 
 ```bash
-export IFV_TORCH_INDEX_URL=<官方 PyTorch CUDA wheel index>
-export IFV_TORCH_PACKAGES='torch==<version> torchvision==<version>'
+export IFV_TORCH_INDEX_URL=https://download.pytorch.org/whl/cu130
+export IFV_TORCH_PACKAGES='torch==2.13.0 torchvision==0.28.0'
 bash scripts/server/bootstrap_gpu13.sh
 ```
 
-脚本不会接触 `ifv-agent`。它只安装：
-
-- `ms-swift==4.4.1`
-- DeepSpeed（训练环境）
-- vLLM（训练 rollout 与服务）
-- Qwen VL utilities
-
-## 3. 数据转换
+生成环境清单并检查 Qwen3.5 关键依赖：
 
 ```bash
-conda run --no-capture-output -n ifv-qwen-train \
-  python -m ifv_training convert-policy \
-  --input "$POLICY_DATASET" \
-  --output "$DERIVED_ROOT/policy-v1"
+conda run -n ifv-qwen35-serve python -m ifv_training environment-manifest \
+  --repo-root "$PWD" \
+  --output /gsdata/home/wza/image-factual-verifier-v2-data/training/logs/qwen35-serve-environment.json
 
-conda run --no-capture-output -n ifv-qwen-train \
-  python -m ifv_training audit \
-  --input "$DERIVED_ROOT/policy-v1" \
-  --strict
+conda run -n ifv-qwen35-sft python -c \
+  'import torch, transformers, swift; print(torch.__version__, transformers.__version__, swift.__version__)'
 ```
 
-真实训练前必须用实际 Qwen processor 验证模板、loss 和图像 token：
+## 2. 下载模型
+
+4B 只做快速启动，9B 是正式学生：
 
 ```bash
-conda run --no-capture-output -n ifv-qwen-train \
-  python scripts/probe/ms_swift_template.py \
-  --model /gsdata/home/wza/models/Qwen3-VL-8B-Thinking \
-  --dataset "$DERIVED_ROOT/perception-v1/train.jsonl"
+conda run -n ifv-qwen35-serve python scripts/server/download_model.py \
+  --model Qwen/Qwen3.5-4B \
+  --local-dir /gsdata/home/wza/models/Qwen3.5-4B \
+  --manifest /gsdata/home/wza/image-factual-verifier-v2-data/training/models/Qwen3.5-4B.json
+
+conda run -n ifv-qwen35-serve python scripts/server/download_model.py \
+  --model Qwen/Qwen3.5-9B \
+  --local-dir /gsdata/home/wza/models/Qwen3.5-9B \
+  --manifest /gsdata/home/wza/image-factual-verifier-v2-data/training/models/Qwen3.5-9B.json
 ```
 
-## 4. 双卡 LoRA smoke
-
-训练集和验证集必须非空。当前 20 条 preview 太小，只用于基础设施 smoke，
-不能用于证明训练有效。
+## 3. 4B serving 快速门禁
 
 ```bash
-conda run --no-capture-output -n ifv-qwen-train \
-  bash scripts/train/run_sft.sh \
-  configs/models/qwen3-vl-8b-thinking.env \
-  configs/sft/qwen3-vl-lora-smoke.env \
-  "$TRAIN_JSONL" \
-  "$VAL_JSONL" \
-  qwen3-vl-8b-ifv-sft-smoke-001
-```
-
-恢复：
-
-```bash
-conda run --no-capture-output -n ifv-qwen-train \
-  bash scripts/train/run_sft.sh \
-  configs/models/qwen3-vl-8b-thinking.env \
-  configs/sft/qwen3-vl-lora-smoke.env \
-  "$TRAIN_JSONL" \
-  "$VAL_JSONL" \
-  qwen3-vl-8b-ifv-sft-resume-001 \
-  "$CHECKPOINT"
-```
-
-## 5. 导出和服务
-
-```bash
-conda run --no-capture-output -n ifv-qwen-train \
-  bash scripts/export/merge_lora.sh \
-  "$CHECKPOINT" \
-  qwen3-vl-8b-ifv-sft-smoke-001 \
-  "$DERIVED_ROOT/manifest.json"
-
-export CUDA_VISIBLE_DEVICES=<服务卡1>,<服务卡2>
-conda run --no-capture-output -n ifv-qwen-serve \
+export CUDA_VISIBLE_DEVICES=4
+conda run --no-capture-output -n ifv-qwen35-serve \
   bash scripts/serve/start_vllm.sh \
-  "$EXPORTED_MODEL" \
-  ifv-qwen-sft-smoke \
-  8899 \
-  2 \
-  "$CHECKPOINT_MANIFEST"
+  /gsdata/home/wza/models/Qwen3.5-4B \
+  ifv-qwen35-4b-base 8899 1 32768 false
 ```
 
-服务探针：
+另一个控制会话运行：
 
 ```bash
-conda run --no-capture-output -n ifv-qwen-serve \
+conda run --no-capture-output -n ifv-qwen35-serve \
   python scripts/probe/openai_endpoint.py \
   --base-url http://127.0.0.1:8899/v1 \
-  --image "$CANARY_IMAGE"
+  --image "$SMOKE_IMAGE" \
+  --rounds 8
 ```
 
-服务只监听 loopback，不占用 Jupyter 8333，也不读取 Gemini 环境变量。
+4B 通过后将模型路径换成9B，原样重跑。完整20例只使用9B。
 
-## 5.1 Mixed curriculum
+## 4. Processor 与全参数 SFT smoke
 
-只有五个阶段的 train/validation 文件都非空时才启动：
+先生成不属于评测集的合成图像数据：
 
 ```bash
-conda run --no-capture-output -n ifv-qwen-train \
-  bash scripts/train/run_curriculum_sft.sh \
-  configs/models/qwen3-vl-8b-thinking.env \
-  configs/sft/qwen3-vl-lora-smoke.env \
-  "$DERIVED_ROOT/perception-v1" \
-  "$DERIVED_ROOT/policy-v1" \
-  qwen3-vl-8b-ifv-curriculum-001
+SMOKE_ROOT=/gsdata/home/wza/image-factual-verifier-v2-data/training/datasets/qwen35-smoke-v1
+conda run -n ifv-qwen35-sft python scripts/server/build_smoke_dataset.py \
+  --output "$SMOKE_ROOT"
+
+conda run -n ifv-qwen35-sft python scripts/probe/ms_swift_template.py \
+  --model /gsdata/home/wza/models/Qwen3.5-4B \
+  --dataset "$SMOKE_ROOT/train.jsonl"
 ```
 
-该入口使用 ms-swift 原生 `--interleave_prob`，不会复制数据或实现自定义
-DataLoader。
-
-## 6. GRPO smoke
-
-仅在 SFT checkpoint 通过真实 Agent canary 后运行。第一阶段是 ms-swift
-`GYMScheduler` 的确定性 mock 环境，不访问网络：
+4B 3-step 快速检查：
 
 ```bash
-conda run --no-capture-output -n ifv-qwen-train \
-  bash scripts/rl/run_mock_grpo.sh \
-  configs/models/qwen3-vl-8b-thinking.env \
-  configs/rl/qwen3-vl-grpo-mock.env \
-  qwen3-vl-8b-ifv-grpo-mock-001
+export CUDA_VISIBLE_DEVICES=4,5,6,7
+conda run --no-capture-output -n ifv-qwen35-sft \
+  bash scripts/train/run_sft.sh \
+  configs/models/qwen3.5-4b.env \
+  configs/sft/qwen3.5-full-3step.env \
+  "$SMOKE_ROOT/train.jsonl" \
+  "$SMOKE_ROOT/validation.jsonl" \
+  qwen35-4b-full-3step-001
 ```
 
-真实工具环境以后仍通过 `external_plugins` 接入，不替换 ms-swift 的 GRPO、
-vLLM rollout、DeepSpeed 或 checkpoint 实现。
+9B 按 1-step、3-step、20-step 递进；每次使用新的 experiment ID。20-step 指优化器
+步数，不是20例评测。完成后执行 checkpoint audit、显式恢复3步和vLLM重新加载。
+
+## 5. 运行产物
+
+```text
+/gsdata/home/wza/image-factual-verifier-v2-data/training/
+  datasets/
+  derived/
+  checkpoints/
+  exports/
+  rollouts/
+  rewards/
+  logs/
+  models/
+```
+
+每次运行必须保存 environment manifest、Git commit、GPU映射、stdout/stderr、checkpoint
+manifest和恢复来源。服务只监听loopback，不占用Jupyter 8333。

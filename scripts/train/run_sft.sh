@@ -19,7 +19,7 @@ RESUME_CHECKPOINT="${6:-}"
 
 load_profile "$MODEL_PROFILE"
 load_profile "$SFT_PROFILE"
-require_training_gpus
+require_idle_gpus
 require_full_parameter_profile
 require_model_path
 require_dataset "$TRAIN_DATASET"

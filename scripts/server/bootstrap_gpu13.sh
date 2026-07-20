@@ -12,10 +12,10 @@ create_env() {
   local name="$1"
   local requirements="$2"
   if ! conda env list | awk '{print $1}' | grep -Fxq "$name"; then
-    conda create -y -n "$name" python=3.11 pip
+    conda create -y -n "$name" python=3.12 pip
   fi
   conda run -n "$name" python -c \
-    "import sys; assert sys.version_info[:2] == (3, 11), sys.version"
+    "import sys; assert sys.version_info[:2] == (3, 12), sys.version"
   if ! conda run -n "$name" python -c "import torch; assert torch.cuda.is_available()" >/dev/null 2>&1; then
     if [[ -z "${IFV_TORCH_INDEX_URL:-}" || -z "${IFV_TORCH_PACKAGES:-}" ]]; then
       echo "$name has no CUDA-enabled PyTorch." >&2
@@ -35,10 +35,10 @@ create_env() {
 }
 
 # Never modifies ifv-agent.
-create_env ifv-qwen-train "$REPO_ROOT/requirements/train.txt"
-create_env ifv-qwen-serve "$REPO_ROOT/requirements/serve.txt"
+create_env ifv-qwen35-sft "$REPO_ROOT/requirements/train.txt"
+create_env ifv-qwen35-serve "$REPO_ROOT/requirements/serve.txt"
 
-conda run -n ifv-qwen-train swift --help >/dev/null
-conda run -n ifv-qwen-serve swift deploy --help >/dev/null
+conda run -n ifv-qwen35-sft swift --help >/dev/null
+conda run -n ifv-qwen35-serve vllm --help >/dev/null
 
-echo "Created isolated environments: ifv-qwen-train, ifv-qwen-serve"
+echo "Created isolated environments: ifv-qwen35-sft, ifv-qwen35-serve"

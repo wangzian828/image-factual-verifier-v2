@@ -69,6 +69,13 @@ def _parser() -> argparse.ArgumentParser:
     serving.add_argument("--tensor-parallel-size", type=int, required=True)
     serving.add_argument("--dtype", default="bfloat16")
     serving.add_argument("--context-length", type=int, required=True)
+    serving.add_argument("--tool-call-parser", required=True)
+    serving.add_argument("--reasoning-parser", required=True)
+    serving.add_argument(
+        "--thinking-enabled",
+        choices=("true", "false"),
+        required=True,
+    )
     serving.add_argument("--checkpoint-manifest", type=Path)
     return parser
 
@@ -121,6 +128,9 @@ def main() -> None:
             tensor_parallel_size=args.tensor_parallel_size,
             dtype=args.dtype,
             context_length=args.context_length,
+            tool_call_parser=args.tool_call_parser,
+            reasoning_parser=args.reasoning_parser,
+            thinking_enabled=args.thinking_enabled == "true",
             checkpoint_manifest_path=args.checkpoint_manifest,
         )
     else:

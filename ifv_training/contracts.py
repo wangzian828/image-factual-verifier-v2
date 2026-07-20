@@ -20,7 +20,18 @@ FORBIDDEN_MODEL_VISIBLE_KEYS = frozenset(
 )
 
 ALLOWED_STAGES = frozenset(
-    {"perception", "planning", "react", "reflection", "judgment"}
+    {
+        "perception",
+        "planning",
+        "image_account_planning",
+        "react",
+        "evidence_decision",
+        "discrepancy_decision",
+        "query_concept_extraction",
+        "query_replan",
+        "reflection",
+        "judgment",
+    }
 )
 
 

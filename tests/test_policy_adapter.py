@@ -120,6 +120,26 @@ def test_structured_stage_retains_response_contract() -> None:
     assert json.loads(converted["messages"][-1]["content"])["ready"] is True
 
 
+@pytest.mark.parametrize(
+    "example_type",
+    [
+        "planning",
+        "image_account_planning",
+        "evidence_decision",
+        "discrepancy_decision",
+        "query_concept_extraction",
+        "query_replan",
+        "reflection",
+        "judgment",
+    ],
+)
+def test_v4_structured_stages_are_supported(example_type: str) -> None:
+    converted = convert_policy_row(_policy_row(example_type))
+
+    assert converted["channel"] == example_type
+    assert converted["messages"][-1]["role"] == "assistant"
+
+
 def test_private_fields_are_rejected() -> None:
     row = _policy_row("react")
     row["policy_input"]["evaluation_gold"] = {"verdict": "fake"}
@@ -140,7 +160,12 @@ def test_dataset_conversion_is_deterministic_and_auditable(
             "schema_version": "ifv-policy-dataset-manifest-v2",
         },
     )
-    rows = [_policy_row("react"), _policy_row("reflection")]
+    rows = [
+        _policy_row("react"),
+        _policy_row("reflection"),
+        _policy_row("evidence_decision"),
+        _policy_row("discrepancy_decision"),
+    ]
     write_jsonl(source / "train.jsonl", rows)
     write_jsonl(source / "validation.jsonl", [])
     write_jsonl(source / "test.jsonl", [])
@@ -151,7 +176,8 @@ def test_dataset_conversion_is_deterministic_and_auditable(
     convert_policy_dataset(source, second)
     audit = audit_derived_dataset(first)
 
-    assert manifest["example_count"] == 2
+    assert manifest["example_count"] == 4
+    assert manifest["artifacts"]["train_group_decision"]["rows"] == 2
     assert audit["passed"] is True
     for path in first.iterdir():
         assert path.read_bytes() == (second / path.name).read_bytes()

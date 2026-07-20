@@ -15,7 +15,7 @@ RL_PROFILE="$2"
 EXPERIMENT_ID="$3"
 load_profile "$MODEL_PROFILE"
 load_profile "$RL_PROFILE"
-require_training_gpus
+require_idle_gpus
 require_full_parameter_profile
 require_model_path
 require_value EXPERIMENT_ID

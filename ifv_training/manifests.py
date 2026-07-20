@@ -25,6 +25,11 @@ TRACKED_PACKAGES = (
     "accelerate",
     "datasets",
     "qwen-vl-utils",
+    "flash-linear-attention",
+    "causal-conv1d",
+    "liger-kernel",
+    "verl",
+    "sglang",
 )
 
 MS_SWIFT_RELEASE = {

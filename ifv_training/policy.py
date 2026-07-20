@@ -20,6 +20,29 @@ from .io import (
 SUPPORTED_DATASET_VERSION = "ifv-policy-dataset-v2"
 OUTPUT_VERSION = "ifv-ms-swift-policy-v1"
 SPLITS = ("train", "validation", "test")
+POLICY_STAGES = (
+    "planning",
+    "image_account_planning",
+    "react",
+    "evidence_decision",
+    "discrepancy_decision",
+    "query_concept_extraction",
+    "query_replan",
+    "reflection",
+    "judgment",
+)
+CURRICULUM_GROUPS = {
+    "planning": (
+        "planning",
+        "image_account_planning",
+        "query_concept_extraction",
+        "query_replan",
+    ),
+    "react": ("react",),
+    "decision": ("evidence_decision", "discrepancy_decision"),
+    "reflection": ("reflection",),
+    "judgment": ("judgment",),
+}
 
 
 def _strip_gemini_wire_instructions(value: str) -> str:
@@ -74,7 +97,7 @@ def _tool_action(action: Mapping[str, Any]) -> dict[str, Any]:
 
 def convert_policy_row(row: Mapping[str, Any]) -> dict[str, Any]:
     example_type = str(row.get("example_type", "")).strip()
-    if example_type not in {"planning", "react", "reflection", "judgment"}:
+    if example_type not in POLICY_STAGES:
         raise ValueError(f"unsupported policy example_type: {example_type!r}")
     if not bool(row.get("action_valid", False)):
         raise ValueError("invalid policy actions cannot enter SFT")
@@ -183,7 +206,7 @@ def convert_policy_dataset(input_dir: Path, output_dir: Path) -> dict[str, Any]:
             "rows": len(converted_rows),
             "sha256": sha256_file(output_path),
         }
-        for stage in ("planning", "react", "reflection", "judgment"):
+        for stage in POLICY_STAGES:
             stage_path = output_dir / f"{split}.{stage}.jsonl"
             rows = stage_rows.get((split, stage), [])
             write_jsonl(stage_path, rows)
@@ -191,6 +214,19 @@ def convert_policy_dataset(input_dir: Path, output_dir: Path) -> dict[str, Any]:
                 "path": stage_path.name,
                 "rows": len(rows),
                 "sha256": sha256_file(stage_path),
+            }
+        for group, stages in CURRICULUM_GROUPS.items():
+            group_path = output_dir / f"{split}.group-{group}.jsonl"
+            rows = [
+                row
+                for stage in stages
+                for row in stage_rows.get((split, stage), [])
+            ]
+            write_jsonl(group_path, rows)
+            artifacts[f"{split}_group_{group}"] = {
+                "path": group_path.name,
+                "rows": len(rows),
+                "sha256": sha256_file(group_path),
             }
 
     index_path = output_dir / "index.jsonl"

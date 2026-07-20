@@ -44,12 +44,17 @@ def test_checkpoint_and_serving_manifests(tmp_path: Path) -> None:
         tensor_parallel_size=2,
         dtype="bfloat16",
         context_length=16384,
+        tool_call_parser="qwen3_coder",
+        reasoning_parser="qwen3",
+        thinking_enabled=False,
         checkpoint_manifest_path=checkpoint_manifest_path,
     )
 
     assert checkpoint_manifest["checkpoint"]["global_step"] == 25
     assert checkpoint_manifest["training_method"] == "lora"
     assert serving["base_url"] == "http://127.0.0.1:8899/v1"
+    assert serving["tool_call_parser"] == "qwen3_coder"
+    assert serving["thinking_enabled"] is False
     assert len(serving["checkpoint_manifest_sha256"]) == 64
     assert json.loads(serving_path.read_text())["profile_id"] == "student-qwen-local"
 

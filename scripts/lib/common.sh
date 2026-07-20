@@ -3,6 +3,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DATA_ROOT="${IFV_TRAINING_DATA_ROOT:-/gsdata/home/wza/image-factual-verifier-v2-data/training}"
+ALLOWED_GPU_IDS="${IFV_ALLOWED_GPU_IDS:-4,5,6,7}"
 
 load_profile() {
   local profile="$1"
@@ -32,6 +33,7 @@ require_training_gpus() {
     exit 2
   fi
   local seen=","
+  local allowed=",${ALLOWED_GPU_IDS//[[:space:]]/},"
   local device
   for device in "${devices[@]}"; do
     device="${device//[[:space:]]/}"
@@ -43,11 +45,34 @@ require_training_gpus() {
       echo "CUDA_VISIBLE_DEVICES contains duplicate GPU index: $device" >&2
       exit 2
     fi
+    if [[ "$allowed" != *",$device,"* ]]; then
+      echo "GPU $device is outside the allowed physical GPU set: $ALLOWED_GPU_IDS" >&2
+      exit 2
+    fi
     seen+="$device,"
   done
   export NPROC_PER_NODE="${#devices[@]}"
   export OMP_NUM_THREADS=1
   export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
+}
+
+require_idle_gpus() {
+  require_training_gpus
+  local device used util
+  IFS=',' read -r -a devices <<<"$CUDA_VISIBLE_DEVICES"
+  for device in "${devices[@]}"; do
+    device="${device//[[:space:]]/}"
+    IFS=',' read -r used util < <(
+      nvidia-smi --id="$device" \
+        --query-gpu=memory.used,utilization.gpu \
+        --format=csv,noheader,nounits |
+        awk -F',' '{gsub(/^[ \t]+|[ \t]+$/, "", $1); gsub(/^[ \t]+|[ \t]+$/, "", $2); print $1 "," $2}'
+    )
+    if [[ "$used" -gt 1024 ]]; then
+      echo "GPU $device is not idle: ${used} MiB allocated, ${util}% utilization" >&2
+      exit 2
+    fi
+  done
 }
 
 require_full_parameter_profile() {

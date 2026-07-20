@@ -19,24 +19,26 @@ RESUME_CHECKPOINT="${6:-}"
 
 load_profile "$MODEL_PROFILE"
 load_profile "$SFT_PROFILE"
-require_training_gpus
+require_idle_gpus
 require_full_parameter_profile
 require_model_path
 require_value EXPERIMENT_ID
 
 train_datasets=(
   "$PERCEPTION_DIR/train.jsonl"
-  "$POLICY_DIR/train.planning.jsonl"
-  "$POLICY_DIR/train.react.jsonl"
-  "$POLICY_DIR/train.reflection.jsonl"
-  "$POLICY_DIR/train.judgment.jsonl"
+  "$POLICY_DIR/train.group-planning.jsonl"
+  "$POLICY_DIR/train.group-react.jsonl"
+  "$POLICY_DIR/train.group-decision.jsonl"
+  "$POLICY_DIR/train.group-reflection.jsonl"
+  "$POLICY_DIR/train.group-judgment.jsonl"
 )
 validation_datasets=(
   "$PERCEPTION_DIR/validation.jsonl"
-  "$POLICY_DIR/validation.planning.jsonl"
-  "$POLICY_DIR/validation.react.jsonl"
-  "$POLICY_DIR/validation.reflection.jsonl"
-  "$POLICY_DIR/validation.judgment.jsonl"
+  "$POLICY_DIR/validation.group-planning.jsonl"
+  "$POLICY_DIR/validation.group-react.jsonl"
+  "$POLICY_DIR/validation.group-decision.jsonl"
+  "$POLICY_DIR/validation.group-reflection.jsonl"
+  "$POLICY_DIR/validation.group-judgment.jsonl"
 )
 for dataset in "${train_datasets[@]}" "${validation_datasets[@]}"; do
   require_dataset "$dataset"
@@ -54,7 +56,7 @@ args=(
   --model "$IFV_MODEL_ID"
   --dataset "${train_datasets[@]}"
   --val_dataset "${validation_datasets[@]}"
-  --interleave_prob 0.25 0.10 0.45 0.15 0.05
+  --interleave_prob 0.20 0.15 0.35 0.20 0.05 0.05
   --stopping_strategy all_exhausted
   --split_dataset_ratio 0
   --strict true

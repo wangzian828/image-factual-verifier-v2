@@ -343,6 +343,9 @@ def build_serving_profile(
     tensor_parallel_size: int,
     dtype: str,
     context_length: int,
+    tool_call_parser: str,
+    reasoning_parser: str,
+    thinking_enabled: bool,
     checkpoint_manifest_path: Path | None,
 ) -> dict[str, Any]:
     profile = {
@@ -352,7 +355,9 @@ def build_serving_profile(
         "engine": engine,
         "base_url": f"http://127.0.0.1:{port}/v1",
         "wire_api": "chat_completions",
-        "tool_call_parser": "ms-swift-model-template",
+        "tool_call_parser": tool_call_parser,
+        "reasoning_parser": reasoning_parser,
+        "thinking_enabled": thinking_enabled,
         "multimodal": True,
         "context_length": context_length,
         "tensor_parallel_size": tensor_parallel_size,
