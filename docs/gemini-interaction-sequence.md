@@ -60,6 +60,8 @@ Core instruction:
 - Purpose:
   - emit one to three high-salience ImageClaims;
   - emit bounded SearchHypotheses;
+  - plan beyond the image's vocabulary to establish underlying facts independently;
+  - use model knowledge only to propose unverified retrieval leads;
   - avoid selecting a verdict owner;
   - keep external identities, dates, sources, creators, and platforms tentative.
 - Output: `ImageAccountPlanningOutput`
@@ -67,9 +69,9 @@ Core instruction:
 
 Core instruction:
 
-> State what factual account the image communicates. Separate visually anchored
-> ImageClaims from external SearchHypotheses. A hypothesis may guide retrieval but
-> cannot itself own a verdict.
+> State the factual account the image asks us to check, then plan the investigation
+> freely. The image supplies claims and clues, not the boundary of the search.
+> Establish underlying facts independently; hypotheses remain unverified leads.
 
 ### 3. Investigation ReAct
 
@@ -85,6 +87,7 @@ Core instruction:
 - Purpose:
   - choose exactly one permitted tool action;
   - investigate one unresolved claim through one hypothesis;
+  - change the query angle when a different lead better tests the same claim;
   - inspect existing candidates before expanding search.
 - Output: one native function call or bounded segment output
 - Next: deterministic tool execution.
@@ -92,7 +95,9 @@ Core instruction:
 Core instruction:
 
 > Select one runtime-authorized action that most reduces uncertainty about an
-> unresolved ImageClaim. SearchHypotheses are routes, not conclusions.
+> unresolved ImageClaim. Claim/hypothesis ownership records lineage but does not
+> restrict the query angle. Model knowledge is a lead until tool Evidence verifies
+> it.
 
 ### 4. Tool Function Result
 

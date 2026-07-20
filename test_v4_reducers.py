@@ -99,6 +99,26 @@ def _planned_state() -> ImageOnlyInvestigationState:
     return state
 
 
+def test_planning_query_can_establish_the_underlying_fact_independently() -> None:
+    state = _state()
+    output = _planning_output()
+    hypothesis = output.search_hypotheses[0]
+    hypothesis.statement = (
+        "Independent event records may establish what the presenter actually held."
+    )
+    hypothesis.queries = ["what did the presenter hold during the event"]
+    hypothesis.expected_information = (
+        "A reliable account of the object actually present at the event."
+    )
+
+    update = apply_image_account_planning(state, output)
+
+    assert update["accepted"] is True
+    assert state.search_hypotheses[0].queries == [
+        "what did the presenter hold during the event"
+    ]
+
+
 def _semantic_safety_fixture() -> dict[str, object]:
     path = (
         Path(__file__).parent

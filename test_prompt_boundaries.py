@@ -1,6 +1,7 @@
 from src.integrations.browse.jina_reader import EXTRACT_PROMPT
 from src.orchestrator.image_only_prompts import (
     DISCREPANCY_DECISION_SYSTEM_PROMPT,
+    DISCREPANCY_REACT_SYSTEM_PROMPT,
     IMAGE_ACCOUNT_PLANNING_SYSTEM_PROMPT,
     REACT_SYSTEM_PROMPT,
     TARGET_PLANNING_SYSTEM_PROMPT,
@@ -14,6 +15,10 @@ def test_hot_path_prompts_stay_semantic_and_compact() -> None:
         "target planning": (TARGET_PLANNING_SYSTEM_PROMPT, 1300),
         "image account planning": (
             IMAGE_ACCOUNT_PLANNING_SYSTEM_PROMPT,
+            1900,
+        ),
+        "discrepancy investigation": (
+            DISCREPANCY_REACT_SYSTEM_PROMPT,
             1900,
         ),
         "discrepancy decision": (
@@ -32,6 +37,9 @@ def test_hot_path_prompts_stay_semantic_and_compact() -> None:
     image_account_prompt = " ".join(
         IMAGE_ACCOUNT_PLANNING_SYSTEM_PROMPT.split()
     )
+    discrepancy_react_prompt = " ".join(
+        DISCREPANCY_REACT_SYSTEM_PROMPT.split()
+    )
     discrepancy_prompt = " ".join(
         DISCREPANCY_DECISION_SYSTEM_PROMPT.split()
     )
@@ -40,9 +48,16 @@ def test_hot_path_prompts_stay_semantic_and_compact() -> None:
     assert "need not settle every clause" in browse_prompt
     assert "runtime owns task state" in react_prompt
     assert "validates grounding" in planning_prompt
-    assert "Hypotheses guide retrieval" in image_account_prompt
     assert "do not own the verdict" in image_account_prompt
+    assert "design the investigation freely" in image_account_prompt
+    assert "does not limit which real-world facts" in image_account_prompt
+    assert "underlying facts independently" in image_account_prompt
+    assert "prior knowledge as unverified leads" in image_account_prompt
     assert "required JSON schema" in image_account_prompt
+    assert "not a boundary on the investigation" in discrepancy_react_prompt
+    assert "any useful query angle" in discrepancy_react_prompt
+    assert "only tool Evidence establishes a fact" in discrepancy_react_prompt
+    assert "Do not change the ImageClaim" in discrepancy_react_prompt
     assert "reviewed qualified Evidence" in discrepancy_prompt
     assert "MaterialDiscrepancy" in discrepancy_prompt
     assert "otherwise continue" in discrepancy_prompt

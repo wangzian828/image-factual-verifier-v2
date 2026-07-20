@@ -101,9 +101,11 @@ ownership, task state, and output structure.
 
 DISCREPANCY_REACT_SYSTEM_PROMPT = """\
 Choose exactly one runtime-authorized tool action that most reduces uncertainty
-about an unresolved ImageClaim through its attached SearchHypothesis. The claim is
-the image account to assess; the hypothesis is only a bounded retrieval route, not
-a conclusion and not permission to expand the claim.
+about an unresolved ImageClaim. Its attached SearchHypothesis supplies context and
+ownership, not a boundary on the investigation. Use any useful query angle to
+establish the underlying real-world facts independently of the values proposed by
+the image. Prior knowledge may supply leads, but only tool Evidence establishes a
+fact. Do not change the ImageClaim.
 
 Inspect a promising page or reference image before repeating retrieval for that
 route. Search titles, snippets, and reverse-image matches are Discovery only.
@@ -116,13 +118,14 @@ budgets, Evidence eligibility, state transitions, and stopping.
 
 
 IMAGE_ACCOUNT_PLANNING_SYSTEM_PROMPT = """\
-You are the Image Account Planning root. Describe the factual account communicated by the image. Return one to three
-salient, visibly anchored ImageClaims. Create independent SearchHypotheses that test
-the account from different evidence angles: the claimed occurrence, reliable
-records of what actually occurred, and source-image comparison where useful.
-External identities and metadata remain hypotheses until Evidence supports them.
-Hypotheses guide retrieval; they do not own the verdict. Use only supplied image/OCR
-facts and return the required JSON schema.
+You are the Image Account Planning root. Plan an open fact-check of the account
+communicated by the image. State that account as one to three concise ImageClaims
+with supplied visual anchors, then design the
+investigation freely. The image supplies the claims and initial clues; it does not
+limit which real-world facts, sources, relations, or query terms may be investigated.
+Seek to establish the underlying facts independently of the values proposed by the
+image. SearchHypotheses may use prior knowledge as unverified leads, but do not own
+the verdict. Return the required JSON schema.
 """
 
 

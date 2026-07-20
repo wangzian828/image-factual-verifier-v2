@@ -21,8 +21,11 @@ It also receives perception, positioned OCR, pixel/OCR VisualFacts, retrieval
 anchors, and bootstrap tasks. It emits positive ImageClaims and tentative
 SearchHypotheses; it does not create a core verdict fact or verdict.
 
-External remembered metadata is not an ImageClaim merely because it could identify
-the image. It belongs in a SearchHypothesis until Evidence supports its relevance.
+The image defines the account to fact-check and supplies initial clues; it does not
+bound the investigation's facts, sources, relations, or query vocabulary. Planning
+should independently establish the underlying real-world facts rather than merely
+look for the value proposed by the image. Prior knowledge may contribute tentative
+SearchHypotheses, but only tool Evidence can establish them.
 
 ## ReAct and native protocol
 
@@ -30,7 +33,10 @@ Each action continues the main Interaction through `previous_interaction_id` and
 selects exactly one active claim/hypothesis task. The runtime dynamically exposes
 only untried bounded routes. A retrieval batch may enable one concrete `visit` or
 `compare_with_reference` action. Pending candidates are inspected before repeating
-retrieval.
+retrieval. Claim/hypothesis ownership preserves lineage; it is not a semantic cage.
+Gemini may choose any useful query angle, including an independent question about
+the underlying real-world fact. Such a query does not change the ImageClaim or
+create Evidence.
 
 After tool execution, the runtime reduces the canonical result, stores the native
 `function_result`, and ends the action segment. The next semantic checkpoint submits
