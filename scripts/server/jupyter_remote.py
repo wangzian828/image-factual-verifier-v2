@@ -4,13 +4,15 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import getpass
 import json
 import os
 import sys
 import time
 import uuid
-from urllib.parse import urlsplit, urlunsplit
+from pathlib import Path
+from urllib.parse import quote, urlsplit, urlunsplit
 
 import requests
 import websocket
@@ -108,6 +110,102 @@ def list_kernels(
     if not isinstance(payload, list):
         raise TypeError("Jupyter kernel list must be a JSON list")
     return payload
+
+
+def _contents_url(base: str, remote_path: str) -> str:
+    normalized = remote_path.replace("\\", "/").strip("/")
+    if not normalized or any(
+        part in {"", ".", ".."} for part in normalized.split("/")
+    ):
+        raise ValueError("remote upload path must be a normalized file path")
+    return f"{base}/api/contents/{quote(normalized, safe='/')}"
+
+
+def _remote_file_size(
+    session: requests.Session,
+    url: str,
+    request_timeout: float,
+) -> int | None:
+    response = session.get(
+        url,
+        params={"content": 0},
+        timeout=request_timeout,
+    )
+    if response.status_code == 404:
+        return None
+    response.raise_for_status()
+    payload = response.json()
+    if payload.get("type") != "file":
+        raise RuntimeError("remote upload target exists and is not a file")
+    return int(payload.get("size", 0) or 0)
+
+
+def upload_file(
+    session: requests.Session,
+    base: str,
+    local_path: Path,
+    remote_path: str,
+    request_timeout: float,
+    chunk_size: int,
+) -> None:
+    if not local_path.is_file():
+        raise FileNotFoundError(local_path)
+    if chunk_size < 1024 * 1024:
+        raise ValueError("upload chunk size must be at least 1 MiB")
+
+    total_size = local_path.stat().st_size
+    url = _contents_url(base, remote_path)
+    remote_size = _remote_file_size(session, url, request_timeout)
+    if remote_size is not None and remote_size > total_size:
+        raise RuntimeError(
+            f"remote file is larger than local file: {remote_size} > {total_size}"
+        )
+    if remote_size == total_size:
+        print(f"upload already complete: {remote_path} ({total_size} bytes)")
+        return
+
+    offset = int(remote_size or 0)
+    headers = {"X-XSRFToken": session.cookies.get("_xsrf", "")}
+    with local_path.open("rb") as handle:
+        handle.seek(offset)
+        chunk_index = 2 if offset else 1
+        while offset < total_size:
+            content = handle.read(min(chunk_size, total_size - offset))
+            if not content:
+                raise IOError("local file ended before the recorded size")
+            next_offset = offset + len(content)
+            is_last = next_offset == total_size
+            if offset == 0 and is_last:
+                chunk_marker = None
+            else:
+                chunk_marker = -1 if is_last else chunk_index
+            payload = {
+                "type": "file",
+                "format": "base64",
+                "content": base64.b64encode(content).decode("ascii"),
+            }
+            if chunk_marker is not None:
+                payload["chunk"] = chunk_marker
+            response = session.put(
+                url,
+                headers=headers,
+                json=payload,
+                timeout=max(request_timeout, 120.0),
+            )
+            response.raise_for_status()
+            offset = next_offset
+            chunk_index += 1
+            print(
+                f"uploaded {offset}/{total_size} bytes "
+                f"({offset / max(total_size, 1):.1%})",
+                flush=True,
+            )
+
+    confirmed_size = _remote_file_size(session, url, request_timeout)
+    if confirmed_size != total_size:
+        raise RuntimeError(
+            f"upload size verification failed: remote={confirmed_size}, local={total_size}"
+        )
 
 
 def execute_code(
@@ -235,6 +333,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--keep", action="store_true")
     parser.add_argument("--list-kernels", action="store_true")
     parser.add_argument("--stop-kernel")
+    parser.add_argument(
+        "--upload",
+        nargs=2,
+        metavar=("LOCAL_PATH", "REMOTE_PATH"),
+        help="upload one file through the Jupyter Contents API with resume support",
+    )
+    parser.add_argument("--upload-chunk-mib", type=int, default=8)
     parser.add_argument("--stdin", action="store_true")
     parser.add_argument("code", nargs="?", default="")
     return parser.parse_args()
@@ -267,6 +372,16 @@ def main() -> int:
     if args.stop_kernel:
         stop_kernel(session, base, args.stop_kernel, args.request_timeout)
         print(f"stopped {args.stop_kernel}")
+        return 0
+    if args.upload:
+        upload_file(
+            session,
+            base,
+            Path(args.upload[0]).expanduser().resolve(),
+            args.upload[1],
+            args.request_timeout,
+            max(1, int(args.upload_chunk_mib)) * 1024 * 1024,
+        )
         return 0
 
     code = sys.stdin.read() if args.stdin else args.code
