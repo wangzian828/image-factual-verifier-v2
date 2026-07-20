@@ -223,7 +223,7 @@ class PlanningThenReactBackend(ImageAccountPlanningBackend):
             else:
                 context = json.loads(payload)
             claim = context["image_claims"][0]
-            evidence = context["reviewed_qualified_evidence"][0]
+            evidence = context["reviewed_evidence"][0]
             return {
                 "id": "discrepancy-decision-1",
                 "status": "completed",
@@ -657,7 +657,8 @@ def test_discrepancy_decision_consumes_pending_result_on_same_chain(
             trigger="qualified_evidence",
         )
     )
-    assert decision_context["assessable_claim_ids"] == [claim.claim_id]
+    assert decision_context["reviewable_claim_ids"] == [claim.claim_id]
+    assert "assessable_claim_ids" not in decision_context
     assert decision_context["reviewed_evidence_ownership"] == [
         {
             "evidence_id": evidence.evidence_id,
@@ -666,6 +667,25 @@ def test_discrepancy_decision_consumes_pending_result_on_same_chain(
             "hypothesis_id": task.hypothesis_id,
         }
     ]
+    assert decision_context["reviewed_evidence"][0]["admissible_stances"] == [
+        "refute"
+    ]
+    assert decision_context["claim_update_space"] == [
+        {
+            "claim_id": claim.claim_id,
+            "allowed_visual_anchor_fact_ids": claim.anchor_fact_ids,
+        }
+    ]
+    assert decision_context["reviewed_directional_chains"] == [
+        {
+            "stance": "refute",
+            "finding_id": finding.finding_id,
+            "evidence_ids": [evidence.evidence_id],
+            "task_id": task.task_id,
+            "task_owned_claim_ids": [claim.claim_id],
+        }
+    ]
+    assert "does not prove" in decision_context["ownership_note"]
 
     update = asyncio.run(
         orchestrator._run_discrepancy_decision(
@@ -686,7 +706,7 @@ def test_discrepancy_decision_consumes_pending_result_on_same_chain(
         "user_input",
     ]
     assert decision_input[0]["call_id"] == "call-v4-text_search"
-    assert "reviewed_qualified_evidence" in decision_input[1]["content"][0]["text"]
+    assert "reviewed_evidence" in decision_input[1]["content"][0]["text"]
     assert update["verdict_proposal"] == "fake"
     assert investigation.proposed_verdict == "fake"
     assert investigation.image_claims[0].status == "refuted"
@@ -696,6 +716,60 @@ def test_discrepancy_decision_consumes_pending_result_on_same_chain(
     ]
     assert session.previous_interaction_id == "discrepancy-decision-1"
     assert session.pending_input == []
+
+
+def test_discrepancy_context_marks_neutral_reference_as_non_directional(
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "neutral-reference.jpg"
+    image_path.write_bytes(b"neutral-reference-image")
+    state, investigation = _state(image_path)
+    backend = ImageAccountPlanningBackend()
+    orchestrator = Orchestrator(validate_startup=False)
+    orchestrator.llm = backend
+    asyncio.run(
+        orchestrator._run_image_account_planning(
+            state,
+            investigation,
+            interaction_session=None,
+        )
+    )
+    claim = investigation.image_claims[0]
+    task = next(item for item in investigation.tasks if item.claim_ids)
+    evidence = InvestigationEvidence(
+        evidence_id="evidence-neutral-reference",
+        task_id=task.task_id,
+        fact_ids=[claim.fact_id],
+        function_call_id="call-neutral-reference",
+        tool_name="compare_with_reference",
+        evidence_kind="reference_comparison",
+        source_url="https://example.org/reference.jpg",
+        source_family="domain:example.org",
+        exact_text="The images are crops of the same original capture.",
+        artifact_sha256="b" * 64,
+        retrieved_at=datetime.now(timezone.utc).isoformat(),
+        stance="neutral",
+        quality="moderate",
+        directness="direct",
+        claim_binding="same_capture",
+        same_subject_or_scene=True,
+        same_capture_or_near_duplicate=True,
+        likely_different_original_capture=False,
+        edit_evidence_present=False,
+    )
+    investigation.evidence.append(evidence)
+
+    context = json.loads(
+        render_discrepancy_decision_context(
+            investigation,
+            reviewed_evidence_ids=[evidence.evidence_id],
+            trigger="qualified_evidence",
+        )
+    )
+
+    assert context["reviewed_evidence"][0]["stance"] == "neutral"
+    assert context["reviewed_evidence"][0]["admissible_stances"] == []
+    assert context["reviewed_directional_chains"] == []
 
 
 def test_discrepancy_main_loop_stops_on_first_decisive_discrepancy(

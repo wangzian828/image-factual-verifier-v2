@@ -1010,12 +1010,21 @@ def apply_discrepancy_decision(
                 task_by_id=task_by_id,
             )
             if not qualified_evidence_ids:
+                selected_directions = sorted(
+                    {
+                        evidence_by_id[evidence_id].stance
+                        for evidence_id in evidence_ids
+                        if evidence_id in evidence_by_id
+                    }
+                )
                 return {
                     "accepted": False,
                     "rejected_reason": (
                         f"{proposal.assessment} assessment for ImageClaim "
                         f"{claim.claim_id!r} requires owned qualified {stance} "
-                        "Evidence"
+                        "Evidence; selected Evidence records direction(s): "
+                        f"{', '.join(selected_directions) or 'none'}. Omit the "
+                        "assessment or keep it insufficient; do not relabel Evidence"
                     ),
                 }
             if not finding_ids:
@@ -1126,7 +1135,11 @@ def apply_discrepancy_decision(
             if not set(discrepancy.visual_anchor_fact_ids) & set(claim.anchor_fact_ids):
                 return {
                     "accepted": False,
-                    "rejected_reason": "discrepancy anchor is outside the affected claim",
+                    "rejected_reason": (
+                        "discrepancy anchor is outside the affected claim; "
+                        f"allowed visual anchor IDs for {claim_id!r}: "
+                        f"{', '.join(claim.anchor_fact_ids)}"
+                    ),
                 }
             if not any(
                 (
@@ -4656,7 +4669,12 @@ def _record_evidence_and_findings(
 ) -> tuple[List[str], List[str]]:
     evidence_ids: List[str] = []
     finding_ids: List[str] = []
-    eligible_fact_ids = _eligible_fact_ids(state, task, tool_name)
+    # Task ownership is an auditable eligibility boundary, not a semantic
+    # judgment about which owned Claim the material ultimately affects.  Keep
+    # every owned Claim available to the Discrepancy Decision; in particular,
+    # web retrieval must not discard a text Claim merely because the same task
+    # also owns a relation or attribute Claim.
+    owned_fact_ids = list(task.fact_ids)
 
     for record in _web_evidence_records(data):
         evidence = str(record.get("evidence", "")).strip()
@@ -4718,7 +4736,7 @@ def _record_evidence_and_findings(
                 InvestigationEvidence(
                     evidence_id=evidence_id,
                     task_id=task.task_id,
-                    fact_ids=eligible_fact_ids,
+                    fact_ids=owned_fact_ids,
                     function_call_id=function_call_id,
                     tool_name=tool_name,
                     evidence_kind="web_span",
@@ -4751,20 +4769,20 @@ def _record_evidence_and_findings(
                 )
             )
             evidence_ids.append(evidence_id)
-        if stance in {"support", "refute"} and eligible_fact_ids:
+        if stance in {"support", "refute"} and owned_fact_ids:
             finding_id = stable_id(
                 "finding",
                 task.task_id,
                 stance,
                 evidence_id,
-                eligible_fact_ids,
+                owned_fact_ids,
             )
             if finding_id not in {item.finding_id for item in state.findings}:
                 state.findings.append(
                     Finding(
                         finding_id=finding_id,
                         task_id=task.task_id,
-                        fact_ids=eligible_fact_ids,
+                        fact_ids=owned_fact_ids,
                         statement=evidence[:1200],
                         stance=stance,
                         evidence_ids=[evidence_id],
@@ -4786,7 +4804,7 @@ def _record_evidence_and_findings(
         data=data,
         metadata=metadata,
         image_sha256=image_sha256,
-        fact_ids=eligible_fact_ids,
+        fact_ids=owned_fact_ids,
     )
     if visual is not None:
         evidence, finding = visual
@@ -5021,28 +5039,6 @@ def _web_evidence_records(value: Any) -> Iterator[Mapping[str, Any]]:
     elif isinstance(value, list):
         for child in value:
             yield from _web_evidence_records(child)
-
-
-def _eligible_fact_ids(
-    state: ImageOnlyInvestigationState,
-    task: ResearchTask,
-    tool_name: str,
-) -> List[str]:
-    fact_by_id = {fact.fact_id: fact for fact in state.facts}
-    if tool_name in {
-        "text_search",
-        "visit",
-        "reverse_image_search",
-        "crop_and_search",
-    }:
-        filtered = [
-            fact_id
-            for fact_id in task.fact_ids
-            if fact_by_id.get(fact_id) is not None
-            and fact_by_id[fact_id].kind != "text_claim"
-        ]
-        return filtered or list(task.fact_ids)
-    return list(task.fact_ids)
 
 
 def _refresh_fact_states(state: ImageOnlyInvestigationState) -> None:

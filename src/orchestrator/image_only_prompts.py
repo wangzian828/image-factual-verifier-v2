@@ -15,6 +15,9 @@ from src.orchestrator.task_store import (
     remaining_claim_hypothesis_routes,
     remaining_material_routes,
 )
+from src.orchestrator.evidence_semantics import (
+    evidence_is_qualified_for_stance,
+)
 from src.orchestrator.source_provenance import classify_source
 from src.orchestrator.source_provenance import canonicalize_url
 
@@ -186,11 +189,15 @@ visual_reinspection or refinement, never both.
 
 
 DISCREPANCY_DECISION_SYSTEM_PROMPT = """\
-You are the sparse multimodal Discrepancy Decision checkpoint. Compare the reviewed qualified Evidence with the current image account. Update
+You are the sparse multimodal Discrepancy Decision checkpoint. Compare the reviewed Evidence with the current image account. Update
 only affected Claim assessments; establish a MaterialDiscrepancy only when cited
 Evidence and visible anchors support it. You may retire or add a bounded,
 non-duplicate hypothesis or request one Evidence-motivated image reinspection.
 Omit Claims that have no reviewed owned Evidence.
+Use Evidence only in its recorded admissible_stances; neutral Evidence cannot
+support or refute a Claim.
+Task ownership permits review but does not establish semantic coverage; update only
+the Claims the Evidence actually addresses and use their allowed visual anchors.
 Propose fake for a decisive high-salience discrepancy, real when all high-salience
 claims are supported and meaningful routes are closed, otherwise continue. Use
 only supplied IDs and return the required JSON schema.
@@ -762,15 +769,16 @@ def render_discrepancy_decision_context(
     reviewed = list(dict.fromkeys(str(item) for item in reviewed_evidence_ids))
     evidence_by_id = {item.evidence_id: item for item in state.evidence}
     task_by_id = {item.task_id: item for item in state.tasks}
+    reviewed_set = set(reviewed)
     reviewed_evidence_ownership = []
-    assessable_claim_ids: List[str] = []
+    reviewable_claim_ids: List[str] = []
     for evidence_id in reviewed:
         evidence = evidence_by_id.get(evidence_id)
         if evidence is None:
             continue
         task = task_by_id.get(evidence.task_id)
         claim_ids = list(task.claim_ids) if task is not None else []
-        assessable_claim_ids.extend(claim_ids)
+        reviewable_claim_ids.extend(claim_ids)
         reviewed_evidence_ownership.append(
             {
                 "evidence_id": evidence_id,
@@ -779,6 +787,40 @@ def render_discrepancy_decision_context(
                 "hypothesis_id": (
                     task.hypothesis_id if task is not None else None
                 ),
+            }
+        )
+    claim_update_space = [
+        {
+            "claim_id": claim.claim_id,
+            "allowed_visual_anchor_fact_ids": list(claim.anchor_fact_ids),
+        }
+        for claim in state.image_claims
+    ]
+    reviewed_directional_chains = []
+    for finding in state.findings:
+        task = task_by_id.get(finding.task_id)
+        if task is None or finding.stance not in {"support", "refute"}:
+            continue
+        chain_evidence_ids = [
+            evidence_id
+            for evidence_id in finding.evidence_ids
+            if evidence_id in reviewed_set
+            and evidence_id in evidence_by_id
+            and evidence_by_id[evidence_id].task_id == finding.task_id
+            and evidence_is_qualified_for_stance(
+                evidence_by_id[evidence_id],
+                finding.stance,
+            )
+        ]
+        if not chain_evidence_ids:
+            continue
+        reviewed_directional_chains.append(
+            {
+                "stance": finding.stance,
+                "finding_id": finding.finding_id,
+                "evidence_ids": chain_evidence_ids,
+                "task_id": finding.task_id,
+                "task_owned_claim_ids": list(task.claim_ids),
             }
         )
     return json.dumps(
@@ -792,13 +834,29 @@ def render_discrepancy_decision_context(
                 item.model_dump(mode="json")
                 for item in state.search_hypotheses
             ],
-            "reviewed_qualified_evidence": [
-                evidence_by_id[evidence_id].model_dump(mode="json")
+            "reviewed_evidence": [
+                {
+                    **evidence_by_id[evidence_id].model_dump(mode="json"),
+                    "admissible_stances": [
+                        stance
+                        for stance in ("support", "refute")
+                        if evidence_is_qualified_for_stance(
+                            evidence_by_id[evidence_id],
+                            stance,
+                        )
+                    ],
+                }
                 for evidence_id in reviewed
                 if evidence_id in evidence_by_id
             ],
             "reviewed_evidence_ownership": reviewed_evidence_ownership,
-            "assessable_claim_ids": list(dict.fromkeys(assessable_claim_ids)),
+            "reviewable_claim_ids": list(dict.fromkeys(reviewable_claim_ids)),
+            "claim_update_space": claim_update_space,
+            "reviewed_directional_chains": reviewed_directional_chains,
+            "ownership_note": (
+                "Ownership permits review; it does not prove that Evidence "
+                "semantically addresses every owned Claim."
+            ),
             "prior_claim_assessments": [
                 item.model_dump(mode="json")
                 for item in state.claim_assessments[-12:]

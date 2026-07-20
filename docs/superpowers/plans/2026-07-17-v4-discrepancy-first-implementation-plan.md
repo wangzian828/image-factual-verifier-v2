@@ -36,6 +36,11 @@
   和 `information_saturated` 提前结算。当前本地门禁为 `422 passed`、`compileall` 通过、
   `git diff --check` 通过。下一步在 gpu-13 复验 Queen strict audit，再运行 Monarch、Pillars、
   Andreea 三条异构真实样例。
+- Phase 16：Queen 已通过；Pillars、Monarch、Andreea 首轮均在 Discrepancy Decision 的合法
+  原子更新门禁失败。当前修复保持通用：neutral Evidence 显式不可定向，Task ownership 与
+  Evidence 的实际语义覆盖分离，网页 Evidence 不再确定性排除 mixed task 中的 `text_claim`，
+  Decision 上下文显式列出每个 Claim 的合法视觉锚点与已审阅定向链。未加入样例专用规则；
+  本地更新后门禁为 `424 passed`，下一步重新运行三条真实 canary。
 
 ### 2026-07-20 决策更新
 

@@ -277,6 +277,79 @@ def test_v4_finding_does_not_resolve_claim_route_before_semantic_decision() -> N
     assert hypothesis.status == "active"
 
 
+def test_web_evidence_keeps_mixed_text_and_relation_claims_reviewable() -> None:
+    state = _state()
+    output = _planning_output()
+    output.image_claims.append(
+        ImageClaimProposal(
+            claim_key="visible-endorsement-text",
+            statement="Visible text says the presenter endorses the shown product.",
+            kind="text_claim",
+            predicate="states_endorsement",
+            anchor_fact_ids=["fact-visible-person"],
+            salience="high",
+        )
+    )
+    update = apply_image_account_planning(state, output)
+    assert update["accepted"] is True
+    task = state.tasks[0]
+    statement = "The presenter says she has never endorsed the advertised product."
+    step = StageStep(
+        action_type="tool_call",
+        tool_name="visit",
+        tool_args={
+            "url": "https://example.org/statement",
+            "__question_id": task.task_id,
+        },
+        tool_result=json.dumps(
+            {
+                "status": "success",
+                "selected_url": "https://example.org/statement",
+                "url": "https://example.org/statement",
+                "evidence": statement,
+                "relevance": "high",
+                "stance": "refute",
+                "directness": "direct",
+                "temporal_alignment": "not_applicable",
+                "artifact_sha256": "c" * 64,
+                "evidence_span": {"start": 0, "end": len(statement)},
+                "retrieved_at": datetime.now(timezone.utc).isoformat(),
+                "injection_flags": [],
+                "evidence_eligible": True,
+            }
+        ),
+        metadata={"function_call_id": "call-mixed-claim-web-evidence"},
+    )
+
+    observation = record_tool_observation(
+        state,
+        step,
+        image_sha256="a" * 64,
+    )
+
+    owned_claim_fact_ids = {claim.fact_id for claim in state.image_claims}
+    evidence = next(
+        item
+        for item in state.evidence
+        if item.evidence_id in observation["created_evidence_ids"]
+    )
+    finding = next(
+        item
+        for item in state.findings
+        if item.finding_id in observation["created_finding_ids"]
+    )
+    assert set(evidence.fact_ids) == owned_claim_fact_ids
+    assert set(finding.fact_ids) == owned_claim_fact_ids
+    assert any(
+        fact_id in evidence.fact_ids
+        for fact_id in owned_claim_fact_ids
+        if next(
+            fact for fact in state.facts if fact.fact_id == fact_id
+        ).kind
+        == "text_claim"
+    )
+
+
 def test_image_account_planning_creates_stable_owned_graph() -> None:
     first = _state()
     second = _state()

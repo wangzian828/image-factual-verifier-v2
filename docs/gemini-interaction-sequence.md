@@ -166,11 +166,15 @@ Exact instruction:
 Exact instruction:
 
 > You are the sparse multimodal Discrepancy Decision checkpoint. Compare the
-> reviewed qualified Evidence with the current image account. Update only affected
+> reviewed Evidence with the current image account. Update only affected
 > Claim assessments; establish a MaterialDiscrepancy only when cited Evidence and
 > visible anchors support it. You may retire or add a bounded, non-duplicate
 > hypothesis or request one Evidence-motivated image reinspection. Omit Claims that
-> have no reviewed owned Evidence. Propose fake for a decisive high-salience
+> have no reviewed owned Evidence. Use Evidence only in its recorded
+> admissible_stances; neutral Evidence cannot support or refute a Claim. Task
+> ownership permits review but does not establish semantic coverage; update only
+> the Claims the Evidence actually addresses and use their allowed visual anchors. Propose
+> fake for a decisive high-salience
 > discrepancy, real when all high-salience claims are supported and meaningful
 > routes are closed, otherwise continue. Use only supplied IDs and return the
 > required JSON schema.
