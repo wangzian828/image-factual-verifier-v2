@@ -67,4 +67,5 @@ def test_hot_path_prompts_stay_semantic_and_compact() -> None:
     assert "does not establish semantic coverage" in discrepancy_prompt
     assert "allowed visual anchors" in discrepancy_prompt
     assert "MaterialDiscrepancy" in discrepancy_prompt
+    assert "unresolved other Claims do not weaken it" in discrepancy_prompt
     assert "otherwise continue" in discrepancy_prompt

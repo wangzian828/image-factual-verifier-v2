@@ -199,9 +199,10 @@ Use Evidence only in its recorded admissible_stances; neutral Evidence cannot
 support or refute a Claim.
 Task ownership permits review but does not establish semantic coverage; update only
 the Claims the Evidence actually addresses and use their allowed visual anchors.
-Propose fake for a decisive high-salience discrepancy, real when all high-salience
-claims are supported and meaningful routes are closed, otherwise continue. Use
-only supplied IDs and return the required JSON schema.
+Treat qualified refutation of a high-salience Claim as decisive; unresolved other
+Claims do not weaken it. Propose fake for a decisive high-salience discrepancy,
+real when all high-salience claims are supported and meaningful routes are closed,
+otherwise continue. Use only supplied IDs and return the required JSON schema.
 """
 
 

@@ -46,6 +46,12 @@
   的跨归属组合。后续通用修复把每轮 ReAct 限为一个 task-scoped route family；网页访问由
   模型从该 Task 拥有的 Claim ID 中选择单一 stance 目标，runtime 注入 Claim 原文，同时保留
   action 自己的 passage retrieval goal。修复后只重跑 Andreea，再决定是否进入正式 20 例。
+- Phase 16 第二轮：单 Claim 网页取证修复后的 Andreea 真实 canary 得到 evidence-determined
+  `fake`，strict audit 通过，0 次工程错误和协议拒绝；工具调用从 21 降至 16，LLM 调用从 42
+  降至 30。首个 Decision 已取得 Esca 本人“从未服用或推荐减肥产品”的直接反证，却把已
+  refuted 的高显著 Claim 降为 supporting discrepancy 并继续寻找另一 Claim 的原图。当前
+  通用修复要求高显著 Claim 的合格 refutation 必须形成 decisive discrepancy 和 `fake`，其他
+  未解决 Claim 不降低该反证；失败输出仍由原子 reducer 拒绝，不新增样例、人物或产品规则。
 
 ### 2026-07-20 决策更新
 

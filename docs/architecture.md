@@ -107,6 +107,8 @@ and provenance. General anomaly opinions are diagnostic only.
 
 - `fake`: at least one established decisive MaterialDiscrepancy affects a
   high-salience ImageClaim and cites qualified Evidence plus visible anchors.
+  A qualified refutation of such a Claim cannot be downgraded because another
+  Claim remains unresolved.
 - `real`: every high-salience ImageClaim is supported, no decisive discrepancy
   remains, meaningful high-salience routes are closed, and Gemini proposes real.
 - unresolved or conflicted internal state is retained in the verdict basis. After

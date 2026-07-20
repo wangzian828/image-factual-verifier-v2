@@ -1407,6 +1407,11 @@ def apply_discrepancy_decision(
         item for item in decisive if item.status == "established"
     ]
     high_claims = [claim for claim in candidate.image_claims if claim.salience == "high"]
+    refuted_high_claim_ids = {
+        claim.claim_id
+        for claim in high_claims
+        if claim.status == "refuted"
+    }
     established_high_discrepancy = any(
         any(
             claim_by_id[claim_id].salience == "high"
@@ -1414,6 +1419,14 @@ def apply_discrepancy_decision(
         )
         for item in established_decisive
     )
+    if refuted_high_claim_ids and not established_high_discrepancy:
+        return {
+            "accepted": False,
+            "rejected_reason": (
+                "a refuted high-salience ImageClaim requires a decisive "
+                "established discrepancy; fake verdict requires that record"
+            ),
+        }
     if established_high_discrepancy and output.verdict_proposal != "fake":
         return {
             "accepted": False,

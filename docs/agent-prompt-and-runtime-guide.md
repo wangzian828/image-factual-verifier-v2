@@ -75,6 +75,10 @@ hypotheses, request one Evidence-motivated visual reinspection, and propose a ve
 It may not cite search snippets, invent IDs, expand the image account, or turn
 provider failure into a factual verdict.
 
+A qualified refutation of one high-salience Claim is already decisive for `fake`.
+Another unresolved Claim does not lower that contradiction to supporting or require
+the investigation to reconstruct every other aspect of the image first.
+
 ## Observation semantics
 
 Search and reverse-image output create Discovery. A fetched exact web passage or

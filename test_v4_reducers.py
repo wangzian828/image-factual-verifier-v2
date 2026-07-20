@@ -496,6 +496,43 @@ def test_discrepancy_decision_establishes_fake_atomically() -> None:
     assert state.stop_reason == "verdict_determined"
 
 
+def test_refuted_high_salience_claim_cannot_be_downgraded_to_supporting() -> None:
+    state = _planned_state()
+    evidence = _append_evidence(state)
+    claim = state.image_claims[0]
+    before = state.model_dump(mode="json")
+
+    update = apply_discrepancy_decision(
+        state,
+        DiscrepancyDecisionOutput(
+            claim_assessments=[
+                ClaimAssessmentProposal(
+                    claim_id=claim.claim_id,
+                    assessment="refuted",
+                    selected_evidence_ids=[evidence.evidence_id],
+                    rationale="The qualified evidence fully refutes this claim.",
+                )
+            ],
+            material_discrepancy=MaterialDiscrepancyProposal(
+                statement="The source contradicts the high-salience image claim.",
+                affected_claim_ids=[claim.claim_id],
+                visual_anchor_fact_ids=claim.anchor_fact_ids,
+                evidence_ids=[evidence.evidence_id],
+                materiality="supporting",
+                rationale="The contradiction is recorded but incorrectly downgraded.",
+            ),
+            verdict_proposal="continue",
+            rationale="Continue despite fully refuting a high-salience claim.",
+        ),
+        reviewed_evidence_ids=[evidence.evidence_id],
+        trigger="qualified_evidence",
+    )
+
+    assert update["accepted"] is False
+    assert "refuted high-salience ImageClaim" in update["rejected_reason"]
+    assert state.model_dump(mode="json") == before
+
+
 @pytest.mark.parametrize(
     ("assessment", "stance", "expected_direction"),
     [
