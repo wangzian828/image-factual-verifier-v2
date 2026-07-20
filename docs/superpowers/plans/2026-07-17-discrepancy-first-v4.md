@@ -39,10 +39,12 @@ Planning emits one to three high-value claims. It does not select a verdict owne
 
 ### SearchHypothesis
 
-A bounded retrieval direction attached to one or more ImageClaims.
+A bounded retrieval direction planned independently of ImageClaim keys. The reducer
+registers it against the current image account after Planning for auditable Evidence,
+budgets, and stopping; this bookkeeping attachment is not a semantic conclusion.
 
 - `hypothesis_id`
-- `claim_ids`
+- internal account `claim_ids` (not emitted by initial Planning)
 - `statement`
 - `queries`
 - `expected_information`
@@ -149,7 +151,8 @@ Code does not own:
 
 1. Add v4 state models and deterministic reducer tests.
 2. Replace Target Planning with Image Account Planning.
-3. Convert Planning hypotheses into claim-owned ResearchTasks.
+3. Convert Planning hypotheses into account-owned ResearchTasks without exposing
+   Claim binding in the initial Planning schema.
 4. Replace Evidence Decision with Discrepancy Decision.
 5. Replace core-only Coverage and verdict compilation.
 6. Migrate prompt rendering and route selection.

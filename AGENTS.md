@@ -35,8 +35,8 @@ but they must not enter the v4 default path.
 3. Deterministically bootstrap literal visual facts and retrieval anchors.
 4. Create the main Interaction root with the original image and run Image Account
    Planning for one to three ImageClaims plus bounded SearchHypotheses.
-5. Create claim/hypothesis-owned ResearchTasks and execute one bounded native tool
-   call per ReAct action.
+5. Create account/hypothesis-owned ResearchTasks without exposing per-Claim binding
+   in initial Planning, then execute one bounded native tool call per ReAct action.
 6. Keep Discovery separate from provenance-complete Evidence.
 7. Run sparse multimodal Discrepancy Decision checkpoints after qualified Evidence,
    at material boundaries, and before unresolved termination.

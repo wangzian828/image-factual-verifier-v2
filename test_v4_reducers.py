@@ -32,6 +32,7 @@ from src.orchestrator.task_store import (
     apply_discrepancy_decision,
     apply_image_account_planning,
     record_tool_observation,
+    runtime_task_tool_names,
 )
 from src.orchestrator.stage_runner import StageStep
 
@@ -76,13 +77,11 @@ def _planning_output() -> ImageAccountPlanningOutput:
                 predicate="depicts_relation",
                 anchor_fact_ids=["fact-visible-person"],
                 salience="high",
-                verification_question="Is the depicted person-product relationship genuine?",
             )
         ],
         search_hypotheses=[
             SearchHypothesisProposal(
                 hypothesis_key="source-photo",
-                claim_keys=["person-product"],
                 statement="A source photograph may show what the presenter held.",
                 queries=["presenter source photograph product"],
                 expected_information="A traceable source image or report.",
@@ -117,6 +116,13 @@ def test_planning_query_can_establish_the_underlying_fact_independently() -> Non
     assert state.search_hypotheses[0].queries == [
         "what did the presenter hold during the event"
     ]
+    assert "claim_keys" not in SearchHypothesisProposal.model_json_schema()[
+        "properties"
+    ]
+    assert "verification_question" not in ImageClaimProposal.model_json_schema()[
+        "properties"
+    ]
+    assert state.tasks[0].question == hypothesis.statement
 
 
 def _semantic_safety_fixture() -> dict[str, object]:
@@ -268,6 +274,43 @@ def test_search_hypothesis_requires_an_executable_first_hop() -> None:
 
     with pytest.raises(ValidationError, match="executable first-hop tool"):
         ImageAccountPlanningOutput.model_validate(payload)
+
+
+def test_image_account_planning_requires_one_open_route() -> None:
+    payload = _planning_output().model_dump(mode="json")
+    payload["search_hypotheses"] = []
+
+    with pytest.raises(ValidationError, match="at least 1 item"):
+        ImageAccountPlanningOutput.model_validate(payload)
+
+
+def test_non_integrity_task_does_not_expose_integrity_only_tools() -> None:
+    state = _planned_state()
+    task = state.tasks[0]
+    task.suggested_tools.extend(
+        ["check_consistency", "analyze_visual_anomalies"]
+    )
+
+    allowed = runtime_task_tool_names(state, task)
+
+    assert "text_search" in allowed
+    assert "check_consistency" not in allowed
+    assert "analyze_visual_anomalies" not in allowed
+
+
+def test_planning_rejects_route_with_no_authorized_first_hop() -> None:
+    state = _state()
+    output = _planning_output()
+    output.search_hypotheses[0].suggested_tools = [
+        "analyze_visual_anomalies"
+    ]
+    before = state.model_dump(mode="json")
+
+    update = apply_image_account_planning(state, output)
+
+    assert update["accepted"] is False
+    assert "no executable first-hop tool" in update["rejected_reason"]
+    assert state.model_dump(mode="json") == before
 
 
 def test_discrepancy_decision_establishes_fake_atomically() -> None:

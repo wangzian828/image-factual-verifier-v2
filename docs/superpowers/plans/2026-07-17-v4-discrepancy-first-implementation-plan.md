@@ -99,7 +99,7 @@ Phase 0～10 保留为重构历史，但下面四项新决定覆盖旧计划中�
 - `apply_image_account_planning(...)`
 - `apply_discrepancy_decision(...)`
 
-Planning reducer 必须验证 Claim key、视觉锚点、高显著性 Claim、Hypothesis 引用和预算，创建稳定 ID 与 claim-owned task，并在完整验证后一次性写入。
+Planning reducer 必须验证 Claim key、视觉锚点、高显著性 Claim、Hypothesis 唯一性、可执行首跳工具和预算，创建稳定 ID 与 account-owned task，并在完整验证后一次性写入。初始 Hypothesis schema 不包含 Claim key 或逐 Claim 核查问题；reducer 写入的 account 归属只用于 Evidence、预算和停止账本，不构成语义判断。
 
 Decision reducer 必须验证 Claim、Evidence、Hypothesis、视觉锚点及调查归属；验证新增 Hypothesis 和视觉复查预算；discrepancy 必须引用 Evidence；verdict 必须满足前置条件；完整验证后一次性提交。
 
@@ -115,7 +115,7 @@ Decision reducer 必须验证 Claim、Evidence、Hypothesis、视觉锚点及调
 
 ### Phase 3：Claim/Hypothesis 调查循环
 
-- ResearchTask 必须归属 Claim 和 Hypothesis。
+- ResearchTask 必须归属当前 image account 和 Hypothesis；该内部归属不得反馈成 Planning 的搜索语义约束。
 - ReAct 每次只选择一个有限动作。
 - 搜索发现可更新 Hypothesis，不自动扩大 ImageClaim。
 - 禁止相同语义、工具、目标的重复路线。

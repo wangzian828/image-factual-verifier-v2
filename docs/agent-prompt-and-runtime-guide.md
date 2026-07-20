@@ -19,7 +19,10 @@
 Planning is the stored main Interaction root and receives the original image once.
 It also receives perception, positioned OCR, pixel/OCR VisualFacts, retrieval
 anchors, and bootstrap tasks. It emits positive ImageClaims and tentative
-SearchHypotheses; it does not create a core verdict fact or verdict.
+SearchHypotheses; it does not create a core verdict fact or verdict. The Planning
+schema exposes no Claim key or per-Claim verification question on a hypothesis.
+It must still emit at least one executable route; this is a structural requirement,
+not a rule about which fact the route should investigate.
 
 The image defines the account to fact-check and supplies initial clues; it does not
 bound the investigation's facts, sources, relations, or query vocabulary. Planning
@@ -42,6 +45,11 @@ retrieval. Claim/hypothesis ownership preserves lineage; it is not a semantic ca
 Gemini may choose any useful query angle, including an independent question about
 the underlying real-world fact. Such a query does not change the ImageClaim or
 create Evidence.
+
+After Planning, the reducer broadly registers each initial route against the current
+image account so Evidence, budgets, and stopping remain auditable. This internal
+attachment is not shown as a Planning choice and cannot establish a ClaimAssessment
+or MaterialDiscrepancy without a qualified directional Finding/Evidence chain.
 
 After tool execution, the runtime reduces the canonical result, stores the native
 `function_result`, and ends the action segment. The next semantic checkpoint submits

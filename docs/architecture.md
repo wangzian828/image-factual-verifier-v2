@@ -27,8 +27,8 @@ hash-verified original image
   -> deterministic visual facts and retrieval anchors
   -> Image Account Planning (main Interaction root; original image attached once)
        1-3 ImageClaims
-       bounded SearchHypotheses
-  -> claim/hypothesis-owned ReAct action
+       independently planned, bounded SearchHypotheses
+  -> case/hypothesis-owned ReAct action
   -> deterministic Discovery / Evidence / Failure reduction
   -> sparse multimodal Discrepancy Decision
        ClaimAssessment
@@ -54,10 +54,15 @@ assessed as `open|supported|refuted|conflicted|unresolved`.
 
 ### SearchHypothesis
 
-A bounded retrieval direction attached to one or more ImageClaims. External names,
-places, dates, events, sources, creators, platforms, instruments, and species
-identities remain hypotheses until qualified Evidence supports a semantic decision.
-A hypothesis never owns a verdict.
+A bounded retrieval direction for the image account. Its Planning schema contains
+no Claim key: the route may ask for the actual underlying value instead of repeating
+the depicted value. After Planning, the reducer attaches the route to the current
+account Claims only as broad bookkeeping for provenance, budgets, Evidence review,
+and stopping. That attachment does not establish support or refutation. The
+Discrepancy Decision must still select the affected ImageClaim and prove the
+directional Finding/Evidence chain. A hypothesis never owns a verdict.
+Planning must provide at least one route with an executable first hop; the runtime
+does not constrain the route's factual angle.
 
 ### MaterialDiscrepancy
 

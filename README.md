@@ -7,7 +7,7 @@ ImageOnlyRuntimeCase
   -> Gemini perception + positioned OCR
   -> deterministic visual facts and retrieval anchors
   -> Image Account Planning (1-3 ImageClaims + SearchHypotheses)
-  -> claim/hypothesis-owned native Gemini ReAct
+  -> account/hypothesis-owned native Gemini ReAct
   -> sparse multimodal Discrepancy Decision
   -> deterministic Coverage and claim/discrepancy/Evidence basis
   -> constrained discrepancy-first-v4 Judgment

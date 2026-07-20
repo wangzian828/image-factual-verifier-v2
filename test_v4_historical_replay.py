@@ -55,15 +55,11 @@ def _planning_output(fixture: dict[str, object]) -> ImageAccountPlanningOutput:
                 predicate="depicts_relation",
                 anchor_fact_ids=["fact-visible-anchor"],
                 salience="high",
-                verification_question=(
-                    "Does provenance-complete Evidence support the visible relation?"
-                ),
             )
         ],
         search_hypotheses=[
             SearchHypothesisProposal(
                 hypothesis_key="historical-evidence-route",
-                claim_keys=["primary-visible-relation"],
                 statement=str(fixture["hypothesis"]),
                 queries=[],
                 expected_information=str(fixture["expected_information"]),

@@ -700,38 +700,24 @@ def apply_image_account_planning(
     if len(candidate.tasks) + len(output.search_hypotheses) > TOTAL_TASKS_MAX:
         return {"accepted": False, "rejected_reason": "total task budget exhausted"}
 
-    planning_claim_keys = {item.claim_key for item in output.image_claims}
-    covered_claim_keys = {
-        claim_key
-        for hypothesis in output.search_hypotheses
-        for claim_key in hypothesis.claim_keys
-    }
     high_claim_keys = {
         item.claim_key
         for item in output.image_claims
         if item.salience == "high"
     }
-    if not high_claim_keys or not high_claim_keys <= covered_claim_keys:
+    if not high_claim_keys:
         return {
             "accepted": False,
-            "rejected_reason": (
-                "every high-salience image claim requires a search hypothesis"
-            ),
+            "rejected_reason": "image account requires a high-salience claim",
         }
     if candidate.proposed_verdict in {"fake", "real"}:
         return {
             "accepted": False,
             "rejected_reason": "image account planning cannot run after verdict",
         }
-    if not covered_claim_keys <= planning_claim_keys:
-        return {
-            "accepted": False,
-            "rejected_reason": "search hypothesis cites unknown planning claim",
-        }
     for index, proposal in enumerate(output.search_hypotheses):
         if any(
-            set(prior.claim_keys) == set(proposal.claim_keys)
-            and _hypothesis_text_equivalent(prior.statement, proposal.statement)
+            _hypothesis_text_equivalent(prior.statement, proposal.statement)
             for prior in output.search_hypotheses[:index]
         ):
             return {
@@ -801,14 +787,34 @@ def apply_image_account_planning(
         new_fact_ids.append(fact_id)
         new_claim_ids.append(claim_id)
 
+    # Initial routes are planned independently of individual ImageClaims. They are
+    # registered against the whole image account only after Planning so Evidence,
+    # budgets, and stopping remain auditable without turning ownership into a
+    # semantic constraint on what the model may investigate.
+    claims = list(claim_by_key.values())
+    claim_ids = [claim.claim_id for claim in claims]
+    fact_ids = [claim.fact_id for claim in claims]
+    owns_visual_integrity = any(
+        fact_by_id[fact_id].predicate == "visual_integrity"
+        for fact_id in fact_ids
+    )
     for proposal in output.search_hypotheses:
-        claims = [claim_by_key.get(key) for key in proposal.claim_keys]
-        if any(claim is None for claim in claims):
+        suggested_tools = list(dict.fromkeys(proposal.suggested_tools))
+        if not owns_visual_integrity:
+            suggested_tools = [
+                tool_name
+                for tool_name in suggested_tools
+                if tool_name
+                not in {"check_consistency", "analyze_visual_anomalies"}
+            ]
+        if not suggested_tools:
             return {
                 "accepted": False,
-                "rejected_reason": "search hypothesis cites unknown planning claim",
+                "rejected_reason": (
+                    "search hypothesis has no executable first-hop tool after "
+                    "runtime capability filtering"
+                ),
             }
-        claim_ids = [claim.claim_id for claim in claims if claim is not None]
         hypothesis_id = stable_id(
             "hypothesis", candidate.brief.case_id, proposal.hypothesis_key
         )
@@ -819,32 +825,27 @@ def apply_image_account_planning(
             statement=proposal.statement,
             queries=list(dict.fromkeys(proposal.queries)),
             expected_information=proposal.expected_information,
-            suggested_tools=list(dict.fromkeys(proposal.suggested_tools)),
+            suggested_tools=suggested_tools,
             priority=proposal.priority,
             task_id=task_id,
         )
-        fact_ids = [claim.fact_id for claim in claims if claim is not None]
         task = ResearchTask(
             task_id=task_id,
             fact_ids=fact_ids,
             claim_ids=claim_ids,
             hypothesis_id=hypothesis_id,
-            question=" ".join(
-                claim_proposal.verification_question
-                for claim_proposal in output.image_claims
-                if claim_proposal.claim_key in proposal.claim_keys
-            ),
+            question=proposal.statement,
             purpose=proposal.expected_information,
             priority=proposal.priority,
             status="active",
             origin_ids=list(dict.fromkeys([hypothesis_id, *claim_ids, *fact_ids]))[:12],
-            suggested_tools=list(dict.fromkeys(proposal.suggested_tools)),
+            suggested_tools=suggested_tools,
             suggested_queries=list(dict.fromkeys(proposal.queries)),
         )
         candidate.search_hypotheses.append(hypothesis)
         candidate.tasks.append(task)
         for claim in claims:
-            if claim is not None and task_id not in claim.task_ids:
+            if task_id not in claim.task_ids:
                 claim.task_ids.append(task_id)
         new_hypothesis_ids.append(hypothesis_id)
         new_task_ids.append(task_id)
@@ -5466,6 +5467,16 @@ def runtime_task_tool_names(
     """
 
     allowed = set(task.suggested_tools)
+    facts = {fact.fact_id: fact for fact in state.facts}
+    owns_visual_integrity = any(
+        facts.get(fact_id) is not None
+        and facts[fact_id].predicate == "visual_integrity"
+        for fact_id in task.fact_ids
+    )
+    if not owns_visual_integrity:
+        allowed.difference_update(
+            {"check_consistency", "analyze_visual_anomalies"}
+        )
     for discovery in state.discoveries:
         if discovery.task_id != task.task_id or discovery.abandoned:
             continue

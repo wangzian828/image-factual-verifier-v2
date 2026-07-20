@@ -8,12 +8,18 @@ import pytest
 from pydantic import BaseModel, Field
 
 from src.orchestrator.source_access import SourceAccessPolicy
+from src.orchestrator.runtime_events import (
+    CaseRuntimeStore,
+    bind_case_runtime_store,
+    reset_case_runtime_store,
+)
 from src.orchestrator.stage_runner import (
     InteractionSession,
     StageRunner,
     StageStep,
 )
 from src.tools.base import BaseTool
+from src.tools.context_memory import RecallEvidenceTool
 from src.tools.visit import VisitTool
 from test_support_models import ToolStageOutput
 
@@ -94,6 +100,43 @@ class NativeStructuredOutput(BaseModel):
 
 class BoundedNativeOutput(BaseModel):
     values: List[str] = Field(default_factory=list, max_length=2)
+
+
+def test_sync_tool_thread_preserves_case_archive_context(tmp_path) -> None:
+    store = CaseRuntimeStore(tmp_path, case_id="case-context-propagation")
+    archived = store.archive_tool_result(
+        stage="verification",
+        action_index=1,
+        tool_name="visit",
+        tool_args={"url": "https://example.org/coach"},
+        tool_result=json.dumps(
+            {
+                "status": "success",
+                "evidence": "The official account names the ceremonial coach.",
+            }
+        ),
+    )
+    runner = StageRunner(
+        llm=NativeFakeBackend([]),
+        system_prompt="Recall archived evidence.",
+        tools=[RecallEvidenceTool()],
+        stage_name="verification",
+        attach_image=False,
+    )
+    token = bind_case_runtime_store(store)
+    try:
+        serialized, _ = asyncio.run(
+            runner._execute_tool(
+                "recall_evidence",
+                {"query": "ceremonial coach"},
+            )
+        )
+    finally:
+        reset_case_runtime_store(token)
+
+    result = json.loads(serialized)
+    assert result["status"] == "success"
+    assert result["candidates"][0]["memory_id"] == archived["memory_id"]
 
 
 def _function_call_response() -> Dict[str, Any]:

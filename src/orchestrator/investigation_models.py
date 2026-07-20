@@ -415,7 +415,6 @@ class ImageClaimProposal(StrictModel):
     predicate: str = Field(min_length=1, max_length=100)
     anchor_fact_ids: List[str] = Field(min_length=1, max_length=12)
     salience: Literal["high", "medium"] = "high"
-    verification_question: str = Field(min_length=1, max_length=800)
 
 
 class SearchHypothesisProposal(StrictModel):
@@ -424,7 +423,6 @@ class SearchHypothesisProposal(StrictModel):
         max_length=80,
         pattern=r"^[a-z0-9][a-z0-9_-]*$",
     )
-    claim_keys: List[str] = Field(min_length=1, max_length=3)
     statement: str = Field(min_length=1, max_length=1200)
     queries: List[str] = Field(default_factory=list, max_length=3)
     expected_information: str = Field(min_length=1, max_length=800)
@@ -462,7 +460,7 @@ class ImageAccountPlanningOutput(StrictModel):
     account_summary: str = Field(min_length=1, max_length=1600)
     image_claims: List[ImageClaimProposal] = Field(min_length=1, max_length=3)
     search_hypotheses: List[SearchHypothesisProposal] = Field(
-        default_factory=list,
+        min_length=1,
         max_length=6,
     )
 
@@ -476,12 +474,6 @@ class ImageAccountPlanningOutput(StrictModel):
         ]
         if len(hypothesis_keys) != len(set(hypothesis_keys)):
             raise ValueError("search hypothesis keys must be unique")
-        known_claims = set(claim_keys)
-        for hypothesis in self.search_hypotheses:
-            if not set(hypothesis.claim_keys) <= known_claims:
-                raise ValueError(
-                    "search hypotheses must reference supplied image claim keys"
-                )
         high_claims = {
             item.claim_key
             for item in self.image_claims
@@ -489,15 +481,6 @@ class ImageAccountPlanningOutput(StrictModel):
         }
         if not high_claims:
             raise ValueError("image account requires a high-salience claim")
-        covered_claims = {
-            claim_key
-            for hypothesis in self.search_hypotheses
-            for claim_key in hypothesis.claim_keys
-        }
-        if not high_claims <= covered_claims:
-            raise ValueError(
-                "every high-salience image claim requires a search hypothesis"
-            )
         return self
 
 

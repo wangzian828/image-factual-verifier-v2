@@ -18,6 +18,11 @@ investigation's vocabulary or search boundary. SearchHypotheses and queries may
 independently seek the underlying real-world fact and may use model knowledge to
 propose unverified leads. That knowledge is never Evidence: only recorded tool
 observations can support a ClaimAssessment, MaterialDiscrepancy, or verdict basis.
+The initial Planning schema therefore has no Claim-key field on a SearchHypothesis.
+The reducer registers each initial route against the current image account for
+provenance, budgets, Evidence review, and stopping, but this broad bookkeeping
+attachment is not a semantic conclusion. Discrepancy Decision still has to name the
+affected ImageClaim and cite its directional Finding/Evidence chain.
 
 For webpages, lack of mention is insufficient to refute a goal. A model may mark a
 source as refuting only when the selected passage states a proposition incompatible

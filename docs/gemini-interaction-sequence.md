@@ -60,19 +60,20 @@ Core instruction:
   - bootstrap tasks.
 - Purpose:
   - emit one to three high-salience ImageClaims;
-  - emit bounded SearchHypotheses;
+  - separately emit at least one bounded SearchHypothesis without Claim-key binding;
   - plan beyond the image's vocabulary to establish underlying facts independently;
   - use model knowledge only to propose unverified retrieval leads;
   - avoid selecting a verdict owner;
   - keep external identities, dates, sources, creators, and platforms tentative.
 - Output: `ImageAccountPlanningOutput`
-- Next: deterministic claim, hypothesis, and ResearchTask creation.
+- Next: deterministic Claim, hypothesis, and ResearchTask creation. Initial route
+  attachment to the image account is bookkeeping, not a semantic conclusion.
 
 Core instruction:
 
-> State the factual account the image asks us to check, then plan the investigation
-> freely. The image supplies claims and clues, not the boundary of the search.
-> Establish underlying facts independently; hypotheses remain unverified leads.
+> State the visually anchored account, then separately plan open routes that
+> establish the underlying facts. The image supplies claims and clues, not the
+> search boundary. Hypotheses remain unverified leads.
 
 ### 3. Investigation ReAct
 

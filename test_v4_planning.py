@@ -164,16 +164,11 @@ class ImageAccountPlanningBackend:
                     "predicate": "holds",
                     "anchor_fact_ids": [anchor_id],
                     "salience": "high",
-                    "verification_question": (
-                        "Does reliable evidence support the depicted "
-                        "person-product relation?"
-                    ),
                 }
             ],
             "search_hypotheses": [
                 {
                     "hypothesis_key": "source_capture",
-                    "claim_keys": ["person_product_relation"],
                     "statement": (
                         "A traceable source capture may clarify what the person held."
                     ),

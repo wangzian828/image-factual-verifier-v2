@@ -2997,9 +2997,8 @@ class Orchestrator:
                     ),
                 )
             else:
-                loop = asyncio.get_event_loop()
                 result = await asyncio.wait_for(
-                    loop.run_in_executor(None, tool.call, tool_args),
+                    asyncio.to_thread(tool.call, tool_args),
                     timeout=getattr(
                         self,
                         "tool_action_timeout_seconds",

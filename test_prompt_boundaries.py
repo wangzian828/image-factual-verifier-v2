@@ -49,10 +49,11 @@ def test_hot_path_prompts_stay_semantic_and_compact() -> None:
     assert "runtime owns task state" in react_prompt
     assert "validates grounding" in planning_prompt
     assert "do not own the verdict" in image_account_prompt
-    assert "design the investigation freely" in image_account_prompt
-    assert "does not limit which real-world facts" in image_account_prompt
-    assert "underlying facts independently" in image_account_prompt
-    assert "prior knowledge as unverified leads" in image_account_prompt
+    assert "Separately design open SearchHypotheses" in image_account_prompt
+    assert "not the search boundary" in image_account_prompt
+    assert "underlying real-world facts" in image_account_prompt
+    assert "unverified leads" in image_account_prompt
+    assert "only tool Evidence establishes facts" in image_account_prompt
     assert "required JSON schema" in image_account_prompt
     assert "not a boundary on the investigation" in discrepancy_react_prompt
     assert "any useful query angle" in discrepancy_react_prompt

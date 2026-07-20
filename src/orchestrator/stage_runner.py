@@ -2387,9 +2387,8 @@ class StageRunner:
                     timeout=self.tool_timeout_seconds,
                 )
             else:
-                loop = asyncio.get_event_loop()
                 result = await asyncio.wait_for(
-                    loop.run_in_executor(None, tool.call, tool_args),
+                    asyncio.to_thread(tool.call, tool_args),
                     timeout=self.tool_timeout_seconds,
                 )
         except asyncio.TimeoutError:
