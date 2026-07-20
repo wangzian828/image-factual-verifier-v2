@@ -222,9 +222,11 @@ class PlanningThenReactBackend(ImageAccountPlanningBackend):
         self.requests.append(kwargs)
         if "sparse multimodal Discrepancy Decision checkpoint" in system:
             payload = kwargs["input_payload"]
-            assert isinstance(payload, list)
-            user_input = payload[-1]
-            context = json.loads(user_input["content"][0]["text"])
+            if isinstance(payload, list):
+                user_input = payload[-1]
+                context = json.loads(user_input["content"][0]["text"])
+            else:
+                context = json.loads(payload)
             claim = context["image_claims"][0]
             evidence = context["reviewed_qualified_evidence"][0]
             return {
@@ -735,7 +737,6 @@ def test_discrepancy_main_loop_stops_on_first_decisive_discrepancy(
             investigation,
             str(image_path),
             runtime_case,
-            interaction_session=session,
         )
     )
 
@@ -750,9 +751,9 @@ def test_discrepancy_main_loop_stops_on_first_decisive_discrepancy(
     assert backend.react_count == 2
     assert [request["previous_interaction_id"] for request in backend.requests] == [
         None,
-        "image-account-planning-1",
-        "discrepancy-react-1",
-        "discrepancy-react-2",
+        None,
+        None,
+        None,
     ]
     assert search.calls
     assert visit.calls

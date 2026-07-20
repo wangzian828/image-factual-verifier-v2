@@ -665,7 +665,6 @@ class DiscrepancyDecisionOutput(StrictModel):
         "continue",
         "fake",
         "real",
-        "unverifiable",
     ] = "continue"
     rationale: str = Field(min_length=1, max_length=2000)
 
@@ -692,6 +691,7 @@ class ClaimAssessment(StrictModel):
         "insufficient",
     ]
     evidence_ids: List[str] = Field(default_factory=list, max_length=20)
+    finding_ids: List[str] = Field(default_factory=list, max_length=20)
     remaining_gap: str = Field(default="", max_length=800)
     rationale: str = Field(min_length=1, max_length=1600)
 
@@ -718,6 +718,7 @@ class DiscrepancyDecisionRecord(StrictModel):
     reviewed_evidence_ids: List[str] = Field(default_factory=list, max_length=40)
     output: DiscrepancyDecisionOutput
     accepted_assessment_ids: List[str] = Field(default_factory=list, max_length=3)
+    accepted_finding_ids: List[str] = Field(default_factory=list, max_length=20)
     accepted_discrepancy_id: Optional[str] = Field(default=None, max_length=100)
     accepted_hypothesis_ids: List[str] = Field(default_factory=list, max_length=3)
     retired_hypothesis_ids: List[str] = Field(default_factory=list, max_length=6)
@@ -756,12 +757,12 @@ class DiscrepancyCoverageAudit(StrictModel):
         "continue",
         "fake",
         "real",
-        "unverifiable",
     ] = ""
     complete: bool = False
     stop_reason: Literal[
         "continue",
         "verdict_determined",
+        "meaningful_routes_exhausted",
         "information_saturated",
         "hard_budget_exhausted",
     ] = "continue"
@@ -772,6 +773,10 @@ class DiscrepancyCoverageAudit(StrictModel):
 
 class DiscrepancyVerdictBasis(StrictModel):
     policy_rule_id: Literal["discrepancy-first-v4"] = "discrepancy-first-v4"
+    decision_mode: Literal[
+        "evidence_determined",
+        "bounded_binary_judgment",
+    ] = "evidence_determined"
     verdict_target: str = Field(min_length=1, max_length=1600)
     claim_ids: List[str] = Field(default_factory=list, max_length=3)
     discrepancy_ids: List[str] = Field(default_factory=list, max_length=12)
@@ -782,7 +787,7 @@ class DiscrepancyVerdictBasis(StrictModel):
 
 
 class DiscrepancyJudgment(StrictModel):
-    verdict: Literal["real", "fake", "unverifiable"]
+    verdict: Literal["real", "fake"]
     confidence: float = Field(ge=0.0, le=1.0)
     policy_rule_id: Literal["discrepancy-first-v4"] = "discrepancy-first-v4"
     selected_claim_ids: List[str] = Field(default_factory=list, max_length=3)
@@ -795,6 +800,23 @@ class DiscrepancyJudgment(StrictModel):
     selected_evidence_ids: List[str] = Field(default_factory=list, max_length=40)
     overall_assessment: str = Field(min_length=1, max_length=2000)
     unresolved_gaps: List[str] = Field(default_factory=list, max_length=12)
+
+
+class ProgressEvent(StrictModel):
+    progress_id: str = Field(min_length=1, max_length=100)
+    action_count: int = Field(ge=1, le=24)
+    gain: Literal[
+        "lead_gain",
+        "evidence_gain",
+        "decision_gain",
+        "visual_understanding_gain",
+        "no_gain",
+    ]
+    source_ids: List[str] = Field(default_factory=list, max_length=40)
+    no_substantive_gain_streak: int = Field(ge=0, le=24)
+    soft_checkpoint_triggered: bool = False
+    grace_remaining: int = Field(default=0, ge=0, le=8)
+    rationale: str = Field(min_length=1, max_length=800)
 
 
 class EvidenceDecisionOutput(StrictModel):
@@ -1059,7 +1081,6 @@ class ImageOnlyInvestigationState(StrictModel):
         "continue",
         "fake",
         "real",
-        "unverifiable",
     ] = ""
     core_verdict_fact_id: Optional[str] = Field(
         default=None,
@@ -1070,16 +1091,34 @@ class ImageOnlyInvestigationState(StrictModel):
     decisive_fact_ids: List[str] = Field(default_factory=list, max_length=1)
     recommended_next_task_ids: List[str] = Field(default_factory=list, max_length=4)
     attempted_routes: List[str] = Field(default_factory=list, max_length=120)
+    recalled_archive_memory_ids: List[str] = Field(
+        default_factory=list,
+        max_length=120,
+    )
+    read_archive_memory_ids: List[str] = Field(
+        default_factory=list,
+        max_length=120,
+    )
+    pending_archive_read_ids: List[str] = Field(
+        default_factory=list,
+        max_length=12,
+    )
     action_count: int = Field(default=0, ge=0, le=24)
     reflection_failure_streak: int = Field(default=0, ge=0, le=2)
+    no_substantive_gain_streak: int = Field(default=0, ge=0, le=24)
+    saturation_checkpoint_action: Optional[int] = Field(default=None, ge=0, le=24)
+    saturation_grace_remaining: int = Field(default=0, ge=0, le=8)
+    progress_events: List[ProgressEvent] = Field(default_factory=list, max_length=24)
     verdict_basis: Optional[VerdictBasis] = None
     judgment: Optional[ImageOnlyJudgment] = None
     stop_reason: Literal[
         "",
         "verdict_determined",
         "coverage_complete",
+        "meaningful_routes_exhausted",
         "information_saturated",
         "hard_budget_exhausted",
+        "engineering_error",
     ] = ""
 
     @model_validator(mode="after")

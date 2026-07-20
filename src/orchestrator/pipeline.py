@@ -21,6 +21,14 @@ from src.orchestrator.discrepancy_coverage import (
     compile_discrepancy_verdict_basis,
 )
 from src.orchestrator.runtime_case import verify_case_image
+from src.orchestrator.runtime_events import CaseRuntimeStore, current_case_runtime_store
+from src.orchestrator.progress_control import (
+    grace_exhausted_without_gain,
+    open_saturation_grace,
+    record_action_progress,
+    record_decision_progress,
+    should_run_saturation_checkpoint,
+)
 from src.orchestrator.image_only_prompts import (
     DISCREPANCY_REACT_SYSTEM_PROMPT as IMAGE_ONLY_DISCREPANCY_REACT_PROMPT,
     DISCREPANCY_DECISION_SYSTEM_PROMPT as IMAGE_ONLY_DISCREPANCY_DECISION_PROMPT,
@@ -304,10 +312,12 @@ class Orchestrator:
         runtime_case: ImageOnlyRuntimeCase,
         *,
         decision_policy_version: str = "discrepancy-first-v4",
+        runtime_store: Optional[CaseRuntimeStore] = None,
     ) -> Dict[str, Any]:
         """Run one explicit image-only decision policy without hidden fallback."""
 
         verify_case_image(runtime_case, image_path)
+        runtime_store = runtime_store or current_case_runtime_store()
         state = VerificationState(
             image_path=image_path,
             image_id=runtime_case.case_id,
@@ -315,6 +325,7 @@ class Orchestrator:
             input_mode="image_only",
             decision_policy_version=decision_policy_version,
             tool_health=self.tool_health_summary,
+            runtime_store=runtime_store,
         )
         self.last_state = state
         started = time.time()
@@ -333,19 +344,17 @@ class Orchestrator:
             investigation = state_from_bootstrap(bootstrap)
             state.investigation_state = investigation
             self._sync_image_only_state(state, investigation)
-            investigation_session = InteractionSession()
             await self._run_image_account_planning(
                 state,
                 investigation,
                 image_path=image_path,
-                interaction_session=investigation_session,
+                interaction_session=None,
             )
             await self._run_discrepancy_investigation(
                 state,
                 investigation,
                 image_path,
                 runtime_case,
-                interaction_session=investigation_session,
             )
             self._require_successful_discrepancy_investigation(state)
             compiled_verdict, basis = compile_discrepancy_verdict_basis(
@@ -356,7 +365,7 @@ class Orchestrator:
                 investigation,
                 compiled_verdict,
                 basis,
-                interaction_session=investigation_session,
+                interaction_session=None,
             )
             investigation.discrepancy_judgment = judgment
             state.judgment = judgment  # type: ignore[assignment]
@@ -436,6 +445,8 @@ class Orchestrator:
             max_rounds=3,
             image_path=effective_image_path,
             stage_name="image_only_planning",
+            runtime_store=state.runtime_store,
+            handoff_state=investigation,
             attach_image=bool(effective_image_path),
             interaction_session=interaction_session,
             output_validator=lambda parsed, _steps: (
@@ -508,6 +519,8 @@ class Orchestrator:
             max_rounds=2,
             image_path=effective_image_path,
             stage_name="image_account_planning",
+            runtime_store=state.runtime_store,
+            handoff_state=investigation,
             attach_image=bool(effective_image_path),
             interaction_session=interaction_session,
             output_validator=lambda parsed, _steps: (
@@ -745,6 +758,8 @@ class Orchestrator:
                 max_rounds=1,
                 image_path=image_path,
                 stage_name="verification",
+                runtime_store=state.runtime_store,
+                handoff_state=investigation,
                 recent_rounds_to_keep=3,
                 tool_cache=self.tool_cache,
                 cacheable_tools=list(self.cacheable_tools),
@@ -768,8 +783,11 @@ class Orchestrator:
                     step
                     for step in state.all_steps
                     if getattr(step, "stage_name", "")
-                    == "image_only_investigation"
-                    or getattr(step, "stage_name", "") == "verification"
+                    in {
+                        "image_only_investigation",
+                        "verification",
+                        "image_only_discrepancy_investigation",
+                    }
                 ],
                 max_output_tokens=self._stage_output_tokens(
                     "VERIFICATION",
@@ -956,7 +974,7 @@ class Orchestrator:
         image_path: str,
         runtime_case: ImageOnlyRuntimeCase,
         *,
-        interaction_session: InteractionSession,
+        interaction_session: Optional[InteractionSession] = None,
     ) -> None:
         """Run the bounded v4 claim/hypothesis loop to a deterministic stop."""
 
@@ -982,7 +1000,7 @@ class Orchestrator:
                         )
                         or "scheduled_boundary"
                     ),
-                    interaction_session=interaction_session,
+                    interaction_session=None,
                 )
                 audit_discrepancy_coverage(
                     investigation,
@@ -990,11 +1008,7 @@ class Orchestrator:
                 )
                 self._sync_image_only_state(state, investigation)
                 continue
-            if investigation.proposed_verdict in {
-                "fake",
-                "real",
-                "unverifiable",
-            }:
+            if investigation.proposed_verdict in {"fake", "real"}:
                 audit_discrepancy_coverage(
                     investigation,
                     decision_checkpoint=True,
@@ -1007,13 +1021,24 @@ class Orchestrator:
                     investigation,
                     reviewed_evidence_ids=reviewed_ids,
                     trigger="before_unresolved",
-                    interaction_session=interaction_session,
+                    interaction_session=None,
                 )
                 audit_discrepancy_coverage(
                     investigation,
                     decision_checkpoint=True,
                 )
                 break
+            if investigation.pending_archive_read_ids:
+                await self._run_discrepancy_react_action(
+                    state,
+                    investigation,
+                    image_path,
+                    runtime_case,
+                    interaction_session=InteractionSession(),
+                )
+                audit_discrepancy_coverage(investigation)
+                self._sync_image_only_state(state, investigation)
+                continue
             routes = remaining_claim_hypothesis_routes(investigation)
             if not routes:
                 reviewed_ids = discrepancy_decision_evidence_ids(investigation)
@@ -1022,19 +1047,22 @@ class Orchestrator:
                     investigation,
                     reviewed_evidence_ids=reviewed_ids,
                     trigger="before_unresolved",
-                    interaction_session=interaction_session,
+                    interaction_session=None,
                 )
-                audit_discrepancy_coverage(
+                audit = audit_discrepancy_coverage(
                     investigation,
                     decision_checkpoint=True,
                 )
-                break
+                self._sync_image_only_state(state, investigation)
+                if audit.stop_reason != "continue":
+                    break
+                continue
             observation_update = await self._run_discrepancy_react_action(
                 state,
                 investigation,
                 image_path,
                 runtime_case,
-                interaction_session=interaction_session,
+                interaction_session=InteractionSession(),
             )
             trigger = discrepancy_decision_checkpoint_reason(
                 investigation,
@@ -1048,7 +1076,7 @@ class Orchestrator:
                         discrepancy_decision_evidence_ids(investigation)
                     ),
                     trigger=trigger,
-                    interaction_session=interaction_session,
+                    interaction_session=None,
                 )
                 audit_discrepancy_coverage(
                     investigation,
@@ -1058,11 +1086,39 @@ class Orchestrator:
                 audit_discrepancy_coverage(investigation)
             self._sync_image_only_state(state, investigation)
 
-        if investigation.proposed_verdict in {
-            "fake",
-            "real",
-            "unverifiable",
-        }:
+            # Recall is deliberately two-step. Once candidates exist, perform
+            # the exact read before any saturation/settlement checkpoint can
+            # retire the task that owns this memory action.
+            if investigation.pending_archive_read_ids:
+                continue
+
+            if should_run_saturation_checkpoint(investigation):
+                reviewed_ids = discrepancy_decision_evidence_ids(investigation)
+                await self._run_discrepancy_decision(
+                    state,
+                    investigation,
+                    reviewed_evidence_ids=reviewed_ids,
+                    trigger="before_unresolved",
+                    interaction_session=None,
+                )
+                if investigation.proposed_verdict in {"fake", "real"}:
+                    audit_discrepancy_coverage(
+                        investigation,
+                        decision_checkpoint=True,
+                    )
+                elif remaining_claim_hypothesis_routes(investigation):
+                    open_saturation_grace(investigation)
+                else:
+                    audit_discrepancy_coverage(
+                        investigation,
+                        decision_checkpoint=True,
+                    )
+                self._sync_image_only_state(state, investigation)
+            elif grace_exhausted_without_gain(investigation):
+                investigation.stop_reason = "information_saturated"
+                self._sync_image_only_state(state, investigation)
+
+        if investigation.proposed_verdict in {"fake", "real"}:
             audit = (
                 investigation.discrepancy_coverage_audits[-1]
                 if investigation.discrepancy_coverage_audits
@@ -1084,15 +1140,19 @@ class Orchestrator:
     ) -> Dict[str, Any]:
         """Execute one bounded v4 claim/hypothesis action on the main chain."""
 
-        if investigation.proposed_verdict in {"fake", "real", "unverifiable"}:
+        if investigation.proposed_verdict in {"fake", "real"}:
             raise RuntimeError("no ReAct action is allowed after a v4 verdict")
         react_tasks = select_image_only_discrepancy_react_tasks(investigation)
         task_ids = {task.task_id for task in react_tasks}
         if not task_ids:
             raise RuntimeError("no executable claim/hypothesis task remains")
-        executable_tool_names = self._discrepancy_executable_tool_names(
-            investigation,
-            task_ids=task_ids,
+        executable_tool_names = (
+            {"read_evidence"}
+            if investigation.pending_archive_read_ids
+            else self._discrepancy_executable_tool_names(
+                investigation,
+                task_ids=task_ids,
+            )
         )
         if not executable_tool_names:
             raise RuntimeError("no executable claim/hypothesis route remains")
@@ -1109,6 +1169,8 @@ class Orchestrator:
                 step,
                 image_sha256=runtime_case.image_sha256,
             )
+            progress = record_action_progress(investigation, update)
+            update["progress"] = progress.model_dump(mode="json")
             observation_update = update
             self._sync_image_only_state(state, investigation)
             return update
@@ -1120,13 +1182,31 @@ class Orchestrator:
                 tool
                 for tool in build_stage_tools("verification", self.all_tools)
                 if tool.name != "current_time"
-                and tool.name in executable_tool_names
+                and (
+                    tool.name == "read_evidence"
+                    if investigation.pending_archive_read_ids
+                    else (
+                        tool.name in executable_tool_names
+                        or tool.name in {"recall_evidence", "read_evidence"}
+                    )
+                )
             ],
             output_schema=InvestigationSegmentOutput,
             max_rounds=1,
             image_path=image_path,
             stage_name="verification",
+            runtime_store=state.runtime_store,
+            handoff_state=investigation,
             attach_image=False,
+            prior_steps=[
+                step
+                for step in state.all_steps
+                if getattr(step, "stage_name", "")
+                in {
+                    "image_only_discrepancy_investigation",
+                    "image_only_visual_reinspection",
+                }
+            ],
             tool_cache=self.tool_cache,
             cacheable_tools=list(self.cacheable_tools),
             tool_call_limits=self.verification_tool_limits,
@@ -1173,7 +1253,13 @@ class Orchestrator:
             request_timeout_seconds=self.stage_request_timeout_seconds,
             tool_timeout_seconds=self.tool_action_timeout_seconds,
             tool_argument_constraints=(
-                self._discrepancy_tool_argument_constraints(
+                {
+                    "read_evidence": {
+                        "memory_id": list(investigation.pending_archive_read_ids)
+                    }
+                }
+                if investigation.pending_archive_read_ids
+                else self._discrepancy_tool_argument_constraints(
                     investigation,
                     task_ids=task_ids,
                 )
@@ -1206,6 +1292,8 @@ class Orchestrator:
     ) -> Dict[str, Any]:
         """Run and atomically apply one sparse v4 multimodal checkpoint."""
 
+        before_signature = self._discrepancy_progress_signature(investigation)
+
         runner = StageRunner(
             llm=self.llm,
             system_prompt=self._sp(IMAGE_ONLY_DISCREPANCY_DECISION_PROMPT),
@@ -1213,6 +1301,8 @@ class Orchestrator:
             output_schema=DiscrepancyDecisionOutput,
             max_rounds=2,
             stage_name="image_only_discrepancy_decision",
+            runtime_store=state.runtime_store,
+            handoff_state=investigation,
             attach_image=False,
             interaction_session=interaction_session,
             output_validator=lambda parsed, _steps: (
@@ -1259,8 +1349,49 @@ class Orchestrator:
                 "Discrepancy Decision failed deterministic application: "
                 + str(update.get("rejected_reason", "unknown validation error"))
             )
+        progress = (
+            record_decision_progress(investigation, update)
+            if self._discrepancy_progress_signature(investigation)
+            != before_signature
+            else None
+        )
+        if progress is not None:
+            update["progress"] = progress.model_dump(mode="json")
         self._sync_image_only_state(state, investigation)
         return update
+
+    @staticmethod
+    def _discrepancy_progress_signature(
+        investigation: ImageOnlyInvestigationState,
+    ) -> tuple[Any, ...]:
+        latest = {}
+        for item in investigation.claim_assessments:
+            latest[item.claim_id] = (
+                item.assessment,
+                tuple(item.evidence_ids),
+                item.remaining_gap,
+            )
+        return (
+            tuple(sorted(latest.items())),
+            tuple(
+                (
+                    item.discrepancy_id,
+                    item.status,
+                    item.materiality,
+                    tuple(item.evidence_ids),
+                )
+                for item in investigation.material_discrepancies
+            ),
+            tuple(
+                (item.hypothesis_id, item.status)
+                for item in investigation.search_hypotheses
+            ),
+            tuple(
+                (item.visual_question_id, item.status)
+                for item in investigation.visual_reinspections
+            ),
+            investigation.proposed_verdict,
+        )
 
     async def _run_image_only_visual_reinspection(
         self,
@@ -1354,11 +1485,26 @@ class Orchestrator:
                 **metadata,
             },
         )
+        self._archive_direct_tool_step(
+            state,
+            step,
+            action_index=investigation.action_count + 1,
+        )
         update = record_tool_observation(
             investigation,
             step,
             image_sha256=runtime_case.image_sha256,
         )
+        progress = record_action_progress(
+            investigation,
+            update,
+            visual_reinspection=True,
+        )
+        update["progress"] = progress.model_dump(mode="json")
+        artifact = step.metadata.get("tool_result_artifact") or {}
+        memory_id = str(artifact.get("memory_id", "")).strip()
+        if state.runtime_store is not None and memory_id:
+            state.runtime_store.bind_archive_lineage(memory_id, update)
         step.metadata["investigation_state_update"] = update
         self._record_stage_steps(state, [step])
         self._sync_image_only_state(state, investigation)
@@ -1388,6 +1534,8 @@ class Orchestrator:
             # Allow two bounded correction turns without reopening tool use.
             max_rounds=2,
             stage_name="image_only_evidence_decision",
+            runtime_store=state.runtime_store,
+            handoff_state=investigation,
             attach_image=False,
             interaction_session=interaction_session,
             output_validator=lambda parsed, _steps: (
@@ -1464,6 +1612,8 @@ class Orchestrator:
             output_schema=ReflectionOutput,
             max_rounds=2,
             stage_name="image_only_reflection",
+            runtime_store=state.runtime_store,
+            handoff_state=investigation,
             attach_image=False,
             interaction_session=interaction_session,
             output_validator=lambda parsed, _steps: (
@@ -1579,6 +1729,8 @@ class Orchestrator:
             output_schema=QueryConceptExtractionOutput,
             max_rounds=2,
             stage_name="image_only_query_concept_extraction",
+            runtime_store=state.runtime_store,
+            handoff_state=investigation,
             attach_image=False,
             output_validator=lambda parsed, _steps: (
                 self._validate_image_only_query_concept_extraction(
@@ -1625,6 +1777,8 @@ class Orchestrator:
             output_schema=QueryReplanOutput,
             max_rounds=2,
             stage_name="image_only_query_replan",
+            runtime_store=state.runtime_store,
+            handoff_state=investigation,
             attach_image=False,
             output_validator=lambda parsed, _steps: (
                 self._validate_image_only_query_replan(
@@ -1691,6 +1845,8 @@ class Orchestrator:
             output_schema=ImageOnlyJudgment,
             max_rounds=1,
             stage_name="image_only_judgment",
+            runtime_store=state.runtime_store,
+            handoff_state=investigation,
             attach_image=False,
             interaction_session=interaction_session,
             output_validator=lambda parsed, _steps: (
@@ -1736,6 +1892,8 @@ class Orchestrator:
             output_schema=DiscrepancyJudgment,
             max_rounds=1,
             stage_name="image_only_discrepancy_judgment",
+            runtime_store=state.runtime_store,
+            handoff_state=investigation,
             attach_image=False,
             interaction_session=interaction_session,
             output_validator=lambda parsed, _steps: (
@@ -1987,7 +2145,7 @@ class Orchestrator:
         compiled_verdict: str,
         basis: Any,
     ) -> tuple[bool, str]:
-        if parsed.verdict != compiled_verdict:
+        if compiled_verdict and parsed.verdict != compiled_verdict:
             return False, (
                 f"verdict must be {compiled_verdict}, received {parsed.verdict}"
             )
@@ -2346,6 +2504,8 @@ class Orchestrator:
         if task is None:
             return f"Unknown image-only task {task_id!r}."
         allowed_tools = runtime_task_tool_names(investigation, task)
+        if tool_name in {"recall_evidence", "read_evidence"}:
+            return ""
         if tool_name not in allowed_tools:
             return (
                 f"Tool {tool_name!r} is not enabled for task {task_id!r}. "
@@ -2584,6 +2744,17 @@ class Orchestrator:
         state.research_tasks = list(investigation.tasks)
         state.findings = list(investigation.findings)
         state.retrieval_anchors = list(investigation.retrieval_anchors)
+        if state.runtime_store is not None:
+            state.runtime_store.write_snapshot(
+                "workspace",
+                {
+                    "action_count": investigation.action_count,
+                    "stop_reason": investigation.stop_reason,
+                    "investigation_state": investigation.model_dump(mode="json"),
+                    "token_usage": state.token_usage,
+                    "total_tool_calls": state.total_tool_calls,
+                },
+            )
 
     @staticmethod
     def _require_successful_image_only_investigation(
@@ -2659,6 +2830,7 @@ class Orchestrator:
                 tool_result=tool_result,
                 metadata={"stage": "perception", **metadata},
             )
+            self._archive_direct_tool_step(state, step, action_index=1)
             steps.append(step)
             if not self._tool_step_succeeded(step):
                 raise RuntimeError(f"perceive_scene failed: {tool_result[:1000]}")
@@ -2687,6 +2859,7 @@ class Orchestrator:
                 tool_result=tool_result,
                 metadata={"stage": "perception", **metadata},
             )
+            self._archive_direct_tool_step(state, step, action_index=2)
             steps.append(step)
             if not self._tool_step_succeeded(step):
                 raise RuntimeError(f"ocr_with_position failed: {tool_result[:1000]}")
@@ -2718,6 +2891,29 @@ class Orchestrator:
                 f"GEMINI_{stage_name}_MAX_OUTPUT_TOKENS must be positive."
             )
         return tokens
+
+    @staticmethod
+    def _archive_direct_tool_step(
+        state: VerificationState,
+        step: StageStep,
+        *,
+        action_index: int,
+    ) -> None:
+        if state.runtime_store is None or step.action_type != "tool_call":
+            return
+        descriptor = state.runtime_store.archive_tool_result(
+            stage=step.stage_name,
+            action_index=action_index,
+            tool_name=step.tool_name,
+            tool_args=step.tool_args,
+            tool_result=step.tool_result,
+            metadata={
+                "tool_success": bool(step.metadata.get("tool_success", False)),
+                "cache_hit": bool(step.metadata.get("cache_hit", False)),
+                "function_call_id": step.metadata.get("function_call_id"),
+            },
+        )
+        step.metadata["tool_result_artifact"] = descriptor
 
     @staticmethod
     def _stage_thinking_level(stage_name: str) -> str:

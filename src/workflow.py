@@ -10,7 +10,6 @@ Usage:
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -22,6 +21,13 @@ os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 
 from src.orchestrator.runtime_case import image_sha256, verify_case_image
 from src.orchestrator.pipeline import Orchestrator
+from src.orchestrator.runtime_events import (
+    CANONICAL_TRACE_SCHEMA_VERSION,
+    CaseRuntimeStore,
+    atomic_write_json,
+    bind_case_runtime_store,
+    reset_case_runtime_store,
+)
 from src.orchestrator.state import ImageOnlyRuntimeCase
 from src.orchestrator.source_access import SourceAccessPolicy
 from src.provider_profiles import resolve_provider_settings
@@ -126,6 +132,11 @@ class VerificationWorkflow:
             )
 
         orchestrator = self._get_orchestrator(validate_startup=False)
+        runtime_store = CaseRuntimeStore(
+            self.config.output_dir,
+            case_id=runtime_case.case_id,
+        )
+        runtime_token = bind_case_runtime_store(runtime_store)
         try:
             verify_case_image(runtime_case, image_path)
             result = await orchestrator.run(
@@ -151,6 +162,7 @@ class VerificationWorkflow:
                     "state": state.to_dict(),
                 }
             if self.config.save_traces and state is not None:
+                runtime_store.write_snapshot("engineering_error", state.to_dict())
                 self._save_trace(
                     {
                         "image_id": state.image_id,
@@ -172,9 +184,12 @@ class VerificationWorkflow:
             if error_result is not None:
                 setattr(exc, "_ifv_result", error_result)
             raise
+        finally:
+            reset_case_runtime_store(runtime_token)
 
         # Save trace if configured
         if self.config.save_traces:
+            runtime_store.write_snapshot("final_state", result.get("state", {}))
             self._save_trace(result)
 
         return result
@@ -264,6 +279,5 @@ class VerificationWorkflow:
             k: v for k, v in result.items()
             if k != "state" or isinstance(v, dict)
         })
-
-        with open(trace_path, "w", encoding="utf-8") as f:
-            json.dump(serializable, f, ensure_ascii=False, indent=2, default=str)
+        serializable.setdefault("schema_version", CANONICAL_TRACE_SCHEMA_VERSION)
+        atomic_write_json(trace_path, serializable)

@@ -102,6 +102,7 @@ class VerificationState:
     termination: str = ""
     errors: List[str] = field(default_factory=list)
     tool_health: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    runtime_store: Optional[Any] = field(default=None, repr=False)
 
     def to_dict(self) -> Dict[str, Any]:
         steps_data: List[Dict[str, Any]] = []
@@ -181,5 +182,10 @@ class VerificationState:
                 "termination": self.termination,
                 "errors": self.errors,
                 "tool_health": self.tool_health,
+                "runtime_store": (
+                    self.runtime_store.descriptor
+                    if self.runtime_store is not None
+                    else None
+                ),
             }
         )

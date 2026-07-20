@@ -13,6 +13,8 @@ from src.orchestrator.investigation_models import (
 )
 from src.orchestrator.task_store import (
     MAX_TOOL_ACTIONS,
+    pending_discrepancy_evidence_ids,
+    pending_visual_reinspection,
     remaining_claim_hypothesis_routes,
     stable_id,
 )
@@ -29,6 +31,12 @@ def audit_discrepancy_coverage(
     for item in state.claim_assessments:
         latest_assessment[item.claim_id] = item
     remaining_routes = remaining_claim_hypothesis_routes(state)
+    pending_archive_ids = list(state.pending_archive_read_ids)
+    pending_evidence_ids = pending_discrepancy_evidence_ids(state)
+    pending_visual = pending_visual_reinspection(state)
+    has_pending_terminal_work = bool(
+        pending_archive_ids or pending_evidence_ids or pending_visual is not None
+    )
     open_task_ids = {
         route.split(":", 2)[2]
         if route.startswith("reverse_image_search:")
@@ -77,16 +85,7 @@ def audit_discrepancy_coverage(
         and not decisive
         and state.proposed_verdict == "real"
     )
-    unverifiable_complete = bool(
-        any(
-            item.assessment in {"insufficient", "conflicted"}
-            and item.route_status == "closed"
-            for item in high_rows
-        )
-        and not decisive
-        and state.proposed_verdict == "unverifiable"
-    )
-    complete = fake_complete or real_complete or unverifiable_complete
+    complete = fake_complete or real_complete
     if complete:
         stop_reason = "verdict_determined"
         reason = {
@@ -94,24 +93,25 @@ def audit_discrepancy_coverage(
             "real": (
                 "Every high-salience ImageClaim is supported and its routes close."
             ),
-            "unverifiable": (
-                "A high-salience ImageClaim remains unresolved after its routes close."
-            ),
         }[state.proposed_verdict]
     elif state.action_count >= MAX_TOOL_ACTIONS:
         stop_reason = "hard_budget_exhausted"
         reason = "The action budget ended before v4 verdict preconditions closed."
-    elif not remaining_routes and decision_checkpoint:
-        stop_reason = "information_saturated"
+    elif (
+        not remaining_routes
+        and not has_pending_terminal_work
+        and decision_checkpoint
+    ):
+        stop_reason = "meaningful_routes_exhausted"
         reason = (
-            "No claim/hypothesis route remains, but the checkpoint did not propose "
-            "an admissible terminal verdict."
+            "No claim/hypothesis route, pending archive read, or visual reinspection "
+            "remains after the final route audit."
         )
     else:
         stop_reason = "continue"
         reason = (
-            "Claim/discrepancy coverage remains open."
-            if remaining_routes
+            "Claim/discrepancy coverage or pending terminal work remains open."
+            if remaining_routes or has_pending_terminal_work
             else "A final Discrepancy Decision checkpoint is required."
         )
 
@@ -155,12 +155,13 @@ def compile_discrepancy_verdict_basis(
         if state.discrepancy_coverage_audits
         else audit_discrepancy_coverage(state)
     )
-    if not audit.complete or state.proposed_verdict not in {
-        "fake",
-        "real",
-        "unverifiable",
+    if state.stop_reason not in {
+        "verdict_determined",
+        "meaningful_routes_exhausted",
+        "information_saturated",
+        "hard_budget_exhausted",
     }:
-        raise RuntimeError("v4 verdict basis requires complete discrepancy coverage")
+        raise RuntimeError("v4 verdict basis requires a terminal investigation state")
 
     evidence_ids: List[str] = []
     claim_ids: List[str] = []
@@ -217,7 +218,7 @@ def compile_discrepancy_verdict_basis(
             item
             for item in audit.claims
             if item.salience == "high"
-            and item.assessment in {"insufficient", "conflicted"}
+            and item.assessment not in {"supported", "refuted"}
         ]
         claim_ids = [item.claim_id for item in unresolved_rows]
         evidence_ids = list(
@@ -233,7 +234,7 @@ def compile_discrepancy_verdict_basis(
         ]
         verdict_target = state.image_account_summary
 
-    if state.proposed_verdict == "unverifiable":
+    if state.proposed_verdict not in {"fake", "real"}:
         finding_ids = [
             item.finding_id
             for item in state.findings
@@ -244,6 +245,11 @@ def compile_discrepancy_verdict_basis(
             )
         ]
     basis = DiscrepancyVerdictBasis(
+        decision_mode=(
+            "evidence_determined"
+            if state.proposed_verdict in {"fake", "real"}
+            else "bounded_binary_judgment"
+        ),
         verdict_target=verdict_target,
         claim_ids=claim_ids,
         discrepancy_ids=discrepancy_ids,
@@ -253,7 +259,7 @@ def compile_discrepancy_verdict_basis(
         unresolved_gaps=unresolved_gaps[:12],
     )
     state.discrepancy_verdict_basis = basis
-    return state.proposed_verdict, basis
+    return state.proposed_verdict if state.proposed_verdict in {"fake", "real"} else "", basis
 
 
 def _directional_verdict_chain(

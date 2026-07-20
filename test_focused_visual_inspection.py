@@ -67,9 +67,9 @@ def test_focused_visual_inspection_uses_original_and_anchor_views(
     assert result["observations"][0]["view_kind"] == "relation_context"
     assert len(client.calls) == 1
     supplied_images = client.calls[0]["image_inputs"]
-    assert supplied_images[0] == str(image_path)
+    assert supplied_images[0] != str(image_path)
     assert len(supplied_images) >= 3
-    assert all(not Path(path).exists() for path in supplied_images[1:])
+    assert all(not Path(path).exists() for path in supplied_images)
 
 
 def test_focused_visual_inspection_keeps_global_question_on_original(
@@ -105,4 +105,6 @@ def test_focused_visual_inspection_keeps_global_question_on_original(
             "region": [0.0, 0.0, 1.0, 1.0],
         }
     ]
-    assert client.calls[0]["image_inputs"] == [str(image_path)]
+    assert client.calls[0]["image_inputs"] != [str(image_path)]
+    assert len(client.calls[0]["image_inputs"]) == 1
+    assert not Path(client.calls[0]["image_inputs"][0]).exists()

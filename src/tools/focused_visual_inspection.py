@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import json
+import hashlib
 import os
 import tempfile
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from src.integrations.gemini import RUNTIME_METRICS_KEY, exception_runtime_metrics
 from src.tools.base import BaseTool
+from src.orchestrator.runtime_events import current_case_runtime_store
 
 
 FOCUSED_VISUAL_INSPECTION_PROMPT = """\
@@ -172,6 +174,7 @@ class FocusedVisualInspectionTool(BaseTool):
             "views": views,
         }
         try:
+            before_version = str(params.get("before_understanding_version", "")).strip()
             parsed = self._get_client().create_images_json(
                 system_prompt=FOCUSED_VISUAL_INSPECTION_PROMPT,
                 user_text=(
@@ -204,6 +207,26 @@ class FocusedVisualInspectionTool(BaseTool):
                 except OSError:
                     pass
 
+        after_version = hashlib.sha256(
+            json.dumps(normalized, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        ).hexdigest()[:16]
+        store = current_case_runtime_store()
+        if store is not None:
+            store.append_event(
+                "image_view",
+                {
+                    "stage": "image_only_visual_reinspection",
+                    "purpose": "evidence_motivated_reinspection",
+                    "image_id": "input-image",
+                    "visual_question_id": request_context["visual_question_id"],
+                    "question": request_context["question"],
+                    "views": views,
+                    "before_understanding_version": before_version or None,
+                    "after_understanding_version": after_version,
+                    "decision_impact": "pending",
+                    "answer_status": normalized["answer_status"],
+                },
+            )
         return {
             "status": "success",
             "visual_question_id": request_context["visual_question_id"],
@@ -215,6 +238,8 @@ class FocusedVisualInspectionTool(BaseTool):
             "observations": normalized["observations"],
             "limitations": normalized["limitations"],
             "views": views,
+            "before_understanding_version": before_version or None,
+            "after_understanding_version": after_version,
             RUNTIME_METRICS_KEY: parsed.get(RUNTIME_METRICS_KEY, {}),
         }
 
@@ -252,7 +277,15 @@ def _prepare_views(
 
     image = Image.open(image_path).convert("RGB")
     width, height = image.size
-    image_inputs: List[str] = [image_path]
+    original_view = _bounded_view(image)
+    original_handle = tempfile.NamedTemporaryFile(
+        prefix="ifv_visual_original_",
+        suffix=".jpg",
+        delete=False,
+    )
+    original_handle.close()
+    original_view.save(original_handle.name, format="JPEG", quality=88, optimize=True)
+    image_inputs: List[str] = [original_handle.name]
     views: List[Dict[str, Any]] = [
         {
             "view_index": 0,
@@ -260,7 +293,7 @@ def _prepare_views(
             "region": [0.0, 0.0, 1.0, 1.0],
         }
     ]
-    temporary_paths: List[str] = []
+    temporary_paths: List[str] = [original_handle.name]
     regions = [list(item) for item in anchor_regions]
     derived: List[tuple[str, List[float]]] = []
     if scope == "relation" and len(regions) >= 2:
@@ -278,7 +311,7 @@ def _prepare_views(
         y1 = max(0, min(height - 1, int(region[1] * height)))
         x2 = max(x1 + 1, min(width, int(region[2] * width)))
         y2 = max(y1 + 1, min(height, int(region[3] * height)))
-        crop = image.crop((x1, y1, x2, y2))
+        crop = _bounded_view(image.crop((x1, y1, x2, y2)))
         handle = tempfile.NamedTemporaryFile(
             prefix="ifv_visual_view_",
             suffix=".png",
@@ -298,6 +331,15 @@ def _prepare_views(
         if len(views) >= 5:
             break
     return image_inputs, views, temporary_paths
+
+
+def _bounded_view(image: Any) -> Any:
+    from PIL import Image
+
+    bounded = image.copy()
+    long_edge = max(256, int(os.getenv("IFV_IMAGE_MAX_LONG_EDGE", "1280")))
+    bounded.thumbnail((long_edge, long_edge), Image.Resampling.LANCZOS)
+    return bounded
 
 
 def _expand_region(region: Sequence[float], margin: float) -> List[float]:

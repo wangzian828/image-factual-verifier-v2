@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -26,11 +27,19 @@ from src.integrations.gemini import (
 from src.orchestrator.evidence_policy import query_targets_fact_check_answer
 from src.orchestrator.llm_backend import LLMBackend, LLMResponse
 from src.orchestrator.route_policy import routes_semantically_equivalent
+from src.orchestrator.runtime_events import CaseRuntimeStore
+from src.orchestrator.context_workspace import (
+    StageHandoffPacket,
+    build_stage_handoff,
+    fit_stage_handoff_to_budget,
+    render_stage_handoff,
+    render_stage_request,
+)
 from src.orchestrator.tool_cache import ToolResultCache
 from src.orchestrator.tool_result import ToolResultContractError, parse_tool_result, serialize_tool_result
 from src.orchestrator.source_access import SourceAccessPolicy
 from src.tools.base import BaseTool
-from src.tools.vision_utils import image_to_data_url
+from src.tools.vision_utils import controlled_image_to_data_url
 
 
 def _bounded_timeout(
@@ -122,6 +131,10 @@ class StageRunner:
             Dict[str, Dict[str, List[Any]]]
         ] = None,
         interaction_session: Optional[InteractionSession] = None,
+        runtime_store: Optional[CaseRuntimeStore] = None,
+        prompt_version: str = "",
+        handoff_packet: Optional[StageHandoffPacket] = None,
+        handoff_state: Optional[Any] = None,
     ):
         self.llm = llm
         self.system_prompt = system_prompt
@@ -178,6 +191,13 @@ class StageRunner:
             tool_argument_constraints or {}
         )
         self.interaction_session = interaction_session
+        self.runtime_store = runtime_store
+        self.prompt_version = prompt_version or f"{stage_name or 'stage'}-v1"
+        self._last_context_request_id = ""
+        self._last_interaction_lifecycle_kind = ""
+        self._last_image_view: Dict[str, Any] = {}
+        self.handoff_packet = handoff_packet
+        self.handoff_state = handoff_state
         self.request_timeout_seconds = _bounded_timeout(
             request_timeout_seconds,
             env_name="AGENT_STAGE_REQUEST_TIMEOUT_SECONDS",
@@ -191,10 +211,74 @@ class StageRunner:
 
     async def run(self, input_context: str) -> Tuple[Optional[BaseModel], List[StageStep]]:
         """Run the ReAct loop."""
+        recalled_materials = self._recent_recalled_materials()
+        if self.handoff_packet is None and self.handoff_state is not None:
+            self.handoff_packet = build_stage_handoff(
+                self.handoff_state,
+                target_stage=self.stage_name,
+                stage_input=input_context,
+                available_tools=self.tools,
+                output_contract=(
+                    self.output_schema.__name__ if self.output_schema is not None else ""
+                ),
+                recent_steps=self.prior_steps,
+                recalled_materials=recalled_materials,
+            )
+        if self.handoff_packet is not None:
+            budget_result = fit_stage_handoff_to_budget(self.handoff_packet)
+            self.handoff_packet = budget_result.packet
+            if not budget_result.all_protected_items_reachable:
+                raise RuntimeError(
+                    "stage handoff lost protected context: "
+                    + ", ".join(self.handoff_packet.missing_protected_ids)
+                )
+            if self.runtime_store is not None and (
+                budget_result.removed_item_ids
+                or budget_result.protected_context_overflow
+            ):
+                self.runtime_store.append_event(
+                    "context_compaction",
+                    {
+                        "handoff_id": self.handoff_packet.handoff_id,
+                        **self.handoff_packet.compaction,
+                    },
+                )
+        if self.runtime_store is not None and self.handoff_packet is not None:
+            handoff_artifact = self.runtime_store.artifacts.put_text(
+                render_stage_handoff(self.handoff_packet),
+                media_type="application/json; charset=utf-8",
+                suffix=".json",
+                metadata={
+                    "kind": "stage_handoff_shadow",
+                    "handoff_id": self.handoff_packet.handoff_id,
+                    "target_stage": self.handoff_packet.target_stage,
+                },
+            )
+            self.runtime_store.append_event(
+                "stage_handoff_shadow",
+                {
+                    "handoff_id": self.handoff_packet.handoff_id,
+                    "target_stage": self.handoff_packet.target_stage,
+                    "workspace_version": self.handoff_packet.workspace.workspace_version,
+                    "protected_coverage": self.handoff_packet.protected_coverage,
+                    "protected_ids": self.handoff_packet.protected_ids,
+                    "included_protected_ids": self.handoff_packet.included_protected_ids,
+                    "missing_protected_ids": self.handoff_packet.missing_protected_ids,
+                    "estimated_tokens": self.handoff_packet.estimated_tokens,
+                    "compaction": self.handoff_packet.compaction,
+                    "legacy_input_chars": len(str(input_context)),
+                    "legacy_input_sha256": hashlib.sha256(
+                        str(input_context).encode("utf-8")
+                    ).hexdigest(),
+                    "handoff_artifact": handoff_artifact,
+                },
+            )
         if str(getattr(self.llm, "provider", "")).lower() == "gemini" and str(
             getattr(self.llm, "wire_api", "")
         ).lower() != "interactions":
             raise RuntimeError("Gemini stages require wire_api='interactions'.")
+        if self.handoff_packet is not None:
+            input_context = render_stage_request(self.handoff_packet)
         configured_question_ids = [
             question_id
             for question_id in self.question_claims
@@ -336,6 +420,10 @@ class StageRunner:
                 serialized, tool_metadata = await self._execute_tool(tool_name, dict(step.tool_args))
                 step.tool_result = serialized
                 step.metadata.update(tool_metadata)
+                self._archive_tool_step(
+                    step,
+                    action_index=len(self.prior_steps) + len(steps) + 1,
+                )
                 step.metadata.setdefault(
                     "function_call_id",
                     (
@@ -497,6 +585,8 @@ class StageRunner:
                         response_format=response_format,
                     ),
                     "policy_action": deepcopy(output_json),
+                    "context_request_id": self._last_context_request_id,
+                    "interaction_lifecycle_kind": self._last_interaction_lifecycle_kind,
                 },
             )
             steps.append(step)
@@ -616,6 +706,8 @@ class StageRunner:
                     tools=native_tools,
                     response_format=response_format,
                 ),
+                "context_request_id": self._last_context_request_id,
+                "interaction_lifecycle_kind": self._last_interaction_lifecycle_kind,
             }
             thought = self._extract_native_thought(payload)
             function_calls = self._extract_native_function_calls(payload)
@@ -780,6 +872,12 @@ class StageRunner:
                                 )
                                 step.tool_result = serialized
                                 step.metadata.update(tool_metadata)
+                                self._archive_tool_step(
+                                    step,
+                                    action_index=(
+                                        len(self.prior_steps) + len(steps) + 1
+                                    ),
+                                )
                                 evidence_so_far.append(
                                     self._summarize_tool_result(
                                         tool_name,
@@ -1166,7 +1264,8 @@ class StageRunner:
     def _build_native_input(self, input_context: str) -> Any:
         if not (self.attach_image and self.image_path):
             return input_context
-        image_url = image_to_data_url(self.image_path)
+        image_url, view = controlled_image_to_data_url(self.image_path)
+        self._record_image_view(view, purpose=self.stage_name or "stage")
         if not (image_url.startswith("data:") and ";base64," in image_url):
             return [
                 {"type": "text", "text": input_context},
@@ -1385,6 +1484,8 @@ class StageRunner:
                     tools=[],
                     response_format=response_format,
                 ),
+                "context_request_id": self._last_context_request_id,
+                "interaction_lifecycle_kind": self._last_interaction_lifecycle_kind,
             }
             tokens = self._usage_tokens(usage)
             if self._extract_native_function_calls(payload):
@@ -1962,13 +2063,59 @@ class StageRunner:
         parts: List[Dict[str, Any]] = []
         if self.attach_image and self.image_path:
             try:
-                parts.append({"type": "image_url", "image_url": {"url": image_to_data_url(self.image_path)}})
+                image_url, view = controlled_image_to_data_url(self.image_path)
+                self._record_image_view(view, purpose=self.stage_name or "stage")
+                parts.append({"type": "image_url", "image_url": {"url": image_url}})
             except Exception:
                 pass
         parts.append({"type": "text", "text": input_context})
         if len(parts) == 1 and parts[0]["type"] == "text":
             return {"role": "user", "content": parts[0]["text"]}
         return {"role": "user", "content": parts}
+
+    def _record_image_view(self, view: Dict[str, Any], *, purpose: str) -> None:
+        fingerprint = json.dumps(view, sort_keys=True, default=str)
+        if fingerprint == self._last_image_view.get("fingerprint"):
+            return
+        self._last_image_view = {"fingerprint": fingerprint, **dict(view)}
+        if self.runtime_store is None:
+            return
+        self.runtime_store.append_event(
+            "image_view",
+            {
+                "stage": self.stage_name,
+                "purpose": purpose,
+                "image_id": "input-image",
+                "crop": None,
+                "before_understanding_version": None,
+                "after_understanding_version": None,
+                "decision_impact": "pending",
+                **dict(view),
+            },
+        )
+
+    def _recent_recalled_materials(self) -> List[Dict[str, Any]]:
+        materials: List[Dict[str, Any]] = []
+        for step in self.prior_steps:
+            if getattr(step, "action_type", "") != "tool_call":
+                continue
+            if getattr(step, "tool_name", "") != "read_evidence":
+                continue
+            try:
+                payload = json.loads(str(getattr(step, "tool_result", "")))
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if isinstance(payload, dict) and payload.get("status") == "success":
+                materials.append(
+                    {
+                        "memory_id": payload.get("memory_id"),
+                        "artifact": payload.get("artifact", {}),
+                        "offset": payload.get("offset", 0),
+                        "end": payload.get("end", 0),
+                        "content": str(payload.get("content", ""))[:24000],
+                    }
+                )
+        return materials[-4:]
 
     def _build_round_messages(
         self,
@@ -1997,32 +2144,134 @@ class StageRunner:
     async def _call_llm(self, messages: List[Dict[str, Any]]) -> Tuple[LLMResponse, Dict[str, Any]]:
         started = time.perf_counter()
         self.llm_api_calls += 1
+        request_id = ""
+        if self.runtime_store is not None:
+            request_id = self.runtime_store.context_ledger.begin_request(
+                stage=self.stage_name,
+                lifecycle_kind="standalone_request",
+                system_instruction="",
+                input_payload=messages,
+                model=str(getattr(self.llm, "model_name", "")),
+                prompt_version=self.prompt_version,
+            )
         try:
             response = await asyncio.wait_for(
                 self.llm.get_response(messages),
                 timeout=self.request_timeout_seconds,
             )
         except asyncio.TimeoutError as exc:
+            if request_id:
+                self.runtime_store.context_ledger.complete_request(
+                    request_id,
+                    status="error",
+                    error="request timeout",
+                )
             raise TimeoutError(
                 f"{self.stage_name or 'stage'} model request exceeded "
                 f"{self.request_timeout_seconds:.1f}s"
             ) from exc
+        except Exception as exc:
+            if request_id:
+                self.runtime_store.context_ledger.complete_request(
+                    request_id,
+                    status="error",
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+            raise
         duration_ms = round((time.perf_counter() - started) * 1000, 2)
-        return response, {"llm_duration_ms": duration_ms}
+        if request_id:
+            raw = response.raw if isinstance(response.raw, dict) else {}
+            usage = (
+                raw.get("usage", {})
+                if isinstance(raw.get("usage"), dict)
+                else {
+                    "input_tokens": response.prompt_tokens,
+                    "output_tokens": response.completion_tokens,
+                }
+            )
+            self.runtime_store.context_ledger.complete_request(
+                request_id,
+                usage=usage,
+                status="completed",
+            )
+        self._last_context_request_id = request_id
+        return response, {
+            "llm_duration_ms": duration_ms,
+            "context_request_id": request_id,
+        }
 
     async def _create_interaction(self, **kwargs: Any) -> Dict[str, Any]:
         """Apply one wall-clock deadline to every native Gemini request."""
 
+        explicit_lifecycle = str(kwargs.pop("lifecycle_kind", "")).strip()
+        request_id = ""
+        tools = kwargs.get("tools") or []
+        previous_interaction_id = kwargs.get("previous_interaction_id")
+        lifecycle_kind = explicit_lifecycle or (
+            "tool_roundtrip"
+            if tools
+            else "protocol_correction"
+            if previous_interaction_id
+            else "standalone_request"
+        )
+        if (
+            previous_interaction_id
+            and lifecycle_kind == "standalone_request"
+        ):
+            raise RuntimeError(
+                "standalone_request cannot inherit a previous interaction"
+            )
+        self._last_interaction_lifecycle_kind = lifecycle_kind
+        if self.runtime_store is not None:
+            request_id = self.runtime_store.context_ledger.begin_request(
+                stage=self.stage_name,
+                lifecycle_kind=lifecycle_kind,
+                system_instruction=kwargs.get("system_instruction"),
+                input_payload=kwargs.get("input_payload"),
+                tools=tools,
+                response_format=kwargs.get("response_format"),
+                generation_config=kwargs.get("generation_config"),
+                previous_interaction_id=previous_interaction_id,
+                model=str(getattr(self.llm, "model_name", "")),
+                prompt_version=self.prompt_version,
+            )
         try:
-            return await asyncio.wait_for(
+            payload = await asyncio.wait_for(
                 self.llm.create_interaction(**kwargs),
                 timeout=self.request_timeout_seconds,
             )
         except asyncio.TimeoutError as exc:
+            if request_id:
+                self.runtime_store.context_ledger.complete_request(
+                    request_id,
+                    status="error",
+                    error="request timeout",
+                )
             raise TimeoutError(
                 f"{self.stage_name or 'stage'} Gemini request exceeded "
                 f"{self.request_timeout_seconds:.1f}s"
             ) from exc
+        except Exception as exc:
+            if request_id:
+                self.runtime_store.context_ledger.complete_request(
+                    request_id,
+                    status="error",
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+            raise
+        if request_id:
+            self.runtime_store.context_ledger.complete_request(
+                request_id,
+                usage=(
+                    payload.get("usage", {})
+                    if isinstance(payload.get("usage"), dict)
+                    else {}
+                ),
+                interaction_id=str(payload.get("id", "")).strip() or None,
+                status=str(payload.get("status", "completed")),
+            )
+        self._last_context_request_id = request_id
+        return payload
 
     @staticmethod
     def _extract_think(content: str) -> str:
@@ -2267,7 +2516,32 @@ class StageRunner:
         update = self.observation_callback(step, list(self.prior_steps) + list(steps))
         if update:
             step.metadata["investigation_state_update"] = update
+            memory_id = str(
+                (step.metadata.get("tool_result_artifact") or {}).get(
+                    "memory_id", ""
+                )
+            ).strip()
+            if self.runtime_store is not None and memory_id:
+                self.runtime_store.bind_archive_lineage(memory_id, update)
         return update
+
+    def _archive_tool_step(self, step: StageStep, *, action_index: int) -> None:
+        if self.runtime_store is None or step.action_type != "tool_call":
+            return
+        descriptor = self.runtime_store.archive_tool_result(
+            stage=self.stage_name,
+            action_index=action_index,
+            tool_name=step.tool_name,
+            tool_args=step.tool_args,
+            tool_result=step.tool_result,
+            metadata={
+                "context_request_id": self._last_context_request_id,
+                "cache_hit": bool(step.metadata.get("cache_hit", False)),
+                "tool_success": bool(step.metadata.get("tool_success", False)),
+                "function_call_id": step.metadata.get("function_call_id"),
+            },
+        )
+        step.metadata["tool_result_artifact"] = descriptor
 
     def _compact_tool_result_for_context(self, tool_name: str, result: str) -> Any:
         try:

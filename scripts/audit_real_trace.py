@@ -702,6 +702,16 @@ def _audit_discrepancy_interaction_chains(
         )
         return
     previous = ""
+    previous_stage = ""
+    root_count = 0
+    uses_explicit_lifecycles = any(
+        str(
+            _mapping(step.get("metadata")).get(
+                "interaction_lifecycle_kind", ""
+            )
+        ).strip()
+        for _, step in native
+    )
     for position, (index, step) in enumerate(native):
         metadata = _mapping(step.get("metadata"))
         interaction_id = str(metadata.get("interaction_id", "")).strip()
@@ -716,6 +726,12 @@ def _audit_discrepancy_interaction_chains(
                 location=location,
             )
             continue
+        stage = str(step.get("stage", ""))
+        lifecycle = str(
+            metadata.get("interaction_lifecycle_kind", "")
+        ).strip()
+        if not parent:
+            root_count += 1
         if position == 0:
             if parent:
                 _issue(
@@ -731,15 +747,36 @@ def _audit_discrepancy_interaction_chains(
                     "v4 main chain must begin at Image Account Planning",
                     location=location,
                 )
-        elif parent != previous:
+        elif not uses_explicit_lifecycles:
+            if parent != previous:
+                _issue(
+                    report,
+                    "INTERACTION_CHAIN_BROKEN",
+                    f"expected previous_interaction_id {previous!r}, got {parent!r}",
+                    location=location,
+                )
+        elif stage == previous_stage:
+            if parent and parent != previous:
+                _issue(
+                    report,
+                    "INTERACTION_CHAIN_BROKEN",
+                    f"same-stage short chain expected parent {previous!r}, got {parent!r}",
+                    location=location,
+                )
+        elif parent or lifecycle not in {
+            "standalone_request",
+            "tool_roundtrip",
+        }:
             _issue(
                 report,
-                "INTERACTION_CHAIN_BROKEN",
-                f"expected previous_interaction_id {previous!r}, got {parent!r}",
+                "INTERACTION_STAGE_LEAK",
+                "cross-stage request must be a standalone interaction root",
                 location=location,
             )
         previous = interaction_id
+        previous_stage = stage
     report.stats["v4_interaction_steps"] = len(native)
+    report.stats["v4_interaction_segments"] = root_count
 
 
 def _v4_claim_has_directional_chain(
@@ -1288,6 +1325,10 @@ def _audit_discrepancy_trace(
         or investigation.get("discrepancy_judgment")
     )
     verdict = str(trace.get("verdict", judgment.get("verdict", ""))).strip()
+    decision_mode = str(
+        basis.get("decision_mode", "evidence_determined")
+        or "evidence_determined"
+    )
     if str(basis.get("policy_rule_id", "")) != "discrepancy-first-v4":
         _issue(
             report,
@@ -1295,7 +1336,11 @@ def _audit_discrepancy_trace(
             "v4 verdict_basis must use discrepancy-first-v4",
             location="verdict_basis.policy_rule_id",
         )
-    if verdict == "fake" and not basis.get("discrepancy_ids"):
+    if (
+        decision_mode == "evidence_determined"
+        and verdict == "fake"
+        and not basis.get("discrepancy_ids")
+    ):
         _issue(
             report,
             "V4_FAKE_BASIS_DISCREPANCY_MISSING",
@@ -1340,7 +1385,7 @@ def _audit_discrepancy_trace(
             "Discovery IDs cannot appear in verdict_basis.evidence_ids",
             location="verdict_basis.evidence_ids",
         )
-    if verdict in {"fake", "real"}:
+    if decision_mode == "evidence_determined" and verdict in {"fake", "real"}:
         expected_stance = "refute" if verdict == "fake" else "support"
         if not basis_evidence_ids or not basis_finding_ids:
             _issue(
@@ -1381,6 +1426,59 @@ def _audit_discrepancy_trace(
                 "Every selected verdict Evidence must be linked by a selected Finding",
                 location="verdict_basis",
             )
+    elif decision_mode == "bounded_binary_judgment":
+        action_count = int(investigation.get("action_count", 0) or 0)
+        stop_reason = str(investigation.get("stop_reason", ""))
+        unresolved_gaps = [
+            str(item).strip()
+            for item in basis.get("unresolved_gaps", []) or []
+            if str(item).strip()
+        ]
+        if action_count <= 0:
+            _issue(
+                report,
+                "V4_BOUNDED_JUDGMENT_WITHOUT_INVESTIGATION",
+                "bounded binary Judgment requires at least one accepted investigation action",
+                location="state.investigation_state.action_count",
+            )
+        if stop_reason not in {
+            "meaningful_routes_exhausted",
+            "information_saturated",
+            "hard_budget_exhausted",
+        }:
+            _issue(
+                report,
+                "V4_BOUNDED_JUDGMENT_STOP_INVALID",
+                "bounded binary Judgment requires a finite-information terminal stop",
+                location="state.investigation_state.stop_reason",
+            )
+        if not basis_claim_ids or not unresolved_gaps:
+            _issue(
+                report,
+                "V4_BOUNDED_JUDGMENT_GAPS_MISSING",
+                "bounded binary Judgment must preserve its claims and unresolved gaps",
+                location="verdict_basis",
+            )
+        linked_basis_evidence = {
+            str(evidence_id)
+            for finding_id in basis_finding_ids & set(finding_by_id)
+            for evidence_id in finding_by_id[finding_id].get("evidence_ids", [])
+            or []
+        }
+        if not basis_evidence_ids <= linked_basis_evidence:
+            _issue(
+                report,
+                "V4_VERDICT_EVIDENCE_WITHOUT_FINDING",
+                "Every selected bounded-judgment Evidence must be linked by a selected Finding",
+                location="verdict_basis",
+            )
+    else:
+        _issue(
+            report,
+            "V4_VERDICT_DECISION_MODE_INVALID",
+            f"unknown v4 verdict decision_mode {decision_mode!r}",
+            location="verdict_basis.decision_mode",
+        )
     if str(judgment.get("verdict", "")) != verdict:
         _issue(
             report,
@@ -1389,17 +1487,26 @@ def _audit_discrepancy_trace(
             location="judgment.verdict",
         )
 
+    terminal_stop_reason = str(investigation.get("stop_reason", ""))
     terminal_audits = [
         item
         for item in audits
-        if item.get("complete") is True
-        and str(item.get("stop_reason", "")) == "verdict_determined"
+        if (
+            item.get("complete") is True
+            and str(item.get("stop_reason", "")) == "verdict_determined"
+        )
+        or str(item.get("stop_reason", ""))
+        in {
+            "meaningful_routes_exhausted",
+            "information_saturated",
+            "hard_budget_exhausted",
+        }
     ]
     if not terminal_audits:
         _issue(
             report,
             "V4_TERMINAL_COVERAGE_MISSING",
-            "v4 successful trace requires complete terminal Coverage",
+            "v4 successful trace requires an auditable terminal Coverage boundary",
         )
     else:
         terminal_action_count = int(terminal_audits[-1].get("action_count", 0) or 0)
@@ -1453,6 +1560,10 @@ def _audit_discrepancy_trace(
             "material_discrepancies": len(discrepancies),
             "discrepancy_decisions": len(decisions),
             "v4_actions": int(investigation.get("action_count", 0) or 0),
+            "v4_stop_reason": terminal_stop_reason,
+            "v4_progress_events": len(
+                _rows(investigation.get("progress_events"))
+            ),
         }
     )
     _audit_discrepancy_interaction_chains(steps, report)

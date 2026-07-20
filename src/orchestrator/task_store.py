@@ -481,8 +481,46 @@ def record_tool_observation(
     evidence_ids: List[str] = []
     finding_ids: List[str] = []
     failure_ids: List[str] = []
+    recalled_candidate_ids: List[str] = []
+    read_memory_ids: List[str] = []
+    memory_action_error = ""
 
-    if succeeded:
+    if tool_name == "recall_evidence":
+        if succeeded:
+            recalled_candidate_ids = list(
+                dict.fromkeys(
+                    str(item.get("memory_id", "")).strip()
+                    for item in data.get("candidates", []) or []
+                    if isinstance(item, Mapping)
+                    and str(item.get("memory_id", "")).strip()
+                )
+            )[:12]
+            state.recalled_archive_memory_ids = list(
+                dict.fromkeys(
+                    [
+                        *state.recalled_archive_memory_ids,
+                        *recalled_candidate_ids,
+                    ]
+                )
+            )[-120:]
+            state.pending_archive_read_ids = recalled_candidate_ids
+        else:
+            memory_action_error = str(data.get("error", "archive recall failed"))
+    elif tool_name == "read_evidence":
+        if succeeded:
+            memory_id = str(data.get("memory_id", "")).strip()
+            if memory_id:
+                read_memory_ids = [memory_id]
+                state.read_archive_memory_ids = list(
+                    dict.fromkeys([*state.read_archive_memory_ids, memory_id])
+                )[-120:]
+                # One exact selection completes the two-step recall batch. Other
+                # candidates remain immutable in the archive and can be recalled
+                # again if they become relevant later.
+                state.pending_archive_read_ids = []
+        else:
+            memory_action_error = str(data.get("error", "archive read failed"))
+    elif succeeded:
         discovery_ids = _record_discoveries(
             state,
             task,
@@ -530,6 +568,15 @@ def record_tool_observation(
         if item.evidence_id in set(evidence_ids)
     ]
     route_payload["outcome"] = (
+        "memory_read"
+        if read_memory_ids
+        else "memory_candidates"
+        if recalled_candidate_ids
+        else "memory_empty"
+        if tool_name in {"recall_evidence", "read_evidence"} and succeeded
+        else "memory_failed"
+        if tool_name in {"recall_evidence", "read_evidence"}
+        else
         "evidence"
         if any(
             item.quality in {"strong", "moderate"}
@@ -618,6 +665,10 @@ def record_tool_observation(
         "created_evidence_ids": evidence_ids,
         "created_finding_ids": finding_ids,
         "created_failure_ids": failure_ids,
+        "recalled_candidate_ids": recalled_candidate_ids,
+        "read_memory_ids": read_memory_ids,
+        "pending_archive_read_ids": list(state.pending_archive_read_ids),
+        "memory_action_error": memory_action_error,
         "fact_statuses": {
             fact.fact_id: fact.status
             for fact in state.facts
@@ -667,7 +718,7 @@ def apply_image_account_planning(
                 "every high-salience image claim requires a search hypothesis"
             ),
         }
-    if candidate.proposed_verdict in {"fake", "real", "unverifiable"}:
+    if candidate.proposed_verdict in {"fake", "real"}:
         return {
             "accepted": False,
             "rejected_reason": "image account planning cannot run after verdict",
@@ -860,7 +911,7 @@ def apply_discrepancy_decision(
     """Validate a discrepancy checkpoint on a copy, then commit it atomically."""
 
     candidate = state.model_copy(deep=True)
-    if candidate.proposed_verdict in {"fake", "real", "unverifiable"}:
+    if candidate.proposed_verdict in {"fake", "real"}:
         return {
             "accepted": False,
             "rejected_reason": "no discrepancy decision is allowed after verdict",
@@ -1364,23 +1415,6 @@ def apply_discrepancy_decision(
                 "no decisive discrepancy, and no open high-salience route"
             ),
         }
-    unresolved_high_claim_ids = {
-        claim.claim_id
-        for claim in high_claims
-        if claim.status in {"unresolved", "conflicted"}
-    }
-    if output.verdict_proposal == "unverifiable" and (
-        not high_claims
-        or not unresolved_high_claim_ids
-        or any(
-            hypothesis.status in {"open", "active"}
-            and bool(set(hypothesis.claim_ids) & unresolved_high_claim_ids)
-            for hypothesis in candidate.search_hypotheses
-        )
-        or established_decisive
-    ):
-        return {"accepted": False, "rejected_reason": "unverifiable verdict requires unresolved high-salience claims and exhausted routes"}
-
     candidate.proposed_verdict = output.verdict_proposal
     decision_id = stable_id(
         "discrepancy-decision",

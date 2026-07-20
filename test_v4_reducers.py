@@ -31,7 +31,9 @@ from src.orchestrator.discrepancy_coverage import (
 from src.orchestrator.task_store import (
     apply_discrepancy_decision,
     apply_image_account_planning,
+    record_tool_observation,
 )
+from src.orchestrator.stage_runner import StageStep
 
 
 def _state() -> ImageOnlyInvestigationState:
@@ -148,6 +150,62 @@ def _append_evidence(state: ImageOnlyInvestigationState) -> InvestigationEvidenc
     state.findings.append(finding)
     task.finding_ids.append(finding.finding_id)
     return evidence
+
+
+def test_archive_memory_actions_update_memory_state_without_fact_failure() -> None:
+    state = _planned_state()
+    task = state.tasks[0]
+    recall = StageStep(
+        action_type="tool_call",
+        tool_name="recall_evidence",
+        tool_args={"query": "source object", "__question_id": task.task_id},
+        tool_result=json.dumps(
+            {
+                "status": "success",
+                "candidates": [
+                    {"memory_id": "memory-a"},
+                    {"memory_id": "memory-b"},
+                ],
+            }
+        ),
+        metadata={"function_call_id": "call-recall"},
+    )
+
+    recall_update = record_tool_observation(
+        state,
+        recall,
+        image_sha256="a" * 64,
+    )
+
+    assert recall_update["recalled_candidate_ids"] == ["memory-a", "memory-b"]
+    assert recall_update["created_failure_ids"] == []
+    assert state.pending_archive_read_ids == ["memory-a", "memory-b"]
+    assert state.failures == []
+
+    read = StageStep(
+        action_type="tool_call",
+        tool_name="read_evidence",
+        tool_args={"memory_id": "memory-a", "__question_id": task.task_id},
+        tool_result=json.dumps(
+            {
+                "status": "success",
+                "memory_id": "memory-a",
+                "content": "exact archived span",
+            }
+        ),
+        metadata={"function_call_id": "call-read"},
+    )
+    read_update = record_tool_observation(
+        state,
+        read,
+        image_sha256="a" * 64,
+    )
+
+    assert read_update["read_memory_ids"] == ["memory-a"]
+    assert read_update["created_failure_ids"] == []
+    assert state.pending_archive_read_ids == []
+    assert state.read_archive_memory_ids == ["memory-a"]
+    assert state.failures == []
 
 
 def test_image_account_planning_creates_stable_owned_graph() -> None:
@@ -748,7 +806,7 @@ def test_discrepancy_coverage_compiles_real_only_after_routes_close() -> None:
     assert basis.evidence_ids == [evidence.evidence_id]
 
 
-def test_discrepancy_coverage_compiles_unverifiable_gap_after_routes_close() -> None:
+def test_discrepancy_coverage_preserves_gap_for_binary_judgment_after_routes_close() -> None:
     state = _planned_state()
     evidence = _append_evidence(state)
     claim = state.image_claims[0]
@@ -767,7 +825,7 @@ def test_discrepancy_coverage_compiles_unverifiable_gap_after_routes_close() -> 
                 )
             ],
             retire_hypothesis_ids=[hypothesis_id],
-            verdict_proposal="unverifiable",
+            verdict_proposal="continue",
             rationale="The high-salience claim remains unresolved after saturation.",
         ),
         reviewed_evidence_ids=[evidence.evidence_id],
@@ -779,9 +837,44 @@ def test_discrepancy_coverage_compiles_unverifiable_gap_after_routes_close() -> 
         decision_checkpoint=True,
     )
     verdict, basis = compile_discrepancy_verdict_basis(state)
-    assert coverage.complete is True
-    assert verdict == "unverifiable"
+    assert coverage.complete is False
+    assert coverage.stop_reason == "meaningful_routes_exhausted"
+    assert verdict == ""
+    assert basis.decision_mode == "bounded_binary_judgment"
     assert basis.claim_ids == [claim.claim_id]
     assert basis.unresolved_gaps == [
         "No source binds the depicted held object."
     ]
+
+
+def test_discrepancy_coverage_does_not_stop_before_pending_archive_read() -> None:
+    state = _planned_state()
+    evidence = _append_evidence(state)
+    claim = state.image_claims[0]
+    hypothesis_id = state.search_hypotheses[0].hypothesis_id
+    update = apply_discrepancy_decision(
+        state,
+        DiscrepancyDecisionOutput(
+            claim_assessments=[
+                ClaimAssessmentProposal(
+                    claim_id=claim.claim_id,
+                    assessment="insufficient",
+                    selected_evidence_ids=[evidence.evidence_id],
+                    remaining_gap="The archived source needs exact reading.",
+                    rationale="The current comparison is not decisive.",
+                )
+            ],
+            retire_hypothesis_ids=[hypothesis_id],
+            verdict_proposal="continue",
+            rationale="Read the selected archive item before settlement.",
+        ),
+        reviewed_evidence_ids=[evidence.evidence_id],
+        trigger="before_unresolved",
+    )
+    assert update["accepted"] is True
+    state.pending_archive_read_ids = ["memory-decisive"]
+
+    audit = audit_discrepancy_coverage(state, decision_checkpoint=True)
+
+    assert audit.stop_reason == "continue"
+    assert state.stop_reason == ""

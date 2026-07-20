@@ -11,6 +11,22 @@ from typing import Any
 from src.eval import run_eval
 
 
+def test_classification_prediction_accepts_only_binary_v4_verdicts() -> None:
+    sample = {"case_id": "case-binary"}
+    assert run_eval._classification_prediction(
+        sample,
+        {"verdict": "real", "termination": "success", "error": ""},
+    ) == {"case_id": "case-binary", "verdict": "real"}
+    assert run_eval._classification_prediction(
+        sample,
+        {"verdict": "fake", "termination": "success", "error": ""},
+    ) == {"case_id": "case-binary", "verdict": "fake"}
+    assert run_eval._classification_prediction(
+        sample,
+        {"verdict": "unverifiable", "termination": "success", "error": ""},
+    ) is None
+
+
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 

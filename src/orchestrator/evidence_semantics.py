@@ -47,27 +47,73 @@ def evidence_direction_is_coherent(evidence: Any, stance: str) -> bool:
     return False
 
 
-def evidence_is_qualified_for_stance(evidence: Any, stance: str) -> bool:
-    """Return whether Evidence may support a terminal semantic direction."""
+def evidence_is_qualified(evidence: Any) -> bool:
+    """Return whether Evidence may enter a material semantic decision."""
 
     hard_risk_flags = {
         str(item)
         for item in evidence_value(evidence, "risk_flags", []) or []
     } - _NON_BLOCKING_RISK_FLAGS
     return bool(
-        stance in {"support", "refute"}
-        and str(evidence_value(evidence, "directness", "")) == "direct"
+        str(evidence_value(evidence, "directness", "")) == "direct"
         and str(evidence_value(evidence, "quality", ""))
         in QUALIFIED_EVIDENCE_QUALITIES
         and not hard_risk_flags
+    )
+
+
+def evidence_is_qualified_for_stance(evidence: Any, stance: str) -> bool:
+    """Return whether Evidence can support the requested directional chain.
+
+    Qualification and direction are separate checks.  ``evidence_is_qualified``
+    validates provenance/quality/risk, while ``evidence_direction_is_coherent``
+    validates the recorded stance and any reference-comparison constraints.
+    Keeping this small composition here lets reducers, audits, and exporters use
+    one semantic gate without duplicating either rule.
+    """
+
+    return bool(
+        evidence_is_qualified(evidence)
         and evidence_direction_is_coherent(evidence, stance)
     )
 
 
 def required_assessment_stances(assessment: str) -> frozenset[str]:
+    """Return directional Evidence requirements for an internal assessment."""
+
     return {
         "supported": frozenset({"support"}),
         "refuted": frozenset({"refute"}),
         "conflicted": frozenset({"support", "refute"}),
         "insufficient": frozenset(),
-    }.get(str(assessment), frozenset())
+        "unclear": frozenset(),
+    }.get(str(assessment).strip().lower(), frozenset())
+
+
+def reference_only_assessment_is_admissible(
+    assessment: str,
+    evidence_rows: list[Any],
+) -> bool:
+    """Preserve v3's conservative standalone reference-comparison boundary."""
+
+    if assessment not in {"supported", "refuted"} or not evidence_rows:
+        return True
+    qualified_rows = [item for item in evidence_rows if evidence_is_qualified(item)]
+    if not qualified_rows or any(
+        str(evidence_value(item, "evidence_kind", ""))
+        != "reference_comparison"
+        for item in qualified_rows
+    ):
+        return True
+    if assessment == "supported":
+        return not any(
+            evidence_value(item, "edit_evidence_present", False) is True
+            for item in qualified_rows
+        )
+    return any(
+        evidence_value(item, "same_capture_or_near_duplicate", False) is True
+        and evidence_value(item, "likely_different_original_capture", False)
+        is not True
+        and evidence_value(item, "edit_evidence_present", False) is True
+        for item in qualified_rows
+    )

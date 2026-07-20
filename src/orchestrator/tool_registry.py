@@ -27,6 +27,8 @@ STAGE_TOOLS: Dict[str, List[str]] = {
         "check_consistency",
         "analyze_visual_anomalies",
         "crop_and_inspect",
+        "recall_evidence",
+        "read_evidence",
     ],
     "judgment": [],
 }
@@ -110,6 +112,20 @@ def build_all_tools_with_health(
     register(
         "current_time",
         lambda: __import__("src.tools.current_time", fromlist=["CurrentTimeTool"]).CurrentTimeTool(),
+    )
+    register(
+        "recall_evidence",
+        lambda: __import__(
+            "src.tools.context_memory",
+            fromlist=["RecallEvidenceTool"],
+        ).RecallEvidenceTool(),
+    )
+    register(
+        "read_evidence",
+        lambda: __import__(
+            "src.tools.context_memory",
+            fromlist=["ReadEvidenceTool"],
+        ).ReadEvidenceTool(),
     )
     register(
         "crop_and_inspect",

@@ -39,9 +39,9 @@ def test_hot_path_prompts_stay_semantic_and_compact() -> None:
     assert "incompatible with the positive goal" in browse_prompt
     assert "runtime owns task state" in react_prompt
     assert "validates grounding" in planning_prompt
-    assert "SearchHypothesis is a retrieval direction" in image_account_prompt
-    assert "Do not choose one claim as a verdict owner" in image_account_prompt
-    assert "Return exactly one JSON object" in image_account_prompt
-    assert "recorded Evidence stance is also authoritative" in discrepancy_prompt
-    assert "Neutral Evidence" in discrepancy_prompt
-    assert "likely different original capture" in discrepancy_prompt
+    assert "Hypotheses guide retrieval" in image_account_prompt
+    assert "do not own the verdict" in image_account_prompt
+    assert "required JSON schema" in image_account_prompt
+    assert "reviewed qualified Evidence" in discrepancy_prompt
+    assert "MaterialDiscrepancy" in discrepancy_prompt
+    assert "otherwise continue" in discrepancy_prompt

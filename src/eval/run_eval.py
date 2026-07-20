@@ -250,7 +250,7 @@ def _classification_prediction(
 
     verdict = str(result.get("verdict") or "").strip()
     if (
-        verdict not in {"real", "fake", "unverifiable"}
+        verdict not in {"real", "fake"}
         or str(result.get("termination") or "") != "success"
         or bool(str(result.get("error") or "").strip())
     ):

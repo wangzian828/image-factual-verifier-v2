@@ -251,6 +251,59 @@ def test_strict_audit_accepts_discrepancy_first_v4_trace(tmp_path: Path) -> None
     assert report.stats["v4_actions"] == 2
 
 
+def test_strict_audit_accepts_bounded_binary_v4_trace(tmp_path: Path) -> None:
+    trace_path = _v4_trace(tmp_path)
+    trace = json.loads(trace_path.read_text(encoding="utf-8"))
+    investigation = trace["state"]["investigation_state"]
+    basis = trace["verdict_basis"]
+    basis.update(
+        {
+            "decision_mode": "bounded_binary_judgment",
+            "discrepancy_ids": [],
+            "finding_ids": [],
+            "evidence_ids": [],
+            "unresolved_gaps": ["The available material does not close the claim."],
+        }
+    )
+    investigation["discrepancy_verdict_basis"] = dict(basis)
+    investigation["material_discrepancies"] = []
+    investigation["claim_assessments"] = []
+    investigation["discrepancy_decisions"][0]["output"] = {
+        "claim_assessments": [],
+        "material_discrepancy": None,
+    }
+    investigation["stop_reason"] = "meaningful_routes_exhausted"
+    investigation["discrepancy_coverage_audits"][0].update(
+        {
+            "complete": False,
+            "stop_reason": "meaningful_routes_exhausted",
+        }
+    )
+    for judgment in (
+        trace["judgment"],
+        trace["state"]["judgment"],
+        investigation["discrepancy_judgment"],
+    ):
+        judgment.update(
+            {
+                "selected_discrepancy_ids": [],
+                "selected_finding_ids": [],
+                "selected_evidence_ids": [],
+                "unresolved_gaps": [
+                    "The available material does not close the claim."
+                ],
+            }
+        )
+    trace_path.write_text(
+        json.dumps(trace, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    report = audit_trace(trace_path)
+
+    assert not report.failures(strict_scheduler=True)
+
+
 def test_strict_audit_rejects_v4_discrepancy_alignment_tampering(
     tmp_path: Path,
 ) -> None:
