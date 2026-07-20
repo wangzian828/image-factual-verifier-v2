@@ -878,3 +878,15 @@ def test_discrepancy_coverage_does_not_stop_before_pending_archive_read() -> Non
 
     assert audit.stop_reason == "continue"
     assert state.stop_reason == ""
+
+
+def test_discrepancy_coverage_records_information_saturated_terminal_audit() -> None:
+    state = _planned_state()
+    state.action_count = 4
+    state.stop_reason = "information_saturated"
+
+    audit = audit_discrepancy_coverage(state, decision_checkpoint=True)
+
+    assert audit.complete is False
+    assert audit.stop_reason == "information_saturated"
+    assert state.discrepancy_coverage_audits[-1].action_count == 4

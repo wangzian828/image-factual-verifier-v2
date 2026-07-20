@@ -117,10 +117,12 @@ budgets, Evidence eligibility, state transitions, and stopping.
 
 IMAGE_ACCOUNT_PLANNING_SYSTEM_PROMPT = """\
 You are the Image Account Planning root. Describe the factual account communicated by the image. Return one to three
-salient, visibly anchored ImageClaims and bounded SearchHypotheses that can test
-them. External identities and metadata remain hypotheses until Evidence supports
-them. Hypotheses guide retrieval; they do not own the verdict. Use only supplied
-image/OCR facts and return the required JSON schema.
+salient, visibly anchored ImageClaims. Create independent SearchHypotheses that test
+the account from different evidence angles: the claimed occurrence, reliable
+records of what actually occurred, and source-image comparison where useful.
+External identities and metadata remain hypotheses until Evidence supports them.
+Hypotheses guide retrieval; they do not own the verdict. Use only supplied image/OCR
+facts and return the required JSON schema.
 """
 
 
@@ -186,6 +188,7 @@ You are the sparse multimodal Discrepancy Decision checkpoint. Compare the revie
 only affected Claim assessments; establish a MaterialDiscrepancy only when cited
 Evidence and visible anchors support it. You may retire or add a bounded,
 non-duplicate hypothesis or request one Evidence-motivated image reinspection.
+Omit Claims that have no reviewed owned Evidence.
 Propose fake for a decisive high-salience discrepancy, real when all high-salience
 claims are supported and meaningful routes are closed, otherwise continue. Use
 only supplied IDs and return the required JSON schema.
@@ -206,8 +209,9 @@ DISCREPANCY_JUDGMENT_SYSTEM_PROMPT = """\
 You are the constrained final synthesizer for discrepancy-first-v4. Give the final binary fact-check verdict, real or fake, from the supplied complete
 investigation basis. When compiled_verdict is non-empty, reproduce it. Otherwise
 weigh the recorded Evidence, image understanding, conflicts, failed routes and
-unresolved gaps and choose the better-supported binary conclusion. Preserve every
-supplied basis ID exactly; do not add facts or reopen search.
+unresolved gaps and choose the better-supported binary conclusion. Copy every
+compiled-basis ID list and unresolved_gaps exactly. The assessment may summarize
+only supplied material; do not add historical facts or reopen search.
 """
 
 

@@ -37,6 +37,7 @@ HARD = "hard"
 SCHEDULER = "scheduler"
 PROTOCOL = "protocol"
 ROUTE_CONTROL = "route_control"
+CORRECTION = "correction"
 REJECTION_ACTIONS = frozenset({"format_error", "output_rejected"})
 WEB_EVIDENCE_TOOLS = frozenset({"visit", "crop_and_search"})
 KNOWN_FACT_CHECK_QUERY_POLICY = SourceAccessPolicy(
@@ -505,6 +506,7 @@ def _audit_rejections(
     scheduler_count = 0
     protocol_count = 0
     route_control_count = 0
+    corrected_count = 0
     for index, step in enumerate(steps):
         metadata = _mapping(step.get("metadata"))
         if str(step.get("action_type", "")) in {
@@ -518,6 +520,34 @@ def _audit_rejections(
         )
         if not rejected:
             continue
+        rejected_interaction_id = str(
+            metadata.get("interaction_id", "")
+        ).strip()
+        corrected = bool(
+            rejected_interaction_id
+            and any(
+                str(candidate.get("stage", ""))
+                == str(step.get("stage", ""))
+                and str(candidate.get("action_type", ""))
+                not in REJECTION_ACTIONS
+                and not _mapping(candidate.get("metadata")).get(
+                    "rejection_reason"
+                )
+                and str(
+                    _mapping(candidate.get("metadata")).get(
+                        "previous_interaction_id", ""
+                    )
+                ).strip()
+                == rejected_interaction_id
+                and str(
+                    _mapping(candidate.get("metadata")).get(
+                        "interaction_lifecycle_kind", ""
+                    )
+                ).strip()
+                == "protocol_correction"
+                for candidate in steps[index + 1 :]
+            )
+        )
         reason = str(metadata.get("rejection_reason", "")).strip()
         if not reason:
             try:
@@ -530,9 +560,15 @@ def _audit_rejections(
             and "already resolved" in reason.casefold()
         )
         category = (
-            ROUTE_CONTROL if route_control else _rejection_category(step)
+            CORRECTION
+            if corrected
+            else ROUTE_CONTROL
+            if route_control
+            else _rejection_category(step)
         )
-        if category == ROUTE_CONTROL:
+        if category == CORRECTION:
+            corrected_count += 1
+        elif category == ROUTE_CONTROL:
             route_control_count += 1
         elif category == SCHEDULER:
             scheduler_count += 1
@@ -541,7 +577,9 @@ def _audit_rejections(
         _issue(
             report,
             (
-                "ROUTE_CONTROL_REJECTION"
+                "PROTOCOL_CORRECTION"
+                if category == CORRECTION
+                else "ROUTE_CONTROL_REJECTION"
                 if category == ROUTE_CONTROL
                 else "SCHEDULER_REJECTION"
                 if category == SCHEDULER
@@ -554,6 +592,7 @@ def _audit_rejections(
     report.stats["scheduler_rejections"] = scheduler_count
     report.stats["protocol_rejections"] = protocol_count
     report.stats["route_control_rejections"] = route_control_count
+    report.stats["successful_protocol_corrections"] = corrected_count
 
 
 

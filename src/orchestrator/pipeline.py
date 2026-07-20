@@ -1116,6 +1116,10 @@ class Orchestrator:
                 self._sync_image_only_state(state, investigation)
             elif grace_exhausted_without_gain(investigation):
                 investigation.stop_reason = "information_saturated"
+                audit_discrepancy_coverage(
+                    investigation,
+                    decision_checkpoint=True,
+                )
                 self._sync_image_only_state(state, investigation)
 
         if investigation.proposed_verdict in {"fake", "real"}:

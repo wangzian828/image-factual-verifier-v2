@@ -304,6 +304,60 @@ def test_strict_audit_accepts_bounded_binary_v4_trace(tmp_path: Path) -> None:
     assert not report.failures(strict_scheduler=True)
 
 
+def test_strict_audit_accepts_successful_v4_protocol_correction(
+    tmp_path: Path,
+) -> None:
+    trace_path = _v4_trace(tmp_path)
+    trace = json.loads(trace_path.read_text(encoding="utf-8"))
+    steps = trace["state"]["all_steps"]
+    judgment_index = next(
+        index
+        for index, step in enumerate(steps)
+        if step["stage"] == "image_only_discrepancy_judgment"
+    )
+    accepted = steps[judgment_index]
+    rejected_interaction = "interaction-rejected-v4"
+    rejected = {
+        **accepted,
+        "action_type": "output_rejected",
+        "metadata": {
+            **accepted["metadata"],
+            "interaction_id": rejected_interaction,
+            "previous_interaction_id": None,
+            "interaction_lifecycle_kind": "standalone_request",
+            "rejection_reason": "unresolved_gaps must match the compiled basis",
+        },
+    }
+    accepted["metadata"].update(
+        {
+            "previous_interaction_id": rejected_interaction,
+            "interaction_lifecycle_kind": "protocol_correction",
+        }
+    )
+    steps.insert(judgment_index, rejected)
+    for step in steps:
+        metadata = step["metadata"]
+        metadata.setdefault(
+            "interaction_lifecycle_kind",
+            (
+                "tool_roundtrip"
+                if step["stage"] == "image_only_discrepancy_investigation"
+                else "standalone_request"
+            ),
+        )
+        if metadata["interaction_lifecycle_kind"] != "protocol_correction":
+            metadata["previous_interaction_id"] = None
+    trace_path.write_text(
+        json.dumps(trace, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    report = audit_trace(trace_path)
+
+    assert not report.failures(strict_scheduler=True)
+    assert report.stats["successful_protocol_corrections"] == 1
+
+
 def test_strict_audit_rejects_v4_discrepancy_alignment_tampering(
     tmp_path: Path,
 ) -> None:
