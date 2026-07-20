@@ -232,6 +232,10 @@ The webpage extractor is an independent request with two trusted fields:
 - `retrieval_goal`: the passage sought by the current action. It ranks and selects
   passages but cannot determine stance or change the ImageClaim.
 
+Stance follows whether the exact passage makes `image_claim` true or false. A page
+reporting that someone made the claim does not support its truth; an explicit denial
+is refuting Evidence.
+
 The model selects only a Claim ID already owned by the scheduled ResearchTask; the
 runtime injects its exact text and records the ID in provenance. One ReAct action
 exposes one task-scoped route family, so URL, reference and Claim choices cannot be

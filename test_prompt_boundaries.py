@@ -45,6 +45,8 @@ def test_hot_path_prompts_stay_semantic_and_compact() -> None:
     )
     assert "missing mention is not refutation" in browse_prompt
     assert "conflicting value for the same subject" in browse_prompt
+    assert "does not support its truth" in browse_prompt
+    assert "explicit denial refutes it" in browse_prompt
     assert "need not settle every clause" in browse_prompt
     assert "runtime owns task state" in react_prompt
     assert "validates grounding" in planning_prompt

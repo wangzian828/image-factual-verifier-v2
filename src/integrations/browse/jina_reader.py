@@ -51,8 +51,9 @@ part of the claimed relation or a conflicting value for the same subject, event,
 time, place, object, or role; the page need not settle every clause or discuss image
 authenticity. The retrieval goal helps locate text but never determines stance. A
 missing mention is not refutation. Mark support or refute only when the selected text
-establishes that direction; otherwise keep useful factual context unclear. Mark
-direct when the passage itself states the selected factual edge.
+establishes that direction; reporting that someone made the claim does not support
+its truth, and an explicit denial refutes it. Otherwise keep useful factual context
+unclear. Mark direct when the passage itself states the selected factual edge.
 
 Choose passage_id=-1 only when no passage supplies a material factual edge. Up to two
 supporting passages may establish scope, identity, event, or relation. Do not select
