@@ -51,6 +51,7 @@ Core instruction:
 - Replaces: `TARGET_PLANNING_SYSTEM_PROMPT`
 - Interaction: creates the stored main Interaction root
 - Sees original image: yes, attached once
+- Thinking: `high` by default; thought tokens are recorded, never Evidence
 - Input:
   - PerceptionReport;
   - OCR observations;

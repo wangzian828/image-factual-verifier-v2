@@ -2940,13 +2940,26 @@ class Orchestrator:
 
     @staticmethod
     def _stage_thinking_level(stage_name: str) -> str:
+        normalized_stage = stage_name.strip().upper()
+        fallback = (
+            "high"
+            if normalized_stage == "PLANNING"
+            else os.getenv("GEMINI_AGENT_THINKING_LEVEL", "minimal")
+        )
         value = os.getenv(
-            f"GEMINI_{stage_name}_THINKING_LEVEL",
-            os.getenv("GEMINI_AGENT_THINKING_LEVEL", "minimal"),
+            f"GEMINI_{normalized_stage}_THINKING_LEVEL",
+            fallback,
         ).strip().lower()
-        if value != "minimal":
+        allowed = (
+            {"minimal", "low", "medium", "high"}
+            if normalized_stage == "PLANNING"
+            else {"minimal"}
+        )
+        if value not in allowed:
             raise ValueError(
-                f"GEMINI_{stage_name}_THINKING_LEVEL must be 'minimal' for the active agent."
+                f"GEMINI_{normalized_stage}_THINKING_LEVEL must be one of "
+                + ", ".join(sorted(allowed))
+                + "."
             )
         return value
 
@@ -3182,9 +3195,17 @@ class Orchestrator:
             if (
                 self.provider == "gemini"
                 and str(self.llm.wire_api).lower() == "interactions"
-                and total_thought > 0
             ):
-                thought_violation = thought_violation or step
+                policy_thought = int(step.tokens.get("thought", 0) or 0)
+                tool_thought = int(tool_tokens.get("thought", 0) or 0)
+                planning_thought_allowed = (
+                    step.stage_name == "image_account_planning"
+                    and self._stage_thinking_level("PLANNING") != "minimal"
+                )
+                if tool_thought > 0 or (
+                    policy_thought > 0 and not planning_thought_allowed
+                ):
+                    thought_violation = thought_violation or step
         state.llm_api_calls += sum(
             1 for step in steps if step.metadata.get("llm_duration_ms") is not None
         )
@@ -3195,7 +3216,7 @@ class Orchestrator:
         if thought_violation is not None:
             raise RuntimeError(
                 f"Gemini stage '{thought_violation.stage_name}' returned non-zero thought tokens "
-                "despite the required minimal thinking policy."
+                "outside the reasoning-enabled Image Account Planning stage."
             )
 
     @staticmethod

@@ -243,6 +243,7 @@ def test_v03_eval_keeps_gold_post_rollout_and_writes_scorer_predictions(
     assert manifest["agent"]["decision_policy_version"] == (
         "discrepancy-first-v4"
     )
+    assert manifest["agent"]["stage_thinking_levels"]["planning"] == "high"
     assert manifest["benchmark"]["evaluation_gold"]["sha256"] == _sha256(gold)
     assert manifest["source_access_policy"]["active"] is False
     assert manifest["artifacts"]["run_results"] == "run_results.jsonl"

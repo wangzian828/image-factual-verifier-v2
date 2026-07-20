@@ -369,6 +369,35 @@ def test_nonzero_thought_tokens_are_hard_failure() -> None:
         orchestrator._record_stage_steps(state, [step])
 
 
+def test_image_account_planning_records_reasoning_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("GEMINI_PLANNING_THINKING_LEVEL", raising=False)
+    orchestrator = object.__new__(Orchestrator)
+    orchestrator.provider = "gemini"
+    orchestrator.llm = type("LLM", (), {"wire_api": "interactions"})()
+    state = VerificationState()
+    step = StageStep(
+        stage_name="image_account_planning",
+        action_type="output",
+        tokens={"prompt": 20, "completion": 4, "thought": 12},
+    )
+
+    orchestrator._record_stage_steps(state, [step])
+
+    assert Orchestrator._stage_thinking_level("PLANNING") == "high"
+    assert state.token_usage == {"prompt": 20, "completion": 4, "thought": 12}
+
+
+def test_non_planning_stage_cannot_enable_reasoning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_VERIFICATION_THINKING_LEVEL", "high")
+
+    with pytest.raises(ValueError, match="must be one of minimal"):
+        Orchestrator._stage_thinking_level("VERIFICATION")
+
+
 @pytest.mark.parametrize("wire_api", ["chat_completions", "responses", "openai_compat"])
 def test_gemini_rejects_non_interactions_protocol(wire_api: str) -> None:
     with pytest.raises(ValueError, match="requires wire_api='interactions'"):

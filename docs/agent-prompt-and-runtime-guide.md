@@ -27,6 +27,11 @@ should independently establish the underlying real-world facts rather than merel
 look for the value proposed by the image. Prior knowledge may contribute tentative
 SearchHypotheses, but only tool Evidence can establish them.
 
+Image Account Planning uses Gemini `thinking_level=high` by default because it must
+separate the depicted value from the underlying fact to investigate. Its thought
+tokens are recorded in the trace. Investigation, extraction, visual tools, Decision,
+and Judgment remain concise and do not treat hidden reasoning as Evidence.
+
 ## ReAct and native protocol
 
 Each action continues the main Interaction through `previous_interaction_id` and

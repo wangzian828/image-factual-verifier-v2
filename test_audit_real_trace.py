@@ -251,6 +251,36 @@ def test_strict_audit_accepts_discrepancy_first_v4_trace(tmp_path: Path) -> None
     assert report.stats["v4_actions"] == 2
 
 
+def test_strict_audit_allows_thought_tokens_only_for_v4_planning(
+    tmp_path: Path,
+) -> None:
+    trace_path = _v4_trace(tmp_path)
+    trace = json.loads(trace_path.read_text(encoding="utf-8"))
+    trace["token_usage"]["thought"] = 12
+    trace["state"]["token_usage"]["thought"] = 12
+    trace["state"]["all_steps"][0]["tokens"]["thought"] = 12
+    trace_path.write_text(
+        json.dumps(trace, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    report = audit_trace(trace_path)
+
+    assert "THOUGHT_TOKENS_NONZERO" not in {
+        issue.code for issue in report.failures(strict_scheduler=True)
+    }
+
+    trace["state"]["all_steps"][1]["tokens"]["thought"] = 1
+    trace_path.write_text(
+        json.dumps(trace, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    report = audit_trace(trace_path)
+    assert "THOUGHT_TOKENS_NONZERO" in {
+        issue.code for issue in report.failures(strict_scheduler=True)
+    }
+
+
 def test_strict_audit_accepts_bounded_binary_v4_trace(tmp_path: Path) -> None:
     trace_path = _v4_trace(tmp_path)
     trace = json.loads(trace_path.read_text(encoding="utf-8"))

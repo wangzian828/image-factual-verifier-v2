@@ -180,25 +180,32 @@ def _numeric_token(value: Any) -> float | None:
 def _audit_thought_tokens(
     trace: Mapping[str, Any], state: Mapping[str, Any], steps: Sequence[Mapping[str, Any]], report: TraceReport
 ) -> None:
-    locations: list[tuple[str, Any]] = []
+    locations: list[tuple[str, Any, bool]] = []
     for prefix, usage in (
         ("token_usage", trace.get("token_usage")),
         ("state.token_usage", state.get("token_usage")),
     ):
         row = _mapping(usage)
         if "thought" in row:
-            locations.append((f"{prefix}.thought", row.get("thought")))
+            locations.append((f"{prefix}.thought", row.get("thought"), True))
         if "thought_tokens" in row:
-            locations.append((f"{prefix}.thought_tokens", row.get("thought_tokens")))
+            locations.append(
+                (f"{prefix}.thought_tokens", row.get("thought_tokens"), True)
+            )
         if "total_thought_tokens" in row:
             locations.append(
-                (f"{prefix}.total_thought_tokens", row.get("total_thought_tokens"))
+                (
+                    f"{prefix}.total_thought_tokens",
+                    row.get("total_thought_tokens"),
+                    True,
+                )
             )
 
     native_steps = 0
     for index, step in enumerate(steps):
         metadata = _mapping(step.get("metadata"))
         tokens = _mapping(step.get("tokens"))
+        planning_step = str(step.get("stage", "")).strip() == "image_account_planning"
         if metadata.get("native_interactions"):
             native_steps += 1
             if not any(
@@ -213,9 +220,15 @@ def _audit_thought_tokens(
                 )
         for key in ("thought", "thought_tokens", "total_thought_tokens"):
             if key in tokens:
-                locations.append((f"state.all_steps[{index}].tokens.{key}", tokens[key]))
+                locations.append(
+                    (
+                        f"state.all_steps[{index}].tokens.{key}",
+                        tokens[key],
+                        planning_step,
+                    )
+                )
 
-    recorded_paths = {path for path, _ in locations}
+    recorded_paths = {path for path, _, _ in locations}
     for key, raw_value, path in _iter_named_values(trace):
         token_key = key.casefold()
         parent_segments = {
@@ -229,25 +242,44 @@ def _audit_thought_tokens(
             and bool(parent_segments & {"usage", "tokens", "token_usage"})
         )
         if (is_token_field or is_usage_total) and path not in recorded_paths:
-            locations.append((path, raw_value))
+            planning_path = any(
+                f"all_steps[{index}]" in path
+                and str(step.get("stage", "")).strip()
+                == "image_account_planning"
+                for index, step in enumerate(steps)
+            )
+            aggregate_path = path in {
+                "token_usage.thought",
+                "token_usage.thought_tokens",
+                "token_usage.total_thought_tokens",
+                "state.token_usage.thought",
+                "state.token_usage.thought_tokens",
+                "state.token_usage.total_thought_tokens",
+            }
+            locations.append(
+                (path, raw_value, planning_path or aggregate_path)
+            )
             recorded_paths.add(path)
 
     report.stats["native_interaction_steps"] = native_steps
     report.stats["thought_token_fields"] = len(locations)
-    for path, value in locations:
+    for path, value, nonzero_allowed in locations:
         numeric = _numeric_token(value)
         if numeric is None:
             _issue(
                 report,
                 "THOUGHT_TOKENS_INVALID",
-                f"thought-token value must be numeric zero, got {value!r}",
+                f"thought-token value must be numeric, got {value!r}",
                 location=path,
             )
-        elif numeric != 0:
+        elif numeric != 0 and not nonzero_allowed:
             _issue(
                 report,
                 "THOUGHT_TOKENS_NONZERO",
-                f"Gemini thought tokens must be zero, got {value!r}",
+                (
+                    "Gemini thought tokens must be zero outside "
+                    f"image_account_planning, got {value!r}"
+                ),
                 location=path,
             )
 

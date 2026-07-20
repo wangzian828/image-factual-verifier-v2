@@ -5,18 +5,18 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; style-src 'unsafe-inline' blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; img-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; font-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; media-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; worker-src blob:; connect-src blob: data:; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
-<title>Image Factual Verifier Agent v3</title>
+<title>VisualFact Agent</title>
 <style>:root{color-scheme:light dark;background:light-dark(rgb(255 255 255), rgb(24 24 24))}html,body{margin:0}body{box-sizing:border-box;padding:1rem;background:inherit}iframe{display:block;width:100%;max-width:736px;height:calc(100vh - 2rem);margin:0 auto;border:0}</style>
 </head>
 <body>
-<iframe sandbox="allow-scripts" referrerpolicy="no-referrer" title="Image Factual Verifier Agent v3" srcdoc="&lt;!doctype html&gt;
+<iframe sandbox="allow-scripts" referrerpolicy="no-referrer" title="VisualFact Agent" srcdoc="&lt;!doctype html&gt;
 &lt;html lang=&quot;zh-CN&quot;&gt;
 &lt;head&gt;
 &lt;meta charset=&quot;utf-8&quot;&gt;
 &lt;meta name=&quot;viewport&quot; content=&quot;width=device-width, initial-scale=1&quot;&gt;
 &lt;meta name=&quot;referrer&quot; content=&quot;no-referrer&quot;&gt;
 &lt;meta http-equiv=&quot;Content-Security-Policy&quot; content=&quot;default-src &#x27;none&#x27;; script-src &#x27;unsafe-inline&#x27; &#x27;unsafe-eval&#x27; &#x27;wasm-unsafe-eval&#x27; blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; style-src &#x27;unsafe-inline&#x27; blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; img-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; font-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; media-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; worker-src blob:; connect-src blob: data:; frame-src &#x27;none&#x27;; object-src &#x27;none&#x27;; base-uri &#x27;none&#x27;; form-action &#x27;none&#x27;&quot;&gt;
-&lt;title&gt;Image Factual Verifier Agent v3&lt;/title&gt;
+&lt;title&gt;VisualFact Agent&lt;/title&gt;
 &lt;style&gt;:root {
   color-scheme: light dark;
   background-color: var(--background) !important;
@@ -847,7 +847,7 @@ html&gt;body{padding:0}&lt;/style&gt;
     &lt;span class=&quot;viz-badge&quot;&gt;图片输入&lt;/span&gt;
     &lt;span class=&quot;viz-badge&quot;&gt;开放网络调查&lt;/span&gt;
     &lt;span class=&quot;viz-badge&quot;&gt;状态可审计&lt;/span&gt;
-    &lt;span class=&quot;viz-badge&quot;&gt;三分类输出&lt;/span&gt;
+    &lt;span class=&quot;viz-badge&quot;&gt;real / fake 二元输出&lt;/span&gt;
   &lt;/div&gt;
 
   &lt;div class=&quot;ifv-example-head&quot; aria-label=&quot;Example context&quot;&gt;
@@ -863,7 +863,7 @@ html&gt;body{padding:0}&lt;/style&gt;
     &lt;span class=&quot;ifv-arrow&quot; aria-hidden=&quot;true&quot;&gt;→&lt;/span&gt;
     &lt;button class=&quot;btn ifv-stage&quot; type=&quot;button&quot; data-stage=&quot;1&quot; aria-pressed=&quot;false&quot;&gt;
       &lt;i data-lucide=&quot;list-tree&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;
-      2 Bootstrap
+      2 Planning
     &lt;/button&gt;
     &lt;span class=&quot;ifv-arrow&quot; aria-hidden=&quot;true&quot;&gt;→&lt;/span&gt;
 
@@ -879,7 +879,7 @@ html&gt;body{padding:0}&lt;/style&gt;
           4 归约 / Coverage
         &lt;/button&gt;
       &lt;/div&gt;
-      &lt;span class=&quot;viz-badge ifv-loop-return&quot;&gt;未决定：Reflection 调整状态后 ↺ 回到 ReAct&lt;/span&gt;
+      &lt;span class=&quot;viz-badge ifv-loop-return&quot;&gt;未决定：Decision 更新路线后 ↺ 回到 ReAct&lt;/span&gt;
     &lt;/div&gt;
 
     &lt;span class=&quot;ifv-arrow&quot; aria-hidden=&quot;true&quot;&gt;→&lt;/span&gt;
@@ -908,7 +908,7 @@ html&gt;body{padding:0}&lt;/style&gt;
   &lt;div class=&quot;ifv-ownership&quot; aria-label=&quot;Model and runtime responsibilities&quot;&gt;
     &lt;div class=&quot;ifv-lane&quot;&gt;
       &lt;span class=&quot;viz-badge ifv-lane-label&quot;&gt;模型负责提议&lt;/span&gt;
-      &lt;span class=&quot;ifv-lane-copy&quot;&gt;感知 · 选择工具 · Reflection 提议 · Judgment 表述&lt;/span&gt;
+      &lt;span class=&quot;ifv-lane-copy&quot;&gt;感知 · 开放调查规划 · 选择工具 · Discrepancy Decision · Judgment 表述&lt;/span&gt;
     &lt;/div&gt;
     &lt;div class=&quot;ifv-lane&quot;&gt;
       &lt;span class=&quot;viz-badge ifv-lane-label&quot;&gt;Runtime 负责裁决&lt;/span&gt;
@@ -919,14 +919,14 @@ html&gt;body{padding:0}&lt;/style&gt;
   &lt;div class=&quot;ifv-principles&quot; aria-label=&quot;Design principles&quot;&gt;
     &lt;span class=&quot;viz-badge&quot;&gt;观察 ≠ 证据&lt;/span&gt;
     &lt;span class=&quot;viz-badge&quot;&gt;Discovery ≠ Evidence&lt;/span&gt;
-    &lt;span class=&quot;viz-badge&quot;&gt;冲突 ≠ unverifiable&lt;/span&gt;
+    &lt;span class=&quot;viz-badge&quot;&gt;内部不确定性 ≠ 提前结束&lt;/span&gt;
     &lt;span class=&quot;viz-badge&quot;&gt;工程错误 ≠ factual verdict&lt;/span&gt;
     &lt;span class=&quot;viz-badge&quot;&gt;最小充分证据链&lt;/span&gt;
   &lt;/div&gt;
 
   &lt;div class=&quot;ifv-guardrails&quot; aria-label=&quot;Investigation limits&quot;&gt;
     &lt;span class=&quot;viz-badge&quot;&gt;每回合 1 个工具调用&lt;/span&gt;
-    &lt;span class=&quot;viz-badge&quot;&gt;4 / 8 / 12 / 16 / 20 / 24 动作 Reflection&lt;/span&gt;
+    &lt;span class=&quot;viz-badge&quot;&gt;合格 Evidence 触发稀疏 Decision&lt;/span&gt;
     &lt;span class=&quot;viz-badge&quot;&gt;结论确定立即停止&lt;/span&gt;
   &lt;/div&gt;
 
@@ -961,10 +961,10 @@ html&gt;body{padding:0}&lt;/style&gt;
         },
         {
           icon: &quot;list-tree&quot;,
-          label: &quot;确定性建立初始调查状态&quot;,
-          action: &quot;从观察生成 VisualFact，选择中心事实，并建立最多 4 个可执行 ResearchTask。&quot;,
-          state: &quot;InvestigationBrief · VisualFact · decisive_fact_ids · ResearchTask&quot;,
-          example: &quot;中心事实：图像似乎描绘 Artemis II crew 在 Kennedy 举行 Moon Tree dedication；任务是寻找原始事件和地点。&quot;
+          label: &quot;先写图像主张，再开放规划现实调查&quot;,
+          action: &quot;图像只定义待核查主张和初始线索，不限制事实、来源、关系或查询词。Planning 默认使用 high thinking，独立寻找底层真实事实。&quot;,
+          state: &quot;ImageClaim · SearchHypothesis · ResearchTask · planning thought tokens&quot;,
+          example: &quot;图中提出某个事件地点；调查计划不只搜索该地点是否出现，而是询问事件实际发生在哪里，并寻找官方记录。&quot;
         },
         {
           icon: &quot;search&quot;,
@@ -977,7 +977,7 @@ html&gt;body{padding:0}&lt;/style&gt;
           icon: &quot;refresh-cw&quot;,
           label: &quot;Runtime 归约、裁冲突并检查覆盖&quot;,
           action: &quot;验证来源和调用链，生成 Evidence、Finding 或 Failure；裁决支持/反驳冲突并运行 Coverage。&quot;,
-          state: &quot;Evidence · Finding · fact.status · FactCoverage · ReflectionRecord&quot;,
+          state: &quot;Evidence · Finding · ClaimAssessment · MaterialDiscrepancy · Coverage&quot;,
           example: &quot;NASA 官方直接说明真实仪式在 Johnson Space Center，反驳 Kennedy 地点；决定性事实变为 refuted，Coverage 已足够判 fake。&quot;
         },
         {
