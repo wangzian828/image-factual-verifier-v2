@@ -24,6 +24,10 @@ schema exposes no Claim key or per-Claim verification question on a hypothesis.
 It must still emit at least one executable route; this is a structural requirement,
 not a rule about which fact the route should investigate.
 
+Each ImageClaim states the underlying real-world proposition conveyed to the
+viewer. It does not replace that proposition with the easier meta-claim that visible
+text, a post, or an advertisement merely makes the assertion.
+
 The image defines the account to fact-check and supplies initial clues; it does not
 bound the investigation's facts, sources, relations, or query vocabulary. Planning
 should independently establish the underlying real-world facts rather than merely

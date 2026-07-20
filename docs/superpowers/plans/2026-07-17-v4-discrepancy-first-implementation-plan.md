@@ -52,6 +52,12 @@
   refuted 的高显著 Claim 降为 supporting discrepancy 并继续寻找另一 Claim 的原图。当前
   通用修复要求高显著 Claim 的合格 refutation 必须形成 decisive discrepancy 和 `fake`，其他
   未解决 Claim 不降低该反证；失败输出仍由原子 reducer 拒绝，不新增样例、人物或产品规则。
+- Phase 16 第三轮：真实运行仍得到 `fake` 且 strict audit 通过，但属于 15-action bounded
+  Judgment，Evidence 链未进入 verdict basis。根因是 Planning 把 Claim 写成“广告声称 Esca
+  代言”，使 Esca 本人否认代言的原文在字面上支持“广告存在这种虚假声称”，而不是反驳
+  待核查的现实命题。当前通用修复只明确 ImageClaim 必须直接表达图像让读者相信的现实命题，
+  不得退化为“图片、文字、帖子或广告作出了该声称”的元命题；不修改抽取器 stance，不使用
+  字符串门禁。
 
 ### 2026-07-20 决策更新
 

@@ -51,9 +51,11 @@ observations and cannot mutate semantic state.
 
 ### ImageClaim
 
-A positive factual statement communicated by visible pixels or reliable embedded
-text. It cites pixel/OCR `VisualFact` anchors, has `high|medium` salience, and is
-assessed as `open|supported|refuted|conflicted|unresolved`.
+A positive real-world proposition communicated by visible pixels or reliable
+embedded text. It records what the image asks the viewer to believe, not merely the
+meta-fact that a caption, post, or advertisement contains the assertion. It cites
+pixel/OCR `VisualFact` anchors, has `high|medium` salience, and is assessed as
+`open|supported|refuted|conflicted|unresolved`.
 
 ### SearchHypothesis
 
