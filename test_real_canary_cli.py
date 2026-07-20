@@ -147,7 +147,7 @@ def _write_v4_canary_artifacts(
                         "stop_reason": (
                             "verdict_determined"
                             if decision_mode == "evidence_determined"
-                            else "information_saturated"
+                            else "meaningful_routes_exhausted"
                         ),
                         "image_claims": [
                             {"claim_id": "claim-v4", "salience": "high"}

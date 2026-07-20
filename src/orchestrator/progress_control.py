@@ -1,7 +1,6 @@
-"""Auditable information-gain accounting and two-stage saturation control."""
+"""Auditable information-gain accounting for investigation diagnostics."""
 from __future__ import annotations
 
-import os
 from typing import Any, Mapping
 
 from src.orchestrator.investigation_models import (
@@ -54,26 +53,11 @@ def record_action_progress(
 
     if gain in SUBSTANTIVE_GAINS:
         state.no_substantive_gain_streak = 0
-        state.saturation_checkpoint_action = None
-        state.saturation_grace_remaining = 0
     else:
         state.no_substantive_gain_streak = min(
             24,
             state.no_substantive_gain_streak + 1,
         )
-        if state.saturation_grace_remaining > 0:
-            state.saturation_grace_remaining -= 1
-
-    soft_limit = max(
-        2,
-        int(os.getenv("IFV_SOFT_NO_GAIN_ACTIONS", "4")),
-    )
-    checkpoint = bool(
-        state.no_substantive_gain_streak >= soft_limit
-        and state.saturation_checkpoint_action is None
-    )
-    if checkpoint:
-        state.saturation_checkpoint_action = state.action_count
 
     event = ProgressEvent(
         progress_id=stable_id(
@@ -87,8 +71,6 @@ def record_action_progress(
         gain=gain,
         source_ids=list(dict.fromkeys(source_ids))[:40],
         no_substantive_gain_streak=state.no_substantive_gain_streak,
-        soft_checkpoint_triggered=checkpoint,
-        grace_remaining=state.saturation_grace_remaining,
         rationale=rationale,
     )
     state.progress_events.append(event)
@@ -121,8 +103,6 @@ def record_decision_progress(
     if not changed_ids:
         return None
     state.no_substantive_gain_streak = 0
-    state.saturation_checkpoint_action = None
-    state.saturation_grace_remaining = 0
     event = ProgressEvent(
         progress_id=stable_id(
             "progress-decision",
@@ -138,25 +118,3 @@ def record_decision_progress(
     )
     state.progress_events.append(event)
     return event
-
-
-def open_saturation_grace(state: ImageOnlyInvestigationState) -> int:
-    grace = max(1, min(8, int(os.getenv("IFV_SATURATION_GRACE_ACTIONS", "2"))))
-    state.saturation_grace_remaining = grace
-    return grace
-
-
-def should_run_saturation_checkpoint(state: ImageOnlyInvestigationState) -> bool:
-    return bool(
-        state.saturation_checkpoint_action == state.action_count
-        and state.saturation_grace_remaining == 0
-    )
-
-
-def grace_exhausted_without_gain(state: ImageOnlyInvestigationState) -> bool:
-    return bool(
-        state.saturation_checkpoint_action is not None
-        and state.action_count > state.saturation_checkpoint_action
-        and state.saturation_grace_remaining == 0
-        and state.no_substantive_gain_streak > 0
-    )

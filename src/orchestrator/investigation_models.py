@@ -763,7 +763,6 @@ class DiscrepancyCoverageAudit(StrictModel):
         "continue",
         "verdict_determined",
         "meaningful_routes_exhausted",
-        "information_saturated",
         "hard_budget_exhausted",
     ] = "continue"
     decision_checkpoint: bool = False
@@ -814,6 +813,8 @@ class ProgressEvent(StrictModel):
     ]
     source_ids: List[str] = Field(default_factory=list, max_length=40)
     no_substantive_gain_streak: int = Field(ge=0, le=24)
+    # Retained in the trace schema for historical replay. The v4 runtime never
+    # uses these diagnostic values to schedule a checkpoint or stop a case.
     soft_checkpoint_triggered: bool = False
     grace_remaining: int = Field(default=0, ge=0, le=8)
     rationale: str = Field(min_length=1, max_length=800)
@@ -1106,6 +1107,8 @@ class ImageOnlyInvestigationState(StrictModel):
     action_count: int = Field(default=0, ge=0, le=24)
     reflection_failure_streak: int = Field(default=0, ge=0, le=2)
     no_substantive_gain_streak: int = Field(default=0, ge=0, le=24)
+    # Legacy trace fields. They remain serializable but have no v4 control-flow
+    # effect after no-gain settlement was removed.
     saturation_checkpoint_action: Optional[int] = Field(default=None, ge=0, le=24)
     saturation_grace_remaining: int = Field(default=0, ge=0, le=8)
     progress_events: List[ProgressEvent] = Field(default_factory=list, max_length=24)

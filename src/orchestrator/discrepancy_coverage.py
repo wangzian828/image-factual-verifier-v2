@@ -97,12 +97,6 @@ def audit_discrepancy_coverage(
     elif state.action_count >= MAX_TOOL_ACTIONS:
         stop_reason = "hard_budget_exhausted"
         reason = "The action budget ended before v4 verdict preconditions closed."
-    elif state.stop_reason == "information_saturated":
-        stop_reason = "information_saturated"
-        reason = (
-            "The semantic saturation checkpoint and its grace actions completed "
-            "without substantive gain."
-        )
     elif (
         not remaining_routes
         and not has_pending_terminal_work
@@ -164,7 +158,6 @@ def compile_discrepancy_verdict_basis(
     if state.stop_reason not in {
         "verdict_determined",
         "meaningful_routes_exhausted",
-        "information_saturated",
         "hard_budget_exhausted",
     }:
         raise RuntimeError("v4 verdict basis requires a terminal investigation state")

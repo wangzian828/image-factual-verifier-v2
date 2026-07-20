@@ -24,11 +24,14 @@
   不含凭据、private gold 或 provider interaction ID。当前 v4 reducer 对 Andreea、Queen、
   Pillars 和 Monarch 双跑状态完全一致，预期 verdict、Evidence 所有权、discrepancy 对齐、
   及时停止、post-verdict 禁止和 strict audit 均通过。
-- Phase 9：执行中。四条历史回放门禁已放行；数据管线 `reinspect-v2` 协议与 Agent
-  `discrepancy-first-v4` 协议已在 adapter、run manifest 和 canary gate 中解耦，下一步是
-  提交/同步后运行单条真实 Gemini canary。
-- Phase 10：核心文档已更新；v4 主实现已提交。当前本地门禁为 `373 passed`、
-  `compileall` 通过、`git diff --check` 通过。
+- Phase 9：执行中。四条历史回放门禁已放行；Queen 真实 canary 已验证短 Interaction 将
+  最大单请求降到约 36.9k token，但 Evidence/Discrepancy 质量仍未验收通过。
+- Phase 10：核心文档已更新；v4 主实现已提交。
+- Phase 11～14：上下文测量、不可变档案、显式工作区、按需回读、图像分辨率控制和调查后
+  图像重检已实现。
+- Phase 15：进展记账保留；2026-07-20 按最新决策删除无进展 soft checkpoint、grace actions
+  和 `information_saturated` 提前结算。当前本地门禁为 `407 passed`、`compileall` 通过、
+  `git diff --check` 通过。下一步同步 gpu-13 后重新运行 Queen。
 
 ### 2026-07-20 决策更新
 
@@ -40,10 +43,10 @@ Phase 0～10 保留为重构历史，但下面四项新决定覆盖旧计划中�
 2. 不再把全案 Gemini `previous_interaction_id` 隐藏历史当作调查记忆或事实来源。
    原始材料进入不可变调查档案，每轮由显式工作区和按需回读材料构造输入；
    `previous_interaction_id` 只保留在一次原生工具调用所需的短链内。
-3. 保留确定性的“有意义路线耗尽”停止作为兜底；改掉的只是固定“两次无进展”就机械
-   判饱和。连续无实质进展先触发一次模型结算/重规划检查；路线账本确实耗尽，或检查后
-   仍无新证据、图像理解变化和可执行新路线时，才结束调查。
-4. 先完成上下文管理和早停，再运行真实 20 例回归；通过准确率、证据保留、
+3. 保留确定性的“有意义路线耗尽”停止作为兜底；取消所有由连续无实质进展触发的
+   提前结算和 `information_saturated`。进展记账只用于诊断、评估和训练评分，不影响
+   v4 控制流。调查仅因证据结论成立、路线账本确实耗尽或 24-action 安全上限而结束。
+4. 先完成上下文管理和停止机制，再运行真实 20 例回归；通过准确率、证据保留、
    token、停止质量和工程稳定性门禁后，才开始 Qwen SFT/RL 训练基建。
 
 ## 目标
@@ -472,7 +475,7 @@ inspect_image(image_id, crop, resolution)
 图像重新观察另记 `ImageViewEvent`，保存 crop、分辨率、观察问题、前后理解版本和决策影响，
 以便验证“调查后是否真正重新认识图像”，而不是只统计调用次数。
 
-### Phase 15：实质进展记账与两段式早停
+### Phase 15：实质进展记账与确定性停止
 
 每个已接受 action 归档后记录一种主要进展状态：
 
@@ -493,8 +496,9 @@ no_gain
 - `no_gain`：空结果、错误、重复来源、同义摘要、重复路线或未增加判断能力的材料。
 
 `evidence_gain`、`decision_gain`、`visual_understanding_gain` 才重置连续无实质进展计数。
-进展分类由简短语义评估输出并引用本轮新增 ID；确定性代码验证引用、状态变化和计数，
-不通过关键词猜测语义。
+进展分类由 reducer 创建的 ID 和状态变化生成；确定性代码验证引用、状态变化和计数，
+不通过关键词猜测语义。连续计数只进入轨迹、诊断和训练评分，不触发 Decision、路线切换
+或停止。
 
 原有路线耗尽兜底继续存在，并与连续无进展机制分开：
 
@@ -518,26 +522,16 @@ no_gain
 → 更新工作区与 gain
 → Coverage 检查路线账本
    └─ 有意义路线已确定性耗尽：meaningful_routes_exhausted（兜底）
-→ 若未到 soft checkpoint：继续调查
-→ 若连续无实质进展达到 soft checkpoint：触发一次结算/重规划检查
-   ├─ 找到有依据、未重复、可执行的新路线：给予有限 grace actions
-   ├─ 发现应主动回读或重新观察图像：执行回读/重检
-   └─ 无新路线且现有材料足以结算：information_saturated
-→ grace actions 后仍无实质进展：information_saturated
+→ 若已形成符合 Coverage 前置条件的证据结论：verdict_determined
+→ 若达到 24-action 安全上限：hard_budget_exhausted
+→ 否则继续调查
 → 进入二元 Judgment
 ```
 
-结算/重规划检查可选择 `continue | change_route | recall | reinspect | settle`，但继续必须给出
-具体开放问题、所需材料、候选工具和非重复路线。最终停止原因至少区分
-`verdict_determined | meaningful_routes_exhausted | information_saturated |
-hard_budget_exhausted | engineering_error`。路线耗尽和 hard action budget 24 都保留为
-确定性兜底；连续无进展只是更早触发语义检查，不能覆盖这两个兜底。
-`soft checkpoint` 和 `post-checkpoint grace actions` 都是配置项，初值通过真实 20 例校准，
-不得把“连续两次”写成永久规则。
-
-以下情况不算信息饱和：尚有决定相关材料只存在档案但未精确回读；新的 Evidence 已改变图像
-理解但尚未重检；有明确的独立来源路线未执行；刚发生 provider/协议/工具工程错误。全工具
-不可用或核心协议失败应以 engineering error 结束。
+v4 最终停止原因区分
+`verdict_determined | meaningful_routes_exhausted | hard_budget_exhausted |
+engineering_error`。尚有档案待精确回读、新 Evidence 待图像重检或明确的独立来源路线时，
+路线账本不得判定为耗尽。全工具不可用或核心协议失败以 `engineering_error` 结束。
 
 ### Phase 16：真实隔离实验与 20 例门禁
 
@@ -545,8 +539,7 @@ hard_budget_exhausted | engineering_error`。路线耗尽和 hard action budget 
 
 1. 当前全案 hidden-history 基线；
 2. 显式工作区，无主动 recall；
-3. 工作区 + archive + recall + 图像重检；
-4. 工作区 + archive + recall + 图像重检 + 两段式早停。
+3. 工作区 + archive + recall + 图像重检 + 确定性路线耗尽/24-action 兜底。
 
 每组保存完整 canonical trace、请求 token、工具成本和停止状态。先跑少量代表性 case
 确认协议无误，再跑用户此前使用的完整 20 例。至少审计：
@@ -557,7 +550,7 @@ hard_budget_exhausted | engineering_error`。路线耗尽和 hard action budget 
 - 调查后重新观察图像并产生有效理解更新的比例；
 - 各阶段 `protected_context` 覆盖率、handoff 后关键状态保持率和因信息缺失产生的无效动作；
 - 每轮/每案最大输入 token、超过 128k 的请求次数；
-- 平均 action 数、跑满 24 action 比例、误早停和无效过搜；
+- 平均 action 数、跑满 24 action 比例、误判路线耗尽和无效过搜；
 - `meaningful_routes_exhausted` 触发次数、触发时剩余可执行路线数和误判路线耗尽率；
 - 成本、延迟、工程错误率和 Prompt/协议重试率。
 
@@ -568,13 +561,13 @@ hard_budget_exhausted | engineering_error`。路线耗尽和 hard action budget 
 - 决定性 Evidence 在压缩、回读和 Judgment 中保持可达；
 - 所有阶段 protected-context 覆盖率必须为 100%；短链的调查方向、证据利用和图像理解更新
   不得显著差于长链基线，发现退化先修 StageHandoffPacket；
-- 早停不因重复新 URL 被无限推迟，也不在明确新路线/待回读关键材料存在时误停；
+- 无进展计数不触发提前结算；明确新路线或待回读关键材料存在时不得误判路线耗尽；
 - 路线账本确实耗尽时能确定性结束，不依赖模型继续生成无意义路线直到 24 action；
 - 工程错误不产生 `real` 或 `fake`；
 - 不为单个样例添加查询、关键词、URL、交通工具或人物专用规则。
 
-如第 4 组精度下降，按组件回退到第 3 组定位早停问题；如第 3 组下降，回退到第 2 组定位
-recall/图像重检问题；任何回退只切换新组件，不恢复全案隐藏历史作为长期方案。
+如第 3 组精度下降，按组件回退到第 2 组定位 recall、图像重检或路线账本问题；任何回退只
+切换新组件，不恢复全案隐藏历史作为长期方案。
 
 ### Phase 17：训练基建前置门禁
 
@@ -606,5 +599,5 @@ recall/图像重检问题；任何回退只切换新组件，不恢复全案隐�
 压缩、进展和停止均可追溯且有界；原始材料不可变保存，工作区可压缩，决定性材料可精确
 回读；`real | fake` 二元 Judgment 与内部不确定状态分离；历史回放和四组真实隔离实验通过；
 完整 20 例经人工与 strict audit 验收；单次输入满足 128k 门禁目标；无样例专用规则；
-早停能减少无效跑满且不降低关键证据与结论质量。满足这些条件后才清理冻结 v4 运行边界并
+停止机制不因无进展计数误杀有效调查，且不降低关键证据与结论质量。满足这些条件后才清理冻结 v4 运行边界并
 进入基于成熟框架的 Qwen SFT/RL 训练基建。

@@ -23,11 +23,8 @@ from src.orchestrator.discrepancy_coverage import (
 from src.orchestrator.runtime_case import verify_case_image
 from src.orchestrator.runtime_events import CaseRuntimeStore, current_case_runtime_store
 from src.orchestrator.progress_control import (
-    grace_exhausted_without_gain,
-    open_saturation_grace,
     record_action_progress,
     record_decision_progress,
-    should_run_saturation_checkpoint,
 )
 from src.orchestrator.image_only_prompts import (
     DISCREPANCY_REACT_SYSTEM_PROMPT as IMAGE_ONLY_DISCREPANCY_REACT_PROMPT,
@@ -1086,41 +1083,11 @@ class Orchestrator:
                 audit_discrepancy_coverage(investigation)
             self._sync_image_only_state(state, investigation)
 
-            # Recall is deliberately two-step. Once candidates exist, perform
-            # the exact read before any saturation/settlement checkpoint can
-            # retire the task that owns this memory action.
+            # Recall remains two-step: candidate recall is followed by an exact
+            # read on the next action.  A no-gain streak is diagnostic only and
+            # must not settle the case while an executable route remains.
             if investigation.pending_archive_read_ids:
                 continue
-
-            if should_run_saturation_checkpoint(investigation):
-                reviewed_ids = discrepancy_decision_evidence_ids(investigation)
-                await self._run_discrepancy_decision(
-                    state,
-                    investigation,
-                    reviewed_evidence_ids=reviewed_ids,
-                    trigger="before_unresolved",
-                    interaction_session=None,
-                )
-                if investigation.proposed_verdict in {"fake", "real"}:
-                    audit_discrepancy_coverage(
-                        investigation,
-                        decision_checkpoint=True,
-                    )
-                elif remaining_claim_hypothesis_routes(investigation):
-                    open_saturation_grace(investigation)
-                else:
-                    audit_discrepancy_coverage(
-                        investigation,
-                        decision_checkpoint=True,
-                    )
-                self._sync_image_only_state(state, investigation)
-            elif grace_exhausted_without_gain(investigation):
-                investigation.stop_reason = "information_saturated"
-                audit_discrepancy_coverage(
-                    investigation,
-                    decision_checkpoint=True,
-                )
-                self._sync_image_only_state(state, investigation)
 
         if investigation.proposed_verdict in {"fake", "real"}:
             audit = (

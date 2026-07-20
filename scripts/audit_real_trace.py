@@ -1482,7 +1482,6 @@ def _audit_discrepancy_trace(
             )
         if stop_reason not in {
             "meaningful_routes_exhausted",
-            "information_saturated",
             "hard_budget_exhausted",
         }:
             _issue(
@@ -1537,7 +1536,6 @@ def _audit_discrepancy_trace(
         or str(item.get("stop_reason", ""))
         in {
             "meaningful_routes_exhausted",
-            "information_saturated",
             "hard_budget_exhausted",
         }
     ]

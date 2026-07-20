@@ -252,7 +252,6 @@ def _require_real_run_artifacts(
             or investigation.get("stop_reason")
             not in {
                 "meaningful_routes_exhausted",
-                "information_saturated",
                 "hard_budget_exhausted",
             }
         ):

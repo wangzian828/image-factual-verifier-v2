@@ -43,8 +43,8 @@ but they must not enter the v4 default path.
 8. Apply claim assessment, discrepancy, hypothesis, visual-reinspection, and verdict
    proposals atomically through deterministic reducers.
 9. Stop immediately on an admissible decisive discrepancy, close all supported
-   high-salience claims for real, or close unresolved high-salience routes for
-   unverifiable.
+   high-salience claims for real, or enter bounded binary Judgment after meaningful
+   routes close or the 24-action safety cap is reached.
 10. Compile a claim/discrepancy/Evidence basis and require v4 Judgment to match it.
 
 ## Non-negotiable invariants
@@ -75,10 +75,13 @@ but they must not enter the v4 default path.
 - Reliable text may close ecological, geographic, temporal, or other world
   relations. A same-capture bridge is mandatory only when the semantic decision says
   the conclusion depends on binding a source assertion to this exact input image.
-- `fake` requires an established decisive, Evidence-backed, visually anchored
-  discrepancy affecting a high-salience claim. `real` requires every high-salience
-  claim supported and its meaningful routes closed. `unverifiable` requires an
-  unresolved high-salience claim and exhausted meaningful routes.
+- An evidence-determined `fake` requires an established decisive, Evidence-backed,
+  visually anchored discrepancy affecting a high-salience claim. Evidence-determined
+  `real` requires every high-salience claim supported and its meaningful routes
+  closed. Unresolved cases retain internal uncertainty and enter bounded binary
+  Judgment only after meaningful routes close or the hard action cap is reached.
+- No-gain streaks are diagnostic and training signals only. They must not trigger a
+  Decision checkpoint, route retirement, `information_saturated`, or any other stop.
 - A Discrepancy Decision may add or retire bounded SearchHypotheses and request one
   focused visual reinspection, but it cannot silently expand an ImageClaim.
 - General VLM consistency/anomaly opinions are diagnostic and cannot create verdict

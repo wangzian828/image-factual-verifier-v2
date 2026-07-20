@@ -262,8 +262,6 @@ def build_explicit_workspace(
             "actions_used": state.action_count,
             "actions_remaining": max(0, 24 - state.action_count),
             "no_substantive_gain_streak": state.no_substantive_gain_streak,
-            "saturation_checkpoint_action": state.saturation_checkpoint_action,
-            "saturation_grace_remaining": state.saturation_grace_remaining,
             "latest_progress": (
                 state.progress_events[-1].model_dump(mode="json")
                 if state.progress_events
