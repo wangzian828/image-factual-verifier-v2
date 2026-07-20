@@ -93,6 +93,7 @@ def _write_v4_canary_artifacts(
     data_policy: str = "reinspect-v2",
     agent_policy: str = "discrepancy-first-v4",
     trace_policy: str = "discrepancy-first-v4",
+    decision_mode: str = "evidence_determined",
 ) -> None:
     (tmp_path / "traces").mkdir()
     (tmp_path / "run_manifest.json").write_text(
@@ -125,14 +126,29 @@ def _write_v4_canary_artifacts(
                 "decision_policy_version": trace_policy,
                 "verdict": "fake",
                 "verdict_basis": {
+                    "decision_mode": decision_mode,
                     "claim_ids": ["claim-v4"],
-                    "discrepancy_ids": ["discrepancy-v4"],
+                    "discrepancy_ids": (
+                        ["discrepancy-v4"]
+                        if decision_mode == "evidence_determined"
+                        else []
+                    ),
+                    "unresolved_gaps": (
+                        []
+                        if decision_mode == "evidence_determined"
+                        else ["The material route ended without decisive Evidence."]
+                    ),
                 },
                 "termination": "success",
                 "llm_api_calls": 2,
                 "state": {
                     "investigation_state": {
                         "core_verdict_fact_id": None,
+                        "stop_reason": (
+                            "verdict_determined"
+                            if decision_mode == "evidence_determined"
+                            else "information_saturated"
+                        ),
                         "image_claims": [
                             {"claim_id": "claim-v4", "salience": "high"}
                         ],
@@ -173,6 +189,25 @@ def test_real_canary_accepts_discrepancy_first_v4_artifacts(
     assert result["data_pipeline_decision_policy_version"] == "reinspect-v2"
     assert result["agent_decision_policy_version"] == "discrepancy-first-v4"
     assert result["successful_tools"] == ["text_search", "visit"]
+
+
+def test_real_canary_accepts_bounded_binary_fake_artifacts(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    _write_v4_canary_artifacts(
+        tmp_path,
+        decision_mode="bounded_binary_judgment",
+    )
+    monkeypatch.setattr(
+        run_real_canary,
+        "audit_trace",
+        lambda path: SimpleNamespace(failures=lambda strict_scheduler: []),
+    )
+
+    result = run_real_canary._require_real_run_artifacts(tmp_path)
+
+    assert result["passed"] is True
 
 
 def test_real_canary_rejects_agent_policy_mismatch(

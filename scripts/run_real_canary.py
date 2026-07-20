@@ -235,9 +235,29 @@ def _require_real_run_artifacts(
         basis = _mapping(trace.get("verdict_basis"))
         if not basis.get("claim_ids"):
             raise RuntimeError(f"trace has no verdict basis claims: {path.name}")
-        if trace.get("verdict") == "fake" and not basis.get("discrepancy_ids"):
+        decision_mode = str(
+            basis.get("decision_mode", "evidence_determined")
+            or "evidence_determined"
+        )
+        if (
+            trace.get("verdict") == "fake"
+            and decision_mode == "evidence_determined"
+            and not basis.get("discrepancy_ids")
+        ):
             raise RuntimeError(
                 f"fake trace has no selected discrepancy: {path.name}"
+            )
+        if decision_mode == "bounded_binary_judgment" and (
+            not basis.get("unresolved_gaps")
+            or investigation.get("stop_reason")
+            not in {
+                "meaningful_routes_exhausted",
+                "information_saturated",
+                "hard_budget_exhausted",
+            }
+        ):
+            raise RuntimeError(
+                f"bounded binary trace lacks its terminal gaps: {path.name}"
             )
         if trace.get("termination") != "success":
             raise RuntimeError(f"trace did not terminate successfully: {path.name}")
