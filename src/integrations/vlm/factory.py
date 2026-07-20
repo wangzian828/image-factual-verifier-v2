@@ -57,6 +57,18 @@ def build_vlm_client(
             timeout=timeout,
             max_retries=max_retries,
         )
+    if provider == "qwen_local":
+        return OpenAIVisionClient(
+            api_key=api_key or os.getenv("QWEN_LOCAL_API_KEY", "none"),
+            provider="qwen_local",
+            base_url=base_url
+            or os.getenv("QWEN_LOCAL_BASE_URL", "http://127.0.0.1:8899/v1"),
+            wire_api=wire_api or "chat_completions",
+            model_name=model_name
+            or os.getenv("QWEN_LOCAL_MODEL", "ifv-qwen35-9b-base"),
+            timeout=timeout,
+            max_retries=max_retries,
+        )
     if provider in {"openai", "necodex"}:
         return OpenAIVisionClient(
             api_key=api_key,

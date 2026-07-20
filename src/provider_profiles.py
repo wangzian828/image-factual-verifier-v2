@@ -39,12 +39,12 @@ PROVIDER_PROFILES = {
         llm_wire_api="interactions",
         vlm_wire_api="interactions",
     ),
-    "student-qwen-local": ProviderProfile(
-        profile_id="student-qwen-local",
-        provider="lmdeploy",
-        default_model="/gsdata/home/wza/models/Qwen3-VL-8B-Thinking",
-        model_env="LMDEPLOY_MODEL",
-        vlm_provider="lmdeploy",
+    "student-qwen35-local": ProviderProfile(
+        profile_id="student-qwen35-local",
+        provider="qwen_local",
+        default_model="ifv-qwen35-9b-base",
+        model_env="QWEN_LOCAL_MODEL",
+        vlm_provider="qwen_local",
         llm_wire_api="chat_completions",
         vlm_wire_api="chat_completions",
     ),

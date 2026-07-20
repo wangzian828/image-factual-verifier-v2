@@ -51,7 +51,7 @@ class LLMBackend(ABC):
 class APIBackend(LLMBackend):
     """OpenAI-compatible API backend using async httpx.
 
-    Supports qwen (dashscope), necodex, and standard OpenAI endpoints.
+    Supports qwen (dashscope), qwen_local (vLLM), necodex, and standard OpenAI endpoints.
     """
 
     def __init__(
@@ -93,6 +93,8 @@ class APIBackend(LLMBackend):
             return os.getenv("GPUSTACK_API_KEY", "")
         if self.provider == "lmdeploy":
             return os.getenv("LMDEPLOY_API_KEY", "none")
+        if self.provider == "qwen_local":
+            return os.getenv("QWEN_LOCAL_API_KEY", "none")
         return resolve_model_api_key(self.provider, None) or ""
 
     def _resolve_base_url(self) -> str:
@@ -104,12 +106,14 @@ class APIBackend(LLMBackend):
             return "http://10.254.47.36/v1"
         elif self.provider == "lmdeploy":
             return os.getenv("LMDEPLOY_BASE_URL", "http://127.0.0.1:8899/v1")
+        elif self.provider == "qwen_local":
+            return os.getenv("QWEN_LOCAL_BASE_URL", "http://127.0.0.1:8899/v1")
         return resolve_model_base_url(self.provider, None, self.wire_api) or "https://api.openai.com/v1"
 
     def _resolve_proxy(self) -> Optional[str]:
         if self.provider == "gpustack":
             return os.getenv("GPUSTACK_PROXY", "http://100.10.1.210:80")
-        if self.provider == "lmdeploy":
+        if self.provider in {"lmdeploy", "qwen_local"}:
             return None  # Local service, no proxy needed
         # Use HTTP proxy for external API calls
         return os.getenv("HTTPS_PROXY", os.getenv("HTTP_PROXY", None))
@@ -190,6 +194,14 @@ class APIBackend(LLMBackend):
             "temperature": kwargs.get("temperature", self.temperature),
             "max_tokens": kwargs.get("max_tokens", self.max_tokens),
         }
+        tools = kwargs.get("tools")
+        if tools:
+            body["tools"] = self._openai_tool_schemas(tools)
+            body["tool_choice"] = kwargs.get("tool_choice", "auto")
+            body["parallel_tool_calls"] = False
+        response_format = kwargs.get("response_format")
+        if response_format:
+            body["response_format"] = response_format
 
         # For models with internal reasoning (gpt-5.5, o1), give enough space
         # for both reasoning and content output.
@@ -256,6 +268,28 @@ class APIBackend(LLMBackend):
                 raise
 
         raise last_error or RuntimeError("All retries exhausted")
+
+    @staticmethod
+    def _openai_tool_schemas(
+        tools: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        normalized: List[Dict[str, Any]] = []
+        for item in tools:
+            if isinstance(item.get("function"), dict):
+                normalized.append(item)
+                continue
+            normalized.append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": item.get("name"),
+                        "description": item.get("description", ""),
+                        "parameters": item.get("parameters", {}),
+                    },
+                }
+            )
+        return normalized
+
     @staticmethod
     def _extract_chat_completion_text(choice: Dict[str, Any]) -> str:
         """Extract assistant text from OpenAI-compatible chat completion payloads.
@@ -296,7 +330,25 @@ class APIBackend(LLMBackend):
 
         tool_calls = message.get("tool_calls")
         if isinstance(tool_calls, list) and tool_calls:
-            serialized = json.dumps(tool_calls, ensure_ascii=False)
+            if len(tool_calls) != 1:
+                return "<parallel_tool_calls>" + json.dumps(
+                    tool_calls,
+                    ensure_ascii=False,
+                ) + "</parallel_tool_calls>"
+            function = tool_calls[0].get("function") or {}
+            arguments = function.get("arguments", {})
+            if isinstance(arguments, str):
+                try:
+                    arguments = json.loads(arguments)
+                except json.JSONDecodeError:
+                    arguments = {}
+            serialized = json.dumps(
+                {
+                    "name": function.get("name", ""),
+                    "arguments": arguments,
+                },
+                ensure_ascii=False,
+            )
             return f"<tool_call>{serialized}</tool_call>"
 
         return ""

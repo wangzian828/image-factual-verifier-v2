@@ -300,19 +300,57 @@ class StageRunner:
             return await self._run_native_structured_output(input_context)
 
         steps: List[StageStep] = []
-        system_msg = {"role": "system", "content": self._build_system_content()}
+        native_chat = self._uses_native_chat_completions()
+        system_msg = {
+            "role": "system",
+            "content": (
+                self._build_native_chat_system_content()
+                if native_chat
+                else self._build_system_content()
+            ),
+        }
         user_msg = self._build_user_message(input_context)
         history: List[Dict[str, Any]] = [system_msg, user_msg]
         evidence_so_far: List[str] = []
 
         for round_num in range(1, self.max_rounds + 1):
             messages = self._build_round_messages(system_msg, user_msg, history, evidence_so_far)
-            response, llm_metadata = await self._call_llm(messages)
+            completed_tool_calls = sum(
+                1 for item in steps if item.action_type == "tool_call"
+            )
+            response, llm_metadata = await self._call_llm(
+                messages,
+                require_tool=(
+                    native_chat
+                    and bool(self.tools_list)
+                    and (
+                        self.force_tool_each_round
+                        or completed_tool_calls < self.min_tool_calls
+                    )
+                ),
+            )
             step = StageStep(
                 round=round_num,
                 stage_name=self.stage_name,
                 tokens={"prompt": response.prompt_tokens, "completion": response.completion_tokens},
-                metadata={"stage": self.stage_name, **llm_metadata},
+                metadata={
+                    "stage": self.stage_name,
+                    **llm_metadata,
+                    "policy_input": self._policy_input_snapshot(
+                        system_instruction=system_msg["content"],
+                        input_payload=messages[1:],
+                        tools=(
+                            self._build_native_tool_schemas()
+                            if native_chat and self.tools_list
+                            else []
+                        ),
+                        response_format=(
+                            self._openai_response_format()
+                            if native_chat and not self.tools_list
+                            else None
+                        ),
+                    ),
+                },
             )
 
             content = (response.text or "").strip()
@@ -325,6 +363,16 @@ class StageRunner:
                 continue
 
             step.thought = self._extract_think(content)
+            native_assistant = (
+                self._openai_assistant_message(response.raw)
+                if native_chat
+                else None
+            )
+            native_call = (
+                self._openai_single_tool_call(response.raw)
+                if native_chat
+                else None
+            )
 
             if "<tool_call>" in content and "</tool_call>" in content:
                 tool_name, tool_args = self._parse_tool_call(content)
@@ -340,6 +388,16 @@ class StageRunner:
                 step.action_type = "tool_call"
                 step.tool_name = tool_name
                 step.tool_args = self._prepare_tool_args(tool_name, dict(tool_args), input_context)
+                step.metadata["policy_action"] = {
+                    "type": "tool_call",
+                    "name": tool_name,
+                    "arguments": deepcopy(step.tool_args),
+                }
+                if native_call is not None:
+                    step.metadata["native_chat_completions"] = True
+                    step.metadata["function_call_id"] = str(
+                        native_call.get("id", "")
+                    ).strip()
                 step.tool_args = self._bind_pending_visual_args(tool_name, step.tool_args)
                 question_error = self._question_id_error(step.tool_args)
                 if question_error:
@@ -436,19 +494,29 @@ class StageRunner:
                 steps.append(step)
                 state_update = self._record_observation_update(step, steps)
                 evidence_so_far.append(self._summarize_tool_result(tool_name, step.tool_args, serialized))
-                history.append({"role": "assistant", "content": content})
-                history.append(
-                    {
-                        "role": "user",
-                        "content": self._build_tool_response_message(
-                            tool_name,
-                            step.tool_args,
-                            serialized,
-                            function_call_id=str(step.metadata["function_call_id"]),
-                            state_update=state_update,
-                        ),
-                    }
+                tool_response = self._build_tool_response_message(
+                    tool_name,
+                    step.tool_args,
+                    serialized,
+                    function_call_id=str(step.metadata["function_call_id"]),
+                    state_update=state_update,
+                    native_chat=(
+                        native_assistant is not None and native_call is not None
+                    ),
                 )
+                if native_assistant is not None and native_call is not None:
+                    history.append(native_assistant)
+                    history.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": str(step.metadata["function_call_id"]),
+                            "name": tool_name,
+                            "content": tool_response,
+                        }
+                    )
+                else:
+                    history.append({"role": "assistant", "content": content})
+                    history.append({"role": "user", "content": tool_response})
 
                 if self.should_stop and self.should_stop(steps):
                     if self.stop_output_factory is not None:
@@ -473,6 +541,7 @@ class StageRunner:
             if output_json is not None:
                 step.action_type = "output"
                 step.output = output_json
+                step.metadata["policy_action"] = deepcopy(output_json)
                 steps.append(step)
                 parsed = self._validate_output(output_json)
                 if parsed is not None:
@@ -493,7 +562,16 @@ class StageRunner:
             step.action_type = "format_error"
             steps.append(step)
             history.append({"role": "assistant", "content": content})
-            history.append({"role": "user", "content": "Use exactly one <tool_call> or one <output> block."})
+            history.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "Use exactly one native function call or one JSON object."
+                        if native_chat
+                        else "Use exactly one <tool_call> or one <output> block."
+                    ),
+                }
+            )
 
         forced, forced_meta = await self._force_output(system_msg, user_msg, history, evidence_so_far)
         if forced is not None:
@@ -1079,6 +1157,61 @@ class StageRunner:
             + "- Tool failures are observations to react to, not successful evidence."
         )
 
+    def _build_native_chat_system_content(self) -> str:
+        prompt = re.sub(
+            r"Return exactly one JSON object inside <output>\.\.\.</output>",
+            "Return exactly one JSON object",
+            self.system_prompt,
+        )
+        if not self.tools_list:
+            return prompt + "\n\nReturn one JSON object matching the response schema."
+        return (
+            prompt
+            + "\n\nUse native function calls for tools. Return one JSON object "
+            + "when finished; tool failures are not evidence."
+        )
+
+    def _openai_response_format(self) -> Optional[Dict[str, Any]]:
+        if self.output_schema is None:
+            return None
+        return {
+            "type": "json_schema",
+            "json_schema": {
+                "name": self.output_schema.__name__,
+                "schema": self._normalized_output_schema(),
+                "strict": True,
+            },
+        }
+
+    @staticmethod
+    def _openai_assistant_message(
+        payload: Optional[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        if not isinstance(payload, dict):
+            return None
+        choices = payload.get("choices")
+        if not isinstance(choices, list) or not choices:
+            return None
+        message = choices[0].get("message")
+        if not isinstance(message, dict):
+            return None
+        result = deepcopy(message)
+        result["role"] = "assistant"
+        return result
+
+    @classmethod
+    def _openai_single_tool_call(
+        cls,
+        payload: Optional[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        message = cls._openai_assistant_message(payload)
+        if message is None:
+            return None
+        calls = message.get("tool_calls")
+        if not isinstance(calls, list) or len(calls) != 1:
+            return None
+        return calls[0] if isinstance(calls[0], dict) else None
+
     def _build_native_tool_schemas(self) -> List[Dict[str, Any]]:
         schemas: List[Dict[str, Any]] = []
         for tool in self.tools_list:
@@ -1662,9 +1795,10 @@ class StageRunner:
             ]
         if not isinstance(value, dict):
             return deepcopy(value)
-        if str(value.get("type", "")).strip().lower() == "image":
+        media_type = str(value.get("type", "")).strip().lower()
+        if media_type in {"image", "image_url"}:
             snapshot: Dict[str, Any] = {
-                "type": "image",
+                "type": media_type,
                 "runtime_image": True,
             }
             mime_type = str(value.get("mime_type", "")).strip()
@@ -2167,6 +2301,13 @@ class StageRunner:
             },
         )
 
+    def _uses_native_chat_completions(self) -> bool:
+        return bool(
+            str(getattr(self.llm, "provider", "")).lower() == "qwen_local"
+            and str(getattr(self.llm, "wire_api", "")).lower()
+            == "chat_completions"
+        )
+
     def _recent_recalled_materials(self) -> List[Dict[str, Any]]:
         materials: List[Dict[str, Any]] = []
         for step in self.prior_steps:
@@ -2214,7 +2355,12 @@ class StageRunner:
         messages.extend(recent)
         return messages
 
-    async def _call_llm(self, messages: List[Dict[str, Any]]) -> Tuple[LLMResponse, Dict[str, Any]]:
+    async def _call_llm(
+        self,
+        messages: List[Dict[str, Any]],
+        *,
+        require_tool: bool = False,
+    ) -> Tuple[LLMResponse, Dict[str, Any]]:
         started = time.perf_counter()
         self.llm_api_calls += 1
         request_id = ""
@@ -2228,8 +2374,19 @@ class StageRunner:
                 prompt_version=self.prompt_version,
             )
         try:
+            request_kwargs: Dict[str, Any] = {}
+            if self._uses_native_chat_completions():
+                if self.tools_list:
+                    request_kwargs["tools"] = self._build_native_tool_schemas()
+                    request_kwargs["tool_choice"] = (
+                        "required" if require_tool else "auto"
+                    )
+                elif self.output_schema is not None:
+                    request_kwargs["response_format"] = (
+                        self._openai_response_format()
+                    )
             response = await asyncio.wait_for(
-                self.llm.get_response(messages),
+                self.llm.get_response(messages, **request_kwargs),
                 timeout=self.request_timeout_seconds,
             )
         except asyncio.TimeoutError as exc:
@@ -2271,6 +2428,7 @@ class StageRunner:
         return response, {
             "llm_duration_ms": duration_ms,
             "context_request_id": request_id,
+            "native_chat_completions": self._uses_native_chat_completions(),
         }
 
     async def _create_interaction(self, **kwargs: Any) -> Dict[str, Any]:
@@ -2563,6 +2721,7 @@ class StageRunner:
         *,
         function_call_id: str,
         state_update: Optional[Dict[str, Any]] = None,
+        native_chat: bool = False,
     ) -> str:
         compact = self._compact_tool_result_for_context(tool_name, result)
         payload = {
@@ -2573,9 +2732,16 @@ class StageRunner:
         }
         if state_update:
             payload["investigation_state_update"] = state_update
-        text = json.dumps(payload, ensure_ascii=False, indent=2)
-        if len(text) > self.tool_response_max_chars:
+        text = json.dumps(
+            payload,
+            ensure_ascii=False,
+            indent=None if native_chat else 2,
+            separators=(",", ":") if native_chat else None,
+        )
+        if not native_chat and len(text) > self.tool_response_max_chars:
             text = text[: self.tool_response_max_chars] + "\n...<truncated>"
+        if native_chat:
+            return text
         return f"<tool_response>\n{text}\n</tool_response>"
 
     def _record_observation_update(

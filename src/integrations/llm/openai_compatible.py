@@ -235,6 +235,8 @@ def resolve_model_api_key(provider: str, api_key: Optional[str]) -> Optional[str
         return resolve_necodex_api_key(api_key)
     if provider == "lmdeploy":
         return api_key or os.getenv("LMDEPLOY_API_KEY", "none")
+    if provider == "qwen_local":
+        return api_key or os.getenv("QWEN_LOCAL_API_KEY", "none")
     return api_key
 
 
@@ -257,6 +259,8 @@ def resolve_model_base_url(
         return os.getenv("NECODEX_BASE_URL") or "https://api.sbbbbbbbbb.xyz/v1"
     if provider == "lmdeploy":
         return os.getenv("LMDEPLOY_BASE_URL", "http://127.0.0.1:8899/v1")
+    if provider == "qwen_local":
+        return os.getenv("QWEN_LOCAL_BASE_URL", "http://127.0.0.1:8899/v1")
     return base_url
 
 
