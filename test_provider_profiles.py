@@ -118,7 +118,7 @@ def test_local_qwen_verification_has_bounded_tool_call_budget(
     orchestrator.provider = "qwen_local"
 
     assert orchestrator._stage_output_tokens("VERIFICATION", 16384) == 8192
-    assert orchestrator._stage_output_tokens("PLANNING", 8192) == 8192
+    assert orchestrator._stage_output_tokens("PLANNING", 8192) == 32768
 
     monkeypatch.setenv("QWEN_VERIFICATION_MAX_OUTPUT_TOKENS", "4096")
     assert orchestrator._stage_output_tokens("VERIFICATION", 16384) == 4096

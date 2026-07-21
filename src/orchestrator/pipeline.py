@@ -2912,7 +2912,11 @@ class Orchestrator:
         if self.provider in {"qwen_local", "lmdeploy"}:
             env_name = f"QWEN_{normalized_stage}_MAX_OUTPUT_TOKENS"
             provider_default = (
-                8192 if normalized_stage == "VERIFICATION" else default
+                32768
+                if normalized_stage == "PLANNING"
+                else 8192
+                if normalized_stage == "VERIFICATION"
+                else default
             )
         else:
             env_name = f"GEMINI_{normalized_stage}_MAX_OUTPUT_TOKENS"
