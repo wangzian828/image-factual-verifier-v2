@@ -94,6 +94,7 @@ def test_qwen35_launcher_uses_native_multimodal_hybrid_thinking_protocol() -> No
     assert "131072" in source
     assert "NCCL_CUMEM_HOST_ENABLE=0" in source
     assert "--disable-custom-all-reduce" in source
+    assert "VLLM_USE_FLASHINFER_SAMPLER=0" in source
     assert "prepare_qwen3vl_chat_template.py" not in source
 
 
@@ -226,3 +227,4 @@ def test_qwen35_training_bootstrap_is_fresh_pinned_and_isolated() -> None:
     assert "flash-linear-attention==0.5.1" in sft
     assert "causal-conv1d==1.6.2.post1" in sft
     assert "vllm==0.22.1" in rl
+    assert "llguidance==1.7.5" in rl

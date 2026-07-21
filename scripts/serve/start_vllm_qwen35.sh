@@ -44,6 +44,10 @@ export NO_PROXY="127.0.0.1,localhost"
 export no_proxy="$NO_PROXY"
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
+# The frozen serving image intentionally has no CUDA toolkit.  vLLM's optional
+# FlashInfer sampler JIT-compiles an extension on first use and therefore needs
+# nvcc; use the built-in sampler for this runtime-only environment.
+export VLLM_USE_FLASHINFER_SAMPLER=0
 PROFILE_DIR="$DATA_ROOT/exports/$SERVED_NAME"
 mkdir -p "$PROFILE_DIR"
 "$ENV_PREFIX/bin/python" -m ifv_training serving-profile \

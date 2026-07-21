@@ -9,4 +9,5 @@ causal-conv1d==1.6.2.post1
 flash-attn==2.8.3
 liger-kernel
 vllm==0.22.1
+llguidance==1.7.5
 huggingface-hub>=0.34,<2
