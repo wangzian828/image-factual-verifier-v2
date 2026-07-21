@@ -51,6 +51,22 @@ class LookupTool(BaseTool):
         return {"status": "success", "answer": "ceremonial coach"}
 
 
+class OptionalReferenceTool(BaseTool):
+    name = "compare_with_reference"
+    description = "Compare against one runtime-selected reference."
+    parameters = {
+        "type": "object",
+        "properties": {
+            "reference_url": {"type": "string"},
+            "focus": {"type": "string"},
+        },
+        "required": [],
+    }
+
+    def call(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        return {"status": "success", "reference_url": params["reference_url"]}
+
+
 class AnswerOutput(BaseModel):
     answer: str
 
@@ -220,6 +236,31 @@ def test_qwen_protocol_correction_does_not_consume_action_round() -> None:
     assert "meaningfully different" in (
         backend.requests[1]["messages"][-1]["content"]
     )
+
+
+def test_runtime_constrained_optional_tool_selector_becomes_required() -> None:
+    reference_url = "https://example.org/pending-reference.jpg"
+    runner = StageRunner(
+        llm=QwenFakeBackend([]),
+        system_prompt="Inspect the selected reference.",
+        tools=[OptionalReferenceTool()],
+        stage_name="verification",
+        question_claims={"task-1": "The image matches the reference."},
+        tool_argument_constraints={
+            "compare_with_reference": {
+                "reference_url": [reference_url],
+                "question_id": ["task-1"],
+            }
+        },
+        attach_image=False,
+    )
+    runner.active_question_ids = ["task-1"]
+
+    schema = runner._build_native_tool_schemas()[0]["parameters"]
+
+    assert schema["properties"]["reference_url"]["enum"] == [reference_url]
+    assert "reference_url" in schema["required"]
+    assert "question_id" in schema["required"]
 
 
 def test_qwen_no_tool_stage_uses_json_schema_and_redacts_image(

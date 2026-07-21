@@ -73,6 +73,10 @@
   独立归档；调查取得 Gold State Coach 正文，但重复路线的协议纠正误占 Chat Completions
   唯一 action round，导致强制输出 schema 错误。当前修复让有限协议纠正不消耗真实 action
   budget，并用通用的一句 Claim 定义避免把中心关系拆成场景清单；未加入样例专用规则。
+- 2026-07-22 Queen Qwen3.5 第二轮：协议纠正生命周期已生效；新失败来自待选参考图 enum
+  与 `reference_url` required 不一致。当前统一为“有 route constraint 的 selector 必须由模型
+  选择并必填，无 constraint 的 pending visual 字段才由 runtime 注入”，并把中心 Claim 定义
+  收敛为优先保留完整人物—事件—关系。
 
 ### 2026-07-20 决策更新
 

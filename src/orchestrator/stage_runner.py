@@ -1362,6 +1362,13 @@ class StageRunner:
                     property_schema["items"]["enum"] = list(allowed_values)
                 else:
                     property_schema["enum"] = list(allowed_values)
+                # A runtime constraint represents a concrete executable route,
+                # not a hint.  If the base tool marks that selector optional,
+                # guided decoding may legally omit it and produce a call the
+                # route validator must reject (for example a reference compare
+                # without its pending reference URL).
+                if property_name not in required:
+                    required.append(property_name)
             properties.pop("image_input", None)
             required = [name for name in required if name != "image_input"]
             parameters = self._normalize_native_schema(parameters)
@@ -1410,7 +1417,15 @@ class StageRunner:
                     }
                     if "claim_id" not in required:
                         required.append("claim_id")
-                runtime_bound = self._runtime_bound_visual_fields(tool.name)
+                constrained_fields = self.tool_argument_constraints.get(
+                    tool.name,
+                    {},
+                )
+                runtime_bound = {
+                    name
+                    for name in self._runtime_bound_visual_fields(tool.name)
+                    if not constrained_fields.get(name)
+                }
                 if runtime_bound:
                     required = [name for name in required if name not in runtime_bound]
                     for name in runtime_bound:
