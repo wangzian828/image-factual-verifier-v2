@@ -49,6 +49,8 @@ bash scripts/server/bootstrap_gpu13.sh sft
 
 该脚本从现有 `qwen3vl` 克隆 Python 3.10/CUDA 基础，建立隔离的
 `ifv-qwen3vl-serve` 与 `ifv-qwen3vl-sft`，不污染 `ifv-agent`。
+`ifv-agent` Jupyter kernel 会有意把自己的 `bin` 保持在 PATH 首位，因此 bootstrap 使用
+目标环境的绝对解释器路径，不依赖 `conda run ... python` 的命令解析。
 
 ## 2. LMDeploy serving 门禁
 

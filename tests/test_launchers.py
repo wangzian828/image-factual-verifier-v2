@@ -75,6 +75,8 @@ def test_gpu13_bootstrap_isolates_serving_from_sft_installation() -> None:
     assert '"sft" || "$MODE" == "all"' in source
     assert "ifv-qwen3vl-serve" in source
     assert "ifv-qwen3vl-sft" in source
+    assert '"$env_prefix/bin/python"' in source
+    assert 'conda run -n "$name" python' not in source
 
 
 def test_qwen3_vl_thinking_is_the_only_primary_profile() -> None:

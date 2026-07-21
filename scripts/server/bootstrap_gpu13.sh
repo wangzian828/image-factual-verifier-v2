@@ -25,9 +25,20 @@ create_env() {
     fi
     conda create -y -n "$name" --clone "$seed_env"
   fi
-  conda run -n "$name" python -c \
+  local env_prefix
+  env_prefix="$(
+    conda env list | awk -v target="$name" '$1 == target {print $NF; exit}'
+  )"
+  if [[ -z "$env_prefix" || ! -x "$env_prefix/bin/python" ]]; then
+    echo "cannot resolve Python for Conda environment: $name" >&2
+    exit 2
+  fi
+  # The gpu-13 ifv-agent kernel deliberately keeps its own bin directory first
+  # in PATH. Use absolute target-environment executables so that this bootstrap
+  # cannot accidentally validate or modify ifv-agent through `conda run`.
+  "$env_prefix/bin/python" -c \
     "import sys; assert sys.version_info[:2] == (3, 10), sys.version"
-  if ! conda run -n "$name" python -c "import torch; assert torch.cuda.is_available()" >/dev/null 2>&1; then
+  if ! "$env_prefix/bin/python" -c "import torch; assert torch.cuda.is_available()" >/dev/null 2>&1; then
     if [[ -z "${IFV_TORCH_INDEX_URL:-}" || -z "${IFV_TORCH_PACKAGES:-}" ]]; then
       echo "$name has no CUDA-enabled PyTorch." >&2
       echo "Set IFV_TORCH_INDEX_URL and IFV_TORCH_PACKAGES after checking gpu-13's driver." >&2
@@ -36,9 +47,9 @@ create_env() {
     fi
     # Intentional word splitting: IFV_TORCH_PACKAGES is a package-spec list.
     # shellcheck disable=SC2086
-    conda run -n "$name" python -m pip install \
+    "$env_prefix/bin/python" -m pip install \
       --index-url "$IFV_TORCH_INDEX_URL" $IFV_TORCH_PACKAGES
-    conda run -n "$name" python -c \
+    "$env_prefix/bin/python" -c \
       "import torch; assert torch.cuda.is_available(); print(torch.__version__, torch.version.cuda)"
   fi
   pip_args=()
@@ -49,20 +60,21 @@ create_env() {
     fi
     pip_args+=(--no-index --find-links "$IFV_WHEELHOUSE")
   fi
-  conda run -n "$name" python -m pip install "${pip_args[@]}" -r "$requirements"
-  conda run -n "$name" python -m pip install --no-deps -e "$REPO_ROOT"
+  "$env_prefix/bin/python" -m pip install "${pip_args[@]}" -r "$requirements"
+  "$env_prefix/bin/python" -m pip install --no-deps -e "$REPO_ROOT"
 }
 
 # Never modifies ifv-agent.
 SEED_ENV="${IFV_QWEN3VL_SEED_ENV:-qwen3vl}"
 if [[ "$MODE" == "serve" || "$MODE" == "all" ]]; then
   create_env ifv-qwen3vl-serve "$REPO_ROOT/requirements/serve.txt" "$SEED_ENV"
-  conda run -n ifv-qwen3vl-serve lmdeploy --help >/dev/null
+  "$(conda env list | awk '$1 == "ifv-qwen3vl-serve" {print $NF; exit}')/bin/lmdeploy" --help >/dev/null
   echo "Prepared isolated environment: ifv-qwen3vl-serve"
 fi
 if [[ "$MODE" == "sft" || "$MODE" == "all" ]]; then
   create_env ifv-qwen3vl-sft "$REPO_ROOT/requirements/train.txt" "$SEED_ENV"
-  conda run -n ifv-qwen3vl-sft swift --help >/dev/null
-  conda run -n ifv-qwen3vl-sft deepspeed --help >/dev/null
+  sft_prefix="$(conda env list | awk '$1 == "ifv-qwen3vl-sft" {print $NF; exit}')"
+  "$sft_prefix/bin/swift" --help >/dev/null
+  "$sft_prefix/bin/deepspeed" --help >/dev/null
   echo "Prepared isolated environment: ifv-qwen3vl-sft"
 fi
