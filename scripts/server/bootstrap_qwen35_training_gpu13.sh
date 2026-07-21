@@ -33,12 +33,13 @@ export OMP_NUM_THREADS=1
 
 prepare_base() {
   local prefix="$1"
+  local cuda_nvcc_version="$2"
   if [[ -e "$prefix" ]]; then
     echo "refusing to modify an existing environment: $prefix" >&2
     exit 2
   fi
   "$CONDA" create -y -p "$prefix" python=3.12 pip=25.2
-  "$CONDA" install -y -p "$prefix" -c nvidia cuda-nvcc=12.8.93
+  "$CONDA" install -y -p "$prefix" -c nvidia "cuda-nvcc=$cuda_nvcc_version"
 }
 
 freeze_env() {
@@ -72,7 +73,7 @@ PY
 }
 
 install_sft() {
-  prepare_base "$SFT_PREFIX"
+  prepare_base "$SFT_PREFIX" 12.8.93
   "$SFT_PREFIX/bin/python" -m pip install \
     torch==2.10.0 torchvision==0.25.0 torchaudio==2.10.0
   CUDA_HOME="$SFT_PREFIX" "$SFT_PREFIX/bin/python" -m pip install \
@@ -86,7 +87,7 @@ install_sft() {
 }
 
 install_rl() {
-  prepare_base "$RL_PREFIX"
+  prepare_base "$RL_PREFIX" 13.0.88
   "$RL_PREFIX/bin/python" -m pip install \
     torch==2.11.0 torchvision==0.26.0 torchaudio==2.11.0
   CUDA_HOME="$RL_PREFIX" "$RL_PREFIX/bin/python" -m pip install \
