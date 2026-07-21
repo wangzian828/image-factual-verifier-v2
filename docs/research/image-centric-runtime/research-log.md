@@ -1,5 +1,20 @@
 # Image-Centric Runtime Research Log
 
+## 2026-07-22 — first frozen 20-case launch stopped after two failures
+
+- The frozen `qwen35-full20-c1797c1` launch was stopped after its first two cases
+  both exhausted the fixed Discrepancy Decision correction budget. No completed
+  work was discarded; both failure traces remain durable.
+- One output repeatedly assessed a medium Claim whose reviewed Evidence had no
+  Finding chain for that Claim. The other first misspelled a Claim ID, while the
+  fail-fast top-level check hid two additional assessment errors and an illegal
+  `real` proposal with open high-salience routes.
+- The repair completes, rather than weakens, contract diagnostics: all detectable
+  Claim IDs, Evidence/Finding directions, discrepancy links, and verdict/route
+  preconditions are returned together. Final semantically rejected JSON is now
+  persisted verbatim as `output_rejected`. Correction count and semantic gates are
+  unchanged.
+
 ## 2026-07-22 — heterogeneous Decision contract failure
 
 - In `qwen35-heterogeneous3-753090e`, Andreea and Pillars completed without

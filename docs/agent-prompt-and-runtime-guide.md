@@ -95,7 +95,10 @@ provider failure into a factual verdict.
 `supported` means the exact ImageClaim is true and `refuted` means it is false.
 Before a correction turn, the runtime reports all independent ID, ownership,
 direction, and Finding-chain contract errors it can establish from the same output;
-it does not serially hide later errors behind the first failure.
+it also reports incompatible verdict/route preconditions instead of serially hiding
+later errors behind the first failure. A final rejected JSON object remains an
+`output_rejected` trace step with its exact fields; it is not mislabeled as an empty
+format error.
 
 A qualified refutation of one high-salience Claim is already decisive for `fake`.
 Another unresolved Claim does not lower that contradiction to supporting or require

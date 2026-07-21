@@ -931,12 +931,15 @@ def _discrepancy_contract_errors(
 
     errors: list[str] = []
     reviewed_ids = set(reviewed_evidence_ids)
+    valid_assessments: dict[str, Any] = {}
 
     for proposal in output.claim_assessments:
+        error_count_before = len(errors)
         claim = claim_by_id.get(proposal.claim_id)
         if claim is None:
             errors.append(
-                f"assessment cites unknown ImageClaim {proposal.claim_id!r}"
+                f"assessment cites unknown ImageClaim {proposal.claim_id!r}; "
+                "valid ImageClaim IDs: " + ", ".join(claim_by_id)
             )
             continue
         evidence_ids = list(dict.fromkeys(proposal.selected_evidence_ids))
@@ -990,11 +993,16 @@ def _discrepancy_contract_errors(
                 errors.append(
                     f"{proposal.assessment} assessment for ImageClaim "
                     f"{proposal.claim_id!r} requires a {stance} Finding -> "
-                    "Evidence chain"
+                    "Evidence chain. Omit this assessment unless a listed "
+                    "reviewed directional chain serves this exact ImageClaim"
                 )
+        if len(errors) == error_count_before:
+            valid_assessments[proposal.claim_id] = proposal
 
     discrepancy = output.material_discrepancy
+    valid_output_discrepancy = False
     if discrepancy is not None:
+        discrepancy_error_count_before = len(errors)
         unknown_claim_ids = [
             item for item in discrepancy.affected_claim_ids if item not in claim_by_id
         ]
@@ -1010,6 +1018,17 @@ def _discrepancy_contract_errors(
             errors.append(
                 "discrepancy cites unknown visual anchor: "
                 + ", ".join(unknown_anchor_ids)
+            )
+        non_pixel_anchor_ids = [
+            item
+            for item in discrepancy.visual_anchor_fact_ids
+            if item in fact_by_id
+            and fact_by_id[item].origin.type not in {"input_image", "ocr"}
+        ]
+        if non_pixel_anchor_ids:
+            errors.append(
+                "discrepancy anchors are not image/OCR grounded: "
+                + ", ".join(non_pixel_anchor_ids)
             )
         unknown_evidence_ids = [
             item for item in discrepancy.evidence_ids if item not in evidence_by_id
@@ -1048,6 +1067,168 @@ def _discrepancy_contract_errors(
                 "discrepancy or select a qualified refute chain; do not relabel "
                 "Evidence"
             )
+
+        assessment_by_claim_id = {
+            item.claim_id: item for item in output.claim_assessments
+        }
+        if discrepancy.materiality == "decisive":
+            expected_assessment = (
+                "refuted" if discrepancy.status == "established" else "conflicted"
+            )
+            mismatched_ids = [
+                claim_id
+                for claim_id in discrepancy.affected_claim_ids
+                if claim_id not in assessment_by_claim_id
+                or assessment_by_claim_id[claim_id].assessment
+                != expected_assessment
+            ]
+            if mismatched_ids:
+                errors.append(
+                    f"decisive discrepancy status {discrepancy.status!r} requires "
+                    f"{expected_assessment} assessment for affected ImageClaims: "
+                    + ", ".join(mismatched_ids)
+                )
+        for claim_id in discrepancy.affected_claim_ids:
+            claim = claim_by_id.get(claim_id)
+            if claim is None:
+                continue
+            if not set(discrepancy.visual_anchor_fact_ids) & set(claim.anchor_fact_ids):
+                errors.append(
+                    "discrepancy anchor is outside the affected claim; allowed "
+                    f"visual anchor IDs for {claim_id!r}: "
+                    + ", ".join(claim.anchor_fact_ids)
+                )
+            owned_ids = [
+                evidence_id
+                for evidence_id in known_discrepancy_ids
+                if evidence_by_id[evidence_id].task_id in task_by_id
+                and claim_id
+                in task_by_id[evidence_by_id[evidence_id].task_id].claim_ids
+            ]
+            if not owned_ids and known_discrepancy_ids:
+                errors.append(
+                    f"discrepancy Evidence is outside affected ImageClaim "
+                    f"{claim_id!r}'s tasks"
+                )
+            if (
+                discrepancy.materiality == "decisive"
+                and discrepancy.status == "established"
+                and owned_ids
+                and not _claim_directional_chain_ids(
+                    state,
+                    claim_id=claim_id,
+                    claim_fact_id=claim.fact_id,
+                    evidence_ids=owned_ids,
+                    stance="refute",
+                    evidence_by_id=evidence_by_id,
+                    task_by_id=task_by_id,
+                )[1]
+            ):
+                errors.append(
+                    f"affected ImageClaim {claim_id!r} requires an owned qualified "
+                    "refute Finding -> Evidence discrepancy chain"
+                )
+        valid_output_discrepancy = len(errors) == discrepancy_error_count_before
+
+    high_claims = [claim for claim in state.image_claims if claim.salience == "high"]
+    projected_high_status = {
+        claim.claim_id: (
+            valid_assessments[claim.claim_id].assessment
+            if claim.claim_id in valid_assessments
+            else claim.status
+        )
+        for claim in high_claims
+    }
+    retired_ids = set(output.retire_hypothesis_ids)
+    open_high_route_ids = [
+        hypothesis.hypothesis_id
+        for hypothesis in state.search_hypotheses
+        if hypothesis.status in {"open", "active"}
+        and hypothesis.hypothesis_id not in retired_ids
+        and any(
+            claim_id in claim_by_id
+            and claim_by_id[claim_id].salience == "high"
+            for claim_id in hypothesis.claim_ids
+        )
+    ]
+    new_high_routes = [
+        item.statement
+        for item in output.new_hypotheses
+        if any(
+            claim_id in claim_by_id
+            and claim_by_id[claim_id].salience == "high"
+            for claim_id in item.claim_ids
+        )
+    ]
+    current_decisive = [
+        item
+        for item in state.material_discrepancies
+        if item.materiality == "decisive"
+        and item.status in {"established", "conflicted"}
+    ]
+    output_established_high_discrepancy = bool(
+        discrepancy is not None
+        and valid_output_discrepancy
+        and discrepancy.materiality == "decisive"
+        and discrepancy.status == "established"
+        and any(
+            claim_id in claim_by_id
+            and claim_by_id[claim_id].salience == "high"
+            for claim_id in discrepancy.affected_claim_ids
+        )
+    )
+    current_established_high_discrepancy = any(
+        item.status == "established"
+        and any(
+            claim_id in claim_by_id
+            and claim_by_id[claim_id].salience == "high"
+            for claim_id in item.affected_claim_ids
+        )
+        for item in current_decisive
+    )
+    established_high_discrepancy = (
+        current_established_high_discrepancy
+        or output_established_high_discrepancy
+    )
+    if output.verdict_proposal == "real" and (
+        not high_claims
+        or any(status != "supported" for status in projected_high_status.values())
+        or current_decisive
+        or (discrepancy is not None and discrepancy.materiality == "decisive")
+        or open_high_route_ids
+        or new_high_routes
+    ):
+        detail: list[str] = []
+        unsupported_ids = [
+            claim_id
+            for claim_id, status in projected_high_status.items()
+            if status != "supported"
+        ]
+        if unsupported_ids:
+            detail.append("unsupported high Claims: " + ", ".join(unsupported_ids))
+        if open_high_route_ids:
+            detail.append("open high routes: " + ", ".join(open_high_route_ids))
+        if new_high_routes:
+            detail.append("new high routes remain open")
+        if current_decisive or (
+            discrepancy is not None and discrepancy.materiality == "decisive"
+        ):
+            detail.append("decisive discrepancy remains")
+        errors.append(
+            "real verdict requires all high-salience claims supported, no "
+            "decisive discrepancy, and no open high-salience route; choose "
+            "continue unless those conditions are already satisfied"
+            + (f" ({'; '.join(detail)})" if detail else "")
+        )
+    if output.verdict_proposal == "fake" and not established_high_discrepancy:
+        errors.append(
+            "fake verdict requires a valid decisive established discrepancy "
+            "affecting a high-salience ImageClaim; otherwise choose continue"
+        )
+    if established_high_discrepancy and output.verdict_proposal != "fake":
+        errors.append(
+            "a valid established decisive high-salience discrepancy requires fake"
+        )
 
     return list(dict.fromkeys(errors))
 
@@ -1093,8 +1274,6 @@ def apply_discrepancy_decision(
             "accepted": False,
             "rejected_reason": "qualified Evidence checkpoint requires Evidence",
         }
-    if any(item.claim_id not in claim_by_id for item in output.claim_assessments):
-        return {"accepted": False, "rejected_reason": "assessment cites unknown ImageClaim"}
     if any(item not in hypothesis_by_id for item in output.retire_hypothesis_ids):
         return {"accepted": False, "rejected_reason": "decision cites unknown SearchHypothesis"}
     if len(output.new_hypotheses) > MAX_NEW_HYPOTHESES_PER_DECISION:

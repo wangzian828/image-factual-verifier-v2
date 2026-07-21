@@ -770,12 +770,26 @@ class StageRunner:
             accepted, reason = self._accept_output(forced, steps, final_attempt=True)
             if not accepted:
                 forced_meta["rejection_reason"] = reason
+                forced_meta["policy_action"] = forced.model_dump()
                 forced = None
+        rejected_output = forced_meta.get("policy_action")
         final_step = StageStep(
             round=len(steps) + 1,
             stage_name=self.stage_name,
-            action_type="output" if forced is not None else "format_error",
-            output=forced.model_dump() if forced is not None else None,
+            action_type=(
+                "output"
+                if forced is not None
+                else "output_rejected"
+                if isinstance(rejected_output, dict)
+                else "format_error"
+            ),
+            output=(
+                forced.model_dump()
+                if forced is not None
+                else rejected_output
+                if isinstance(rejected_output, dict)
+                else None
+            ),
             metadata={"stage": self.stage_name, **forced_meta},
         )
         steps.append(final_step)
@@ -2086,12 +2100,26 @@ class StageRunner:
             return False, f"at least {self.min_tool_calls} tool calls are required; only {tool_calls} completed"
         required_question_error = self._required_question_output_error(steps)
         if required_question_error:
-            suffix = " No more tool turns remain." if final_attempt else ""
+            suffix = (
+                " No more tool turns remain."
+                if final_attempt and self.tools_list
+                else " This is the final correction attempt for this stage; a "
+                "non-terminal output remains valid."
+                if final_attempt
+                else ""
+            )
             return False, required_question_error + suffix
         if self.output_validator:
             accepted, reason = self.output_validator(parsed, steps)
             if not accepted:
-                suffix = " No more tool turns remain." if final_attempt else ""
+                suffix = (
+                    " No more tool turns remain."
+                    if final_attempt and self.tools_list
+                    else " This is the final correction attempt for this stage; a "
+                    "non-terminal output remains valid."
+                    if final_attempt
+                    else ""
+                )
                 return False, reason + suffix
         return True, ""
 
@@ -3640,7 +3668,9 @@ class StageRunner:
             message += (
                 "A non-terminal continue proposal remains valid; do not force "
                 "real or fake merely because this is a retry. Omit any Claim "
-                "assessment that has no reviewed owned Evidence. "
+                "assessment that has no reviewed owned Evidence or listed "
+                "directional Finding chain. Address every independent error in "
+                "the validator feedback. "
             )
         return message + f"Runtime validator feedback: {reason}"
 

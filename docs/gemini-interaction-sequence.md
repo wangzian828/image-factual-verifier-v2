@@ -112,7 +112,10 @@ no-tool structured stage, the final retry says that it is the last validation
 attempt, includes the exact runtime rejection, and preserves non-terminal
 `continue` when evidence or routes remain open. The runtime never silently drops
 an invalid Claim assessment or changes a proposed verdict; the model must return
-the corrected object, and an unaccepted object remains an engineering failure.
+the corrected object. Independent reference, direction, chain, and verdict/route
+contract errors are returned together. An unaccepted final object remains an
+engineering failure and is preserved as `output_rejected` rather than an empty
+format error.
 
 Qwen Chat Completions records the same lifecycle explicitly in the context ledger.
 The first Planning, Decision, or Judgment attempt is `standalone_request`; each

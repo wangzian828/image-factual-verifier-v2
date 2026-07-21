@@ -820,6 +820,41 @@ def test_discrepancy_decision_reports_independent_contract_errors_together() -> 
     assert state.model_dump(mode="json") == before
 
 
+def test_discrepancy_decision_reports_unknown_claim_and_real_gate_together() -> None:
+    state = _planned_state()
+    evidence = _append_evidence(state)
+    evidence.stance = "support"
+    evidence.edit_evidence_present = False
+    state.findings[0].stance = "support"
+    claim = state.image_claims[0]
+    before = state.model_dump(mode="json")
+
+    update = apply_discrepancy_decision(
+        state,
+        DiscrepancyDecisionOutput(
+            claim_assessments=[
+                ClaimAssessmentProposal(
+                    claim_id="claim-typo",
+                    assessment="supported",
+                    selected_evidence_ids=[evidence.evidence_id],
+                    rationale="The Claim ID is invalid.",
+                )
+            ],
+            verdict_proposal="real",
+            rationale="The route is still open and the high Claim is unsupported.",
+        ),
+        reviewed_evidence_ids=[evidence.evidence_id],
+        trigger="qualified_evidence",
+    )
+
+    assert update["accepted"] is False
+    assert "unknown ImageClaim 'claim-typo'" in update["rejected_reason"]
+    assert claim.claim_id in update["rejected_reason"]
+    assert "real verdict requires" in update["rejected_reason"]
+    assert "choose continue" in update["rejected_reason"]
+    assert state.model_dump(mode="json") == before
+
+
 def test_discrepancy_decision_accepts_bounded_visual_reinspection() -> None:
     state = _planned_state()
     evidence = _append_evidence(state)

@@ -520,6 +520,37 @@ def test_qwen_forced_structured_retry_does_not_force_terminal_answer(
     ]
 
 
+def test_qwen_final_semantic_rejection_preserves_structured_output(
+    tmp_path: Path,
+) -> None:
+    backend = QwenFakeBackend([_output_response(), _output_response()])
+
+    runner = StageRunner(
+        llm=backend,
+        system_prompt="Return one answer.",
+        tools=[],
+        output_schema=AnswerOutput,
+        max_rounds=1,
+        attach_image=False,
+        output_validator=lambda _parsed, _steps: (False, "route remains open"),
+        runtime_store=CaseRuntimeStore(
+            tmp_path,
+            case_id="final-rejection",
+            attempt_id="attempt",
+        ),
+    )
+
+    parsed, steps = asyncio.run(runner.run("Answer the question."))
+
+    assert parsed is None
+    assert steps[-1].action_type == "output_rejected"
+    assert steps[-1].output == {"answer": "ceremonial coach"}
+    assert steps[-1].metadata["policy_action"] == steps[-1].output
+    assert "non-terminal output remains valid" in steps[-1].metadata[
+        "rejection_reason"
+    ]
+
+
 def test_qwen_forced_output_preserves_final_budget_and_thinking_policy() -> None:
     empty_raw = {
         "choices": [
