@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from src.orchestrator.llm_backend import APIBackend, LLMResponse
 from src.orchestrator.stage_runner import StageRunner
@@ -186,6 +186,9 @@ def test_qwen_no_tool_stage_uses_json_schema_and_redacts_image(
     assert request["response_format"]["type"] == "json_schema"
     assert request["response_format"]["json_schema"]["strict"] is True
     assert request["generation_config"] == {"enable_thinking": False}
+    assert "minLength" not in json.dumps(request["response_format"])
+    assert "maxLength" not in json.dumps(request["response_format"])
+    assert "pattern" not in json.dumps(request["response_format"])
     assert "answer" in request["response_format"]["json_schema"]["schema"][
         "properties"
     ]
@@ -197,6 +200,145 @@ def test_qwen_no_tool_stage_uses_json_schema_and_redacts_image(
         "runtime_image": True,
     }
     assert "data:image/" not in json.dumps(snapshot)
+
+
+def test_qwen_schema_keeps_structural_and_numeric_constraints() -> None:
+    class RankedOutput(BaseModel):
+        label: str = Field(min_length=1, max_length=80)
+        priority: int = Field(ge=1, le=3)
+        values: List[str] = Field(min_length=1, max_length=3)
+
+    backend = QwenFakeBackend([_output_response()])
+    runner = StageRunner(
+        llm=backend,
+        system_prompt="Return a ranked result.",
+        tools=[],
+        output_schema=RankedOutput,
+        max_rounds=1,
+        attach_image=False,
+    )
+    schema = runner._openai_response_format()["json_schema"]["schema"]
+
+    assert schema["type"] == "object"
+    assert schema["additionalProperties"] is False
+    assert set(schema["required"]) == {"label", "priority", "values"}
+    assert schema["properties"]["values"]["type"] == "array"
+    assert schema["properties"]["values"]["minItems"] == 1
+    assert schema["properties"]["values"]["maxItems"] == 3
+    assert schema["properties"]["priority"]["minimum"] == 1
+    assert schema["properties"]["priority"]["maximum"] == 3
+
+
+def test_qwen_recovers_only_missing_top_level_open_brace() -> None:
+    output = '"answer": "ceremonial coach"}'
+    raw = {"choices": [{"message": {"role": "assistant", "content": output}}]}
+    backend = QwenFakeBackend(
+        [
+            LLMResponse(
+                text=output,
+                prompt_tokens=10,
+                completion_tokens=5,
+                raw=raw,
+            )
+        ]
+    )
+    runner = StageRunner(
+        llm=backend,
+        system_prompt="Return one answer.",
+        tools=[],
+        output_schema=AnswerOutput,
+        max_rounds=1,
+        attach_image=False,
+    )
+
+    parsed, steps = asyncio.run(runner.run("Answer the question."))
+
+    assert parsed == AnswerOutput(answer="ceremonial coach")
+    assert steps[0].metadata["format_repair"] == (
+        "prepended_missing_top_level_open_brace"
+    )
+    assert StageRunner._try_parse_bare_json('"answer": 1') is None
+
+
+def test_qwen_schema_correction_receives_validation_reason() -> None:
+    invalid_text = "{}"
+    invalid_raw = {
+        "choices": [
+            {"message": {"role": "assistant", "content": invalid_text}}
+        ]
+    }
+    backend = QwenFakeBackend(
+        [
+            LLMResponse(
+                text=invalid_text,
+                prompt_tokens=10,
+                completion_tokens=2,
+                raw=invalid_raw,
+            ),
+            _output_response(),
+        ]
+    )
+    runner = StageRunner(
+        llm=backend,
+        system_prompt="Return one answer.",
+        tools=[],
+        output_schema=AnswerOutput,
+        max_rounds=2,
+        attach_image=False,
+    )
+
+    parsed, steps = asyncio.run(runner.run("Answer the question."))
+
+    assert parsed == AnswerOutput(answer="ceremonial coach")
+    assert steps[0].action_type == "output_rejected"
+    assert "missing required fields" in steps[0].metadata["rejection_reason"]
+    correction = backend.requests[1]["messages"][-1]["content"]
+    assert "missing required fields" in correction
+
+
+def test_qwen_forced_output_preserves_final_budget_and_thinking_policy() -> None:
+    empty_raw = {
+        "choices": [
+            {"message": {"role": "assistant", "content": ""}}
+        ]
+    }
+    backend = QwenFakeBackend(
+        [
+            LLMResponse(
+                text="",
+                prompt_tokens=10,
+                completion_tokens=1,
+                raw=empty_raw,
+            ),
+            _output_response(),
+        ]
+    )
+    runner = StageRunner(
+        llm=backend,
+        system_prompt="Return one answer.",
+        tools=[],
+        output_schema=AnswerOutput,
+        max_rounds=1,
+        attach_image=False,
+        max_output_tokens=128,
+        generation_config={"enable_thinking": False},
+        final_output_max_tokens=512,
+        final_output_generation_config={"enable_thinking": True},
+    )
+
+    parsed, steps = asyncio.run(runner.run("Answer the question."))
+
+    assert parsed == AnswerOutput(answer="ceremonial coach")
+    assert backend.requests[0]["max_tokens"] == 128
+    assert backend.requests[0]["generation_config"] == {
+        "enable_thinking": False
+    }
+    assert backend.requests[1]["max_tokens"] == 512
+    assert backend.requests[1]["generation_config"] == {
+        "enable_thinking": True
+    }
+    assert backend.requests[1]["response_format"]["type"] == "json_schema"
+    assert steps[-1].metadata["forced_output"] is True
 
 
 def test_local_qwen_forwards_stage_thinking_switch_to_lmdeploy() -> None:

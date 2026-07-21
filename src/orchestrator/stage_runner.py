@@ -537,13 +537,22 @@ class StageRunner:
                     break
                 continue
 
-            output_json = self._extract_output(content) or self._try_parse_bare_json(content)
+            output_json = self._extract_output(content)
+            format_repair = ""
+            if output_json is None:
+                output_json, format_repair = (
+                    self._try_parse_bare_json_with_repair(content)
+                )
             if output_json is not None:
                 step.action_type = "output"
                 step.output = output_json
                 step.metadata["policy_action"] = deepcopy(output_json)
+                if format_repair:
+                    step.metadata["format_repair"] = format_repair
                 steps.append(step)
-                parsed = self._validate_output(output_json)
+                parsed, schema_error = self._validate_output_with_error(
+                    output_json
+                )
                 if parsed is not None:
                     accepted, reason = self._accept_output(parsed, steps)
                     if accepted:
@@ -554,12 +563,26 @@ class StageRunner:
                     history.append({"role": "user", "content": f"Output rejected: {reason} Continue investigating."})
                     continue
                 step.action_type = "output_rejected"
-                step.metadata["rejection_reason"] = "output schema was invalid or incomplete"
+                rejection_reason = (
+                    schema_error or "output schema was invalid or incomplete"
+                )
+                step.metadata["rejection_reason"] = rejection_reason
+                self._attach_invalid_response_preview(step, content)
                 history.append({"role": "assistant", "content": content})
-                history.append({"role": "user", "content": "Output schema was invalid. Try again with one valid JSON object."})
+                history.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "Output schema was invalid: "
+                            + rejection_reason
+                            + " Return one corrected complete JSON object."
+                        ),
+                    }
+                )
                 continue
 
             step.action_type = "format_error"
+            self._attach_invalid_response_preview(step, content)
             steps.append(step)
             history.append({"role": "assistant", "content": content})
             history.append(
@@ -1174,13 +1197,41 @@ class StageRunner:
     def _openai_response_format(self) -> Optional[Dict[str, Any]]:
         if self.output_schema is None:
             return None
+        schema = self._normalized_output_schema()
+        if str(getattr(self.llm, "provider", "")).lower() in {
+            "qwen_local",
+            "lmdeploy",
+        }:
+            schema = self._lmdeploy_response_schema(schema)
         return {
             "type": "json_schema",
             "json_schema": {
                 "name": self.output_schema.__name__,
-                "schema": self._normalized_output_schema(),
+                "schema": schema,
                 "strict": True,
             },
+        }
+
+    @classmethod
+    def _lmdeploy_response_schema(cls, schema: Any) -> Any:
+        """Project strict application schemas onto LMDeploy's grammar subset.
+
+        LMDeploy 0.13 warns that string length, pattern and format keywords are
+        unsupported. Passing them in nested schemas can make guided decoding
+        emit whitespace until the output budget is exhausted. Structural,
+        enum, array and numeric constraints remain on the wire; Pydantic still
+        enforces the complete original model after decoding.
+        """
+
+        if isinstance(schema, list):
+            return [cls._lmdeploy_response_schema(item) for item in schema]
+        if not isinstance(schema, dict):
+            return schema
+        unsupported = {"minLength", "maxLength", "pattern", "format"}
+        return {
+            key: cls._lmdeploy_response_schema(value)
+            for key, value in schema.items()
+            if key not in unsupported
         }
 
     @staticmethod
@@ -2360,14 +2411,26 @@ class StageRunner:
         messages: List[Dict[str, Any]],
         *,
         require_tool: bool = False,
+        max_tokens: Optional[int] = None,
+        generation_config: Optional[Dict[str, Any]] = None,
     ) -> Tuple[LLMResponse, Dict[str, Any]]:
         started = time.perf_counter()
         self.llm_api_calls += 1
         request_kwargs: Dict[str, Any] = {}
-        if self.max_output_tokens is not None:
-            request_kwargs["max_tokens"] = self.max_output_tokens
-        if self.generation_config:
-            request_kwargs["generation_config"] = dict(self.generation_config)
+        effective_max_tokens = (
+            max_tokens if max_tokens is not None else self.max_output_tokens
+        )
+        effective_generation_config = (
+            generation_config
+            if generation_config is not None
+            else self.generation_config
+        )
+        if effective_max_tokens is not None:
+            request_kwargs["max_tokens"] = effective_max_tokens
+        if effective_generation_config:
+            request_kwargs["generation_config"] = dict(
+                effective_generation_config
+            )
         response_format: Optional[Dict[str, Any]] = None
         if self._uses_native_chat_completions():
             if self.tools_list:
@@ -2432,10 +2495,19 @@ class StageRunner:
                 status="completed",
             )
         self._last_context_request_id = request_id
+        raw = response.raw if isinstance(response.raw, dict) else {}
+        choices = raw.get("choices") if isinstance(raw.get("choices"), list) else []
+        choice = choices[0] if choices and isinstance(choices[0], dict) else {}
+        message = choice.get("message") if isinstance(choice.get("message"), dict) else {}
         return response, {
             "llm_duration_ms": duration_ms,
             "context_request_id": request_id,
             "native_chat_completions": self._uses_native_chat_completions(),
+            "finish_reason": str(choice.get("finish_reason", "")),
+            "response_content_chars": len(str(message.get("content") or "")),
+            "response_reasoning_chars": len(
+                str(message.get("reasoning_content") or "")
+            ),
         }
 
     async def _create_interaction(self, **kwargs: Any) -> Dict[str, Any]:
@@ -3102,30 +3174,75 @@ class StageRunner:
             ),
         }
 
-    def _validate_output(self, output_json: Dict[str, Any]) -> Optional[BaseModel]:
+    def _validate_output_with_error(
+        self,
+        output_json: Dict[str, Any],
+    ) -> Tuple[Optional[BaseModel], str]:
         if self.output_schema is None:
-            return None
+            return None, "no output schema is configured"
         if not isinstance(output_json, dict):
-            return None
-        if missing_required_paths(output_json, self._normalized_output_schema()):
-            return None
+            return None, "output must be a JSON object"
+        missing = missing_required_paths(
+            output_json,
+            self._normalized_output_schema(),
+        )
+        if missing:
+            return None, "missing required fields: " + ", ".join(missing[:12])
         try:
-            return self.output_schema.model_validate(output_json)
-        except Exception:
-            return None
+            return self.output_schema.model_validate(output_json), ""
+        except Exception as exc:
+            compact = " ".join(str(exc).split())
+            return None, compact[:1200]
+
+    def _validate_output(self, output_json: Dict[str, Any]) -> Optional[BaseModel]:
+        parsed, _reason = self._validate_output_with_error(output_json)
+        return parsed
 
     @staticmethod
     def _try_parse_bare_json(content: str) -> Optional[Dict[str, Any]]:
+        parsed, _repair = StageRunner._try_parse_bare_json_with_repair(content)
+        return parsed
+
+    @staticmethod
+    def _try_parse_bare_json_with_repair(
+        content: str,
+    ) -> Tuple[Optional[Dict[str, Any]], str]:
         text = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
         text = StageRunner._strip_markdown_fence(text)
         start = text.find("{")
         end = text.rfind("}")
-        if start == -1 or end == -1 or end <= start:
-            return None
-        try:
-            return json.loads(text[start : end + 1])
-        except json.JSONDecodeError:
-            return None
+        if start != -1 and end != -1 and end > start:
+            try:
+                parsed = json.loads(text[start : end + 1])
+                return (parsed, "") if isinstance(parsed, dict) else (None, "")
+            except json.JSONDecodeError:
+                pass
+
+        # LMDeploy guided decoding can omit the fixed opening token while
+        # returning the rest of a complete top-level object. Repair only that
+        # syntax defect; never infer fields, values or semantic content.
+        if start == -1 and text.startswith('"') and text.endswith("}"):
+            try:
+                parsed = json.loads("{" + text)
+                if isinstance(parsed, dict):
+                    return parsed, "prepended_missing_top_level_open_brace"
+            except json.JSONDecodeError:
+                pass
+        return None, ""
+
+    @staticmethod
+    def _attach_invalid_response_preview(
+        step: StageStep,
+        content: str,
+    ) -> None:
+        """Persist a bounded model-response preview for protocol diagnosis."""
+
+        text = str(content or "")
+        step.metadata["invalid_response"] = {
+            "content_chars": len(text),
+            "head": text[:600],
+            "tail": text[-600:] if len(text) > 600 else "",
+        }
 
     def _summarize_tool_result(self, tool_name: str, tool_args: Dict[str, Any], result: str) -> str:
         try:
@@ -3212,19 +3329,30 @@ class StageRunner:
         messages.extend(recent)
         messages.append({"role": "user", "content": prompt})
 
-        started = time.perf_counter()
-        self.llm_api_calls += 1
-        response = await self.llm.get_response(messages)
+        response, call_metadata = await self._call_llm(
+            messages,
+            max_tokens=self.final_output_max_tokens,
+            generation_config=self.final_output_generation_config,
+        )
         metadata = {
             "forced_output": True,
-            "llm_duration_ms": round((time.perf_counter() - started) * 1000, 2),
+            **call_metadata,
         }
         if response.text:
-            output_json = self._extract_output(response.text) or self._try_parse_bare_json(response.text)
+            output_json = self._extract_output(response.text)
+            format_repair = ""
+            if output_json is None:
+                output_json, format_repair = (
+                    self._try_parse_bare_json_with_repair(response.text)
+                )
+            if format_repair:
+                metadata["format_repair"] = format_repair
             if output_json:
                 parsed = self._validate_output(output_json)
                 if parsed is not None:
                     return parsed, metadata
+            preview_step = StageStep(metadata=metadata)
+            self._attach_invalid_response_preview(preview_step, response.text)
         return None, metadata
 
     def _has_duplicate_tool_call(self, steps: List[StageStep], tool_name: str, tool_args: Dict[str, Any]) -> bool:

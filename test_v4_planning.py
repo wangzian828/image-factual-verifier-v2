@@ -19,6 +19,7 @@ from src.orchestrator.investigation_models import (
 )
 from src.orchestrator.pipeline import Orchestrator
 from src.orchestrator.image_only_prompts import (
+    render_image_account_planning_context,
     render_discrepancy_decision_context,
     render_discrepancy_react_context,
     select_discrepancy_react_tasks,
@@ -468,6 +469,30 @@ def test_image_account_planning_is_image_root_and_installs_claim_graph(
     snapshot = planning_step.metadata["policy_input"]["input_payload"]
     assert any(item.get("runtime_image") is True for item in snapshot)
     assert all("data" not in item for item in snapshot if isinstance(item, dict))
+
+
+def test_image_account_planning_context_excludes_judgment_controls(
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "planning-projection.jpg"
+    image_path.write_bytes(b"v4-planning-projection")
+    state, investigation = _state(image_path)
+
+    context = json.loads(
+        render_image_account_planning_context(
+            investigation,
+            perception=state.perception,
+        )
+    )
+
+    assert context["case"] == {
+        "case_id": investigation.brief.case_id,
+        "input_mode": investigation.brief.input_mode,
+        "media_type": investigation.brief.media_type,
+    }
+    assert "brief" not in context
+    assert "required_output" not in json.dumps(context)
+    assert "stop_policy" not in json.dumps(context)
 
 
 def test_image_account_planning_revisions_are_atomic_and_inherit_image_root(

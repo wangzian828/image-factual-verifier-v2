@@ -59,6 +59,8 @@ Core instruction:
   - pixel/OCR VisualFacts;
   - retrieval anchors;
   - bootstrap tasks.
+  - public case/media identity only; final Judgment fields such as
+    `required_output` and `stop_policy` are not included in Planning.
 - Purpose:
   - emit one to three high-salience ImageClaims;
   - separately emit at least one bounded SearchHypothesis without Claim-key binding;
@@ -80,6 +82,16 @@ Exact instruction:
 > claims and clues, not the search boundary.
 > Prior knowledge may supply unverified leads; only tool Evidence establishes facts.
 > Hypotheses do not own the verdict. Return the required JSON schema.
+
+For the local Qwen Chat Completions profile, the same canonical output model is
+used. The wire schema omits only string `minLength`, `maxLength`, `pattern`, and
+`format`, which LMDeploy 0.13 declares unsupported and which can stall nested
+guided decoding. Object structure, required fields, enums, list bounds, and numeric
+bounds remain server-constrained; the complete Pydantic model is validated after
+decoding. A bounded correction turn receives the actual validation error. The only
+local syntax repair allowed is restoring a missing top-level opening `{` when the
+remaining response is already one complete parseable object; no field or value is
+inferred.
 
 ### 3. Investigation ReAct
 

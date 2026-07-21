@@ -130,6 +130,14 @@ JSON Schema 通过。128 output token 会在 Thinking 中截断 native tool call
 正确 `tool_calls`，因此门禁预算不得误设为 128。开启 `raw_logprobs` 后能返回生成 token IDs，
 但标准 logprobs 仍为空；LMDeploy 当前只冻结为普通 Agent serving，不冒充 RL rollout worker。
 
+2026-07-21 第二轮实测改为物理 GPU 4、5 的 TP=2，`session_len=131072`，单并发，并已接受
+40,026-token 请求。Queen Planning 的失败并非 8k 输出不足：完整 Pydantic JSON Schema 使
+LMDeploy 0.13 guided decoding 在未闭合对象后持续生成空白。隔离矩阵确认，Planning 输入排除
+最终 Judgment 的 `required_output/stop_policy`，且 wire schema 只去掉 LMDeploy 明确不支持的
+字符串长度、pattern 和 format 约束后，请求约 25 秒、1.5k output token 正常停止，并保留事件、
+实际交通方式和路线等开放调查方向。数组长度、枚举、数字范围和对象结构继续在服务端约束，
+客户端仍以完整 Pydantic schema 严格校验；失败纠正携带具体校验原因，不增加 Queen 专用规则。
+
 ## 7. 数据与上下文
 
 训练集只能来自通过 schema、provenance、图像资产、阶段归属、loss mask、去重和泄漏审计的

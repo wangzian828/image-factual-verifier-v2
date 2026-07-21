@@ -724,7 +724,14 @@ def render_image_account_planning_context(
             perception_payload = dict(perception)
     return json.dumps(
         {
-            "brief": state.brief.model_dump(mode="json"),
+            # Planning needs public case/media identity, not the final
+            # Judgment contract. ``required_output`` and ``stop_policy``
+            # describe later stages and can be mistaken for Planning fields.
+            "case": {
+                "case_id": state.brief.case_id,
+                "input_mode": state.brief.input_mode,
+                "media_type": state.brief.media_type,
+            },
             "perception": {
                 "scene_description": perception_payload.get(
                     "scene_description",
