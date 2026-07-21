@@ -120,6 +120,12 @@ Multi-step correction chains retain every parent link. Strict audit accepts a
 rejection only when that chain reaches a valid same-stage output; an unrelated
 later request cannot erase it.
 
+A duplicate native call receives the exact rejected tool name and normalized
+arguments so the model can change the call instead of guessing what collided. If
+the bounded correction budget ends, the final segment-boundary request exposes no
+tools and uses the stage JSON schema; tool calls cannot leak into a response that
+the runtime will parse as structured output.
+
 Qwen3.5 semantic stages use its official non-greedy sampling profile. Planning has
 `thinking_token_budget=1024`; Discrepancy Decision and Judgment use 2,048, and
 Reflection uses 1,536. The hard reasoning budget is separate from `max_tokens`.

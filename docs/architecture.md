@@ -171,6 +171,13 @@ and absence of post-verdict actions. For Qwen, protocol-correction ancestry uses
 durable context request IDs rather than invented provider Interaction IDs, including
 multi-hop retries.
 
+Local student profiles also own their serving endpoint instead of inheriting the
+shared legacy `QWEN_LOCAL_BASE_URL`. `student-qwen3-vl-local` defaults to port 8899;
+`student-qwen3.5-local` defaults to port 8901 and may be overridden only by its
+profile-scoped `QWEN35_LOCAL_BASE_URL`; its model override is likewise isolated as
+`QWEN35_LOCAL_MODEL`. The same resolved endpoint and model are passed to the policy
+backend and every visual tool, preventing split-brain text/vision routing.
+
 `ifv-policy-v2` exports Image Account Planning, v4 ReAct, Discrepancy Decision, and
 v4 Judgment. Training eligibility requires classification correctness, complete
 directionally consistent Evidence chains, discrepancy alignment, stop quality, and

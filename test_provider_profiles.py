@@ -19,7 +19,9 @@ def test_teacher_profile_is_fixed_to_accepted_gemini_wire() -> None:
 def test_local_student_profile_uses_qwen_without_gemini_fallback() -> None:
     settings = resolve_provider_settings(
         profile_id="student-qwen3-vl-local",
-        environ={"QWEN_LOCAL_MODEL": "ifv-qwen3-vl-8b-thinking-smoke"},
+        environ={
+            "QWEN3_VL_LOCAL_MODEL": "ifv-qwen3-vl-8b-thinking-smoke"
+        },
     )
     backend = APIBackend(
         provider=settings.provider,
@@ -33,18 +35,37 @@ def test_local_student_profile_uses_qwen_without_gemini_fallback() -> None:
     assert backend.provider == "qwen_local"
     assert backend.base_url == "http://127.0.0.1:8899/v1"
     assert backend.wire_api == "chat_completions"
+    assert settings.base_url == "http://127.0.0.1:8899/v1"
+    assert settings.vlm_base_url == settings.base_url
 
 
 def test_qwen35_local_profile_uses_one_multimodal_model() -> None:
     settings = resolve_provider_settings(
         profile_id="student-qwen3.5-local",
-        environ={"QWEN_LOCAL_MODEL": "ifv-qwen3.5-9b-vllm"},
+        environ={"QWEN35_LOCAL_MODEL": "ifv-qwen3.5-9b-vllm"},
     )
 
     assert settings.provider == "qwen_local"
     assert settings.vlm_provider == "qwen_local"
     assert settings.model_name == "ifv-qwen3.5-9b-vllm"
     assert settings.vlm_model == "ifv-qwen3.5-9b-vllm"
+    assert settings.base_url == "http://127.0.0.1:8901/v1"
+    assert settings.vlm_base_url == settings.base_url
+
+
+def test_qwen35_profile_endpoint_override_is_profile_scoped() -> None:
+    settings = resolve_provider_settings(
+        profile_id="student-qwen3.5-local",
+        environ={
+            "QWEN_LOCAL_BASE_URL": "http://127.0.0.1:8899/v1",
+            "QWEN_LOCAL_MODEL": "wrong-shared-model",
+            "QWEN35_LOCAL_BASE_URL": "http://127.0.0.1:9001/v1",
+            "QWEN35_LOCAL_MODEL": "ifv-qwen3.5-9b-profile",
+        },
+    )
+
+    assert settings.base_url == "http://127.0.0.1:9001/v1"
+    assert settings.model_name == "ifv-qwen3.5-9b-profile"
 
 
 def test_backend_exposes_bounded_interaction_retry_configuration() -> None:

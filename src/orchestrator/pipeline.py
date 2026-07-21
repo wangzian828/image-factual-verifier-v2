@@ -130,6 +130,8 @@ class Orchestrator:
         vlm_model: Optional[str] = None,
         llm_wire_api: Optional[str] = None,
         vlm_wire_api: Optional[str] = None,
+        llm_base_url: Optional[str] = None,
+        vlm_base_url: Optional[str] = None,
         timeout: float = 1800.0,
         temperature: float = 0.0,
         max_tokens: int = 8192,
@@ -140,6 +142,8 @@ class Orchestrator:
         self.model_name = model_name
         self.vlm_provider = (vlm_provider or self.provider).lower().strip()
         self.vlm_model = vlm_model or model_name
+        self.llm_base_url = llm_base_url
+        self.vlm_base_url = vlm_base_url
         self.llm_wire_api = llm_wire_api or os.getenv("AGENT_LLM_WIRE_API")
         if self.llm_wire_api is None and self.provider == "gemini":
             self.llm_wire_api = os.getenv("GEMINI_WIRE_API")
@@ -204,6 +208,7 @@ class Orchestrator:
         self.llm = APIBackend(
             provider=self.provider,
             model_name=model_name,
+            base_url=self.llm_base_url,
             wire_api=self.llm_wire_api,
             temperature=temperature,
             max_tokens=max_tokens,
@@ -224,6 +229,7 @@ class Orchestrator:
             vlm_provider=self.vlm_provider,
             vlm_model=self.vlm_model,
             vlm_wire_api=self.vlm_wire_api,
+            vlm_base_url=self.vlm_base_url,
         )
         for tool in self.all_tools.values():
             setter = getattr(tool, "set_source_access_policy", None)

@@ -486,15 +486,26 @@ class StageRunner:
                         continue
                     break
                 if self._has_duplicate_tool_call(steps, tool_name, step.tool_args):
+                    duplicate_message = self._duplicate_tool_message(
+                        tool_name,
+                        step.tool_args,
+                    )
                     step.action_type = "format_error"
                     step.metadata["error_class"] = "protocol_error"
                     step.metadata["duplicate_tool_call"] = True
+                    step.metadata["rejection_reason"] = duplicate_message
+                    step.tool_result = json.dumps(
+                        {"status": "error", "error": duplicate_message},
+                        ensure_ascii=False,
+                    )
                     steps.append(step)
                     history.append({"role": "assistant", "content": content})
-                    history.append({"role": "user", "content": self._duplicate_tool_message(tool_name)})
+                    history.append(
+                        {"role": "user", "content": duplicate_message}
+                    )
                     if request_chat_protocol_correction(
                         step,
-                        f"duplicate {tool_name} route",
+                        duplicate_message,
                     ):
                         continue
                     break
@@ -1067,7 +1078,10 @@ class StageRunner:
                             step.metadata["invalid_tool_arguments"] = True
                             step.metadata["error_class"] = "protocol_error"
                     if not error_message and self._has_duplicate_tool_call(steps, tool_name, prepared_args):
-                        error_message = self._duplicate_tool_message(tool_name)
+                        error_message = self._duplicate_tool_message(
+                            tool_name,
+                            prepared_args,
+                        )
                         step.metadata["duplicate_tool_call"] = True
                         step.metadata["error_class"] = "protocol_error"
                     elif not error_message and self._tool_budget_reached(steps, tool_name):
@@ -2588,6 +2602,7 @@ class StageRunner:
         generation_config: Optional[Dict[str, Any]] = None,
         lifecycle_kind: str = "",
         parent_context_request_id: str = "",
+        suppress_tools: bool = False,
     ) -> Tuple[LLMResponse, Dict[str, Any]]:
         started = time.perf_counter()
         self.llm_api_calls += 1
@@ -2608,7 +2623,7 @@ class StageRunner:
             )
         response_format: Optional[Dict[str, Any]] = None
         if self._uses_native_chat_completions():
-            if self.tools_list:
+            if self.tools_list and not suppress_tools:
                 request_kwargs["tools"] = self._build_native_tool_schemas()
                 request_kwargs["tool_choice"] = (
                     "required" if require_tool else "auto"
@@ -3585,6 +3600,7 @@ class StageRunner:
             generation_config=self.final_output_generation_config,
             lifecycle_kind=lifecycle_kind,
             parent_context_request_id=parent_context_request_id,
+            suppress_tools=True,
         )
         metadata = {
             "forced_output": True,
@@ -3677,9 +3693,24 @@ class StageRunner:
         available = ", ".join(self.tools.keys()) if self.tools else "(none)"
         return f"Tool '{tool_name}' is not available in this stage. Available tools: {available}"
 
-    @staticmethod
-    def _duplicate_tool_message(tool_name: str) -> str:
-        return f"You already called '{tool_name}' with essentially the same target. Choose a meaningfully different next step."
+    def _duplicate_tool_message(
+        self,
+        tool_name: str,
+        tool_args: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        rejected_call = json.dumps(
+            {
+                "tool": tool_name,
+                "arguments": self._normalize_tool_args(tool_args or {}),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        return (
+            "The runtime rejected this duplicate call: "
+            f"{rejected_call}. Do not repeat it in this correction chain. "
+            "Use a different available tool or materially different arguments."
+        )
 
     def _tool_budget_message(self, tool_name: str) -> str:
         return f"Tool budget for '{tool_name}' is exhausted. Use another tool or finalize the output."

@@ -51,6 +51,7 @@ def build_all_tools_with_health(
     vlm_provider: str = "gemini",
     vlm_model: str = "gemini-3.5-flash",
     vlm_wire_api: Optional[str] = None,
+    vlm_base_url: Optional[str] = None,
 ) -> Tuple[Dict[str, BaseTool], Dict[str, ToolHealth]]:
     tools: Dict[str, BaseTool] = {}
     health: Dict[str, ToolHealth] = {}
@@ -66,6 +67,7 @@ def build_all_tools_with_health(
     vlm_backend = APIBackend(
         provider=vlm_provider,
         model_name=vlm_model,
+        base_url=vlm_base_url,
         wire_api=vlm_wire_api,
         temperature=0.0,
         max_tokens=4096,
@@ -78,6 +80,7 @@ def build_all_tools_with_health(
             provider=vlm_provider,
             model_name=vlm_model,
             wire_api=vlm_wire_api,
+            base_url=vlm_base_url,
             timeout=request_timeout,
             max_retries=request_max_retries,
         )

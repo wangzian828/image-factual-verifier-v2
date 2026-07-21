@@ -36,6 +36,11 @@ green; real-provider target fidelity remains unmeasured.
 - A rejected output is recoverable only when an explicit same-stage correction
   chain reaches an accepted output. Provider-specific IDs must not be fabricated;
   local Chat Completions uses context request IDs and parent request IDs.
+- A provider profile must bind one endpoint for both policy and vision. Falling back
+  to a shared legacy local URL can fail before Planning or silently split the model
+  roles across services.
+- A forced structured boundary must not advertise tools. Exact rejected arguments
+  are more useful correction feedback than a generic duplicate warning.
 
 ## Open questions
 

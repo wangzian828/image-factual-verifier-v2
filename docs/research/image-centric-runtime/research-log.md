@@ -10,6 +10,11 @@
   auditor required Gemini Interaction ancestry. The locked repair records Qwen
   request lifecycle and parent request IDs, then audits correction chains
   transitively without relaxing semantic validators.
+- The first post-fix launch exposed an old 8899 fallback while Qwen3.5 served on
+  8901. After an explicit endpoint launch, a second run reached 14 actions but a
+  duplicate-call correction loop ended in a tool-bearing forced-output request.
+  The next locked repair makes endpoints profile-owned, returns exact duplicate
+  arguments, and suppresses tools on the schema-bound final boundary.
 
 ## 2026-07-17 — bootstrap
 

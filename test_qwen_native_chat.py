@@ -233,9 +233,54 @@ def test_qwen_protocol_correction_does_not_consume_action_round() -> None:
     assert steps[1].metadata["react_action_turn"] == 1
     assert tool.calls == [{"query": "new route"}]
     assert len(backend.requests) == 2
-    assert "meaningfully different" in (
-        backend.requests[1]["messages"][-1]["content"]
+    correction = backend.requests[1]["messages"][-1]["content"]
+    assert "materially different" in correction
+    assert "already attempted" in correction
+    assert steps[0].metadata["rejection_reason"] == correction
+
+
+def test_qwen_forced_tool_stage_boundary_hides_tools() -> None:
+    backend = QwenFakeBackend(
+        [
+            _tool_response(
+                query="already attempted",
+                call_id="call-duplicate",
+                question_id="task-1",
+            ),
+            _output_response(),
+        ]
     )
+    prior = StageStep(
+        action_type="tool_call",
+        tool_name="lookup_fact",
+        tool_args={
+            "query": "already attempted",
+            "__question_id": "task-1",
+        },
+    )
+    runner = StageRunner(
+        llm=backend,
+        system_prompt="Investigate the relevant fact.",
+        tools=[LookupTool()],
+        output_schema=AnswerOutput,
+        max_rounds=1,
+        max_protocol_corrections=0,
+        force_tool_each_round=True,
+        prior_steps=[prior],
+        stage_name="verification",
+        question_claims={"task-1": "Verify the transport."},
+        attach_image=False,
+    )
+
+    parsed, steps = asyncio.run(runner.run("Find a new route."))
+
+    assert parsed == AnswerOutput(answer="ceremonial coach")
+    assert [step.action_type for step in steps] == [
+        "format_error",
+        "output",
+    ]
+    assert "tools" not in backend.requests[1]
+    assert backend.requests[1]["response_format"]["type"] == "json_schema"
 
 
 def test_runtime_constrained_optional_tool_selector_becomes_required() -> None:
@@ -465,6 +510,8 @@ def test_qwen_forced_structured_retry_does_not_force_terminal_answer(
     assert "last validation attempt" in forced_prompt
     assert "continue is required while a high-salience route is open" in forced_prompt
     assert "no more tool turns" not in forced_prompt.lower()
+    assert "tools" not in backend.requests[1]
+    assert backend.requests[1]["response_format"]["type"] == "json_schema"
     assert steps[-1].metadata["interaction_lifecycle_kind"] == (
         "protocol_correction"
     )

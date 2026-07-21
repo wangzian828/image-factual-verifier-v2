@@ -50,6 +50,8 @@ class WorkflowConfig:
     vlm_model: Optional[str] = None  # Defaults to model_name
     llm_wire_api: Optional[str] = None
     vlm_wire_api: Optional[str] = None
+    llm_base_url: Optional[str] = field(default=None, init=False)
+    vlm_base_url: Optional[str] = field(default=None, init=False)
     temperature: float = 0.0
     max_tokens: int = 8192
 
@@ -79,6 +81,8 @@ class WorkflowConfig:
         self.vlm_model = resolved.vlm_model
         self.llm_wire_api = resolved.llm_wire_api
         self.vlm_wire_api = resolved.vlm_wire_api
+        self.llm_base_url = resolved.base_url
+        self.vlm_base_url = resolved.vlm_base_url
 
 
 class VerificationWorkflow:
@@ -98,6 +102,8 @@ class VerificationWorkflow:
                 vlm_model=self.config.vlm_model,
                 llm_wire_api=self.config.llm_wire_api,
                 vlm_wire_api=self.config.vlm_wire_api,
+                llm_base_url=self.config.llm_base_url,
+                vlm_base_url=self.config.vlm_base_url,
                 timeout=self.config.timeout,
                 temperature=self.config.temperature,
                 max_tokens=self.config.max_tokens,

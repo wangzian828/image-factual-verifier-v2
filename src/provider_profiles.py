@@ -17,6 +17,8 @@ class ProviderProfile:
     vlm_model_env: Optional[str] = None
     llm_wire_api: str = "chat_completions"
     vlm_wire_api: str = "chat_completions"
+    default_base_url: Optional[str] = None
+    base_url_env: Optional[str] = None
 
 @dataclass(frozen=True)
 class ResolvedProviderSettings:
@@ -27,6 +29,8 @@ class ResolvedProviderSettings:
     vlm_model: str
     llm_wire_api: Optional[str]
     vlm_wire_api: Optional[str]
+    base_url: Optional[str]
+    vlm_base_url: Optional[str]
 
 PROVIDER_PROFILES = {
     "teacher-gemini": ProviderProfile(
@@ -43,19 +47,23 @@ PROVIDER_PROFILES = {
         profile_id="student-qwen3-vl-local",
         provider="qwen_local",
         default_model="ifv-qwen3-vl-8b-thinking",
-        model_env="QWEN_LOCAL_MODEL",
+        model_env="QWEN3_VL_LOCAL_MODEL",
         vlm_provider="qwen_local",
         llm_wire_api="chat_completions",
         vlm_wire_api="chat_completions",
+        default_base_url="http://127.0.0.1:8899/v1",
+        base_url_env="QWEN3_VL_LOCAL_BASE_URL",
     ),
     "student-qwen3.5-local": ProviderProfile(
         profile_id="student-qwen3.5-local",
         provider="qwen_local",
         default_model="ifv-qwen3.5-9b",
-        model_env="QWEN_LOCAL_MODEL",
+        model_env="QWEN35_LOCAL_MODEL",
         vlm_provider="qwen_local",
         llm_wire_api="chat_completions",
         vlm_wire_api="chat_completions",
+        default_base_url="http://127.0.0.1:8901/v1",
+        base_url_env="QWEN35_LOCAL_BASE_URL",
     ),
     "student-qwen-api": ProviderProfile(
         profile_id="student-qwen-api",
@@ -140,6 +148,11 @@ def resolve_provider_settings(
             vision=True,
             fallback=resolved_model,
         )
+        resolved_base_url = (
+            _clean(active_env.get(profile.base_url_env, ""))
+            if profile.base_url_env
+            else None
+        ) or _clean(profile.default_base_url)
         return ResolvedProviderSettings(
             profile_id=profile.profile_id,
             provider=profile.provider,
@@ -148,6 +161,8 @@ def resolve_provider_settings(
             vlm_model=resolved_vlm_model,
             llm_wire_api=profile.llm_wire_api,
             vlm_wire_api=profile.vlm_wire_api,
+            base_url=resolved_base_url,
+            vlm_base_url=resolved_base_url,
         )
 
     resolved_provider = _clean(provider) or "gemini"
@@ -160,4 +175,6 @@ def resolve_provider_settings(
         vlm_model=_clean(vlm_model) or resolved_model,
         llm_wire_api=_clean(llm_wire_api),
         vlm_wire_api=_clean(vlm_wire_api),
+        base_url=None,
+        vlm_base_url=None,
     )

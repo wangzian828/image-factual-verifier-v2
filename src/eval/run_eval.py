@@ -494,6 +494,8 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
             "model": config.model_name,
             "vlm_provider": config.vlm_provider,
             "vlm_model": config.vlm_model,
+            "base_url": config.llm_base_url,
+            "vlm_base_url": config.vlm_base_url,
             "llm_wire_api": config.llm_wire_api,
             "vlm_wire_api": config.vlm_wire_api,
             "timeout_seconds": args.timeout,
