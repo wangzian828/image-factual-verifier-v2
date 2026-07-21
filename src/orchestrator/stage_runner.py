@@ -2375,6 +2375,8 @@ class StageRunner:
             )
         try:
             request_kwargs: Dict[str, Any] = {}
+            if self.max_output_tokens is not None:
+                request_kwargs["max_tokens"] = self.max_output_tokens
             if self._uses_native_chat_completions():
                 if self.tools_list:
                     request_kwargs["tools"] = self._build_native_tool_schemas()

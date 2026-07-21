@@ -116,6 +116,7 @@ def test_qwen_native_function_round_trip_uses_tool_role() -> None:
         min_tool_calls=1,
         stage_name="planning",
         attach_image=False,
+        max_output_tokens=512,
     )
 
     parsed, steps = asyncio.run(runner.run("Find the actual transport."))
@@ -134,6 +135,8 @@ def test_qwen_native_function_round_trip_uses_tool_role() -> None:
     }
 
     first, second = backend.requests
+    assert first["max_tokens"] == 512
+    assert second["max_tokens"] == 512
     assert first["tool_choice"] == "required"
     assert first["tools"][0]["name"] == "lookup_fact"
     assert first["tools"][0]["parameters"]["additionalProperties"] is False
