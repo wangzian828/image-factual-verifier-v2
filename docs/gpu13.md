@@ -113,3 +113,5 @@ gpu-13 的 R580 驱动与 NCCL 2.27 默认 cuMem host 分配路径存在已实�
 vLLM 的 custom all-reduce 在本机预热时会返回 CUDA `invalid argument`，因此启动参数固定使用 `--disable-custom-all-reduce`，TP 通信统一走上述已验证的 NCCL 路径。
 
 Thinking checkpoint 的原始模板会在 prompt 末尾预填 `<think>`，但 vLLM 0.11.2 的 `qwen3` parser 只解析生成结果中同时存在的 `<think>...</think>`。启动器因此从 checkpoint 原始模板精确派生一份服务模板，仅去掉生成前的 `<think>` 预填，让模型自行生成起始标记；模板及 SHA256 写入服务 profile 目录。正文中出现思考或缺少独立 reasoning 字段都视为门禁失败。
+
+结构化输出固定设置 xgrammar 的 `disable_any_whitespace=true`。该 checkpoint 在允许任意 JSON 空白时会持续生成数千行空白直至 16384 token 长度上限；禁用 grammar 空白只约束序列化形式，不改变 Planning schema 或调查语义。

@@ -65,6 +65,7 @@ def test_locked_vllm_launcher_uses_native_qwen3_vl_protocol() -> None:
     assert "--reasoning-parser qwen3" in source
     assert '"reasoning_parser":"qwen3"' in source
     assert '"backend":"xgrammar"' in source
+    assert '"disable_any_whitespace":true' in source
     assert "--tool-call-parser qwen3_xml" in source
     assert '"image":1,"video":0' in source
     assert "--enable-tokenizer-info-endpoint" in source

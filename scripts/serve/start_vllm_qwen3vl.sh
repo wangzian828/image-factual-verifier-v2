@@ -84,7 +84,7 @@ args=(
   --max-num-seqs 4
   --max-num-batched-tokens 8192
   --reasoning-parser qwen3
-  --structured-outputs-config '{"backend":"xgrammar","reasoning_parser":"qwen3","disable_fallback":true}'
+  --structured-outputs-config '{"backend":"xgrammar","reasoning_parser":"qwen3","disable_fallback":true,"disable_any_whitespace":true}'
   --enable-auto-tool-choice
   --tool-call-parser qwen3_xml
   --limit-mm-per-prompt '{"image":1,"video":0}'
