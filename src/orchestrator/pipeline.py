@@ -456,9 +456,7 @@ class Orchestrator:
                 )
             ),
             max_output_tokens=self._stage_output_tokens("PLANNING", 8192),
-            generation_config={
-                "thinking_level": self._stage_thinking_level("PLANNING")
-            },
+            generation_config=self._stage_generation_config("PLANNING"),
         )
         parsed, steps = await runner.run(
             render_image_only_target_planning_context(investigation)
@@ -530,9 +528,7 @@ class Orchestrator:
                 )
             ),
             max_output_tokens=self._stage_output_tokens("PLANNING", 8192),
-            generation_config={
-                "thinking_level": self._stage_thinking_level("PLANNING")
-            },
+            generation_config=self._stage_generation_config("PLANNING"),
             request_timeout_seconds=self.stage_request_timeout_seconds,
         )
         parsed, steps = await runner.run(
@@ -793,9 +789,7 @@ class Orchestrator:
                     "VERIFICATION",
                     16384,
                 ),
-                generation_config={
-                    "thinking_level": self._stage_thinking_level("VERIFICATION")
-                },
+                generation_config=self._stage_generation_config("VERIFICATION"),
                 observation_callback=observation_callback,
                 question_claims=task_claims,
                 question_evidence_goals=task_evidence_goals,
@@ -1193,9 +1187,7 @@ class Orchestrator:
                 step.action_type == "tool_call" for step in steps
             ),
             max_output_tokens=self._stage_output_tokens("VERIFICATION", 16384),
-            generation_config={
-                "thinking_level": self._stage_thinking_level("VERIFICATION")
-            },
+            generation_config=self._stage_generation_config("VERIFICATION"),
             observation_callback=observation_callback,
             question_claims=self._discrepancy_task_claims(
                 investigation,
@@ -1302,11 +1294,7 @@ class Orchestrator:
                 "EVIDENCE_DECISION",
                 8192,
             ),
-            generation_config={
-                "thinking_level": self._stage_thinking_level(
-                    "EVIDENCE_DECISION"
-                )
-            },
+            generation_config=self._stage_generation_config("EVIDENCE_DECISION"),
             request_timeout_seconds=self.stage_request_timeout_seconds,
         )
         parsed, steps = await runner.run(
@@ -1532,9 +1520,7 @@ class Orchestrator:
                 )
             ),
             max_output_tokens=self._stage_output_tokens("VERIFICATION", 8192),
-            generation_config={
-                "thinking_level": self._stage_thinking_level("VERIFICATION")
-            },
+            generation_config=self._stage_generation_config("VERIFICATION"),
         )
         parsed, steps = await runner.run(
             render_image_only_evidence_decision_context(
@@ -1611,9 +1597,7 @@ class Orchestrator:
                 )
             ),
             max_output_tokens=self._stage_output_tokens("REFLECTION", 8192),
-            generation_config={
-                "thinking_level": self._stage_thinking_level("REFLECTION")
-            },
+            generation_config=self._stage_generation_config("REFLECTION"),
         )
         parsed, steps = await runner.run(
             render_image_only_reflection_context(
@@ -1729,11 +1713,9 @@ class Orchestrator:
                 "QUERY_CONCEPT_EXTRACTION",
                 2048,
             ),
-            generation_config={
-                "thinking_level": self._stage_thinking_level(
-                    "QUERY_CONCEPT_EXTRACTION"
-                )
-            },
+            generation_config=self._stage_generation_config(
+                "QUERY_CONCEPT_EXTRACTION"
+            ),
         )
         concept_extraction, concept_steps = await concept_runner.run(
             render_image_only_query_concept_extraction_context(
@@ -1776,9 +1758,7 @@ class Orchestrator:
                 )
             ),
             max_output_tokens=self._stage_output_tokens("QUERY_REPLAN", 2048),
-            generation_config={
-                "thinking_level": self._stage_thinking_level("QUERY_REPLAN")
-            },
+            generation_config=self._stage_generation_config("QUERY_REPLAN"),
         )
         parsed, steps = await runner.run(
             render_image_only_query_replan_context(
@@ -1842,9 +1822,7 @@ class Orchestrator:
                 )
             ),
             max_output_tokens=self._stage_output_tokens("JUDGMENT", 8192),
-            generation_config={
-                "thinking_level": self._stage_thinking_level("JUDGMENT")
-            },
+            generation_config=self._stage_generation_config("JUDGMENT"),
         )
         parsed, steps = await runner.run(
             render_image_only_judgment_context(
@@ -1889,9 +1867,7 @@ class Orchestrator:
                 )
             ),
             max_output_tokens=self._stage_output_tokens("JUDGMENT", 8192),
-            generation_config={
-                "thinking_level": self._stage_thinking_level("JUDGMENT")
-            },
+            generation_config=self._stage_generation_config("JUDGMENT"),
             request_timeout_seconds=self.stage_request_timeout_seconds,
         )
         parsed, steps = await runner.run(
@@ -2993,6 +2969,27 @@ class Orchestrator:
                 + "."
             )
         return value
+
+    def _stage_generation_config(self, stage_name: str) -> Dict[str, Any]:
+        """Map one stage's reasoning policy to the active serving protocol."""
+
+        normalized_stage = stage_name.strip().upper()
+        if self.provider in {"qwen_local", "lmdeploy"}:
+            # Current LMDeploy/Qwen3-VL exposes a binary template switch but no
+            # bounded thinking budget. Planning defaults off as an isolation
+            # setting; later stages retain reasoning and every stage can be
+            # overridden independently for quality experiments.
+            default = "false" if normalized_stage == "PLANNING" else "true"
+            raw = os.getenv(
+                f"QWEN_{normalized_stage}_ENABLE_THINKING",
+                default,
+            ).strip().lower()
+            if raw not in {"true", "false"}:
+                raise ValueError(
+                    f"QWEN_{normalized_stage}_ENABLE_THINKING must be true or false."
+                )
+            return {"enable_thinking": raw == "true"}
+        return {"thinking_level": self._stage_thinking_level(normalized_stage)}
 
     async def _execute_tool(self, tool_name: str, args: Dict[str, Any], image_path: str) -> tuple[str, Dict[str, Any]]:
         tool = self.all_tools[tool_name]

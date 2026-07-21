@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from src.orchestrator.llm_backend import APIBackend
+from src.orchestrator.pipeline import Orchestrator
 from src.provider_profiles import resolve_provider_settings
 from src.workflow import WorkflowConfig
 
@@ -62,3 +63,22 @@ def test_loose_default_remains_gemini() -> None:
     assert config.profile_id is None
     assert config.provider == "gemini"
     assert config.model_name == "gemini-3.5-flash"
+
+
+def test_local_qwen_planning_reasoning_is_stage_scoped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    orchestrator = Orchestrator.__new__(Orchestrator)
+    orchestrator.provider = "qwen_local"
+
+    assert orchestrator._stage_generation_config("PLANNING") == {
+        "enable_thinking": False
+    }
+    assert orchestrator._stage_generation_config("JUDGMENT") == {
+        "enable_thinking": True
+    }
+
+    monkeypatch.setenv("QWEN_PLANNING_ENABLE_THINKING", "true")
+    assert orchestrator._stage_generation_config("PLANNING") == {
+        "enable_thinking": True
+    }

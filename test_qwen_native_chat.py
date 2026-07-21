@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List
 
+import httpx
 from pydantic import BaseModel
 
 from src.orchestrator.llm_backend import APIBackend, LLMResponse
@@ -175,6 +176,7 @@ def test_qwen_no_tool_stage_uses_json_schema_and_redacts_image(
         image_path=str(image_path),
         stage_name="image_account_planning",
         attach_image=True,
+        generation_config={"enable_thinking": False},
     )
 
     parsed, steps = asyncio.run(runner.run("Inspect the image."))
@@ -183,6 +185,7 @@ def test_qwen_no_tool_stage_uses_json_schema_and_redacts_image(
     request = backend.requests[0]
     assert request["response_format"]["type"] == "json_schema"
     assert request["response_format"]["json_schema"]["strict"] is True
+    assert request["generation_config"] == {"enable_thinking": False}
     assert "answer" in request["response_format"]["json_schema"]["schema"][
         "properties"
     ]
@@ -194,6 +197,43 @@ def test_qwen_no_tool_stage_uses_json_schema_and_redacts_image(
         "runtime_image": True,
     }
     assert "data:image/" not in json.dumps(snapshot)
+
+
+def test_local_qwen_forwards_stage_thinking_switch_to_lmdeploy() -> None:
+    captured: Dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content.decode("utf-8")))
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": '{"answer":"ok"}'}}],
+                "usage": {"prompt_tokens": 3, "completion_tokens": 2},
+            },
+        )
+
+    async def run() -> None:
+        backend = APIBackend(
+            provider="qwen_local",
+            model_name="ifv-qwen3-vl-8b-thinking-smoke",
+            max_retries=0,
+        )
+        backend._shared_client = httpx.AsyncClient(
+            transport=httpx.MockTransport(handler),
+        )
+        try:
+            response = await backend.get_response(
+                [{"role": "user", "content": "Return JSON."}],
+                response_format={"type": "json_object"},
+                generation_config={"enable_thinking": False},
+            )
+        finally:
+            await backend.aclose()
+        assert response.text == '{"answer":"ok"}'
+
+    asyncio.run(run())
+
+    assert captured["chat_template_kwargs"] == {"enable_thinking": False}
 
 
 def test_qwen_native_tool_call_wins_over_reasoning_and_blank_content() -> None:

@@ -423,6 +423,21 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
         "GEMINI_VERIFICATION_FINAL_THINKING_LEVEL",
         stage_thinking_levels["verification"],
     ).strip().lower()
+    qwen_stage_thinking = {
+        stage.lower(): os.getenv(
+            f"QWEN_{stage}_ENABLE_THINKING",
+            "false" if stage == "PLANNING" else "true",
+        ).strip().lower()
+        for stage in (
+            "PLANNING",
+            "VERIFICATION",
+            "EVIDENCE_DECISION",
+            "REFLECTION",
+            "QUERY_CONCEPT_EXTRACTION",
+            "QUERY_REPLAN",
+            "JUDGMENT",
+        )
+    }
     explicit_policy = (
         SourceAccessPolicy.load(args.source_access_policy)
         if args.source_access_policy
@@ -483,6 +498,7 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
                 verification_final_thinking_level
             ),
             "stage_thinking_levels": stage_thinking_levels,
+            "qwen_stage_enable_thinking": qwen_stage_thinking,
             "concurrency": max(1, args.concurrency),
         },
         "source_access_policy": {

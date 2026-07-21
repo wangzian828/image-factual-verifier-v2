@@ -2363,6 +2363,21 @@ class StageRunner:
     ) -> Tuple[LLMResponse, Dict[str, Any]]:
         started = time.perf_counter()
         self.llm_api_calls += 1
+        request_kwargs: Dict[str, Any] = {}
+        if self.max_output_tokens is not None:
+            request_kwargs["max_tokens"] = self.max_output_tokens
+        if self.generation_config:
+            request_kwargs["generation_config"] = dict(self.generation_config)
+        response_format: Optional[Dict[str, Any]] = None
+        if self._uses_native_chat_completions():
+            if self.tools_list:
+                request_kwargs["tools"] = self._build_native_tool_schemas()
+                request_kwargs["tool_choice"] = (
+                    "required" if require_tool else "auto"
+                )
+            elif self.output_schema is not None:
+                response_format = self._openai_response_format()
+                request_kwargs["response_format"] = response_format
         request_id = ""
         if self.runtime_store is not None:
             request_id = self.runtime_store.context_ledger.begin_request(
@@ -2370,23 +2385,13 @@ class StageRunner:
                 lifecycle_kind="standalone_request",
                 system_instruction="",
                 input_payload=messages,
+                tools=request_kwargs.get("tools"),
+                response_format=response_format,
+                generation_config=request_kwargs.get("generation_config"),
                 model=str(getattr(self.llm, "model_name", "")),
                 prompt_version=self.prompt_version,
             )
         try:
-            request_kwargs: Dict[str, Any] = {}
-            if self.max_output_tokens is not None:
-                request_kwargs["max_tokens"] = self.max_output_tokens
-            if self._uses_native_chat_completions():
-                if self.tools_list:
-                    request_kwargs["tools"] = self._build_native_tool_schemas()
-                    request_kwargs["tool_choice"] = (
-                        "required" if require_tool else "auto"
-                    )
-                elif self.output_schema is not None:
-                    request_kwargs["response_format"] = (
-                        self._openai_response_format()
-                    )
             response = await asyncio.wait_for(
                 self.llm.get_response(messages, **request_kwargs),
                 timeout=self.request_timeout_seconds,

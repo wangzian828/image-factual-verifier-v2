@@ -203,6 +203,7 @@ class APIBackend(LLMBackend):
         response_format = kwargs.get("response_format")
         if response_format:
             body["response_format"] = response_format
+        generation_config = kwargs.get("generation_config")
 
         # For models with internal reasoning (gpt-5.5, o1), give enough space
         # for both reasoning and content output.
@@ -212,6 +213,25 @@ class APIBackend(LLMBackend):
         # Merge extra_body (e.g., chat_template_kwargs for GPUStack)
         if self.extra_body:
             body.update(self.extra_body)
+
+        # LMDeploy exposes Qwen's thinking switch through the chat template,
+        # not as an OpenAI top-level generation field. Keep this local so other
+        # OpenAI-compatible providers never receive an unsupported parameter.
+        if (
+            self.provider in {"qwen_local", "lmdeploy"}
+            and isinstance(generation_config, dict)
+            and "enable_thinking" in generation_config
+        ):
+            template_kwargs = body.get("chat_template_kwargs", {})
+            template_kwargs = (
+                dict(template_kwargs)
+                if isinstance(template_kwargs, dict)
+                else {}
+            )
+            template_kwargs["enable_thinking"] = bool(
+                generation_config["enable_thinking"]
+            )
+            body["chat_template_kwargs"] = template_kwargs
 
         last_error: Optional[Exception] = None
         attempts = self.max_retries + 1
