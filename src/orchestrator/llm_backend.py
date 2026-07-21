@@ -281,7 +281,7 @@ class APIBackend(LLMBackend):
                     import asyncio
                     await asyncio.sleep(2 * (attempt + 1))
                     continue
-                raise
+                raise RuntimeError(self._http_status_error_detail(e)) from e
             except Exception as e:
                 # Catch SSL errors and other transient network issues
                 if "SSL" in str(type(e).__name__) or "ssl" in str(e).lower():
@@ -293,6 +293,23 @@ class APIBackend(LLMBackend):
                 raise
 
         raise last_error or RuntimeError("All retries exhausted")
+
+    @staticmethod
+    def _http_status_error_detail(error: httpx.HTTPStatusError) -> str:
+        """Preserve a bounded provider error body for durable diagnostics."""
+
+        response = error.response
+        try:
+            detail = response.text.strip()
+        except Exception:
+            detail = ""
+        if len(detail) > 4000:
+            detail = detail[:4000] + "... [truncated]"
+        suffix = f": {detail}" if detail else ""
+        return (
+            f"HTTP {response.status_code} {response.reason_phrase} for "
+            f"{response.request.url}{suffix}"
+        )
 
     @staticmethod
     def _openai_tool_schemas(

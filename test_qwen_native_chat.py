@@ -418,3 +418,34 @@ def test_qwen_reasoning_fallback_is_limited_to_schema_bound_requests() -> None:
         choice,
         allow_reasoning_fallback=True,
     ) == '{"answer":"coach"}'
+
+
+def test_qwen_http_error_preserves_bounded_provider_detail() -> None:
+    async def run() -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                400,
+                request=request,
+                json={"error": {"message": "invalid generated tool call"}},
+            )
+
+        backend = APIBackend(
+            provider="qwen_local",
+            model_name="ifv-qwen3-vl-8b-thinking-smoke",
+            max_retries=0,
+        )
+        backend._shared_client = httpx.AsyncClient(
+            transport=httpx.MockTransport(handler),
+        )
+        try:
+            with pytest.raises(RuntimeError, match="invalid generated tool call"):
+                await backend.get_response(
+                    [{"role": "user", "content": "Use one tool."}],
+                    tools=[LookupTool().schema],
+                )
+        finally:
+            await backend.aclose()
+
+    import pytest
+
+    asyncio.run(run())

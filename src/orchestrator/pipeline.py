@@ -2981,11 +2981,25 @@ class Orchestrator:
 
         normalized_stage = stage_name.strip().upper()
         if self.provider in {"qwen_local", "lmdeploy"}:
-            # Current LMDeploy/Qwen3-VL exposes a binary template switch but no
-            # bounded thinking budget. Planning defaults off as an isolation
-            # setting; later stages retain reasoning and every stage can be
-            # overridden independently for quality experiments.
-            default = "false" if normalized_stage == "PLANNING" else "true"
+            # Qwen3.5 uses one checkpoint for both thinking and direct-response
+            # modes. Keep deliberation at semantic checkpoints and use direct
+            # responses for frequent tool routing. Older Qwen3-VL behavior is
+            # retained only for its explicit diagnostic profile.
+            qwen35 = "qwen3.5" in str(
+                getattr(self, "model_name", "")
+            ).lower()
+            if qwen35:
+                thinking_stages = {
+                    "PLANNING",
+                    "EVIDENCE_DECISION",
+                    "REFLECTION",
+                    "JUDGMENT",
+                }
+                default = (
+                    "true" if normalized_stage in thinking_stages else "false"
+                )
+            else:
+                default = "false" if normalized_stage == "PLANNING" else "true"
             raw = os.getenv(
                 f"QWEN_{normalized_stage}_ENABLE_THINKING",
                 default,

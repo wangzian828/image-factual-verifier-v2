@@ -48,6 +48,15 @@ PROVIDER_PROFILES = {
         llm_wire_api="chat_completions",
         vlm_wire_api="chat_completions",
     ),
+    "student-qwen3.5-local": ProviderProfile(
+        profile_id="student-qwen3.5-local",
+        provider="qwen_local",
+        default_model="ifv-qwen3.5-9b",
+        model_env="QWEN_LOCAL_MODEL",
+        vlm_provider="qwen_local",
+        llm_wire_api="chat_completions",
+        vlm_wire_api="chat_completions",
+    ),
     "student-qwen-api": ProviderProfile(
         profile_id="student-qwen-api",
         provider="qwen",

@@ -1,4 +1,8 @@
-# Qwen3-VL-8B-Thinking 部署与训练设施统一执行计划
+# Qwen3-VL-8B-Thinking 部署与训练设施统一执行计划（已被取代）
+
+> 2026-07-21 更新：本计划已由
+> `2026-07-21-qwen3.5-9b-runtime-evaluation-and-training-plan.md` 取代。
+> 本文只保留 Qwen3-VL 的历史实测记录，不再指导正式 20 例或训练部署。
 
 日期：2026-07-21  
 状态：执行中，随 gpu-13 实测动态维护  
