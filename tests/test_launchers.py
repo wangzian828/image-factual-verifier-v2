@@ -43,7 +43,7 @@ def test_rl_stack_is_pinned_and_isolated_from_serving() -> None:
     assert "IFV_RL_FRAMEWORK=ms_swift_grpo" in profile
     assert "IFV_MS_SWIFT_VERSION=4.4.2" in profile
     assert "IFV_ENABLE_THINKING=false" in profile
-    assert "vllm==0.17.1" in requirements
+    assert "vllm==0.22.1" in requirements
 
 
 def test_serving_launcher_uses_qwen3_vl_lmdeploy_protocol() -> None:
@@ -212,7 +212,7 @@ def test_qwen35_training_bootstrap_is_fresh_pinned_and_isolated() -> None:
     assert "cuda-nvcc=12.8.93" in source
     assert "refusing to modify an existing environment" in source
     assert "ifv-qwen35-sft-ms-swift442" in source
-    assert "ifv-qwen35-rl-ms-swift442-vllm0171" in source
+    assert "ifv-qwen35-rl-ms-swift442-vllm0221" in source
     assert "pip freeze --all" in source
     assert "get_model_processor" in source
     assert 'enable_thinking=False' in source
@@ -220,4 +220,4 @@ def test_qwen35_training_bootstrap_is_fresh_pinned_and_isolated() -> None:
     assert "transformers==5.12.1" in sft
     assert "flash-linear-attention==0.5.1" in sft
     assert "causal-conv1d==1.6.2.post1" in sft
-    assert "vllm==0.17.1" in rl
+    assert "vllm==0.22.1" in rl

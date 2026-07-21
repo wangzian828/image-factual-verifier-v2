@@ -115,7 +115,7 @@ bash scripts/server/bootstrap_qwen35_training_gpu13.sh rl
 
 ```text
 /gsdata/home/wza/conda/envs/ifv-qwen35-sft-ms-swift442
-/gsdata/home/wza/conda/envs/ifv-qwen35-rl-ms-swift442-vllm0171
+/gsdata/home/wza/conda/envs/ifv-qwen35-rl-ms-swift442-vllm0221
 ```
 
 每个任务只使用物理 GPU `4,5,6,7` 中当时空闲的卡，最多四张；不终止其他用户进程。所有数据、checkpoint、rollout、环境清单与日志写入 `/gsdata`，不写入 Git checkout。

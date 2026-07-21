@@ -5,7 +5,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 MODE="${1:-all}"
 CONDA="${IFV_CONDA_BIN:-/gs/home/wza/anaconda3/bin/conda}"
 SFT_PREFIX="${IFV_QWEN35_SFT_ENV_PREFIX:-/gsdata/home/wza/conda/envs/ifv-qwen35-sft-ms-swift442}"
-RL_PREFIX="${IFV_QWEN35_RL_ENV_PREFIX:-/gsdata/home/wza/conda/envs/ifv-qwen35-rl-ms-swift442-vllm0171}"
+RL_PREFIX="${IFV_QWEN35_RL_ENV_PREFIX:-/gsdata/home/wza/conda/envs/ifv-qwen35-rl-ms-swift442-vllm0221}"
 MODEL="${IFV_QWEN35_MODEL:-/gsdata/home/wza/models/Qwen3.5-9B}"
 ARTIFACT_ROOT="${IFV_TRAINING_DATA_ROOT:-/gsdata/home/wza/image-factual-verifier-v2-data/training}"
 
@@ -87,11 +87,11 @@ install_sft() {
 install_rl() {
   prepare_base "$RL_PREFIX"
   "$RL_PREFIX/bin/python" -m pip install \
-    torch==2.10.0 torchvision==0.25.0 torchaudio==2.10.0
+    torch==2.11.0 torchvision==0.26.0 torchaudio==2.11.0
   CUDA_HOME="$RL_PREFIX" "$RL_PREFIX/bin/python" -m pip install \
     --no-build-isolation --requirement "$REPO_ROOT/requirements/rl-qwen35.txt"
   "$RL_PREFIX/bin/python" -m pip install --no-deps --editable "$REPO_ROOT"
-  freeze_env "$RL_PREFIX" ifv-qwen35-rl-ms-swift442-vllm0171
+  freeze_env "$RL_PREFIX" ifv-qwen35-rl-ms-swift442-vllm0221
   "$RL_PREFIX/bin/swift" rlhf --help >/dev/null
   "$RL_PREFIX/bin/vllm" serve --help >/dev/null
   touch "$RL_PREFIX/.ifv-qwen35-rl-ready"
