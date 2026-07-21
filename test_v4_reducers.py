@@ -602,6 +602,47 @@ def test_refuted_high_salience_claim_cannot_be_downgraded_to_supporting() -> Non
 
     assert update["accepted"] is False
     assert "refuted high-salience ImageClaim" in update["rejected_reason"]
+    assert "verdict_proposal='fake'" in update["rejected_reason"]
+    assert "same atomic update" in update["rejected_reason"]
+    assert state.model_dump(mode="json") == before
+
+
+def test_established_high_discrepancy_requires_fake_in_same_object() -> None:
+    state = _planned_state()
+    evidence = _append_evidence(state)
+    claim = state.image_claims[0]
+    before = state.model_dump(mode="json")
+
+    update = apply_discrepancy_decision(
+        state,
+        DiscrepancyDecisionOutput(
+            claim_assessments=[
+                ClaimAssessmentProposal(
+                    claim_id=claim.claim_id,
+                    assessment="refuted",
+                    selected_evidence_ids=[evidence.evidence_id],
+                    rationale="The qualified evidence refutes the central claim.",
+                )
+            ],
+            material_discrepancy=MaterialDiscrepancyProposal(
+                statement="The source contradicts the central image relation.",
+                affected_claim_ids=[claim.claim_id],
+                visual_anchor_fact_ids=claim.anchor_fact_ids,
+                evidence_ids=[evidence.evidence_id],
+                materiality="decisive",
+                status="established",
+                rationale="The contradiction is decisive and fully grounded.",
+            ),
+            verdict_proposal="continue",
+            rationale="This intentionally omits the required terminal proposal.",
+        ),
+        reviewed_evidence_ids=[evidence.evidence_id],
+        trigger="qualified_evidence",
+    )
+
+    assert update["accepted"] is False
+    assert "verdict_proposal='fake'" in update["rejected_reason"]
+    assert "same complete JSON object" in update["rejected_reason"]
     assert state.model_dump(mode="json") == before
 
 

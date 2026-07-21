@@ -100,6 +100,8 @@ it also reports incompatible verdict/route preconditions instead of serially hid
 later errors behind the first failure. A final parseable JSON object rejected by
 either schema or semantic validation remains an `output_rejected` trace step with
 its exact fields and reason; it is not mislabeled as an empty format error.
+Coupled atomic consequences are reported together: refuting a high-salience Claim
+requires its decisive established discrepancy and `fake` proposal in the same JSON.
 
 A qualified refutation of one high-salience Claim is already decisive for `fake`.
 Another unresolved Claim does not lower that contradiction to supporting or require

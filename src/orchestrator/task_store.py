@@ -1211,6 +1211,18 @@ def _discrepancy_contract_errors(
         current_established_high_discrepancy
         or output_established_high_discrepancy
     )
+    refuted_high_claim_ids = [
+        claim_id
+        for claim_id, status in projected_high_status.items()
+        if status == "refuted"
+    ]
+    if refuted_high_claim_ids and not established_high_discrepancy:
+        errors.append(
+            "refuted high-salience ImageClaim requires a valid decisive "
+            "established discrepancy and verdict_proposal='fake' in the same "
+            "atomic update; affected high Claim IDs: "
+            + ", ".join(refuted_high_claim_ids)
+        )
     if output.verdict_proposal == "real" and (
         not high_claims
         or any(status != "supported" for status in projected_high_status.values())
@@ -1248,7 +1260,8 @@ def _discrepancy_contract_errors(
         )
     if established_high_discrepancy and output.verdict_proposal != "fake":
         errors.append(
-            "a valid established decisive high-salience discrepancy requires fake"
+            "a valid established decisive high-salience discrepancy requires "
+            "verdict_proposal='fake' in the same complete JSON object"
         )
 
     return list(dict.fromkeys(errors))
@@ -1792,7 +1805,8 @@ def apply_discrepancy_decision(
             "accepted": False,
             "rejected_reason": (
                 "a refuted high-salience ImageClaim requires a decisive "
-                "established discrepancy; fake verdict requires that record"
+                "established discrepancy and fake verdict in the same atomic "
+                "update"
             ),
         }
     if established_high_discrepancy and output.verdict_proposal != "fake":

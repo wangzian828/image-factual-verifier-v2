@@ -1,5 +1,18 @@
 # Image-Centric Runtime Research Log
 
+## 2026-07-22 — Monarch atomic Decision correction
+
+- `qwen35-monarch-querycap-eef68a0` confirmed that Planning now persists valid
+  hypotheses and derived text-search capability, then failed at its first sparse
+  Decision after two investigation actions.
+- The first response had several independent ownership/anchor errors. The second
+  correctly retained only the qualified high-Claim refutation but omitted the
+  required discrepancy; the final response added a valid decisive discrepancy yet
+  left `verdict_proposal=continue`.
+- The fixed retry count and all Evidence gates remain unchanged. Validator feedback
+  now states the coupled atomic consequence once: high-Claim refutation, decisive
+  established discrepancy, and `fake` belong in the same complete JSON object.
+
 ## 2026-07-22 — full-20 Planning contract failure
 
 - `qwen35-full20-e82bd88` completed three cases without engineering errors, then
