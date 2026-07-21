@@ -52,8 +52,9 @@ def test_hot_path_prompts_stay_semantic_and_compact() -> None:
     assert "validates grounding" in planning_prompt
     assert "do not own the verdict" in image_account_prompt
     assert "Separately create open SearchHypotheses" in image_account_prompt
-    assert "direct real-world propositions" in image_account_prompt
-    assert "not a meta-level Claim" in image_account_prompt
+    assert "central real-world assertions" in image_account_prompt
+    assert "not an inventory of visible details" in image_account_prompt
+    assert "truth can change the image verdict" in image_account_prompt
     assert "Image clues do not limit the search" in image_account_prompt
     assert "underlying facts" in image_account_prompt
     assert "unverified leads" in image_account_prompt

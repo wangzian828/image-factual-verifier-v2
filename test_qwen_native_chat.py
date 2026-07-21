@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 from src.orchestrator.llm_backend import APIBackend, LLMResponse
 from src.orchestrator.runtime_events import CaseRuntimeStore
-from src.orchestrator.stage_runner import StageRunner
+from src.orchestrator.stage_runner import StageRunner, StageStep
 from src.tools.base import BaseTool
 
 
@@ -55,7 +55,14 @@ class AnswerOutput(BaseModel):
     answer: str
 
 
-def _tool_response() -> LLMResponse:
+def _tool_response(
+    query: str = "actual transport",
+    call_id: str = "call-qwen-1",
+    question_id: str = "",
+) -> LLMResponse:
+    arguments = {"query": query}
+    if question_id:
+        arguments["question_id"] = question_id
     raw = {
         "choices": [
             {
@@ -64,13 +71,11 @@ def _tool_response() -> LLMResponse:
                     "content": None,
                     "tool_calls": [
                         {
-                            "id": "call-qwen-1",
+                            "id": call_id,
                             "type": "function",
                             "function": {
                                 "name": "lookup_fact",
-                                "arguments": json.dumps(
-                                    {"query": "actual transport"}
-                                ),
+                                "arguments": json.dumps(arguments),
                             },
                         }
                     ],
@@ -155,6 +160,66 @@ def test_qwen_native_function_round_trip_uses_tool_role() -> None:
     assert assistant["tool_calls"][0]["id"] == "call-qwen-1"
     assert tool_result["tool_call_id"] == "call-qwen-1"
     assert json.loads(tool_result["content"])["function_call_id"] == "call-qwen-1"
+
+
+def test_qwen_protocol_correction_does_not_consume_action_round() -> None:
+    backend = QwenFakeBackend(
+        [
+            _tool_response(
+                query="already attempted",
+                call_id="call-duplicate",
+                question_id="task-1",
+            ),
+            _tool_response(
+                query="new route",
+                call_id="call-corrected",
+                question_id="task-1",
+            ),
+        ]
+    )
+    tool = LookupTool()
+    prior = StageStep(
+        action_type="tool_call",
+        tool_name="lookup_fact",
+        tool_args={
+            "query": "already attempted",
+            "__question_id": "task-1",
+        },
+    )
+    runner = StageRunner(
+        llm=backend,
+        system_prompt="Investigate the relevant fact.",
+        tools=[tool],
+        output_schema=AnswerOutput,
+        max_rounds=1,
+        max_protocol_corrections=1,
+        force_tool_each_round=True,
+        should_stop=lambda steps: any(
+            step.action_type == "tool_call" for step in steps
+        ),
+        stop_output_factory=lambda: AnswerOutput(answer="action boundary"),
+        prior_steps=[prior],
+        stage_name="verification",
+        question_claims={"task-1": "Verify the transport."},
+        attach_image=False,
+    )
+
+    parsed, steps = asyncio.run(runner.run("Find a new route."))
+
+    assert parsed == AnswerOutput(answer="action boundary")
+    assert [step.action_type for step in steps] == [
+        "format_error",
+        "tool_call",
+        "output",
+    ]
+    assert steps[0].metadata["duplicate_tool_call"] is True
+    assert steps[0].metadata["protocol_corrections_used"] == 1
+    assert steps[1].metadata["react_action_turn"] == 1
+    assert tool.calls == [{"query": "new route"}]
+    assert len(backend.requests) == 2
+    assert "meaningfully different" in (
+        backend.requests[1]["messages"][-1]["content"]
+    )
 
 
 def test_qwen_no_tool_stage_uses_json_schema_and_redacts_image(

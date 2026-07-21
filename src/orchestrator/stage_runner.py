@@ -313,7 +313,41 @@ class StageRunner:
         history: List[Dict[str, Any]] = [system_msg, user_msg]
         evidence_so_far: List[str] = []
 
-        for round_num in range(1, self.max_rounds + 1):
+        # Chat Completions has no provider-side Interaction lifecycle to
+        # distinguish a rejected protocol turn from an accepted ReAct action.
+        # Keep the same bounded correction semantics as native Interactions:
+        # correction-only requests do not consume the action budget.
+        action_turns = 0
+        correction_turns = 0
+        request_index = 0
+        correction_only_turns = native_chat and bool(self.tools_list)
+
+        def request_chat_protocol_correction(
+            affected: StageStep,
+            reason: str,
+        ) -> bool:
+            nonlocal correction_turns
+            if not correction_only_turns:
+                return True
+            affected.metadata["react_action_turn"] = action_turns
+            affected.metadata["chat_request_index"] = request_index
+            if correction_turns >= self.max_protocol_corrections:
+                affected.metadata["protocol_corrections_used"] = correction_turns
+                affected.metadata["correction_budget_exhausted"] = True
+                affected.metadata["termination_reason"] = (
+                    "protocol_correction_budget_exhausted"
+                )
+                affected.metadata.setdefault("rejection_reason", reason)
+                return False
+            correction_turns += 1
+            affected.metadata["protocol_corrections_used"] = correction_turns
+            return True
+
+        while (
+            action_turns if correction_only_turns else request_index
+        ) < self.max_rounds:
+            request_index += 1
+            round_num = request_index
             messages = self._build_round_messages(system_msg, user_msg, history, evidence_so_far)
             completed_tool_calls = sum(
                 1 for item in steps if item.action_type == "tool_call"
@@ -360,7 +394,12 @@ class StageRunner:
                 steps.append(step)
                 history.append({"role": "assistant", "content": ""})
                 history.append({"role": "user", "content": "Response was empty. Produce one valid tool call or final output."})
-                continue
+                if request_chat_protocol_correction(
+                    step,
+                    "the model returned an empty response",
+                ):
+                    continue
+                break
 
             step.thought = self._extract_think(content)
             native_assistant = (
@@ -383,7 +422,12 @@ class StageRunner:
                     steps.append(step)
                     history.append({"role": "assistant", "content": content})
                     history.append({"role": "user", "content": self._unknown_tool_message(tool_name)})
-                    continue
+                    if request_chat_protocol_correction(
+                        step,
+                        f"unknown tool {tool_name!r}",
+                    ):
+                        continue
+                    break
 
                 step.action_type = "tool_call"
                 step.tool_name = tool_name
@@ -414,7 +458,9 @@ class StageRunner:
                             ),
                         }
                     )
-                    continue
+                    if request_chat_protocol_correction(step, question_error):
+                        continue
+                    break
                 if self._has_duplicate_tool_call(steps, tool_name, step.tool_args):
                     step.action_type = "format_error"
                     step.metadata["error_class"] = "protocol_error"
@@ -422,7 +468,12 @@ class StageRunner:
                     steps.append(step)
                     history.append({"role": "assistant", "content": content})
                     history.append({"role": "user", "content": self._duplicate_tool_message(tool_name)})
-                    continue
+                    if request_chat_protocol_correction(
+                        step,
+                        f"duplicate {tool_name} route",
+                    ):
+                        continue
+                    break
                 if self._tool_budget_reached(steps, tool_name):
                     step.action_type = "format_error"
                     step.metadata["error_class"] = "protocol_error"
@@ -430,7 +481,12 @@ class StageRunner:
                     steps.append(step)
                     history.append({"role": "assistant", "content": content})
                     history.append({"role": "user", "content": self._tool_budget_message(tool_name)})
-                    continue
+                    if request_chat_protocol_correction(
+                        step,
+                        f"{tool_name} budget reached",
+                    ):
+                        continue
+                    break
                 filtered_query_count = self._sanitize_search_queries(
                     tool_name,
                     step.tool_args,
@@ -449,7 +505,9 @@ class StageRunner:
                     steps.append(step)
                     history.append({"role": "assistant", "content": content})
                     history.append({"role": "user", "content": search_policy_error})
-                    continue
+                    if request_chat_protocol_correction(step, search_policy_error):
+                        continue
+                    break
                 if self.visual_call_validator is not None:
                     visual_error = self.visual_call_validator(tool_name, step.tool_args)
                     if visual_error:
@@ -463,7 +521,9 @@ class StageRunner:
                         steps.append(step)
                         history.append({"role": "assistant", "content": content})
                         history.append({"role": "user", "content": visual_error})
-                        continue
+                        if request_chat_protocol_correction(step, visual_error):
+                            continue
+                        break
                 coverage_error = self._priority_coverage_error(step.tool_args, steps)
                 if coverage_error:
                     step.action_type = "format_error"
@@ -476,7 +536,9 @@ class StageRunner:
                     steps.append(step)
                     history.append({"role": "assistant", "content": content})
                     history.append({"role": "user", "content": coverage_error})
-                    continue
+                    if request_chat_protocol_correction(step, coverage_error):
+                        continue
+                    break
                 serialized, tool_metadata = await self._execute_tool(tool_name, dict(step.tool_args))
                 step.tool_result = serialized
                 step.metadata.update(tool_metadata)
@@ -518,6 +580,10 @@ class StageRunner:
                     history.append({"role": "assistant", "content": content})
                     history.append({"role": "user", "content": tool_response})
 
+                action_turns += 1
+                step.metadata["react_action_turn"] = action_turns
+                step.metadata["protocol_corrections_used"] = correction_turns
+                step.metadata["chat_request_index"] = request_index
                 if self.should_stop and self.should_stop(steps):
                     if self.stop_output_factory is not None:
                         parsed = self.stop_output_factory()
@@ -561,7 +627,9 @@ class StageRunner:
                     step.metadata["rejection_reason"] = reason
                     history.append({"role": "assistant", "content": content})
                     history.append({"role": "user", "content": f"Output rejected: {reason} Continue investigating."})
-                    continue
+                    if request_chat_protocol_correction(step, reason):
+                        continue
+                    break
                 step.action_type = "output_rejected"
                 rejection_reason = (
                     schema_error or "output schema was invalid or incomplete"
@@ -579,7 +647,9 @@ class StageRunner:
                         ),
                     }
                 )
-                continue
+                if request_chat_protocol_correction(step, rejection_reason):
+                    continue
+                break
 
             step.action_type = "format_error"
             self._attach_invalid_response_preview(step, content)
@@ -595,6 +665,12 @@ class StageRunner:
                     ),
                 }
             )
+            if request_chat_protocol_correction(
+                step,
+                "the response was neither a function call nor valid JSON",
+            ):
+                continue
+            break
 
         forced, forced_meta = await self._force_output(system_msg, user_msg, history, evidence_so_far)
         if forced is not None:
