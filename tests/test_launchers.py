@@ -78,6 +78,8 @@ def test_gpu13_bootstrap_isolates_serving_from_sft_installation() -> None:
     assert '"$env_prefix/bin/python"' in source
     assert 'conda run -n "$name" python' not in source
     assert "pip uninstall -y lmdeploy vllm sglang" in source
+    assert '"cuda-nvcc=$cuda_nvcc_version"' in source
+    assert 'CUDA_HOME="$sft_prefix"' in source
     assert '"$env_prefix/bin/python" -m pip check' in source
     assert '"$sft_prefix/bin/swift" sft --help' in source
 

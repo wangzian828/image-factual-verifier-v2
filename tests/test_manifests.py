@@ -18,6 +18,9 @@ def test_checkpoint_and_serving_manifests(tmp_path: Path) -> None:
     (checkpoint / "adapter_model.safetensors").write_bytes(b"adapter")
     write_json(checkpoint / "args.json", {"model": "Qwen/Qwen3-VL-8B"})
     write_json(checkpoint / "trainer_state.json", {"global_step": 25})
+    (checkpoint / "optimizer.pt").write_bytes(b"optimizer")
+    (checkpoint / "scheduler.pt").write_bytes(b"scheduler")
+    (checkpoint / "rng_state.pth").write_bytes(b"rng")
     dataset_manifest = tmp_path / "dataset-manifest.json"
     write_json(
         dataset_manifest,
@@ -51,6 +54,9 @@ def test_checkpoint_and_serving_manifests(tmp_path: Path) -> None:
     )
 
     assert checkpoint_manifest["checkpoint"]["global_step"] == 25
+    assert checkpoint_manifest["checkpoint"]["optimizer_state_available"] is True
+    assert checkpoint_manifest["checkpoint"]["scheduler_state_available"] is True
+    assert checkpoint_manifest["checkpoint"]["rng_state_available"] is True
     assert checkpoint_manifest["training_method"] == "lora"
     assert serving["base_url"] == "http://127.0.0.1:8899/v1"
     assert serving["tool_call_parser"] == "qwen3_coder"

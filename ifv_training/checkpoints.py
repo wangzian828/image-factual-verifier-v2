@@ -26,6 +26,14 @@ OPTIMIZER_PATTERNS = (
     "*optim_states.pt",
     "optimizer.pt",
 )
+SCHEDULER_PATTERNS = (
+    "scheduler.pt",
+    "*model_states.pt",
+)
+RNG_PATTERNS = (
+    "rng_state*.pth",
+    "random_states*.pkl",
+)
 
 
 def _bool_arg(value: Any) -> bool | None:
@@ -47,13 +55,25 @@ def _full_weight_files(checkpoint_dir: Path) -> list[Path]:
     return sorted(set(files))
 
 
-def _optimizer_state_files(checkpoint_dir: Path) -> list[Path]:
+def _state_files(checkpoint_dir: Path, patterns: tuple[str, ...]) -> list[Path]:
     files: list[Path] = []
-    for pattern in OPTIMIZER_PATTERNS:
+    for pattern in patterns:
         files.extend(
             path for path in checkpoint_dir.rglob(pattern) if path.is_file()
         )
     return sorted(set(files))
+
+
+def _optimizer_state_files(checkpoint_dir: Path) -> list[Path]:
+    return _state_files(checkpoint_dir, OPTIMIZER_PATTERNS)
+
+
+def _scheduler_state_files(checkpoint_dir: Path) -> list[Path]:
+    return _state_files(checkpoint_dir, SCHEDULER_PATTERNS)
+
+
+def _rng_state_files(checkpoint_dir: Path) -> list[Path]:
+    return _state_files(checkpoint_dir, RNG_PATTERNS)
 
 
 def _weight_index(root: Path) -> dict[str, Path]:
@@ -203,6 +223,8 @@ def audit_full_parameter_checkpoint(
     }
     weight_files = _full_weight_files(checkpoint_dir)
     optimizer_files = _optimizer_state_files(checkpoint_dir)
+    scheduler_files = _scheduler_state_files(checkpoint_dir)
+    rng_files = _rng_state_files(checkpoint_dir)
     adapter_files = [
         path
         for name in ("adapter_config.json", "adapter_model.safetensors")
@@ -226,6 +248,8 @@ def audit_full_parameter_checkpoint(
         "aligner_unfrozen": freeze_flags["freeze_aligner"] is False,
         "full_weights_present": bool(weight_files),
         "optimizer_state_present": bool(optimizer_files),
+        "scheduler_state_present": bool(scheduler_files),
+        "rng_state_present": bool(rng_files),
         "adapter_weights_absent": not adapter_files,
         "language_weights_updated": bool(
             component_updates.get("language", {}).get("updated")
@@ -249,6 +273,12 @@ def audit_full_parameter_checkpoint(
         ],
         "optimizer_state_files": [
             str(path.relative_to(checkpoint_dir)) for path in optimizer_files
+        ],
+        "scheduler_state_files": [
+            str(path.relative_to(checkpoint_dir)) for path in scheduler_files
+        ],
+        "rng_state_files": [
+            str(path.relative_to(checkpoint_dir)) for path in rng_files
         ],
         "adapter_files": [
             str(path.relative_to(checkpoint_dir)) for path in adapter_files
@@ -285,6 +315,8 @@ def build_checkpoint_manifest(
             candidate_paths.append(path)
     candidate_paths.extend(_full_weight_files(checkpoint_dir))
     candidate_paths.extend(_optimizer_state_files(checkpoint_dir))
+    candidate_paths.extend(_scheduler_state_files(checkpoint_dir))
+    candidate_paths.extend(_rng_state_files(checkpoint_dir))
     for path in sorted(set(candidate_paths)):
         artifacts.append(
             {
@@ -319,12 +351,13 @@ def build_checkpoint_manifest(
         "checkpoint": {
             "path": str(checkpoint_dir),
             "global_step": trainer_state.get("global_step"),
-            "optimizer_state_available": (
-                checkpoint_dir / "optimizer.pt"
-            ).is_file(),
-            "scheduler_state_available": (
-                checkpoint_dir / "scheduler.pt"
-            ).is_file(),
+            "optimizer_state_available": bool(
+                _optimizer_state_files(checkpoint_dir)
+            ),
+            "scheduler_state_available": bool(
+                _scheduler_state_files(checkpoint_dir)
+            ),
+            "rng_state_available": bool(_rng_state_files(checkpoint_dir)),
         },
         "adapter_config": adapter_config,
         "artifacts": artifacts,

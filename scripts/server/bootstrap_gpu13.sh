@@ -58,6 +58,10 @@ create_env() {
     # environment leaves an internally inconsistent vLLM/SGLang dependency
     # graph after ms-swift installs its training stack.
     "$env_prefix/bin/python" -m pip uninstall -y lmdeploy vllm sglang >/dev/null 2>&1 || true
+    cuda_nvcc_version="${IFV_CUDA_NVCC_VERSION:-12.4.131}"
+    if [[ ! -x "$env_prefix/bin/nvcc" ]]; then
+      conda install -y -n "$name" -c nvidia "cuda-nvcc=$cuda_nvcc_version"
+    fi
   fi
   pip_args=()
   if [[ -n "${IFV_WHEELHOUSE:-}" ]]; then
@@ -82,7 +86,11 @@ fi
 if [[ "$MODE" == "sft" || "$MODE" == "all" ]]; then
   create_env ifv-qwen3vl-sft "$REPO_ROOT/requirements/train.txt" "$SEED_ENV"
   sft_prefix="$(conda env list | awk '$1 == "ifv-qwen3vl-sft" {print $NF; exit}')"
-  "$sft_prefix/bin/swift" sft --help >/dev/null
-  "$sft_prefix/bin/deepspeed" --help >/dev/null
+  CUDA_HOME="$sft_prefix" PATH="$sft_prefix/bin:$PATH" \
+    "$sft_prefix/bin/python" -c "import deepspeed, torch; assert torch.cuda.is_available()"
+  CUDA_HOME="$sft_prefix" PATH="$sft_prefix/bin:$PATH" \
+    "$sft_prefix/bin/swift" sft --help >/dev/null
+  CUDA_HOME="$sft_prefix" PATH="$sft_prefix/bin:$PATH" \
+    "$sft_prefix/bin/deepspeed" --help >/dev/null
   echo "Prepared isolated environment: ifv-qwen3vl-sft"
 fi
