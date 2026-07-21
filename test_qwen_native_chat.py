@@ -367,7 +367,9 @@ def test_qwen_recovers_only_missing_top_level_open_brace() -> None:
     assert StageRunner._try_parse_bare_json('"answer": 1') is None
 
 
-def test_qwen_schema_correction_receives_validation_reason() -> None:
+def test_qwen_schema_correction_receives_validation_reason(
+    tmp_path: Path,
+) -> None:
     invalid_text = "{}"
     invalid_raw = {
         "choices": [
@@ -392,6 +394,11 @@ def test_qwen_schema_correction_receives_validation_reason() -> None:
         output_schema=AnswerOutput,
         max_rounds=2,
         attach_image=False,
+        runtime_store=CaseRuntimeStore(
+            tmp_path,
+            case_id="schema-correction",
+            attempt_id="attempt",
+        ),
     )
 
     parsed, steps = asyncio.run(runner.run("Answer the question."))
@@ -401,9 +408,31 @@ def test_qwen_schema_correction_receives_validation_reason() -> None:
     assert "missing required fields" in steps[0].metadata["rejection_reason"]
     correction = backend.requests[1]["messages"][-1]["content"]
     assert "missing required fields" in correction
+    assert steps[0].metadata["interaction_lifecycle_kind"] == (
+        "standalone_request"
+    )
+    assert steps[1].metadata["interaction_lifecycle_kind"] == (
+        "protocol_correction"
+    )
+    assert steps[1].metadata["parent_context_request_id"] == steps[0].metadata[
+        "context_request_id"
+    ]
+    correction_manifest = json.loads(
+        (
+            runner.runtime_store.root
+            / "context"
+            / f"{steps[1].metadata['context_request_id']}.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert correction_manifest["parent_request_id"] == steps[0].metadata[
+        "context_request_id"
+    ]
+    assert correction_manifest["lifecycle_kind"] == "protocol_correction"
 
 
-def test_qwen_forced_structured_retry_does_not_force_terminal_answer() -> None:
+def test_qwen_forced_structured_retry_does_not_force_terminal_answer(
+    tmp_path: Path,
+) -> None:
     backend = QwenFakeBackend([_output_response(), _output_response()])
     validations = 0
 
@@ -422,15 +451,26 @@ def test_qwen_forced_structured_retry_does_not_force_terminal_answer() -> None:
         max_rounds=1,
         attach_image=False,
         output_validator=validator,
+        runtime_store=CaseRuntimeStore(
+            tmp_path,
+            case_id="forced-correction",
+            attempt_id="attempt",
+        ),
     )
 
-    parsed, _steps = asyncio.run(runner.run("Answer the question."))
+    parsed, steps = asyncio.run(runner.run("Answer the question."))
 
     assert parsed == AnswerOutput(answer="ceremonial coach")
     forced_prompt = backend.requests[1]["messages"][-1]["content"]
     assert "last validation attempt" in forced_prompt
     assert "continue is required while a high-salience route is open" in forced_prompt
     assert "no more tool turns" not in forced_prompt.lower()
+    assert steps[-1].metadata["interaction_lifecycle_kind"] == (
+        "protocol_correction"
+    )
+    assert steps[-1].metadata["parent_context_request_id"] == steps[0].metadata[
+        "context_request_id"
+    ]
 
 
 def test_qwen_forced_output_preserves_final_budget_and_thinking_policy() -> None:

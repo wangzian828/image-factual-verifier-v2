@@ -534,6 +534,7 @@ class ContextLedger:
         generation_config: Any = None,
         max_output_tokens: Optional[int] = None,
         previous_interaction_id: Optional[str] = None,
+        parent_request_id: Optional[str] = None,
         model: str = "",
         prompt_version: str = "",
     ) -> str:
@@ -613,6 +614,7 @@ class ContextLedger:
             "prompt_version": prompt_version,
             "model": model,
             "parent_interaction_id": previous_interaction_id,
+            "parent_request_id": parent_request_id,
             "explicit_input_chars": explicit_chars,
             "explicit_input_tokens_estimate": max(1, (explicit_chars + 3) // 4),
             "serialized_input_chars": serialized_input_chars,

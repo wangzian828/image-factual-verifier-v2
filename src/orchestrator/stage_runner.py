@@ -321,13 +321,25 @@ class StageRunner:
         correction_turns = 0
         request_index = 0
         correction_only_turns = native_chat and bool(self.tools_list)
+        next_lifecycle_kind = (
+            "tool_roundtrip"
+            if native_chat and bool(self.tools_list)
+            else "standalone_request"
+        )
+        next_parent_context_request_id = ""
 
         def request_chat_protocol_correction(
             affected: StageStep,
             reason: str,
         ) -> bool:
             nonlocal correction_turns
+            nonlocal next_lifecycle_kind
+            nonlocal next_parent_context_request_id
             if not correction_only_turns:
+                next_lifecycle_kind = "protocol_correction"
+                next_parent_context_request_id = str(
+                    affected.metadata.get("context_request_id", "")
+                ).strip()
                 return True
             affected.metadata["react_action_turn"] = action_turns
             affected.metadata["chat_request_index"] = request_index
@@ -341,6 +353,10 @@ class StageRunner:
                 return False
             correction_turns += 1
             affected.metadata["protocol_corrections_used"] = correction_turns
+            next_lifecycle_kind = "protocol_correction"
+            next_parent_context_request_id = str(
+                affected.metadata.get("context_request_id", "")
+            ).strip()
             return True
 
         while (
@@ -362,7 +378,15 @@ class StageRunner:
                         or completed_tool_calls < self.min_tool_calls
                     )
                 ),
+                lifecycle_kind=next_lifecycle_kind,
+                parent_context_request_id=next_parent_context_request_id,
             )
+            next_lifecycle_kind = (
+                "tool_roundtrip"
+                if native_chat and bool(self.tools_list)
+                else "standalone_request"
+            )
+            next_parent_context_request_id = ""
             step = StageStep(
                 round=round_num,
                 stage_name=self.stage_name,
@@ -601,6 +625,10 @@ class StageRunner:
                         )
                         return parsed, steps
                     break
+                next_lifecycle_kind = "tool_roundtrip"
+                next_parent_context_request_id = str(
+                    step.metadata.get("context_request_id", "")
+                ).strip()
                 continue
 
             output_json = self._extract_output(content)
@@ -687,12 +715,45 @@ class StageRunner:
             if candidate_reason:
                 last_rejection_reason = candidate_reason
                 break
+        last_request_step = next(
+            (
+                item
+                for item in reversed(steps)
+                if str(item.metadata.get("context_request_id", "")).strip()
+            ),
+            None,
+        )
+        forced_is_correction = bool(
+            last_request_step is not None
+            and (
+                last_request_step.action_type
+                in {"format_error", "output_rejected"}
+                or last_request_step.metadata.get("rejection_reason")
+            )
+        )
+        forced_lifecycle_kind = (
+            "protocol_correction"
+            if forced_is_correction
+            else "tool_roundtrip"
+            if native_chat and bool(self.tools_list)
+            else "standalone_request"
+        )
+        forced_parent_context_request_id = (
+            str(
+                last_request_step.metadata.get("context_request_id", "")
+            ).strip()
+            if last_request_step is not None
+            and forced_lifecycle_kind != "standalone_request"
+            else ""
+        )
         forced, forced_meta = await self._force_output(
             system_msg,
             user_msg,
             history,
             evidence_so_far,
             last_rejection_reason=last_rejection_reason,
+            lifecycle_kind=forced_lifecycle_kind,
+            parent_context_request_id=forced_parent_context_request_id,
         )
         if forced is not None:
             accepted, reason = self._accept_output(forced, steps, final_attempt=True)
@@ -2525,6 +2586,8 @@ class StageRunner:
         require_tool: bool = False,
         max_tokens: Optional[int] = None,
         generation_config: Optional[Dict[str, Any]] = None,
+        lifecycle_kind: str = "",
+        parent_context_request_id: str = "",
     ) -> Tuple[LLMResponse, Dict[str, Any]]:
         started = time.perf_counter()
         self.llm_api_calls += 1
@@ -2554,16 +2617,31 @@ class StageRunner:
                 response_format = self._openai_response_format()
                 request_kwargs["response_format"] = response_format
         request_id = ""
+        effective_lifecycle_kind = lifecycle_kind.strip() or (
+            "tool_roundtrip"
+            if self._uses_native_chat_completions() and bool(self.tools_list)
+            else "standalone_request"
+        )
+        effective_parent_request_id = parent_context_request_id.strip() or None
+        if (
+            effective_lifecycle_kind == "protocol_correction"
+            and effective_parent_request_id is None
+            and self.runtime_store is not None
+        ):
+            raise RuntimeError(
+                "protocol_correction requires a parent context request"
+            )
         if self.runtime_store is not None:
             request_id = self.runtime_store.context_ledger.begin_request(
                 stage=self.stage_name,
-                lifecycle_kind="standalone_request",
+                lifecycle_kind=effective_lifecycle_kind,
                 system_instruction="",
                 input_payload=messages,
                 tools=request_kwargs.get("tools"),
                 response_format=response_format,
                 generation_config=request_kwargs.get("generation_config"),
                 max_output_tokens=effective_max_tokens,
+                parent_request_id=effective_parent_request_id,
                 model=str(getattr(self.llm, "model_name", "")),
                 prompt_version=self.prompt_version,
             )
@@ -2654,6 +2732,8 @@ class StageRunner:
         return response, {
             "llm_duration_ms": duration_ms,
             "context_request_id": request_id,
+            "parent_context_request_id": effective_parent_request_id,
+            "interaction_lifecycle_kind": effective_lifecycle_kind,
             "native_chat_completions": self._uses_native_chat_completions(),
             "finish_reason": str(choice.get("finish_reason", "")),
             "response_content_chars": response_content_chars,
@@ -3465,6 +3545,8 @@ class StageRunner:
         evidence_so_far: List[str],
         *,
         last_rejection_reason: str = "",
+        lifecycle_kind: str = "standalone_request",
+        parent_context_request_id: str = "",
     ) -> Tuple[Optional[BaseModel], Dict[str, Any]]:
         evidence_block = ""
         if evidence_so_far:
@@ -3501,6 +3583,8 @@ class StageRunner:
             messages,
             max_tokens=self.final_output_max_tokens,
             generation_config=self.final_output_generation_config,
+            lifecycle_kind=lifecycle_kind,
+            parent_context_request_id=parent_context_request_id,
         )
         metadata = {
             "forced_output": True,

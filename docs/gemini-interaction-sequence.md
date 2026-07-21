@@ -112,6 +112,14 @@ attempt, includes the exact runtime rejection, and preserves non-terminal
 an invalid Claim assessment or changes a proposed verdict; the model must return
 the corrected object, and an unaccepted object remains an engineering failure.
 
+Qwen Chat Completions records the same lifecycle explicitly in the context ledger.
+The first Planning, Decision, or Judgment attempt is `standalone_request`; each
+ReAct request is `tool_roundtrip`; and a retry after runtime rejection is
+`protocol_correction` with `parent_request_id` pointing to the rejected request.
+Multi-step correction chains retain every parent link. Strict audit accepts a
+rejection only when that chain reaches a valid same-stage output; an unrelated
+later request cannot erase it.
+
 Qwen3.5 semantic stages use its official non-greedy sampling profile. Planning has
 `thinking_token_budget=1024`; Discrepancy Decision and Judgment use 2,048, and
 Reflection uses 1,536. The hard reasoning budget is separate from `max_tokens`.

@@ -47,6 +47,13 @@ from an explicit, versioned workspace handoff. One ReAct action may use
 crosses an action or stage boundary. Tool-internal model calls are independent
 observations and cannot mutate semantic state.
 
+The local Qwen Chat Completions transport has no provider Interaction ID, so the
+runtime records equivalent request ancestry itself. Context manifests distinguish
+`standalone_request`, `tool_roundtrip`, and `protocol_correction`; only a correction
+may set `parent_request_id` to the rejected request. The strict auditor follows this
+chain transitively and requires it to end in an accepted output before classifying
+the rejection as recovered.
+
 ## State ownership
 
 ### ImageClaim
@@ -160,7 +167,9 @@ calls, ClaimAssessment Evidence scope and direction, reference-comparison stance
 coherence, discrepancy-to-claim anchors, qualified refuting discrepancy Evidence,
 the complete `VisualFact -> Finding -> Evidence -> successful call` verdict chain,
 terminal Coverage, basis/Judgment equality, interaction ancestry, action-count parity,
-and absence of post-verdict actions.
+and absence of post-verdict actions. For Qwen, protocol-correction ancestry uses
+durable context request IDs rather than invented provider Interaction IDs, including
+multi-hop retries.
 
 `ifv-policy-v2` exports Image Account Planning, v4 ReAct, Discrepancy Decision, and
 v4 Judgment. Training eligibility requires classification correctness, complete

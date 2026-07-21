@@ -2,6 +2,13 @@
 
 ## Current understanding
 
+The Qwen3.5 short-request runtime now reaches a complete bounded binary Judgment
+without engineering errors on the first heterogeneous canary. The compiled basis
+retains supported high-salience Claims, unresolved medium Claims, Evidence, and an
+explicit gap. The remaining strict-audit failure is request-lineage bookkeeping:
+Qwen corrections are real independent Chat Completions requests and therefore need
+durable context-request ancestry instead of Gemini Interaction IDs.
+
 The baseline runtime was a deterministic coordinator of isolated Gemini stages.
 Initial perception saw the image, while Target Planning, ReAct, Evidence Decision,
 Reflection, Query Replan, and Judgment normally consumed text-only state.
@@ -26,6 +33,9 @@ green; real-provider target fidelity remains unmeasured.
 - Image persistence alone is not assumed to solve frozen target ownership.
 - Stop only after reviewing target fidelity, evidence sufficiency, and remaining
   image-grounded uncertainty together.
+- A rejected output is recoverable only when an explicit same-stage correction
+  chain reaches an accepted output. Provider-specific IDs must not be fabricated;
+  local Chat Completions uses context request IDs and parent request IDs.
 
 ## Open questions
 

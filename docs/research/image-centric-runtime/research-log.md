@@ -1,5 +1,16 @@
 # Image-Centric Runtime Research Log
 
+## 2026-07-22 — Qwen correction-lineage canary
+
+- `qwen35-case04886-basis-d08e6e0` completed with `real`, zero engineering errors,
+  24 investigation actions, 44 model calls, and a non-empty bounded basis.
+- Maximum provider input for one request was about 53.8K tokens, below the 128K
+  target; protected context coverage remained complete in observed handoffs.
+- Strict audit rejected four semantically recovered Decision attempts because the
+  auditor required Gemini Interaction ancestry. The locked repair records Qwen
+  request lifecycle and parent request IDs, then audits correction chains
+  transitively without relaxing semantic validators.
+
 ## 2026-07-17 — bootstrap
 
 - Baseline commit: `5f4ac7e`.

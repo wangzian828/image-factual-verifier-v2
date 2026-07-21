@@ -1,21 +1,34 @@
 project: image-centric-runtime
 question: >
-  Does persistent original-image access plus a unified multimodal investigation
-  checkpoint prevent target-information loss and improve evidence-grounded stopping?
+  Can explicit image-aware workspace handoffs and auditable short request lifecycles
+  preserve investigation quality while keeping every request below 128K tokens?
 status: active
-baseline_commit: 5f4ac7e
-active_hypothesis: H1
+baseline_commit: d08e6e0
+active_hypothesis: H3
 hypotheses:
   H1:
-    status: implemented_pending_real_validation
+    status: superseded
     prediction: >
       A single image-bearing Planning root followed by a stateful main policy chain
       preserves salient image relations better than isolated text-only stages.
   H2:
-    status: pending
+    status: implemented_pending_full_evaluation
     prediction: >
       A unified multimodal checkpoint can revise an underspecified target and
       stop on decisive evidence without separate Reflection and Query Replan.
+  H3:
+    status: implemented_pending_real_validation
+    prediction: >
+      Explicit Qwen context-request ancestry will distinguish recovered protocol
+      corrections from unresolved rejections without weakening semantic gates.
+latest_experiment:
+  run_id: qwen35-case04886-basis-d08e6e0
+  engineering_errors: 0
+  strict_audit_passed: false
+  audit_failure: missing_qwen_protocol_correction_ancestry
+  maximum_provider_input_tokens: 53794
+  investigation_actions: 24
+  llm_api_calls: 44
 metrics:
   - target_relation_preserved
   - correct_verdict

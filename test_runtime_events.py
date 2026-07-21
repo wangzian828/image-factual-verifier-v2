@@ -57,7 +57,33 @@ def test_context_manifest_reconstructs_exact_image_request(tmp_path: Path) -> No
     assert manifest["media_bytes"] == len(image_bytes)
     assert manifest["serialized_input_chars"] > manifest["explicit_input_chars"]
     assert manifest["parent_interaction_id"] is None
+    assert manifest["parent_request_id"] is None
     assert manifest["max_output_tokens"] == 8192
+
+
+def test_context_manifest_records_local_protocol_correction_parent(
+    tmp_path: Path,
+) -> None:
+    store = CaseRuntimeStore(tmp_path, case_id="case")
+    root_id = store.context_ledger.begin_request(
+        stage="decision",
+        lifecycle_kind="standalone_request",
+        system_instruction="decide",
+        input_payload={"claim": "open"},
+    )
+    store.context_ledger.complete_request(root_id)
+
+    correction_id = store.context_ledger.begin_request(
+        stage="decision",
+        lifecycle_kind="protocol_correction",
+        system_instruction="decide",
+        input_payload={"feedback": "invalid evidence id"},
+        parent_request_id=root_id,
+    )
+    manifest = store.context_ledger.complete_request(correction_id)
+
+    assert manifest["parent_interaction_id"] is None
+    assert manifest["parent_request_id"] == root_id
 
 
 def test_event_reader_ignores_torn_last_line(tmp_path: Path) -> None:

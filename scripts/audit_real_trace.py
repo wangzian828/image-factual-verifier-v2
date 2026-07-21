@@ -539,6 +539,64 @@ def _audit_rejections(
     protocol_count = 0
     route_control_count = 0
     corrected_count = 0
+
+    def rejected(candidate: Mapping[str, Any]) -> bool:
+        candidate_metadata = _mapping(candidate.get("metadata"))
+        return (
+            str(candidate.get("action_type", "")) in REJECTION_ACTIONS
+            or bool(candidate_metadata.get("rejection_reason"))
+        )
+
+    def attempt_id(candidate: Mapping[str, Any]) -> str:
+        candidate_metadata = _mapping(candidate.get("metadata"))
+        if candidate_metadata.get("native_chat_completions"):
+            return str(
+                candidate_metadata.get("context_request_id", "")
+                or candidate_metadata.get("interaction_id", "")
+            ).strip()
+        return str(
+            candidate_metadata.get("interaction_id", "")
+            or candidate_metadata.get("context_request_id", "")
+        ).strip()
+
+    def correction_parent_id(candidate: Mapping[str, Any]) -> str:
+        candidate_metadata = _mapping(candidate.get("metadata"))
+        if candidate_metadata.get("native_chat_completions"):
+            return str(
+                candidate_metadata.get("parent_context_request_id", "")
+                or candidate_metadata.get("previous_interaction_id", "")
+            ).strip()
+        return str(
+            candidate_metadata.get("previous_interaction_id", "")
+            or candidate_metadata.get("parent_context_request_id", "")
+        ).strip()
+
+    def eventually_corrected(
+        rejected_index: int,
+        rejected_step: Mapping[str, Any],
+    ) -> bool:
+        root_id = attempt_id(rejected_step)
+        if not root_id:
+            return False
+        reachable_rejected_ids = {root_id}
+        stage = str(rejected_step.get("stage", ""))
+        for candidate in steps[rejected_index + 1 :]:
+            if str(candidate.get("stage", "")) != stage:
+                continue
+            candidate_metadata = _mapping(candidate.get("metadata"))
+            if str(
+                candidate_metadata.get("interaction_lifecycle_kind", "")
+            ).strip() != "protocol_correction":
+                continue
+            if correction_parent_id(candidate) not in reachable_rejected_ids:
+                continue
+            if not rejected(candidate):
+                return True
+            candidate_id = attempt_id(candidate)
+            if candidate_id:
+                reachable_rejected_ids.add(candidate_id)
+        return False
+
     for index, step in enumerate(steps):
         metadata = _mapping(step.get("metadata"))
         if str(step.get("action_type", "")) in {
@@ -546,40 +604,9 @@ def _audit_rejections(
             "evidence_decision_revision",
         }:
             continue
-        rejected = (
-            str(step.get("action_type", "")) in REJECTION_ACTIONS
-            or bool(metadata.get("rejection_reason"))
-        )
-        if not rejected:
+        if not rejected(step):
             continue
-        rejected_interaction_id = str(
-            metadata.get("interaction_id", "")
-        ).strip()
-        corrected = bool(
-            rejected_interaction_id
-            and any(
-                str(candidate.get("stage", ""))
-                == str(step.get("stage", ""))
-                and str(candidate.get("action_type", ""))
-                not in REJECTION_ACTIONS
-                and not _mapping(candidate.get("metadata")).get(
-                    "rejection_reason"
-                )
-                and str(
-                    _mapping(candidate.get("metadata")).get(
-                        "previous_interaction_id", ""
-                    )
-                ).strip()
-                == rejected_interaction_id
-                and str(
-                    _mapping(candidate.get("metadata")).get(
-                        "interaction_lifecycle_kind", ""
-                    )
-                ).strip()
-                == "protocol_correction"
-                for candidate in steps[index + 1 :]
-            )
-        )
+        corrected = eventually_corrected(index, step)
         reason = str(metadata.get("rejection_reason", "")).strip()
         if not reason:
             try:

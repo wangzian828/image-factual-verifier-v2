@@ -388,6 +388,79 @@ def test_strict_audit_accepts_successful_v4_protocol_correction(
     assert report.stats["successful_protocol_corrections"] == 1
 
 
+def test_strict_audit_accepts_multihop_qwen_protocol_correction(
+    tmp_path: Path,
+) -> None:
+    trace_path = _v4_trace(tmp_path)
+    trace = json.loads(trace_path.read_text(encoding="utf-8"))
+    steps = trace["state"]["all_steps"]
+    for index, step in enumerate(steps):
+        metadata = step["metadata"]
+        metadata["native_interactions"] = False
+        metadata["native_chat_completions"] = True
+        metadata["context_request_id"] = f"req-qwen-fixture-{index}"
+        metadata["parent_context_request_id"] = None
+        metadata["interaction_lifecycle_kind"] = (
+            "tool_roundtrip"
+            if step["stage"] == "image_only_discrepancy_investigation"
+            else "standalone_request"
+        )
+    judgment_index = next(
+        index
+        for index, step in enumerate(steps)
+        if step["stage"] == "image_only_discrepancy_judgment"
+    )
+    accepted = steps[judgment_index]
+    rejected_root = {
+        **accepted,
+        "action_type": "output_rejected",
+        "metadata": {
+            **accepted["metadata"],
+            "native_interactions": False,
+            "native_chat_completions": True,
+            "context_request_id": "req-qwen-root",
+            "parent_context_request_id": None,
+            "interaction_lifecycle_kind": "standalone_request",
+            "rejection_reason": "assessment cites unknown Evidence",
+        },
+    }
+    rejected_correction = {
+        **accepted,
+        "action_type": "output_rejected",
+        "metadata": {
+            **accepted["metadata"],
+            "native_interactions": False,
+            "native_chat_completions": True,
+            "context_request_id": "req-qwen-correction-1",
+            "parent_context_request_id": "req-qwen-root",
+            "interaction_lifecycle_kind": "protocol_correction",
+            "rejection_reason": "support Finding chain is missing",
+        },
+    }
+    accepted["metadata"].update(
+        {
+            "native_interactions": False,
+            "native_chat_completions": True,
+            "context_request_id": "req-qwen-correction-2",
+            "parent_context_request_id": "req-qwen-correction-1",
+            "interaction_lifecycle_kind": "protocol_correction",
+        }
+    )
+    steps[judgment_index:judgment_index] = [
+        rejected_root,
+        rejected_correction,
+    ]
+    trace_path.write_text(
+        json.dumps(trace, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    report = audit_trace(trace_path)
+
+    assert not report.failures(strict_scheduler=True)
+    assert report.stats["successful_protocol_corrections"] == 2
+
+
 def test_strict_audit_rejects_v4_discrepancy_alignment_tampering(
     tmp_path: Path,
 ) -> None:
