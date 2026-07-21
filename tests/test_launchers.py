@@ -77,6 +77,45 @@ def test_locked_vllm_launcher_uses_native_qwen3_vl_protocol() -> None:
     assert '--chat-template "$CHAT_TEMPLATE"' in source
 
 
+def test_qwen35_launcher_uses_native_multimodal_hybrid_thinking_protocol() -> None:
+    source = _source("scripts/serve/start_vllm_qwen35.sh")
+
+    assert 'max-model-len "$CONTEXT_LENGTH"' in source
+    assert "--reasoning-parser qwen3" in source
+    assert '"reasoning_parser":"qwen3"' in source
+    assert '"backend":"xgrammar"' in source
+    assert "--tool-call-parser qwen3_coder" in source
+    assert "--default-chat-template-kwargs" in source
+    assert '"enable_thinking":false' in source
+    assert '"image":1,"video":0' in source
+    assert "--enable-tokenizer-info-endpoint" in source
+    assert "require_idle_gpus" in source
+    assert "131072" in source
+    assert "NCCL_CUMEM_HOST_ENABLE=0" in source
+    assert "--disable-custom-all-reduce" in source
+    assert "prepare_qwen3vl_chat_template.py" not in source
+
+
+def test_qwen35_lifecycle_only_stops_its_verified_process_group() -> None:
+    source = _source("scripts/serve/manage_vllm_qwen35.sh")
+
+    assert "owned_process" in source
+    assert 'kill -TERM -- "-$pid"' in source
+    assert "no SIGKILL was sent" in source
+    assert "setsid bash" in source
+    assert "120" in source
+
+
+def test_qwen35_freeze_gate_records_environment_nccl_and_model_hashes() -> None:
+    source = _source("scripts/server/freeze_vllm_qwen35_gpu13.sh")
+
+    assert "verify_vllm_qwen35_environment.py" in source
+    assert "verify_nccl_tensor_parallel.py" in source
+    assert "pip freeze --all" in source
+    assert "model-files.sha256" in source
+    assert ".ifv-vllm-qwen35-ready" in source
+
+
 def test_vllm_lifecycle_only_stops_its_verified_process_group() -> None:
     source = _source("scripts/serve/manage_vllm_qwen3vl.sh")
 
