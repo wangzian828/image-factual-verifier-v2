@@ -142,6 +142,10 @@ The hard action cap is 24. One accepted native tool call is one action. The v4 l
 stops immediately after terminal Coverage, before any further search. Normal stops
 are `verdict_determined`, `meaningful_routes_exhausted`, and
 `hard_budget_exhausted`; provider/protocol failures remain `engineering_error`.
+The remaining-route inventory includes only tasks that still own at least one
+`open`, `conflicted`, or `unresolved` ImageClaim. A stale active task attached only
+to supported/refuted Claims cannot keep the investigation alive or trigger a
+no-executable-task error.
 No-gain streaks are diagnostic only. One focused visual reinspection may be
 requested by Discrepancy Decision. New hypotheses are bounded globally and per
 decision; semantically duplicate routes are rejected.

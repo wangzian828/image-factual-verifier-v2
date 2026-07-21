@@ -5343,7 +5343,8 @@ def remaining_claim_hypothesis_routes(
 ) -> List[str]:
     """Return untried routes owned by open v4 claim/hypothesis tasks."""
 
-    known_claim_ids = {claim.claim_id for claim in state.image_claims}
+    claim_by_id = {claim.claim_id: claim for claim in state.image_claims}
+    known_claim_ids = set(claim_by_id)
     known_hypothesis_ids = {
         hypothesis.hypothesis_id
         for hypothesis in state.search_hypotheses
@@ -5355,6 +5356,11 @@ def remaining_claim_hypothesis_routes(
         if task.status in {"active", "pending"}
         and bool(set(task.claim_ids) & known_claim_ids)
         and task.hypothesis_id in known_hypothesis_ids
+        and any(
+            claim_by_id[claim_id].status in {"open", "conflicted", "unresolved"}
+            for claim_id in task.claim_ids
+            if claim_id in claim_by_id
+        )
         and (task_ids is None or task.task_id in task_ids)
     ]
     attempted = _attempted_routes_by_task(state)

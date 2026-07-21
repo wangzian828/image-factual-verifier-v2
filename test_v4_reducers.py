@@ -34,6 +34,7 @@ from src.orchestrator.task_store import (
     apply_image_account_planning,
     archive_recall_available,
     record_tool_observation,
+    remaining_claim_hypothesis_routes,
     runtime_task_tool_names,
 )
 from src.orchestrator.stage_runner import StageStep
@@ -1121,6 +1122,15 @@ def test_discrepancy_coverage_compiles_real_only_after_routes_close() -> None:
     assert verdict == "real"
     assert basis.claim_ids == [claim.claim_id]
     assert basis.evidence_ids == [evidence.evidence_id]
+
+
+def test_remaining_discrepancy_routes_ignore_tasks_with_only_supported_claims() -> None:
+    state = _planned_state()
+    state.image_claims[0].status = "supported"
+
+    assert remaining_claim_hypothesis_routes(state) == []
+    audit = audit_discrepancy_coverage(state, decision_checkpoint=True)
+    assert audit.stop_reason == "meaningful_routes_exhausted"
 
 
 def test_discrepancy_coverage_preserves_gap_for_binary_judgment_after_routes_close() -> None:
