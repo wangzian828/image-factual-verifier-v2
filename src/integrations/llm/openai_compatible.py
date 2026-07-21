@@ -59,6 +59,7 @@ class OpenAICompatibleChatClient:
         messages: List[Dict[str, Any]],
         max_tokens: int,
         temperature: float = 0.0,
+        response_schema: Optional[Dict[str, Any]] = None,
     ) -> str:
         last_error: Exception | None = None
         for attempt in range(self.max_retries + 1):
@@ -69,6 +70,7 @@ class OpenAICompatibleChatClient:
                         messages=messages,
                         max_tokens=max_tokens,
                         temperature=temperature,
+                        response_schema=response_schema,
                     )
                 if self.wire_api == "chat_completions":
                     return self._create_chat_json_completion(
@@ -76,6 +78,7 @@ class OpenAICompatibleChatClient:
                         messages=messages,
                         max_tokens=max_tokens,
                         temperature=temperature,
+                        response_schema=response_schema,
                     )
                 raise RuntimeError(f"Unsupported wire API at runtime: {self.wire_api}")
             except httpx.HTTPStatusError as exc:
@@ -97,6 +100,7 @@ class OpenAICompatibleChatClient:
         messages: List[Dict[str, Any]],
         max_tokens: int,
         temperature: float,
+        response_schema: Optional[Dict[str, Any]],
     ) -> str:
         if not self.api_key:
             raise RuntimeError("LLM API key is not set.")
@@ -105,7 +109,18 @@ class OpenAICompatibleChatClient:
             "model": model_name,
             "temperature": temperature,
             "max_tokens": max_tokens,
-            "response_format": {"type": "json_object"},
+            "response_format": (
+                {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "structured_output",
+                        "strict": True,
+                        "schema": response_schema,
+                    },
+                }
+                if response_schema is not None
+                else {"type": "json_object"}
+            ),
             "messages": messages,
         }
         response = self._get_client().post(
@@ -155,6 +170,7 @@ class OpenAICompatibleChatClient:
         messages: List[Dict[str, Any]],
         max_tokens: int,
         temperature: float,
+        response_schema: Optional[Dict[str, Any]],
     ) -> str:
         if not self.api_key:
             raise RuntimeError("LLM API key is not set.")

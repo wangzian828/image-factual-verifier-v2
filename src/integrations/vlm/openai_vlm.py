@@ -113,6 +113,27 @@ class OpenAIVisionClient:
                 response_schema=response_schema,
             )
 
+        schema = None
+        effective_max_tokens = max_tokens
+        if self.provider == "qwen_local":
+            effective_max_tokens = max(
+                max_tokens,
+                max(
+                    1,
+                    int(
+                        os.getenv(
+                            "QWEN_LOCAL_VISION_MIN_OUTPUT_TOKENS",
+                            "8192",
+                        )
+                    ),
+                ),
+            )
+            if response_schema is not None:
+                schema = normalize_json_schema(
+                    response_schema,
+                    require_all_properties=True,
+                )
+
         chat = OpenAICompatibleChatClient(
             api_key=self.api_key,
             base_url=self.base_url,
@@ -138,9 +159,10 @@ class OpenAIVisionClient:
         ]
         content = chat.create_json_completion(
             model_name=model_name or self.model_name,
-            max_tokens=max_tokens,
+            max_tokens=effective_max_tokens,
             temperature=temperature,
             messages=messages,
+            response_schema=schema,
         )
         parsed = parse_json_object(content)
         if not parsed:
