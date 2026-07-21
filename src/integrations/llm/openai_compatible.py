@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import threading
 import time
@@ -117,10 +118,35 @@ class OpenAICompatibleChatClient:
         )
         response.raise_for_status()
         data = response.json()
-        content = data["choices"][0]["message"].get("content")
-        if not isinstance(content, str) or not content.strip():
+        content = self._extract_chat_json_text(data["choices"][0])
+        if not content:
             raise RuntimeError("Chat Completions returned an empty JSON response.")
         return content
+
+    @staticmethod
+    def _extract_chat_json_text(choice: Dict[str, Any]) -> str:
+        """Return only a JSON-object candidate from a constrained chat reply.
+
+        Qwen Thinking servers may place a schema-constrained final object in
+        ``reasoning_content`` while leaving canonical ``content`` null.  This
+        fallback is intentionally limited to this JSON-only client method and
+        accepts the alternate field only when it is itself a complete object.
+        """
+
+        message = choice.get("message") or {}
+        content = message.get("content")
+        if isinstance(content, str) and content.strip():
+            return content.strip()
+
+        reasoning = message.get("reasoning_content")
+        if not isinstance(reasoning, str) or not reasoning.strip():
+            return ""
+        candidate = reasoning.strip()
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError:
+            return ""
+        return candidate if isinstance(parsed, dict) else ""
 
     def _create_responses_json_completion(
         self,
