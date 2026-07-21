@@ -426,7 +426,17 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
     qwen_stage_thinking = {
         stage.lower(): os.getenv(
             f"QWEN_{stage}_ENABLE_THINKING",
-            "false" if stage == "PLANNING" else "true",
+            (
+                "true"
+                if stage
+                in {
+                    "PLANNING",
+                    "EVIDENCE_DECISION",
+                    "REFLECTION",
+                    "JUDGMENT",
+                }
+                else "false"
+            ),
         ).strip().lower()
         for stage in (
             "PLANNING",

@@ -244,7 +244,9 @@ def test_v03_eval_keeps_gold_post_rollout_and_writes_scorer_predictions(
         "discrepancy-first-v4"
     )
     assert manifest["agent"]["stage_thinking_levels"]["planning"] == "high"
-    assert manifest["agent"]["qwen_stage_enable_thinking"]["planning"] == "false"
+    assert manifest["agent"]["qwen_stage_enable_thinking"]["planning"] == "true"
+    assert manifest["agent"]["qwen_stage_enable_thinking"]["verification"] == "false"
+    assert manifest["agent"]["qwen_stage_enable_thinking"]["query_replan"] == "false"
     assert manifest["agent"]["qwen_stage_enable_thinking"]["judgment"] == "true"
     assert manifest["benchmark"]["evaluation_gold"]["sha256"] == _sha256(gold)
     assert manifest["source_access_policy"]["active"] is False
