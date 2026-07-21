@@ -77,6 +77,9 @@ def test_gpu13_bootstrap_isolates_serving_from_sft_installation() -> None:
     assert "ifv-qwen3vl-sft" in source
     assert '"$env_prefix/bin/python"' in source
     assert 'conda run -n "$name" python' not in source
+    assert "pip uninstall -y lmdeploy vllm sglang" in source
+    assert '"$env_prefix/bin/python" -m pip check' in source
+    assert '"$sft_prefix/bin/swift" sft --help' in source
 
 
 def test_qwen3_vl_thinking_is_the_only_primary_profile() -> None:

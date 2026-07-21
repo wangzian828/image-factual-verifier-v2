@@ -52,6 +52,13 @@ create_env() {
     "$env_prefix/bin/python" -c \
       "import torch; assert torch.cuda.is_available(); print(torch.__version__, torch.version.cuda)"
   fi
+  if [[ "$name" == "ifv-qwen3vl-sft" ]]; then
+    # qwen3vl is only a CUDA/PyTorch seed on gpu-13.  It also contains serving
+    # engines from earlier experiments; keeping those packages in the SFT
+    # environment leaves an internally inconsistent vLLM/SGLang dependency
+    # graph after ms-swift installs its training stack.
+    "$env_prefix/bin/python" -m pip uninstall -y lmdeploy vllm sglang >/dev/null 2>&1 || true
+  fi
   pip_args=()
   if [[ -n "${IFV_WHEELHOUSE:-}" ]]; then
     if [[ ! -d "$IFV_WHEELHOUSE" ]]; then
@@ -62,6 +69,7 @@ create_env() {
   fi
   "$env_prefix/bin/python" -m pip install "${pip_args[@]}" -r "$requirements"
   "$env_prefix/bin/python" -m pip install --no-deps -e "$REPO_ROOT"
+  "$env_prefix/bin/python" -m pip check
 }
 
 # Never modifies ifv-agent.
@@ -74,7 +82,7 @@ fi
 if [[ "$MODE" == "sft" || "$MODE" == "all" ]]; then
   create_env ifv-qwen3vl-sft "$REPO_ROOT/requirements/train.txt" "$SEED_ENV"
   sft_prefix="$(conda env list | awk '$1 == "ifv-qwen3vl-sft" {print $NF; exit}')"
-  "$sft_prefix/bin/swift" --help >/dev/null
+  "$sft_prefix/bin/swift" sft --help >/dev/null
   "$sft_prefix/bin/deepspeed" --help >/dev/null
   echo "Prepared isolated environment: ifv-qwen3vl-sft"
 fi
