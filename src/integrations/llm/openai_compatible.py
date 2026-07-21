@@ -72,7 +72,6 @@ class OpenAICompatibleChatClient:
                         max_tokens=max_tokens,
                         temperature=temperature,
                         response_schema=response_schema,
-                        chat_template_kwargs=chat_template_kwargs,
                     )
                 if self.wire_api == "chat_completions":
                     return self._create_chat_json_completion(
@@ -81,6 +80,7 @@ class OpenAICompatibleChatClient:
                         max_tokens=max_tokens,
                         temperature=temperature,
                         response_schema=response_schema,
+                        chat_template_kwargs=chat_template_kwargs,
                     )
                 raise RuntimeError(f"Unsupported wire API at runtime: {self.wire_api}")
             except httpx.HTTPStatusError as exc:

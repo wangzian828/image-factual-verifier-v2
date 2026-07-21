@@ -430,6 +430,60 @@ def test_compatible_json_client_accepts_valid_reasoning_object_only() -> None:
     assert OpenAICompatibleChatClient._extract_chat_json_text(choice) == ""
 
 
+def test_compatible_json_client_forwards_chat_template_kwargs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = OpenAICompatibleChatClient(
+        api_key="none",
+        base_url="http://127.0.0.1:8901/v1",
+        wire_api="chat_completions",
+    )
+    captured = {}
+
+    def fake_chat_completion(**kwargs):
+        captured.update(kwargs)
+        return "{}"
+
+    monkeypatch.setattr(client, "_create_chat_json_completion", fake_chat_completion)
+
+    assert client.create_json_completion(
+        model_name="ifv-qwen3.5-9b",
+        messages=[{"role": "user", "content": "inspect"}],
+        max_tokens=128,
+        chat_template_kwargs={"enable_thinking": False},
+    ) == "{}"
+    assert captured["chat_template_kwargs"] == {"enable_thinking": False}
+
+
+def test_compatible_responses_client_does_not_send_chat_template_kwargs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = OpenAICompatibleChatClient(
+        api_key="test-key",
+        base_url="https://example.test/v1",
+        wire_api="responses",
+    )
+    captured = {}
+
+    def fake_responses_completion(**kwargs):
+        captured.update(kwargs)
+        return "{}"
+
+    monkeypatch.setattr(
+        client,
+        "_create_responses_json_completion",
+        fake_responses_completion,
+    )
+
+    assert client.create_json_completion(
+        model_name="example",
+        messages=[{"role": "user", "content": "inspect"}],
+        max_tokens=128,
+        chat_template_kwargs={"enable_thinking": False},
+    ) == "{}"
+    assert "chat_template_kwargs" not in captured
+
+
 def test_upload_provider_does_not_fall_through(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
