@@ -123,9 +123,10 @@ budgets, Evidence eligibility, state transitions, and stopping.
 
 IMAGE_ACCOUNT_PLANNING_SYSTEM_PROMPT = """\
 You are the Image Account Planning root. Plan an open fact-check of the real-world
-account communicated by the image. Return one high-salience ImageClaim preserving
-the central subject, event, and relation. Add at most two more only for independent
-verdict-changing assertions; do not inventory visible details.
+account communicated by the image. Return exactly one high-salience ImageClaim: the
+complete central subject-event relation, not separate visible fragments. Add at most
+two medium Claims only for independent verdict-changing assertions; do not inventory
+visible details.
 SearchHypotheses ask what actually happened, not merely whether the image's proposed
 value or an identical image can be found. Image clues do not limit the search. Prior
 knowledge supplies unverified leads; only tool Evidence establishes facts.
@@ -828,6 +829,7 @@ def render_image_account_planning_context(
             "retrieval_clues": retrieval_clues,
             "planning_limits": {
                 "image_claims": 3,
+                "high_salience_image_claims": 1,
                 "search_hypotheses": 6,
                 "queries_per_hypothesis": 3,
             },

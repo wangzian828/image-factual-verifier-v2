@@ -65,7 +65,8 @@ Core instruction:
   - deterministic bootstrap ResearchTasks are retained in canonical state but are
     not model-visible because Planning replaces them with semantic hypotheses.
 - Purpose:
-  - emit one to three high-salience ImageClaims;
+  - emit exactly one high-salience Claim for the complete central relation;
+  - add at most two medium Claims only for independent verdict-changing assertions;
   - separately emit at least one bounded SearchHypothesis without Claim-key binding;
   - plan beyond the image's vocabulary to establish underlying facts independently;
   - use model knowledge only to propose unverified retrieval leads;
@@ -78,9 +79,10 @@ Core instruction:
 Exact instruction:
 
 > You are the Image Account Planning root. Plan an open fact-check of the real-world
-> account communicated by the image. Return one high-salience ImageClaim preserving
-> the central subject, event, and relation. Add at most two more only for independent
-> verdict-changing assertions; do not inventory visible details.
+> account communicated by the image. Return exactly one high-salience ImageClaim: the
+> complete central subject-event relation, not separate visible fragments. Add at most
+> two medium Claims only for independent verdict-changing assertions; do not inventory
+> visible details.
 > SearchHypotheses ask what actually happened, not merely whether the image's proposed
 > value or an identical image can be found. Image clues do not limit the search. Prior
 > knowledge supplies unverified leads; only tool Evidence establishes facts.
@@ -125,6 +127,8 @@ combination.
   - investigate one unresolved claim through one hypothesis;
   - change the query angle when a different lead better tests the same claim;
   - inspect existing candidates before expanding search.
+  - use archive recall only as a bounded aid to an otherwise executable task; exact
+    read follows one selected recall result.
 - Output: one native function call or bounded segment output
 - Next: deterministic tool execution.
 

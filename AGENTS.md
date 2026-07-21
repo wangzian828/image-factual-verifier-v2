@@ -39,7 +39,8 @@ but they must not enter the v4 default path.
 2. Run Gemini `perceive_scene` and positioned OCR.
 3. Deterministically bootstrap literal visual facts and retrieval anchors.
 4. Run standalone Image Account Planning with the controlled original-image view and
-   explicit context packet for one to three ImageClaims plus bounded SearchHypotheses.
+   explicit context packet for exactly one central high-salience ImageClaim, up to
+   two medium Claims, and bounded SearchHypotheses.
 5. Create account/hypothesis-owned ResearchTasks without exposing per-Claim binding
    in initial Planning, then execute one bounded native tool call per ReAct action.
 6. Keep Discovery separate from provenance-complete Evidence.

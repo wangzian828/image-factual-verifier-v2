@@ -22,6 +22,11 @@
 - 门禁顺序保持：本地全量测试 → 提交/同步 → 只重跑 Queen → strict audit。Queen 零工程
   错误后冻结配置并运行正式 20 例；20/20 工程通过后才做总体轨迹分析和小幅通用调整，随后
   推进成熟框架下的 SFT/RL 基建。
+- 第四轮 Queen 证明开放事实方向已出现在 reasoning 和 Hypothesis，但结构化 Claim 又拆为两个
+  high 表层断言；优先来源 Task 随后执行 17 个动作并重复同一 archive recall 四次，纠正预算
+  耗尽，实际关系 Task 未获调度。修复限定为两个通用控制面：恰好一个完整中心关系 high
+  Claim，附加 Claim 只能为 medium；archive recall 需先有该 Task 的调查档案且每 Task 最多
+  两个 recall/read 周期，pending 为空时不暴露 `read_evidence`。不扩大 action 或纠正预算。
 
 ## 当前执行进度（2026-07-20）
 

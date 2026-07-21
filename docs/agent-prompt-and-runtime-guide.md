@@ -7,7 +7,7 @@
 | Case validation | none | exact three-field row, path boundary, SHA-256 |
 | Perception/OCR | Gemini/tool provider | required-tool success and literal schemas |
 | Bootstrap | none | stable visual facts and retrieval anchors |
-| Image Account Planning | Gemini | 1-3 claims, pixel/OCR anchors, high salience, bounded hypotheses, atomic apply |
+| Image Account Planning | Gemini | exactly one central high Claim, up to two medium Claims, pixel/OCR anchors, bounded hypotheses, atomic apply |
 | ReAct | Gemini | one claim/hypothesis-owned native tool action, route and provider bounds |
 | Observation reduction | none | Discovery/Evidence/Failure separation and immutable provenance |
 | Discrepancy Decision | Gemini | reviewed Evidence scope, ownership, anchors, budgets, atomic apply |
@@ -30,6 +30,8 @@ not a rule about which fact the route should investigate.
 Each ImageClaim states the underlying real-world proposition conveyed to the
 viewer. It does not replace that proposition with the easier meta-claim that visible
 text, a post, or an advertisement merely makes the assertion.
+Exactly one Claim is high salience and preserves the complete central relation;
+optional independent Claims are medium rather than fragments of that relation.
 
 The image defines the account to fact-check and supplies initial clues; it does not
 bound the investigation's facts, sources, relations, or query vocabulary. Planning
@@ -54,6 +56,11 @@ retrieval. Claim/hypothesis ownership preserves lineage; it is not a semantic ca
 Gemini may choose any useful query angle, including an independent question about
 the underlying real-world fact. Such a query does not change the ImageClaim or
 create Evidence.
+
+Archive recall is a bounded aid within an executable task. It is hidden before the
+task creates archived investigation material, permits at most two recall/read cycles
+per task, and exposes exact reads only for pending recalled IDs. Recall candidates
+remain memory and cannot become Evidence by being retrieved again.
 
 One action exposes one task-scoped route family. For webpage inspection Gemini
 selects one Claim ID already owned by that task and writes the passage it wants;

@@ -99,6 +99,7 @@ from src.orchestrator.task_store import (
     apply_query_replan,
     apply_reflection,
     apply_target_planning,
+    archive_recall_available,
     discrepancy_decision_checkpoint_reason,
     discrepancy_decision_evidence_ids,
     evidence_decision_checkpoint_reason,
@@ -1128,6 +1129,13 @@ class Orchestrator:
         )
         if not executable_tool_names:
             raise RuntimeError("no executable claim/hypothesis route remains")
+        recall_available = (
+            not investigation.pending_archive_read_ids
+            and archive_recall_available(
+                investigation,
+                task_ids=task_ids,
+            )
+        )
 
         observation_update: Dict[str, Any] = {}
 
@@ -1159,7 +1167,10 @@ class Orchestrator:
                     if investigation.pending_archive_read_ids
                     else (
                         tool.name in executable_tool_names
-                        or tool.name in {"recall_evidence", "read_evidence"}
+                        or (
+                            tool.name == "recall_evidence"
+                            and recall_available
+                        )
                     )
                 )
             ],

@@ -55,7 +55,9 @@ A positive real-world proposition communicated by visible pixels or reliable
 embedded text. It records what the image asks the viewer to believe, not merely the
 meta-fact that a caption, post, or advertisement contains the assertion. It cites
 pixel/OCR `VisualFact` anchors, has `high|medium` salience, and is assessed as
-`open|supported|refuted|conflicted|unresolved`.
+`open|supported|refuted|conflicted|unresolved`. Planning produces exactly one high
+Claim containing the complete central relation; up to two additional independent
+Claims must be medium.
 
 ### SearchHypothesis
 
@@ -104,6 +106,11 @@ task-scoped route family, preventing invalid cross-task URL/Claim combinations.
 Both fields remain in the canonical tool result and Evidence ledger. Visual Evidence
 requires a successful focused observation or reference comparison with image hashes
 and provenance. General anomaly opinions are diagnostic only.
+
+Archive recall is optional support for an otherwise executable task, not an
+unbounded route family. It becomes available only after that task has produced
+archived investigation material, is limited to two recall/read cycles per task, and
+`read_evidence` is exposed only for IDs returned by the pending recall.
 
 ## Verdict rules
 

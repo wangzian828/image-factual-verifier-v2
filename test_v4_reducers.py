@@ -29,8 +29,10 @@ from src.orchestrator.discrepancy_coverage import (
     compile_discrepancy_verdict_basis,
 )
 from src.orchestrator.task_store import (
+    MAX_ARCHIVE_RECALL_ROUTES_PER_TASK,
     apply_discrepancy_decision,
     apply_image_account_planning,
+    archive_recall_available,
     record_tool_observation,
     runtime_task_tool_names,
 )
@@ -89,6 +91,26 @@ def _planning_output() -> ImageAccountPlanningOutput:
             )
         ],
     )
+
+
+def test_image_account_requires_exactly_one_high_salience_claim() -> None:
+    payload = _planning_output().model_dump(mode="json")
+    payload["image_claims"].append(
+        {
+            "claim_key": "separate-visible-fragment",
+            "statement": "A separate visible label appears in the image.",
+            "kind": "text_claim",
+            "predicate": "reads",
+            "anchor_fact_ids": ["fact-visible-person"],
+            "salience": "high",
+        }
+    )
+
+    with pytest.raises(
+        ValidationError,
+        match="exactly one high-salience central claim",
+    ):
+        ImageAccountPlanningOutput.model_validate(payload)
 
 
 def _planned_state() -> ImageOnlyInvestigationState:
@@ -232,6 +254,29 @@ def test_archive_memory_actions_update_memory_state_without_fact_failure() -> No
     assert state.pending_archive_read_ids == []
     assert state.read_archive_memory_ids == ["memory-a"]
     assert state.failures == []
+
+
+def test_archive_recall_is_optional_and_bounded_per_task() -> None:
+    state = _planned_state()
+    task = state.tasks[0]
+
+    assert archive_recall_available(state, task_ids={task.task_id}) is False
+    state.attempted_routes.append(
+        json.dumps({"tool": "text_search", "task_id": task.task_id})
+    )
+    assert archive_recall_available(state, task_ids={task.task_id}) is True
+
+    for index in range(MAX_ARCHIVE_RECALL_ROUTES_PER_TASK):
+        state.attempted_routes.append(
+            json.dumps(
+                {
+                    "tool": "recall_evidence",
+                    "task_id": task.task_id,
+                    "args": {"query": f"archive direction {index}"},
+                }
+            )
+        )
+    assert archive_recall_available(state, task_ids={task.task_id}) is False
 
 
 def test_v4_finding_does_not_resolve_claim_route_before_semantic_decision() -> None:

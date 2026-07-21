@@ -474,13 +474,15 @@ class ImageAccountPlanningOutput(StrictModel):
         ]
         if len(hypothesis_keys) != len(set(hypothesis_keys)):
             raise ValueError("search hypothesis keys must be unique")
-        high_claims = {
+        high_claims = [
             item.claim_key
             for item in self.image_claims
             if item.salience == "high"
-        }
-        if not high_claims:
-            raise ValueError("image account requires a high-salience claim")
+        ]
+        if len(high_claims) != 1:
+            raise ValueError(
+                "image account requires exactly one high-salience central claim"
+            )
         return self
 
 

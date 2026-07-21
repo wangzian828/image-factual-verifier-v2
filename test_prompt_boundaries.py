@@ -55,8 +55,10 @@ def test_hot_path_prompts_stay_semantic_and_compact() -> None:
     assert "do not own the verdict" in image_account_prompt
     assert "SearchHypotheses ask what actually happened" in image_account_prompt
     assert "identical image can be found" in image_account_prompt
-    assert "one high-salience ImageClaim" in image_account_prompt
-    assert "central subject, event, and relation" in image_account_prompt
+    assert "exactly one high-salience ImageClaim" in image_account_prompt
+    assert "complete central subject-event relation" in image_account_prompt
+    assert "not separate visible fragments" in image_account_prompt
+    assert "two medium Claims" in image_account_prompt
     assert "independent verdict-changing assertions" in image_account_prompt
     assert "do not inventory visible details" in image_account_prompt
     assert "Image clues do not limit the search" in image_account_prompt

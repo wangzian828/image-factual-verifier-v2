@@ -63,6 +63,7 @@ INITIAL_TASKS_MAX = 4
 TOTAL_TASKS_MAX = 12
 NEW_TASKS_PER_REFLECTION_MAX = 3
 MAX_TEXT_SEARCH_ROUTES_PER_TASK = 2
+MAX_ARCHIVE_RECALL_ROUTES_PER_TASK = 2
 MAX_CORE_FACT_REFINEMENTS = 1
 MAX_INSPECTION_CANDIDATES_PER_BATCH = 4
 MAX_INSPECTION_ATTEMPTS_PER_BATCH = 2
@@ -5356,6 +5357,33 @@ def remaining_claim_hypothesis_routes(
             )
         )
     return list(dict.fromkeys(routes))
+
+
+def archive_recall_available(
+    state: ImageOnlyInvestigationState,
+    *,
+    task_ids: set[str],
+) -> bool:
+    """Allow bounded optional recall only after a task has produced archive material."""
+
+    attempted = _attempted_routes_by_task(state)
+    for task_id in task_ids:
+        routes = attempted.get(task_id, [])
+        has_investigation_material = any(
+            str(route.get("tool", "")).strip()
+            not in {"recall_evidence", "read_evidence"}
+            for route in routes
+        )
+        recall_count = sum(
+            str(route.get("tool", "")).strip() == "recall_evidence"
+            for route in routes
+        )
+        if (
+            has_investigation_material
+            and recall_count < MAX_ARCHIVE_RECALL_ROUTES_PER_TASK
+        ):
+            return True
+    return False
 
 
 def pending_discrepancy_evidence_ids(

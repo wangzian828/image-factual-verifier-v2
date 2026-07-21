@@ -35,7 +35,9 @@ One positive factual statement communicated by the pixels or embedded text.
 - `salience: high | medium`
 - `status: open | supported | refuted | conflicted | unresolved`
 
-Planning emits one to three high-value claims. It does not select a verdict owner.
+Planning emits exactly one high-salience Claim for the complete central real-world
+relation and may add up to two medium, independently verdict-changing Claims. It
+does not select a verdict owner.
 
 ### SearchHypothesis
 
