@@ -65,7 +65,7 @@ def build_vlm_client(
             or os.getenv("QWEN_LOCAL_BASE_URL", "http://127.0.0.1:8899/v1"),
             wire_api=wire_api or "chat_completions",
             model_name=model_name
-            or os.getenv("QWEN_LOCAL_MODEL", "ifv-qwen35-9b-base"),
+            or os.getenv("QWEN_LOCAL_MODEL", "ifv-qwen3-vl-8b-thinking"),
             timeout=timeout,
             max_retries=max_retries,
         )

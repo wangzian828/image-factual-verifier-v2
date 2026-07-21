@@ -51,7 +51,8 @@ class LLMBackend(ABC):
 class APIBackend(LLMBackend):
     """OpenAI-compatible API backend using async httpx.
 
-    Supports qwen (dashscope), qwen_local (vLLM), necodex, and standard OpenAI endpoints.
+    Supports qwen (DashScope), qwen_local (OpenAI-compatible local serving),
+    necodex, and standard OpenAI endpoints.
     """
 
     def __init__(
@@ -120,7 +121,7 @@ class APIBackend(LLMBackend):
 
     def _resolve_extra_body(self) -> Dict[str, Any]:
         if self.provider == "gpustack":
-            # Must disable thinking mode for Qwen3.5
+            # Keep this externally hosted Qwen-family endpoint deterministic.
             return {"chat_template_kwargs": {"enable_thinking": False}}
         return {}
 
@@ -230,7 +231,10 @@ class APIBackend(LLMBackend):
                 data = response.json()
 
                 choice = data["choices"][0]
-                text = self._extract_chat_completion_text(choice)
+                text = self._extract_chat_completion_text(
+                    choice,
+                    allow_reasoning_fallback=bool(response_format),
+                )
                 if not text.strip():
                     raise RuntimeError("Chat Completions returned an empty model response.")
 
@@ -291,7 +295,11 @@ class APIBackend(LLMBackend):
         return normalized
 
     @staticmethod
-    def _extract_chat_completion_text(choice: Dict[str, Any]) -> str:
+    def _extract_chat_completion_text(
+        choice: Dict[str, Any],
+        *,
+        allow_reasoning_fallback: bool = False,
+    ) -> str:
         """Extract assistant text from OpenAI-compatible chat completion payloads.
 
         Different providers are slightly inconsistent here:
@@ -300,34 +308,6 @@ class APIBackend(LLMBackend):
         - `message.content` may be omitted while provider-specific fields exist
         """
         message = choice.get("message") or {}
-        content = message.get("content")
-
-        if isinstance(content, str):
-            return content
-
-        if isinstance(content, list):
-            parts: List[str] = []
-            for item in content:
-                if isinstance(item, str):
-                    parts.append(item)
-                    continue
-                if not isinstance(item, dict):
-                    continue
-                text = item.get("text")
-                if isinstance(text, str) and text:
-                    parts.append(text)
-                    continue
-                if item.get("type") == "output_text":
-                    value = item.get("text")
-                    if isinstance(value, str) and value:
-                        parts.append(value)
-            if parts:
-                return "\n".join(parts)
-
-        reasoning = message.get("reasoning_content")
-        if isinstance(reasoning, str) and reasoning:
-            return reasoning
-
         tool_calls = message.get("tool_calls")
         if isinstance(tool_calls, list) and tool_calls:
             if len(tool_calls) != 1:
@@ -350,6 +330,36 @@ class APIBackend(LLMBackend):
                 ensure_ascii=False,
             )
             return f"<tool_call>{serialized}</tool_call>"
+
+        content = message.get("content")
+        if isinstance(content, str) and content.strip():
+            return content
+
+        if isinstance(content, list):
+            parts: List[str] = []
+            for item in content:
+                if isinstance(item, str) and item.strip():
+                    parts.append(item)
+                    continue
+                if not isinstance(item, dict):
+                    continue
+                text = item.get("text")
+                if isinstance(text, str) and text.strip():
+                    parts.append(text)
+            if parts:
+                return "\n".join(parts)
+
+        # Some reasoning-aware servers place constrained JSON in this field
+        # because the checkpoint's generation prompt begins inside <think>.
+        # Only schema-bound requests may consume it; their normal parser still
+        # validates the candidate before it can become a canonical action.
+        reasoning = message.get("reasoning_content")
+        if (
+            allow_reasoning_fallback
+            and isinstance(reasoning, str)
+            and reasoning.strip()
+        ):
+            return reasoning
 
         return ""
 

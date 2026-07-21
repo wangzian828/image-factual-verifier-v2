@@ -15,7 +15,7 @@ from src.tools.base import BaseTool
 class QwenFakeBackend:
     provider = "qwen_local"
     wire_api = "chat_completions"
-    model_name = "ifv-qwen35-4b-smoke"
+    model_name = "ifv-qwen3-vl-8b-thinking-smoke"
 
     def __init__(self, responses: List[LLMResponse]):
         self.responses = list(responses)
@@ -191,3 +191,45 @@ def test_qwen_no_tool_stage_uses_json_schema_and_redacts_image(
         "runtime_image": True,
     }
     assert "data:image/" not in json.dumps(snapshot)
+
+
+def test_qwen_native_tool_call_wins_over_reasoning_and_blank_content() -> None:
+    choice = {
+        "message": {
+            "role": "assistant",
+            "content": "\n\n",
+            "reasoning_content": "I should call the tool.",
+            "tool_calls": [
+                {
+                    "id": "call-real-server",
+                    "type": "function",
+                    "function": {
+                        "name": "lookup_fact",
+                        "arguments": '{"query":"actual transport"}',
+                    },
+                }
+            ],
+        }
+    }
+
+    assert APIBackend._extract_chat_completion_text(choice) == (
+        '<tool_call>{"name": "lookup_fact", '
+        '"arguments": {"query": "actual transport"}}</tool_call>'
+    )
+
+
+def test_qwen_reasoning_fallback_is_limited_to_schema_bound_requests() -> None:
+    choice = {
+        "message": {
+            "role": "assistant",
+            "content": None,
+            "reasoning_content": '{"answer":"coach"}',
+            "tool_calls": None,
+        }
+    }
+
+    assert APIBackend._extract_chat_completion_text(choice) == ""
+    assert APIBackend._extract_chat_completion_text(
+        choice,
+        allow_reasoning_fallback=True,
+    ) == '{"answer":"coach"}'

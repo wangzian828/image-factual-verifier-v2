@@ -17,8 +17,8 @@ def test_teacher_profile_is_fixed_to_accepted_gemini_wire() -> None:
 
 def test_local_student_profile_uses_qwen_without_gemini_fallback() -> None:
     settings = resolve_provider_settings(
-        profile_id="student-qwen35-local",
-        environ={"QWEN_LOCAL_MODEL": "ifv-qwen35-4b-smoke"},
+        profile_id="student-qwen3-vl-local",
+        environ={"QWEN_LOCAL_MODEL": "ifv-qwen3-vl-8b-thinking-smoke"},
     )
     backend = APIBackend(
         provider=settings.provider,
@@ -28,7 +28,7 @@ def test_local_student_profile_uses_qwen_without_gemini_fallback() -> None:
 
     assert settings.provider == "qwen_local"
     assert settings.vlm_provider == "qwen_local"
-    assert settings.model_name == "ifv-qwen35-4b-smoke"
+    assert settings.model_name == "ifv-qwen3-vl-8b-thinking-smoke"
     assert backend.provider == "qwen_local"
     assert backend.base_url == "http://127.0.0.1:8899/v1"
     assert backend.wire_api == "chat_completions"

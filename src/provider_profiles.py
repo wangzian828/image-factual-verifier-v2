@@ -39,10 +39,10 @@ PROVIDER_PROFILES = {
         llm_wire_api="interactions",
         vlm_wire_api="interactions",
     ),
-    "student-qwen35-local": ProviderProfile(
-        profile_id="student-qwen35-local",
+    "student-qwen3-vl-local": ProviderProfile(
+        profile_id="student-qwen3-vl-local",
         provider="qwen_local",
-        default_model="ifv-qwen35-9b-base",
+        default_model="ifv-qwen3-vl-8b-thinking",
         model_env="QWEN_LOCAL_MODEL",
         vlm_provider="qwen_local",
         llm_wire_api="chat_completions",

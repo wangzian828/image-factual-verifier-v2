@@ -84,16 +84,17 @@ Phase 0～10 保留为重构历史，但下面四项新决定覆盖旧计划中�
 ### 2026-07-21 Qwen 部署决策
 
 Qwen 部署、SFT 与 Agent RL 的唯一执行主计划为
-`2026-07-21-qwen35-9b-deployment-and-training-infrastructure.md`。已确认：
+`2026-07-21-qwen3-vl-8b-deployment-and-training-infrastructure.md`。已确认：
 
-1. 正式学生改为 `Qwen/Qwen3.5-9B`；先用 `Qwen/Qwen3.5-4B` 单卡快速打通
-   环境、协议、v4 adapter 和短训练，再由 9B 原样复验；Qwen3-VL-8B 旧计划不再执行。
+1. 正式学生统一为服务器已有的 `Qwen3-VL-8B-Thinking`，不再执行 Qwen3.5 下载、
+   4B 快速启动或 9B 迁移路线。
 2. gpu-13 只使用物理 GPU `4,5,6,7` 中当时空闲的卡，最多四张，不占用 0～3。
-3. 不先运行 Gemini 完整 20 例。完成 Qwen3.5-9B serving、v4 adapter 和四条 Qwen
+3. 不先运行 Gemini 完整 20 例。完成 Qwen3-VL serving、v4 adapter 和四条 Qwen
    base canary 后，由 Qwen base 运行完整 20 例；相同冻结评测在 SFT、RL 后重跑。
 4. 20 例是开发评测，不进入训练上下文；Gemini 已通过的四条 canary 保留为教师和基线。
-5. SFT 使用 ms-swift/DeepSpeed 的 Qwen3.5-9B 全参数多模态门禁；Agent RL 保留
-   v4 runtime 环境所有权，以 rLLM/veRL gateway 为首选，不复制第二套状态机。
+5. SFT 以 ms-swift/DeepSpeed 的 Qwen3-VL-8B 全参数多模态门禁为首选；Agent RL 保留
+   v4 runtime 环境所有权，以 rLLM/veRL gateway 为首选，不复制第二套状态机。框架必须
+   经过 gpu-13 实测；不兼容时动态切换成熟替代框架，但不得降低契约和验收标准。
 
 ## 目标
 
@@ -617,9 +618,9 @@ engineering_error`。尚有档案待精确回读、新 Evidence 待图像重检�
 
 ### Phase 17：训练基建前置门禁
 
-本阶段以 `2026-07-21-qwen35-9b-deployment-and-training-infrastructure.md` 为准。
-先清理训练仓库中的失效实验脚本、重复 schema、旧生成物和 Qwen3-VL 过时入口，但保留
-冻结 trace、迁移记录和审计工具。随后部署 Qwen3.5-9B、接入 v4 并由 Qwen 运行 20 例，
+本阶段以 `2026-07-21-qwen3-vl-8b-deployment-and-training-infrastructure.md` 为准。
+先清理训练仓库中的失效实验脚本、重复 schema、旧生成物和 Qwen3.5 活动入口，但保留
+冻结 trace、迁移记录和审计工具。随后部署 Qwen3-VL-8B-Thinking、接入 v4 并由 Qwen 运行 20 例，
 再依次完成 SFT 和 Agent RL：
 
 - SFT 与 RL 共享同一 archive/workspace/action/gain/verdict 轨迹契约；

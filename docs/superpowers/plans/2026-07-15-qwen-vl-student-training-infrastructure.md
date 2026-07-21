@@ -2,8 +2,8 @@
 
 **Date:** 2026-07-15  
 **Status:** superseded on 2026-07-21 by
-`2026-07-21-qwen35-9b-deployment-and-training-infrastructure.md`; retained as research
-and implementation history
+`2026-07-21-qwen3-vl-8b-deployment-and-training-infrastructure.md`; retained only as
+research and implementation history; none of its framework/model choices are active
 **Runtime project:** `image-factual-verifier-v3`  
 **Training project:** new, separate `image-factual-verifier-training` repository  
 **Teacher:** Gemini  
