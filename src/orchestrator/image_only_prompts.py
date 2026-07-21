@@ -130,6 +130,7 @@ SearchHypotheses that establish the underlying real-world facts. The image suppl
 claims and clues, not the search boundary.
 Prior knowledge may supply unverified leads; only tool Evidence establishes facts.
 Hypotheses do not own the verdict.
+The input JSON contains observations, not an output example.
 Return the required JSON schema.
 """
 
@@ -714,7 +715,7 @@ def render_image_account_planning_context(
     *,
     perception: Any = None,
 ) -> str:
-    """Render only public runtime observations for v4 Image Account Planning."""
+    """Render a loss-aware observation projection for initial v4 Planning."""
 
     perception_payload: Dict[str, Any] = {}
     if perception is not None:
@@ -722,46 +723,106 @@ def render_image_account_planning_context(
             perception_payload = perception.model_dump(mode="json")
         elif isinstance(perception, dict):
             perception_payload = dict(perception)
+    entities: List[Dict[str, Any]] = []
+    seen_entities: set[tuple[str, str]] = set()
+    for item in perception_payload.get("entities", []):
+        name = str(item.get("name", "")).strip()
+        entity_type = str(item.get("entity_type", "")).strip()
+        key = (name.casefold(), entity_type.casefold())
+        if not name or key in seen_entities:
+            continue
+        seen_entities.add(key)
+        entities.append(
+            {
+                "name": name,
+                "entity_type": entity_type,
+                "confidence": item.get("confidence", 0.0),
+            }
+        )
+
+    positioned_ocr: List[Dict[str, Any]] = []
+    seen_ocr: set[tuple[str, str]] = set()
+    for item in perception_payload.get("text_regions", []):
+        text = str(item.get("text", "")).strip()
+        quad = item.get("bbox_quad") or []
+        region: List[float] = []
+        if len(quad) == 4 and all(len(point) == 2 for point in quad):
+            xs = [float(point[0]) for point in quad]
+            ys = [float(point[1]) for point in quad]
+            region = [min(xs), min(ys), max(xs), max(ys)]
+        key = (text.casefold(), json.dumps(region))
+        if not text or key in seen_ocr:
+            continue
+        seen_ocr.add(key)
+        positioned_ocr.append(
+            {
+                "text": text,
+                "region": region,
+                "confidence": item.get("confidence", 0.0),
+            }
+        )
+
+    visual_fact_anchors: List[Dict[str, Any]] = []
+    seen_fact_statements: set[str] = set()
+    for item in state.facts:
+        if item.origin.type not in {"input_image", "ocr"}:
+            continue
+        # OCR bootstrap creates a second, mechanically derived
+        # context_suggested_by_text relation for every literal token. Planning
+        # retains the literal text_claim and image fact, so this duplicate adds
+        # no observation and previously doubled the prompt.
+        if item.predicate == "context_suggested_by_text":
+            continue
+        statement_key = " ".join(item.statement.casefold().split())
+        if statement_key in seen_fact_statements:
+            continue
+        seen_fact_statements.add(statement_key)
+        visual_fact_anchors.append(
+            {
+                "fact_id": item.fact_id,
+                "kind": item.kind,
+                "statement": item.statement,
+                "predicate": item.predicate,
+            }
+        )
+
+    retrieval_clues: List[Dict[str, Any]] = []
+    seen_clues: set[tuple[str, str]] = set()
+    for item in state.retrieval_anchors:
+        key = (item.kind, " ".join(item.value.casefold().split()))
+        if key in seen_clues:
+            continue
+        seen_clues.add(key)
+        retrieval_clues.append(
+            {
+                "kind": item.kind,
+                "value": item.value,
+                "confidence": item.confidence,
+            }
+        )
+
+    # Do not include bootstrap ResearchTasks here. They are deterministic
+    # retrieval scaffolding created before semantic Planning and are replaced
+    # by the accepted SearchHypotheses. Presenting them as input made smaller
+    # models mistake internal state for the requested output schema.
     return json.dumps(
         {
-            # Planning needs public case/media identity, not the final
-            # Judgment contract. ``required_output`` and ``stop_policy``
-            # describe later stages and can be mistaken for Planning fields.
+            "context_role": "observations_only",
             "case": {
                 "case_id": state.brief.case_id,
                 "input_mode": state.brief.input_mode,
                 "media_type": state.brief.media_type,
             },
-            "perception": {
-                "scene_description": perception_payload.get(
-                    "scene_description",
-                    "",
-                ),
+            "scene": {
+                "description": perception_payload.get("scene_description", ""),
                 "image_type": perception_payload.get(
-                    "image_type",
-                    state.brief.media_type,
+                    "image_type", state.brief.media_type
                 ),
-                "entities": perception_payload.get("entities", []),
             },
-            "positioned_ocr": perception_payload.get("text_regions", []),
-            "visual_entities": [
-                item.model_dump(mode="json")
-                for item in state.entities[:24]
-                if item.origin in {"input_image", "ocr"}
-            ],
-            "pixel_ocr_visual_facts": [
-                item.model_dump(mode="json")
-                for item in state.facts
-                if item.origin.type in {"input_image", "ocr"}
-            ][:48],
-            "retrieval_anchors": [
-                item.model_dump(mode="json")
-                for item in state.retrieval_anchors[:24]
-            ],
-            "bootstrap_tasks": [
-                item.model_dump(mode="json")
-                for item in state.tasks[:4]
-            ],
+            "salient_entities": entities,
+            "positioned_ocr": positioned_ocr,
+            "visual_fact_anchors": visual_fact_anchors,
+            "retrieval_clues": retrieval_clues,
             "planning_limits": {
                 "image_claims": 3,
                 "search_hypotheses": 6,
@@ -769,7 +830,7 @@ def render_image_account_planning_context(
             },
         },
         ensure_ascii=False,
-        indent=2,
+        separators=(",", ":"),
     )
 
 

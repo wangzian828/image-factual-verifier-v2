@@ -54,13 +54,14 @@ Core instruction:
 - Sees original image: yes, controlled view supplied explicitly
 - Thinking: `high` by default; thought tokens are recorded, never Evidence
 - Input:
-  - PerceptionReport;
-  - OCR observations;
-  - pixel/OCR VisualFacts;
-  - retrieval anchors;
-  - bootstrap tasks.
+  - a compact, deduplicated projection of the PerceptionReport;
+  - positioned OCR observations;
+  - all non-mechanical pixel/OCR VisualFact anchors;
+  - deduplicated retrieval clues.
   - public case/media identity only; final Judgment fields such as
     `required_output` and `stop_policy` are not included in Planning.
+  - deterministic bootstrap ResearchTasks are retained in canonical state but are
+    not model-visible because Planning replaces them with semantic hypotheses.
 - Purpose:
   - emit one to three high-salience ImageClaims;
   - separately emit at least one bounded SearchHypothesis without Claim-key binding;
@@ -81,7 +82,8 @@ Exact instruction:
 > SearchHypotheses that establish the underlying real-world facts. The image supplies
 > claims and clues, not the search boundary.
 > Prior knowledge may supply unverified leads; only tool Evidence establishes facts.
-> Hypotheses do not own the verdict. Return the required JSON schema.
+> Hypotheses do not own the verdict. The input JSON contains observations, not an
+> output example. Return the required JSON schema.
 
 For the local Qwen Chat Completions profile, the same canonical output model is
 used. The wire schema omits only string `minLength`, `maxLength`, `pattern`, and

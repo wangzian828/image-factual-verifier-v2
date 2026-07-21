@@ -17,10 +17,13 @@
 ## Image Account Planning
 
 Planning is a standalone request and receives a controlled original-image view.
-It also receives perception, positioned OCR, pixel/OCR VisualFacts, retrieval
-anchors, and bootstrap tasks. It emits positive ImageClaims and tentative
-SearchHypotheses; it does not create a core verdict fact or verdict. The Planning
-schema exposes no Claim key or per-Claim verification question on a hypothesis.
+It also receives a compact observation packet containing deduplicated perception,
+positioned OCR, all non-mechanical pixel/OCR VisualFact anchors, and retrieval
+clues. Deterministic bootstrap tasks and lifecycle handoff metadata stay in the
+canonical archive but are not presented as Planning output examples. It emits
+positive ImageClaims and tentative SearchHypotheses; it does not create a core
+verdict fact or verdict. The Planning schema exposes no Claim key or per-Claim
+verification question on a hypothesis.
 It must still emit at least one executable route; this is a structural requirement,
 not a rule about which fact the route should investigate.
 

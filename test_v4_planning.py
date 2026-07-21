@@ -14,6 +14,7 @@ from src.orchestrator.investigation_models import (
     ImageOnlyInvestigationState,
     InvestigationBrief,
     InvestigationEvidence,
+    RetrievalAnchor,
     VisualEntity,
     VisualFact,
 )
@@ -148,7 +149,7 @@ class ImageAccountPlanningBackend:
                 if isinstance(item, dict) and item.get("type") == "text"
             )
             context = json.loads(text)
-            anchor_id = context["pixel_ocr_visual_facts"][0]["fact_id"]
+            anchor_id = context["visual_fact_anchors"][0]["fact_id"]
         else:
             anchor_id = "unknown-anchor"
         if self.unknown_anchor:
@@ -493,6 +494,74 @@ def test_image_account_planning_context_excludes_judgment_controls(
     assert "brief" not in context
     assert "required_output" not in json.dumps(context)
     assert "stop_policy" not in json.dumps(context)
+    assert context["context_role"] == "observations_only"
+    assert "bootstrap_tasks" not in context
+    assert "visual_entities" not in context
+    assert "pixel_ocr_visual_facts" not in context
+    assert "visual_fact_anchors" in context
+
+
+def test_image_account_planning_context_deduplicates_internal_bootstrap_rows(
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "planning-compact.jpg"
+    image_path.write_bytes(b"v4-planning-compact")
+    state, investigation = _state(image_path)
+    base_fact = investigation.facts[0]
+    for index in range(40):
+        investigation.facts.append(
+            VisualFact(
+                fact_id=f"fact-derived-{index}",
+                kind="relation",
+                statement=(
+                    f'The visible text "TOKEN-{index}" is a candidate anchor '
+                    "for identifying the depicted entity, place, or event."
+                ),
+                subject_entity_id=base_fact.subject_entity_id,
+                predicate="context_suggested_by_text",
+                object_entity_id=base_fact.object_entity_id,
+                status="candidate",
+                basis_ids=[base_fact.fact_id],
+                origin=FactOrigin(type="ocr", origin_ids=[base_fact.fact_id]),
+            )
+        )
+    for index in range(35):
+        investigation.facts.append(
+            VisualFact(
+                fact_id=f"fact-observed-{index}",
+                kind="attribute",
+                statement=f"Distinct useful visual observation {index}.",
+                subject_entity_id=base_fact.subject_entity_id,
+                predicate="visible_detail",
+                status="candidate",
+                basis_ids=[base_fact.fact_id],
+                origin=FactOrigin(type="input_image", origin_ids=[base_fact.fact_id]),
+            )
+        )
+        investigation.retrieval_anchors.append(
+            RetrievalAnchor(
+                anchor_id=f"anchor-observed-{index}",
+                kind="entity",
+                value=f"distinct useful retrieval clue {index}",
+                confidence=0.8,
+            )
+        )
+
+    rendered = render_image_account_planning_context(
+        investigation,
+        perception=state.perception,
+    )
+    context = json.loads(rendered)
+
+    assert all(
+        item["predicate"] != "context_suggested_by_text"
+        for item in context["visual_fact_anchors"]
+    )
+    assert sum(
+        item["predicate"] == "visible_detail"
+        for item in context["visual_fact_anchors"]
+    ) == 35
+    assert len(context["retrieval_clues"]) == 35
 
 
 def test_image_account_planning_revisions_are_atomic_and_inherit_image_root(
