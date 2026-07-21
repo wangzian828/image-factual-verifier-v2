@@ -114,6 +114,8 @@ def test_qwen35_freeze_gate_records_environment_nccl_and_model_hashes() -> None:
     assert "verify_nccl_tensor_parallel.py" in source
     assert "pip freeze --all" in source
     assert "model-files.sha256" in source
+    assert 'data.get("weight_map", {}).values()' in source
+    assert '"$MODEL/$shard"' in source
     assert ".ifv-vllm-qwen35-ready" in source
 
 

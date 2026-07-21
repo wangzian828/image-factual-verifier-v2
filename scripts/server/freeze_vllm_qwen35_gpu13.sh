@@ -20,10 +20,32 @@ if find "$MODEL" -maxdepth 2 -type f -path '*/._____temp/*' -print -quit | grep 
   echo "model download is incomplete: temporary shards remain" >&2
   exit 2
 fi
-if [[ "$(find "$MODEL" -maxdepth 1 -name 'model-*.safetensors' -type f | wc -l)" -ne 4 ]]; then
-  echo "model directory does not contain four final safetensors shards" >&2
+mapfile -t MODEL_SHARDS < <("$PYTHON" - "$MODEL/model.safetensors.index.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+index = Path(sys.argv[1])
+data = json.loads(index.read_text(encoding="utf-8"))
+shards = sorted(set(data.get("weight_map", {}).values()))
+if len(shards) != 4:
+    raise SystemExit(f"expected four shards in {index}, got {len(shards)}")
+for shard in shards:
+    if not isinstance(shard, str) or Path(shard).name != shard or not shard.endswith(".safetensors"):
+        raise SystemExit(f"unsafe shard entry in {index}: {shard!r}")
+    print(shard)
+PY
+)
+if [[ "${#MODEL_SHARDS[@]}" -ne 4 ]]; then
+  echo "model index does not resolve to four final safetensors shards" >&2
   exit 2
 fi
+for shard in "${MODEL_SHARDS[@]}"; do
+  if [[ ! -f "$MODEL/$shard" ]]; then
+    echo "model shard listed by index is missing: $MODEL/$shard" >&2
+    exit 2
+  fi
+done
 
 mkdir -p "$ARTIFACT_DIR"
 CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-4,5}" \
@@ -39,9 +61,16 @@ CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-4,5}" \
 "$PYTHON" -m pip check
 "$PYTHON" -m pip freeze --all >"$ARTIFACT_DIR/pip-freeze.txt"
 sha256sum "$ARTIFACT_DIR/pip-freeze.txt" >"$ARTIFACT_DIR/pip-freeze.sha256"
-sha256sum "$MODEL"/config.json "$MODEL"/tokenizer_config.json \
-  "$MODEL"/preprocessor_config.json "$MODEL"/model.safetensors.index.json \
-  "$MODEL"/model-*.safetensors >"$ARTIFACT_DIR/model-files.sha256"
+MODEL_HASH_INPUTS=(
+  "$MODEL/config.json"
+  "$MODEL/tokenizer_config.json"
+  "$MODEL/preprocessor_config.json"
+  "$MODEL/model.safetensors.index.json"
+)
+for shard in "${MODEL_SHARDS[@]}"; do
+  MODEL_HASH_INPUTS+=("$MODEL/$shard")
+done
+sha256sum "${MODEL_HASH_INPUTS[@]}" >"$ARTIFACT_DIR/model-files.sha256"
 CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-4,5}" \
   "$PYTHON" -m ifv_training environment-manifest \
   --repo-root "$REPO_ROOT" \
