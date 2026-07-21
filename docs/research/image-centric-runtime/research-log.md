@@ -1,5 +1,20 @@
 # Image-Centric Runtime Research Log
 
+## 2026-07-22 — heterogeneous Decision contract failure
+
+- In `qwen35-heterogeneous3-753090e`, Andreea and Pillars completed without
+  engineering errors and passed strict audit; Monarch failed after three rejected
+  Discrepancy Decision outputs.
+- The first Monarch output simultaneously cited visual/hypothesis IDs as Evidence,
+  inverted a support Evidence stance into `refuted`, and tried to establish a
+  decisive discrepancy without a qualified refute chain. The fail-fast reducer
+  exposed only one error per correction, exhausting the fixed correction budget.
+- The generic repair defines each planned ImageClaim as the positive real-world
+  proposition communicated by the image, forbids ready-made fact-check queries,
+  and reports all independently detectable reference, ownership, direction, and
+  Finding-chain errors in one correction response. Evidence semantics and the
+  correction budget remain unchanged.
+
 ## 2026-07-22 — profile-owned endpoint canary accepted
 
 - `qwen35-case04886-profile-6568a61` ran with all Qwen endpoint/model environment

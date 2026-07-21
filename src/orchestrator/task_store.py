@@ -917,6 +917,141 @@ def _claim_directional_chain_ids(
     return qualified_evidence_ids, finding_ids
 
 
+def _discrepancy_contract_errors(
+    state: ImageOnlyInvestigationState,
+    output: DiscrepancyDecisionOutput,
+    *,
+    reviewed_evidence_ids: Sequence[str],
+    claim_by_id: Mapping[str, ImageClaim],
+    evidence_by_id: Mapping[str, InvestigationEvidence],
+    fact_by_id: Mapping[str, VisualFact],
+    task_by_id: Mapping[str, ResearchTask],
+) -> list[str]:
+    """Report independent reference/direction failures in one correction turn."""
+
+    errors: list[str] = []
+    reviewed_ids = set(reviewed_evidence_ids)
+
+    for proposal in output.claim_assessments:
+        claim = claim_by_id.get(proposal.claim_id)
+        if claim is None:
+            errors.append(
+                f"assessment cites unknown ImageClaim {proposal.claim_id!r}"
+            )
+            continue
+        evidence_ids = list(dict.fromkeys(proposal.selected_evidence_ids))
+        unknown_ids = [item for item in evidence_ids if item not in evidence_by_id]
+        if unknown_ids:
+            errors.append(
+                f"assessment for ImageClaim {proposal.claim_id!r} cites unknown "
+                f"Evidence: {', '.join(unknown_ids)}"
+            )
+        known_ids = [item for item in evidence_ids if item in evidence_by_id]
+        unreviewed_ids = [item for item in known_ids if item not in reviewed_ids]
+        if unreviewed_ids:
+            errors.append(
+                f"assessment for ImageClaim {proposal.claim_id!r} uses unreviewed "
+                f"Evidence: {', '.join(unreviewed_ids)}"
+            )
+        outside_ids = [
+            evidence_id
+            for evidence_id in known_ids
+            if evidence_by_id[evidence_id].task_id not in task_by_id
+            or proposal.claim_id
+            not in task_by_id[evidence_by_id[evidence_id].task_id].claim_ids
+        ]
+        if outside_ids:
+            errors.append(
+                f"assessment for ImageClaim {proposal.claim_id!r} uses Evidence "
+                f"outside its owned tasks: {', '.join(outside_ids)}"
+            )
+        for stance in required_assessment_stances(proposal.assessment):
+            qualified_ids, finding_ids = _claim_directional_chain_ids(
+                state,
+                claim_id=claim.claim_id,
+                claim_fact_id=claim.fact_id,
+                evidence_ids=known_ids,
+                stance=stance,
+                evidence_by_id=evidence_by_id,
+                task_by_id=task_by_id,
+            )
+            if not qualified_ids:
+                selected_directions = sorted(
+                    {evidence_by_id[item].stance for item in known_ids}
+                )
+                errors.append(
+                    f"{proposal.assessment} assessment for ImageClaim "
+                    f"{proposal.claim_id!r} requires owned qualified {stance} "
+                    "Evidence; selected Evidence records direction(s): "
+                    f"{', '.join(selected_directions) or 'none'}. Omit the "
+                    "assessment or keep it insufficient; do not relabel Evidence"
+                )
+            elif not finding_ids:
+                errors.append(
+                    f"{proposal.assessment} assessment for ImageClaim "
+                    f"{proposal.claim_id!r} requires a {stance} Finding -> "
+                    "Evidence chain"
+                )
+
+    discrepancy = output.material_discrepancy
+    if discrepancy is not None:
+        unknown_claim_ids = [
+            item for item in discrepancy.affected_claim_ids if item not in claim_by_id
+        ]
+        if unknown_claim_ids:
+            errors.append(
+                "discrepancy cites unknown ImageClaim: "
+                + ", ".join(unknown_claim_ids)
+            )
+        unknown_anchor_ids = [
+            item for item in discrepancy.visual_anchor_fact_ids if item not in fact_by_id
+        ]
+        if unknown_anchor_ids:
+            errors.append(
+                "discrepancy cites unknown visual anchor: "
+                + ", ".join(unknown_anchor_ids)
+            )
+        unknown_evidence_ids = [
+            item for item in discrepancy.evidence_ids if item not in evidence_by_id
+        ]
+        if unknown_evidence_ids:
+            errors.append(
+                "discrepancy cites unknown Evidence: "
+                + ", ".join(unknown_evidence_ids)
+            )
+        known_discrepancy_ids = [
+            item for item in discrepancy.evidence_ids if item in evidence_by_id
+        ]
+        unreviewed_discrepancy_ids = [
+            item for item in known_discrepancy_ids if item not in reviewed_ids
+        ]
+        if unreviewed_discrepancy_ids:
+            errors.append(
+                "discrepancy uses unreviewed Evidence: "
+                + ", ".join(unreviewed_discrepancy_ids)
+            )
+        if (
+            discrepancy.materiality == "decisive"
+            and discrepancy.status == "established"
+            and not any(
+                evidence_is_qualified_for_stance(evidence_by_id[item], "refute")
+                for item in known_discrepancy_ids
+            )
+        ):
+            selected_directions = sorted(
+                {evidence_by_id[item].stance for item in known_discrepancy_ids}
+            )
+            errors.append(
+                "established decisive discrepancy requires qualified refute "
+                "Evidence; selected Evidence records direction(s): "
+                f"{', '.join(selected_directions) or 'none'}. Remove the "
+                "discrepancy or select a qualified refute chain; do not relabel "
+                "Evidence"
+            )
+
+    return list(dict.fromkeys(errors))
+
+
 def apply_discrepancy_decision(
     state: ImageOnlyInvestigationState,
     output: DiscrepancyDecisionOutput,
@@ -968,6 +1103,21 @@ def apply_discrepancy_decision(
         return {"accepted": False, "rejected_reason": "search hypothesis budget exhausted"}
     if len(candidate.tasks) + len(output.new_hypotheses) > TOTAL_TASKS_MAX:
         return {"accepted": False, "rejected_reason": "total task budget exhausted"}
+
+    contract_errors = _discrepancy_contract_errors(
+        candidate,
+        output,
+        reviewed_evidence_ids=reviewed_ids,
+        claim_by_id=claim_by_id,
+        evidence_by_id=evidence_by_id,
+        fact_by_id=fact_by_id,
+        task_by_id=task_by_id,
+    )
+    if contract_errors:
+        return {
+            "accepted": False,
+            "rejected_reason": "; ".join(contract_errors),
+        }
 
     accepted_assessment_ids: List[str] = []
     for proposal in output.claim_assessments:

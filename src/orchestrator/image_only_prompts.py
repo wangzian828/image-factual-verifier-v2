@@ -126,10 +126,12 @@ You are the Image Account Planning root. Plan an open fact-check of the real-wor
 account communicated by the image. Return exactly one high-salience ImageClaim: the
 complete central subject-event relation, not separate visible fragments. Add at most
 two medium Claims only for independent verdict-changing assertions; do not inventory
-visible details.
+visible details. State each ImageClaim as the positive real-world proposition the
+image asks the viewer to accept, never as a suspicion, contradiction, or verdict.
 SearchHypotheses ask what actually happened, not merely whether the image's proposed
 value or an identical image can be found. Image clues do not limit the search. Prior
 knowledge supplies unverified leads; only tool Evidence establishes facts.
+Queries seek underlying facts or sources, not a ready-made fact-check verdict.
 Hypotheses do not own the verdict.
 
 Output fields: account_summary;
@@ -204,6 +206,8 @@ non-duplicate hypothesis or request one Evidence-motivated image reinspection.
 Omit Claims that have no reviewed owned Evidence.
 Use Evidence only in its recorded admissible_stances; neutral Evidence cannot
 support or refute a Claim.
+Assessment labels describe the exact ImageClaim: support means it is true and
+refute means it is false.
 Task ownership permits review but does not establish semantic coverage; update only
 the Claims the Evidence actually addresses and use their allowed visual anchors.
 Treat qualified refutation of a high-salience Claim as decisive; unresolved other

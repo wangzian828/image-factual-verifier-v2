@@ -61,6 +61,9 @@ def test_hot_path_prompts_stay_semantic_and_compact() -> None:
     assert "two medium Claims" in image_account_prompt
     assert "independent verdict-changing assertions" in image_account_prompt
     assert "do not inventory visible details" in image_account_prompt
+    assert "positive real-world proposition" in image_account_prompt
+    assert "never as a suspicion, contradiction, or verdict" in image_account_prompt
+    assert "not a ready-made fact-check verdict" in image_account_prompt
     assert "Image clues do not limit the search" in image_account_prompt
     assert "unverified leads" in image_account_prompt
     assert "only tool Evidence establishes facts" in image_account_prompt
@@ -75,6 +78,8 @@ def test_hot_path_prompts_stay_semantic_and_compact() -> None:
     assert "reviewed Evidence" in discrepancy_prompt
     assert "recorded admissible_stances" in discrepancy_prompt
     assert "neutral Evidence cannot" in discrepancy_prompt
+    assert "support means it is true" in discrepancy_prompt
+    assert "refute means it is false" in discrepancy_prompt
     assert "does not establish semantic coverage" in discrepancy_prompt
     assert "allowed visual anchors" in discrepancy_prompt
     assert "MaterialDiscrepancy" in discrepancy_prompt

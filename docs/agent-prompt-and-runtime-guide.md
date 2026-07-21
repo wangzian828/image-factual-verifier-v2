@@ -31,6 +31,9 @@ web queries must include `text_search`; otherwise those queries would never exec
 Each ImageClaim states the underlying real-world proposition conveyed to the
 viewer. It does not replace that proposition with the easier meta-claim that visible
 text, a post, or an advertisement merely makes the assertion.
+It is written positively as what the image asks the viewer to accept, never as a
+suspicion, contradiction, authenticity judgment, or verdict. Search queries seek
+the underlying facts and sources rather than a ready-made fact-check answer.
 Exactly one Claim is high salience and preserves the complete central relation;
 optional independent Claims are medium rather than fragments of that relation.
 
@@ -89,6 +92,10 @@ It may assess claims, establish or conflict a MaterialDiscrepancy, add/retire bo
 hypotheses, request one Evidence-motivated visual reinspection, and propose a verdict.
 It may not cite search snippets, invent IDs, expand the image account, or turn
 provider failure into a factual verdict.
+`supported` means the exact ImageClaim is true and `refuted` means it is false.
+Before a correction turn, the runtime reports all independent ID, ownership,
+direction, and Finding-chain contract errors it can establish from the same output;
+it does not serially hide later errors behind the first failure.
 
 A qualified refutation of one high-salience Claim is already decisive for `fake`.
 Another unresolved Claim does not lower that contradiction to supporting or require
