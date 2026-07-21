@@ -105,6 +105,13 @@ local syntax repair allowed is restoring a missing top-level opening `{` when th
 remaining response is already one complete parseable object; no field or value is
 inferred.
 
+Semantic validation is also a bounded retry, not a forced conclusion. For a
+no-tool structured stage, the final retry says that it is the last validation
+attempt, includes the exact runtime rejection, and preserves non-terminal
+`continue` when evidence or routes remain open. The runtime never silently drops
+an invalid Claim assessment or changes a proposed verdict; the model must return
+the corrected object, and an unaccepted object remains an engineering failure.
+
 Qwen3.5 semantic stages use its official non-greedy sampling profile. Planning has
 `thinking_token_budget=1024`; Discrepancy Decision and Judgment use 2,048, and
 Reflection uses 1,536. The hard reasoning budget is separate from `max_tokens`.

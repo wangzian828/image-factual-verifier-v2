@@ -626,7 +626,14 @@ class StageRunner:
                     step.action_type = "output_rejected"
                     step.metadata["rejection_reason"] = reason
                     history.append({"role": "assistant", "content": content})
-                    history.append({"role": "user", "content": f"Output rejected: {reason} Continue investigating."})
+                    history.append(
+                        {
+                            "role": "user",
+                            "content": self._structured_output_correction_prompt(
+                                reason
+                            ),
+                        }
+                    )
                     if request_chat_protocol_correction(step, reason):
                         continue
                     break
@@ -672,7 +679,21 @@ class StageRunner:
                 continue
             break
 
-        forced, forced_meta = await self._force_output(system_msg, user_msg, history, evidence_so_far)
+        last_rejection_reason = ""
+        for prior_step in reversed(steps):
+            candidate_reason = str(
+                (prior_step.metadata or {}).get("rejection_reason", "")
+            ).strip()
+            if candidate_reason:
+                last_rejection_reason = candidate_reason
+                break
+        forced, forced_meta = await self._force_output(
+            system_msg,
+            user_msg,
+            history,
+            evidence_so_far,
+            last_rejection_reason=last_rejection_reason,
+        )
         if forced is not None:
             accepted, reason = self._accept_output(forced, steps, final_attempt=True)
             if not accepted:
@@ -776,7 +797,7 @@ class StageRunner:
                     return parsed, steps
                 step.action_type = "output_rejected"
                 step.metadata["rejection_reason"] = reason
-                next_input = f"Output rejected: {reason}. Return a corrected JSON object."
+                next_input = self._structured_output_correction_prompt(reason)
             else:
                 if output_json is not None:
                     step.action_type = "output_rejected"
@@ -3442,14 +3463,30 @@ class StageRunner:
         user_msg: Dict[str, Any],
         history: List[Dict[str, Any]],
         evidence_so_far: List[str],
+        *,
+        last_rejection_reason: str = "",
     ) -> Tuple[Optional[BaseModel], Dict[str, Any]]:
         evidence_block = ""
         if evidence_so_far:
             evidence_block = "\n".join(f"{idx + 1}. {item}" for idx, item in enumerate(evidence_so_far[-12:]))
-        prompt = (
-            "You have no more tool turns. Produce one final <output> JSON now.\n"
-            "Use the collected evidence. Be explicit about uncertainty.\n"
-        )
+        if self.tools_list:
+            prompt = (
+                "You have no more tool turns. Produce one final <output> JSON now.\n"
+                "Use the collected evidence. Be explicit about uncertainty.\n"
+            )
+        else:
+            prompt = (
+                "This is the last validation attempt for this structured output. "
+                "Return one corrected JSON object now; this does not require a "
+                "terminal verdict or the end of an investigation. Preserve "
+                "uncertainty and choose the non-terminal option when the evidence "
+                "does not justify a final verdict.\n"
+            )
+        if last_rejection_reason:
+            prompt += (
+                "Runtime validator feedback from the previous attempt:\n"
+                f"{last_rejection_reason}\n"
+            )
         if evidence_block:
             prompt += f"\nCollected evidence:\n{evidence_block}\n"
 
@@ -3485,6 +3522,27 @@ class StageRunner:
             preview_step = StageStep(metadata=metadata)
             self._attach_invalid_response_preview(preview_step, response.text)
         return None, metadata
+
+    def _structured_output_correction_prompt(self, reason: str) -> str:
+        """Return a bounded semantic retry instruction for a JSON stage.
+
+        Guided decoding guarantees syntax, not that a proposed state update is
+        admissible. Feed the exact validator feedback back to the model without
+        silently rewriting its state transition or forcing a terminal answer.
+        """
+
+        message = (
+            "The previous JSON object was rejected by the runtime validator. "
+            "Return one corrected complete JSON object. Change only the fields "
+            "needed to satisfy this feedback; do not invent IDs or state. "
+        )
+        if self.stage_name == "image_only_discrepancy_decision":
+            message += (
+                "A non-terminal continue proposal remains valid; do not force "
+                "real or fake merely because this is a retry. Omit any Claim "
+                "assessment that has no reviewed owned Evidence. "
+            )
+        return message + f"Runtime validator feedback: {reason}"
 
     def _has_duplicate_tool_call(self, steps: List[StageStep], tool_name: str, tool_args: Dict[str, Any]) -> bool:
         for step in [

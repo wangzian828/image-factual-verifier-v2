@@ -403,6 +403,36 @@ def test_qwen_schema_correction_receives_validation_reason() -> None:
     assert "missing required fields" in correction
 
 
+def test_qwen_forced_structured_retry_does_not_force_terminal_answer() -> None:
+    backend = QwenFakeBackend([_output_response(), _output_response()])
+    validations = 0
+
+    def validator(_parsed: BaseModel, _steps: List[StageStep]) -> tuple[bool, str]:
+        nonlocal validations
+        validations += 1
+        if validations == 1:
+            return False, "continue is required while a high-salience route is open"
+        return True, ""
+
+    runner = StageRunner(
+        llm=backend,
+        system_prompt="Return one answer.",
+        tools=[],
+        output_schema=AnswerOutput,
+        max_rounds=1,
+        attach_image=False,
+        output_validator=validator,
+    )
+
+    parsed, _steps = asyncio.run(runner.run("Answer the question."))
+
+    assert parsed == AnswerOutput(answer="ceremonial coach")
+    forced_prompt = backend.requests[1]["messages"][-1]["content"]
+    assert "last validation attempt" in forced_prompt
+    assert "continue is required while a high-salience route is open" in forced_prompt
+    assert "no more tool turns" not in forced_prompt.lower()
+
+
 def test_qwen_forced_output_preserves_final_budget_and_thinking_policy() -> None:
     empty_raw = {
         "choices": [
