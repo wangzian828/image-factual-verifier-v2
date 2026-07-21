@@ -62,7 +62,7 @@ def test_qwen_vlm_supports_ordered_multi_view_input(monkeypatch) -> None:
     assert content[2]["image_url"]["url"] == encoded["detail.png"]
 
 
-def test_local_qwen_vision_has_thinking_budget_and_native_schema(
+def test_local_qwen_vision_uses_direct_mode_and_native_schema(
     monkeypatch,
 ) -> None:
     RecordingChatClient.requests = []
@@ -98,3 +98,4 @@ def test_local_qwen_vision_has_thinking_budget_and_native_schema(
     request = RecordingChatClient.requests[0]
     assert request["max_tokens"] == 8192
     assert request["response_schema"]["required"] == ["answer"]
+    assert request["chat_template_kwargs"] == {"enable_thinking": False}

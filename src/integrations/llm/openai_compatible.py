@@ -60,6 +60,7 @@ class OpenAICompatibleChatClient:
         max_tokens: int,
         temperature: float = 0.0,
         response_schema: Optional[Dict[str, Any]] = None,
+        chat_template_kwargs: Optional[Dict[str, Any]] = None,
     ) -> str:
         last_error: Exception | None = None
         for attempt in range(self.max_retries + 1):
@@ -71,6 +72,7 @@ class OpenAICompatibleChatClient:
                         max_tokens=max_tokens,
                         temperature=temperature,
                         response_schema=response_schema,
+                        chat_template_kwargs=chat_template_kwargs,
                     )
                 if self.wire_api == "chat_completions":
                     return self._create_chat_json_completion(
@@ -101,6 +103,7 @@ class OpenAICompatibleChatClient:
         max_tokens: int,
         temperature: float,
         response_schema: Optional[Dict[str, Any]],
+        chat_template_kwargs: Optional[Dict[str, Any]],
     ) -> str:
         if not self.api_key:
             raise RuntimeError("LLM API key is not set.")
@@ -123,6 +126,8 @@ class OpenAICompatibleChatClient:
             ),
             "messages": messages,
         }
+        if chat_template_kwargs:
+            payload["chat_template_kwargs"] = dict(chat_template_kwargs)
         response = self._get_client().post(
             f"{base_url}/chat/completions",
             headers={

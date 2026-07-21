@@ -163,6 +163,11 @@ class OpenAIVisionClient:
             temperature=temperature,
             messages=messages,
             response_schema=schema,
+            chat_template_kwargs=(
+                {"enable_thinking": False}
+                if self.provider == "qwen_local"
+                else None
+            ),
         )
         parsed = parse_json_object(content)
         if not parsed:
