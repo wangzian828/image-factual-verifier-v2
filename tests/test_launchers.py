@@ -35,14 +35,26 @@ def test_grpo_launcher_uses_framework_gym_reward() -> None:
     assert "--reward_funcs" not in source
 
 
-def test_serving_launcher_uses_qwen35_vllm_protocol() -> None:
-    source = _source("scripts/serve/start_vllm.sh")
+def test_rl_stack_is_pinned_and_isolated_from_serving() -> None:
+    profile = _source("configs/rl/qwen3-vl-grpo-mock.env")
+    requirements = _source("requirements/rl.txt")
 
-    assert "vllm serve" in source
-    assert "--tensor-parallel-size" in source
-    assert "--max-model-len" in source
-    assert "--tool-call-parser qwen3_coder" in source
-    assert "--reasoning-parser qwen3" in source
+    assert "IFV_RL_FRAMEWORK=rllm_verl" in profile
+    assert "IFV_RLLM_REVISION=cd9ea0" in profile
+    assert "IFV_VERL_REVISION=6a6242" in profile
+    assert "rllm[verl] @ git+https://" in requirements
+
+
+def test_serving_launcher_uses_qwen3_vl_lmdeploy_protocol() -> None:
+    source = _source("scripts/serve/start_lmdeploy.sh")
+
+    assert "lmdeploy serve api_server" in source
+    assert "--backend pytorch" in source
+    assert 'IFV_LMDEPLOY_TOOL_CALL_PARSER:-qwen3' in source
+    assert 'SERVING_ROLE="${6:-agent}"' in source
+    assert "--logprobs-mode raw_logprobs" in source
+    assert "--distributed-executor-backend" in source
+    assert "--session-len" in source
     assert "require_idle_gpus" in source
 
 
@@ -55,11 +67,29 @@ def test_launchers_enforce_physical_gpu_allowlist() -> None:
     assert "$1 + 0 >= 4 && $1 + 0 <= 7" in selector
 
 
-def test_qwen35_quick_and_primary_profiles_exist() -> None:
-    quick = _source("configs/models/qwen3.5-4b.env")
-    primary = _source("configs/models/qwen3.5-9b.env")
+def test_gpu13_bootstrap_isolates_serving_from_sft_installation() -> None:
+    source = _source("scripts/server/bootstrap_gpu13.sh")
 
-    assert "Qwen3.5-4B" in quick
-    assert "quick_bootstrap" in quick
-    assert "Qwen3.5-9B" in primary
+    assert 'MODE="${1:-all}"' in source
+    assert '"serve" || "$MODE" == "all"' in source
+    assert '"sft" || "$MODE" == "all"' in source
+    assert "ifv-qwen3vl-serve" in source
+    assert "ifv-qwen3vl-sft" in source
+
+
+def test_qwen3_vl_thinking_is_the_only_primary_profile() -> None:
+    primary = _source("configs/models/qwen3-vl-8b-thinking.env")
+
+    assert "Qwen3-VL-8B-Thinking" in primary
     assert "primary_student" in primary
+    assert not list((ROOT / "configs/models").glob("qwen3.5-*.env"))
+
+
+def test_qwen3_vl_full_parameter_step_profiles_exist() -> None:
+    for steps in (1, 3, 20):
+        source = _source(f"configs/sft/qwen3-vl-full-{steps}step.env")
+        assert f"IFV_MAX_STEPS={steps}" in source
+        assert "IFV_TUNER_TYPE=full" in source
+        assert "IFV_FREEZE_LLM=false" in source
+        assert "IFV_FREEZE_VIT=false" in source
+        assert "IFV_FREEZE_ALIGNER=false" in source

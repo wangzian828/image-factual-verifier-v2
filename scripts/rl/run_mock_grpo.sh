@@ -49,7 +49,7 @@ args=(
   --vllm_gpu_memory_utilization "$IFV_VLLM_GPU_MEMORY_UTILIZATION"
   --vllm_tensor_parallel_size 1
   --vllm_server_pass_dataset true
-  --enable_thinking false
+  --enable_thinking true
   --torch_dtype "$IFV_TORCH_DTYPE"
   --freeze_llm "$IFV_FREEZE_LLM"
   --freeze_vit "$IFV_FREEZE_VIT"

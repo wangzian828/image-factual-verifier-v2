@@ -55,14 +55,14 @@ def main() -> None:
         ],
         "images": [str(image_path.resolve())],
         "channel": "perception",
-        "chat_template_kwargs": {"enable_thinking": False},
+        "model_mode": "thinking",
     }
     _write_jsonl(args.output / "train.jsonl", [row, row])
     _write_jsonl(args.output / "validation.jsonl", [row])
     digest = hashlib.sha256(image_path.read_bytes()).hexdigest()
     manifest = {
-        "schema_version": "ifv-qwen35-smoke-dataset-v1",
-        "dataset_version": "ifv-qwen35-smoke-v1",
+        "schema_version": "ifv-qwen3-vl-smoke-dataset-v1",
+        "dataset_version": "ifv-qwen3-vl-smoke-v1",
         "synthetic": True,
         "image": {"path": image_path.name, "sha256": digest},
         "splits": {"train": 2, "validation": 1},

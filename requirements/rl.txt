@@ -1,0 +1,3 @@
+# Install in an isolated environment only. Never merge this stack into qwen3vl serving.
+# Exact Git revisions are recorded in configs/rl/qwen3-vl-grpo-mock.env.
+rllm[verl] @ git+https://github.com/rllm-org/rllm.git@cd9ea0eca082bcc701ee4df464446288ccb02c1f
