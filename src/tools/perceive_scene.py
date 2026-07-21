@@ -147,7 +147,12 @@ class PerceiveSceneTool(BaseTool):
             if not isinstance(ent, dict):
                 continue
             try:
-                bbox = normalize_entity_bbox(ent.get("bbox", []))
+                bbox = normalize_entity_bbox(
+                    ent.get("bbox", []),
+                    thousand_scale_order=(
+                        "yxyx" if self.provider.strip().lower() == "gemini" else "xyxy"
+                    ),
+                )
             except ValueError as exc:
                 # A model may return one malformed or mixed-scale region while
                 # still producing a useful literal scene report. Never guess or
@@ -182,7 +187,11 @@ class PerceiveSceneTool(BaseTool):
         }
 
 
-def normalize_entity_bbox(raw_bbox: Any) -> List[float]:
+def normalize_entity_bbox(
+    raw_bbox: Any,
+    *,
+    thousand_scale_order: str = "yxyx",
+) -> List[float]:
     """Convert a model bbox to normalized project-order XYXY coordinates.
 
     The public tool contract is ``[x_min, y_min, x_max, y_max]`` in ``[0, 1]``.
@@ -212,7 +221,12 @@ def normalize_entity_bbox(raw_bbox: Any) -> List[float]:
     elif all(0.0 <= value <= 1000.0 for value in values) and any(
         value > 1.0 for value in values
     ):
-        y1, x1, y2, x2 = (value / 1000.0 for value in values)
+        if thousand_scale_order == "yxyx":
+            y1, x1, y2, x2 = (value / 1000.0 for value in values)
+        elif thousand_scale_order == "xyxy":
+            x1, y1, x2, y2 = (value / 1000.0 for value in values)
+        else:
+            raise ValueError("thousand_scale_order must be 'xyxy' or 'yxyx'")
     else:
         raise ValueError("bbox must use normalized XYXY or Gemini 0..1000 YXYX coordinates")
 

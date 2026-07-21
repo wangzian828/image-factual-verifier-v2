@@ -33,6 +33,18 @@ def test_gemini_1000_yxyx_bbox_is_converted_at_perception_boundary() -> None:
     assert result["entities"][0]["bbox"] == [0.088, 0.195, 0.56, 0.904]
 
 
+def test_qwen_1000_xyxy_bbox_is_converted_without_axis_swap() -> None:
+    tool = PerceiveSceneTool(
+        client=FakePerceptionClient(),
+        provider="qwen_local",
+    )
+
+    result = tool.call({"image_input": "not-read-by-fake.jpg"})
+
+    assert result["status"] == "success"
+    assert result["entities"][0]["bbox"] == [0.195, 0.088, 0.904, 0.56]
+
+
 def test_normalized_xyxy_is_preserved_and_invalid_boxes_are_rejected() -> None:
     assert normalize_entity_bbox([0.1, 0.2, 0.8, 0.9]) == [0.1, 0.2, 0.8, 0.9]
 
