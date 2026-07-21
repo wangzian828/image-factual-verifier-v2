@@ -2480,8 +2480,46 @@ class StageRunner:
                 )
             raise
         duration_ms = round((time.perf_counter() - started) * 1000, 2)
+        raw = response.raw if isinstance(response.raw, dict) else {}
+        choices = raw.get("choices") if isinstance(raw.get("choices"), list) else []
+        choice = choices[0] if choices and isinstance(choices[0], dict) else {}
+        message = choice.get("message") if isinstance(choice.get("message"), dict) else {}
+        reasoning_field = ""
+        reasoning_text = ""
+        for candidate_field in ("reasoning", "reasoning_content"):
+            candidate = message.get(candidate_field)
+            if isinstance(candidate, str) and candidate.strip():
+                reasoning_field = candidate_field
+                reasoning_text = candidate
+                break
+        response_content_chars = len(str(message.get("content") or ""))
+        response_reasoning_chars = len(reasoning_text)
+        reasoning_artifact: Optional[Dict[str, Any]] = None
+        if self.runtime_store is not None and reasoning_text:
+            reasoning_artifact = self.runtime_store.artifacts.put_text(
+                reasoning_text,
+                media_type="text/plain; charset=utf-8",
+                suffix=".txt",
+                metadata={
+                    "kind": "model_reasoning",
+                    "stage": self.stage_name,
+                    "request_id": request_id,
+                    "provider_field": reasoning_field,
+                    "excluded_from_model_context": True,
+                },
+            )
+            self.runtime_store.append_event(
+                "model_reasoning_archived",
+                {
+                    "stage": self.stage_name,
+                    "request_id": request_id,
+                    "provider_field": reasoning_field,
+                    "char_count": response_reasoning_chars,
+                    "artifact": reasoning_artifact,
+                    "excluded_from_model_context": True,
+                },
+            )
         if request_id:
-            raw = response.raw if isinstance(response.raw, dict) else {}
             usage = (
                 raw.get("usage", {})
                 if isinstance(raw.get("usage"), dict)
@@ -2494,21 +2532,21 @@ class StageRunner:
                 request_id,
                 usage=usage,
                 status="completed",
+                response_metadata={
+                    "response_content_chars": response_content_chars,
+                    "response_reasoning_chars": response_reasoning_chars,
+                    "reasoning_artifact": reasoning_artifact,
+                },
             )
         self._last_context_request_id = request_id
-        raw = response.raw if isinstance(response.raw, dict) else {}
-        choices = raw.get("choices") if isinstance(raw.get("choices"), list) else []
-        choice = choices[0] if choices and isinstance(choices[0], dict) else {}
-        message = choice.get("message") if isinstance(choice.get("message"), dict) else {}
         return response, {
             "llm_duration_ms": duration_ms,
             "context_request_id": request_id,
             "native_chat_completions": self._uses_native_chat_completions(),
             "finish_reason": str(choice.get("finish_reason", "")),
-            "response_content_chars": len(str(message.get("content") or "")),
-            "response_reasoning_chars": len(
-                str(message.get("reasoning_content") or "")
-            ),
+            "response_content_chars": response_content_chars,
+            "response_reasoning_chars": response_reasoning_chars,
+            "reasoning_artifact": reasoning_artifact,
         }
 
     async def _create_interaction(self, **kwargs: Any) -> Dict[str, Any]:

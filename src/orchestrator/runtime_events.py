@@ -620,6 +620,9 @@ class ContextLedger:
             "provider_input_tokens": None,
             "provider_output_tokens": None,
             "provider_thought_tokens": None,
+            "response_content_chars": None,
+            "response_reasoning_chars": None,
+            "reasoning_artifact": None,
             "max_output_tokens": max_output_tokens,
             "image_count": sum(len(item.get("media", [])) for item in items),
             "status": "started",
@@ -641,12 +644,14 @@ class ContextLedger:
         interaction_id: Optional[str] = None,
         status: str = "completed",
         error: str = "",
+        response_metadata: Optional[Mapping[str, Any]] = None,
     ) -> Dict[str, Any]:
         with self._lock:
             manifest = self._open.pop(request_id, None)
         if manifest is None:
             raise KeyError(f"unknown context request {request_id}")
         normalized_usage = dict(usage or {})
+        normalized_response = dict(response_metadata or {})
         manifest.update(
             {
                 "provider_input_tokens": _usage_int(
@@ -666,6 +671,15 @@ class ContextLedger:
                     "total_thought_tokens",
                     "thought_tokens",
                 ),
+                "response_content_chars": normalized_response.get(
+                    "response_content_chars"
+                ),
+                "response_reasoning_chars": normalized_response.get(
+                    "response_reasoning_chars"
+                ),
+                "reasoning_artifact": normalized_response.get(
+                    "reasoning_artifact"
+                ),
                 "interaction_id": interaction_id,
                 "status": status,
                 "error": error,
@@ -684,6 +698,11 @@ class ContextLedger:
                 "provider_input_tokens": manifest["provider_input_tokens"],
                 "provider_output_tokens": manifest["provider_output_tokens"],
                 "provider_thought_tokens": manifest["provider_thought_tokens"],
+                "response_content_chars": manifest["response_content_chars"],
+                "response_reasoning_chars": manifest[
+                    "response_reasoning_chars"
+                ],
+                "reasoning_artifact": manifest["reasoning_artifact"],
                 "error": error,
             },
         )

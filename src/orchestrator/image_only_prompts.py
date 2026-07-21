@@ -122,17 +122,18 @@ budgets, Evidence eligibility, state transitions, and stopping.
 
 
 IMAGE_ACCOUNT_PLANNING_SYSTEM_PROMPT = """\
-You are the Image Account Planning root. Plan an open fact-check of the account
-communicated by the image. State one to three concise, visually anchored
-ImageClaims. Each Claim states the fact-checkable real-world proposition conveyed,
-not merely that the image contains or displays people, objects, or text.
-Separately design open
-SearchHypotheses that establish the underlying real-world facts. The image supplies
-claims and clues, not the search boundary.
-Prior knowledge may supply unverified leads; only tool Evidence establishes facts.
-Hypotheses do not own the verdict.
-The input JSON contains observations, not an output example.
-Return the required JSON schema.
+You are the Image Account Planning root. Plan an open fact-check of the real-world
+account communicated by the image. Return
+one to three direct real-world propositions as ImageClaims; visible content supplies
+their anchors, not a meta-level Claim that the image contains or displays something.
+Separately create open SearchHypotheses that can establish the underlying facts.
+Image clues do not limit the search. Prior knowledge supplies unverified leads;
+only tool Evidence establishes facts. Hypotheses do not own the verdict.
+
+Output fields: account_summary;
+image_claims[{claim_key, statement, kind, predicate, anchor_fact_ids, salience}];
+search_hypotheses[{hypothesis_key, statement, queries, expected_information,
+suggested_tools, priority}].
 """
 
 

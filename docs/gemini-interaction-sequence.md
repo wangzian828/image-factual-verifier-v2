@@ -52,7 +52,9 @@ Core instruction:
 - Replaces: `TARGET_PLANNING_SYSTEM_PROMPT`
 - Interaction: `standalone_request`
 - Sees original image: yes, controlled view supplied explicitly
-- Thinking: `high` by default; thought tokens are recorded, never Evidence
+- Thinking: Gemini keeps its configured semantic-stage level. Qwen3.5 uses a
+  1,024-token Planning reasoning wall; reasoning is archived as excluded diagnostic
+  material and never enters later model context or Evidence.
 - Input:
   - a compact, deduplicated projection of the PerceptionReport;
   - positioned OCR observations;
@@ -75,16 +77,18 @@ Core instruction:
 
 Exact instruction:
 
-> You are the Image Account Planning root. Plan an open fact-check of the account
-> communicated by the image. State one to three concise, visually anchored
-> ImageClaims. Each Claim states the fact-checkable real-world proposition conveyed,
-> not merely that the image contains or displays people, objects, or text.
-> Separately design open
-> SearchHypotheses that establish the underlying real-world facts. The image supplies
-> claims and clues, not the search boundary.
-> Prior knowledge may supply unverified leads; only tool Evidence establishes facts.
-> Hypotheses do not own the verdict. The input JSON contains observations, not an
-> output example. Return the required JSON schema.
+> You are the Image Account Planning root. Plan an open fact-check of the real-world
+> account communicated by the image. Return one to three direct real-world propositions
+> as ImageClaims; visible content supplies
+> their anchors, not a meta-level Claim that the image contains or displays something.
+> Separately create open SearchHypotheses that can establish the underlying facts.
+> Image clues do not limit the search. Prior knowledge supplies unverified leads;
+> only tool Evidence establishes facts. Hypotheses do not own the verdict.
+>
+> Output fields: account_summary;
+> image_claims[{claim_key, statement, kind, predicate, anchor_fact_ids, salience}];
+> search_hypotheses[{hypothesis_key, statement, queries, expected_information,
+> suggested_tools, priority}].
 
 For the local Qwen Chat Completions profile, the same canonical output model is
 used. The wire schema omits only string `minLength`, `maxLength`, `pattern`, and
@@ -95,6 +99,13 @@ decoding. A bounded correction turn receives the actual validation error. The on
 local syntax repair allowed is restoring a missing top-level opening `{` when the
 remaining response is already one complete parseable object; no field or value is
 inferred.
+
+Qwen3.5 semantic stages use its official non-greedy sampling profile. Planning has
+`thinking_token_budget=1024`; Discrepancy Decision and Judgment use 2,048, and
+Reflection uses 1,536. The hard reasoning budget is separate from `max_tokens`.
+The formal Qwen3.5 service does not enable MTP speculative decoding because current
+vLLM releases have open reasoning-boundary and structured-output defects for that
+combination.
 
 ### 3. Investigation ReAct
 

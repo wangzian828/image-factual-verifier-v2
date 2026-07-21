@@ -2911,8 +2911,13 @@ class Orchestrator:
         normalized_stage = stage_name.strip().upper()
         if self.provider in {"qwen_local", "lmdeploy"}:
             env_name = f"QWEN_{normalized_stage}_MAX_OUTPUT_TOKENS"
+            qwen35 = "qwen3.5" in str(
+                getattr(self, "model_name", "")
+            ).lower()
             provider_default = (
-                32768
+                8192
+                if qwen35 and normalized_stage == "PLANNING"
+                else 32768
                 if normalized_stage == "PLANNING"
                 else 8192
                 if normalized_stage == "VERIFICATION"
@@ -3012,7 +3017,43 @@ class Orchestrator:
                 raise ValueError(
                     f"QWEN_{normalized_stage}_ENABLE_THINKING must be true or false."
                 )
-            return {"enable_thinking": raw == "true"}
+            enable_thinking = raw == "true"
+            config: Dict[str, Any] = {"enable_thinking": enable_thinking}
+            if not qwen35:
+                return config
+
+            # Qwen3.5's official recommendations use non-greedy sampling and a
+            # presence penalty.  Greedy decoding caused long, repetitive schema
+            # deliberation in the real Queen Planning request.  Keep the hard
+            # reasoning wall independent of max_tokens so visible JSON always has
+            # room to finish.
+            config.update(
+                {
+                    "temperature": 1.0 if enable_thinking else 0.7,
+                    "top_p": 0.95 if enable_thinking else 0.8,
+                    "top_k": 20,
+                    "min_p": 0.0,
+                    "presence_penalty": 1.5,
+                    "repetition_penalty": 1.0,
+                }
+            )
+            if enable_thinking:
+                default_budget = {
+                    "PLANNING": 1024,
+                    "EVIDENCE_DECISION": 2048,
+                    "REFLECTION": 1536,
+                    "JUDGMENT": 2048,
+                }.get(normalized_stage, 1024)
+                env_name = f"QWEN_{normalized_stage}_THINKING_TOKEN_BUDGET"
+                raw_budget = os.getenv(env_name, str(default_budget)).strip()
+                try:
+                    budget = int(raw_budget)
+                except ValueError as exc:
+                    raise ValueError(f"{env_name} must be an integer.") from exc
+                if budget < 1:
+                    raise ValueError(f"{env_name} must be positive.")
+                config["thinking_token_budget"] = budget
+            return config
         return {"thinking_level": self._stage_thinking_level(normalized_stage)}
 
     async def _execute_tool(self, tool_name: str, args: Dict[str, Any], image_path: str) -> tuple[str, Dict[str, Any]]:

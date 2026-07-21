@@ -233,6 +233,26 @@ class APIBackend(LLMBackend):
             )
             body["chat_template_kwargs"] = template_kwargs
 
+        # vLLM exposes Qwen's reasoning wall and sampling controls as top-level
+        # request fields, separately from chat-template switches.  Forward only
+        # the explicit allowlist so internal stage metadata never leaks onto the
+        # provider wire.
+        if self.provider in {"qwen_local", "lmdeploy"} and isinstance(
+            generation_config, dict
+        ):
+            for key in (
+                "thinking_token_budget",
+                "temperature",
+                "top_p",
+                "top_k",
+                "min_p",
+                "presence_penalty",
+                "repetition_penalty",
+                "seed",
+            ):
+                if key in generation_config:
+                    body[key] = generation_config[key]
+
         last_error: Optional[Exception] = None
         attempts = self.max_retries + 1
         for attempt in range(attempts):

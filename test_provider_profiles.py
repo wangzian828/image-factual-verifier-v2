@@ -101,14 +101,31 @@ def test_qwen35_uses_hybrid_stage_reasoning_defaults() -> None:
     orchestrator.provider = "qwen_local"
     orchestrator.model_name = "ifv-qwen3.5-9b-vllm"
 
-    for stage in ["PLANNING", "EVIDENCE_DECISION", "REFLECTION", "JUDGMENT"]:
-        assert orchestrator._stage_generation_config(stage) == {
-            "enable_thinking": True
-        }
+    assert orchestrator._stage_generation_config("PLANNING") == {
+        "enable_thinking": True,
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "min_p": 0.0,
+        "presence_penalty": 1.5,
+        "repetition_penalty": 1.0,
+        "thinking_token_budget": 1024,
+    }
+    assert orchestrator._stage_generation_config("EVIDENCE_DECISION")[
+        "thinking_token_budget"
+    ] == 2048
+    assert orchestrator._stage_generation_config("REFLECTION")[
+        "thinking_token_budget"
+    ] == 1536
+    assert orchestrator._stage_generation_config("JUDGMENT")[
+        "thinking_token_budget"
+    ] == 2048
     for stage in ["VERIFICATION", "QUERY_REPLAN", "QUERY_CONCEPT_EXTRACTION"]:
-        assert orchestrator._stage_generation_config(stage) == {
-            "enable_thinking": False
-        }
+        config = orchestrator._stage_generation_config(stage)
+        assert config["enable_thinking"] is False
+        assert config["temperature"] == 0.7
+        assert config["top_p"] == 0.8
+        assert "thinking_token_budget" not in config
 
 
 def test_local_qwen_verification_has_bounded_tool_call_budget(
@@ -118,7 +135,20 @@ def test_local_qwen_verification_has_bounded_tool_call_budget(
     orchestrator.provider = "qwen_local"
 
     assert orchestrator._stage_output_tokens("VERIFICATION", 16384) == 8192
-    assert orchestrator._stage_output_tokens("PLANNING", 8192) == 32768
+    orchestrator.model_name = "ifv-qwen3.5-9b-vllm"
+    assert orchestrator._stage_output_tokens("PLANNING", 8192) == 8192
 
     monkeypatch.setenv("QWEN_VERIFICATION_MAX_OUTPUT_TOKENS", "4096")
     assert orchestrator._stage_output_tokens("VERIFICATION", 16384) == 4096
+
+
+def test_qwen35_thinking_budget_can_be_overridden(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    orchestrator = Orchestrator.__new__(Orchestrator)
+    orchestrator.provider = "qwen_local"
+    orchestrator.model_name = "ifv-qwen3.5-9b-vllm"
+    monkeypatch.setenv("QWEN_PLANNING_THINKING_TOKEN_BUDGET", "768")
+    assert orchestrator._stage_generation_config("PLANNING")[
+        "thinking_token_budget"
+    ] == 768

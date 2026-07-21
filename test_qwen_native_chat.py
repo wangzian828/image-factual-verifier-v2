@@ -9,6 +9,7 @@ import httpx
 from pydantic import BaseModel, Field
 
 from src.orchestrator.llm_backend import APIBackend, LLMResponse
+from src.orchestrator.runtime_events import CaseRuntimeStore
 from src.orchestrator.stage_runner import StageRunner
 from src.tools.base import BaseTool
 
@@ -376,6 +377,116 @@ def test_local_qwen_forwards_stage_thinking_switch_to_lmdeploy() -> None:
     asyncio.run(run())
 
     assert captured["chat_template_kwargs"] == {"enable_thinking": False}
+
+
+def test_qwen35_forwards_budget_and_sampling_controls() -> None:
+    captured: Dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content.decode("utf-8")))
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": '{"answer":"ok"}'}}],
+                "usage": {"prompt_tokens": 3, "completion_tokens": 2},
+            },
+        )
+
+    async def run() -> None:
+        backend = APIBackend(
+            provider="qwen_local",
+            model_name="ifv-qwen3.5-9b-vllm",
+            max_retries=0,
+        )
+        backend._shared_client = httpx.AsyncClient(
+            transport=httpx.MockTransport(handler),
+        )
+        try:
+            response = await backend.get_response(
+                [{"role": "user", "content": "Return JSON."}],
+                response_format={"type": "json_object"},
+                generation_config={
+                    "enable_thinking": True,
+                    "thinking_token_budget": 1024,
+                    "temperature": 1.0,
+                    "top_p": 0.95,
+                    "top_k": 20,
+                    "presence_penalty": 1.5,
+                },
+            )
+        finally:
+            await backend.aclose()
+        assert response.text == '{"answer":"ok"}'
+
+    asyncio.run(run())
+
+    assert captured["chat_template_kwargs"] == {"enable_thinking": True}
+    assert captured["thinking_token_budget"] == 1024
+    assert captured["temperature"] == 1.0
+    assert captured["top_p"] == 0.95
+    assert captured["top_k"] == 20
+    assert captured["presence_penalty"] == 1.5
+
+
+def test_qwen_reasoning_is_archived_but_not_reintroduced(
+    tmp_path: Path,
+) -> None:
+    output = {"answer": "ceremonial coach"}
+    raw = {
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "message": {
+                    "role": "assistant",
+                    "reasoning": "private reasoning that must not become context",
+                    "content": json.dumps(output),
+                },
+            }
+        ],
+        "usage": {"prompt_tokens": 11, "completion_tokens": 9},
+    }
+    backend = QwenFakeBackend(
+        [
+            LLMResponse(
+                text=json.dumps(output),
+                prompt_tokens=11,
+                completion_tokens=9,
+                raw=raw,
+            )
+        ]
+    )
+    store = CaseRuntimeStore(tmp_path, case_id="reasoning-case", attempt_id="attempt")
+    runner = StageRunner(
+        llm=backend,
+        system_prompt="Return the structured result.",
+        tools=[],
+        output_schema=AnswerOutput,
+        max_rounds=1,
+        stage_name="image_account_planning",
+        runtime_store=store,
+        generation_config={"enable_thinking": True, "thinking_token_budget": 1024},
+    )
+
+    parsed, steps = asyncio.run(runner.run("Find the actual transport."))
+
+    assert parsed == AnswerOutput(answer="ceremonial coach")
+    assert steps[0].metadata["response_reasoning_chars"] > 0
+    descriptor = steps[0].metadata["reasoning_artifact"]
+    assert descriptor["media_type"].startswith("text/plain")
+    assert store.artifacts.read_bytes(descriptor).decode("utf-8") == raw[
+        "choices"
+    ][0]["message"]["reasoning"]
+    context = json.loads(
+        (store.root / "context" / "req-000001.json").read_text(encoding="utf-8")
+    )
+    assert context["response_reasoning_chars"] == steps[0].metadata[
+        "response_reasoning_chars"
+    ]
+    assert context["reasoning_artifact"]["sha256"] == descriptor["sha256"]
+    assert all(
+        "private reasoning" not in json.dumps(request["messages"], ensure_ascii=False)
+        for request in backend.requests
+    )
 
 
 def test_qwen_native_tool_call_wins_over_reasoning_and_blank_content() -> None:
