@@ -27,6 +27,9 @@ Training：`image-factual-verifier-training`
 9. 服务器 checkpoint 的 chat template 固定以 `<think>` 开始，`enable_thinking=false`
    不会关闭思考，因此按原生 Thinking 模式运行，并用 serving reasoning parser 将推理与
    canonical action 隔离。隐藏推理不作为 Gemini SFT 监督目标。
+10. 普通 Agent serving 已切换为独立的 Python 3.11 + vLLM 0.11.2 锁定环境；不再修改或
+    clone 历史 `qwen3vl`、`ifv-agent`、SFT、RL 与失败候选环境。每次失败构建保留证据并用新
+    prefix 重建，成功解析还要固化完整 resolved lock。
 
 ## 2. 不变边界
 
@@ -49,13 +52,15 @@ Runtime 和 Training 仓库只通过版本化 JSONL、manifest 和 checkpoint pr
 
 - 完整权重：`/gsdata/home/wza/models/Qwen3-VL-8B-Thinking`，约 17 GB，4 个完整
   safetensors 分片，架构为 `Qwen3VLForConditionalGeneration`。
-- 现有环境：`/gs/home/wza/anaconda3/envs/qwen3vl`。
-- 已实测基础栈：Python 3.10.18、PyTorch 2.6.0+cu124、torchvision 0.21.0+cu124、
-  Transformers 4.57.6、qwen-vl-utils 0.0.14、LMDeploy 0.13.0、Ray 2.55.1。
+- 历史环境 `/gs/home/wza/anaconda3/envs/qwen3vl` 只保留为旧实验，不再作为 seed 或主线。
 - LMDeploy 0.13.0 已成功加载该权重并完成约 530 次 Chat Completions 请求；历史终止原因是
-  节点系统内存触发 Ray 95% 阈值，不是模型协议失败。
-- vLLM 0.8.5 已因 `Qwen3VLConfig.vocab_size` 兼容问题失败；现有 vLLM 0.10.2 只能作为
-  新实测候选，不是默认 serving 主线。
+  节点系统内存触发 Ray 95% 阈值。进一步隔离确认它的 JSON grammar 从首 token 生效，和
+  Thinking checkpoint 固定先输出 `<think>` 的模板冲突，因此不能作为当前结构化 Agent 主线。
+- 历史 vLLM 0.8.5/0.10.2 不原生支持当前 Qwen3-VL/依赖组合；vLLM 0.11.0 又会被 resolver
+  配到不兼容的 Transformers 5。vLLM 0.11.2 原生注册 `Qwen3VLForConditionalGeneration`、
+  `qwen3` reasoning parser 和 `qwen3_xml` tool parser，并限制 `transformers<5`，故选为主线。
+- 主线环境为 `/gsdata/home/wza/conda/envs/ifv-qwen3vl-vllm0112-locked`：Python 3.11、
+  vLLM 0.11.2、Torch 2.9.0/cu128、Transformers 4.57.6。它从零创建，不继承任何旧环境。
 - gpu-13 直连仍不可用，但正式代理 `http://100.10.1.210:47899` 已于 2026-07-21
   复测恢复（PyPI HTTP 200）。旧 shell 中残留的 `47894` 必须清除；权重已在本地，不重复下载。
 
@@ -70,7 +75,7 @@ stdout/stderr、停止命令和输出路径。模型、数据、checkpoint、rol
 
 | 层 | 首选候选 | 通过条件 | 不通过时的动作 |
 |---|---|---|---|
-| Serving | LMDeploy 0.13.0 | 图像、JSON、reasoning 隔离、tool call、tool continuation、8 轮短链、并发与干净退出均通过 | 已通过加载、图像、JSON 和 512-token native tool call；继续补 tool continuation/8 轮/生命周期实测，失败再切候选 |
+| Serving | vLLM 0.11.2 锁定栈 | 图像、reasoning 后 JSON、完整 Planning schema、tool call、tool continuation、8 轮短链、128k 配置与干净退出均通过 | 失败保留最小复现和完整环境清单；只新建环境验证兼容版本，不修补旧环境 |
 | SFT | ms-swift 4.4.1 + DeepSpeed ZeRO-3 | 精确 processor/template、全参数梯度、1/3-step、保存、恢复和重新加载均通过 | 优先调整兼容版本或 ms-swift 后端；仍失败才选支持 Qwen3-VL 的成熟 Transformers/DeepSpeed 方案 |
 | Agent RL | rLLM gateway + veRL | 能由 v4 runtime 驱动 on-policy rollout，保留 tool provenance、logprob、mask、恢复和审计 | rLLM 主线依赖独立的新 PyTorch/Transformers/vLLM 栈；与 serving/SFT 隔离，先验证 rollout worker 的 token ID/logprob 对齐，不通过则比较成熟替代框架 |
 
@@ -86,7 +91,7 @@ teacher-gemini
 student-qwen3-vl-local
 ```
 
-默认 served model 为 `ifv-qwen3-vl-8b-thinking`。`qwen_local` provider 和
+默认 served model 为 `ifv-qwen3-vl-8b-thinking-vllm`。`qwen_local` provider 和
 `QWEN_LOCAL_*` 环境变量保持 provider-neutral 命名，不保留 Qwen3.5 的模型默认值或特例。
 
 Qwen adapter 必须支持：
@@ -105,9 +110,9 @@ Planning、Decision、Reflection、Judgment 是独立请求；一次 function ca
 
 ## 6. Serving 验收
 
-初始配置：BF16、loopback、单张空闲 GPU、`max_model_len=32768`、Thinking reasoning parser。
-只有真实状态包需要且显存、
-系统内存与延迟均可接受时才提高到 65536；128k 是审计边界，不是日常输入目标。
+正式配置：BF16、loopback、物理 GPU 4、5、TP=2、`max_model_len=131072`、
+`reasoning_parser=qwen3`、`tool_call_parser=qwen3_xml`。128k 是单条对话的硬上限，日常输入仍应
+通过 workspace/archive 控制在必要范围内；服务端不能用 32k 配置冒充上下文管理。
 
 依次验证：
 
@@ -121,6 +126,7 @@ Planning、Decision、Reflection、Judgment 是独立请求；一次 function ca
 8. 超时、取消、并发、服务失败与干净 shutdown；
 9. 普通 Agent serving 与开放 token IDs/logprobs 的 RL rollout profile 分离；
 10. 记录 RSS、GPU memory、executor 状态，避免再次触发系统内存阈值。
+11. 首次成功安装后固化全量 `pip freeze --all` 与 SHA256，再从锁文件重建时不得重新解析漂移。
 
 任何 provider/protocol/runtime 失败都输出 `engineering_error`，不得静默切换 Gemini 或猜测
 `real|fake`。
@@ -137,6 +143,12 @@ LMDeploy 0.13 guided decoding 在未闭合对象后持续生成空白。隔离�
 字符串长度、pattern 和 format 约束后，请求约 25 秒、1.5k output token 正常停止，并保留事件、
 实际交通方式和路线等开放调查方向。数组长度、枚举、数字范围和对象结构继续在服务端约束，
 客户端仍以完整 Pydantic schema 严格校验；失败纠正携带具体校验原因，不增加 Queen 专用规则。
+
+2026-07-21 第三轮根因隔离：checkpoint chat template 无有效的 `enable_thinking=false` 分支；
+LMDeploy grammar 又从 reasoning 的第一个 token 开始约束 JSON，所以“Thinking + JSON schema”会
+天然冲突。vLLM 0.11.2 的 structured-output manager 在 reasoning 结束前跳过 grammar bitmask，
+结束后再约束 final content，正好符合本 Agent 的协议。新环境及完整门禁由 Training 仓库
+commit `9c4fb31` 提供；服务器安装与真实 Queen Planning 结果完成后继续回填本节。
 
 ## 7. 数据与上下文
 
