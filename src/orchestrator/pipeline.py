@@ -56,6 +56,7 @@ from src.orchestrator.investigation_models import (
     EvidenceDecisionOutput,
     DiscrepancyDecisionOutput,
     DiscrepancyJudgment,
+    DiscrepancyJudgmentOutput,
     ImageAccountPlanningOutput,
     ImageOnlyInvestigationState,
     ImageOnlyJudgment,
@@ -1863,7 +1864,7 @@ class Orchestrator:
             llm=self.llm,
             system_prompt=self._sp(IMAGE_ONLY_DISCREPANCY_JUDGMENT_PROMPT),
             tools=[],
-            output_schema=DiscrepancyJudgment,
+            output_schema=DiscrepancyJudgmentOutput,
             max_rounds=1,
             stage_name="image_only_discrepancy_judgment",
             runtime_store=state.runtime_store,
@@ -1891,9 +1892,22 @@ class Orchestrator:
         self._record_stage_steps(state, steps)
         if parsed is None:
             raise RuntimeError(
-                "v4 Judgment did not reproduce the compiled discrepancy basis"
+                "v4 Judgment did not produce a valid binary judgment"
             )
-        return parsed
+        # IDs and unresolved gaps are runtime-owned.  Reconstruct the canonical
+        # record from the compiled basis instead of asking the model to copy a
+        # large, error-prone identifier list.
+        return DiscrepancyJudgment(
+            verdict=parsed.verdict,
+            confidence=parsed.confidence,
+            overall_assessment=parsed.overall_assessment,
+            selected_claim_ids=list(basis.claim_ids),
+            selected_discrepancy_ids=list(basis.discrepancy_ids),
+            selected_visual_anchor_fact_ids=list(basis.visual_anchor_fact_ids),
+            selected_finding_ids=list(basis.finding_ids),
+            selected_evidence_ids=list(basis.evidence_ids),
+            unresolved_gaps=list(basis.unresolved_gaps),
+        )
 
     @staticmethod
     def _validate_image_only_reflection(
@@ -2112,7 +2126,7 @@ class Orchestrator:
 
     @staticmethod
     def _validate_discrepancy_judgment(
-        parsed: DiscrepancyJudgment,
+        parsed: DiscrepancyJudgmentOutput,
         *,
         compiled_verdict: str,
         basis: Any,
@@ -2121,36 +2135,6 @@ class Orchestrator:
             return False, (
                 f"verdict must be {compiled_verdict}, received {parsed.verdict}"
             )
-        checks = (
-            (set(parsed.selected_claim_ids), set(basis.claim_ids), "claim"),
-            (
-                set(parsed.selected_discrepancy_ids),
-                set(basis.discrepancy_ids),
-                "discrepancy",
-            ),
-            (
-                set(parsed.selected_visual_anchor_fact_ids),
-                set(basis.visual_anchor_fact_ids),
-                "visual anchor fact",
-            ),
-            (
-                set(parsed.selected_finding_ids),
-                set(basis.finding_ids),
-                "finding",
-            ),
-            (
-                set(parsed.selected_evidence_ids),
-                set(basis.evidence_ids),
-                "evidence",
-            ),
-        )
-        for selected, allowed, name in checks:
-            if selected != allowed:
-                return False, (
-                    f"selected {name} ids must exactly match the compiled basis"
-                )
-        if parsed.unresolved_gaps != basis.unresolved_gaps:
-            return False, "unresolved_gaps must match the compiled basis"
         return True, ""
 
     @staticmethod

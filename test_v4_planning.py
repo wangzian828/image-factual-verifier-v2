@@ -317,21 +317,10 @@ class PlanningThenReactBackend(ImageAccountPlanningBackend):
                                     {
                                         "verdict": context["compiled_verdict"],
                                         "confidence": 0.99,
-                                        "policy_rule_id": "discrepancy-first-v4",
-                                        "selected_claim_ids": basis["claim_ids"],
-                                        "selected_discrepancy_ids": basis[
-                                            "discrepancy_ids"
-                                        ],
-                                        "selected_visual_anchor_fact_ids": basis[
-                                            "visual_anchor_fact_ids"
-                                        ],
-                                        "selected_finding_ids": basis["finding_ids"],
-                                        "selected_evidence_ids": basis["evidence_ids"],
                                         "overall_assessment": (
                                             "The compiled Evidence establishes the "
                                             "selected material discrepancy."
                                         ),
-                                        "unresolved_gaps": basis["unresolved_gaps"],
                                     }
                                 ),
                             }

@@ -228,20 +228,20 @@ Exact instruction:
   - unresolved gaps.
 - Purpose:
   - explain the already compiled verdict;
-  - cite exactly the compiled basis;
-  - add no new facts or searches.
-- Output: `DiscrepancyJudgment`
+  - return only verdict, confidence, and a concise assessment;
+  - add no new facts, searches, or identifiers. Runtime injects the compiled
+    claim/discrepancy/finding/Evidence IDs and unresolved gaps into canonical
+    `DiscrepancyJudgment`.
+- Output: `DiscrepancyJudgmentOutput` (runtime then builds `DiscrepancyJudgment`)
 - Next: trace persistence, scoring, and export.
 
 Exact instruction:
 
-> You are the constrained final synthesizer for discrepancy-first-v4. Give the final
-> binary fact-check verdict, real or fake, from the supplied complete investigation
-> basis. When compiled_verdict is non-empty, reproduce it. Otherwise weigh the
-> recorded Evidence, image understanding, conflicts, failed routes and unresolved
-> gaps and choose the better-supported binary conclusion. Copy every compiled-basis
-> ID list and unresolved_gaps exactly. The assessment may summarize only supplied
-> material; do not add historical facts or reopen search.
+> You are the constrained final synthesizer for discrepancy-first-v4. Return only
+> the binary verdict, confidence, and a concise assessment of the supplied compiled
+> basis. When compiled_verdict is non-empty, reproduce it. Do not emit claim,
+> discrepancy, finding, Evidence, or gap IDs; the runtime injects those from the
+> accepted investigation state. Do not add historical facts or reopen search.
 
 ## 3. Auxiliary Gemini calls
 

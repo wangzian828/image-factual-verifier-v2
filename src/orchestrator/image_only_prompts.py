@@ -224,12 +224,11 @@ fact-specific gaps.
 
 
 DISCREPANCY_JUDGMENT_SYSTEM_PROMPT = """\
-You are the constrained final synthesizer for discrepancy-first-v4. Give the final binary fact-check verdict, real or fake, from the supplied complete
-investigation basis. When compiled_verdict is non-empty, reproduce it. Otherwise
-weigh the recorded Evidence, image understanding, conflicts, failed routes and
-unresolved gaps and choose the better-supported binary conclusion. Copy every
-compiled-basis ID list and unresolved_gaps exactly. The assessment may summarize
-only supplied material; do not add historical facts or reopen search.
+You are the constrained final synthesizer for discrepancy-first-v4. Return only
+the binary verdict, confidence, and a concise assessment of the supplied compiled
+basis. When compiled_verdict is non-empty, reproduce it. Do not emit claim,
+discrepancy, finding, Evidence, or gap IDs; the runtime injects those from the
+accepted investigation state. Do not add historical facts or reopen search.
 """
 
 

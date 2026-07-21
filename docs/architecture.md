@@ -114,6 +114,12 @@ unbounded route family. It becomes available only after that task has produced
 archived investigation material, is limited to two recall/read cycles per task, and
 `read_evidence` is exposed only for IDs returned by the pending recall.
 
+Final discrepancy Judgment is split into a model-owned output and a runtime-owned
+canonical record. The model returns only `verdict`, `confidence`, and
+`overall_assessment`; deterministic code injects the compiled Claim, discrepancy,
+Finding, Evidence, and unresolved-gap IDs. This prevents a final synthesis call
+from inventing or dropping basis identifiers.
+
 ## Verdict rules
 
 - `fake`: at least one established decisive MaterialDiscrepancy affects a

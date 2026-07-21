@@ -277,6 +277,17 @@ class APIBackend(LLMBackend):
                     allow_reasoning_fallback=bool(response_format),
                 )
                 if not text.strip():
+                    # Qwen/vLLM can occasionally return a successful HTTP
+                    # response containing only hidden reasoning or an empty
+                    # choice. Treat that as a bounded transient at the wire
+                    # boundary, just like an empty body; do not turn it into an
+                    # Agent engineering error before StageRunner can continue.
+                    if attempt + 1 < attempts:
+                        last_error = RuntimeError(
+                            "Chat Completions returned an empty model response."
+                        )
+                        await asyncio.sleep(2 * (attempt + 1))
+                        continue
                     raise RuntimeError("Chat Completions returned an empty model response.")
 
                 usage = data.get("usage", {})
