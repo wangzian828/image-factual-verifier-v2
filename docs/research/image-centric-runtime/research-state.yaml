@@ -3,8 +3,8 @@ question: >
   Can explicit image-aware workspace handoffs and auditable short request lifecycles
   preserve investigation quality while keeping every request below 128K tokens?
 status: active
-baseline_commit: d08e6e0
-active_hypothesis: H3
+baseline_commit: 6568a61
+active_hypothesis: H4
 hypotheses:
   H1:
     status: superseded
@@ -17,18 +17,24 @@ hypotheses:
       A unified multimodal checkpoint can revise an underspecified target and
       stop on decisive evidence without separate Reflection and Query Replan.
   H3:
-    status: implemented_pending_real_validation
+    status: validated
     prediction: >
       Explicit Qwen context-request ancestry will distinguish recovered protocol
       corrections from unresolved rejections without weakening semantic gates.
+  H4:
+    status: evaluating_heterogeneous_canaries
+    prediction: >
+      Profile-owned endpoints and schema-only forced boundaries eliminate
+      provider and duplicate-correction engineering failures across unrelated
+      real cases without weakening the 24-action or evidence gates.
 latest_experiment:
-  run_id: qwen35-case04886-lineage-env-6e89fbd
-  engineering_errors: 1
-  strict_audit_passed: false
-  audit_failure: duplicate_correction_forced_boundary_mismatch
-  maximum_provider_input_tokens: null
-  investigation_actions: 14
-  llm_api_calls: 25
+  run_id: qwen35-case04886-profile-6568a61
+  engineering_errors: 0
+  strict_audit_passed: true
+  audit_failure: null
+  maximum_provider_input_tokens: 56158
+  investigation_actions: 24
+  llm_api_calls: 40
 metrics:
   - target_relation_preserved
   - correct_verdict

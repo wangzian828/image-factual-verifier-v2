@@ -1,5 +1,18 @@
 # Image-Centric Runtime Research Log
 
+## 2026-07-22 — profile-owned endpoint canary accepted
+
+- `qwen35-case04886-profile-6568a61` ran with all Qwen endpoint/model environment
+  overrides unset and still reached a bounded `real` Judgment in 319.65 seconds.
+- The run had zero engineering errors, exactly 24 investigation actions, 40 model
+  calls, 12 successful Evidence calls, and an explicit three-Claim unresolved basis.
+- Strict scheduler audit passed with no warnings or rejections. All 27 context
+  requests completed; the only correction had a valid parent request, and the
+  maximum provider input was 56,158 tokens, below the 128K request limit.
+- This accepts request ancestry, profile-owned endpoint resolution, and the clean
+  forced boundary for the first heterogeneous case. Andreea, Pillars, and Monarch
+  remain the pre-20-case heterogeneous gate.
+
 ## 2026-07-22 — Qwen correction-lineage canary
 
 - `qwen35-case04886-basis-d08e6e0` completed with `real`, zero engineering errors,

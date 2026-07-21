@@ -3,11 +3,11 @@
 ## Current understanding
 
 The Qwen3.5 short-request runtime now reaches a complete bounded binary Judgment
-without engineering errors on the first heterogeneous canary. The compiled basis
-retains supported high-salience Claims, unresolved medium Claims, Evidence, and an
-explicit gap. The remaining strict-audit failure is request-lineage bookkeeping:
-Qwen corrections are real independent Chat Completions requests and therefore need
-durable context-request ancestry instead of Gemini Interaction IDs.
+without engineering errors on the first heterogeneous canary, and strict scheduler
+audit passes without warnings. Its 24-action trace preserves unresolved Claims as
+explicit gaps instead of inventing Evidence. All requests remain independent short
+lifecycles with durable request ancestry; the largest observed provider request is
+56,158 tokens, below the 128K limit.
 
 The baseline runtime was a deterministic coordinator of isolated Gemini stages.
 Initial perception saw the image, while Target Planning, ReAct, Evidence Decision,
