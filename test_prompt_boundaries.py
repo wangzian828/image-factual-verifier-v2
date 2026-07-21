@@ -45,24 +45,27 @@ def test_hot_path_prompts_stay_semantic_and_compact() -> None:
     )
     assert "missing mention is not refutation" in browse_prompt
     assert "conflicting value for the same subject" in browse_prompt
+    assert "actual value of the disputed relation" in browse_prompt
+    assert "never mentions the image's proposed value" in browse_prompt
     assert "does not support its truth" in browse_prompt
     assert "explicit denial refutes it" in browse_prompt
     assert "need not settle every clause" in browse_prompt
     assert "runtime owns task state" in react_prompt
     assert "validates grounding" in planning_prompt
     assert "do not own the verdict" in image_account_prompt
-    assert "Separately create open SearchHypotheses" in image_account_prompt
+    assert "SearchHypotheses ask what actually happened" in image_account_prompt
+    assert "identical image can be found" in image_account_prompt
     assert "one high-salience ImageClaim" in image_account_prompt
     assert "central subject, event, and relation" in image_account_prompt
     assert "independent verdict-changing assertions" in image_account_prompt
     assert "do not inventory visible details" in image_account_prompt
     assert "Image clues do not limit the search" in image_account_prompt
-    assert "underlying facts" in image_account_prompt
     assert "unverified leads" in image_account_prompt
     assert "only tool Evidence establishes facts" in image_account_prompt
     assert "Output fields: account_summary" in image_account_prompt
     assert "not a boundary on the investigation" in discrepancy_react_prompt
-    assert "any useful query angle" in discrepancy_react_prompt
+    assert "Frame retrieval around what actually happened" in discrepancy_react_prompt
+    assert "identical image can be found" in discrepancy_react_prompt
     assert "only tool Evidence establishes a fact" in discrepancy_react_prompt
     assert "Do not change the ImageClaim" in discrepancy_react_prompt
     assert "select one owned ImageClaim" in discrepancy_react_prompt

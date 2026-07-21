@@ -81,9 +81,10 @@ Exact instruction:
 > account communicated by the image. Return one high-salience ImageClaim preserving
 > the central subject, event, and relation. Add at most two more only for independent
 > verdict-changing assertions; do not inventory visible details.
-> Separately create open SearchHypotheses that can establish the underlying facts.
-> Image clues do not limit the search. Prior knowledge supplies unverified leads;
-> only tool Evidence establishes facts. Hypotheses do not own the verdict.
+> SearchHypotheses ask what actually happened, not merely whether the image's proposed
+> value or an identical image can be found. Image clues do not limit the search. Prior
+> knowledge supplies unverified leads; only tool Evidence establishes facts.
+> Hypotheses do not own the verdict.
 >
 > Output fields: account_summary;
 > image_claims[{claim_key, statement, kind, predicate, anchor_fact_ids, salience}];
@@ -131,10 +132,10 @@ Exact instruction:
 
 > Choose exactly one runtime-authorized tool action that most reduces uncertainty
 > about an unresolved ImageClaim. Its attached SearchHypothesis supplies context and
-> ownership, not a boundary on the investigation. Use any useful query angle to
-> establish the underlying real-world facts independently of the values proposed by
-> the image. Prior knowledge may supply leads, but only tool Evidence establishes a
-> fact. Do not change the ImageClaim.
+> ownership, not a boundary on the investigation. Frame retrieval around what actually
+> happened, not merely whether the image's proposed value or an identical image can be
+> found. Prior knowledge may supply leads, but only tool Evidence establishes a fact.
+> Do not change the ImageClaim.
 >
 > Inspect a promising page or reference image before repeating retrieval for that
 > route. Search titles, snippets, and reverse-image matches are Discovery only.
@@ -260,7 +261,9 @@ The webpage extractor is an independent request with two trusted fields:
 
 Stance follows whether the exact passage makes `image_claim` true or false. A page
 reporting that someone made the claim does not support its truth; an explicit denial
-is refuting Evidence.
+is refuting Evidence. A passage that names the actual value of the disputed relation
+remains useful even when it never repeats the image's proposed value; the extractor
+still assigns direction only from the exact selected text.
 
 The model selects only a Claim ID already owned by the scheduled ResearchTask; the
 runtime injects its exact text and records the ID in provenance. One ReAct action

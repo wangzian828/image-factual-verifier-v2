@@ -7,6 +7,22 @@
 
 > 本文保存用户确认的独立执行计划。详细服务器命令与验收边界以本次接手消息为准；实施时不得跳过确定性门禁直接调用真实 Gemini。
 
+## 当前执行进度（2026-07-22，Qwen3.5）
+
+- Qwen3.5-9B 已在 gpu-13 的物理 GPU 4、5 上通过 128K、Thinking、结构化输出、原生工具
+  调用和短链门禁；reasoning 独立归档且不回灌。
+- Queen 前两轮暴露的协议纠正 action 计数和参考图 selector schema 已分别修复，第三轮
+  Planning 已保留中心人物—事件—交通工具关系，并能完整运行到 24-action bounded Judgment。
+- 第三轮仍缺少合格网页 Evidence：调查偏向验证图中具体值、相同图片和错误 OCR，且窄
+  `retrieval_goal` 让抽取器漏选同一现实关系的实际值。Judgment 随后擅自增加空 basis 之外的
+  ID，被严格 validator 正确拒绝为 engineering error。
+- 当前只做通用、简短的开放事实修正：SearchHypothesis 询问实际发生了什么，ReAct 围绕现实
+  事实而非图中具体值/相同图片检索，网页抽取允许选择未复述争议值但给出同一争议关系实际值
+  的正文。不得加入人物、交通工具、年份、OCR 字符、固定 URL 或固定查询。
+- 门禁顺序保持：本地全量测试 → 提交/同步 → 只重跑 Queen → strict audit。Queen 零工程
+  错误后冻结配置并运行正式 20 例；20/20 工程通过后才做总体轨迹分析和小幅通用调整，随后
+  推进成熟框架下的 SFT/RL 基建。
+
 ## 当前执行进度（2026-07-20）
 
 - Phase 0～7：本地实现完成。默认 Agent workflow policy 已切换为
