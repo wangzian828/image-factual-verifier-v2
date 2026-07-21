@@ -58,6 +58,30 @@ def test_serving_launcher_uses_qwen3_vl_lmdeploy_protocol() -> None:
     assert "require_idle_gpus" in source
 
 
+def test_locked_vllm_launcher_uses_native_qwen3_vl_protocol() -> None:
+    source = _source("scripts/serve/start_vllm_qwen3vl.sh")
+
+    assert 'max-model-len "$CONTEXT_LENGTH"' in source
+    assert "--reasoning-parser qwen3" in source
+    assert '"reasoning_parser":"qwen3"' in source
+    assert '"backend":"xgrammar"' in source
+    assert "--tool-call-parser qwen3_xml" in source
+    assert '"image":1,"video":0' in source
+    assert "--enable-tokenizer-info-endpoint" in source
+    assert "require_idle_gpus" in source
+    assert "131072" in source
+
+
+def test_vllm_lifecycle_only_stops_its_verified_process_group() -> None:
+    source = _source("scripts/serve/manage_vllm_qwen3vl.sh")
+
+    assert "owned_process" in source
+    assert 'kill -TERM -- "-$pid"' in source
+    assert "SIGKILL was sent" in source
+    assert "setsid bash" in source
+    assert "120" in source
+
+
 def test_launchers_enforce_physical_gpu_allowlist() -> None:
     common = _source("scripts/lib/common.sh")
     selector = _source("scripts/server/select_idle_gpus.sh")
@@ -82,6 +106,25 @@ def test_gpu13_bootstrap_isolates_serving_from_sft_installation() -> None:
     assert 'CUDA_HOME="$sft_prefix"' in source
     assert '"$env_prefix/bin/python" -m pip check' in source
     assert '"$sft_prefix/bin/swift" sft --help' in source
+
+
+def test_vllm_bootstrap_is_fresh_pinned_and_refuses_existing_prefix() -> None:
+    source = _source("scripts/server/bootstrap_vllm_qwen3vl_gpu13.sh")
+    requirements = _source("requirements/serve-vllm-qwen3vl.txt")
+    constraints = _source("requirements/constraints-vllm-qwen3vl.txt")
+
+    assert "conda create -y -p" in source
+    assert "--clone" not in source
+    assert 'if [[ -e "$ENV_PREFIX" ]]' in source
+    assert "pip check" in source
+    assert 'pip install --constraint "$CONSTRAINTS" --requirement "$REQUIREMENTS"' in source
+    assert "verify_vllm_environment.py" in source
+    assert "pip freeze --all" in source
+    assert "input-locks.sha256" in source
+    assert "vllm==0.11.2" in requirements
+    assert "transformers==4.57.6" in requirements
+    assert "torch==2.9.0" in constraints
+    assert "xgrammar==0.1.25" in constraints
 
 
 def test_qwen3_vl_thinking_is_the_only_primary_profile() -> None:
