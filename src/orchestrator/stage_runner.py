@@ -2451,6 +2451,7 @@ class StageRunner:
                 tools=request_kwargs.get("tools"),
                 response_format=response_format,
                 generation_config=request_kwargs.get("generation_config"),
+                max_output_tokens=effective_max_tokens,
                 model=str(getattr(self.llm, "model_name", "")),
                 prompt_version=self.prompt_version,
             )
@@ -2541,6 +2542,7 @@ class StageRunner:
                 tools=tools,
                 response_format=kwargs.get("response_format"),
                 generation_config=kwargs.get("generation_config"),
+                max_output_tokens=kwargs.get("max_tokens"),
                 previous_interaction_id=previous_interaction_id,
                 model=str(getattr(self.llm, "model_name", "")),
                 prompt_version=self.prompt_version,

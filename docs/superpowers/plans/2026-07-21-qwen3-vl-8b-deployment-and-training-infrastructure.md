@@ -150,6 +150,16 @@ LMDeploy grammar 又从 reasoning 的第一个 token 开始约束 JSON，所以�
 结束后再约束 final content，正好符合本 Agent 的协议。新环境及完整门禁由 Training 仓库
 commit `9c4fb31` 提供；服务器安装与真实 Queen Planning 结果完成后继续回填本节。
 
+2026-07-21 vLLM 主线实测已通过 health、128k、图像、reasoning 分离、完整 Planning schema、
+原生工具、continuation 和 8 条独立短链门禁。Queen 首次完整 Agent 运行确认 Planning 的紧凑观测
+投影把该阶段输入降至 4,352 provider token 并正常产出；后续 ReAct 单请求输入约 25.5k～38.7k
+token，均低于 128k。第 11 个 ReAct 请求因 16,384 输出上限持续生成并在 300 秒客户端边界超时，
+因此本地 Qwen 的 Verification 工具选择预算改为 8,192，Planning 保持 8,192。运行账本新增每次
+请求的输出上限，并由 `scripts/monitor_runtime_events.py` 实时报告阶段、token、工具和错误。
+该次轨迹未产生事实结论：模型虽检索到 Gold State Coach 线索，但 Planning 仍有 Claim 退化为
+可见元素清单，现以通用短句明确 Claim 必须是图像传达的可核查现实命题；不增加 Queen/bus
+专用规则。修复后只重跑 Queen，再决定是否进入其余三例。
+
 ## 7. 数据与上下文
 
 训练集只能来自通过 schema、provenance、图像资产、阶段归属、loss mask、去重和泄漏审计的

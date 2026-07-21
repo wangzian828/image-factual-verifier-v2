@@ -459,6 +459,19 @@ scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
 Only after this command passes should a larger formal evaluation be launched in the
 background with `scripts/server/start_eval_gpu13.sh`.
 
+During any long canary, follow the durable event stream instead of waiting for the
+whole-case evaluator summary:
+
+```bash
+python scripts/monitor_runtime_events.py \
+  --run-dir "$IFV_DATA_ROOT/runs/eval/<run-id>" \
+  --case-id <case-id> \
+  --follow
+```
+
+The monitor reports each model request's stage, estimated input, output cap, actual
+provider token counts, tool result, and terminal engineering-error/final snapshot.
+
 `run_real_canary.py` refuses a dirty checkout and rejects any `GIT_COMMIT` value that
 does not match the actual HEAD. The child evaluator receives the verified HEAD, so a
 run directory name or inherited environment variable cannot falsify manifest

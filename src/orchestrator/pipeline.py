@@ -2907,19 +2907,25 @@ class Orchestrator:
             self._record_stage_steps(state, steps)
         return report
 
-    @staticmethod
-    def _stage_output_tokens(stage_name: str, default: int) -> int:
-        value = os.getenv(f"GEMINI_{stage_name}_MAX_OUTPUT_TOKENS", str(default)).strip()
+    def _stage_output_tokens(self, stage_name: str, default: int) -> int:
+        normalized_stage = stage_name.strip().upper()
+        if self.provider in {"qwen_local", "lmdeploy"}:
+            env_name = f"QWEN_{normalized_stage}_MAX_OUTPUT_TOKENS"
+            provider_default = (
+                8192 if normalized_stage == "VERIFICATION" else default
+            )
+        else:
+            env_name = f"GEMINI_{normalized_stage}_MAX_OUTPUT_TOKENS"
+            provider_default = default
+        value = os.getenv(env_name, str(provider_default)).strip()
         try:
             tokens = int(value)
         except ValueError as exc:
             raise ValueError(
-                f"GEMINI_{stage_name}_MAX_OUTPUT_TOKENS must be an integer."
+                f"{env_name} must be an integer."
             ) from exc
         if tokens < 1:
-            raise ValueError(
-                f"GEMINI_{stage_name}_MAX_OUTPUT_TOKENS must be positive."
-            )
+            raise ValueError(f"{env_name} must be positive.")
         return tokens
 
     @staticmethod

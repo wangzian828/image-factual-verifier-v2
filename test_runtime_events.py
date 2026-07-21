@@ -39,6 +39,7 @@ def test_context_manifest_reconstructs_exact_image_request(tmp_path: Path) -> No
         ],
         tools=[],
         response_format={"type": "text"},
+        max_output_tokens=8192,
         model="controlled",
         prompt_version="planning-v1",
     )
@@ -56,6 +57,7 @@ def test_context_manifest_reconstructs_exact_image_request(tmp_path: Path) -> No
     assert manifest["media_bytes"] == len(image_bytes)
     assert manifest["serialized_input_chars"] > manifest["explicit_input_chars"]
     assert manifest["parent_interaction_id"] is None
+    assert manifest["max_output_tokens"] == 8192
 
 
 def test_event_reader_ignores_torn_last_line(tmp_path: Path) -> None:
