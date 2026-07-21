@@ -72,6 +72,8 @@ def test_locked_vllm_launcher_uses_native_qwen3_vl_protocol() -> None:
     assert "131072" in source
     assert "NCCL_CUMEM_HOST_ENABLE=0" in source
     assert "--disable-custom-all-reduce" in source
+    assert "prepare_qwen3vl_chat_template.py" in source
+    assert '--chat-template "$CHAT_TEMPLATE"' in source
 
 
 def test_vllm_lifecycle_only_stops_its_verified_process_group() -> None:

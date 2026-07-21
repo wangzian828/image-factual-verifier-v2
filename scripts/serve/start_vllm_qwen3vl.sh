@@ -52,6 +52,11 @@ export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 PROFILE_DIR="$DATA_ROOT/exports/$SERVED_NAME"
 mkdir -p "$PROFILE_DIR"
+CHAT_TEMPLATE="$PROFILE_DIR/chat-template.jinja"
+"$ENV_PREFIX/bin/python" "$SCRIPT_DIR/prepare_qwen3vl_chat_template.py" \
+  --model "$MODEL" \
+  --output "$CHAT_TEMPLATE" \
+  --manifest "$PROFILE_DIR/chat-template.json"
 "$ENV_PREFIX/bin/python" -m ifv_training serving-profile \
   --output "$PROFILE_DIR/serving-profile.json" \
   --profile-id "$SERVED_NAME" \
@@ -70,6 +75,7 @@ args=(
   --host 127.0.0.1
   --port "$PORT"
   --served-model-name "$SERVED_NAME"
+  --chat-template "$CHAT_TEMPLATE"
   --dtype bfloat16
   --tensor-parallel-size "$TP_SIZE"
   --disable-custom-all-reduce

@@ -111,3 +111,5 @@ SFT 和 RL 不使用上述 serving 环境。它们继续使用各自的成熟框
 gpu-13 的 R580 驱动与 NCCL 2.27 默认 cuMem host 分配路径存在已实测的 `libcuda.so` 崩溃。服务固定设置 `NCCL_CUMEM_HOST_ENABLE=0`；构建门禁会在物理 GPU 4、5 上执行真实的双 rank NCCL all-reduce，不能用单卡 CUDA import 代替这项检查。
 
 vLLM 的 custom all-reduce 在本机预热时会返回 CUDA `invalid argument`，因此启动参数固定使用 `--disable-custom-all-reduce`，TP 通信统一走上述已验证的 NCCL 路径。
+
+Thinking checkpoint 的原始模板会在 prompt 末尾预填 `<think>`，但 vLLM 0.11.2 的 `qwen3` parser 只解析生成结果中同时存在的 `<think>...</think>`。启动器因此从 checkpoint 原始模板精确派生一份服务模板，仅去掉生成前的 `<think>` 预填，让模型自行生成起始标记；模板及 SHA256 写入服务 profile 目录。正文中出现思考或缺少独立 reasoning 字段都视为门禁失败。

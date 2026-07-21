@@ -76,3 +76,14 @@ def test_nccl_probe_exercises_real_tensor_parallel_collective() -> None:
     assert "dist.all_reduce(value)" in source
     assert "dist.all_gather_object" in source
     assert "dist.destroy_process_group()" in source
+
+
+def test_chat_template_keeps_generated_think_start_for_vllm_parser() -> None:
+    source = (ROOT / "scripts/serve/prepare_qwen3vl_chat_template.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "GENERATION_PREFILL" in source
+    assert "PARSER_COMPATIBLE_PREFILL" in source
+    assert "template.count(GENERATION_PREFILL) != 1" in source
+    assert "removed_generation_think_prefill" in source
