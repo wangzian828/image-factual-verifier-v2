@@ -19,7 +19,22 @@ if [[ -n "$(git -C "${REPO_ROOT}" status --porcelain)" ]]; then
     exit 2
 fi
 
-git -C "${REPO_ROOT}" fetch --prune origin
+REMOTE_REF="refs/heads/${BRANCH}"
+TRACKING_REF="refs/remotes/origin/${BRANCH}"
+
+# Some single-branch clones do not have a wildcard fetch refspec. An unqualified
+# `git fetch origin` then succeeds while leaving this branch's tracking ref stale.
+# Fetch the requested branch into its exact tracking ref before fast-forwarding.
+git -C "${REPO_ROOT}" fetch --prune origin \
+    "+${REMOTE_REF}:${TRACKING_REF}"
 git -C "${REPO_ROOT}" checkout "${BRANCH}"
 git -C "${REPO_ROOT}" merge --ff-only "origin/${BRANCH}"
+
+remote_head="$(git -C "${REPO_ROOT}" rev-parse "${TRACKING_REF}")"
+local_head="$(git -C "${REPO_ROOT}" rev-parse HEAD)"
+if [[ "${local_head}" != "${remote_head}" ]]; then
+    echo "Server checkout did not reach ${TRACKING_REF}." >&2
+    echo "local=${local_head} remote=${remote_head}" >&2
+    exit 2
+fi
 git -C "${REPO_ROOT}" status --short --branch
