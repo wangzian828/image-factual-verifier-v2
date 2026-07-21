@@ -114,17 +114,28 @@ def test_image_account_requires_exactly_one_high_salience_claim() -> None:
         ImageAccountPlanningOutput.model_validate(payload)
 
 
-def test_search_hypothesis_queries_require_an_executable_text_route() -> None:
+def test_planning_derives_text_search_from_nonempty_queries() -> None:
     payload = _planning_output().model_dump(mode="json")
     payload["search_hypotheses"][0]["suggested_tools"] = [
         "reverse_image_search"
     ]
 
-    with pytest.raises(
-        ValidationError,
-        match="queries require the text_search tool",
-    ):
-        ImageAccountPlanningOutput.model_validate(payload)
+    output = ImageAccountPlanningOutput.model_validate(payload)
+    state = _state()
+    update = apply_image_account_planning(state, output)
+
+    assert update["accepted"] is True
+    assert state.search_hypotheses[0].queries == [
+        "presenter source photograph product"
+    ]
+    assert state.search_hypotheses[0].suggested_tools == [
+        "reverse_image_search",
+        "text_search",
+    ]
+    assert state.tasks[0].suggested_tools == [
+        "reverse_image_search",
+        "text_search",
+    ]
 
 
 def _planned_state() -> ImageOnlyInvestigationState:
@@ -455,6 +466,7 @@ def test_image_account_planning_rejects_unknown_anchor_atomically() -> None:
 
 def test_search_hypothesis_requires_an_executable_first_hop() -> None:
     payload = _planning_output().model_dump(mode="json")
+    payload["search_hypotheses"][0]["queries"] = []
     payload["search_hypotheses"][0]["suggested_tools"] = ["visit"]
 
     with pytest.raises(ValidationError, match="executable first-hop tool"):
@@ -486,6 +498,7 @@ def test_non_integrity_task_does_not_expose_integrity_only_tools() -> None:
 def test_planning_rejects_route_with_no_authorized_first_hop() -> None:
     state = _state()
     output = _planning_output()
+    output.search_hypotheses[0].queries = []
     output.search_hypotheses[0].suggested_tools = [
         "analyze_visual_anomalies"
     ]
@@ -1029,6 +1042,51 @@ def test_discrepancy_decision_rejects_duplicate_hypothesis_atomically() -> None:
     assert update["accepted"] is False
     assert "duplicates an existing route" in update["rejected_reason"]
     assert state.model_dump(mode="json") == before
+
+
+def test_discrepancy_decision_derives_text_search_for_new_query_route() -> None:
+    state = _planned_state()
+    claim = state.image_claims[0]
+    query = "what object did the presenter hold during the event"
+
+    update = apply_discrepancy_decision(
+        state,
+        DiscrepancyDecisionOutput(
+            new_hypotheses=[
+                NewSearchHypothesis(
+                    claim_ids=[claim.claim_id],
+                    statement=(
+                        "Independent event records may identify the object that "
+                        "was actually held."
+                    ),
+                    queries=[query],
+                    expected_information=(
+                        "A reliable event record naming the held object."
+                    ),
+                    suggested_tools=["reverse_image_search"],
+                )
+            ],
+            verdict_proposal="continue",
+            rationale="A distinct underlying-fact route remains open.",
+        ),
+        reviewed_evidence_ids=[],
+        trigger="scheduled_boundary",
+    )
+
+    assert update["accepted"] is True
+    hypothesis = next(
+        item
+        for item in state.search_hypotheses
+        if item.hypothesis_id in update["accepted_hypothesis_ids"]
+    )
+    task = next(item for item in state.tasks if item.task_id == hypothesis.task_id)
+    assert hypothesis.queries == [query]
+    assert hypothesis.suggested_tools == [
+        "reverse_image_search",
+        "text_search",
+    ]
+    assert task.suggested_queries == [query]
+    assert task.suggested_tools == hypothesis.suggested_tools
 
 
 def test_discrepancy_decision_rejects_post_verdict_update_atomically() -> None:

@@ -442,7 +442,7 @@ class SearchHypothesisProposal(StrictModel):
 
     @model_validator(mode="after")
     def validate_first_hop(self) -> "SearchHypothesisProposal":
-        if not set(self.suggested_tools) & {
+        if not self.queries and not set(self.suggested_tools) & {
             "reverse_image_search",
             "text_search",
             "check_consistency",
@@ -452,10 +452,6 @@ class SearchHypothesisProposal(StrictModel):
         }:
             raise ValueError(
                 "search hypothesis requires an executable first-hop tool"
-            )
-        if self.queries and "text_search" not in self.suggested_tools:
-            raise ValueError(
-                "search hypothesis queries require the text_search tool"
             )
         return self
 
@@ -626,7 +622,7 @@ class NewSearchHypothesis(StrictModel):
 
     @model_validator(mode="after")
     def validate_first_hop(self) -> "NewSearchHypothesis":
-        if not set(self.suggested_tools) & {
+        if not self.queries and not set(self.suggested_tools) & {
             "reverse_image_search",
             "text_search",
             "check_consistency",
@@ -636,10 +632,6 @@ class NewSearchHypothesis(StrictModel):
         }:
             raise ValueError(
                 "new search hypothesis requires an executable first-hop tool"
-            )
-        if self.queries and "text_search" not in self.suggested_tools:
-            raise ValueError(
-                "new search hypothesis queries require the text_search tool"
             )
         return self
 

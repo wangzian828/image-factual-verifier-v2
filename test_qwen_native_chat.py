@@ -551,6 +551,47 @@ def test_qwen_final_semantic_rejection_preserves_structured_output(
     ]
 
 
+def test_qwen_final_schema_rejection_preserves_raw_json_and_reason(
+    tmp_path: Path,
+) -> None:
+    invalid_raw = {
+        "choices": [
+            {"message": {"role": "assistant", "content": "{}"}}
+        ]
+    }
+    invalid_response = LLMResponse(
+        text="{}",
+        prompt_tokens=10,
+        completion_tokens=2,
+        raw=invalid_raw,
+    )
+    backend = QwenFakeBackend([invalid_response, invalid_response])
+    runner = StageRunner(
+        llm=backend,
+        system_prompt="Return one answer.",
+        tools=[],
+        output_schema=AnswerOutput,
+        max_rounds=1,
+        attach_image=False,
+        runtime_store=CaseRuntimeStore(
+            tmp_path,
+            case_id="final-schema-rejection",
+            attempt_id="attempt",
+        ),
+    )
+
+    parsed, steps = asyncio.run(runner.run("Answer the question."))
+
+    assert parsed is None
+    assert steps[-1].action_type == "output_rejected"
+    assert steps[-1].output == {}
+    assert steps[-1].metadata["policy_action"] == {}
+    assert steps[-1].metadata["error_class"] == "schema_error"
+    assert "missing required fields" in steps[-1].metadata[
+        "rejection_reason"
+    ]
+
+
 def test_qwen_forced_output_preserves_final_budget_and_thinking_policy() -> None:
     empty_raw = {
         "choices": [

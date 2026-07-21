@@ -74,6 +74,24 @@ MAX_NEW_HYPOTHESES_PER_DECISION = 3
 MAX_V4_VISUAL_REINSPECTIONS = 1
 
 
+def _runtime_hypothesis_tools(
+    suggested_tools: Sequence[str],
+    queries: Sequence[str],
+) -> List[str]:
+    """Derive executable capabilities from the hypothesis payload.
+
+    A non-empty query list already declares a text-search route.  Keep that
+    protocol fact in one place instead of requiring the policy to repeat it in
+    ``suggested_tools``.  The persisted runtime list remains bounded by the
+    SearchHypothesis schema.
+    """
+
+    tools = list(dict.fromkeys(suggested_tools))
+    if queries and "text_search" not in tools:
+        tools = [*tools[:3], "text_search"]
+    return tools
+
+
 def stable_id(prefix: str, *parts: object) -> str:
     payload = json.dumps(parts, ensure_ascii=False, sort_keys=True, default=str)
     digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:20]
@@ -814,7 +832,10 @@ def apply_image_account_planning(
         for fact_id in fact_ids
     )
     for proposal in output.search_hypotheses:
-        suggested_tools = list(dict.fromkeys(proposal.suggested_tools))
+        suggested_tools = _runtime_hypothesis_tools(
+            proposal.suggested_tools,
+            proposal.queries,
+        )
         if not owns_visual_integrity:
             suggested_tools = [
                 tool_name
@@ -1570,13 +1591,17 @@ def apply_discrepancy_decision(
             proposal.statement,
         )
         task_id = stable_id("task", hypothesis_id, "decision-route")
+        suggested_tools = _runtime_hypothesis_tools(
+            proposal.suggested_tools,
+            proposal.queries,
+        )
         hypothesis = SearchHypothesis(
             hypothesis_id=hypothesis_id,
             claim_ids=proposal_claim_ids,
             statement=proposal.statement,
             queries=list(dict.fromkeys(proposal.queries)),
             expected_information=proposal.expected_information,
-            suggested_tools=list(dict.fromkeys(proposal.suggested_tools)),
+            suggested_tools=suggested_tools,
             priority=proposal.priority,
             task_id=task_id,
         )

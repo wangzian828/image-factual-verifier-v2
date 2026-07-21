@@ -75,8 +75,9 @@ Core instruction:
 - Output: `ImageAccountPlanningOutput`
 - Next: deterministic Claim, hypothesis, and ResearchTask creation. Initial route
   attachment to the image account is bookkeeping, not a semantic conclusion.
-  Explicit `queries` require `text_search` in the same Hypothesis; the schema rejects
-  planned query text that no advertised tool can execute.
+  Non-empty `queries` already declare a text-search route, so the runtime derives
+  `text_search` without changing the query text. `suggested_tools` only carries
+  additional useful capabilities.
 
 Exact instruction:
 
@@ -113,8 +114,9 @@ attempt, includes the exact runtime rejection, and preserves non-terminal
 `continue` when evidence or routes remain open. The runtime never silently drops
 an invalid Claim assessment or changes a proposed verdict; the model must return
 the corrected object. Independent reference, direction, chain, and verdict/route
-contract errors are returned together. An unaccepted final object remains an
-engineering failure and is preserved as `output_rejected` rather than an empty
+contract errors are returned together. Any final parseable JSON object rejected by
+either Pydantic or the semantic validator remains an engineering failure and is
+preserved verbatim as `output_rejected` with the exact reason, rather than an empty
 format error.
 
 Qwen Chat Completions records the same lifecycle explicitly in the context ledger.

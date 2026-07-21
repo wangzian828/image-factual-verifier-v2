@@ -1,5 +1,18 @@
 # Image-Centric Runtime Research Log
 
+## 2026-07-22 — full-20 Planning contract failure
+
+- `qwen35-full20-e82bd88` completed three cases without engineering errors, then
+  stopped on the fourth case after Planning exhausted its fixed corrections.
+- The hypothesis contained valid web queries but omitted `text_search` from a
+  second, redundant tool list. Qwen then appended the literal tool name to query
+  strings instead of repairing the cross-field duplication.
+- The generic repair makes non-empty `queries` the single declaration of a
+  text-search route. The reducer derives the bounded runtime capability without
+  rewriting query text; schema and semantic gates remain unchanged. A final
+  parseable but schema-invalid JSON object is now retained verbatim with its exact
+  Pydantic rejection reason.
+
 ## 2026-07-22 — first frozen 20-case launch stopped after two failures
 
 - The frozen `qwen35-full20-c1797c1` launch was stopped after its first two cases

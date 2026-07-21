@@ -25,8 +25,9 @@ positive ImageClaims and tentative SearchHypotheses; it does not create a core
 verdict fact or verdict. The Planning schema exposes no Claim key or per-Claim
 verification question on a hypothesis.
 It must still emit at least one executable route; this is a structural requirement,
-not a rule about which fact the route should investigate. A Hypothesis with explicit
-web queries must include `text_search`; otherwise those queries would never execute.
+not a rule about which fact the route should investigate. Non-empty Hypothesis
+`queries` already declare a text-search route, so the reducer derives `text_search`
+without editing query content. `suggested_tools` carries additional capabilities.
 
 Each ImageClaim states the underlying real-world proposition conveyed to the
 viewer. It does not replace that proposition with the easier meta-claim that visible
@@ -96,9 +97,9 @@ provider failure into a factual verdict.
 Before a correction turn, the runtime reports all independent ID, ownership,
 direction, and Finding-chain contract errors it can establish from the same output;
 it also reports incompatible verdict/route preconditions instead of serially hiding
-later errors behind the first failure. A final rejected JSON object remains an
-`output_rejected` trace step with its exact fields; it is not mislabeled as an empty
-format error.
+later errors behind the first failure. A final parseable JSON object rejected by
+either schema or semantic validation remains an `output_rejected` trace step with
+its exact fields and reason; it is not mislabeled as an empty format error.
 
 A qualified refutation of one high-salience Claim is already decisive for `fake`.
 Another unresolved Claim does not lower that contradiction to supporting or require

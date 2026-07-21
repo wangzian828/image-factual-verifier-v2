@@ -3643,10 +3643,18 @@ class StageRunner:
                 )
             if format_repair:
                 metadata["format_repair"] = format_repair
-            if output_json:
-                parsed = self._validate_output(output_json)
+            if output_json is not None:
+                parsed, schema_error = self._validate_output_with_error(
+                    output_json
+                )
                 if parsed is not None:
                     return parsed, metadata
+                metadata["policy_action"] = deepcopy(output_json)
+                metadata["rejection_reason"] = (
+                    schema_error
+                    or "output schema was invalid or incomplete"
+                )
+                metadata["error_class"] = "schema_error"
             preview_step = StageStep(metadata=metadata)
             self._attach_invalid_response_preview(preview_step, response.text)
         return None, metadata
