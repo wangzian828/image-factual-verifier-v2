@@ -214,7 +214,8 @@ class APIBackend(LLMBackend):
             body.update(self.extra_body)
 
         last_error: Optional[Exception] = None
-        for attempt in range(5):
+        attempts = self.max_retries + 1
+        for attempt in range(attempts):
             try:
                 client = self._get_shared_client()
                 response = await client.post(url, headers=headers, json=body)
@@ -222,7 +223,7 @@ class APIBackend(LLMBackend):
 
                 # Handle empty response body
                 if not response.content or not response.content.strip():
-                    if attempt < 4:
+                    if attempt + 1 < attempts:
                         import asyncio
                         await asyncio.sleep(3 * (attempt + 1))
                         continue
@@ -249,13 +250,13 @@ class APIBackend(LLMBackend):
             except (httpx.RemoteProtocolError, httpx.ConnectError, httpx.ReadTimeout,
                     httpx.LocalProtocolError, httpx.ReadError) as e:
                 last_error = e
-                if attempt < 4:
+                if attempt + 1 < attempts:
                     import asyncio
                     await asyncio.sleep(3 * (attempt + 1))
                     continue
                 raise
             except httpx.HTTPStatusError as e:
-                if e.response.status_code >= 500 and attempt < 4:
+                if e.response.status_code >= 500 and attempt + 1 < attempts:
                     last_error = e
                     import asyncio
                     await asyncio.sleep(2 * (attempt + 1))
@@ -265,7 +266,7 @@ class APIBackend(LLMBackend):
                 # Catch SSL errors and other transient network issues
                 if "SSL" in str(type(e).__name__) or "ssl" in str(e).lower():
                     last_error = e
-                    if attempt < 4:
+                    if attempt + 1 < attempts:
                         import asyncio
                         await asyncio.sleep(3 * (attempt + 1))
                         continue

@@ -343,20 +343,28 @@ def render_stage_request(packet: StageHandoffPacket) -> str:
             stage_input = {"stage_input": stage_input}
     if not isinstance(stage_input, Mapping):
         stage_input = {"stage_input": stage_input}
+    runtime_handoff = {
+        "schema_version": packet.schema_version,
+        "handoff_id": packet.handoff_id,
+        "target_stage": packet.target_stage,
+        "task_objective": packet.task_objective,
+        "available_tools": packet.available_tools,
+        "output_contract": packet.output_contract,
+        "protected_ids": packet.protected_ids,
+        "protected_coverage": packet.protected_coverage,
+        "workspace_version": packet.workspace.workspace_version,
+        "compaction": packet.compaction,
+    }
+    # Initial image-account planning already receives the complete bootstrap
+    # projection in stage_input (perception, OCR, entities, facts, anchors and
+    # tasks).  Re-embedding the same workspace added no model-visible facts and
+    # consumed roughly a quarter of the local Qwen context.  The complete
+    # workspace remains in the immutable handoff artifact for replay/audit.
+    if packet.target_stage != "image_account_planning":
+        runtime_handoff["workspace"] = packet.workspace.model_dump(mode="json")
     payload = {
         **dict(stage_input),
-        "runtime_handoff": {
-            "schema_version": packet.schema_version,
-            "handoff_id": packet.handoff_id,
-            "target_stage": packet.target_stage,
-            "task_objective": packet.task_objective,
-            "available_tools": packet.available_tools,
-            "output_contract": packet.output_contract,
-            "protected_ids": packet.protected_ids,
-            "protected_coverage": packet.protected_coverage,
-            "workspace": packet.workspace.model_dump(mode="json"),
-            "compaction": packet.compaction,
-        },
+        "runtime_handoff": runtime_handoff,
     }
     return json.dumps(payload, ensure_ascii=False, indent=2)
 

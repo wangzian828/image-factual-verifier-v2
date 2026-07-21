@@ -23,7 +23,9 @@ def test_atomic_json_replaces_complete_document(tmp_path: Path) -> None:
 
 def test_context_manifest_reconstructs_exact_image_request(tmp_path: Path) -> None:
     store = CaseRuntimeStore(tmp_path, case_id="case/with/a/long/name" * 4)
-    image_bytes = b"not-a-real-png-but-stable"
+    # Keep this large enough that externalizing media is meaningfully smaller
+    # than serializing its base64 representation as ordinary request text.
+    image_bytes = b"not-a-real-png-but-stable" * 256
     import base64
 
     encoded = base64.b64encode(image_bytes).decode("ascii")
@@ -51,6 +53,8 @@ def test_context_manifest_reconstructs_exact_image_request(tmp_path: Path) -> No
     assert reconstructed["input_payload"][1]["data"] == encoded
     assert manifest["provider_input_tokens"] == 20
     assert manifest["image_count"] == 1
+    assert manifest["media_bytes"] == len(image_bytes)
+    assert manifest["serialized_input_chars"] > manifest["explicit_input_chars"]
     assert manifest["parent_interaction_id"] is None
 
 

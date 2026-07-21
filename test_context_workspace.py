@@ -4,6 +4,7 @@ from src.orchestrator.context_workspace import (
     build_explicit_workspace,
     build_stage_handoff,
     fit_stage_handoff_to_budget,
+    render_stage_request,
 )
 from src.orchestrator.investigation_models import (
     ClaimAssessment,
@@ -153,3 +154,17 @@ def test_budgeter_reports_protected_overflow_without_silent_deletion() -> None:
     assert result.all_protected_items_reachable is True
     assert result.packet.stage_input == packet.stage_input
     assert result.packet.protected_ids == packet.protected_ids
+
+
+def test_initial_planning_request_does_not_duplicate_workspace() -> None:
+    packet = build_stage_handoff(
+        _state(),
+        target_stage="image_account_planning",
+        stage_input={"bootstrap_tasks": [{"task_id": "task-1"}]},
+    )
+
+    rendered = render_stage_request(packet)
+
+    assert '"workspace_version"' in rendered
+    assert '"workspace"' not in rendered
+    assert '"task_id": "task-1"' in rendered

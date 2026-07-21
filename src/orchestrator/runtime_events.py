@@ -548,6 +548,8 @@ class ContextLedger:
         ]
         items: list[Dict[str, Any]] = []
         explicit_chars = 0
+        serialized_input_chars = 0
+        media_bytes = 0
         for index, (kind, value, reason) in enumerate(components, start=1):
             if value is None or value == [] or value == {} or value == "":
                 continue
@@ -558,7 +560,18 @@ class ContextLedger:
                 sort_keys=True,
                 default=str,
             )
-            explicit_chars += len(serialized_actual)
+            serialized_persisted = json.dumps(
+                persisted,
+                ensure_ascii=False,
+                sort_keys=True,
+                default=str,
+            )
+            # Base64 image bytes are transported as media, not ordinary text
+            # tokens.  Estimate text from the externalized representation while
+            # retaining the raw serialized size and exact request hash.
+            explicit_chars += len(serialized_persisted)
+            serialized_input_chars += len(serialized_actual)
+            media_bytes += sum(int(item.get("byte_count", 0) or 0) for item in media)
             descriptor = self.store.artifacts.put_bytes(
                 stable_json_bytes(persisted),
                 media_type="application/json; charset=utf-8",
@@ -577,8 +590,9 @@ class ContextLedger:
                     "kind": kind,
                     "source_ids": [],
                     "content_hash": sha256_bytes(serialized_actual.encode("utf-8")),
-                    "char_count": len(serialized_actual),
-                    "token_count_estimate": max(1, (len(serialized_actual) + 3) // 4),
+                    "char_count": len(serialized_persisted),
+                    "serialized_input_chars": len(serialized_actual),
+                    "token_count_estimate": max(1, (len(serialized_persisted) + 3) // 4),
                     "priority": "recent",
                     "inclusion_reason": reason,
                     "retrieval_mode": "explicit",
@@ -600,6 +614,8 @@ class ContextLedger:
             "parent_interaction_id": previous_interaction_id,
             "explicit_input_chars": explicit_chars,
             "explicit_input_tokens_estimate": max(1, (explicit_chars + 3) // 4),
+            "serialized_input_chars": serialized_input_chars,
+            "media_bytes": media_bytes,
             "provider_input_tokens": None,
             "provider_output_tokens": None,
             "provider_thought_tokens": None,

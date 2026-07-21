@@ -155,7 +155,7 @@ class Orchestrator:
         )
         self.stage_request_timeout_seconds = self._runtime_timeout(
             "AGENT_STAGE_REQUEST_TIMEOUT_SECONDS",
-            900.0 if self.provider == "gemini" else 120.0,
+            900.0 if self.provider == "gemini" else 300.0,
         )
         cache_namespace = os.getenv("TOOL_CACHE_NAMESPACE", "").strip() or "|".join(
             [
@@ -206,12 +206,15 @@ class Orchestrator:
             temperature=temperature,
             max_tokens=max_tokens,
             timeout=float(
-                os.getenv("AGENT_LLM_REQUEST_TIMEOUT_SECONDS", "90")
+                os.getenv(
+                    "AGENT_LLM_REQUEST_TIMEOUT_SECONDS",
+                    "90" if self.provider == "gemini" else "300",
+                )
             ),
             max_retries=int(
                 os.getenv(
                     "AGENT_LLM_REQUEST_MAX_RETRIES",
-                    "12" if self.provider == "gemini" else "3",
+                    "12" if self.provider == "gemini" else "0",
                 )
             ),
         )
