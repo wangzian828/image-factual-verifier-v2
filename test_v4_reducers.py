@@ -1174,6 +1174,63 @@ def test_discrepancy_coverage_preserves_gap_for_binary_judgment_after_routes_clo
     ]
 
 
+def test_bounded_basis_keeps_supported_high_and_unresolved_medium_claims() -> None:
+    state = _planned_state()
+    high_claim = state.image_claims[0]
+    high_fact = next(item for item in state.facts if item.fact_id == high_claim.fact_id)
+    medium_fact = high_fact.model_copy(deep=True)
+    medium_fact.fact_id = "fact-medium-open"
+    medium_fact.statement = "A secondary visible attribute remains unverified."
+    state.facts.append(medium_fact)
+    medium_claim = high_claim.model_copy(deep=True)
+    medium_claim.claim_id = "claim-medium-open"
+    medium_claim.fact_id = medium_fact.fact_id
+    medium_claim.statement = medium_fact.statement
+    medium_claim.salience = "medium"
+    state.image_claims.append(medium_claim)
+    hypothesis = state.search_hypotheses[0]
+    hypothesis.claim_ids.append(medium_claim.claim_id)
+    task = state.tasks[0]
+    task.claim_ids.append(medium_claim.claim_id)
+    task.fact_ids.append(medium_fact.fact_id)
+    medium_claim.task_ids.append(task.task_id)
+
+    evidence = _append_evidence(state)
+    evidence.stance = "support"
+    evidence.edit_evidence_present = False
+    state.findings[0].stance = "support"
+    update = apply_discrepancy_decision(
+        state,
+        DiscrepancyDecisionOutput(
+            claim_assessments=[
+                ClaimAssessmentProposal(
+                    claim_id=high_claim.claim_id,
+                    assessment="supported",
+                    selected_evidence_ids=[evidence.evidence_id],
+                    rationale="The high-salience relation is directly supported.",
+                )
+            ],
+            retire_hypothesis_ids=[hypothesis.hypothesis_id],
+            verdict_proposal="continue",
+            rationale="A secondary Claim remains unresolved at route exhaustion.",
+        ),
+        reviewed_evidence_ids=[evidence.evidence_id],
+        trigger="before_unresolved",
+    )
+
+    assert update["accepted"] is True, update
+    coverage = audit_discrepancy_coverage(state, decision_checkpoint=True)
+    verdict, basis = compile_discrepancy_verdict_basis(state)
+    assert coverage.stop_reason == "meaningful_routes_exhausted"
+    assert verdict == ""
+    assert basis.claim_ids == [high_claim.claim_id, medium_claim.claim_id]
+    assert basis.evidence_ids == [evidence.evidence_id]
+    assert basis.visual_anchor_fact_ids == high_claim.anchor_fact_ids
+    assert basis.unresolved_gaps == [
+        f"ImageClaim {medium_claim.claim_id} remains unresolved."
+    ]
+
+
 def test_discrepancy_coverage_does_not_stop_before_pending_archive_read() -> None:
     state = _planned_state()
     evidence = _append_evidence(state)

@@ -213,24 +213,45 @@ def compile_discrepancy_verdict_basis(
         )
         verdict_target = state.image_account_summary
     else:
+        high_rows = [
+            item for item in audit.claims if item.salience == "high"
+        ]
         unresolved_rows = [
             item
             for item in audit.claims
-            if item.salience == "high"
-            and item.assessment not in {"supported", "refuted"}
+            if item.assessment not in {"supported", "refuted"}
         ]
-        claim_ids = [item.claim_id for item in unresolved_rows]
+        basis_rows = list(
+            {
+                item.claim_id: item
+                for item in [*high_rows, *unresolved_rows]
+            }.values()
+        )
+        claim_ids = [item.claim_id for item in basis_rows]
         evidence_ids = list(
             dict.fromkeys(
                 evidence_id
-                for item in unresolved_rows
+                for item in basis_rows
                 for evidence_id in item.evidence_ids
+            )
+        )
+        claim_by_id = {item.claim_id: item for item in state.image_claims}
+        anchor_ids = list(
+            dict.fromkeys(
+                anchor_id
+                for claim_id in claim_ids
+                for anchor_id in claim_by_id[claim_id].anchor_fact_ids
             )
         )
         unresolved_gaps = [
             item.remaining_gap or f"ImageClaim {item.claim_id} remains unresolved."
             for item in unresolved_rows
         ]
+        if not unresolved_gaps:
+            unresolved_gaps = [
+                "No evidence-determined verdict was accepted before "
+                f"{state.stop_reason}."
+            ]
         verdict_target = state.image_account_summary
 
     if state.proposed_verdict not in {"fake", "real"}:

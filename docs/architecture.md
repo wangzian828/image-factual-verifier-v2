@@ -131,6 +131,9 @@ from inventing or dropping basis identifiers.
 - unresolved or conflicted internal state is retained in the verdict basis. After
   meaningful routes close or the 24-action cap is reached, bounded Judgment chooses
   the better-supported binary verdict and reports the unresolved gaps.
+  Its compiled basis always includes every high-salience Claim plus unresolved
+  Claims of any salience, together with their recorded anchors, Evidence, Findings,
+  and an explicit gap explaining why the evidence-determined exit did not fire.
 
 Failure to find a discrepancy is not evidence of reality. Provider, protocol,
 runtime, required-tool, and all-tools-failed conditions are engineering errors and
