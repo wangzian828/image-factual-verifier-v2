@@ -58,9 +58,12 @@ def main() -> None:
     parser.add_argument("--model")
     parser.add_argument("--image", type=Path, required=True)
     parser.add_argument("--rounds", type=int, default=8)
+    parser.add_argument("--max-tokens", type=int, default=2048)
     args = parser.parse_args()
     if args.rounds < 1 or args.rounds > 8:
         raise SystemExit("--rounds must be between 1 and 8")
+    if args.max_tokens < 512:
+        raise SystemExit("--max-tokens must be at least 512 for Thinking checkpoints")
 
     base_url = args.base_url.rstrip("/")
     models = _request(f"{base_url}/models")
@@ -71,6 +74,7 @@ def main() -> None:
         {
             "model": model,
             "temperature": 0,
+            "max_tokens": args.max_tokens,
             "messages": [{"role": "user", "content": "Reply with READY."}],
         },
     )
@@ -82,6 +86,7 @@ def main() -> None:
         {
             "model": model,
             "temperature": 0,
+            "max_tokens": args.max_tokens,
             "messages": [
                 {
                     "role": "user",
@@ -114,6 +119,7 @@ def main() -> None:
             {
                 "model": model,
                 "temperature": 0,
+                "max_tokens": args.max_tokens,
                 "messages": [
                     {
                         "role": "user",
@@ -173,6 +179,7 @@ def main() -> None:
             {
                 "model": model,
                 "temperature": 0,
+                "max_tokens": args.max_tokens,
                 "messages": messages,
                 "tools": tools,
                 "tool_choice": "required",
@@ -221,6 +228,7 @@ def main() -> None:
                 {
                     "model": model,
                     "temperature": 0,
+                    "max_tokens": args.max_tokens,
                     "messages": messages,
                     "tools": tools,
                     "tool_choice": "none",
@@ -243,6 +251,7 @@ def main() -> None:
                 "structured": structured,
                 "tool_roundtrips": tool_roundtrips,
                 "lifecycle": "independent_tool_roundtrips",
+                "max_tokens": args.max_tokens,
             },
             ensure_ascii=False,
             indent=2,

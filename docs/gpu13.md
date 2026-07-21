@@ -28,10 +28,17 @@ conda run -n qwen3vl python -m ifv_training environment-manifest \
   --output /gsdata/home/wza/image-factual-verifier-v2-data/training/logs/qwen3vl-serve-environment.json
 ```
 
-gpu-13 当前没有可用外网代理。不要重复下载已有权重，也不要在网络未恢复时无意义地反复
-安装。SFT 环境需要 ms-swift/DeepSpeed；有可用代理或本地 wheelhouse 后执行：
+2026-07-21 实测正式代理 `http://100.10.1.210:47899` 可用（PyPI HTTP 200）。不得使用
+旧 shell 残留的 `47894`。不要重复下载已有权重；SFT 环境需要 ms-swift/DeepSpeed，执行前
+显式设置代理和本机绕过：
 
 ```bash
+export http_proxy=http://100.10.1.210:47899
+export https_proxy=http://100.10.1.210:47899
+export HTTP_PROXY="$http_proxy"
+export HTTPS_PROXY="$https_proxy"
+export NO_PROXY=127.0.0.1,localhost
+
 # serving 可完全复用已安装依赖
 bash scripts/server/bootstrap_gpu13.sh serve
 
@@ -64,7 +71,8 @@ conda run --no-capture-output -n qwen3vl \
   --base-url http://127.0.0.1:8899/v1 \
   --model ifv-qwen3-vl-8b-thinking \
   --image "$SMOKE_IMAGE" \
-  --rounds 8
+  --rounds 8 \
+  --max-tokens 2048
 ```
 
 必须分别记录文本、图像、结构化 JSON、一次 native tool call、`role=tool` continuation、
