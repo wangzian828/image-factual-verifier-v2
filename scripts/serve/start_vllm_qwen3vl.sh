@@ -43,6 +43,9 @@ if ss -ltnH "sport = :$PORT" | grep -q .; then
 fi
 
 export OMP_NUM_THREADS=1
+# Required on gpu-13: R580 + NCCL 2.27 segfaults in the default cuMem host
+# allocation path. The bootstrap gate exercises a real two-rank all_reduce.
+export NCCL_CUMEM_HOST_ENABLE=0
 export NO_PROXY="127.0.0.1,localhost"
 export no_proxy="$NO_PROXY"
 export HF_HUB_OFFLINE=1

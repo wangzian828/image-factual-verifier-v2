@@ -70,6 +70,7 @@ def test_locked_vllm_launcher_uses_native_qwen3_vl_protocol() -> None:
     assert "--enable-tokenizer-info-endpoint" in source
     assert "require_idle_gpus" in source
     assert "131072" in source
+    assert "NCCL_CUMEM_HOST_ENABLE=0" in source
 
 
 def test_vllm_lifecycle_only_stops_its_verified_process_group() -> None:
@@ -112,19 +113,29 @@ def test_vllm_bootstrap_is_fresh_pinned_and_refuses_existing_prefix() -> None:
     source = _source("scripts/server/bootstrap_vllm_qwen3vl_gpu13.sh")
     requirements = _source("requirements/serve-vllm-qwen3vl.txt")
     constraints = _source("requirements/constraints-vllm-qwen3vl.txt")
+    resolved = _source("requirements/constraints-vllm-qwen3vl-resolved.txt")
 
     assert "conda create -y -p" in source
     assert "--clone" not in source
     assert 'if [[ -e "$ENV_PREFIX" ]]' in source
     assert "pip check" in source
-    assert 'pip install --constraint "$CONSTRAINTS" --requirement "$REQUIREMENTS"' in source
+    assert '--constraint "$CONSTRAINTS"' in source
+    assert '--constraint "$RESOLVED_CONSTRAINTS"' in source
+    assert '--requirement "$REQUIREMENTS"' in source
     assert "verify_vllm_environment.py" in source
+    assert "verify_nccl_tensor_parallel.py" in source
+    assert 'NCCL_CUMEM_HOST_ENABLE=0' in source
+    assert '"$ENV_PREFIX/bin/torchrun"' in source
     assert "pip freeze --all" in source
     assert "input-locks.sha256" in source
     assert "vllm==0.11.2" in requirements
     assert "transformers==4.57.6" in requirements
     assert "torch==2.9.0" in constraints
     assert "xgrammar==0.1.25" in constraints
+    assert "nvidia-nccl-cu12==2.27.5" in resolved
+    assert "ray==2.56.1" in resolved
+    assert "fastapi==0.139.2" in resolved
+    assert "@ file:" not in resolved
 
 
 def test_qwen3_vl_thinking_is_the_only_primary_profile() -> None:

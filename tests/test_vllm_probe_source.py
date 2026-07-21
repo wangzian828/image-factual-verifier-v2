@@ -64,3 +64,15 @@ def test_environment_verifier_pins_protocol_critical_packages() -> None:
     assert "Qwen3VLForConditionalGeneration" in source
     assert '"qwen3" not in ReasoningParserManager.list_registered()' in source
     assert '"qwen3_xml" not in ToolParserManager.list_registered()' in source
+
+
+def test_nccl_probe_exercises_real_tensor_parallel_collective() -> None:
+    source = (ROOT / "scripts/probe/verify_nccl_tensor_parallel.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'dist.init_process_group("nccl")' in source
+    assert "torch.cuda.set_device(local_rank)" in source
+    assert "dist.all_reduce(value)" in source
+    assert "dist.all_gather_object" in source
+    assert "dist.destroy_process_group()" in source

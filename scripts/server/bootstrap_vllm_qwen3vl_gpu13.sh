@@ -8,6 +8,7 @@ ARTIFACT_ROOT="${IFV_TRAINING_DATA_ROOT:-/gsdata/home/wza/image-factual-verifier
 ARTIFACT_DIR="$ARTIFACT_ROOT/logs/environments/ifv-qwen3vl-vllm0112-locked"
 REQUIREMENTS="$REPO_ROOT/requirements/serve-vllm-qwen3vl.txt"
 CONSTRAINTS="$REPO_ROOT/requirements/constraints-vllm-qwen3vl.txt"
+RESOLVED_CONSTRAINTS="$REPO_ROOT/requirements/constraints-vllm-qwen3vl-resolved.txt"
 
 if ! command -v conda >/dev/null 2>&1; then
   echo "conda is required" >&2
@@ -40,7 +41,10 @@ printf 'creating a fresh environment at %s\n' "$ENV_PREFIX"
 conda create -y -p "$ENV_PREFIX" python=3.11 pip=25.2
 
 PYTHON="$ENV_PREFIX/bin/python"
-"$PYTHON" -m pip install --constraint "$CONSTRAINTS" --requirement "$REQUIREMENTS"
+"$PYTHON" -m pip install \
+  --constraint "$CONSTRAINTS" \
+  --constraint "$RESOLVED_CONSTRAINTS" \
+  --requirement "$REQUIREMENTS"
 "$PYTHON" -m pip install --no-deps --editable "$REPO_ROOT"
 "$PYTHON" -m pip check
 
@@ -48,9 +52,18 @@ CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-4,5}" \
   "$PYTHON" "$REPO_ROOT/scripts/probe/verify_vllm_environment.py" \
   --model "$MODEL" \
   --output "$ARTIFACT_DIR/verification.json"
+# gpu-13's R580 driver crashes inside NCCL 2.27's default cuMem host path.
+# Verify the exact tensor-parallel communication path, not only single-GPU CUDA.
+CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-4,5}" \
+  NCCL_CUMEM_HOST_ENABLE=0 \
+  "$ENV_PREFIX/bin/torchrun" --standalone --nproc-per-node=2 \
+  "$REPO_ROOT/scripts/probe/verify_nccl_tensor_parallel.py" \
+  --expected-world-size 2 \
+  --output "$ARTIFACT_DIR/nccl-tensor-parallel.json"
 "$PYTHON" -m pip freeze --all >"$ARTIFACT_DIR/pip-freeze.txt"
 sha256sum "$ARTIFACT_DIR/pip-freeze.txt" >"$ARTIFACT_DIR/pip-freeze.sha256"
-sha256sum "$REQUIREMENTS" "$CONSTRAINTS" >"$ARTIFACT_DIR/input-locks.sha256"
+sha256sum "$REQUIREMENTS" "$CONSTRAINTS" "$RESOLVED_CONSTRAINTS" \
+  >"$ARTIFACT_DIR/input-locks.sha256"
 CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-4,5}" \
   "$PYTHON" -m ifv_training environment-manifest \
   --repo-root "$REPO_ROOT" \
