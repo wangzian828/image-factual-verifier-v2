@@ -72,6 +72,7 @@ args=(
   --served-model-name "$SERVED_NAME"
   --dtype bfloat16
   --tensor-parallel-size "$TP_SIZE"
+  --disable-custom-all-reduce
   --max-model-len "$CONTEXT_LENGTH"
   --gpu-memory-utilization 0.92
   --max-num-seqs 4

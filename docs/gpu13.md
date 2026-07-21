@@ -109,3 +109,5 @@ SFT 和 RL 不使用上述 serving 环境。它们继续使用各自的成熟框
 ## gpu-13 NCCL 兼容设置
 
 gpu-13 的 R580 驱动与 NCCL 2.27 默认 cuMem host 分配路径存在已实测的 `libcuda.so` 崩溃。服务固定设置 `NCCL_CUMEM_HOST_ENABLE=0`；构建门禁会在物理 GPU 4、5 上执行真实的双 rank NCCL all-reduce，不能用单卡 CUDA import 代替这项检查。
+
+vLLM 的 custom all-reduce 在本机预热时会返回 CUDA `invalid argument`，因此启动参数固定使用 `--disable-custom-all-reduce`，TP 通信统一走上述已验证的 NCCL 路径。
