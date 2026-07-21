@@ -762,7 +762,10 @@ def _audit_discrepancy_interaction_chains(
         (index, step)
         for index, step in enumerate(steps)
         if str(step.get("stage", "")) in stages
-        and _mapping(step.get("metadata")).get("native_interactions")
+        and (
+            _mapping(step.get("metadata")).get("native_interactions")
+            or _mapping(step.get("metadata")).get("native_chat_completions")
+        )
     ]
     if not native:
         _issue(
@@ -770,6 +773,45 @@ def _audit_discrepancy_interaction_chains(
             "V4_INTERACTIONS_MISSING",
             "v4 trace contains no native main-chain interactions",
             location="state.all_steps",
+        )
+        return
+    # Qwen's local OpenAI-compatible path uses independent Chat Completions
+    # requests instead of Gemini Interaction IDs.  These are intentionally
+    # standalone stage requests; audit their durable request identity and do not
+    # demand an Interaction parent chain that the provider cannot supply.
+    if not any(
+        _mapping(step.get("metadata")).get("native_interactions")
+        for _, step in native
+    ):
+        missing = [
+            (index, step)
+            for index, step in native
+            if not str(
+                _mapping(step.get("metadata")).get("context_request_id", "")
+            ).strip()
+        ]
+        for index, step in missing:
+            _issue(
+                report,
+                "CONTEXT_REQUEST_ID_MISSING",
+                "Chat Completions stage step lacks context_request_id",
+                location=_step_label(index, step),
+            )
+        report.stats["v4_interaction_steps"] = len(native)
+        report.stats["v4_interaction_segments"] = len(
+            {
+                str(
+                    _mapping(step.get("metadata")).get(
+                        "context_request_id", ""
+                    )
+                ).strip()
+                for _, step in native
+                if str(
+                    _mapping(step.get("metadata")).get(
+                        "context_request_id", ""
+                    )
+                ).strip()
+            }
         )
         return
     previous = ""

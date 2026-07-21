@@ -694,3 +694,4 @@ rollout、reward 和重新采样门禁。
 - 通用修复：视觉复核候选依据候选状态中的 `open/unresolved/conflicted` Claim，再叠加本轮 assessment；Evidence 所属任务、像素/OCR 锚点、预算和重复请求门禁保持不变。新增 reducer 回归测试；本地全量为 `461 passed`。
 - 发现的第二个协议问题：Planning/NewHypothesis 若给出 `queries` 却只声明 `reverse_image_search`，查询会成为死字段。已要求非空 `queries` 必须同时声明 `text_search`，并同步 Prompt/架构文档。
 - 下一步：提交并同步该修复，重跑同一 Queen；只有零 engineering error、strict audit 通过后，才启动既定 20 例。若仍失败，只修通用协议/生命周期，不增加 Queen、bus、coach、年份或 URL 专用规则。
+- `ac886b4` 后的 Queen 第三轮已零 engineering error：5 个工具动作，`fake`，compiled discrepancy basis 完整注入，单例耗时 184 秒。旧版 strict audit 只识别 Gemini `native_interactions`，误报 Qwen Chat Completions 缺少主链；已改为审计 Qwen 的 `native_chat_completions + context_request_id` 独立短链，不虚构 Interaction parent。
