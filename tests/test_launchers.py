@@ -210,6 +210,7 @@ def test_qwen35_training_bootstrap_is_fresh_pinned_and_isolated() -> None:
     assert "python=3.12" in source
     assert "pip=25.2" in source
     assert "cuda-nvcc=12.8.93" in source
+    assert 'CUDA_HOME="$SFT_PREFIX"' in source
     assert "refusing to modify an existing environment" in source
     assert "ifv-qwen35-sft-ms-swift442" in source
     assert "ifv-qwen35-rl-ms-swift442-vllm0221" in source

@@ -80,7 +80,8 @@ install_sft() {
   "$SFT_PREFIX/bin/python" -m pip install --no-deps --editable "$REPO_ROOT"
   freeze_env "$SFT_PREFIX" ifv-qwen35-sft-ms-swift442
   "$SFT_PREFIX/bin/swift" sft --help >/dev/null
-  "$SFT_PREFIX/bin/deepspeed" --help >/dev/null
+  CUDA_HOME="$SFT_PREFIX" PATH="$SFT_PREFIX/bin:$PATH" \
+    "$SFT_PREFIX/bin/deepspeed" --help >/dev/null
   touch "$SFT_PREFIX/.ifv-qwen35-sft-ready"
 }
 
