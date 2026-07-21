@@ -37,7 +37,7 @@ prepare_base() {
     echo "refusing to modify an existing environment: $prefix" >&2
     exit 2
   fi
-  "$CONDA" create -y -p "$prefix" python=3.12 pip=26.2
+  "$CONDA" create -y -p "$prefix" python=3.12 pip=25.2
   "$CONDA" install -y -p "$prefix" -c nvidia cuda-nvcc=12.8.93
 }
 
