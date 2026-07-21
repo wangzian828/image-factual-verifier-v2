@@ -113,6 +113,19 @@ def test_image_account_requires_exactly_one_high_salience_claim() -> None:
         ImageAccountPlanningOutput.model_validate(payload)
 
 
+def test_search_hypothesis_queries_require_an_executable_text_route() -> None:
+    payload = _planning_output().model_dump(mode="json")
+    payload["search_hypotheses"][0]["suggested_tools"] = [
+        "reverse_image_search"
+    ]
+
+    with pytest.raises(
+        ValidationError,
+        match="queries require the text_search tool",
+    ):
+        ImageAccountPlanningOutput.model_validate(payload)
+
+
 def _planned_state() -> ImageOnlyInvestigationState:
     state = _state()
     update = apply_image_account_planning(state, _planning_output())
@@ -808,6 +821,39 @@ def test_discrepancy_decision_accepts_bounded_visual_reinspection() -> None:
     assert ImageOnlyInvestigationState.model_validate_json(
         state.model_dump_json()
     ) == state
+
+
+def test_visual_reinspection_can_target_open_claim_without_assessment() -> None:
+    """Neutral Evidence may motivate pixels without a speculative assessment."""
+
+    state = _planned_state()
+    evidence = _append_evidence(state)
+    claim = state.image_claims[0]
+
+    update = apply_discrepancy_decision(
+        state,
+        DiscrepancyDecisionOutput(
+            visual_reinspection=VisualReinspectionRequest(
+                reason="relation",
+                scope="relation",
+                question="Does the visible object actually have the claimed relation?",
+                expected_property="A directly observable relation in the original pixels.",
+                anchor_fact_ids=claim.anchor_fact_ids,
+                grounding_evidence_ids=[evidence.evidence_id],
+            ),
+            verdict_proposal="continue",
+            rationale=(
+                "The reviewed material is neutral, so keep the open Claim and "
+                "inspect the relevant pixels before drawing a directional conclusion."
+            ),
+        ),
+        reviewed_evidence_ids=[evidence.evidence_id],
+        trigger="qualified_evidence",
+    )
+
+    assert update["accepted"] is True
+    assert len(state.visual_reinspections) == 1
+    assert state.discrepancy_decisions[0].accepted_visual_question_id
 
 
 def test_discrepancy_decision_rejects_fake_without_decisive_discrepancy() -> None:

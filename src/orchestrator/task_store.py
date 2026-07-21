@@ -1314,11 +1314,24 @@ def apply_discrepancy_decision(
                     "visual reinspection grounding must use reviewed Evidence"
                 ),
             }
+        # A visual request is allowed to resolve an unresolved Claim even when
+        # this checkpoint deliberately omits a ClaimAssessment.  In
+        # particular, a model may first discover that all reviewed Evidence is
+        # neutral and therefore cannot legally label the Claim ``refuted``;
+        # it can still request a focused pixel check for the still-open Claim.
+        # Use the candidate's state as the source of truth, while retaining the
+        # output assessments as a narrow refinement for newly introduced
+        # ``insufficient``/``conflicted`` records.
         unresolved_assessment_claim_ids = {
+            claim.claim_id
+            for claim in candidate.image_claims
+            if claim.status in {"open", "unresolved", "conflicted"}
+        }
+        unresolved_assessment_claim_ids.update(
             item.claim_id
             for item in output.claim_assessments
             if item.assessment in {"insufficient", "conflicted"}
-        }
+        )
         visual_claim_ids = [
             claim_id
             for claim_id in unresolved_assessment_claim_ids

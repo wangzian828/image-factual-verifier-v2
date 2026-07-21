@@ -69,7 +69,9 @@ and stopping. That attachment does not establish support or refutation. The
 Discrepancy Decision must still select the affected ImageClaim and prove the
 directional Finding/Evidence chain. A hypothesis never owns a verdict.
 Planning must provide at least one route with an executable first hop; the runtime
-does not constrain the route's factual angle.
+does not constrain the route's factual angle. Any explicit planned web query must
+include `text_search` in that Hypothesis so the query is executable rather than dead
+context.
 
 ### MaterialDiscrepancy
 

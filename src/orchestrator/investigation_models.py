@@ -453,6 +453,10 @@ class SearchHypothesisProposal(StrictModel):
             raise ValueError(
                 "search hypothesis requires an executable first-hop tool"
             )
+        if self.queries and "text_search" not in self.suggested_tools:
+            raise ValueError(
+                "search hypothesis queries require the text_search tool"
+            )
         return self
 
 
@@ -632,6 +636,10 @@ class NewSearchHypothesis(StrictModel):
         }:
             raise ValueError(
                 "new search hypothesis requires an executable first-hop tool"
+            )
+        if self.queries and "text_search" not in self.suggested_tools:
+            raise ValueError(
+                "new search hypothesis queries require the text_search tool"
             )
         return self
 

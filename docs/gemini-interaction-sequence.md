@@ -75,6 +75,8 @@ Core instruction:
 - Output: `ImageAccountPlanningOutput`
 - Next: deterministic Claim, hypothesis, and ResearchTask creation. Initial route
   attachment to the image account is bookkeeping, not a semantic conclusion.
+  Explicit `queries` require `text_search` in the same Hypothesis; the schema rejects
+  planned query text that no advertised tool can execute.
 
 Exact instruction:
 

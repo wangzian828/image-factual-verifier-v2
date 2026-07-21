@@ -25,7 +25,8 @@ positive ImageClaims and tentative SearchHypotheses; it does not create a core
 verdict fact or verdict. The Planning schema exposes no Claim key or per-Claim
 verification question on a hypothesis.
 It must still emit at least one executable route; this is a structural requirement,
-not a rule about which fact the route should investigate.
+not a rule about which fact the route should investigate. A Hypothesis with explicit
+web queries must include `text_search`; otherwise those queries would never execute.
 
 Each ImageClaim states the underlying real-world proposition conveyed to the
 viewer. It does not replace that proposition with the easier meta-claim that visible

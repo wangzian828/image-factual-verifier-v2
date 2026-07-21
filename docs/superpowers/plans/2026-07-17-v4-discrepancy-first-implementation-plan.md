@@ -686,3 +686,11 @@ Qwen base、SFT 和 RL 使用相同冻结 20 例完成人工与 strict audit 对
 128k 门禁目标；无样例专用规则；停止机制不因无进展计数误杀有效调查，且不降低关键证据
 与结论质量；Qwen SFT/RL 设施按 2026-07-21 统一计划完成保存、恢复、部署、on-policy
 rollout、reward 和重新采样门禁。
+
+## 2026-07-22 执行记录：第五轮 Queen 与通用门禁修复
+
+- `qwen35-queen-central-recall-bfa02b3` 已真实跑完 1 例、21 个工具动作；Planning 保留了一个中心 high Claim，archive recall 有界，且检索确实触及 London Transport 相关正文。
+- 该轮唯一工程错误发生在 Discrepancy Decision：模型拒绝把 neutral Evidence 误标为 `refuted`，随后请求 `continue + visual_reinspection`；门禁错误地只接受本轮输出中显式写成 `insufficient/conflicted` 的 Claim，忽略仍为 `open` 的当前 Claim。
+- 通用修复：视觉复核候选依据候选状态中的 `open/unresolved/conflicted` Claim，再叠加本轮 assessment；Evidence 所属任务、像素/OCR 锚点、预算和重复请求门禁保持不变。新增 reducer 回归测试；本地全量为 `461 passed`。
+- 发现的第二个协议问题：Planning/NewHypothesis 若给出 `queries` 却只声明 `reverse_image_search`，查询会成为死字段。已要求非空 `queries` 必须同时声明 `text_search`，并同步 Prompt/架构文档。
+- 下一步：提交并同步该修复，重跑同一 Queen；只有零 engineering error、strict audit 通过后，才启动既定 20 例。若仍失败，只修通用协议/生命周期，不增加 Queen、bus、coach、年份或 URL 专用规则。
