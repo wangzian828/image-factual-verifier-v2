@@ -68,7 +68,7 @@ def test_checkpoint_and_serving_manifests(tmp_path: Path) -> None:
 def test_environment_manifest_records_framework_and_lock(tmp_path: Path) -> None:
     manifest = environment_manifest(tmp_path)
 
-    assert manifest["framework_release"]["version"] == "4.4.1"
-    assert manifest["framework_release"]["git_tag"] == "v4.4.1"
+    assert manifest["framework_release"]["version"] == "4.4.2"
+    assert manifest["framework_release"]["git_tag"] == "v4.4.2"
     assert len(manifest["framework_release"]["git_commit"]) == 40
     assert len(manifest["package_lock"]["sha256"]) == 64

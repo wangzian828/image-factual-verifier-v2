@@ -39,8 +39,8 @@ TRACKED_PACKAGES = (
 
 MS_SWIFT_RELEASE = {
     "name": "ms-swift",
-    "version": "4.4.1",
-    "git_tag": "v4.4.1",
+    "version": "4.4.2",
+    "git_tag": "v4.4.2",
     "git_commit": "98a09c18cdf95ff07051324b9b8cc90f5184b24b",
 }
 

@@ -239,7 +239,7 @@ def convert_policy_dataset(input_dir: Path, output_dir: Path) -> dict[str, Any]:
     manifest = {
         "schema_version": "ifv-ms-swift-dataset-manifest-v1",
         "dataset_version": OUTPUT_VERSION,
-        "framework": {"name": "ms-swift", "version": "4.4.1"},
+        "framework": {"name": "ms-swift", "version": "4.4.2"},
         "source": {
             "dataset_version": source_manifest["dataset_version"],
             "manifest_sha256": sha256_file(input_dir / "manifest.json"),

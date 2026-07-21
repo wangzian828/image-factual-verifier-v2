@@ -33,16 +33,17 @@ def test_grpo_launcher_uses_framework_gym_reward() -> None:
     assert "--multi_turn_scheduler gym_scheduler" in source
     assert "--use_gym_env true" in source
     assert "--reward_funcs" not in source
+    assert '--enable_thinking "$IFV_ENABLE_THINKING"' in source
 
 
 def test_rl_stack_is_pinned_and_isolated_from_serving() -> None:
-    profile = _source("configs/rl/qwen3-vl-grpo-mock.env")
-    requirements = _source("requirements/rl.txt")
+    profile = _source("configs/rl/qwen3.5-grpo-mock.env")
+    requirements = _source("requirements/rl-qwen35.txt")
 
-    assert "IFV_RL_FRAMEWORK=rllm_verl" in profile
-    assert "IFV_RLLM_REVISION=cd9ea0" in profile
-    assert "IFV_VERL_REVISION=6a6242" in profile
-    assert "rllm[verl] @ git+https://" in requirements
+    assert "IFV_RL_FRAMEWORK=ms_swift_grpo" in profile
+    assert "IFV_MS_SWIFT_VERSION=4.4.2" in profile
+    assert "IFV_ENABLE_THINKING=false" in profile
+    assert "vllm==0.17.1" in requirements
 
 
 def test_serving_launcher_uses_qwen3_vl_lmdeploy_protocol() -> None:
@@ -181,19 +182,41 @@ def test_vllm_bootstrap_is_fresh_pinned_and_refuses_existing_prefix() -> None:
     assert "@ file:" not in resolved
 
 
-def test_qwen3_vl_thinking_is_the_only_primary_profile() -> None:
-    primary = _source("configs/models/qwen3-vl-8b-thinking.env")
+def test_qwen35_is_the_primary_training_profile() -> None:
+    primary = _source("configs/models/qwen3.5-9b.env")
 
-    assert "Qwen3-VL-8B-Thinking" in primary
+    assert "Qwen3.5-9B" in primary
     assert "primary_student" in primary
-    assert not list((ROOT / "configs/models").glob("qwen3.5-*.env"))
+    assert "IFV_ENABLE_THINKING=false" in primary
+    assert "IFV_ADD_NON_THINKING_PREFIX=true" in primary
 
 
-def test_qwen3_vl_full_parameter_step_profiles_exist() -> None:
+def test_qwen35_full_parameter_step_profiles_exist() -> None:
     for steps in (1, 3, 20):
-        source = _source(f"configs/sft/qwen3-vl-full-{steps}step.env")
+        source = _source(f"configs/sft/qwen3.5-full-{steps}step.env")
         assert f"IFV_MAX_STEPS={steps}" in source
         assert "IFV_TUNER_TYPE=full" in source
         assert "IFV_FREEZE_LLM=false" in source
         assert "IFV_FREEZE_VIT=false" in source
         assert "IFV_FREEZE_ALIGNER=false" in source
+
+
+def test_qwen35_training_bootstrap_is_fresh_pinned_and_isolated() -> None:
+    source = _source("scripts/server/bootstrap_qwen35_training_gpu13.sh")
+    sft = _source("requirements/train-qwen35.txt")
+    rl = _source("requirements/rl-qwen35.txt")
+
+    assert 'MODE="${1:-all}"' in source
+    assert "python=3.12" in source
+    assert "cuda-nvcc=12.8.93" in source
+    assert "refusing to modify an existing environment" in source
+    assert "ifv-qwen35-sft-ms-swift442" in source
+    assert "ifv-qwen35-rl-ms-swift442-vllm0171" in source
+    assert "pip freeze --all" in source
+    assert "get_model_processor" in source
+    assert 'enable_thinking=False' in source
+    assert "ms-swift==4.4.2" in sft
+    assert "transformers==5.12.1" in sft
+    assert "flash-linear-attention==0.5.1" in sft
+    assert "causal-conv1d==1.6.2.post1" in sft
+    assert "vllm==0.17.1" in rl

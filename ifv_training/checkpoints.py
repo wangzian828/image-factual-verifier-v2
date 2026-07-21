@@ -300,7 +300,7 @@ def build_checkpoint_manifest(
     model_revision: str,
     processor_revision: str,
     method: str,
-    framework_version: str = "4.4.1",
+    framework_version: str = "4.4.2",
 ) -> dict[str, Any]:
     checkpoint_dir = checkpoint_dir.expanduser().resolve()
     dataset_manifest_path = dataset_manifest_path.expanduser().resolve()

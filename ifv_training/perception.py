@@ -140,7 +140,7 @@ def convert_perception_runs(
     manifest = {
         "schema_version": "ifv-ms-swift-dataset-manifest-v1",
         "dataset_version": OUTPUT_VERSION,
-        "framework": {"name": "ms-swift", "version": "4.4.1"},
+        "framework": {"name": "ms-swift", "version": "4.4.2"},
         "source_split_map_sha256": sha256_file(split_map_path),
         "example_count": sum(len(rows) for rows in rows_by_split.values()),
         "exclusion_counts": dict(sorted(exclusions.items())),

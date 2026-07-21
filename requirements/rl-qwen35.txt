@@ -1,0 +1,11 @@
+# Isolated Qwen3.5 Agent GRPO environment. vLLM pins Torch 2.10.0.
+ms-swift==4.4.2
+transformers==5.12.1
+deepspeed==0.19.2
+qwen-vl-utils==0.0.14
+flash-linear-attention==0.5.1
+causal-conv1d==1.6.2.post1
+flash-attn==2.8.3
+liger-kernel
+vllm==0.17.1
+huggingface-hub>=0.34,<2

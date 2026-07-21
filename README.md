@@ -1,6 +1,6 @@
 # Image Factual Verifier Training
 
-Visual Fact Discrepancy Agent v4 的独立 Qwen3-VL 训练与部署工程。正式学生模型是服务器已有的 `/gsdata/home/wza/models/Qwen3-VL-8B-Thinking`。
+Visual Fact Discrepancy Agent v4 的独立 Qwen3.5 训练与部署工程。正式学生模型是 `/gsdata/home/wza/models/Qwen3.5-9B`；旧 Qwen3-VL 只保留为诊断基线。
 
 本仓库负责：
 
@@ -14,7 +14,7 @@ Visual Fact Discrepancy Agent v4 的独立 Qwen3-VL 训练与部署工程。正�
 
 ## 环境边界
 
-Serving、SFT、RL 是三套独立环境。当前 serving 使用从零创建并锁定的 Python 3.11 + vLLM 0.11.2 环境，不继承历史 `qwen3vl`、`ifv-agent` 或训练环境。详细命令见 [gpu-13 运维文档](docs/gpu13.md)。
+Serving、SFT、RL 是三套独立环境。当前 serving 使用 Python 3.11 + vLLM nightly；SFT 与 RL 使用独立的 Python 3.12 + ms-swift 4.4.2 环境，不继承历史 `qwen3vl`、`ifv-agent` 或旧训练环境。详细命令见 [gpu-13 运维文档](docs/gpu13.md)。
 
 训练样本以一次真实阶段决策为单位，而不是整条长对话：
 
