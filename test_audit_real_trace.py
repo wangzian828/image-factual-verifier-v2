@@ -902,7 +902,7 @@ def test_policy_rejected_query_is_warning_but_canonical_query_is_hard(
     }
 
 
-def test_fact_check_source_domain_gate_requires_active_source_policy(
+def test_fact_check_source_audit_requires_active_source_policy(
     tmp_path: Path,
 ) -> None:
     trace_path = _scripted_trace(tmp_path)
@@ -916,6 +916,9 @@ def test_fact_check_source_domain_gate_requires_active_source_policy(
             "candidate_url": "https://www.politifact.com/factchecks/example/",
         }
     )
+    trace["state"]["investigation_state"]["tasks"][0][
+        "suggested_queries"
+    ] = ["Sandra May Watkins fake image Snopes"]
     trace_path.write_text(
         json.dumps(trace, ensure_ascii=False, indent=2),
         encoding="utf-8",
@@ -930,7 +933,14 @@ def test_fact_check_source_domain_gate_requires_active_source_policy(
     assert "FACT_CHECK_URL_LEAK" not in {
         item.code for item in inactive.failures(strict_scheduler=True)
     }
+    assert "FACT_CHECK_QUERY_LEAK" in {
+        item.code for item in active.failures(strict_scheduler=True)
+    }
+    assert "FACT_CHECK_QUERY_LEAK" not in {
+        item.code for item in inactive.failures(strict_scheduler=True)
+    }
     assert inactive.stats["fact_check_url_leaks"] == 0
+    assert inactive.stats["fact_check_query_leaks"] == 0
 
 
 def test_strict_audit_rejects_post_determination_action(

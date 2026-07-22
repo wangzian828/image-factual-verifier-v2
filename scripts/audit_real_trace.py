@@ -528,7 +528,11 @@ def _audit_leaks(
                 if enforce_source_access_policy
                 else ""
             )
-            oriented = query_targets_fact_check_answer(raw_value)
+            oriented = (
+                query_targets_fact_check_answer(raw_value)
+                if enforce_source_access_policy
+                else False
+            )
             if query_domain or oriented:
                 signature = ("query", path)
                 if signature not in seen:
