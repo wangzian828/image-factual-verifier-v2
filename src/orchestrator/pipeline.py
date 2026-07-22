@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import time
@@ -137,6 +138,7 @@ class Orchestrator:
         timeout: float = 1800.0,
         temperature: float = 0.0,
         max_tokens: int = 8192,
+        sampling_seed: Optional[int] = None,
         validate_startup: bool = True,
         source_access_policy: Optional[SourceAccessPolicy] = None,
     ):
@@ -157,6 +159,8 @@ class Orchestrator:
             )
         self.source_access_policy = source_access_policy or SourceAccessPolicy()
         self.timeout = timeout
+        self.sampling_seed = sampling_seed
+        self._sampling_request_counts: Dict[str, int] = {}
         self.tool_action_timeout_seconds = self._runtime_timeout(
             "AGENT_TOOL_ACTION_TIMEOUT_SECONDS",
             150.0,
@@ -321,6 +325,7 @@ class Orchestrator:
         image_path: str,
         runtime_case: ImageOnlyRuntimeCase,
         *,
+        episode_id: Optional[str] = None,
         decision_policy_version: str = "discrepancy-first-v4",
         runtime_store: Optional[CaseRuntimeStore] = None,
     ) -> Dict[str, Any]:
@@ -330,7 +335,7 @@ class Orchestrator:
         runtime_store = runtime_store or current_case_runtime_store()
         state = VerificationState(
             image_path=image_path,
-            image_id=runtime_case.case_id,
+            image_id=episode_id or runtime_case.case_id,
             runtime_case=runtime_case,
             input_mode="image_only",
             decision_policy_version=decision_policy_version,
@@ -390,6 +395,7 @@ class Orchestrator:
 
         return {
             "image_id": state.image_id,
+            "case_id": runtime_case.case_id,
             "image_path": state.image_path,
             "input_mode": state.input_mode,
             "decision_policy_version": state.decision_policy_version,
@@ -3098,40 +3104,50 @@ class Orchestrator:
                 )
             enable_thinking = raw == "true"
             config: Dict[str, Any] = {"enable_thinking": enable_thinking}
-            if not qwen35:
-                return config
-
-            # Qwen3.5's official recommendations use non-greedy sampling and a
-            # presence penalty.  Greedy decoding caused long, repetitive schema
-            # deliberation in the real Queen Planning request.  Keep the hard
-            # reasoning wall independent of max_tokens so visible JSON always has
-            # room to finish.
-            config.update(
-                {
-                    "temperature": 1.0 if enable_thinking else 0.7,
-                    "top_p": 0.95 if enable_thinking else 0.8,
-                    "top_k": 20,
-                    "min_p": 0.0,
-                    "presence_penalty": 1.5,
-                    "repetition_penalty": 1.0,
-                }
-            )
-            if enable_thinking:
-                default_budget = {
-                    "PLANNING": 1024,
-                    "EVIDENCE_DECISION": 2048,
-                    "REFLECTION": 1536,
-                    "JUDGMENT": 2048,
-                }.get(normalized_stage, 1024)
-                env_name = f"QWEN_{normalized_stage}_THINKING_TOKEN_BUDGET"
-                raw_budget = os.getenv(env_name, str(default_budget)).strip()
-                try:
-                    budget = int(raw_budget)
-                except ValueError as exc:
-                    raise ValueError(f"{env_name} must be an integer.") from exc
-                if budget < 1:
-                    raise ValueError(f"{env_name} must be positive.")
-                config["thinking_token_budget"] = budget
+            if qwen35:
+                # Qwen3.5's official recommendations use non-greedy sampling and a
+                # presence penalty.  Greedy decoding caused long, repetitive schema
+                # deliberation in the real Queen Planning request.  Keep the hard
+                # reasoning wall independent of max_tokens so visible JSON always has
+                # room to finish.
+                config.update(
+                    {
+                        "temperature": 1.0 if enable_thinking else 0.7,
+                        "top_p": 0.95 if enable_thinking else 0.8,
+                        "top_k": 20,
+                        "min_p": 0.0,
+                        "presence_penalty": 1.5,
+                        "repetition_penalty": 1.0,
+                    }
+                )
+                if enable_thinking:
+                    default_budget = {
+                        "PLANNING": 1024,
+                        "EVIDENCE_DECISION": 2048,
+                        "REFLECTION": 1536,
+                        "JUDGMENT": 2048,
+                    }.get(normalized_stage, 1024)
+                    env_name = f"QWEN_{normalized_stage}_THINKING_TOKEN_BUDGET"
+                    raw_budget = os.getenv(env_name, str(default_budget)).strip()
+                    try:
+                        budget = int(raw_budget)
+                    except ValueError as exc:
+                        raise ValueError(f"{env_name} must be an integer.") from exc
+                    if budget < 1:
+                        raise ValueError(f"{env_name} must be positive.")
+                    config["thinking_token_budget"] = budget
+            sampling_seed = getattr(self, "sampling_seed", None)
+            if sampling_seed is not None:
+                request_counts = getattr(self, "_sampling_request_counts", {})
+                ordinal = request_counts.get(normalized_stage, 0)
+                request_counts[normalized_stage] = ordinal + 1
+                self._sampling_request_counts = request_counts
+                material = (
+                    f"{sampling_seed}:{normalized_stage}:{ordinal}"
+                ).encode("utf-8")
+                config["seed"] = int.from_bytes(
+                    hashlib.sha256(material).digest()[:4], "big"
+                ) & 0x7FFFFFFF
             return config
         return {"thinking_level": self._stage_thinking_level(normalized_stage)}
 

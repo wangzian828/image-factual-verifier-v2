@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List, Optional
 
 # Limit thread usage to prevent memory explosion
@@ -54,6 +54,7 @@ class WorkflowConfig:
     vlm_base_url: Optional[str] = field(default=None, init=False)
     temperature: float = 0.0
     max_tokens: int = 8192
+    sampling_seed: Optional[int] = None
 
     # Runtime settings
     timeout: float = 1800.0
@@ -107,6 +108,7 @@ class VerificationWorkflow:
                 timeout=self.config.timeout,
                 temperature=self.config.temperature,
                 max_tokens=self.config.max_tokens,
+                sampling_seed=self.config.sampling_seed,
                 source_access_policy=self.config.source_access_policy,
                 validate_startup=validate_startup,
             )
@@ -137,18 +139,27 @@ class VerificationWorkflow:
                 "v3 accepts ImageOnlyRuntimeCase only"
             )
 
+        episode_id = image_id or runtime_case.case_id
         orchestrator = self._get_orchestrator(validate_startup=False)
         runtime_store = CaseRuntimeStore(
             self.config.output_dir,
-            case_id=runtime_case.case_id,
+            case_id=episode_id,
         )
         runtime_token = bind_case_runtime_store(runtime_store)
         try:
             verify_case_image(runtime_case, image_path)
+            run_kwargs: Dict[str, Any] = {
+                "decision_policy_version": self.config.decision_policy_version,
+            }
+            # The public single-rollout path keeps case_id and episode_id equal.
+            # Omitting the redundant keyword preserves frozen historical runners
+            # while derived multi-rollout IDs still reach the v4 orchestrator.
+            if episode_id != runtime_case.case_id:
+                run_kwargs["episode_id"] = episode_id
             result = await orchestrator.run(
                 image_path,
                 runtime_case,
-                decision_policy_version=self.config.decision_policy_version,
+                **run_kwargs,
             )
         except Exception as exc:
             state = getattr(orchestrator, "last_state", None)
@@ -205,6 +216,7 @@ class VerificationWorkflow:
         image_paths: List[str],
         image_ids: Optional[List[str]] = None,
         runtime_cases: Optional[List[Optional[ImageOnlyRuntimeCase]]] = None,
+        sampling_seeds: Optional[List[Optional[int]]] = None,
         concurrency: int = 1,
     ) -> List[Dict[str, Any]]:
         """Run verification on multiple images.
@@ -223,6 +235,10 @@ class VerificationWorkflow:
             runtime_cases = [None] * len(image_paths)
         if len(runtime_cases) != len(image_paths):
             raise ValueError("runtime_cases must match image_paths length")
+        if sampling_seeds is None:
+            sampling_seeds = [self.config.sampling_seed] * len(image_paths)
+        if len(sampling_seeds) != len(image_paths):
+            raise ValueError("sampling_seeds must match image_paths length")
 
         semaphore = asyncio.Semaphore(concurrency)
         results = []
@@ -231,10 +247,26 @@ class VerificationWorkflow:
             path: str,
             img_id: str,
             runtime_case: Optional[ImageOnlyRuntimeCase],
+            sampling_seed: Optional[int],
         ) -> Dict[str, Any]:
             async with semaphore:
                 try:
-                    return await self.run_single(
+                    # Test and embedding callers may deliberately replace this
+                    # instance method. Preserve that explicit hook; production
+                    # batch calls take the isolated-child branch below.
+                    if "run_single" in self.__dict__:
+                        return await self.run_single(
+                            path,
+                            img_id,
+                            runtime_case=runtime_case,
+                        )
+                    # A complete rollout owns its orchestrator, interaction
+                    # lifecycle, mutable state, archive and runtime event stream.
+                    # Only content-addressed tool caches may be shared externally.
+                    child = VerificationWorkflow(
+                        replace(self.config, sampling_seed=sampling_seed)
+                    )
+                    return await child.run_single(
                         path,
                         img_id,
                         runtime_case=runtime_case,
@@ -246,11 +278,12 @@ class VerificationWorkflow:
                     raise
 
         tasks = [
-            _verify(path, img_id, runtime_case)
-            for path, img_id, runtime_case in zip(
+            _verify(path, img_id, runtime_case, sampling_seed)
+            for path, img_id, runtime_case, sampling_seed in zip(
                 image_paths,
                 image_ids,
                 runtime_cases,
+                sampling_seeds,
             )
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)

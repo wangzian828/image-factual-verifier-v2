@@ -28,6 +28,11 @@ pipeline repository and enter only through the immutable release contract.
 Each public row contains exactly `case_id`, `image_path`, and `image_sha256`.
 Evaluator-private gold is loaded only after every rollout.
 
+The repository is a monorepo: `training/` is imported with its Git history, but
+remains an independently installable Python project. Runtime dependencies and
+training dependencies must not be mixed. Run root gates from this directory and
+training gates from `training/`.
+
 ## Local setup
 
 Python 3.11 is required.
@@ -65,6 +70,14 @@ reference-chain metrics, v4 teacher scores, and `ifv-policy-v2` trajectories. Th
 training gate focuses on Evidence-chain recovery, discrepancy alignment, stop quality,
 protocol validity, and absence of post-verdict actions.
 
+For on-policy RL, run `--rollouts-per-case 4`. Each member receives a unique
+`episode_id` and sampling seed while retaining the public `case_id`; every complete
+episode owns its workflow, mutable state, interaction lifecycle, runtime archive, and
+trace. The run writes `rollout_groups.jsonl` and `post_rollout_rewards.jsonl`. Then
+use `python -m src.eval.score_semantic_reward` for one frozen Gemini comprehensive
+blind score per trace, followed by `training/ifv-training build-run-rewards` to emit
+standard GRPO groups. See [docs/rl-semantic-reward.md](docs/rl-semantic-reward.md).
+
 ## Validation and acceptance
 
 ```powershell
@@ -72,6 +85,12 @@ python -m pytest -q
 python -m compileall -q src scripts
 git diff --check
 python scripts/audit_real_trace.py path\to\traces --json --strict-scheduler
+```
+
+```powershell
+cd training
+python -m pytest -q
+python -m compileall -q ifv_training scripts
 ```
 
 Local tests are deterministic gates, not production acceptance. v4 completion also

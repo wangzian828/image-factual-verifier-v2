@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import statistics
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -15,24 +16,24 @@ from typing import Any, Mapping, Sequence
 from .io import canonical_json, load_json, write_json
 
 
-SEMANTIC_REWARD_SCHEMA_VERSION = "ifv-semantic-reward-v1"
-REWARD_LEDGER_SCHEMA_VERSION = "ifv-rl-reward-ledger-v1"
+SEMANTIC_REWARD_SCHEMA_VERSION = "ifv-semantic-reward-v2"
+REWARD_LEDGER_SCHEMA_VERSION = "ifv-rl-reward-ledger-v2"
 REWARD_PROFILE_SCHEMA_VERSION = "ifv-rl-reward-profile-v1"
+GRPO_GROUP_SCHEMA_VERSION = "ifv-standard-grpo-group-v1"
 
 DEFAULT_COMPONENT_WEIGHTS = {
-    "classification_correct": 0.25,
-    "strict_trace_audit": 0.15,
-    "verdict_blind_agreement": 0.20,
-    "verdict_sufficiency": 0.25,
-    "verdict_swap_rejection": 0.15,
+    "evidence_quality": 0.50,
+    "overall_process_quality": 0.50,
 }
 
 SUPPORTED_COMPONENT_WEIGHTS = frozenset(DEFAULT_COMPONENT_WEIGHTS) | {
+    "investigation_progress",
+    "search_direction",
+    "evidence_use",
+    "belief_revision",
     "claim_label_agreement",
     "claim_entailment",
     "evidence_citation_fidelity",
-    "evidence_dropout_sensitivity",
-    "rubber_stamp_resistance",
 }
 
 
@@ -109,26 +110,25 @@ def validate_semantic_reward_artifact(
         "claim_label_agreement",
         "claim_entailment",
         "evidence_citation_fidelity",
-        "verdict_sufficiency",
-        "verdict_swap_rejection",
-        "rubber_stamp_risk",
+        "evidence_sufficiency",
+        "evidence_quality",
+        "investigation_progress",
+        "search_direction",
+        "evidence_use",
+        "belief_revision",
+        "overall_process_quality",
     )
     for name in required_metrics:
         try:
             _number(metrics.get(name), location=f"metrics.{name}")
         except ValueError as exc:
             errors.append(str(exc))
-    try:
-        _number(
-            metrics.get("evidence_dropout_sensitivity"),
-            location="metrics.evidence_dropout_sensitivity",
-            nullable=True,
-        )
-    except ValueError as exc:
-        errors.append(str(exc))
     invalid_ids = metrics.get("invalid_judge_evidence_ids", [])
     if not isinstance(invalid_ids, list):
         errors.append("metrics.invalid_judge_evidence_ids must be a list")
+    invalid_turn_ids = metrics.get("invalid_judge_turn_ids", [])
+    if not isinstance(invalid_turn_ids, list):
+        errors.append("metrics.invalid_judge_turn_ids must be a list")
 
     gates = artifact.get("gates")
     if not isinstance(gates, Mapping):
@@ -147,8 +147,8 @@ def validate_semantic_reward_artifact(
         errors.append("judge is required")
     else:
         calls = judge.get("calls")
-        if not isinstance(calls, list) or len(calls) != 2:
-            errors.append("judge.calls must contain blind and aware calls")
+        if not isinstance(calls, list) or len(calls) != 1:
+            errors.append("judge.calls must contain exactly one trajectory call")
         else:
             for index, call in enumerate(calls):
                 if not isinstance(call, Mapping):
@@ -161,27 +161,15 @@ def validate_semantic_reward_artifact(
                 usage = call.get("usage")
                 if not isinstance(usage, Mapping):
                     errors.append(f"judge.calls[{index}].usage is required")
-    blind = artifact.get("blind_judgment")
-    if not isinstance(blind, Mapping):
-        errors.append("blind_judgment is required")
+    judgment = artifact.get("trajectory_judgment")
+    if not isinstance(judgment, Mapping):
+        errors.append("trajectory_judgment is required")
     else:
-        if blind.get("predicted_verdict") not in {"real", "fake", "unclear"}:
-            errors.append("blind_judgment.predicted_verdict is invalid")
-        claim_reviews = blind.get("claim_reviews")
+        if judgment.get("predicted_verdict") not in {"real", "fake", "unclear"}:
+            errors.append("trajectory_judgment.predicted_verdict is invalid")
+        claim_reviews = judgment.get("claim_reviews")
         if not isinstance(claim_reviews, list) or not claim_reviews:
-            errors.append("blind_judgment.claim_reviews must be a non-empty list")
-    aware = artifact.get("aware_counterfactual_judgment")
-    if not isinstance(aware, Mapping):
-        errors.append("aware_counterfactual_judgment is required")
-    else:
-        for name in (
-            "original_verdict_supported",
-            "swapped_verdict_rejected",
-            "dropout_applicable",
-            "dropout_verdict_supported",
-        ):
-            if not isinstance(aware.get(name), bool):
-                errors.append(f"aware_counterfactual_judgment.{name} must be boolean")
+            errors.append("trajectory_judgment.claim_reviews must be a non-empty list")
 
     artifact_id = str(artifact.get("artifact_id", ""))
     expected_id = "sha256:" + hashlib.sha256(
@@ -204,7 +192,7 @@ def load_reward_profile(path: Path | None = None) -> dict[str, Any]:
     if path is None:
         return {
             "schema_version": REWARD_PROFILE_SCHEMA_VERSION,
-            "profile_id": "ifv-semantic-balanced-v4",
+            "profile_id": "ifv-trajectory-quality-v1",
             "weights": dict(DEFAULT_COMPONENT_WEIGHTS),
         }
     profile = load_json(path)
@@ -275,21 +263,26 @@ def compose_reward_ledger(
         "evidence_citation_fidelity": float(
             metrics["evidence_citation_fidelity"]
         ),
-        "verdict_sufficiency": float(metrics["verdict_sufficiency"]),
-        "verdict_swap_rejection": float(metrics["verdict_swap_rejection"]),
-        "evidence_dropout_sensitivity": (
-            None
-            if metrics.get("evidence_dropout_sensitivity") is None
-            else float(metrics["evidence_dropout_sensitivity"])
-        ),
-        "rubber_stamp_resistance": 1.0 - float(metrics["rubber_stamp_risk"]),
+        "evidence_sufficiency": float(metrics["evidence_sufficiency"]),
+        "evidence_quality": float(metrics["evidence_quality"]),
+        "investigation_progress": float(metrics["investigation_progress"]),
+        "search_direction": float(metrics["search_direction"]),
+        "evidence_use": float(metrics["evidence_use"]),
+        "belief_revision": float(metrics["belief_revision"]),
+        "overall_process_quality": float(metrics["overall_process_quality"]),
     }
-    fatal_mask = not engineering_valid or provider_fatal
+    judge_reference_valid = not (
+        metrics.get("invalid_judge_evidence_ids")
+        or metrics.get("invalid_judge_turn_ids")
+    )
+    fatal_mask = not engineering_valid or provider_fatal or not judge_reference_valid
     mask_reason = ""
     if provider_fatal:
         mask_reason = "fatal_environment_or_provider_error"
     elif not engineering_valid:
         mask_reason = "engineering_invalid_rollout"
+    elif not judge_reference_valid:
+        mask_reason = "invalid_teacher_evidence_or_turn_reference"
 
     weighted_terms: list[tuple[str, float, float]] = []
     for name, raw_weight in weights.items():
@@ -301,11 +294,27 @@ def compose_reward_ledger(
     weight_sum = sum(weight for _, _, weight in weighted_terms)
     if weight_sum <= 0.0:
         raise ValueError("no active reward components after nullable values")
-    scalar_reward = sum(value * weight for _, value, weight in weighted_terms) / weight_sum
-    if fatal_mask:
+    quality = sum(
+        value * weight for _, value, weight in weighted_terms
+    ) / weight_sum
+    reward_masked = fatal_mask or not strict_trace_audit
+    if reward_masked:
         scalar_reward_value: float | None = None
+        if not mask_reason:
+            mask_reason = "strict_trace_audit_failed"
+    elif classification_correct is None:
+        reward_masked = True
+        scalar_reward_value = None
+        mask_reason = "classification_correctness_missing"
+    elif classification_correct is False:
+        # Outcome dominance: an incorrect complete trajectory cannot outrank a
+        # correct one merely because its prose or search style looks polished.
+        scalar_reward_value = 0.0
     else:
-        scalar_reward_value = round(max(0.0, min(1.0, scalar_reward)), 8)
+        scalar_reward_value = round(
+            0.5 + 0.5 * max(0.0, min(1.0, quality)),
+            8,
+        )
 
     case_id = str(artifact.get("case_id", ""))
     episode_id = str(
@@ -335,9 +344,15 @@ def compose_reward_ledger(
             "engineering_valid": engineering_valid,
             "strict_trace_audit_pass": strict_trace_audit,
             "semantic_audit_pass": bool(gates.get("semantic_audit_pass")),
+            "judge_reference_valid": judge_reference_valid,
             "classification_correct": classification_correct,
             "has_policy_steps": bool(step_ids),
-            "trainable": bool(not fatal_mask and step_ids),
+            "trainable": bool(
+                not fatal_mask
+                and strict_trace_audit
+                and classification_correct is not None
+                and step_ids
+            ),
             "eligible_for_positive_buffer": bool(
                 not fatal_mask
                 and step_ids
@@ -346,7 +361,7 @@ def compose_reward_ledger(
             ),
         },
         "fatal_mask": {
-            "masked": fatal_mask,
+            "masked": reward_masked,
             "reason": mask_reason,
         },
         "scalar_reward": scalar_reward_value,
@@ -473,6 +488,118 @@ def export_framework_reward(
     raise ValueError("framework must be rllm or verl")
 
 
+def build_standard_grpo_groups(
+    ledgers: Sequence[Mapping[str, Any]],
+    rollout_members: Sequence[Mapping[str, Any]],
+    *,
+    minimum_valid_members: int = 2,
+) -> list[dict[str, Any]]:
+    """Join audited episode rewards into standard same-prompt GRPO groups.
+
+    This is a data contract only. It does not implement an advantage estimator:
+    rLLM/veRL receives one scalar per complete episode and performs standard GRPO.
+    """
+
+    if minimum_valid_members < 2:
+        raise ValueError("minimum_valid_members must be at least 2")
+    ledger_by_episode: dict[str, Mapping[str, Any]] = {}
+    for ledger in ledgers:
+        audit = validate_reward_ledger(ledger)
+        if not audit["passed"]:
+            raise ValueError(
+                "invalid reward ledger: " + "; ".join(audit["errors"])
+            )
+        episode_id = str(ledger.get("episode_id", "")).strip()
+        if not episode_id or episode_id in ledger_by_episode:
+            raise ValueError("reward ledgers require unique episode_id values")
+        ledger_by_episode[episode_id] = ledger
+
+    members_by_group: dict[str, list[Mapping[str, Any]]] = {}
+    for member in rollout_members:
+        if member.get("schema_version") != "ifv-rollout-group-member-v1":
+            raise ValueError("unsupported rollout group member schema")
+        group_id = str(member.get("prompt_group_id", "")).strip()
+        episode_id = str(member.get("episode_id", "")).strip()
+        if not group_id or not episode_id:
+            raise ValueError("rollout member requires prompt_group_id and episode_id")
+        members_by_group.setdefault(group_id, []).append(member)
+
+    groups: list[dict[str, Any]] = []
+    for group_id in sorted(members_by_group):
+        source_members = sorted(
+            members_by_group[group_id],
+            key=lambda item: int(item.get("rollout_index", 0) or 0),
+        )
+        case_ids = {str(item.get("case_id", "")) for item in source_members}
+        group_sizes = {int(item.get("group_size", 0) or 0) for item in source_members}
+        if len(case_ids) != 1 or len(group_sizes) != 1:
+            raise ValueError("one prompt group must have one case_id and group_size")
+        if next(iter(group_sizes)) != len(source_members):
+            raise ValueError("rollout group is incomplete")
+        members: list[dict[str, Any]] = []
+        rewards: list[float] = []
+        for source in source_members:
+            episode_id = str(source["episode_id"])
+            ledger = ledger_by_episode.get(episode_id)
+            reward = None if ledger is None else ledger.get("scalar_reward")
+            gates = {} if ledger is None else _mapping(
+                ledger.get("gates"), location="ledger.gates"
+            )
+            valid = bool(
+                ledger is not None
+                and gates.get("trainable")
+                and source.get("training_eligible", True) is not False
+                and source.get("training_prohibited", False) is not True
+                and isinstance(reward, (int, float))
+            )
+            if valid:
+                rewards.append(float(reward))
+            members.append(
+                {
+                    "episode_id": episode_id,
+                    "rollout_index": int(source.get("rollout_index", 0) or 0),
+                    "sampling_seed": int(source.get("sampling_seed", 0) or 0),
+                    "reward": float(reward) if valid else None,
+                    "policy_step_ids": (
+                        [str(value) for value in ledger.get("step_ids", [])]
+                        if valid and ledger is not None
+                        else []
+                    ),
+                    "training_eligible": valid,
+                    "ledger_id": None if ledger is None else ledger.get("ledger_id"),
+                }
+            )
+        reward_std = statistics.pstdev(rewards) if len(rewards) > 1 else 0.0
+        trainable = len(rewards) >= minimum_valid_members and reward_std > 0.0
+        skip_reason = None
+        if len(rewards) < minimum_valid_members:
+            skip_reason = (
+                "training_prohibited_source"
+                if all(
+                    item.get("training_prohibited", False) is True
+                    for item in source_members
+                )
+                else "insufficient_valid_members"
+            )
+        elif reward_std == 0.0:
+            skip_reason = "zero_reward_variance"
+        groups.append(
+            {
+                "schema_version": GRPO_GROUP_SCHEMA_VERSION,
+                "prompt_group_id": group_id,
+                "case_id": next(iter(case_ids)),
+                "group_size": len(source_members),
+                "valid_member_count": len(rewards),
+                "reward_mean": round(statistics.mean(rewards), 8) if rewards else None,
+                "reward_std": round(reward_std, 8) if rewards else None,
+                "trainable": trainable,
+                "skip_reason": skip_reason,
+                "members": members,
+            }
+        )
+    return groups
+
+
 def build_and_write_ledger(
     *,
     semantic_artifact_path: Path,
@@ -490,3 +617,37 @@ def build_and_write_ledger(
     )
     write_json(output_path, ledger)
     return ledger
+
+
+def build_ledgers_from_run_artifacts(
+    *,
+    semantic_artifacts: Sequence[Mapping[str, Any]],
+    deterministic_rows: Sequence[Mapping[str, Any]],
+    profile: Mapping[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Join one semantic artifact and deterministic score per episode."""
+
+    deterministic_by_episode = {
+        str(row.get("episode_id", "")): row for row in deterministic_rows
+    }
+    if "" in deterministic_by_episode:
+        raise ValueError("deterministic rows require episode_id")
+    ledgers: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for artifact in semantic_artifacts:
+        rollout = _mapping(artifact.get("rollout"), location="artifact.rollout")
+        episode_id = str(rollout.get("episode_id", "")).strip()
+        if not episode_id or episode_id in seen:
+            raise ValueError("semantic artifacts require unique episode_id values")
+        deterministic = deterministic_by_episode.get(episode_id)
+        if deterministic is None:
+            raise ValueError(f"missing deterministic row for {episode_id}")
+        seen.add(episode_id)
+        ledgers.append(
+            compose_reward_ledger(
+                artifact,
+                deterministic=deterministic,
+                profile=profile,
+            )
+        )
+    return ledgers

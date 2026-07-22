@@ -1,0 +1,8 @@
+{
+  "schema_version": "ifv-rl-reward-profile-v1",
+  "profile_id": "ifv-trajectory-quality-v1",
+  "weights": {
+    "evidence_quality": 0.5,
+    "overall_process_quality": 0.5
+  }
+}

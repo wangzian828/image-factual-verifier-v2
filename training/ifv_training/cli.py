@@ -10,12 +10,14 @@ from .checkpoints import (
     build_checkpoint_manifest,
     build_serving_profile,
 )
-from .io import load_json, write_json
+from .io import load_json, load_jsonl, write_json, write_jsonl
 from .manifests import write_environment_manifest
 from .perception import convert_perception_runs
 from .policy import convert_policy_dataset
 from .rewards import (
     build_and_write_ledger,
+    build_ledgers_from_run_artifacts,
+    build_standard_grpo_groups,
     export_framework_reward,
     validate_reward_ledger,
     validate_semantic_reward_artifact,
@@ -108,6 +110,21 @@ def _parser() -> argparse.ArgumentParser:
         required=True,
     )
     reward_export.add_argument("--output", type=Path, required=True)
+
+    grpo_groups = subparsers.add_parser("build-grpo-groups")
+    grpo_groups.add_argument("--ledgers", type=Path, required=True)
+    grpo_groups.add_argument("--rollout-members", type=Path, required=True)
+    grpo_groups.add_argument("--output", type=Path, required=True)
+    grpo_groups.add_argument("--minimum-valid-members", type=int, default=2)
+
+    run_rewards = subparsers.add_parser("build-run-rewards")
+    run_rewards.add_argument("--semantic-artifacts", type=Path, required=True)
+    run_rewards.add_argument("--deterministic", type=Path, required=True)
+    run_rewards.add_argument("--rollout-members", type=Path, required=True)
+    run_rewards.add_argument("--profile", type=Path)
+    run_rewards.add_argument("--ledger-output", type=Path, required=True)
+    run_rewards.add_argument("--group-output", type=Path, required=True)
+    run_rewards.add_argument("--minimum-valid-members", type=int, default=2)
     return parser
 
 
@@ -191,6 +208,36 @@ def main() -> None:
             framework=args.framework,
         )
         write_json(args.output, result)
+    elif args.command == "build-grpo-groups":
+        result = build_standard_grpo_groups(
+            load_jsonl(args.ledgers),
+            load_jsonl(args.rollout_members),
+            minimum_valid_members=args.minimum_valid_members,
+        )
+        write_jsonl(args.output, result)
+    elif args.command == "build-run-rewards":
+        semantic_paths = sorted(args.semantic_artifacts.glob("*.semantic_reward.json"))
+        semantic_artifacts = [load_json(path) for path in semantic_paths]
+        profile = load_reward_profile(args.profile)
+        ledgers = build_ledgers_from_run_artifacts(
+            semantic_artifacts=semantic_artifacts,
+            deterministic_rows=load_jsonl(args.deterministic),
+            profile=profile,
+        )
+        groups = build_standard_grpo_groups(
+            ledgers,
+            load_jsonl(args.rollout_members),
+            minimum_valid_members=args.minimum_valid_members,
+        )
+        write_jsonl(args.ledger_output, ledgers)
+        write_jsonl(args.group_output, groups)
+        result = {
+            "ledger_count": len(ledgers),
+            "group_count": len(groups),
+            "trainable_group_count": sum(
+                1 for group in groups if group.get("trainable") is True
+            ),
+        }
     else:
         raise AssertionError(args.command)
     print(json.dumps(result, ensure_ascii=False, indent=2))

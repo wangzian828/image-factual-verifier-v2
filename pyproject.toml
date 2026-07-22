@@ -27,3 +27,8 @@ ops = [
 [build-system]
 requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta:__legacy__"
+
+[tool.pytest.ini_options]
+# training/ is an independently installable Python project with its own test root.
+# Root runtime gates deliberately do not import its package or mix dependencies.
+norecursedirs = ["training"]

@@ -1,6 +1,6 @@
 project:
   title: "Search-agent training stack selection for IFV"
-  question: "Which mature training stack best supports Qwen3-VL full-parameter SFT and multi-turn visual search-agent RL without coupling to the Gemini runtime?"
+  question: "Which mature training stack best supports Qwen3.5 full-parameter SFT and multi-turn visual search-agent RL without coupling to the Gemini runtime?"
   status: active
   started: "2026-07-17"
   domain: "multimodal agent post-training"
@@ -21,8 +21,7 @@ literature:
   evidence_gaps:
     - "Exact GPU and memory behavior for Qwen3-VL-8B full-parameter RL on 4xA100-40GB."
     - "Checkpoint/resume maturity for long-horizon multimodal tool environments."
-    - "Human-calibrated agreement of Gemini turn labels with counterfactual contribution on IFV trajectories."
-    - "A trainer path that maps IFV turn credit to corresponding policy-token spans rather than broadcasting one episode scalar."
+    - "Human-calibrated agreement of one-call Gemini trajectory rankings with outcome and Evidence quality on IFV groups."
 
 hypotheses:
   - id: H1
@@ -44,9 +43,9 @@ hypotheses:
     parent: null
     priority: high
   - id: H4
-    statement: "Calibrated turn-level process credit is necessary to distinguish useful, redundant, misleading, and regressive investigation steps in IFV long-horizon trajectories."
-    status: supported
-    motivation: "Terminal correctness and selected-basis quality cannot localize the search or belief-update decisions responsible for success and failure."
+    statement: "Calibrated turn-level process credit is necessary for the current IFV RL implementation."
+    status: deferred
+    motivation: "It has research precedent, but the current scope deliberately uses mature standard GRPO with one trajectory scalar and no custom advantage estimator."
     parent: null
     priority: high
 
@@ -79,16 +78,23 @@ experiments:
       timestamp: "2026-07-17"
     - run_id: "survey_004"
       hypothesis: "H4"
-      metric_value: "supported"
+      metric_value: "deferred"
       delta: null
       wall_time_min: null
-      change_summary: "Expanded source audit found multiple released turn-credit implementations and invalidated the earlier outcome-only generalization."
+      change_summary: "Expanded source audit found multiple released turn-credit implementations; retain as research evidence, not the current production algorithm."
+      timestamp: "2026-07-22"
+    - run_id: "decision_005"
+      hypothesis: "H4"
+      metric_value: "standard_grpo_trajectory_scalar"
+      delta: null
+      wall_time_min: null
+      change_summary: "User decision: one blind Gemini comprehensive trajectory score, outcome-gated scalar reward, G=4 same-prompt groups, and framework-native GRPO normalization."
       timestamp: "2026-07-22"
 
 outer_loop:
   cycle: 2
-  last_direction: pivot
-  last_reflection: "Keep the split stack, but require a turn-aware RL integration. Calibrate Gemini process labels against counterfactual/state-delta credit before optimizer use; begin with outcome-gated advantage redistribution."
+  last_direction: standard_grpo
+  last_reflection: "Keep the split stack. Use one frozen Gemini comprehensive trajectory audit and outcome-gated scalar rewards in same-prompt groups; rLLM/veRL owns standard GRPO normalization and all policy tokens share the episode advantage."
 
 workspace:
   findings: "findings.md"

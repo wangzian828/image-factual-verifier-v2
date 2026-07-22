@@ -130,3 +130,13 @@ later scale-up candidate:
 
 The RL choice remains conditional on a real gateway protocol smoke and gpu13 memory
 probe.
+
+## 2026-07-22 implementation decision
+
+The reviewed turn-credit systems remain useful evidence that process quality matters,
+but are not adopted as an IFV training-algorithm contribution. The production contract
+is deliberately narrower: generate G isolated full episodes for the same prompt, call
+Gemini once per episode for a blind overall trajectory assessment, join private outcome
+correctness only after rollout, and pass one scalar reward per episode to standard
+GRPO. rLLM/veRL owns group normalization; no turn-level reward, counterfactual probe,
+CW-GRPO redistribution or custom estimator is implemented.

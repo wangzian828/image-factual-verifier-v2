@@ -202,19 +202,24 @@ profile-scoped `QWEN35_LOCAL_BASE_URL`; its model override is likewise isolated 
 backend and every visual tool, preventing split-brain text/vision routing.
 
 `ifv-policy-v2` exports Image Account Planning, v4 ReAct, Discrepancy Decision, and
-v4 Judgment. Training eligibility requires classification correctness, complete
+v4 Judgment. The SFT positive-data gate requires classification correctness, complete
 directionally consistent Evidence chains, discrepancy alignment, stop quality, and
 no protocol rejection or legacy core ownership. The pure policy exporter repeats
-these gates and rejects a trace even if upstream score metadata is wrong.
+these gates and rejects a trace even if upstream score metadata is wrong. RL keeps a
+separate, auditable rule: an engineering-valid but incorrect complete episode remains
+in its same-prompt group with reward zero, rather than being silently removed.
 
 Completed Qwen rollouts may additionally enter the gold-free semantic reward audit
-described in `docs/rl-semantic-reward.md`. The frozen Gemini judge receives a
-bounded image/Evidence packet after runtime termination. Its first request hides
-the policy verdict, Claim status, and Evidence stance; its second request checks
-the accepted basis, a swapped verdict, and an Evidence-dropout counterfactual.
-The resulting `ifv-semantic-reward-v1` artifact is content-addressed and records
-model, prompt, token usage, and request/response hashes. It never mutates runtime
-state and is not model-visible.
+described in `docs/rl-semantic-reward.md`. A same-prompt group contains fully
+isolated episodes, each with a stable sampling seed and distinct canonical trace.
+The frozen Gemini judge receives one bounded image/Evidence/action-observation packet
+per episode and returns an independent verdict plus overall investigation quality. It
+does not see the policy verdict, Claim status, Evidence stance, Finding summaries,
+hidden reasoning, or private gold. The resulting `ifv-semantic-reward-v2` artifact
+is content-addressed, records one request's model/prompt/token/hash metadata, never
+mutates runtime state, and is not model-visible. After all episodes finish,
+deterministic post-rollout code joins private gold and emits one scalar per episode for
+standard GRPO; it does not implement a custom per-turn advantage.
 
 ## Acceptance status
 

@@ -114,6 +114,8 @@ def _args(benchmark: Path, run_dir: Path) -> argparse.Namespace:
         vlm_wire_api="interactions",
         output_dir=str(run_dir),
         concurrency=1,
+        rollouts_per_case=1,
+        base_sampling_seed=1729,
         timeout=30.0,
         limit=None,
         source_access_policy=None,
@@ -136,6 +138,7 @@ def test_v03_eval_keeps_gold_post_rollout_and_writes_scorer_predictions(
         async def run_batch(self, **kwargs: Any) -> list[dict[str, Any]]:
             nonlocal rollout_finished
             cases = kwargs["runtime_cases"]
+            assert len(kwargs["sampling_seeds"]) == 1
             assert len(cases) == 1
             case = cases[0]
             assert set(case.model_dump()) == {
@@ -145,16 +148,17 @@ def test_v03_eval_keeps_gold_post_rollout_and_writes_scorer_predictions(
             }
             trace_dir = Path(self.config.output_dir)
             trace_dir.mkdir(parents=True, exist_ok=True)
-            (trace_dir / f"{case.case_id}.json").write_text(
+            episode_id = kwargs["image_ids"][0]
+            (trace_dir / f"{episode_id}.json").write_text(
                 json.dumps(
                     {
-                        "image_id": case.case_id,
+                        "image_id": episode_id,
                         "input_mode": "image_only",
                         "decision_policy_version": "discrepancy-first-v4",
                         "verdict": "real",
                         "termination": "success",
                         "state": {
-                            "image_id": case.case_id,
+                            "image_id": episode_id,
                             "input_mode": "image_only",
                             "decision_policy_version": "discrepancy-first-v4",
                             "runtime_case": case.model_dump(),
@@ -258,6 +262,36 @@ def test_v03_eval_keeps_gold_post_rollout_and_writes_scorer_predictions(
     assert manifest["artifacts"]["perception_trajectories"] == (
         "perception_trajectories.jsonl"
     )
+    assert manifest["artifacts"]["rollout_groups"] == "rollout_groups.jsonl"
+    assert manifest["artifacts"]["episode_predictions"] == (
+        "episode_predictions.jsonl"
+    )
+    assert (run_dir / "post_rollout_rewards.jsonl").is_file()
+
+
+def test_rollout_specs_are_stable_unique_and_grouped() -> None:
+    runtime_case = SimpleNamespace(case_id="case-a")
+    samples = [{"case_id": "case-a", "image_path": "fixture.jpg"}]
+    first = run_eval._rollout_specs(
+        samples,
+        [runtime_case],
+        rollouts_per_case=4,
+        base_sampling_seed=7,
+        policy_revision="commit-a",
+        model="Qwen3.5-9B",
+    )
+    second = run_eval._rollout_specs(
+        samples,
+        [runtime_case],
+        rollouts_per_case=4,
+        base_sampling_seed=7,
+        policy_revision="commit-a",
+        model="Qwen3.5-9B",
+    )
+    assert first == second
+    assert len({item["episode_id"] for item in first}) == 4
+    assert len({item["sampling_seed"] for item in first}) == 4
+    assert len({item["prompt_group_id"] for item in first}) == 1
 
 
 def test_eval_cli_exits_nonzero_for_engineering_errors(

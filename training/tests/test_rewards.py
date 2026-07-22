@@ -3,12 +3,12 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-import pytest
-
-from ifv_training.io import canonical_json, load_json
+from ifv_training.io import canonical_json
 from ifv_training.rewards import (
     REWARD_LEDGER_SCHEMA_VERSION,
     SEMANTIC_REWARD_SCHEMA_VERSION,
+    build_standard_grpo_groups,
+    build_ledgers_from_run_artifacts,
     compose_reward_ledger,
     export_framework_reward,
     load_reward_profile,
@@ -17,7 +17,7 @@ from ifv_training.rewards import (
 )
 
 
-def _semantic_artifact() -> dict:
+def _semantic_artifact(episode_id: str = "episode-1") -> dict:
     core = {
         "schema_version": SEMANTIC_REWARD_SCHEMA_VERSION,
         "case_id": "case-reward-1",
@@ -26,57 +26,51 @@ def _semantic_artifact() -> dict:
             "decision_policy_version": "discrepancy-first-v4",
         },
         "reward_input": {
-            "schema_version": "ifv-semantic-reward-input-v1",
+            "schema_version": "ifv-semantic-reward-input-v2",
             "sha256": "b" * 64,
             "image": {"image_sha256": "c" * 64, "available_to_judge": True},
         },
         "rollout": {
-            "episode_id": "case-reward-1",
-            "policy_step_ids": ["case-reward-1:judgment:1"],
-            "terminal_policy_step_id": "case-reward-1:judgment:1",
+            "episode_id": episode_id,
+            "policy_step_ids": [f"{episode_id}:judgment:1"],
+            "terminal_policy_step_id": f"{episode_id}:judgment:1",
         },
         "judge": {
             "provider": "gemini",
             "model": "frozen-judge",
-            "prompt_versions": ["ifv-semantic-blind-v1", "ifv-semantic-aware-counterfactual-v1"],
+            "prompt_versions": ["ifv-semantic-trajectory-blind-v1"],
             "calls": [
                 {
-                    "prompt_version": "ifv-semantic-blind-v1",
+                    "prompt_version": "ifv-semantic-trajectory-blind-v1",
                     "request_sha256": "d" * 64,
                     "response_sha256": "e" * 64,
                     "interaction_id": "judge-1",
-                    "usage": {"input_tokens": 200, "output_tokens": 30, "thought_tokens": 0},
-                },
-                {
-                    "prompt_version": "ifv-semantic-aware-counterfactual-v1",
-                    "request_sha256": "f" * 64,
-                    "response_sha256": "1" * 64,
-                    "interaction_id": "judge-2",
-                    "usage": {"input_tokens": 220, "output_tokens": 40, "thought_tokens": 0},
-                },
+                    "usage": {
+                        "input_tokens": 200,
+                        "output_tokens": 30,
+                        "thought_tokens": 0,
+                    },
+                }
             ],
         },
-        "blind_judgment": {
+        "trajectory_judgment": {
             "predicted_verdict": "fake",
             "claim_reviews": [{"claim_id": "claim-1", "label": "refuted"}],
-        },
-        "aware_counterfactual_judgment": {
-            "original_verdict_supported": True,
-            "swapped_verdict_rejected": True,
-            "dropout_applicable": True,
-            "dropout_verdict_supported": False,
         },
         "metrics": {
             "verdict_blind_agreement": 1.0,
             "claim_label_agreement": 1.0,
             "claim_entailment": 0.9,
             "evidence_citation_fidelity": 0.95,
-            "verdict_sufficiency": 0.92,
-            "verdict_swap_rejection": 1.0,
-            "evidence_dropout_sensitivity": 0.4,
-            "dropout_applicable": True,
-            "rubber_stamp_risk": 0.0,
+            "evidence_sufficiency": 1.0,
+            "evidence_quality": 0.9,
+            "investigation_progress": 0.8,
+            "search_direction": 0.85,
+            "evidence_use": 0.9,
+            "belief_revision": 0.75,
+            "overall_process_quality": 0.85,
             "invalid_judge_evidence_ids": [],
+            "invalid_judge_turn_ids": [],
         },
         "gates": {
             "strict_trace_audit_pass": True,
@@ -85,98 +79,180 @@ def _semantic_artifact() -> dict:
             "semantic_audit_pass": True,
         },
     }
-    artifact_id = "sha256:" + hashlib.sha256(
-        canonical_json(core).encode("utf-8")
-    ).hexdigest()
     return {
         **core,
-        "artifact_id": artifact_id,
+        "artifact_id": "sha256:" + hashlib.sha256(
+            canonical_json(core).encode("utf-8")
+        ).hexdigest(),
         "created_at": "2026-07-22T00:00:00+00:00",
     }
 
 
-def test_semantic_artifact_audit_rejects_tampering() -> None:
-    artifact = _semantic_artifact()
-    assert validate_semantic_reward_artifact(artifact)["passed"] is True
-    artifact["metrics"]["claim_entailment"] = 0.1
-    audit = validate_semantic_reward_artifact(artifact)
-    assert audit["passed"] is False
-    assert "artifact_id does not match semantic artifact content" in audit["errors"]
-
-
-def test_reward_ledger_preserves_dimensions_and_masks_fatal_rollouts() -> None:
-    artifact = _semantic_artifact()
-    ledger = compose_reward_ledger(
-        artifact,
-        deterministic={
-            "classification_correct": True,
-            "episode_id": "rollout-7",
-            "step_ids": ["step-1", "step-2"],
-        },
-    )
-    assert ledger["schema_version"] == REWARD_LEDGER_SCHEMA_VERSION
-    assert ledger["gates"]["trainable"] is True
-    assert ledger["gates"]["eligible_for_positive_buffer"] is True
-    assert ledger["scalar_reward"] is not None
-    assert ledger["teacher_usage"]["call_count"] == 2
-    assert validate_reward_ledger(ledger)["passed"] is True
-
-    masked = compose_reward_ledger(
-        artifact,
-        deterministic={"fatal_engineering_error": True},
-    )
-    assert masked["fatal_mask"]["masked"] is True
-    assert masked["scalar_reward"] is None
-    assert validate_reward_ledger(masked)["passed"] is True
-
-
-def test_missing_post_rollout_correctness_never_enters_positive_buffer() -> None:
-    ledger = compose_reward_ledger(_semantic_artifact())
-    assert ledger["gates"]["has_policy_steps"] is True
-    assert ledger["gates"]["trainable"] is True
-    assert ledger["gates"]["eligible_for_positive_buffer"] is False
-
-
-def test_rllm_and_verl_exports_use_terminal_reward_and_respect_mask() -> None:
-    ledger = compose_reward_ledger(
-        _semantic_artifact(),
-        deterministic={"step_ids": ["plan", "react", "judgment"]},
-    )
-    rllm = export_framework_reward(ledger, framework="rllm")
-    assert rllm["assignment"] == "terminal_step"
-    assert rllm["step_rewards"][0]["reward"] == 0.0
-    assert rllm["step_rewards"][-1]["reward"] == ledger["scalar_reward"]
-
-    verl = export_framework_reward(ledger, framework="verl")
-    assert verl["reward_assignment"]["mode"] == "terminal_token"
-    assert verl["skip_update"] is False
-
-
-def test_profile_file_is_versioned_and_loadable() -> None:
-    root = Path(__file__).resolve().parents[1]
-    profile = load_reward_profile(root / "configs" / "rl" / "semantic-reward-v1.json")
-    assert profile["profile_id"] == "ifv-semantic-balanced-v1"
-    assert profile["weights"]["classification_correct"] == pytest.approx(0.20)
-
-
-def test_v4_profile_keeps_claim_level_metrics_diagnostic() -> None:
-    root = Path(__file__).resolve().parents[1]
-    profile = load_reward_profile(root / "configs" / "rl" / "semantic-reward-v4.json")
-    assert profile["profile_id"] == "ifv-semantic-balanced-v4"
-    assert "claim_label_agreement" not in profile["weights"]
-    assert "claim_entailment" not in profile["weights"]
-    assert "evidence_citation_fidelity" not in profile["weights"]
-    assert "evidence_dropout_sensitivity" not in profile["weights"]
-    assert "rubber_stamp_resistance" not in profile["weights"]
-
-    artifact = _semantic_artifact()
-    artifact["metrics"]["claim_label_agreement"] = 0.0
-    core = {key: value for key, value in artifact.items() if key not in {"artifact_id", "created_at"}}
+def _ledger(episode_id: str, *, correct: bool, quality: float = 0.85) -> dict:
+    artifact = _semantic_artifact(episode_id)
+    artifact["metrics"]["evidence_quality"] = quality
+    artifact["metrics"]["overall_process_quality"] = quality
+    core = {
+        key: value
+        for key, value in artifact.items()
+        if key not in {"artifact_id", "created_at"}
+    }
     artifact["artifact_id"] = "sha256:" + hashlib.sha256(
         canonical_json(core).encode("utf-8")
     ).hexdigest()
-    ledger = compose_reward_ledger(artifact, profile=profile)
-    assert ledger["components"]["claim_label_agreement"] == 0.0
-    assert ledger["scalar_reward"] == compose_reward_ledger(
-        _semantic_artifact(), profile=profile
-    )["scalar_reward"]
+    return compose_reward_ledger(
+        artifact,
+        deterministic={
+            "classification_correct": correct,
+            "strict_trace_audit_pass": True,
+        },
+    )
+
+
+def test_one_call_artifact_validates_and_teacher_usage_is_recorded() -> None:
+    artifact = _semantic_artifact()
+    assert validate_semantic_reward_artifact(artifact)["passed"] is True
+    ledger = _ledger("episode-1", correct=True)
+    assert ledger["schema_version"] == REWARD_LEDGER_SCHEMA_VERSION
+    assert ledger["teacher_usage"]["call_count"] == 1
+    assert validate_reward_ledger(ledger)["passed"] is True
+
+
+def test_correctness_dominates_process_quality() -> None:
+    incorrect = _ledger("bad", correct=False, quality=1.0)
+    weak_correct = _ledger("good", correct=True, quality=0.0)
+    assert incorrect["scalar_reward"] == 0.0
+    assert weak_correct["scalar_reward"] == 0.5
+    assert weak_correct["scalar_reward"] > incorrect["scalar_reward"]
+
+
+def test_missing_correctness_or_failed_audit_is_masked() -> None:
+    artifact = _semantic_artifact()
+    missing = compose_reward_ledger(artifact)
+    assert missing["scalar_reward"] is None
+    assert missing["fatal_mask"]["masked"] is True
+    failed = compose_reward_ledger(
+        artifact,
+        deterministic={
+            "classification_correct": True,
+            "strict_trace_audit_pass": False,
+        },
+    )
+    assert failed["scalar_reward"] is None
+    artifact["metrics"]["invalid_judge_evidence_ids"] = ["invented"]
+    core = {
+        key: value
+        for key, value in artifact.items()
+        if key not in {"artifact_id", "created_at"}
+    }
+    artifact["artifact_id"] = "sha256:" + hashlib.sha256(
+        canonical_json(core).encode("utf-8")
+    ).hexdigest()
+    invalid_reference = compose_reward_ledger(
+        artifact,
+        deterministic={"classification_correct": True},
+    )
+    assert invalid_reference["scalar_reward"] is None
+    assert invalid_reference["fatal_mask"]["reason"] == (
+        "invalid_teacher_evidence_or_turn_reference"
+    )
+
+
+def test_framework_exports_remain_standard_terminal_episode_rewards() -> None:
+    ledger = _ledger("episode-1", correct=True)
+    rllm = export_framework_reward(ledger, framework="rllm")
+    assert rllm["assignment"] == "terminal_step"
+    assert rllm["step_rewards"][-1]["reward"] == ledger["scalar_reward"]
+    verl = export_framework_reward(ledger, framework="verl")
+    assert verl["reward_assignment"]["mode"] == "terminal_token"
+
+
+def test_standard_grpo_groups_join_by_episode_and_skip_zero_variance() -> None:
+    members = [
+        {
+            "schema_version": "ifv-rollout-group-member-v1",
+            "prompt_group_id": "pg-1",
+            "case_id": "case-reward-1",
+            "episode_id": f"episode-{index}",
+            "rollout_index": index,
+            "group_size": 4,
+            "sampling_seed": 100 + index,
+        }
+        for index in range(4)
+    ]
+    varied = build_standard_grpo_groups(
+        [
+            _ledger("episode-0", correct=True, quality=0.9),
+            _ledger("episode-1", correct=True, quality=0.5),
+            _ledger("episode-2", correct=False, quality=1.0),
+            _ledger("episode-3", correct=True, quality=0.7),
+        ],
+        members,
+    )[0]
+    assert varied["trainable"] is True
+    assert varied["valid_member_count"] == 4
+    assert varied["reward_std"] > 0
+
+    equal = build_standard_grpo_groups(
+        [_ledger(f"episode-{index}", correct=False) for index in range(4)],
+        members,
+    )[0]
+    assert equal["trainable"] is False
+    assert equal["skip_reason"] == "zero_reward_variance"
+
+
+def test_development_group_is_explicitly_prohibited_from_training() -> None:
+    members = [
+        {
+            "schema_version": "ifv-rollout-group-member-v1",
+            "prompt_group_id": "pg-frozen",
+            "case_id": "case-reward-1",
+            "episode_id": f"frozen-{index}",
+            "rollout_index": index,
+            "group_size": 2,
+            "sampling_seed": index,
+            "training_prohibited": True,
+            "training_eligible": False,
+        }
+        for index in range(2)
+    ]
+    group = build_standard_grpo_groups(
+        [_ledger("frozen-0", correct=True), _ledger("frozen-1", correct=False)],
+        members,
+    )[0]
+    assert group["trainable"] is False
+    assert group["skip_reason"] == "training_prohibited_source"
+
+
+def test_run_artifact_join_keeps_incorrect_episode_trainable() -> None:
+    artifacts = [_semantic_artifact("episode-0"), _semantic_artifact("episode-1")]
+    rows = [
+        {
+            "episode_id": "episode-0",
+            "classification_correct": True,
+            "strict_trace_audit_pass": True,
+            "fatal_engineering_error": False,
+        },
+        {
+            "episode_id": "episode-1",
+            "classification_correct": False,
+            "strict_trace_audit_pass": True,
+            "fatal_engineering_error": False,
+        },
+    ]
+    ledgers = build_ledgers_from_run_artifacts(
+        semantic_artifacts=artifacts,
+        deterministic_rows=rows,
+    )
+    assert [item["scalar_reward"] for item in ledgers] == [0.9375, 0.0]
+    assert all(item["gates"]["trainable"] for item in ledgers)
+
+
+def test_v5_profile_is_the_default_trajectory_profile() -> None:
+    root = Path(__file__).resolve().parents[1]
+    profile = load_reward_profile(root / "configs" / "rl" / "semantic-reward-v5.json")
+    assert profile["profile_id"] == "ifv-trajectory-quality-v1"
+    assert profile["weights"] == {
+        "evidence_quality": 0.5,
+        "overall_process_quality": 0.5,
+    }

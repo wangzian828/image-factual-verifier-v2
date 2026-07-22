@@ -172,7 +172,7 @@ async def _run(args: argparse.Namespace) -> Dict[str, Any]:
             if artifact is None:
                 report = audit_trace(trace_path)
                 failures = report.failures(strict_scheduler=True)
-                blind, aware, judge_audit = await judge.judge(
+                judgment, judge_audit = await judge.judge(
                     packet,
                     image_path=image_path,
                 )
@@ -180,21 +180,24 @@ async def _run(args: argparse.Namespace) -> Dict[str, Any]:
                     trace=trace,
                     trace_sha256=trace_sha,
                     packet=packet,
-                    blind=blind,
-                    aware=aware,
+                    judgment=judgment,
                     judge_audit=judge_audit,
                     strict_trace_audit_pass=not failures,
                     strict_trace_audit_failures=[asdict(item) for item in failures],
                 )
                 cache.store(cache_key, artifact)
             case_id = str(artifact.get("case_id", ""))
-            if not case_id:
+            episode_id = str(
+                artifact.get("rollout", {}).get("episode_id", "")
+            )
+            if not case_id or not episode_id:
                 raise ValueError(f"semantic artifact has no case_id: {trace_path}")
-            output_path = output_dir / f"{case_id}.semantic_reward.json"
+            output_path = output_dir / f"{episode_id}.semantic_reward.json"
             _write_json(output_path, artifact)
             rows.append(
                 {
                     "case_id": case_id,
+                    "episode_id": episode_id,
                     "artifact": str(output_path),
                     "artifact_id": artifact.get("artifact_id"),
                     "semantic_audit_pass": artifact.get("gates", {}).get("semantic_audit_pass"),
@@ -204,8 +207,9 @@ async def _run(args: argparse.Namespace) -> Dict[str, Any]:
     finally:
         await backend.aclose()
     summary = {
-        "schema_version": "ifv-semantic-reward-summary-v1",
-        "case_count": len(rows),
+        "schema_version": "ifv-semantic-reward-summary-v2",
+        "case_count": len({str(row.get("case_id", "")) for row in rows}),
+        "episode_count": len(rows),
         "passed_count": sum(
             1 for row in rows if row.get("semantic_audit_pass") is True
         ),

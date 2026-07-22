@@ -10,6 +10,7 @@ Read these active documents before changing the runtime:
 - `docs/gemini-interaction-sequence.md`
 - `docs/architecture.md`
 - `docs/runtime-release-contract.md`
+- `docs/rl-semantic-reward.md`
 
 The July 14 implementation plan is a superseded historical record. The implementation
 and contract tests win when an old research note disagrees.
@@ -119,7 +120,10 @@ but they must not enter the v4 default path.
 - `src/orchestrator/stage_runner.py`: native Interactions protocol and tool execution.
 - `src/eval/release_adapter.py`: immutable v0.3 release consumer.
 - `src/eval/run_eval.py`: rollout, post-rollout scoring, and artifacts.
+- `src/eval/score_semantic_reward.py`: one-call, gold-free Gemini trajectory audit.
 - `src/trajectory/`: policy export and process scoring.
+- `training/`: Git-imported training subproject; keep its Python environment and
+  tests independent from root runtime dependencies.
 - `scripts/audit_real_trace.py`: strict image-only trace audit.
 
 Use `STAGE_TOOLS` in `src/orchestrator/tool_registry.py` as the active tool registry.
@@ -132,6 +136,14 @@ Run focused tests while editing, then:
 python -m pytest -q
 python -m compileall -q src scripts
 git diff --check
+```
+
+For work under `training/`, also run:
+
+```powershell
+cd training
+python -m pytest -q
+python -m compileall -q ifv_training scripts
 ```
 
 Pytest and scripted trajectories are not live acceptance. Runtime acceptance requires

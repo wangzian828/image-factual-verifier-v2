@@ -109,6 +109,14 @@ After all rollouts, v4 loads gold, validates the one-to-one `case_id` join, comp
 process metrics and trajectory scores, and records the gold artifact hash. Gold is
 never copied into model inputs, predictions, or canonical Agent state.
 
+For grouped training sampling, one public case expands into several independent
+episodes. `case_id` remains the immutable release identity; `episode_id` is an
+Agent-owned attempt identity and `prompt_group_id` is the same-case sampling group.
+Each episode has its own workflow/orchestrator, state, interaction lifecycle, archive,
+runtime event stream, trace and derived seed. Content-addressed tool caches may be
+shared, but mutable Agent state may not. Gold is still loaded only after every episode
+in the run has stopped, then joined by the original `case_id`.
+
 ## Evaluation artifacts
 
 ### `predictions.jsonl`
@@ -124,6 +132,12 @@ The field set is exactly `case_id` and `verdict`; verdict is
 
 Engineering-error cases are absent from this file. The data-owned classification
 scorer treats the missing case as wrong.
+
+For multi-rollout generation, `predictions.jsonl` still contains only rollout index 0
+for each public case, so it remains scorer-compatible. `episode_predictions.jsonl`
+contains every completed episode and adds `episode_id`, `prompt_group_id`, and
+`rollout_index`; it is a training/evaluation diagnostic, not a data-pipeline scorer
+input.
 
 ### `run_results.jsonl`
 
@@ -153,6 +167,24 @@ evaluator-private gold. URL, span, snapshot, and SHA identity are data-audit
 properties, not Agent capability metrics. Off-chain material is neutral unless it
 enters the final verdict basis. These scores do not override classification or teacher
 eligibility.
+
+### Grouped rollout outputs
+
+When `--rollouts-per-case > 1`, `traces/<episode_id>.json` never overwrites another
+attempt of the same public case. The run additionally emits:
+
+```text
+rollout_groups.jsonl
+post_rollout_rewards.jsonl
+```
+
+The first file has one member record per episode with `prompt_group_id`, original
+`case_id`, `episode_id`, `rollout_index`, group size, seed and trace path. The second
+file is written only after all rollout completion and carries deterministic private-gold
+alignment (`classification_correct` and engineering/audit gates). Gemini never reads
+that second file. A later training-only step joins it with one semantic artifact per
+episode and writes `grpo_groups.jsonl`, whose members retain raw scalar rewards for
+the framework's standard within-group normalization.
 
 ### Other outputs
 

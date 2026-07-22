@@ -1,68 +1,60 @@
 # Image Factual Verifier Training
 
-Visual Fact Discrepancy Agent v4 的独立 Qwen3.5 训练与部署工程。正式学生模型是 `/gsdata/home/wza/models/Qwen3.5-9B`；旧 Qwen3-VL 只保留为诊断基线。
+`training/` 是 v4 主仓库内保留 Git 历史的独立 Python 子项目。它负责成熟框架上的
+Qwen SFT、RL 数据契约、reward 审计、checkpoint/serving 清单；不复制 v4 Agent 状态机，
+不向 Agent 提供 evaluator-private gold。
 
-本仓库负责：
-
-- 把通过审计的 teacher 轨迹转换为 provider-neutral 的阶段样本；
-- 校验图像、工具 schema、阶段归属、loss mask、split、去重与 20 例泄漏；
-- 用成熟框架搭建全参数多模态 SFT 与 Agent RL；
-- 生成 checkpoint、环境和 serving 审计清单；
-- 通过 OpenAI-compatible endpoint 接入 v4 runtime。
-
-本仓库不实现第二套 Agent 状态机，不读取 evaluator-private gold，也不把冻结 20 例用于训练。
-
-## 环境边界
-
-Serving、SFT、RL 是三套独立环境。当前 serving 使用 Python 3.11 + vLLM nightly；SFT 与 RL 使用独立的 Python 3.12 + ms-swift 4.4.2 环境，不继承历史 `qwen3vl`、`ifv-agent` 或旧训练环境。详细命令见 [gpu-13 运维文档](docs/gpu13.md)。
-
-训练样本以一次真实阶段决策为单位，而不是整条长对话：
-
-```text
-perception | planning | react | evidence_decision |
-discrepancy_decision | reflection | judgment
-```
-
-Qwen checkpoint 在 RL 更新后重新采样 on-policy 轨迹；Gemini 只作为冻结的离线教师、过程评分器和回归基线，不生成 Qwen 的 on-policy rollout。
-
-## RL 评分链
-
-Agent 仓库先从完成后的 canonical trace 生成 `ifv-semantic-reward-v1`。Gemini 的第一阶段
-不知道 Qwen 的 verdict、Claim status 和 Evidence stance；第二阶段才检查记录的 basis，
-并执行 verdict swap 与 Evidence dropout 反事实探针。
-
-本仓库只消费冻结 artifact：校验内容 hash，合并确定性门禁和可选的 rollout 后
-`classification_correct`，保留所有 reward 维度，再按 profile 组合标量。provider、工具或
-运行时 fatal error 会被 mask，不会作为策略负奖励。
+根仓库与本目录必须使用独立环境：
 
 ```powershell
-ifv-training audit-semantic-reward `
-  --input D:\runs\semantic_rewards\case_x.semantic_reward.json `
-  --strict
+# 根目录：runtime
+python -m pytest -q
 
-ifv-training reward-ledger `
-  --semantic-artifact D:\runs\semantic_rewards\case_x.semantic_reward.json `
-  --deterministic D:\runs\case_x.post_rollout.json `
-  --profile configs\rl\semantic-reward-v4.json `
-  --output D:\runs\reward_ledgers\case_x.json
-
-ifv-training export-reward `
-  --ledger D:\runs\reward_ledgers\case_x.json `
-  --framework rllm `
-  --output D:\runs\reward_records\case_x.rllm.json
+# 本目录：training
+cd training
+python -m pip install -e ".[dev]"
+python -m pytest -q
 ```
 
-`--framework verl` 生成对应的 terminal-token reward record。两个导出器只做框架边界映射，
-不复制 v4 状态机或训练循环。冻结 20 例产生的 artifact 和 ledger 仍只用于开发评估，禁止
-进入 SFT、RL 或教师数据。
+## SFT
+
+SFT 使用经过审计的阶段样本，不把整段长期对话或历史 hidden reasoning 当作训练目标。
+正式数据必须来自非冻结评测集，并经过图像、工具 schema、阶段归属、loss mask、split 和
+去重门禁。优先采用成熟的 ms-swift + DeepSpeed/FSDP；本项目不自建训练循环。
+
+## RL：标准 GRPO
+
+同一题目生成多条完全隔离的完整 episode。Qwen 在每次参数更新后重新 on-policy 采样；
+Gemini 仅作为冻结的离线评审。它对每条 episode 最多发起一次综合盲评，不生成 Qwen
+轨迹，也不读取 private gold。
+
+确定性代码在所有 rollout 结束后才按原始 `case_id` 接入 private gold：工程或 strict-audit
+失败会 mask；错误轨迹 reward 为 `0.0`；正确轨迹在 `0.5–1.0` 内由 Evidence 质量与
+总体调查过程质量细排。每条完整轨迹只有一个 scalar reward；rLLM/veRL 对同题
+`prompt_group_id` 内的 scalar rewards 执行标准 GRPO。这里不实现逐步 reward、CW-GRPO、
+turn-aware advantage 或自定义 estimator。
+
+```powershell
+# 在根仓库先得到 qwen-g4 的 rollout / semantic artifacts
+cd training
+ifv-training build-run-rewards `
+  --semantic-artifacts D:\runs\qwen-g4\semantic_rewards `
+  --deterministic D:\runs\qwen-g4\post_rollout_rewards.jsonl `
+  --rollout-members D:\runs\qwen-g4\rollout_groups.jsonl `
+  --profile configs\rl\semantic-reward-v5.json `
+  --ledger-output D:\runs\qwen-g4\reward_ledgers.jsonl `
+  --group-output D:\runs\qwen-g4\grpo_groups.jsonl
+```
+
+`grpo_groups.jsonl` 只携带每条完整 episode 的 raw scalar reward、policy step IDs 和
+mask/方差诊断；框架负责 advantage。所有 `development_subset`（包括冻结 20 例）和其
+派生 trace、artifact、ledger 都会被标记为 `training_prohibited`，不得进入 SFT、RL、
+教师数据或合成数据。
 
 ## 本地门禁
 
 ```powershell
-python -m pip install -e ".[dev]"
 python -m pytest -q
 python -m compileall -q ifv_training scripts
 git diff --check
 ```
-
-服务器源码只通过 GitHub fast-forward；模型、数据和运行产物只写 `/gsdata`。

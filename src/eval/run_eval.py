@@ -7,6 +7,7 @@ import json
 import os
 import statistics
 import subprocess
+from dataclasses import asdict
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
@@ -31,9 +32,11 @@ from src.trajectory.exporter import export_policy_examples
 from src.trajectory.perception_exporter import export_perception_example
 from src.trajectory.reference_chain import score_reference_chain_trace
 from src.trajectory.scoring import score_process_trace
+from scripts.audit_real_trace import audit_trace
 
 
-RUN_SCHEMA_VERSION = "ifv-eval-run-v1"
+RUN_SCHEMA_VERSION = "ifv-eval-run-v2"
+ROLLOUT_MEMBER_SCHEMA_VERSION = "ifv-rollout-group-member-v1"
 
 
 def _parse_args() -> argparse.Namespace:
@@ -92,7 +95,19 @@ def _parse_args() -> argparse.Namespace:
         "--concurrency",
         type=int,
         default=1,
-        help="Concurrent image verifications.",
+        help="Concurrent complete rollout episodes.",
+    )
+    parser.add_argument(
+        "--rollouts-per-case",
+        type=int,
+        default=1,
+        help="Independent complete episodes per case (recommended for RL: 4).",
+    )
+    parser.add_argument(
+        "--base-sampling-seed",
+        type=int,
+        default=1729,
+        help="Base seed for reproducible per-episode Qwen sampling seeds.",
     )
     parser.add_argument(
         "--timeout",
@@ -352,6 +367,65 @@ def _file_descriptor(path: Path | None) -> Dict[str, Any] | None:
     return {"path": str(path.resolve()), "sha256": _sha256(path)}
 
 
+def _rollout_specs(
+    samples: List[Dict[str, Any]],
+    runtime_cases: List[Any],
+    *,
+    rollouts_per_case: int,
+    base_sampling_seed: int,
+    policy_revision: str,
+    model: str,
+) -> List[Dict[str, Any]]:
+    """Expand public cases into isolated, reproducible rollout episodes."""
+
+    if rollouts_per_case < 1:
+        raise ValueError("--rollouts-per-case must be at least 1")
+    specs: List[Dict[str, Any]] = []
+    for sample, runtime_case in zip(samples, runtime_cases):
+        case_id = str(runtime_case.case_id)
+        group_material = {
+            "case_id": case_id,
+            "policy_revision": policy_revision,
+            "model": model,
+            "base_sampling_seed": int(base_sampling_seed),
+            "group_size": rollouts_per_case,
+        }
+        prompt_group_id = "pg-" + hashlib.sha256(
+            json.dumps(
+                group_material,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()[:24]
+        for rollout_index in range(rollouts_per_case):
+            seed_material = (
+                f"{base_sampling_seed}:{case_id}:{rollout_index}"
+            ).encode("utf-8")
+            sampling_seed = int.from_bytes(
+                hashlib.sha256(seed_material).digest()[:4], "big"
+            ) & 0x7FFFFFFF
+            episode_id = case_id
+            if rollouts_per_case > 1:
+                episode_id = (
+                    f"{case_id[:150]}--{prompt_group_id[3:11]}"
+                    f"--r{rollout_index:03d}"
+                )
+            specs.append(
+                {
+                    "sample": sample,
+                    "runtime_case": runtime_case,
+                    "case_id": case_id,
+                    "prompt_group_id": prompt_group_id,
+                    "episode_id": episode_id,
+                    "rollout_index": rollout_index,
+                    "group_size": rollouts_per_case,
+                    "sampling_seed": sampling_seed,
+                }
+            )
+    return specs
+
+
 async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
     benchmark_path = Path(args.benchmark).expanduser().resolve()
     release = load_runtime_release(benchmark_path)
@@ -373,6 +447,12 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
     for runtime_case in runtime_cases:
         verify_case_image(runtime_case, runtime_case.image_path)
 
+    runtime_commit = _git_commit()
+    rollouts_per_case = _positive_int(
+        getattr(args, "rollouts_per_case", 1),
+        name="rollouts per case",
+    )
+    base_sampling_seed = int(getattr(args, "base_sampling_seed", 1729))
     config = WorkflowConfig(
         profile_id=getattr(args, "profile", None),
         provider=getattr(args, "provider", None),
@@ -384,6 +464,14 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
         timeout=args.timeout,
         save_traces=True,
         decision_policy_version=AGENT_DECISION_POLICY_VERSION,
+    )
+    rollout_specs = _rollout_specs(
+        samples,
+        runtime_cases,
+        rollouts_per_case=rollouts_per_case,
+        base_sampling_seed=base_sampling_seed,
+        policy_revision=runtime_commit,
+        model=str(config.model_name),
     )
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -466,11 +554,12 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
         "status": "running",
         "started_at": _now_iso(),
         "completed_at": None,
-        "git_commit": _git_commit(),
+        "git_commit": runtime_commit,
         "benchmark": {
             "path": str(benchmark_path),
             "sha256": _sha256(benchmark_path),
             "sample_count": len(samples),
+            "episode_count": len(rollout_specs),
             "limit": args.limit,
             "runtime_release": True,
             "release_id": release.release_id,
@@ -512,6 +601,11 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
             "stage_thinking_levels": stage_thinking_levels,
             "qwen_stage_enable_thinking": qwen_stage_thinking,
             "concurrency": max(1, args.concurrency),
+            "rollouts_per_case": rollouts_per_case,
+            "base_sampling_seed": base_sampling_seed,
+            "sampling_seed_derivation": (
+                "sha256(base_seed:case_id:rollout_index)-31bit-v1"
+            ),
         },
         "source_access_policy": {
             "active": bool(explicit_policy and explicit_policy.active),
@@ -520,12 +614,15 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
         },
         "artifacts": {
             "predictions": "predictions.jsonl",
+            "episode_predictions": "episode_predictions.jsonl",
             "run_results": "run_results.jsonl",
             "process_metrics": "process_metrics.jsonl",
             "reference_chain_metrics": "reference_chain_metrics.jsonl",
             "trajectory_scores": "trajectory_scores.jsonl",
             "policy_trajectories": "policy_trajectories.jsonl",
             "perception_trajectories": "perception_trajectories.jsonl",
+            "rollout_groups": "rollout_groups.jsonl",
+            "post_rollout_rewards": "post_rollout_rewards.jsonl",
             "summary": "summary.json",
             "traces": "traces/",
         },
@@ -535,12 +632,15 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
     config.output_dir = str(trace_dir)
     try:
         workflow = VerificationWorkflow(config)
-        image_paths = [str(sample["image_path"]) for sample in samples]
-        image_ids = [case.case_id for case in runtime_cases]
+        image_paths = [
+            str(spec["sample"]["image_path"]) for spec in rollout_specs
+        ]
+        image_ids = [str(spec["episode_id"]) for spec in rollout_specs]
         results = await workflow.run_batch(
             image_paths=image_paths,
             image_ids=image_ids,
-            runtime_cases=runtime_cases,
+            runtime_cases=[spec["runtime_case"] for spec in rollout_specs],
+            sampling_seeds=[spec["sampling_seed"] for spec in rollout_specs],
             concurrency=max(1, args.concurrency),
         )
 
@@ -564,18 +664,47 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
         )
 
         predictions: List[Dict[str, Any]] = []
+        episode_predictions: List[Dict[str, Any]] = []
         run_results: List[Dict[str, Any]] = []
         process_metrics: List[Dict[str, Any]] = []
         reference_chain_metrics: List[Dict[str, Any]] = []
         trajectory_scores: List[Dict[str, Any]] = []
         policy_trajectories: List[Dict[str, Any]] = []
         perception_trajectories: List[Dict[str, Any]] = []
-        for sample, result in zip(samples, results):
-            identity = str(sample.get("case_id") or "")
+        rollout_members: List[Dict[str, Any]] = []
+        post_rollout_rewards: List[Dict[str, Any]] = []
+        for spec, result in zip(rollout_specs, results):
+            sample = spec["sample"]
+            identity = str(spec["case_id"])
+            episode_id = str(spec["episode_id"])
             record = _run_result_record(sample, result)
-            trace_path = trace_dir / f"{identity}.json"
+            record.update(
+                {
+                    "prompt_group_id": spec["prompt_group_id"],
+                    "episode_id": episode_id,
+                    "rollout_index": spec["rollout_index"],
+                    "sampling_seed": spec["sampling_seed"],
+                }
+            )
+            trace_path = trace_dir / f"{episode_id}.json"
+            member = {
+                "schema_version": ROLLOUT_MEMBER_SCHEMA_VERSION,
+                "prompt_group_id": spec["prompt_group_id"],
+                "case_id": identity,
+                "episode_id": episode_id,
+                "rollout_index": spec["rollout_index"],
+                "group_size": spec["group_size"],
+                "sampling_seed": spec["sampling_seed"],
+                "policy_revision": manifest["git_commit"],
+                "trace_path": None,
+                "training_prohibited": (
+                    release.release_stage == "development_subset"
+                ),
+                "training_eligible": False,
+            }
             if trace_path.exists():
                 record["trace_path"] = trace_path.relative_to(run_dir).as_posix()
+                member["trace_path"] = record["trace_path"]
                 trace = json.loads(trace_path.read_text(encoding="utf-8"))
                 trace_state = trace.get("state")
                 if isinstance(trace_state, dict) and isinstance(
@@ -606,9 +735,20 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
                         ),
                     },
                 )
+                metrics["episode_id"] = episode_id
+                metrics["prompt_group_id"] = spec["prompt_group_id"]
+                teacher_score["episode_id"] = episode_id
+                teacher_score["prompt_group_id"] = spec["prompt_group_id"]
+                strict_failures = audit_trace(trace_path).failures(
+                    strict_scheduler=True
+                )
+                strict_trace_audit_pass = not strict_failures
+                metrics["strict_trace_audit_pass"] = strict_trace_audit_pass
+                metrics["strict_trace_audit_failures"] = [
+                    asdict(item) for item in strict_failures
+                ]
                 process_metrics.append(metrics)
-                reference_chain_metrics.append(
-                    await score_reference_chain_trace(
+                reference_score = await score_reference_chain_trace(
                         trace,
                         evaluation_gold_index[identity],
                         score_metadata={
@@ -620,7 +760,9 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
                             ),
                         },
                     )
-                )
+                reference_score["episode_id"] = episode_id
+                reference_score["prompt_group_id"] = spec["prompt_group_id"]
+                reference_chain_metrics.append(reference_score)
                 trajectory_scores.append(teacher_score)
                 try:
                     exported_policy = export_policy_examples(
@@ -657,6 +799,28 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
                 policy_trajectories.extend(
                     item.model_dump(mode="json")
                     for item in exported_policy
+                )
+                member["training_eligible"] = bool(
+                    strict_trace_audit_pass
+                    and not member["training_prohibited"]
+                )
+                post_rollout_rewards.append(
+                    {
+                        "schema_version": "ifv-post-rollout-deterministic-v1",
+                        "prompt_group_id": spec["prompt_group_id"],
+                        "case_id": identity,
+                        "episode_id": episode_id,
+                        "classification_correct": bool(
+                            metrics.get("result_correct", False)
+                        ),
+                        "fatal_engineering_error": bool(
+                            metrics.get("engineering_error", False)
+                        ),
+                        "strict_trace_audit_pass": bool(
+                            strict_trace_audit_pass
+                        ),
+                        "training_prohibited": member["training_prohibited"],
+                    }
                 )
             else:
                 process_metrics.append(
@@ -702,14 +866,43 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
                         "total": 0.0,
                     }
                 )
+                post_rollout_rewards.append(
+                    {
+                        "schema_version": "ifv-post-rollout-deterministic-v1",
+                        "prompt_group_id": spec["prompt_group_id"],
+                        "case_id": identity,
+                        "episode_id": episode_id,
+                        "classification_correct": False,
+                        "fatal_engineering_error": True,
+                        "strict_trace_audit_pass": False,
+                        "training_prohibited": member["training_prohibited"],
+                    }
+                )
             run_results.append(record)
+            rollout_members.append(member)
             prediction = _classification_prediction(sample, result)
             if prediction is not None:
-                predictions.append(prediction)
+                episode_predictions.append(
+                    {
+                        **prediction,
+                        "episode_id": episode_id,
+                        "prompt_group_id": spec["prompt_group_id"],
+                        "rollout_index": spec["rollout_index"],
+                    }
+                )
+                # predictions.jsonl stays consumable by the data-owned
+                # classification scorer: one row per public case. Multi-rollout
+                # analysis belongs in episode_predictions.jsonl.
+                if spec["rollout_index"] == 0:
+                    predictions.append(prediction)
 
         summary = _compute_summary(run_results)
         summary["run_id"] = manifest["run_id"]
         _write_jsonl(run_dir / "predictions.jsonl", predictions)
+        _write_jsonl(
+            run_dir / "episode_predictions.jsonl",
+            episode_predictions,
+        )
         _write_jsonl(run_dir / "run_results.jsonl", run_results)
         _write_jsonl(run_dir / "process_metrics.jsonl", process_metrics)
         _write_jsonl(
@@ -722,6 +915,11 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
             run_dir / "perception_trajectories.jsonl",
             perception_trajectories,
         )
+        _write_jsonl(run_dir / "rollout_groups.jsonl", rollout_members)
+        _write_jsonl(
+            run_dir / "post_rollout_rewards.jsonl",
+            post_rollout_rewards,
+        )
         _write_json(run_dir / "summary.json", summary)
 
         manifest["status"] = (
@@ -729,7 +927,8 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
         )
         manifest["completed_at"] = _now_iso()
         manifest["result"] = {
-            "num_samples": summary["num_samples"],
+            "num_samples": len(samples),
+            "num_episodes": summary["num_samples"],
             "num_errors": summary["num_errors"],
         }
         _write_json(manifest_path, manifest)
