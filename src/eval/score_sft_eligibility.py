@@ -105,6 +105,10 @@ async def _run(args: argparse.Namespace) -> Dict[str, Any]:
         raise RuntimeError(
             "private gold may be loaded only after the rollout run is completed"
         )
+    source_policy = manifest.get("source_access_policy")
+    source_policy_active = bool(
+        isinstance(source_policy, Mapping) and source_policy.get("active") is True
+    )
     trace_paths = sorted((run_dir / "traces").glob("*.json"))
     if not trace_paths:
         raise FileNotFoundError(f"no canonical traces under {run_dir / 'traces'}")
@@ -159,7 +163,10 @@ async def _run(args: argparse.Namespace) -> Dict[str, Any]:
                 image_path=image_path,
             )
             trace_sha = sha256_file(trace_path)
-            report = audit_trace(trace_path)
+            report = audit_trace(
+                trace_path,
+                enforce_source_access_policy=source_policy_active,
+            )
             failures = report.failures(strict_scheduler=True)
             engineering_valid = bool(
                 str(trace.get("termination", "")) == "success"

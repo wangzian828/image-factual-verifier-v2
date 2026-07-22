@@ -470,16 +470,21 @@ def _policy_rejected_step_for_path(
     return None
 
 
-def _audit_leaks(trace: Mapping[str, Any], report: TraceReport) -> None:
+def _audit_leaks(
+    trace: Mapping[str, Any],
+    report: TraceReport,
+    *,
+    enforce_source_access_policy: bool,
+) -> None:
     seen: set[tuple[str, str]] = set()
     url_count = 0
     query_count = 0
     rejected_query_count = 0
     for key, raw_value, path in _iter_named_values(trace):
         query_key = _looks_like_query_key(key)
-        if _looks_like_url_key(key):
+        if enforce_source_access_policy and _looks_like_url_key(key):
             domain = _fact_check_domain(raw_value) or _fact_check_query_domain(raw_value)
-        elif not query_key:
+        elif enforce_source_access_policy and not query_key:
             domain = _fact_check_embedded_url(raw_value)
         else:
             domain = ""
@@ -494,7 +499,7 @@ def _audit_leaks(trace: Mapping[str, Any], report: TraceReport) -> None:
                     f"known fact-check domain {domain!r} appears in URL-bearing trace data",
                     location=path,
                 )
-        if _looks_like_url_key(key) and (
+        if enforce_source_access_policy and _looks_like_url_key(key) and (
             url_query_leak := _fact_check_url_query(raw_value)
         ):
             signature = ("query", path)
@@ -518,7 +523,11 @@ def _audit_leaks(trace: Mapping[str, Any], report: TraceReport) -> None:
                         location=path,
                     )
         if query_key:
-            query_domain = _fact_check_query_reference(raw_value)
+            query_domain = (
+                _fact_check_query_reference(raw_value)
+                if enforce_source_access_policy
+                else ""
+            )
             oriented = query_targets_fact_check_answer(raw_value)
             if query_domain or oriented:
                 signature = ("query", path)
@@ -3069,7 +3078,11 @@ def _audit_image_only_trace(
     _audit_image_only_interaction_chains(steps, report)
 
 
-def audit_trace(path: Path) -> TraceReport:
+def audit_trace(
+    path: Path,
+    *,
+    enforce_source_access_policy: bool = True,
+) -> TraceReport:
     report = TraceReport(path=str(path))
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -3116,7 +3129,11 @@ def audit_trace(path: Path) -> TraceReport:
         _audit_discrepancy_trace(payload, state, steps, report)
     else:
         _audit_image_only_trace(payload, state, steps, report)
-    _audit_leaks(payload, report)
+    _audit_leaks(
+        payload,
+        report,
+        enforce_source_access_policy=enforce_source_access_policy,
+    )
     _audit_rejections(steps, report)
     return report
 

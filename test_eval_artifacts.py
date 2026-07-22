@@ -448,7 +448,9 @@ def test_scoring_release_keeps_gold_post_rollout_and_requires_structured_gate(
     monkeypatch.setattr(
         run_eval,
         "audit_trace",
-        lambda _path: SimpleNamespace(failures=lambda **_kwargs: []),
+        lambda _path, **_options: SimpleNamespace(
+            failures=lambda **_kwargs: []
+        ),
     )
     monkeypatch.setattr(run_eval, "export_policy_examples", lambda *args, **kwargs: [])
 

@@ -132,6 +132,15 @@ async def _run(args: argparse.Namespace) -> Dict[str, Any]:
     cache = SemanticRewardCache(
         (args.cache_dir or output_dir / "cache").expanduser().resolve()
     )
+    source_policy_active = True
+    if args.run_dir:
+        run_manifest = _load_json(
+            args.run_dir.expanduser().resolve() / "run_manifest.json"
+        )
+        source_policy = run_manifest.get("source_access_policy")
+        source_policy_active = bool(
+            isinstance(source_policy, Mapping) and source_policy.get("active") is True
+        )
     backend = APIBackend(
         provider=args.provider,
         model_name=args.model,
@@ -170,7 +179,10 @@ async def _run(args: argparse.Namespace) -> Dict[str, Any]:
             artifact = None if args.force else cache.load(cache_key)
             from_cache = artifact is not None
             if artifact is None:
-                report = audit_trace(trace_path)
+                report = audit_trace(
+                    trace_path,
+                    enforce_source_access_policy=source_policy_active,
+                )
                 failures = report.failures(strict_scheduler=True)
                 judgment, judge_audit = await judge.judge(
                     packet,

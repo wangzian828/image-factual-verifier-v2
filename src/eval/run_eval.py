@@ -826,7 +826,12 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
                 metrics["prompt_group_id"] = spec["prompt_group_id"]
                 teacher_score["episode_id"] = episode_id
                 teacher_score["prompt_group_id"] = spec["prompt_group_id"]
-                strict_failures = audit_trace(trace_path).failures(
+                strict_failures = audit_trace(
+                    trace_path,
+                    enforce_source_access_policy=bool(
+                        explicit_policy and explicit_policy.active
+                    ),
+                ).failures(
                     strict_scheduler=True
                 )
                 strict_trace_audit_pass = not strict_failures

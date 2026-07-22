@@ -902,6 +902,37 @@ def test_policy_rejected_query_is_warning_but_canonical_query_is_hard(
     }
 
 
+def test_fact_check_source_domain_gate_requires_active_source_policy(
+    tmp_path: Path,
+) -> None:
+    trace_path = _scripted_trace(tmp_path)
+    trace = json.loads(trace_path.read_text(encoding="utf-8"))
+    trace["state"]["investigation_state"]["discoveries"].append(
+        {
+            "discovery_id": "discovery-fact-check-source",
+            "task_id": trace["state"]["investigation_state"]["tasks"][0][
+                "task_id"
+            ],
+            "candidate_url": "https://www.politifact.com/factchecks/example/",
+        }
+    )
+    trace_path.write_text(
+        json.dumps(trace, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    active = audit_trace(trace_path, enforce_source_access_policy=True)
+    inactive = audit_trace(trace_path, enforce_source_access_policy=False)
+
+    assert "FACT_CHECK_URL_LEAK" in {
+        item.code for item in active.failures(strict_scheduler=True)
+    }
+    assert "FACT_CHECK_URL_LEAK" not in {
+        item.code for item in inactive.failures(strict_scheduler=True)
+    }
+    assert inactive.stats["fact_check_url_leaks"] == 0
+
+
 def test_strict_audit_rejects_post_determination_action(
     tmp_path: Path,
 ) -> None:
