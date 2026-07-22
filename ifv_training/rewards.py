@@ -78,6 +78,23 @@ def validate_semantic_reward_artifact(
         errors.append("reward_input is required")
     elif len(str(reward_input.get("sha256", ""))) != 64:
         errors.append("reward_input.sha256 is invalid")
+    rollout = artifact.get("rollout")
+    if not isinstance(rollout, Mapping):
+        errors.append("rollout is required")
+    else:
+        if not str(rollout.get("episode_id", "")).strip():
+            errors.append("rollout.episode_id is required")
+        step_ids = rollout.get("policy_step_ids")
+        if not isinstance(step_ids, list) or any(
+            not str(value).strip() for value in step_ids
+        ):
+            errors.append("rollout.policy_step_ids must be a list of IDs")
+        terminal = str(rollout.get("terminal_policy_step_id", ""))
+        if isinstance(step_ids, list) and step_ids:
+            if terminal != str(step_ids[-1]):
+                errors.append("rollout.terminal_policy_step_id is inconsistent")
+        elif terminal:
+            errors.append("rollout.terminal_policy_step_id requires a policy step")
 
     metrics = artifact.get("metrics")
     if not isinstance(metrics, Mapping):
@@ -232,6 +249,7 @@ def compose_reward_ledger(
     weights = _mapping(profile.get("weights"), location="profile.weights")
     metrics = _mapping(artifact.get("metrics"), location="artifact.metrics")
     gates = _mapping(artifact.get("gates"), location="artifact.gates")
+    rollout = _mapping(artifact.get("rollout"), location="artifact.rollout")
 
     classification_correct = _optional_bool(
         deterministic.get("classification_correct"),
@@ -285,8 +303,12 @@ def compose_reward_ledger(
         scalar_reward_value = round(max(0.0, min(1.0, scalar_reward)), 8)
 
     case_id = str(artifact.get("case_id", ""))
-    episode_id = str(deterministic.get("episode_id") or case_id)
-    step_ids = deterministic.get("step_ids", [])
+    episode_id = str(
+        deterministic.get("episode_id") or rollout.get("episode_id") or case_id
+    )
+    step_ids = deterministic.get("step_ids")
+    if step_ids is None:
+        step_ids = rollout.get("policy_step_ids", [])
     if not isinstance(step_ids, list):
         raise ValueError("deterministic.step_ids must be a list")
     ledger_core = {
@@ -309,11 +331,13 @@ def compose_reward_ledger(
             "strict_trace_audit_pass": strict_trace_audit,
             "semantic_audit_pass": bool(gates.get("semantic_audit_pass")),
             "classification_correct": classification_correct,
-            "trainable": not fatal_mask,
+            "has_policy_steps": bool(step_ids),
+            "trainable": bool(not fatal_mask and step_ids),
             "eligible_for_positive_buffer": bool(
                 not fatal_mask
+                and step_ids
                 and gates.get("semantic_audit_pass")
-                and classification_correct is not False
+                and classification_correct is True
             ),
         },
         "fatal_mask": {
@@ -357,7 +381,8 @@ def validate_reward_ledger(ledger: Mapping[str, Any]) -> dict[str, Any]:
     if ledger.get("schema_version") != REWARD_LEDGER_SCHEMA_VERSION:
         errors.append("unsupported reward ledger schema_version")
     scalar = ledger.get("scalar_reward")
-    masked = bool(_mapping(ledger.get("fatal_mask"), location="fatal_mask").get("masked"))
+    fatal_mask = _mapping(ledger.get("fatal_mask"), location="fatal_mask")
+    masked = bool(fatal_mask.get("masked"))
     if masked and scalar is not None:
         errors.append("fatal-masked ledger must have scalar_reward=null")
     if not masked:
@@ -393,15 +418,20 @@ def export_framework_reward(
     if not audit["passed"]:
         raise ValueError("invalid reward ledger: " + "; ".join(audit["errors"]))
     framework = framework.casefold()
-    masked = bool(_mapping(ledger.get("fatal_mask"), location="fatal_mask").get("masked"))
+    fatal_mask = _mapping(ledger.get("fatal_mask"), location="fatal_mask")
+    masked = bool(fatal_mask.get("masked"))
     reward = ledger.get("scalar_reward")
     step_ids = [str(value) for value in ledger.get("step_ids", [])]
     terminal_step_id = step_ids[-1] if step_ids else ""
+    skip_update = masked or not step_ids
+    mask_reason = str(fatal_mask.get("reason", ""))
+    if not mask_reason and not step_ids:
+        mask_reason = "no_trainable_policy_steps"
     common = {
         "episode_id": ledger.get("episode_id"),
         "reward": reward,
-        "skip_update": masked,
-        "mask_reason": _mapping(ledger.get("fatal_mask"), location="fatal_mask").get("reason"),
+        "skip_update": skip_update,
+        "mask_reason": mask_reason,
         "ledger_id": ledger.get("ledger_id"),
         "components": ledger.get("components"),
     }

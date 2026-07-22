@@ -30,6 +30,11 @@ def _semantic_artifact() -> dict:
             "sha256": "b" * 64,
             "image": {"image_sha256": "c" * 64, "available_to_judge": True},
         },
+        "rollout": {
+            "episode_id": "case-reward-1",
+            "policy_step_ids": ["case-reward-1:judgment:1"],
+            "terminal_policy_step_id": "case-reward-1:judgment:1",
+        },
         "judge": {
             "provider": "gemini",
             "model": "frozen-judge",
@@ -111,6 +116,7 @@ def test_reward_ledger_preserves_dimensions_and_masks_fatal_rollouts() -> None:
     )
     assert ledger["schema_version"] == REWARD_LEDGER_SCHEMA_VERSION
     assert ledger["gates"]["trainable"] is True
+    assert ledger["gates"]["eligible_for_positive_buffer"] is True
     assert ledger["scalar_reward"] is not None
     assert ledger["teacher_usage"]["call_count"] == 2
     assert validate_reward_ledger(ledger)["passed"] is True
@@ -122,6 +128,13 @@ def test_reward_ledger_preserves_dimensions_and_masks_fatal_rollouts() -> None:
     assert masked["fatal_mask"]["masked"] is True
     assert masked["scalar_reward"] is None
     assert validate_reward_ledger(masked)["passed"] is True
+
+
+def test_missing_post_rollout_correctness_never_enters_positive_buffer() -> None:
+    ledger = compose_reward_ledger(_semantic_artifact())
+    assert ledger["gates"]["has_policy_steps"] is True
+    assert ledger["gates"]["trainable"] is True
+    assert ledger["gates"]["eligible_for_positive_buffer"] is False
 
 
 def test_rllm_and_verl_exports_use_terminal_reward_and_respect_mask() -> None:
