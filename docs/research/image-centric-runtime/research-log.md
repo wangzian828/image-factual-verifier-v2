@@ -192,3 +192,17 @@
 - Local StageRunner, reducer, audit, compile, and full-test gates are the next
   prerequisite. Then only this failed case is rerun on the new commit; a clean
   single-case audit is required before restarting full20 from a new directory.
+
+## 2026-07-22 — Decision-boundary case regression accepted
+
+- `qwen35-case17-decision-boundary-b5b6f1d` completed with `termination=success`,
+  `num_errors=0`, predicted `fake`, 24 investigation actions, and 59 model calls.
+- Strict scheduler audit passed with zero failures and zero
+  scheduler/protocol/route-control rejection. The trace contains two accepted
+  Decision checkpoints and ten explicit bounded ReAct fallback warnings; no
+  provider or runtime exception escaped the controlled lifecycle.
+- The new no-op Decision boundary therefore handles the original empty
+  `material_discrepancy.statement` failure without weakening any Evidence,
+  ownership, duplicate, or binary-verdict gate. Because protocol rejections are
+  present, scorer/exporter correctly excludes this trace from preferred training
+  data. A fresh full20 run is now allowed.
