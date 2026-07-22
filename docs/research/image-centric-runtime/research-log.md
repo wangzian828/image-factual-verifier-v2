@@ -166,5 +166,8 @@
 - Strict audit accepts the boundary only through explicit rejected request IDs and
   reports it as a warning. Scoring and policy export still exclude every episode
   containing protocol rejection, so this fallback cannot become preferred SFT data.
-  Local Qwen and Gemini lifecycle tests, reducer tests, and strict-audit tests pass;
-  the failed case is the next and only live rerun before a fresh full20 directory.
+  The same case rerun on `fa05685` completed with `termination=success`,
+  `num_errors=0`, 24 investigation actions, 36 LLM calls, and strict audit passed
+  with zero scheduler/protocol/route-control rejection. This run did not need the
+  fallback: it reached normal `hard_budget_exhausted` binary Judgment after the
+  former repeated-route segment, confirming the old engineering error is gone.
