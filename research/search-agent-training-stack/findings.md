@@ -51,6 +51,15 @@ and trace persistence.
   auditable runtime already exists.
 - IFV's online policy calls are text-only. Perception and image-comparison model calls
   belong to a frozen environment endpoint, even when both endpoints use Qwen.
+- Search-R1, ReCall, DeepResearcher, rLLM SearchReward, and WebAgent-R1 all rely
+  primarily on terminal outcome or environment-success rewards. Released code does
+  not establish a mature generic per-search-step semantic reward.
+- R-Search provides the closest useful process precedent: the policy submits selected
+  raw Evidence, a frozen verifier answers using only that Evidence, and a deterministic
+  comparator checks the verifier answer against gold.
+- Current rLLM/veRL transforms broadcast `trajectory.reward` across trainable action
+  tokens. IFV therefore needs an episode/trajectory join; a terminal-step JSON record
+  alone is not a trainer integration.
 
 ## Lessons and Constraints
 
@@ -65,6 +74,10 @@ and trace persistence.
 - Do not claim that four A100-40GB GPUs reproduce public 8B search-RL recipes.
 - Do not start with live-web RL or plain sparse GRPO on the current small dataset.
 - Do not force the independent IFV stage prompts into an append-only chat transcript.
+- Do not let the reward judge see Evidence outside the Agent-selected verdict basis.
+- Do not score ImageClaim status agreement until visual-observation and world-fact
+  semantics are separated.
+- Do not add per-step cost or search-count shaping before ranking calibration.
 
 ## Open Questions
 
@@ -76,6 +89,8 @@ and trace persistence.
   or must the first RL optimizer smoke use a smaller checkpoint?
 - Which initial estimator is most stable for the available rollout group size:
   RLOO, REINFORCE baseline, or DAPO without group-variance normalization?
+- Does selected-basis recoverability correlate with human ordering on fixed-policy
+  K-sample groups, or does it only reproduce outcome correctness?
 
 ## Optimization Trajectory
 
