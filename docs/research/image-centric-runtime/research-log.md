@@ -1,5 +1,18 @@
 # Image-Centric Runtime Research Log
 
+## 2026-07-22 — unlisted fact-check result regression accepted
+
+- `qwen35-case4c-sourcepolicy-b2284a9` completed with zero engineering errors,
+  23 investigation actions, and a correct evidence-determined `fake` verdict.
+  The decisive high-Claim chain used source metadata to distinguish a routine
+  utility manhole scene from the disaster account communicated by the image.
+- Strict audit passed with zero URL/query leaks and zero scheduler, protocol, or
+  route-control rejection. Four fact-check-oriented Planning proposals were
+  rejected before atomic commit and execution; they remain correction warnings
+  rather than canonical queries.
+- This validates the provider-result SourceAccessPolicy boundary. Commit
+  `b2284a9` is frozen for the next fresh, concurrency-1 full-20 evaluation run.
+
 ## 2026-07-22 — provider-result source-policy boundary
 
 - The first frozen batch on `7e62ab0` completed six cases with passing strict
