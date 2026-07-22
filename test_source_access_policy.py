@@ -191,6 +191,54 @@ def test_fact_check_subdomain_scope_does_not_block_parent_news_domain() -> None:
     assert policy.allows("https://www.afp.com/primary-report")
 
 
+def test_active_evaluation_policy_blocks_unlisted_known_fact_check_source() -> None:
+    policy = benchmark_source_access_policy(
+        ["https://seed.example/hidden-benchmark-answer"]
+    )
+
+    assert not policy.allows("https://www.politifact.com/factchecks/example/")
+    assert policy.blocked_query_reference("PolitiFact article about the event")
+    assert policy.blocked_content_reference("PolitiFact reviewed this claim")
+    assert policy.allows("https://independent.example/primary-report")
+
+
+def test_text_search_filters_unlisted_known_fact_check_result() -> None:
+    class MixedSearch:
+        def search(self, query: str, **_kwargs):
+            return {
+                "query": query,
+                "results": [
+                    {
+                        "title": "PolitiFact review",
+                        "url": "https://www.politifact.com/factchecks/example/",
+                        "snippet": "A ready-made verdict.",
+                    },
+                    {
+                        "title": "Independent primary report",
+                        "url": "https://independent.example/primary",
+                        "snippet": "The underlying event record.",
+                    },
+                ],
+                "answer_box": {"answer": "ready-made verdict"},
+                "knowledge_graph": None,
+            }
+
+    policy = benchmark_source_access_policy(
+        ["https://seed.example/hidden-benchmark-answer"]
+    )
+    tool = TextSearchTool(client=MixedSearch())
+    tool.set_source_access_policy(policy)
+
+    result = tool.search("underlying event record")
+
+    response = result["queries"][0]
+    assert [item["url"] for item in response["results"]] == [
+        "https://independent.example/primary"
+    ]
+    assert response["policy_filtered_count"] == 1
+    assert response["answer_box"] is None
+
+
 def test_text_search_filters_results_and_removes_aggregates() -> None:
     tool = TextSearchTool(client=SearchClient())
     tool.set_source_access_policy(_policy())

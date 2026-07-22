@@ -1,5 +1,22 @@
 # Image-Centric Runtime Research Log
 
+## 2026-07-22 — provider-result source-policy boundary
+
+- The first frozen batch on `7e62ab0` completed six cases with passing strict
+  audits, then stopped at case `case_4c91d7d82956386e`. Serper returned a
+  PolitiFact candidate that was not one of the release's exact excluded URLs;
+  the runtime policy therefore allowed it into Discovery, and a later visit made
+  the known fact-check domain visible in Evidence and policy context. The strict
+  audit correctly reported 18 hard URL leaks. The batch was stopped before the
+  next case performed a model call.
+- The generic boundary now blocks known fact-check domain markers whenever an
+  evaluation SourceAccessPolicy is active, including provider rows and query or
+  content references. It filters results before workspace insertion and leaves
+  query text and fact semantics untouched. New regressions cover an unlisted
+  PolitiFact result; local gates pass (`485 passed`).
+- The next step is a single rerun of `case_4c91d7d82956386e`, followed by a fresh
+  full-20 launch only after strict audit passes.
+
 ## 2026-07-22 — Planning source-policy regression accepted
 
 - `qwen35-monarch-planning-policy-7e21884-r1` completed with zero engineering

@@ -31,7 +31,11 @@ without editing query content. `suggested_tools` carries additional capabilities
 Before the reducer commits any Claim, Hypothesis, or Task, the complete Planning
 object is checked against the active SourceAccessPolicy. A blocked query causes a
 bounded `planning_revision`; the runtime neither rewrites the query nor commits the
-safe-looking siblings from that rejected object.
+safe-looking siblings from that rejected object. The same active policy filters
+provider result rows before their titles, snippets, aggregates, or URLs become
+Discovery or provider-visible context. Known fact-check domains are excluded at
+this retrieval boundary for active evaluation policies; the filter does not rewrite
+queries or decide Evidence semantics.
 
 Each ImageClaim states the underlying real-world proposition conveyed to the
 viewer. It does not replace that proposition with the easier meta-claim that visible

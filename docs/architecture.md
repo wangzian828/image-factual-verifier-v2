@@ -84,7 +84,11 @@ context.
 Planned queries must also pass the active SourceAccessPolicy before the Planning
 object is atomically committed. The runtime rejects the whole object for correction;
 it does not rewrite or partially install the model's query list. The same policy is
-rechecked immediately before search execution.
+rechecked immediately before search execution. At the provider boundary, active
+policies also remove URL-bearing rows from search and reverse-search responses
+before titles, snippets, aggregates, or candidate URLs enter the workspace. Known
+fact-check domains are blocked globally for an active evaluation policy; this is
+source-access hygiene, not a fact or verdict rule.
 
 ### MaterialDiscrepancy
 

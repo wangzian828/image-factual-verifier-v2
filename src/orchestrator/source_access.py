@@ -117,6 +117,8 @@ class SourceAccessPolicy:
             if variant in self.excluded_urls:
                 return False
             hostname = _hostname(variant)
+            if self.active and _fact_check_domain_scope(hostname):
+                return False
             if any(domain_matches(hostname, domain) for domain in self.excluded_domains):
                 return False
         return True
@@ -133,6 +135,10 @@ class SourceAccessPolicy:
                 return domain
             if any(alias in _normalize_query_text(text) for alias in _query_aliases(domain)):
                 return domain
+        normalized = _normalize_query_text(text)
+        for marker in FACT_CHECK_DOMAIN_MARKERS:
+            if any(_contains_query_alias(normalized, alias) for alias in _query_aliases(marker)):
+                return marker
         return ""
 
     def blocked_content_reference(self, value: str) -> str:
@@ -146,6 +152,9 @@ class SourceAccessPolicy:
         for domain in sorted(self.excluded_domains, key=len, reverse=True):
             if any(alias in normalized for alias in _query_aliases(domain)):
                 return domain
+        for marker in FACT_CHECK_DOMAIN_MARKERS:
+            if any(_contains_query_alias(normalized, alias) for alias in _query_aliases(marker)):
+                return marker
         return ""
 
     def filter_rows(
@@ -326,6 +335,11 @@ def _fact_check_domain_scope(hostname: str) -> str:
 
 def _normalize_query_text(value: str) -> str:
     return " ".join(re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).split())
+
+
+def _contains_query_alias(normalized_text: str, alias: str) -> bool:
+    candidate = _normalize_query_text(alias)
+    return bool(candidate) and f" {candidate} " in f" {normalized_text} "
 
 
 def _query_aliases(domain: str) -> tuple[str, ...]:
