@@ -50,7 +50,8 @@ export TRANSFORMERS_OFFLINE=1
 export VLLM_USE_FLASHINFER_SAMPLER=0
 PROFILE_DIR="$DATA_ROOT/exports/$SERVED_NAME"
 mkdir -p "$PROFILE_DIR"
-"$ENV_PREFIX/bin/python" -m ifv_training serving-profile \
+PYTHONPATH="$REPO_ROOT${PYTHONPATH:+:$PYTHONPATH}" \
+  "$ENV_PREFIX/bin/python" -m ifv_training serving-profile \
   --output "$PROFILE_DIR/serving-profile.json" \
   --profile-id "$SERVED_NAME" \
   --model-path "$MODEL" \

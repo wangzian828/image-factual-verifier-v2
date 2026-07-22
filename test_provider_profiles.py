@@ -70,6 +70,25 @@ def test_qwen35_profile_endpoint_override_is_profile_scoped() -> None:
     assert settings.model_name == "ifv-qwen3.5-9b-profile"
 
 
+def test_qwen35_replica_b_profile_isolated_from_primary() -> None:
+    settings = resolve_provider_settings(
+        profile_id="student-qwen3.5-local-replica-b",
+        environ={
+            "QWEN35_LOCAL_BASE_URL": "http://127.0.0.1:8901/v1",
+            "QWEN35_LOCAL_MODEL": "ifv-qwen3.5-9b",
+            "QWEN35_REPLICA_B_LOCAL_BASE_URL": "http://127.0.0.1:9002/v1",
+            "QWEN35_REPLICA_B_LOCAL_MODEL": "ifv-qwen3.5-9b-replica-b-test",
+        },
+    )
+
+    assert settings.provider == "qwen_local"
+    assert settings.vlm_provider == "qwen_local"
+    assert settings.base_url == "http://127.0.0.1:9002/v1"
+    assert settings.vlm_base_url == settings.base_url
+    assert settings.model_name == "ifv-qwen3.5-9b-replica-b-test"
+    assert settings.vlm_model == settings.model_name
+
+
 def test_backend_exposes_bounded_interaction_retry_configuration() -> None:
     backend = APIBackend(
         provider="lmdeploy",

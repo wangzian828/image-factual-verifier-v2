@@ -200,6 +200,11 @@ shared legacy `QWEN_LOCAL_BASE_URL`. `student-qwen3-vl-local` defaults to port 8
 profile-scoped `QWEN35_LOCAL_BASE_URL`; its model override is likewise isolated as
 `QWEN35_LOCAL_MODEL`. The same resolved endpoint and model are passed to the policy
 backend and every visual tool, preventing split-brain text/vision routing.
+`student-qwen3.5-local-replica-b` independently defaults to port 8902 and model
+`ifv-qwen3.5-9b-replica-b`; it uses only `QWEN35_REPLICA_B_LOCAL_BASE_URL` and
+`QWEN35_REPLICA_B_LOCAL_MODEL`. A rollout selects one profile for its complete
+episode, so independent replicas increase episode throughput without mixing an
+episode's policy and visual calls across servers.
 
 `ifv-policy-v2` exports Image Account Planning, v4 ReAct, Discrepancy Decision, and
 v4 Judgment. The SFT positive-data gate requires classification correctness, complete

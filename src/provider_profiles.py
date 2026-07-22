@@ -65,6 +65,17 @@ PROVIDER_PROFILES = {
         default_base_url="http://127.0.0.1:8901/v1",
         base_url_env="QWEN35_LOCAL_BASE_URL",
     ),
+    "student-qwen3.5-local-replica-b": ProviderProfile(
+        profile_id="student-qwen3.5-local-replica-b",
+        provider="qwen_local",
+        default_model="ifv-qwen3.5-9b-replica-b",
+        model_env="QWEN35_REPLICA_B_LOCAL_MODEL",
+        vlm_provider="qwen_local",
+        llm_wire_api="chat_completions",
+        vlm_wire_api="chat_completions",
+        default_base_url="http://127.0.0.1:8902/v1",
+        base_url_env="QWEN35_REPLICA_B_LOCAL_BASE_URL",
+    ),
     "student-qwen-api": ProviderProfile(
         profile_id="student-qwen-api",
         provider="qwen",
