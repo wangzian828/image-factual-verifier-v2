@@ -58,3 +58,31 @@ python -m pytest -q
 python -m compileall -q ifv_training scripts
 git diff --check
 ```
+
+## Frozen teacher SFT export
+
+scoring release 的教师数据固定使用根仓库导出的 frozen teacher dataset：
+
+```powershell
+python scripts/trajectory/export_dataset.py `
+  --run-dir D:\runs\teacher-run-a `
+  --case-split D:\training\sft-v1\case-split\case_split.jsonl `
+  --eligibility-dir D:\training\sft-v1\eligibility `
+  --semantic-reward-dir D:\training\sft-v1\semantic_rewards `
+  --minimum-accepted-cases 40 `
+  --output-dir D:\training\sft-v1\accepted-dataset
+```
+
+此模式不随机重分 split；每个 case 最多选一条通过 strict、structured
+eligibility 和 gold-free semantic 三层门禁的最高质量 rollout，并保留
+`accepted_episodes.jsonl`、`episode_metadata.jsonl` 与门禁 artifact ID。随后转换为
+标准 ms-swift 多模态数据：
+
+```powershell
+python -m ifv_training convert-accepted-perception `
+  --input D:\training\sft-v1\accepted-dataset `
+  --output D:\training\sft-v1\ms-swift-perception
+python -m ifv_training convert-policy `
+  --input D:\training\sft-v1\accepted-dataset `
+  --output D:\training\sft-v1\ms-swift-policy
+```

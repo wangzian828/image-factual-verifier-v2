@@ -12,7 +12,10 @@ from .checkpoints import (
 )
 from .io import load_json, load_jsonl, write_json, write_jsonl
 from .manifests import write_environment_manifest
-from .perception import convert_perception_runs
+from .perception import (
+    convert_accepted_perception_dataset,
+    convert_perception_runs,
+)
 from .policy import convert_policy_dataset
 from .rewards import (
     build_and_write_ledger,
@@ -37,6 +40,10 @@ def _parser() -> argparse.ArgumentParser:
     perception.add_argument("--run-dir", action="append", type=Path, required=True)
     perception.add_argument("--split-map", type=Path, required=True)
     perception.add_argument("--output", type=Path, required=True)
+
+    accepted_perception = subparsers.add_parser("convert-accepted-perception")
+    accepted_perception.add_argument("--input", type=Path, required=True)
+    accepted_perception.add_argument("--output", type=Path, required=True)
 
     audit = subparsers.add_parser("audit")
     audit.add_argument("--input", type=Path, required=True)
@@ -139,6 +146,8 @@ def main() -> None:
             args.output,
             split_map_path=args.split_map,
         )
+    elif args.command == "convert-accepted-perception":
+        result = convert_accepted_perception_dataset(args.input, args.output)
     elif args.command == "audit":
         result = audit_derived_dataset(args.input)
         if args.output:

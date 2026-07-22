@@ -7,7 +7,12 @@ from PIL import Image
 
 from ifv_training.audit import audit_derived_dataset
 from ifv_training.io import write_json, write_jsonl
-from ifv_training.perception import convert_perception_runs, perception_row
+from ifv_training.io import sha256_file
+from ifv_training.perception import (
+    convert_accepted_perception_dataset,
+    convert_perception_runs,
+    perception_row,
+)
 
 
 def _trace(image: Path) -> dict:
@@ -79,4 +84,51 @@ def test_perception_conversion_uses_source_split_and_quality_gate(
 
     assert manifest["artifacts"]["validation"]["rows"] == 1
     assert manifest["artifacts"]["train"]["rows"] == 0
+    assert audit["passed"] is True
+
+
+def test_accepted_perception_conversion_uses_frozen_dataset(
+    tmp_path: Path,
+) -> None:
+    image = tmp_path / "image.png"
+    Image.new("RGB", (8, 8), color="blue").save(image)
+    source = tmp_path / "accepted"
+    source.mkdir()
+    write_json(
+        source / "manifest.json",
+        {
+            "dataset_version": "ifv-policy-dataset-v2",
+            "split_mode": "frozen_teacher_sft",
+        },
+    )
+    row = {
+        "dataset_version": "ifv-policy-dataset-v2",
+        "episode_id": "case-accepted",
+        "source_run_id": "teacher-run",
+        "runtime_commit": "a" * 40,
+        "image_path": str(image),
+        "image_sha256": sha256_file(image),
+        "instruction": "Report visible content.",
+        "perception_report": {
+            "scene_description": "A blue square.",
+            "image_type": "graphic",
+            "entities": [],
+            "text_regions": [],
+        },
+        "split": "validation",
+    }
+    write_jsonl(source / "perception.train.jsonl", [])
+    write_jsonl(source / "perception.validation.jsonl", [row])
+    write_jsonl(source / "perception.test.jsonl", [])
+
+    output = tmp_path / "output"
+    manifest = convert_accepted_perception_dataset(source, output)
+    audit = audit_derived_dataset(output)
+
+    assert manifest["artifacts"]["validation"]["rows"] == 1
+    converted = json.loads(
+        (output / "validation.jsonl").read_text(encoding="utf-8")
+    )
+    assert converted["images"] == [str(image.resolve())]
+    assert converted["messages"][0]["content"].startswith("<image>")
     assert audit["passed"] is True

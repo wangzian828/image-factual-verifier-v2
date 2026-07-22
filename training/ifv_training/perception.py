@@ -17,6 +17,7 @@ from .io import (
 
 
 OUTPUT_VERSION = "ifv-ms-swift-perception-v1"
+SUPPORTED_ACCEPTED_DATASET_VERSION = "ifv-policy-dataset-v2"
 PERCEPTION_INSTRUCTION = """<image>
 Report only literal, visible image content as one JSON object matching the
 PerceptionReport contract. Include scene_description, image_type, entities with
@@ -58,6 +59,119 @@ def perception_row(trace: Mapping[str, Any]) -> dict[str, Any]:
             "max_pixels": 1048576,
         },
     }
+
+
+def accepted_perception_row(
+    source: Mapping[str, Any],
+    *,
+    expected_split: str,
+) -> dict[str, Any]:
+    """Convert one frozen accepted perception example to ms-swift format."""
+
+    if str(source.get("dataset_version", "")) != (
+        SUPPORTED_ACCEPTED_DATASET_VERSION
+    ):
+        raise ValueError("accepted perception row has an unsupported dataset version")
+    if str(source.get("split", "")) != expected_split:
+        raise ValueError("accepted perception row split does not match its file")
+    report = source.get("perception_report")
+    if not isinstance(report, Mapping):
+        raise ValueError("accepted perception row has no PerceptionReport")
+    assert_model_visible(report, location="perception_report")
+    image_path = Path(str(source.get("image_path", ""))).expanduser().resolve()
+    if not image_path.is_file():
+        raise FileNotFoundError(f"accepted perception image is unavailable: {image_path}")
+    expected_sha = str(source.get("image_sha256", ""))
+    if not expected_sha or sha256_file(image_path) != expected_sha:
+        raise ValueError("accepted perception image SHA-256 does not match")
+    instruction = str(source.get("instruction", "")).strip()
+    if not instruction:
+        raise ValueError("accepted perception row has no instruction")
+    if "<image>" not in instruction:
+        instruction = f"<image>\n{instruction}"
+    return {
+        "messages": [
+            {"role": "user", "content": instruction},
+            {
+                "role": "assistant",
+                "content": canonical_json(report),
+                "loss": True,
+            },
+        ],
+        "images": [str(image_path)],
+        "channel": "perception",
+        "chat_template_kwargs": {
+            "enable_thinking": False,
+            "max_pixels": 1048576,
+        },
+    }
+
+
+def convert_accepted_perception_dataset(
+    input_dir: Path,
+    output_dir: Path,
+) -> dict[str, Any]:
+    """Convert only frozen, three-gate-accepted perception examples."""
+
+    source_manifest = load_json(input_dir / "manifest.json")
+    if source_manifest.get("dataset_version") != SUPPORTED_ACCEPTED_DATASET_VERSION:
+        raise ValueError(
+            "accepted perception adapter requires "
+            f"{SUPPORTED_ACCEPTED_DATASET_VERSION}"
+        )
+    if source_manifest.get("split_mode") != "frozen_teacher_sft":
+        raise ValueError("accepted perception adapter requires a frozen teacher dataset")
+    require_new_or_empty(output_dir)
+    artifacts: dict[str, dict[str, Any]] = {}
+    index_rows: list[dict[str, Any]] = []
+    row_id = 0
+    for split in ("train", "validation", "test"):
+        converted_rows: list[dict[str, Any]] = []
+        for source_index, source in enumerate(
+            load_jsonl(input_dir / f"perception.{split}.jsonl")
+        ):
+            converted_rows.append(
+                accepted_perception_row(source, expected_split=split)
+            )
+            index_rows.append(
+                {
+                    "row_id": row_id,
+                    "split": split,
+                    "source_index": source_index,
+                    "episode_id": source.get("episode_id"),
+                    "source_run_id": source.get("source_run_id"),
+                    "runtime_commit": source.get("runtime_commit"),
+                    "image_sha256": source.get("image_sha256"),
+                }
+            )
+            row_id += 1
+        output_path = output_dir / f"{split}.jsonl"
+        write_jsonl(output_path, converted_rows)
+        artifacts[split] = {
+            "path": output_path.name,
+            "rows": len(converted_rows),
+            "sha256": sha256_file(output_path),
+        }
+    index_path = output_dir / "index.jsonl"
+    write_jsonl(index_path, index_rows)
+    artifacts["index"] = {
+        "path": index_path.name,
+        "rows": len(index_rows),
+        "sha256": sha256_file(index_path),
+    }
+    manifest = {
+        "schema_version": "ifv-ms-swift-dataset-manifest-v1",
+        "dataset_version": OUTPUT_VERSION,
+        "framework": {"name": "ms-swift", "version": "4.4.2"},
+        "source": {
+            "dataset_version": source_manifest["dataset_version"],
+            "manifest_sha256": sha256_file(input_dir / "manifest.json"),
+        },
+        "example_count": row_id,
+        "artifacts": artifacts,
+    }
+    write_json(output_dir / "manifest.json", manifest)
+    return manifest
 
 
 def convert_perception_runs(
