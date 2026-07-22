@@ -69,6 +69,14 @@ def _write_jsonl(path: Path, rows: Iterable[Mapping[str, Any]]) -> None:
     )
 
 
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _mapping(value: Any) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
 
@@ -114,6 +122,57 @@ def _source_families(trace: Mapping[str, Any]) -> List[str]:
     return sorted(families)
 
 
+def _trace_case_id(trace: Mapping[str, Any], episode_id: str) -> str:
+    state = _mapping(trace.get("state"))
+    runtime_case = _mapping(state.get("runtime_case"))
+    return str(
+        runtime_case.get("case_id")
+        or trace.get("case_id")
+        or trace.get("image_id")
+        or episode_id
+    ).strip()
+
+
+def _load_fixed_case_split(path: Path) -> Dict[str, Dict[str, Any]]:
+    rows = _load_jsonl(path.expanduser().resolve())
+    result: Dict[str, Dict[str, Any]] = {}
+    for row in rows:
+        case_id = str(row.get("case_id", "")).strip()
+        split = str(row.get("split", "")).strip()
+        group_id = str(row.get("split_group_id", "")).strip()
+        if not case_id or split not in {"train", "validation"} or not group_id:
+            raise ValueError(
+                "fixed case split rows require case_id, train/validation split, "
+                "and split_group_id"
+            )
+        if case_id in result:
+            raise ValueError(f"duplicate fixed case split case_id: {case_id}")
+        result[case_id] = dict(row)
+    if not result:
+        raise ValueError("fixed case split is empty")
+    return result
+
+
+def _load_gate_artifacts(
+    root: Path,
+    *,
+    suffix: str,
+) -> Dict[str, Dict[str, Any]]:
+    result: Dict[str, Dict[str, Any]] = {}
+    for path in sorted(root.expanduser().resolve().rglob(f"*{suffix}")):
+        payload = _load_json(path)
+        episode_id = str(
+            payload.get("episode_id")
+            or _mapping(payload.get("rollout")).get("episode_id", "")
+        ).strip()
+        if not episode_id:
+            raise ValueError(f"gate artifact lacks episode_id: {path}")
+        if episode_id in result:
+            raise ValueError(f"duplicate gate artifact episode_id: {episode_id}")
+        result[episode_id] = payload
+    return result
+
+
 class _UnionFind:
     def __init__(self, values: Iterable[str]) -> None:
         self.parent = {value: value for value in values}
@@ -151,12 +210,31 @@ def export_dataset(
     run_dirs: Sequence[Path],
     output_dir: Path,
     *,
+    case_split_path: Path | None = None,
+    eligibility_dir: Path | None = None,
+    semantic_reward_dir: Path | None = None,
+    require_frozen_gates: bool = False,
+    minimum_accepted_cases: int | None = None,
+    require_all_validation_cases: bool = True,
     train_ratio: float = 0.8,
     validation_ratio: float = 0.1,
     seed: str = "ifv-policy-v1",
 ) -> Dict[str, Any]:
     if not run_dirs:
         raise ValueError("at least one run directory is required")
+    frozen_inputs = (case_split_path, eligibility_dir, semantic_reward_dir)
+    if any(value is not None for value in frozen_inputs):
+        require_frozen_gates = True
+    if require_frozen_gates and case_split_path is None:
+        raise ValueError("frozen SFT export requires --case-split")
+    if require_frozen_gates and eligibility_dir is None:
+        raise ValueError("frozen SFT export requires --eligibility-dir")
+    if require_frozen_gates and semantic_reward_dir is None:
+        raise ValueError("frozen SFT export requires --semantic-reward-dir")
+    if minimum_accepted_cases is not None and minimum_accepted_cases < 1:
+        raise ValueError("minimum_accepted_cases must be at least 1")
+    if require_frozen_gates and minimum_accepted_cases is None:
+        minimum_accepted_cases = 40
     if train_ratio <= 0 or validation_ratio < 0:
         raise ValueError("split ratios must be non-negative")
     if train_ratio + validation_ratio >= 1:
@@ -166,6 +244,21 @@ def export_dataset(
             f"dataset output directory must be new or empty: {output_dir}"
         )
 
+    fixed_split = (
+        _load_fixed_case_split(case_split_path)
+        if case_split_path is not None
+        else None
+    )
+    eligibility_by_episode = (
+        _load_gate_artifacts(eligibility_dir, suffix=".sft_eligibility.json")
+        if eligibility_dir is not None
+        else {}
+    )
+    semantic_by_episode = (
+        _load_gate_artifacts(semantic_reward_dir, suffix=".semantic_reward.json")
+        if semantic_reward_dir is not None
+        else {}
+    )
     examples_by_episode: Dict[str, List[PolicyExample]] = defaultdict(list)
     perception_by_episode: Dict[str, PerceptionExample] = {}
     episode_metadata: Dict[str, Dict[str, Any]] = {}
@@ -185,7 +278,11 @@ def export_dataset(
             }
         )
         for row in _load_jsonl(run_dir / "trajectory_scores.jsonl"):
-            score_by_episode[str(row.get("case_id", ""))] = dict(row)
+            score_key = str(
+                row.get("episode_id") or row.get("case_id", "")
+            ).strip()
+            if score_key:
+                score_by_episode[score_key] = dict(row)
         for row in _load_jsonl(run_dir / "policy_trajectories.jsonl"):
             example = PolicyExample.model_validate(row)
             examples_by_episode[example.episode_id].append(example)
@@ -202,8 +299,48 @@ def export_dataset(
             episode_id = str(
                 trace.get("image_id") or trace_path.stem
             ).strip()
+            case_id = _trace_case_id(trace, episode_id)
+            trace_sha256 = _sha256(trace_path)
             score = score_by_episode.get(episode_id, {})
             training_eligible = bool(score.get("training_eligible", False))
+            eligibility = eligibility_by_episode.get(episode_id, {})
+            semantic = semantic_by_episode.get(episode_id, {})
+            if require_frozen_gates:
+                eligibility_gates = _mapping(eligibility.get("gates"))
+                semantic_gates = _mapping(semantic.get("gates"))
+                split_row = (fixed_split or {}).get(case_id, {})
+                runtime_case = _mapping(
+                    _mapping(trace.get("state")).get("runtime_case")
+                )
+                training_eligible = bool(
+                    str(eligibility.get("case_id", "")) == case_id
+                    and str(eligibility.get("episode_id", "")) == episode_id
+                    and str(semantic.get("case_id", "")) == case_id
+                    and str(
+                        _mapping(semantic.get("rollout")).get("episode_id", "")
+                    )
+                    == episode_id
+                    and eligibility_gates.get("strict_trace_audit_pass") is True
+                    and eligibility_gates.get("engineering_valid") is True
+                    and eligibility_gates.get("sft_eligibility_pass") is True
+                    and semantic_gates.get("strict_trace_audit_pass") is True
+                    and semantic_gates.get("engineering_valid") is True
+                    and semantic_gates.get("semantic_audit_pass") is True
+                    and str(
+                        _mapping(eligibility.get("source_trace")).get(
+                            "sha256", ""
+                        )
+                    )
+                    == trace_sha256
+                    and str(
+                        _mapping(semantic.get("source_trace")).get(
+                            "sha256", ""
+                        )
+                    )
+                    == trace_sha256
+                    and str(split_row.get("image_sha256", ""))
+                    == str(runtime_case.get("image_sha256", ""))
+                )
             exclusion_reasons = [
                 str(item)
                 for item in score.get(
@@ -214,15 +351,37 @@ def export_dataset(
             ]
             if not score:
                 exclusion_reasons = ["missing_training_quality_score"]
+            if require_frozen_gates and not training_eligible:
+                exclusion_reasons = [
+                    "frozen_teacher_gate_failed",
+                    *exclusion_reasons,
+                ]
+            elif require_frozen_gates:
+                exclusion_reasons = []
             episode_metadata[episode_id] = {
                 "episode_id": episode_id,
+                "case_id": case_id,
                 "source_run_id": manifest.get("run_id"),
                 "source_trace": str(trace_path),
                 "source_family_keys": _source_families(trace),
                 "runtime_ids": sorted(_collect_runtime_ids(trace)),
-                "teacher_score": float(score.get("total", 0.0) or 0.0),
+                "teacher_score": float(
+                    _mapping(semantic.get("metrics")).get(
+                        "overall_process_quality",
+                        score.get("total", 0.0),
+                    )
+                    or 0.0
+                ),
                 "training_eligible": training_eligible,
                 "training_exclusion_reasons": exclusion_reasons,
+                "structured_eligibility_pass": eligibility.get("gates", {}).get(
+                    "sft_eligibility_pass"
+                ),
+                "semantic_audit_pass": semantic.get("gates", {}).get(
+                    "semantic_audit_pass"
+                ),
+                "sft_eligibility_artifact_id": eligibility.get("artifact_id"),
+                "semantic_reward_artifact_id": semantic.get("artifact_id"),
             }
 
     candidate_ids = set(examples_by_episode) | set(perception_by_episode)
@@ -233,12 +392,92 @@ def export_dataset(
             + ", ".join(unknown_metadata)
         )
 
+    if require_frozen_gates:
+        missing_split = sorted(
+            {
+                str(metadata["case_id"])
+                for metadata in episode_metadata.values()
+                if str(metadata["case_id"]) not in (fixed_split or {})
+            }
+        )
+        if missing_split:
+            raise ValueError(
+                "fixed case split lacks teacher cases: "
+                + ", ".join(missing_split[:10])
+            )
     all_episodes = sorted(candidate_ids)
-    episodes = [
-        episode_id
-        for episode_id in all_episodes
-        if episode_metadata[episode_id]["training_eligible"]
-    ]
+    if require_frozen_gates:
+        for episode_id in all_episodes:
+            metadata = episode_metadata[episode_id]
+            if not examples_by_episode[episode_id]:
+                metadata["training_eligible"] = False
+                metadata["training_exclusion_reasons"] = list(
+                    dict.fromkeys(
+                        [
+                            "no_exportable_policy_examples",
+                            *metadata["training_exclusion_reasons"],
+                        ]
+                    )
+                )
+        eligible_by_case: Dict[str, List[str]] = defaultdict(list)
+        for episode_id in all_episodes:
+            metadata = episode_metadata[episode_id]
+            if metadata["training_eligible"]:
+                eligible_by_case[str(metadata["case_id"])].append(episode_id)
+        selected_by_case: Dict[str, str] = {}
+        for case_id, candidates in eligible_by_case.items():
+            selected_by_case[case_id] = max(
+                candidates,
+                key=lambda episode_id: (
+                    float(episode_metadata[episode_id]["teacher_score"]),
+                    episode_id,
+                ),
+            )
+        for episode_id in all_episodes:
+            metadata = episode_metadata[episode_id]
+            if (
+                metadata["training_eligible"]
+                and selected_by_case.get(str(metadata["case_id"])) != episode_id
+            ):
+                metadata["training_eligible"] = False
+                metadata["training_exclusion_reasons"] = list(
+                    dict.fromkeys(
+                        [
+                            "lower_quality_rollout_for_case",
+                            *metadata["training_exclusion_reasons"],
+                        ]
+                    )
+                )
+        episodes = sorted(selected_by_case.values())
+        accepted_case_ids = {
+            str(episode_metadata[episode_id]["case_id"])
+            for episode_id in episodes
+        }
+        if minimum_accepted_cases is not None and (
+            len(accepted_case_ids) < minimum_accepted_cases
+        ):
+            raise ValueError(
+                "frozen SFT export accepted too few cases: "
+                f"{len(accepted_case_ids)} < {minimum_accepted_cases}"
+            )
+        if require_all_validation_cases:
+            expected_validation = {
+                case_id
+                for case_id, row in (fixed_split or {}).items()
+                if row.get("split") == "validation"
+            }
+            missing_validation = sorted(expected_validation - accepted_case_ids)
+            if missing_validation:
+                raise ValueError(
+                    "frozen SFT export lacks accepted validation cases: "
+                    + ", ".join(missing_validation[:10])
+                )
+    else:
+        episodes = [
+            episode_id
+            for episode_id in all_episodes
+            if episode_metadata[episode_id]["training_eligible"]
+        ]
     excluded_episode_rows = [
         {
             **episode_metadata[episode_id],
@@ -265,6 +504,25 @@ def export_dataset(
     split_by_episode: Dict[str, str] = {}
     group_by_episode: Dict[str, str] = {}
     for members in components.values():
+        if fixed_split is not None:
+            member_case_splits = {
+                str(fixed_split[str(episode_metadata[item]["case_id"])]["split"])
+                for item in members
+            }
+            if len(member_case_splits) != 1:
+                raise ValueError(
+                    "fixed case split separates one source-family group: "
+                    + ", ".join(sorted(member_case_splits))
+                )
+            for episode_id in members:
+                fixed_row = fixed_split[
+                    str(episode_metadata[episode_id]["case_id"])
+                ]
+                split_by_episode[episode_id] = str(fixed_row["split"])
+                group_by_episode[episode_id] = str(
+                    fixed_row["split_group_id"]
+                )
+            continue
         group_payload = {
             "episodes": sorted(members),
             "families": sorted(
@@ -301,14 +559,30 @@ def export_dataset(
         split: [] for split in SPLITS
     }
     metadata_rows: List[Dict[str, Any]] = []
+    accepted_episode_rows: List[Dict[str, Any]] = []
     for episode_id in episodes:
         metadata = episode_metadata[episode_id]
         split = split_by_episode[episode_id]
-        metadata_rows.append(
+        accepted_row = {
+            **metadata,
+            "split": split,
+            "split_group_id": group_by_episode[episode_id],
+        }
+        metadata_rows.append(accepted_row)
+        accepted_episode_rows.append(
             {
-                **metadata,
-                "split": split,
-                "split_group_id": group_by_episode[episode_id],
+                key: accepted_row.get(key)
+                for key in (
+                    "case_id",
+                    "episode_id",
+                    "split",
+                    "split_group_id",
+                    "source_run_id",
+                    "source_trace",
+                    "sft_eligibility_artifact_id",
+                    "semantic_reward_artifact_id",
+                    "teacher_score",
+                )
             }
         )
         for example in examples_by_episode[episode_id]:
@@ -344,6 +618,8 @@ def export_dataset(
         )
     metadata_rows.sort(key=lambda item: item["episode_id"])
     _write_jsonl(output_dir / "episode_metadata.jsonl", metadata_rows)
+    accepted_episode_rows.sort(key=lambda item: item["episode_id"])
+    _write_jsonl(output_dir / "accepted_episodes.jsonl", accepted_episode_rows)
     excluded_episode_rows.sort(key=lambda item: item["episode_id"])
     _write_jsonl(
         output_dir / "excluded_episode_metadata.jsonl",
@@ -354,14 +630,38 @@ def export_dataset(
         "dataset_version": "ifv-policy-dataset-v2",
         "trajectory_version": "ifv-policy-v1",
         "perception_version": "ifv-perception-v1",
+        "split_mode": (
+            "frozen_teacher_sft" if require_frozen_gates else "derived"
+        ),
         "seed": seed,
-        "split_ratios": {
-            "train": train_ratio,
-            "validation": validation_ratio,
-            "test": 1 - train_ratio - validation_ratio,
-        },
+        "split_ratios": (
+            None
+            if require_frozen_gates
+            else {
+                "train": train_ratio,
+                "validation": validation_ratio,
+                "test": 1 - train_ratio - validation_ratio,
+            }
+        ),
         "source_runs": source_runs,
+        "frozen_inputs": (
+            {
+                "case_split": {
+                    "path": str(case_split_path.expanduser().resolve()),
+                    "sha256": _sha256(case_split_path.expanduser().resolve()),
+                },
+                "eligibility_dir": str(eligibility_dir.expanduser().resolve()),
+                "semantic_reward_dir": str(
+                    semantic_reward_dir.expanduser().resolve()
+                ),
+            }
+            if require_frozen_gates
+            else None
+        ),
         "episode_count": len(episodes),
+        "accepted_case_count": len(
+            {str(episode_metadata[episode_id]["case_id"]) for episode_id in episodes}
+        ),
         "candidate_episode_count": len(all_episodes),
         "excluded_episode_count": len(excluded_episode_rows),
         "group_count": len(components),
@@ -380,6 +680,7 @@ def export_dataset(
             "perception_validation": "perception.validation.jsonl",
             "perception_test": "perception.test.jsonl",
             "episode_metadata": "episode_metadata.jsonl",
+            "accepted_episodes": "accepted_episodes.jsonl",
             "excluded_episode_metadata": (
                 "excluded_episode_metadata.jsonl"
             ),
@@ -393,6 +694,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-dir", action="append", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--case-split", type=Path)
+    parser.add_argument("--eligibility-dir", type=Path)
+    parser.add_argument("--semantic-reward-dir", type=Path)
+    parser.add_argument("--minimum-accepted-cases", type=int)
+    parser.add_argument("--allow-missing-validation-cases", action="store_true")
     parser.add_argument("--train-ratio", type=float, default=0.8)
     parser.add_argument("--validation-ratio", type=float, default=0.1)
     parser.add_argument("--seed", default="ifv-policy-v1")
@@ -404,6 +710,11 @@ def main() -> None:
     result = export_dataset(
         args.run_dir,
         args.output_dir,
+        case_split_path=args.case_split,
+        eligibility_dir=args.eligibility_dir,
+        semantic_reward_dir=args.semantic_reward_dir,
+        minimum_accepted_cases=args.minimum_accepted_cases,
+        require_all_validation_cases=not args.allow_missing_validation_cases,
         train_ratio=args.train_ratio,
         validation_ratio=args.validation_ratio,
         seed=args.seed,

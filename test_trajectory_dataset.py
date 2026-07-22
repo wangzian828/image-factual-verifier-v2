@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
+
+import pytest
 
 from scripts.trajectory.audit_dataset import audit_dataset
 from scripts.trajectory.export_dataset import export_dataset
@@ -165,3 +168,104 @@ def test_dataset_export_excludes_quality_gate_failures(
     assert report["passed"] is True
     assert report["example_count"] == 0
     assert report["excluded_episode_count"] == 1
+
+
+def test_frozen_sft_export_requires_all_three_gate_artifacts(
+    tmp_path: Path,
+) -> None:
+    run_dir = _run_dir(tmp_path)
+    trace_path = run_dir / "traces" / "case_scripted_v3.json"
+    trace_sha = hashlib.sha256(trace_path.read_bytes()).hexdigest()
+    split = tmp_path / "case_split.jsonl"
+    split.write_text(
+        json.dumps(
+            {
+                "case_id": "case_scripted_v3",
+                "image_sha256": json.loads(
+                    trace_path.read_text(encoding="utf-8")
+                )["state"]["runtime_case"]["image_sha256"],
+                "split": "validation",
+                "split_group_id": "group-frozen",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    eligibility = tmp_path / "eligibility"
+    eligibility.mkdir()
+    (eligibility / "episode.sft_eligibility.json").write_text(
+        json.dumps(
+            {
+                "case_id": "case_scripted_v3",
+                "episode_id": "case_scripted_v3",
+                "artifact_id": "sha256:eligibility",
+                "source_trace": {"sha256": trace_sha},
+                "gates": {
+                    "strict_trace_audit_pass": True,
+                    "engineering_valid": True,
+                    "sft_eligibility_pass": True,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    semantic = tmp_path / "semantic"
+    semantic.mkdir()
+    (semantic / "episode.semantic_reward.json").write_text(
+        json.dumps(
+            {
+                "case_id": "case_scripted_v3",
+                "artifact_id": "sha256:semantic",
+                "source_trace": {"sha256": trace_sha},
+                "rollout": {"episode_id": "case_scripted_v3"},
+                "metrics": {"overall_process_quality": 0.9},
+                "gates": {
+                    "strict_trace_audit_pass": True,
+                    "engineering_valid": True,
+                    "semantic_audit_pass": True,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    output = tmp_path / "frozen-dataset"
+    manifest = export_dataset(
+        [run_dir],
+        output,
+        case_split_path=split,
+        eligibility_dir=eligibility,
+        semantic_reward_dir=semantic,
+        minimum_accepted_cases=1,
+    )
+
+    assert manifest["split_mode"] == "frozen_teacher_sft"
+    assert manifest["accepted_case_count"] == 1
+    assert manifest["example_counts"]["validation"] == 7
+    assert manifest["example_counts"]["train"] == 0
+
+
+def test_frozen_sft_export_rejects_missing_validation_gate(
+    tmp_path: Path,
+) -> None:
+    run_dir = _run_dir(tmp_path)
+    split = tmp_path / "case_split.jsonl"
+    split.write_text(
+        json.dumps(
+            {
+                "case_id": "case_scripted_v3",
+                "image_sha256": "0" * 64,
+                "split": "validation",
+                "split_group_id": "group-frozen",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="eligibility-dir"):
+        export_dataset(
+            [run_dir],
+            tmp_path / "frozen-dataset",
+            case_split_path=split,
+            semantic_reward_dir=tmp_path,
+        )
