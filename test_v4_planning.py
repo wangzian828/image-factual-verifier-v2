@@ -26,6 +26,7 @@ from src.orchestrator.image_only_prompts import (
     select_discrepancy_react_tasks,
 )
 from src.orchestrator.stage_runner import InteractionSession
+from src.orchestrator.task_store import remaining_claim_hypothesis_routes
 from src.orchestrator.runtime_case import image_sha256
 from src.orchestrator.source_access import SourceAccessPolicy
 from src.orchestrator.state import (
@@ -765,6 +766,75 @@ def test_discrepancy_action_selects_one_task_scoped_claim_set(
     assert [item["task_id"] for item in react_context["active_tasks"]] == [
         first.task_id
     ]
+
+
+def test_discrepancy_action_skips_exhausted_active_task(
+    tmp_path: Path,
+) -> None:
+    """An active sibling with no route must not mask executable work."""
+
+    image_path = tmp_path / "skip-exhausted-route.jpg"
+    image_path.write_bytes(b"skip-exhausted-route")
+    state, investigation = _state(image_path)
+    backend = ImageAccountPlanningBackend()
+    orchestrator = Orchestrator(validate_startup=False)
+    orchestrator.llm = backend
+    asyncio.run(
+        orchestrator._run_image_account_planning(
+            state,
+            investigation,
+            interaction_session=None,
+        )
+    )
+    exhausted = investigation.tasks[0]
+    executable = exhausted.model_copy(deep=True)
+    executable.task_id = "task-executable-sibling"
+    executable.hypothesis_id = "hypothesis-executable-sibling"
+    executable.priority = 2
+    investigation.tasks.append(executable)
+    executable_hypothesis = investigation.search_hypotheses[0].model_copy(
+        deep=True
+    )
+    executable_hypothesis.hypothesis_id = executable.hypothesis_id
+    executable_hypothesis.task_id = executable.task_id
+    executable_hypothesis.statement = "An executable sibling route."
+    investigation.search_hypotheses.append(executable_hypothesis)
+
+    # Consume the first task's only text-search route while leaving its
+    # deterministic state active, which is the state observed in the real
+    # failed baseline trace.
+    investigation.attempted_routes.append(
+        json.dumps(
+            {
+                "tool": "text_search",
+                "task_id": exhausted.task_id,
+                "queries": ["person source capture held object"],
+                "outcome": "empty",
+            }
+        )
+    )
+    investigation.attempted_routes.append(
+        json.dumps(
+            {
+                "tool": "text_search",
+                "task_id": exhausted.task_id,
+                "queries": ["person source capture held object alternative"],
+                "outcome": "empty",
+            }
+        )
+    )
+
+    assert remaining_claim_hypothesis_routes(
+        investigation,
+        task_ids={exhausted.task_id},
+    ) == []
+    assert remaining_claim_hypothesis_routes(
+        investigation,
+        task_ids={executable.task_id},
+    ) == [f"text_search:{executable.task_id}"]
+    assert [
+        task.task_id for task in select_discrepancy_react_tasks(investigation)
+    ] == [executable.task_id]
 
 
 def test_discrepancy_decision_consumes_pending_result_on_same_chain(

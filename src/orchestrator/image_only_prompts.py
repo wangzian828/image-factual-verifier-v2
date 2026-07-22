@@ -268,7 +268,15 @@ def select_react_tasks(
 def select_discrepancy_react_tasks(
     state: ImageOnlyInvestigationState,
 ) -> List[Any]:
-    """Expose only active tasks with valid open claim/hypothesis ownership."""
+    """Expose active tasks that still own an executable investigation route.
+
+    A task can remain ``active`` after its bounded routes have all been tried.
+    It must not win scheduling merely because it has a lower priority or fewer
+    attempts: doing so leaves the caller with an empty tool schema even when a
+    sibling task still has a visit or retrieval route.  Keep archive reads as
+    a separate executable phase; while one is pending, any valid owner remains
+    selectable so the caller can expose only ``read_evidence``.
+    """
 
     claims = {claim.claim_id: claim for claim in state.image_claims}
     hypotheses = {
@@ -287,6 +295,15 @@ def select_discrepancy_react_tasks(
         and any(
             claims[claim_id].status in {"open", "conflicted", "unresolved"}
             for claim_id in task.claim_ids
+        )
+        and (
+            bool(state.pending_archive_read_ids)
+            or bool(
+                remaining_claim_hypothesis_routes(
+                    state,
+                    task_ids={task.task_id},
+                )
+            )
         )
     ]
     active.sort(
