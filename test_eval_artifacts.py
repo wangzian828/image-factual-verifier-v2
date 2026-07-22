@@ -103,6 +103,88 @@ def _build_release(tmp_path: Path) -> tuple[Path, Path]:
     return benchmark, gold
 
 
+def _build_scoring_release(tmp_path: Path) -> tuple[Path, Path]:
+    root = tmp_path / "scoring-release"
+    image = root / "runtime_input" / "assets" / "sha256" / "fixture.jpg"
+    image.parent.mkdir(parents=True)
+    image.write_bytes(b"scoring-runtime-image-fixture")
+    case_id = "case_scoring_fixture"
+    benchmark = root / "runtime_input" / "cases.jsonl"
+    benchmark.write_text(
+        json.dumps(
+            {
+                "case_id": case_id,
+                "image_path": "runtime_input/assets/sha256/fixture.jpg",
+                "image_sha256": _sha256(image),
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    gold = root / "evaluator_private" / "gold.jsonl"
+    gold.parent.mkdir(parents=True)
+    gold.write_text(
+        json.dumps(
+            {
+                "schema_version": "ifv-scoring-gold-v1",
+                "case_id": case_id,
+                "label": "supported",
+                "decisive_fact": {
+                    "statement": "The depicted relation is correct.",
+                    "visual_anchors": ["fixture"],
+                },
+                "claim_atom": {
+                    "subject": "fixture",
+                    "event": "fixture event",
+                    "slot": "depicted_relation",
+                    "depicted_value": "correct",
+                },
+                "key_error": None,
+                "evidence_target": {
+                    "binding": {
+                        "subject": "fixture",
+                        "event": "fixture event",
+                        "slot": "depicted_relation",
+                        "depicted_value": "correct",
+                        "match": "same_relation",
+                    },
+                    "required_directness": "direct",
+                    "required_stance": "supports",
+                    "statement": "correct",
+                },
+                "boundary": {
+                    "directly_decides": "The depicted relation is correct.",
+                    "does_not_prove": ["Every adjacent relation is correct."],
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    migration = root / "evaluator_private" / "migration_audit.json"
+    _write_json(migration, {"status": "fixture"})
+    (root / "SHA256SUMS").write_text("fixture\n", encoding="utf-8")
+    _write_json(
+        root / "manifest.json",
+        {
+            "schema_version": "ifv-existing-eval-package-v1",
+            "release_id": "ifv-scoring-fixture",
+            "input_mode": "image_only",
+            "counts": {"cases": 1, "supported": 1, "refuted": 0},
+            "runtime_contract": {
+                "allowed_keys": ["case_id", "image_path", "image_sha256"],
+                "private_keys_absent": True,
+            },
+            "artifacts": {
+                "runtime_input": "runtime_input/cases.jsonl",
+                "gold": "evaluator_private/gold.jsonl",
+                "migration_audit": "evaluator_private/migration_audit.json",
+            },
+        },
+    )
+    return benchmark, gold
+
+
 def _args(benchmark: Path, run_dir: Path) -> argparse.Namespace:
     return argparse.Namespace(
         benchmark=str(benchmark),
@@ -118,6 +200,9 @@ def _args(benchmark: Path, run_dir: Path) -> argparse.Namespace:
         base_sampling_seed=1729,
         timeout=30.0,
         limit=None,
+        shard_count=1,
+        shard_index=0,
+        training_prohibited=False,
         source_access_policy=None,
     )
 
@@ -269,6 +354,118 @@ def test_v03_eval_keeps_gold_post_rollout_and_writes_scorer_predictions(
     assert (run_dir / "post_rollout_rewards.jsonl").is_file()
 
 
+def test_scoring_release_keeps_gold_post_rollout_and_requires_structured_gate(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    benchmark, gold = _build_scoring_release(tmp_path)
+    run_dir = tmp_path / "scoring-run"
+    rollout_finished = False
+
+    class ScoringWorkflow:
+        def __init__(self, config: Any) -> None:
+            self.config = config
+
+        async def run_batch(self, **kwargs: Any) -> list[dict[str, Any]]:
+            nonlocal rollout_finished
+            case = kwargs["runtime_cases"][0]
+            episode_id = kwargs["image_ids"][0]
+            trace_dir = Path(self.config.output_dir)
+            trace_dir.mkdir(parents=True, exist_ok=True)
+            (trace_dir / f"{episode_id}.json").write_text(
+                json.dumps(
+                    {
+                        "image_id": episode_id,
+                        "decision_policy_version": "discrepancy-first-v4",
+                        "verdict": "real",
+                        "termination": "success",
+                        "state": {
+                            "image_id": episode_id,
+                            "termination": "success",
+                            "runtime_case": case.model_dump(),
+                            "all_steps": [],
+                            "investigation_state": {
+                                "image_claims": [],
+                                "evidence": [],
+                                "findings": [],
+                            },
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            initial = json.loads(
+                (trace_dir.parent / "run_manifest.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            assert initial["benchmark"]["evaluation_gold"] is None
+            rollout_finished = True
+            return [
+                {
+                    "image_id": episode_id,
+                    "image_path": case.image_path,
+                    "verdict": "real",
+                    "confidence": 0.8,
+                    "termination": "success",
+                    "time_taken": 1.0,
+                    "total_tool_calls": 0,
+                    "llm_api_calls": 1,
+                    "token_usage": {"total": 10},
+                    "state": {},
+                }
+            ]
+
+    real_load = run_eval._load_benchmark
+
+    def guarded_load(path: Path) -> list[dict[str, Any]]:
+        if path == gold:
+            assert rollout_finished, "private scoring gold loaded before rollout"
+        return real_load(path)
+
+    monkeypatch.setattr(run_eval, "VerificationWorkflow", ScoringWorkflow)
+    monkeypatch.setattr(run_eval, "_load_benchmark", guarded_load)
+    monkeypatch.setattr(
+        run_eval,
+        "score_process_trace",
+        lambda *args, **kwargs: (
+            {
+                "schema_version": "ifv-process-metrics-v4",
+                "case_id": "case_scoring_fixture",
+                "result_correct": True,
+                "engineering_error": False,
+                "training_eligible": True,
+                "training_exclusion_reasons": [],
+            },
+            {
+                "schema_version": "ifv-trajectory-score-v4",
+                "case_id": "case_scoring_fixture",
+                "training_eligible": True,
+                "training_exclusion_reasons": [],
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        run_eval,
+        "audit_trace",
+        lambda _path: SimpleNamespace(failures=lambda **_kwargs: []),
+    )
+    monkeypatch.setattr(run_eval, "export_policy_examples", lambda *args, **kwargs: [])
+
+    summary = asyncio.run(run_eval._run_eval(_args(benchmark, run_dir)))
+
+    assert summary["num_errors"] == 0
+    member = json.loads(
+        (run_dir / "rollout_groups.jsonl").read_text(encoding="utf-8").strip()
+    )
+    assert member["sft_structured_eligibility_required"] is True
+    assert member["training_eligible"] is False
+    manifest = json.loads(
+        (run_dir / "run_manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest["benchmark"]["evaluation_gold"]["sha256"] == _sha256(gold)
+
+
 def test_rollout_specs_are_stable_unique_and_grouped() -> None:
     runtime_case = SimpleNamespace(case_id="case-a")
     samples = [{"case_id": "case-a", "image_path": "fixture.jpg"}]
@@ -328,6 +525,36 @@ def test_eval_selects_explicit_ordered_case_ids_before_limit() -> None:
     )
 
     assert [item["case_id"] for item in selected] == ["case_c", "case_a"]
+
+
+def test_eval_shards_sorted_case_ids_without_overlap() -> None:
+    samples = [
+        {"case_id": "case_d"},
+        {"case_id": "case_b"},
+        {"case_id": "case_a"},
+        {"case_id": "case_c"},
+    ]
+
+    shard_a = run_eval._select_samples(
+        samples,
+        requested_case_ids=None,
+        limit=None,
+        shard_count=2,
+        shard_index=0,
+    )
+    shard_b = run_eval._select_samples(
+        samples,
+        requested_case_ids=None,
+        limit=None,
+        shard_count=2,
+        shard_index=1,
+    )
+
+    assert [item["case_id"] for item in shard_a] == ["case_a", "case_c"]
+    assert [item["case_id"] for item in shard_b] == ["case_b", "case_d"]
+    assert {item["case_id"] for item in shard_a}.isdisjoint(
+        {item["case_id"] for item in shard_b}
+    )
 
 
 def test_eval_rejects_unknown_or_duplicate_explicit_case_ids() -> None:

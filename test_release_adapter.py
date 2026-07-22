@@ -10,6 +10,11 @@ from src.eval.release_adapter import (
     load_runtime_release,
     resolve_runtime_image_path,
 )
+from src.eval.scoring_release_adapter import (
+    adapt_scoring_gold_for_process,
+    load_scoring_release,
+    resolve_scoring_image_path,
+)
 
 
 PUBLIC_ROW = {
@@ -166,3 +171,79 @@ def test_v03_active_policy_is_explicit_and_required(tmp_path: Path) -> None:
     release.artifacts.source_access_policy.unlink()
     with pytest.raises(FileNotFoundError, match="source-access policy"):
         load_runtime_release(benchmark)
+
+
+def _scoring_release(tmp_path: Path) -> tuple[Path, dict[str, object]]:
+    root = tmp_path / "scoring"
+    benchmark = root / "runtime_input" / "cases.jsonl"
+    image = root / "runtime_input" / "assets" / "sha256" / "00" / "image.jpg"
+    image.parent.mkdir(parents=True)
+    image.write_bytes(b"scoring-image")
+    row = {
+        **PUBLIC_ROW,
+        "image_path": "runtime_input/assets/sha256/00/image.jpg",
+    }
+    benchmark.write_text(json.dumps(row) + "\n", encoding="utf-8")
+    gold = root / "evaluator_private" / "gold.jsonl"
+    gold.parent.mkdir(parents=True)
+    gold_row = {
+        "schema_version": "ifv-scoring-gold-v1",
+        "case_id": PUBLIC_ROW["case_id"],
+        "label": "supported",
+    }
+    gold.write_text(json.dumps(gold_row) + "\n", encoding="utf-8")
+    _write_json(root / "evaluator_private" / "migration_audit.json", {})
+    (root / "SHA256SUMS").write_text("fixture\n", encoding="utf-8")
+    _write_json(
+        root / "manifest.json",
+        {
+            "schema_version": "ifv-existing-eval-package-v1",
+            "release_id": "scoring-fixture",
+            "input_mode": "image_only",
+            "counts": {"cases": 1, "supported": 1, "refuted": 0},
+            "runtime_contract": {
+                "allowed_keys": ["case_id", "image_path", "image_sha256"],
+                "private_keys_absent": True,
+            },
+            "artifacts": {
+                "runtime_input": "runtime_input/cases.jsonl",
+                "gold": "evaluator_private/gold.jsonl",
+                "migration_audit": "evaluator_private/migration_audit.json",
+            },
+        },
+    )
+    return benchmark, gold_row
+
+
+def test_scoring_release_is_first_class_without_v03_protocol_artifacts(
+    tmp_path: Path,
+) -> None:
+    benchmark, gold = _scoring_release(tmp_path)
+    release = load_scoring_release(benchmark)
+    row = json.loads(benchmark.read_text(encoding="utf-8"))
+    resolved = resolve_scoring_image_path(row, release)
+
+    assert release.release_id == "scoring-fixture"
+    assert release.release_stage == "scoring_release"
+    assert release.artifacts.classification_protocol is None
+    assert release.artifacts.process_reference_protocol is None
+    assert Path(resolved["image_path"]).is_file()
+    adapted = adapt_scoring_gold_for_process(gold)
+    assert adapted["factual_status"] == "supported"
+    assert adapted["label"] == "supported"
+
+
+def test_scoring_release_rejects_private_runtime_fields_and_path_escape(
+    tmp_path: Path,
+) -> None:
+    benchmark, _ = _scoring_release(tmp_path)
+    release = load_scoring_release(benchmark)
+    row = json.loads(benchmark.read_text(encoding="utf-8"))
+
+    with pytest.raises(ValueError, match="unexpected: label"):
+        image_only_case_from_runtime_row({**row, "label": "supported"})
+    with pytest.raises(ValueError, match="escapes runtime_input"):
+        resolve_scoring_image_path(
+            {**row, "image_path": "evaluator_private/gold.jsonl"},
+            release,
+        )

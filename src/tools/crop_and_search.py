@@ -59,7 +59,7 @@ class CropAndSearchTool(BaseTool):
     vlm_client: Optional[Any] = None
     visual_search_client: Optional[VisualReverseSearchClient] = None
     provider: str = "gemini"
-    model_name: str = "gemini-3.5-flash"
+    model_name: str = "gemini-3.6-flash"
     top_k: int = 5
     visit_top_k: int = 3
     saved_crop_dir: str = "outputs/trace_artifacts/crops"

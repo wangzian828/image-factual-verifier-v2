@@ -131,7 +131,7 @@ class Orchestrator:
     def __init__(
         self,
         provider: str = "gemini",
-        model_name: str = "gemini-3.5-flash",
+        model_name: str = "gemini-3.6-flash",
         vlm_provider: Optional[str] = None,
         vlm_model: Optional[str] = None,
         llm_wire_api: Optional[str] = None,

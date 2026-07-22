@@ -35,7 +35,7 @@ def build_vlm_client(
             or os.getenv("GEMINI_VISION_WIRE_API")
             or os.getenv("VISION_LLM_WIRE_API")
             or "interactions",
-            model_name=model_name or os.getenv("GEMINI_VISION_MODEL", os.getenv("GEMINI_MODEL", "gemini-3.5-flash")),
+            model_name=model_name or os.getenv("GEMINI_VISION_MODEL", os.getenv("GEMINI_MODEL", "gemini-3.6-flash")),
             timeout=timeout,
             max_retries=max_retries,
         )

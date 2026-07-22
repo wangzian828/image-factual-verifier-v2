@@ -13,7 +13,7 @@ def test_teacher_profile_is_fixed_to_accepted_gemini_wire() -> None:
     settings = resolve_provider_settings(profile_id="teacher-gemini", environ={})
 
     assert settings.provider == "gemini"
-    assert settings.model_name == "gemini-3.5-flash"
+    assert settings.model_name == "gemini-3.6-flash"
     assert settings.vlm_provider == "gemini"
     assert settings.llm_wire_api == "interactions"
     assert settings.vlm_wire_api == "interactions"
@@ -165,7 +165,7 @@ def test_loose_default_remains_gemini() -> None:
 
     assert config.profile_id is None
     assert config.provider == "gemini"
-    assert config.model_name == "gemini-3.5-flash"
+    assert config.model_name == "gemini-3.6-flash"
 
 
 def test_local_qwen_planning_reasoning_is_stage_scoped(

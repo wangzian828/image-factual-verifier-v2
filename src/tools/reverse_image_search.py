@@ -45,7 +45,7 @@ class ReverseImageSearchTool(BaseTool):
     lens_client: Optional[SerperLensSearchClient] = None
     visual_search_client: Optional[VisualReverseSearchClient] = None
     provider: str = "gemini"
-    model_name: str = "gemini-3.5-flash"
+    model_name: str = "gemini-3.6-flash"
     qwen_model_name: str = "qwen3.6-plus"
     top_k: int = 5
     use_lens: bool = True

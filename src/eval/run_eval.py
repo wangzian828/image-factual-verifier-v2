@@ -25,6 +25,13 @@ from src.eval.release_adapter import (
     load_runtime_release,
     resolve_runtime_image_path,
 )
+from src.eval.scoring_release_adapter import (
+    SCORING_PACKAGE_SCHEMA_VERSION,
+    ScoringRuntimeRelease,
+    adapt_scoring_gold_for_process,
+    load_scoring_release,
+    resolve_scoring_image_path,
+)
 from src.orchestrator.runtime_case import verify_case_image
 from src.orchestrator.source_access import SourceAccessPolicy
 from src.redaction import sanitize_for_persistence
@@ -46,7 +53,10 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--benchmark",
         required=True,
-        help="Path to a v0.3 release runtime_input/cases.jsonl.",
+        help=(
+            "Path to runtime_input/cases.jsonl in a v0.3 benchmark or "
+            "reviewed ifv-scoring-gold-v1 package."
+        ),
     )
     parser.add_argument(
         "--profile",
@@ -128,6 +138,26 @@ def _parse_args() -> argparse.Namespace:
         help=(
             "Run only this case_id. Repeat to select an explicit ordered canary "
             "set without exposing labels to the Agent."
+        ),
+    )
+    parser.add_argument(
+        "--shard-count",
+        type=int,
+        default=1,
+        help="Deterministically split sorted case IDs into this many shards.",
+    )
+    parser.add_argument(
+        "--shard-index",
+        type=int,
+        default=0,
+        help="Zero-based shard index selected after explicit case filtering.",
+    )
+    parser.add_argument(
+        "--training-prohibited",
+        action="store_true",
+        help=(
+            "Mark every derived trajectory as ineligible for training; required "
+            "for frozen external evaluation releases."
         ),
     )
     parser.add_argument(
@@ -332,6 +362,8 @@ def _select_samples(
     *,
     requested_case_ids: List[str] | None,
     limit: int | None,
+    shard_count: int = 1,
+    shard_index: int = 0,
 ) -> List[Dict[str, Any]]:
     indexed: Dict[str, Dict[str, Any]] = {}
     for sample in samples:
@@ -356,6 +388,18 @@ def _select_samples(
                 + ", ".join(missing)
             )
         samples = [indexed[case_id] for case_id in requested]
+    if shard_count < 1:
+        raise ValueError("--shard-count must be at least 1")
+    if shard_index < 0 or shard_index >= shard_count:
+        raise ValueError("--shard-index must be in [0, shard-count)")
+    if shard_count > 1:
+        samples = [
+            sample
+            for index, sample in enumerate(
+                sorted(samples, key=lambda item: str(item["case_id"]))
+            )
+            if index % shard_count == shard_index
+        ]
     if limit is not None:
         samples = samples[:limit]
     return samples
@@ -428,15 +472,35 @@ def _rollout_specs(
 
 async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
     benchmark_path = Path(args.benchmark).expanduser().resolve()
-    release = load_runtime_release(benchmark_path)
+    manifest_probe = json.loads(
+        (benchmark_path.parent.parent / "manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    is_scoring_release = (
+        str(manifest_probe.get("schema_version") or "")
+        == SCORING_PACKAGE_SCHEMA_VERSION
+    )
+    release = (
+        load_scoring_release(benchmark_path)
+        if is_scoring_release
+        else load_runtime_release(benchmark_path)
+    )
     samples = _load_benchmark(benchmark_path)
     samples = _select_samples(
         samples,
         requested_case_ids=getattr(args, "case_id", None),
         limit=args.limit,
+        shard_count=int(getattr(args, "shard_count", 1)),
+        shard_index=int(getattr(args, "shard_index", 0)),
     )
     samples = [
-        resolve_runtime_image_path(sample, benchmark_path) for sample in samples
+        (
+            resolve_scoring_image_path(sample, release)
+            if isinstance(release, ScoringRuntimeRelease)
+            else resolve_runtime_image_path(sample, benchmark_path)
+        )
+        for sample in samples
     ]
     runtime_cases = [
         image_only_case_from_runtime_row(sample) for sample in samples
@@ -561,6 +625,11 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
             "sample_count": len(samples),
             "episode_count": len(rollout_specs),
             "limit": args.limit,
+            "shard_count": int(getattr(args, "shard_count", 1)),
+            "shard_index": int(getattr(args, "shard_index", 0)),
+            "training_prohibited": bool(
+                getattr(args, "training_prohibited", False)
+            ),
             "runtime_release": True,
             "release_id": release.release_id,
             "release_stage": release.release_stage,
@@ -568,11 +637,15 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
             "runtime_contract_version": release.runtime_contract_version,
             "input_mode": release.input_mode,
             "decision_policy_version": release.decision_policy_version,
-            "classification_protocol": _file_descriptor(
-                release.artifacts.classification_protocol
+            "classification_protocol": (
+                _file_descriptor(release.artifacts.classification_protocol)
+                if release.artifacts.classification_protocol is not None
+                else None
             ),
-            "process_reference_protocol": _file_descriptor(
-                release.artifacts.process_reference_protocol
+            "process_reference_protocol": (
+                _file_descriptor(release.artifacts.process_reference_protocol)
+                if release.artifacts.process_reference_protocol is not None
+                else None
             ),
             "evaluation_gold": None,
         },
@@ -698,9 +771,13 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
                 "policy_revision": manifest["git_commit"],
                 "trace_path": None,
                 "training_prohibited": (
-                    release.release_stage == "development_subset"
+                    bool(getattr(args, "training_prohibited", False))
+                    or release.release_stage == "development_subset"
                 ),
                 "training_eligible": False,
+                "sft_structured_eligibility_required": isinstance(
+                    release, ScoringRuntimeRelease
+                ),
             }
             if trace_path.exists():
                 record["trace_path"] = trace_path.relative_to(run_dir).as_posix()
@@ -723,17 +800,27 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
                             },
                         ).model_dump(mode="json")
                     )
+                private_gold = evaluation_gold_index[identity]
+                process_gold = (
+                    adapt_scoring_gold_for_process(private_gold)
+                    if isinstance(release, ScoringRuntimeRelease)
+                    else private_gold
+                )
+                process_metadata = {
+                    "evaluation_gold": _file_descriptor(
+                        release.artifacts.evaluation_gold
+                    ),
+                }
+                if release.artifacts.process_reference_protocol is not None:
+                    process_metadata["process_reference_protocol"] = (
+                        _file_descriptor(
+                            release.artifacts.process_reference_protocol
+                        )
+                    )
                 metrics, teacher_score = score_process_trace(
                     trace,
-                    evaluation_gold_index[identity],
-                    score_metadata={
-                        "process_reference_protocol": _file_descriptor(
-                            release.artifacts.process_reference_protocol
-                        ),
-                        "evaluation_gold": _file_descriptor(
-                            release.artifacts.evaluation_gold
-                        ),
-                    },
+                    process_gold,
+                    score_metadata=process_metadata,
                 )
                 metrics["episode_id"] = episode_id
                 metrics["prompt_group_id"] = spec["prompt_group_id"]
@@ -748,17 +835,21 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
                     asdict(item) for item in strict_failures
                 ]
                 process_metrics.append(metrics)
-                reference_score = await score_reference_chain_trace(
+                if isinstance(release, ScoringRuntimeRelease):
+                    reference_score = {
+                        "schema_version": "ifv-scoring-reference-chain-v1",
+                        "case_id": identity,
+                        "applicable": False,
+                        "reason": (
+                            "ifv-scoring-gold-v1 uses a structured relation "
+                            "target gate instead of the v0.3 reference protocol"
+                        ),
+                    }
+                else:
+                    reference_score = await score_reference_chain_trace(
                         trace,
-                        evaluation_gold_index[identity],
-                        score_metadata={
-                            "process_reference_protocol": _file_descriptor(
-                                release.artifacts.process_reference_protocol
-                            ),
-                            "evaluation_gold": _file_descriptor(
-                                release.artifacts.evaluation_gold
-                            ),
-                        },
+                        private_gold,
+                        score_metadata=process_metadata,
                     )
                 reference_score["episode_id"] = episode_id
                 reference_score["prompt_group_id"] = spec["prompt_group_id"]
@@ -802,7 +893,9 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
                 )
                 member["training_eligible"] = bool(
                     strict_trace_audit_pass
+                    and bool(metrics.get("training_eligible", False))
                     and not member["training_prohibited"]
+                    and not isinstance(release, ScoringRuntimeRelease)
                 )
                 post_rollout_rewards.append(
                     {

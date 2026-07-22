@@ -40,7 +40,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--provider", default="gemini", choices=["gemini"])
     parser.add_argument(
         "--model",
-        default=os.getenv("IFV_SEMANTIC_JUDGE_MODEL", "gemini-3.5-flash"),
+        default=os.getenv("IFV_SEMANTIC_JUDGE_MODEL", "gemini-3.6-flash"),
     )
     parser.add_argument("--max-tokens", type=int, default=4096)
     parser.add_argument("--timeout", type=float, default=180.0)

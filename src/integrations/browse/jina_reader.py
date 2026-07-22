@@ -1328,7 +1328,7 @@ class JinaReaderClient:
                     "LMDEPLOY_MODEL", "/gsdata/home/wza/models/Qwen3-VL-8B-Thinking"
                 )
             elif provider == "gemini":
-                model_name = os.getenv("BROWSE_EXTRACT_MODEL", os.getenv("GEMINI_MODEL", "gemini-3.5-flash"))
+                model_name = os.getenv("BROWSE_EXTRACT_MODEL", os.getenv("GEMINI_MODEL", "gemini-3.6-flash"))
             elif provider == "qwen":
                 model_name = os.getenv("QWEN_MODEL", "qwen3.6-plus")
             elif provider == "necodex":
@@ -1336,7 +1336,7 @@ class JinaReaderClient:
             elif provider == "openai":
                 model_name = "gpt-4o-mini"
             else:
-                model_name = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
+                model_name = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
 
         if provider == "gemini":
             interaction_result = self._run_async(

@@ -173,7 +173,7 @@ async def _run(args: argparse.Namespace) -> Dict[str, Any]:
     if not isinstance(agent_config, Mapping):
         agent_config = {}
     provider = str(args.provider or agent_config.get("provider") or "gemini")
-    model = str(args.model or agent_config.get("model") or "gemini-3.5-flash")
+    model = str(args.model or agent_config.get("model") or "gemini-3.6-flash")
     wire_api = args.wire_api or agent_config.get("llm_wire_api")
     backend: APIBackend | None = None
     matcher: LLMReferenceEvidenceMatcher | None = None

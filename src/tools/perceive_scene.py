@@ -100,7 +100,7 @@ class PerceiveSceneTool(BaseTool):
 
     client: Optional[Any] = field(default=None, repr=False)
     provider: str = "gemini"
-    model_name: str = "gemini-3.5-flash"
+    model_name: str = "gemini-3.6-flash"
 
     def _get_client(self):
         if self.client is None:
