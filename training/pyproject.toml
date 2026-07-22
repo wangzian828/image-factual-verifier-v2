@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "image-factual-verifier-training"
+version = "0.1.0"
+description = "Qwen3-VL deployment, full-parameter SFT, and Agent RL infrastructure for Visual Fact Discrepancy Agent v4"
+requires-python = ">=3.10,<3.13"
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "Pillow>=10,<13",
+    "pytest>=8.0,<9",
+]
+
+[project.scripts]
+ifv-training = "ifv_training.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["ifv_training*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
