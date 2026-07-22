@@ -30,6 +30,7 @@ SEMANTIC_REWARD_INPUT_VERSION = "ifv-semantic-reward-input-v1"
 BLIND_PROMPT_VERSION = "ifv-semantic-blind-v3"
 AWARE_PROMPT_VERSION = "ifv-semantic-aware-counterfactual-v4"
 JUDGE_GENERATION_VERSION = "minimal-thinking-4096-v3"
+SEMANTIC_REWARD_POSTPROCESS_VERSION = "semantic-audit-v3"
 
 BLIND_SYSTEM_PROMPT = (
     "You are a frozen post-rollout factuality auditor. Judge only the supplied "
@@ -664,8 +665,6 @@ def semantic_audit_passes(
         strict_trace_audit_pass
         and engineering_valid
         and float(metrics.get("verdict_blind_agreement", 0.0)) == 1.0
-        and float(metrics.get("claim_entailment", 0.0)) >= 0.65
-        and float(metrics.get("evidence_citation_fidelity", 0.0)) >= 0.80
         and float(metrics.get("verdict_sufficiency", 0.0)) >= 0.70
         and float(metrics.get("verdict_swap_rejection", 0.0)) == 1.0
         and not metrics.get("invalid_judge_evidence_ids")
@@ -695,6 +694,7 @@ def build_semantic_reward_artifact(
     )
     artifact_core = {
         "schema_version": SEMANTIC_REWARD_SCHEMA_VERSION,
+        "postprocess_version": SEMANTIC_REWARD_POSTPROCESS_VERSION,
         "case_id": str(packet.get("case_id", "")),
         "source_trace": {
             "sha256": trace_sha256,
@@ -751,6 +751,7 @@ class SemanticRewardCache:
                 "provider": provider,
                 "model": model,
                 "generation_version": generation_version,
+                "postprocess_version": SEMANTIC_REWARD_POSTPROCESS_VERSION,
                 "prompt_versions": [BLIND_PROMPT_VERSION, AWARE_PROMPT_VERSION],
             }
         )

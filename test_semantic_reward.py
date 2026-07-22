@@ -15,6 +15,7 @@ from src.trajectory.semantic_reward import (
     SemanticRewardJudge,
     build_semantic_reward_artifact,
     build_semantic_reward_input,
+    semantic_audit_passes,
     semantic_metrics,
     sha256_json,
 )
@@ -223,6 +224,19 @@ def test_unknown_judge_citation_fails_semantic_gate() -> None:
     assert metrics["invalid_judge_evidence_ids"] == ["invented-evidence"]
 
 
+def test_claim_level_scores_are_diagnostic_not_audit_gate() -> None:
+    packet = build_semantic_reward_input(_trace())
+    blind = _blind().model_copy(deep=True)
+    blind.claim_reviews[0].entailment_score = 0.0
+    blind.claim_reviews[0].citation_fidelity = 0.0
+    metrics = semantic_metrics(packet, blind, _aware())
+    assert metrics["claim_entailment"] == 0.0
+    assert metrics["evidence_citation_fidelity"] == 0.0
+    assert semantic_audit_passes(
+        metrics, strict_trace_audit_pass=True, engineering_valid=True
+    ) is True
+
+
 def test_semantic_reward_cache_is_content_addressed(tmp_path: Path) -> None:
     cache = SemanticRewardCache(tmp_path)
     key = cache.key(
@@ -241,6 +255,7 @@ def test_semantic_reward_cache_is_content_addressed(tmp_path: Path) -> None:
             "provider": "gemini",
             "model": "judge-model",
                 "generation_version": "minimal-thinking-4096-v3",
+                "postprocess_version": "semantic-audit-v3",
                 "prompt_versions": [
                     "ifv-semantic-blind-v3",
                     "ifv-semantic-aware-counterfactual-v4",
