@@ -240,10 +240,10 @@ def test_semantic_reward_cache_is_content_addressed(tmp_path: Path) -> None:
             "reward_input_sha256": "b" * 64,
             "provider": "gemini",
             "model": "judge-model",
-            "generation_version": "minimal-thinking-4096-v1",
-            "prompt_versions": [
-                "ifv-semantic-blind-v2",
-                "ifv-semantic-aware-counterfactual-v2",
-            ],
+                "generation_version": "minimal-thinking-4096-v2",
+                "prompt_versions": [
+                    "ifv-semantic-blind-v3",
+                    "ifv-semantic-aware-counterfactual-v3",
+                ],
         }
     )
