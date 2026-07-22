@@ -138,6 +138,53 @@ def test_extractor_rejects_invalid_relation_stance(
         _extract(client, "The source page contains this statement.", "verify")
 
 
+def test_local_extractor_enforces_complete_json_schema(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict = {}
+    monkeypatch.setenv("BROWSE_EXTRACT_PROVIDER", "qwen_local")
+
+    def complete(_client, **kwargs) -> str:
+        captured.update(kwargs)
+        return json.dumps(
+            {
+                "rationale": "The passage states the disputed relation.",
+                "passage_id": 0,
+                "supporting_passage_ids": [],
+                "summary": "The actual value differs.",
+                "relevance": "high",
+                "relation_scope": "same_relation",
+                "relation_stance": "contradicts",
+                "directness": "direct",
+                "temporal_alignment": "not_applicable",
+            }
+        )
+
+    monkeypatch.setattr(
+        "src.integrations.browse.jina_reader.OpenAICompatibleChatClient.create_json_completion",
+        complete,
+    )
+    client = JinaReaderClient(
+        extract_provider="qwen_local",
+        extract_model="local-model",
+        extract_base_url="http://127.0.0.1:8901/v1",
+        extract_api_key="none",
+        extract_wire_api="chat_completions",
+    )
+
+    result = client._extract_with_llm(
+        "[PASSAGE 0] The actual value differs.",
+        image_claim="The image claims another value.",
+        retrieval_goal="Find the actual value.",
+    )
+
+    schema = captured["response_schema"]
+    assert set(schema["required"]) == set(schema["properties"])
+    assert schema["additionalProperties"] is False
+    assert result["relation_scope"] == "same_relation"
+    assert result["stance"] == "refute"
+
+
 def test_jina_navigation_is_excluded_from_exact_passage_document(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

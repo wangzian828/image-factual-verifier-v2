@@ -48,12 +48,12 @@ goal and compare it only with the trusted image claim. The retrieval goal locate
 text but does not determine the result.
 
 Return relation_scope as same_relation, partial_relation, different_instance, or
-unclear. same_relation includes a conflicting value for the same subject in the same
-event and relation slot. Return relation_stance as supports, contradicts,
-background, or unclear. A missing mention is not refutation; reporting that somebody
-made a claim does not support its truth and is background. The actual value of the
-disputed relation may contradict the claim even when the page never mentions the
-image's proposed value.
+unclear. A different value in the same subject-event relation is still same_relation;
+different_instance means another photo, event, or episode. Return relation_stance as
+supports, contradicts, background, or unclear. A missing mention is not refutation;
+reporting that somebody made a claim does not support its truth and is background.
+The actual value of the disputed relation may contradict the claim even when the page
+never mentions the image's proposed value.
 An explicit denial refutes it; the selected passage need not settle every clause.
 
 Use only supplied passages. Choose passage_id=-1 when none supplies a material
@@ -1361,6 +1361,10 @@ class JinaReaderClient:
                 model_name=model_name,
                 max_tokens=max_output_tokens,
                 temperature=0.0,
+                response_schema=normalize_json_schema(
+                    EXTRACT_SCHEMA,
+                    require_all_properties=True,
+                ),
                 messages=[
                     {"role": "system", "content": EXTRACT_PROMPT},
                     {
