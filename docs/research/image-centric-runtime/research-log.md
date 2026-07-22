@@ -1,5 +1,22 @@
 # Image-Centric Runtime Research Log
 
+## 2026-07-22 — Planning source-policy regression accepted
+
+- `qwen35-monarch-planning-policy-7e21884-r1` completed with zero engineering
+  errors after 17 investigation actions and stopped normally as
+  `meaningful_routes_exhausted`.
+- Strict scheduler audit passed with zero scheduler, protocol, or route-control
+  rejection. Two fact-check-oriented Planning proposals were rejected before
+  atomic commit and execution, remained correction warnings, and did not enter
+  canonical Hypothesis/Task queries or SFT policy actions.
+- The final `real` verdict is semantically wrong. Decision twice proposed `fake`,
+  but the cited material mixed support/refute directions or was not owned by the
+  affected Claim, so the deterministic Evidence qualification gate correctly
+  rejected it. This remains a batch-level Evidence-promotion analysis item rather
+  than a case-specific rule.
+- The next run freezes commit `7e21884` and restarts the complete 20-case set from
+  a fresh concurrency-1 directory with incremental strict audit.
+
 ## 2026-07-22 — Monarch gate accepted and full 20 launched
 
 - `qwen35-monarch-dedup-cd0c04f` completed with correct `fake`, zero
