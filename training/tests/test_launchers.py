@@ -135,6 +135,9 @@ def test_launchers_enforce_physical_gpu_allowlist() -> None:
     selector = _source("scripts/server/select_idle_gpus.sh")
 
     assert 'IFV_ALLOWED_GPU_IDS:-4,5,6,7' in common
+    assert 'configure_cuda_toolkit' in common
+    assert 'IFV_CUDA_HOME' in common
+    assert 'NCCL_CUMEM_HOST_ENABLE' in common
     assert "outside the allowed physical GPU set" in common
     assert "$1 + 0 >= 4 && $1 + 0 <= 7" in selector
 

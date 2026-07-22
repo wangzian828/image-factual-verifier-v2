@@ -76,7 +76,8 @@ install_sft() {
   prepare_base "$SFT_PREFIX" 12.8.93
   "$SFT_PREFIX/bin/python" -m pip install \
     torch==2.10.0 torchvision==0.25.0 torchaudio==2.10.0
-  CUDA_HOME="$SFT_PREFIX" "$SFT_PREFIX/bin/python" -m pip install \
+  CUDA_HOME="$SFT_PREFIX" PATH="$SFT_PREFIX/bin:$PATH" \
+    "$SFT_PREFIX/bin/python" -m pip install \
     --no-build-isolation --requirement "$REPO_ROOT/requirements/train-qwen35.txt"
   "$SFT_PREFIX/bin/python" -m pip install --no-deps --editable "$REPO_ROOT"
   freeze_env "$SFT_PREFIX" ifv-qwen35-sft-ms-swift442

@@ -25,7 +25,24 @@ require_value() {
   fi
 }
 
+configure_cuda_toolkit() {
+  # gpu-13 keeps nvcc inside the dedicated conda environment rather than under
+  # /usr/local/cuda.  Resolve that environment explicitly so DeepSpeed never
+  # depends on an interactive shell having exported CUDA_HOME beforehand.
+  local candidate="${IFV_CUDA_HOME:-${CUDA_HOME:-}}"
+  if [[ -z "$candidate" ]]; then
+    candidate="$(python -c 'import sys; print(sys.prefix)')"
+  fi
+  if [[ ! -x "$candidate/bin/nvcc" ]]; then
+    echo "CUDA toolkit is unavailable: expected nvcc at $candidate/bin/nvcc. Set IFV_CUDA_HOME or run with the intended training Python environment first." >&2
+    exit 2
+  fi
+  export CUDA_HOME="$candidate"
+  export PATH="$CUDA_HOME/bin:$PATH"
+}
+
 require_training_gpus() {
+  configure_cuda_toolkit
   require_value CUDA_VISIBLE_DEVICES
   IFS=',' read -r -a devices <<<"$CUDA_VISIBLE_DEVICES"
   if [[ "${#devices[@]}" -lt 1 || "${#devices[@]}" -gt 4 ]]; then
@@ -53,6 +70,9 @@ require_training_gpus() {
   done
   export NPROC_PER_NODE="${#devices[@]}"
   export OMP_NUM_THREADS=1
+  # Required on gpu-13: the R580/NCCL 2.27 default cuMem-host allocation path
+  # has previously crashed during multi-rank startup.
+  export NCCL_CUMEM_HOST_ENABLE="${NCCL_CUMEM_HOST_ENABLE:-0}"
   export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 }
 
