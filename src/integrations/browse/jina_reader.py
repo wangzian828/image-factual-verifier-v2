@@ -48,12 +48,14 @@ goal and compare it only with the trusted image claim. The retrieval goal locate
 text but does not determine the result.
 
 Return relation_scope as same_relation, partial_relation, different_instance, or
-unclear. A different value in the same subject-event relation is still same_relation;
-different_instance means another photo, event, or episode. Return relation_stance as
-supports, contradicts, background, or unclear. A missing mention is not refutation;
-reporting that somebody made a claim does not support its truth and is background.
-The actual value of the disputed relation may contradict the claim even when the page
-never mentions the image's proposed value.
+unclear. relation_scope identifies whether the passage and claim concern the same
+subject-event relation, independent of its value. different_instance requires another
+occurrence, photo, event, or episode; a competing value for one relation is
+same_relation. Return relation_stance as supports, contradicts, background, or
+unclear. A missing mention is not refutation; reporting that somebody made a claim
+does not support its truth and is background. The actual value of the disputed
+relation may contradict the claim even when the page never mentions the image's
+proposed value.
 An explicit denial refutes it; the selected passage need not settle every clause.
 
 Use only supplied passages. Choose passage_id=-1 when none supplies a material
@@ -986,7 +988,7 @@ class JinaReaderClient:
                 "relation_scope": relation_scope,
                 "relation_stance": relation_stance,
                 "directness": directness,
-                "context_only": False,
+                "context_only": True,
                 "temporal_alignment": temporal_alignment,
                 "artifact_sha256": document_sha256,
                 "evidence_span": {},
@@ -995,6 +997,8 @@ class JinaReaderClient:
         extracted.update(
             {
                 **primary_record,
+                "passage_id": passage_id,
+                "supporting_passage_ids": supporting_passage_ids,
                 "evidence_records": evidence_records,
                 RUNTIME_METRICS_KEY: runtime_metrics,
             }

@@ -185,6 +185,34 @@ def test_local_extractor_enforces_complete_json_schema(
     assert result["stance"] == "refute"
 
 
+def test_extractor_normalizes_primary_out_of_supporting_passages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = JinaReaderClient(fetch_provider="jina")
+    monkeypatch.setattr(
+        client,
+        "_extract_with_llm",
+        lambda _content, **_kwargs: {
+            "rationale": "The selected passage resolves the relation.",
+            "passage_id": 0,
+            "supporting_passage_ids": [0],
+            "summary": "The actual value differs.",
+            "relevance": "high",
+            "stance": "refute",
+            "relation_scope": "same_relation",
+            "relation_stance": "contradicts",
+            "directness": "direct",
+            "temporal_alignment": "not_applicable",
+        },
+    )
+
+    result = _extract(client, "The actual value differs.", "Another value is shown.")
+
+    assert result["passage_id"] == 0
+    assert result["supporting_passage_ids"] == []
+    assert result["context_only"] is False
+
+
 def test_jina_navigation_is_excluded_from_exact_passage_document(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

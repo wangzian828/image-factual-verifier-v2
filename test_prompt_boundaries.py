@@ -44,8 +44,9 @@ def test_hot_path_prompts_stay_semantic_and_compact() -> None:
         DISCREPANCY_DECISION_SYSTEM_PROMPT.split()
     )
     assert "missing mention is not refutation" in browse_prompt
-    assert "different value in the same subject-event relation" in browse_prompt
-    assert "different_instance means another photo, event, or episode" in browse_prompt
+    assert "same subject-event relation, independent of its value" in browse_prompt
+    assert "different_instance requires another occurrence" in browse_prompt
+    assert "a competing value for one relation is same_relation" in browse_prompt
     assert "actual value of the disputed relation" in browse_prompt
     assert "never mentions the image's proposed value" in browse_prompt
     assert "does not support its truth" in browse_prompt
