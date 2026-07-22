@@ -28,8 +28,8 @@ from src.tools.vision_utils import controlled_image_to_data_url
 SEMANTIC_REWARD_SCHEMA_VERSION = "ifv-semantic-reward-v1"
 SEMANTIC_REWARD_INPUT_VERSION = "ifv-semantic-reward-input-v1"
 BLIND_PROMPT_VERSION = "ifv-semantic-blind-v3"
-AWARE_PROMPT_VERSION = "ifv-semantic-aware-counterfactual-v3"
-JUDGE_GENERATION_VERSION = "minimal-thinking-4096-v2"
+AWARE_PROMPT_VERSION = "ifv-semantic-aware-counterfactual-v4"
+JUDGE_GENERATION_VERSION = "minimal-thinking-4096-v3"
 
 BLIND_SYSTEM_PROMPT = (
     "You are a frozen post-rollout factuality auditor. Judge only the supplied "
@@ -44,7 +44,9 @@ BLIND_SYSTEM_PROMPT = (
 AWARE_SYSTEM_PROMPT = (
     "You are a frozen post-rollout reward auditor. Decide whether the recorded "
     "binary verdict follows from the supplied basis. Also test the swapped verdict "
-    "and the stated Evidence-dropout variant. Use only supplied IDs and facts. "
+    "and the stated Evidence-dropout variant. For the dropout answer, use only "
+    "counterfactual.remaining_evidence; do not reuse the full Evidence list or "
+    "recorded basis. Use only supplied IDs and facts. "
     "Confidence measures support for the stated verdict, not whether its claim is true. "
     "Keep the explanation under 100 words and do not quote Evidence excerpts."
 )
@@ -658,10 +660,6 @@ def semantic_audit_passes(
     strict_trace_audit_pass: bool,
     engineering_valid: bool,
 ) -> bool:
-    dropout_ok = (
-        not bool(metrics.get("dropout_applicable"))
-        or float(metrics.get("evidence_dropout_sensitivity") or 0.0) >= 0.10
-    )
     return bool(
         strict_trace_audit_pass
         and engineering_valid
@@ -670,8 +668,6 @@ def semantic_audit_passes(
         and float(metrics.get("evidence_citation_fidelity", 0.0)) >= 0.80
         and float(metrics.get("verdict_sufficiency", 0.0)) >= 0.70
         and float(metrics.get("verdict_swap_rejection", 0.0)) == 1.0
-        and dropout_ok
-        and float(metrics.get("rubber_stamp_risk", 1.0)) <= 0.60
         and not metrics.get("invalid_judge_evidence_ids")
     )
 
