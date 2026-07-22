@@ -1021,6 +1021,30 @@ def _discrepancy_contract_errors(
             valid_assessments[proposal.claim_id] = proposal
 
     discrepancy = output.material_discrepancy
+    duplicate_discrepancy_id = ""
+    if discrepancy is not None:
+        duplicate_discrepancy_id = next(
+            (
+                item.discrepancy_id
+                for item in state.material_discrepancies
+                if set(item.affected_claim_ids)
+                == set(discrepancy.affected_claim_ids)
+                and set(item.evidence_ids) == set(discrepancy.evidence_ids)
+                and item.materiality == discrepancy.materiality
+                and item.status == discrepancy.status
+            ),
+            "",
+        )
+    if duplicate_discrepancy_id:
+        errors.append(
+            "material_discrepancy duplicates already-recorded discrepancy "
+            f"{duplicate_discrepancy_id!r}; omit material_discrepancy because "
+            "the prior canonical record remains active"
+        )
+        # Validate the rest of the proposed update as though the duplicate were
+        # omitted. This avoids cascading requirements to restate the prior
+        # ClaimAssessment while still rejecting the submitted duplicate.
+        discrepancy = None
     valid_output_discrepancy = False
     if discrepancy is not None:
         discrepancy_error_count_before = len(errors)

@@ -17,6 +17,7 @@ from src.orchestrator.investigation_models import (
     ImageOnlyInvestigationState,
     InvestigationBrief,
     InvestigationEvidence,
+    MaterialDiscrepancy,
     MaterialDiscrepancyProposal,
     NewSearchHypothesis,
     SearchHypothesisProposal,
@@ -643,6 +644,50 @@ def test_established_high_discrepancy_requires_fake_in_same_object() -> None:
     assert update["accepted"] is False
     assert "verdict_proposal='fake'" in update["rejected_reason"]
     assert "same complete JSON object" in update["rejected_reason"]
+    assert state.model_dump(mode="json") == before
+
+
+def test_discrepancy_decision_rejects_structured_duplicate_without_cascade() -> None:
+    state = _planned_state()
+    evidence = _append_evidence(state)
+    claim = state.image_claims[0]
+    claim.salience = "medium"
+    prior = MaterialDiscrepancy(
+        discrepancy_id="discrepancy-already-recorded",
+        statement="The source contradicts the depicted relation.",
+        affected_claim_ids=[claim.claim_id],
+        visual_anchor_fact_ids=claim.anchor_fact_ids,
+        evidence_ids=[evidence.evidence_id],
+        materiality="decisive",
+        status="established",
+        rationale="This canonical discrepancy was accepted earlier.",
+    )
+    state.material_discrepancies.append(prior)
+    before = state.model_dump(mode="json")
+
+    update = apply_discrepancy_decision(
+        state,
+        DiscrepancyDecisionOutput(
+            material_discrepancy=MaterialDiscrepancyProposal(
+                statement="Different prose for the same recorded contradiction.",
+                affected_claim_ids=[claim.claim_id],
+                visual_anchor_fact_ids=claim.anchor_fact_ids,
+                evidence_ids=[evidence.evidence_id],
+                materiality="decisive",
+                status="established",
+                rationale="This should not restate prior canonical state.",
+            ),
+            verdict_proposal="continue",
+            rationale="The high-salience route remains open.",
+        ),
+        reviewed_evidence_ids=[evidence.evidence_id],
+        trigger="qualified_evidence",
+    )
+
+    assert update["accepted"] is False
+    assert prior.discrepancy_id in update["rejected_reason"]
+    assert "omit material_discrepancy" in update["rejected_reason"]
+    assert "requires refuted assessment" not in update["rejected_reason"]
     assert state.model_dump(mode="json") == before
 
 

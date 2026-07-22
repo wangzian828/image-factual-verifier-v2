@@ -977,7 +977,7 @@ html&gt;body{padding:0}&lt;/style&gt;
         {
           icon: &quot;refresh-cw&quot;,
           label: &quot;语义 Decision + 确定性 Coverage&quot;,
-          action: &quot;Runtime 验证来源和调用链并生成 Evidence、Finding 或 Failure；独立 Gemini Decision 提议 ClaimAssessment 与 MaterialDiscrepancy；Runtime 原子校验后运行 Coverage。高显著 Claim 的 refuted、决定性冲突与 fake 必须在同一对象内闭合。&quot;,
+          action: &quot;Runtime 验证来源和调用链并生成 Evidence、Finding 或 Failure；独立 Gemini Decision 只提议本轮更新，已记录冲突保持有效且不可重复提交；Runtime 原子校验后运行 Coverage。高显著 Claim 的 refuted、决定性冲突与 fake 必须在同一对象内闭合。&quot;,
           state: &quot;Evidence · Finding · ClaimAssessment · MaterialDiscrepancy · Coverage&quot;,
           example: &quot;NASA 官方直接说明真实仪式在 Johnson Space Center，反驳 Kennedy 地点；决定性事实变为 refuted，Coverage 已足够判 fake。&quot;
         },

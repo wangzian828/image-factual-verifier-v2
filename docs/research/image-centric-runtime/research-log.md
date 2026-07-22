@@ -1,5 +1,19 @@
 # Image-Centric Runtime Research Log
 
+## 2026-07-22 — repeated canonical discrepancy
+
+- `qwen35-monarch-atomic-9ac16e2` accepted an earlier medium-Claim biological
+  discrepancy and continued on the still-open high Claim. At a later checkpoint,
+  Qwen repeatedly submitted that prior discrepancy as a new update and exhausted
+  corrections while trying to recreate its already-recorded assessment.
+- Duplicate detection now uses only structured identity: affected Claim IDs,
+  Evidence IDs, materiality, and status. It does not compare prose or infer
+  semantics. The duplicate is rejected with its canonical discrepancy ID and the
+  rest of the output is checked as though that repeated field were omitted, avoiding
+  misleading cascade errors.
+- No prior state is deleted, no model output is silently rewritten, and Evidence,
+  verdict, and retry gates remain unchanged.
+
 ## 2026-07-22 — Monarch atomic Decision correction
 
 - `qwen35-monarch-querycap-eef68a0` confirmed that Planning now persists valid

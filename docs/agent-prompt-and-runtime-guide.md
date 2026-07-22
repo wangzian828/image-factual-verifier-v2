@@ -102,6 +102,9 @@ either schema or semantic validation remains an `output_rejected` trace step wit
 its exact fields and reason; it is not mislabeled as an empty format error.
 Coupled atomic consequences are reported together: refuting a high-salience Claim
 requires its decisive established discrepancy and `fake` proposal in the same JSON.
+An already-recorded discrepancy is canonical state, not a template for the next
+update. Repeating the same affected Claim, Evidence, materiality, and status is
+rejected as a structured duplicate without demanding another ClaimAssessment.
 
 A qualified refutation of one high-salience Claim is already decisive for `fake`.
 Another unresolved Claim does not lower that contradiction to supporting or require

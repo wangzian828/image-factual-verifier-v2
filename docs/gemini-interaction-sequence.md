@@ -121,6 +121,9 @@ format error.
 The validator states coupled atomic consequences in one response: a refuted
 high-salience Claim, its decisive established discrepancy, and `fake` must be
 returned in the same complete object.
+Prior canonical discrepancies remain active across standalone checkpoints. A later
+object that repeats the same affected Claims, Evidence, materiality, and status is
+rejected as a duplicate and must omit `material_discrepancy`.
 
 Qwen Chat Completions records the same lifecycle explicitly in the context ledger.
 The first Planning, Decision, or Judgment attempt is `standalone_request`; each
