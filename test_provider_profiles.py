@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from src.orchestrator.llm_backend import APIBackend
 from src.orchestrator.pipeline import Orchestrator
 from src.provider_profiles import resolve_provider_settings
-from src.workflow import WorkflowConfig
+from src.workflow import VerificationWorkflow, WorkflowConfig
 
 def test_teacher_profile_is_fixed_to_accepted_gemini_wire() -> None:
     settings = resolve_provider_settings(profile_id="teacher-gemini", environ={})
@@ -89,6 +91,55 @@ def test_profile_rejects_all_loose_overrides() -> None:
             profile_id="teacher-gemini",
             provider="gemini",
         )
+
+
+def test_profile_config_can_spawn_isolated_seeded_rollouts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = VerificationWorkflow(
+        WorkflowConfig(profile_id="student-qwen3.5-local", save_traces=False)
+    )
+    observed: list[tuple[int | None, str | None, str | None]] = []
+
+    async def record_child(
+        self: VerificationWorkflow,
+        path: str,
+        image_id: str = "",
+        *,
+        runtime_case: object = None,
+    ) -> dict[str, object]:
+        _ = runtime_case
+        observed.append(
+            (
+                self.config.sampling_seed,
+                self.config.profile_id,
+                self.config.llm_base_url,
+            )
+        )
+        return {
+            "image_id": image_id,
+            "image_path": path,
+            "verdict": "real",
+            "termination": "success",
+        }
+
+    monkeypatch.setattr(VerificationWorkflow, "run_single", record_child)
+    results = asyncio.run(
+        workflow.run_batch(
+            ["first.jpg", "second.jpg"],
+            image_ids=["episode-0", "episode-1"],
+            sampling_seeds=[101, 202],
+        )
+    )
+
+    assert [result["image_id"] for result in results] == [
+        "episode-0",
+        "episode-1",
+    ]
+    assert observed == [
+        (101, "student-qwen3.5-local", "http://127.0.0.1:8901/v1"),
+        (202, "student-qwen3.5-local", "http://127.0.0.1:8901/v1"),
+    ]
 
 def test_loose_default_remains_gemini() -> None:
     config = WorkflowConfig()

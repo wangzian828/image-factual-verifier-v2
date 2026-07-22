@@ -10,8 +10,9 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import copy
 import os
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 # Limit thread usage to prevent memory explosion
@@ -263,9 +264,15 @@ class VerificationWorkflow:
                     # A complete rollout owns its orchestrator, interaction
                     # lifecycle, mutable state, archive and runtime event stream.
                     # Only content-addressed tool caches may be shared externally.
-                    child = VerificationWorkflow(
-                        replace(self.config, sampling_seed=sampling_seed)
-                    )
+                    # WorkflowConfig is normalized once in __post_init__.  A
+                    # dataclasses.replace() call would run __post_init__ again
+                    # with both the retained profile_id and its already-resolved
+                    # provider fields, correctly tripping the profile/override
+                    # isolation guard.  Rollout children need the same frozen
+                    # resolved settings with only a distinct sampling seed.
+                    child_config = copy.copy(self.config)
+                    child_config.sampling_seed = sampling_seed
+                    child = VerificationWorkflow(child_config)
                     return await child.run_single(
                         path,
                         img_id,
