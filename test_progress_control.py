@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import pytest
+from pydantic import ValidationError
+
 from src.orchestrator.investigation_models import (
     ImageOnlyInvestigationState,
     InvestigationBrief,
@@ -71,3 +74,39 @@ def test_no_gain_streak_never_sets_a_terminal_state() -> None:
         event.no_substantive_gain_streak == index + 1
         for index, event in enumerate(state.progress_events)
     )
+
+
+def test_progress_ledger_can_record_decisions_beyond_action_count() -> None:
+    state = _state()
+    for index in range(24):
+        state.action_count = index + 1
+        record_action_progress(
+            state,
+            {"created_failure_ids": [f"failure-{index}"]},
+        )
+
+    record_decision_progress(
+        state,
+        {"accepted_hypothesis_ids": ["hypothesis-1"]},
+    )
+    record_decision_progress(
+        state,
+        {"retired_hypothesis_ids": ["hypothesis-2"]},
+    )
+
+    assert state.action_count == 24
+    assert len(state.progress_events) == 26
+    assert [event.gain for event in state.progress_events[-2:]] == [
+        "decision_gain",
+        "decision_gain",
+    ]
+
+    restored = ImageOnlyInvestigationState.model_validate(
+        state.model_dump(mode="json")
+    )
+    assert len(restored.progress_events) == 26
+
+
+def test_progress_ledger_does_not_relax_action_budget() -> None:
+    with pytest.raises(ValidationError, match="less than or equal to 24"):
+        _state(action_count=25)

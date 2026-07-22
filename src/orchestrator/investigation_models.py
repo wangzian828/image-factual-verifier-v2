@@ -1111,7 +1111,11 @@ class ImageOnlyInvestigationState(StrictModel):
     # effect after no-gain settlement was removed.
     saturation_checkpoint_action: Optional[int] = Field(default=None, ge=0, le=24)
     saturation_grace_remaining: int = Field(default=0, ge=0, le=8)
-    progress_events: List[ProgressEvent] = Field(default_factory=list, max_length=24)
+    # One accepted tool action creates one action-progress event, while a semantic
+    # Decision may record an additional decision-progress event without consuming
+    # another action.  This audit ledger therefore must not share the 24-action
+    # budget's list bound; the action_count fields remain independently capped.
+    progress_events: List[ProgressEvent] = Field(default_factory=list)
     verdict_basis: Optional[VerdictBasis] = None
     judgment: Optional[ImageOnlyJudgment] = None
     stop_reason: Literal[
