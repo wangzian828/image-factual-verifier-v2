@@ -10,10 +10,16 @@ from .checkpoints import (
     build_checkpoint_manifest,
     build_serving_profile,
 )
-from .io import write_json
+from .io import load_json, write_json
 from .manifests import write_environment_manifest
 from .perception import convert_perception_runs
 from .policy import convert_policy_dataset
+from .rewards import (
+    build_and_write_ledger,
+    export_framework_reward,
+    validate_reward_ledger,
+    validate_semantic_reward_artifact,
+)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -77,6 +83,31 @@ def _parser() -> argparse.ArgumentParser:
         required=True,
     )
     serving.add_argument("--checkpoint-manifest", type=Path)
+
+    semantic_audit = subparsers.add_parser("audit-semantic-reward")
+    semantic_audit.add_argument("--input", type=Path, required=True)
+    semantic_audit.add_argument("--output", type=Path)
+    semantic_audit.add_argument("--strict", action="store_true")
+
+    reward_ledger = subparsers.add_parser("reward-ledger")
+    reward_ledger.add_argument("--semantic-artifact", type=Path, required=True)
+    reward_ledger.add_argument("--deterministic", type=Path)
+    reward_ledger.add_argument("--profile", type=Path)
+    reward_ledger.add_argument("--output", type=Path, required=True)
+
+    ledger_audit = subparsers.add_parser("audit-reward-ledger")
+    ledger_audit.add_argument("--input", type=Path, required=True)
+    ledger_audit.add_argument("--output", type=Path)
+    ledger_audit.add_argument("--strict", action="store_true")
+
+    reward_export = subparsers.add_parser("export-reward")
+    reward_export.add_argument("--ledger", type=Path, required=True)
+    reward_export.add_argument(
+        "--framework",
+        choices=("rllm", "verl"),
+        required=True,
+    )
+    reward_export.add_argument("--output", type=Path, required=True)
     return parser
 
 
@@ -133,6 +164,33 @@ def main() -> None:
             thinking_enabled=args.thinking_enabled == "true",
             checkpoint_manifest_path=args.checkpoint_manifest,
         )
+    elif args.command == "audit-semantic-reward":
+        result = validate_semantic_reward_artifact(load_json(args.input))
+        if args.output:
+            write_json(args.output, result)
+        if args.strict and not result["passed"]:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            raise SystemExit(1)
+    elif args.command == "reward-ledger":
+        result = build_and_write_ledger(
+            semantic_artifact_path=args.semantic_artifact,
+            deterministic_path=args.deterministic,
+            profile_path=args.profile,
+            output_path=args.output,
+        )
+    elif args.command == "audit-reward-ledger":
+        result = validate_reward_ledger(load_json(args.input))
+        if args.output:
+            write_json(args.output, result)
+        if args.strict and not result["passed"]:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            raise SystemExit(1)
+    elif args.command == "export-reward":
+        result = export_framework_reward(
+            load_json(args.ledger),
+            framework=args.framework,
+        )
+        write_json(args.output, result)
     else:
         raise AssertionError(args.command)
     print(json.dumps(result, ensure_ascii=False, indent=2))
