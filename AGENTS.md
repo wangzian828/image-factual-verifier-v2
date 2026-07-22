@@ -7,6 +7,7 @@ Read these active documents before changing the runtime:
 - `docs/superpowers/plans/2026-07-17-discrepancy-first-v4.md`
 - `docs/superpowers/plans/2026-07-17-v4-discrepancy-first-implementation-plan.md`
 - `docs/superpowers/plans/2026-07-21-qwen3.5-9b-runtime-evaluation-and-training-plan.md`
+- `docs/superpowers/plans/2026-07-23-qwen3.5-9b-sft-execution-plan.md`
 - `docs/gemini-interaction-sequence.md`
 - `docs/architecture.md`
 - `docs/runtime-release-contract.md`
