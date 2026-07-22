@@ -47,6 +47,9 @@ password, and successfully executed a temporary kernel on `gpu-13`. The base
 `ifv-agent` kernel registered by `bootstrap_gpu13.sh`; it starts the isolated
 Python 3.11 environment through `ifv_agent_kernel_gpu13.sh`, which applies the
 same proxy, data-root, cache, and `OMP_NUM_THREADS=1` guard as project wrappers.
+The wrapper also appends `127.0.0.1`, `localhost`, and `::1` to both `NO_PROXY`
+and `no_proxy`. Without this loopback exemption, inherited proxy settings can turn
+a healthy local vLLM `/health` or `/v1/models` request into a proxy-generated 503.
 
 The old local `9814` route belongs to the previous server workflow. On the current
 path the service behind remote `127.0.0.1:9814` was unavailable; use local `8333`.
