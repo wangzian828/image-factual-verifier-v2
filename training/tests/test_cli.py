@@ -1,0 +1,89 @@
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+from ifv_training import cli
+
+from test_rewards import _semantic_artifact
+
+
+def _write_json(path: Path, value: object) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value), encoding="utf-8")
+
+
+def _write_jsonl(path: Path, values: list[dict[str, object]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "".join(json.dumps(value) + "\n" for value in values),
+        encoding="utf-8",
+    )
+
+
+def test_build_run_rewards_cli_executes_real_branch(
+    tmp_path: Path,
+    monkeypatch: object,
+) -> None:
+    semantic_dir = tmp_path / "semantic"
+    _write_json(
+        semantic_dir / "episode-0.semantic_reward.json",
+        _semantic_artifact("episode-0"),
+    )
+    _write_jsonl(
+        tmp_path / "deterministic.jsonl",
+        [
+            {
+                "episode_id": "episode-0",
+                "classification_correct": True,
+                "strict_trace_audit_pass": True,
+                "fatal_engineering_error": False,
+            }
+        ],
+    )
+    _write_jsonl(
+        tmp_path / "members.jsonl",
+        [
+            {
+                "schema_version": "ifv-rollout-group-member-v1",
+                "prompt_group_id": "pg-1",
+                "case_id": "case-reward-1",
+                "episode_id": "episode-0",
+                "rollout_index": 0,
+                "group_size": 1,
+                "sampling_seed": 1,
+                "training_prohibited": False,
+                "training_eligible": True,
+            }
+        ],
+    )
+    root = Path(__file__).resolve().parents[1]
+    argv = [
+        "ifv-training",
+        "build-run-rewards",
+        "--semantic-artifacts",
+        str(semantic_dir),
+        "--deterministic",
+        str(tmp_path / "deterministic.jsonl"),
+        "--rollout-members",
+        str(tmp_path / "members.jsonl"),
+        "--profile",
+        str(root / "configs" / "rl" / "semantic-reward-v5.json"),
+        "--ledger-output",
+        str(tmp_path / "ledgers.jsonl"),
+        "--group-output",
+        str(tmp_path / "groups.jsonl"),
+    ]
+    monkeypatch.setattr(sys, "argv", argv)  # type: ignore[attr-defined]
+
+    cli.main()
+
+    assert (tmp_path / "ledgers.jsonl").is_file()
+    groups = [
+        json.loads(line)
+        for line in (tmp_path / "groups.jsonl").read_text(
+            encoding="utf-8"
+        ).splitlines()
+    ]
+    assert groups[0]["skip_reason"] == "insufficient_valid_members"

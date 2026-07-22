@@ -19,6 +19,7 @@ from .rewards import (
     build_ledgers_from_run_artifacts,
     build_standard_grpo_groups,
     export_framework_reward,
+    load_reward_profile,
     validate_reward_ledger,
     validate_semantic_reward_artifact,
 )
