@@ -207,6 +207,15 @@ directionally consistent Evidence chains, discrepancy alignment, stop quality, a
 no protocol rejection or legacy core ownership. The pure policy exporter repeats
 these gates and rejects a trace even if upstream score metadata is wrong.
 
+Completed Qwen rollouts may additionally enter the gold-free semantic reward audit
+described in `docs/rl-semantic-reward.md`. The frozen Gemini judge receives a
+bounded image/Evidence packet after runtime termination. Its first request hides
+the policy verdict, Claim status, and Evidence stance; its second request checks
+the accepted basis, a swapped verdict, and an Evidence-dropout counterfactual.
+The resulting `ifv-semantic-reward-v1` artifact is content-addressed and records
+model, prompt, token usage, and request/response hashes. It never mutates runtime
+state and is not model-visible.
+
 ## Acceptance status
 
 Local deterministic reducers, mocked native Interactions, the complete default
