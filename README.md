@@ -43,7 +43,7 @@ ifv-training audit-semantic-reward `
 ifv-training reward-ledger `
   --semantic-artifact D:\runs\semantic_rewards\case_x.semantic_reward.json `
   --deterministic D:\runs\case_x.post_rollout.json `
-  --profile configs\rl\semantic-reward-v1.json `
+  --profile configs\rl\semantic-reward-v2.json `
   --output D:\runs\reward_ledgers\case_x.json
 
 ifv-training export-reward `
