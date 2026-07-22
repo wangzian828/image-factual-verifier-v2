@@ -20,17 +20,17 @@ REWARD_LEDGER_SCHEMA_VERSION = "ifv-rl-reward-ledger-v1"
 REWARD_PROFILE_SCHEMA_VERSION = "ifv-rl-reward-profile-v1"
 
 DEFAULT_COMPONENT_WEIGHTS = {
-    "classification_correct": 0.15,
-    "strict_trace_audit": 0.10,
-    "verdict_blind_agreement": 0.10,
-    "claim_label_agreement": 0.15,
-    "claim_entailment": 0.10,
-    "evidence_citation_fidelity": 0.10,
-    "verdict_sufficiency": 0.20,
-    "verdict_swap_rejection": 0.10,
+    "classification_correct": 0.25,
+    "strict_trace_audit": 0.15,
+    "verdict_blind_agreement": 0.20,
+    "verdict_sufficiency": 0.25,
+    "verdict_swap_rejection": 0.15,
 }
 
 SUPPORTED_COMPONENT_WEIGHTS = frozenset(DEFAULT_COMPONENT_WEIGHTS) | {
+    "claim_label_agreement",
+    "claim_entailment",
+    "evidence_citation_fidelity",
     "evidence_dropout_sensitivity",
     "rubber_stamp_resistance",
 }
@@ -204,7 +204,7 @@ def load_reward_profile(path: Path | None = None) -> dict[str, Any]:
     if path is None:
         return {
             "schema_version": REWARD_PROFILE_SCHEMA_VERSION,
-            "profile_id": "ifv-semantic-balanced-v3",
+            "profile_id": "ifv-semantic-balanced-v4",
             "weights": dict(DEFAULT_COMPONENT_WEIGHTS),
         }
     profile = load_json(path)

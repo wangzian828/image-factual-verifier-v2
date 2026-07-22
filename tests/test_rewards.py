@@ -159,11 +159,13 @@ def test_profile_file_is_versioned_and_loadable() -> None:
     assert profile["weights"]["classification_correct"] == pytest.approx(0.20)
 
 
-def test_v3_profile_penalizes_claim_label_disagreement() -> None:
+def test_v4_profile_keeps_claim_level_metrics_diagnostic() -> None:
     root = Path(__file__).resolve().parents[1]
-    profile = load_reward_profile(root / "configs" / "rl" / "semantic-reward-v3.json")
-    assert profile["profile_id"] == "ifv-semantic-balanced-v3"
-    assert profile["weights"]["claim_label_agreement"] == pytest.approx(0.15)
+    profile = load_reward_profile(root / "configs" / "rl" / "semantic-reward-v4.json")
+    assert profile["profile_id"] == "ifv-semantic-balanced-v4"
+    assert "claim_label_agreement" not in profile["weights"]
+    assert "claim_entailment" not in profile["weights"]
+    assert "evidence_citation_fidelity" not in profile["weights"]
     assert "evidence_dropout_sensitivity" not in profile["weights"]
     assert "rubber_stamp_resistance" not in profile["weights"]
 
@@ -175,4 +177,6 @@ def test_v3_profile_penalizes_claim_label_disagreement() -> None:
     ).hexdigest()
     ledger = compose_reward_ledger(artifact, profile=profile)
     assert ledger["components"]["claim_label_agreement"] == 0.0
-    assert ledger["scalar_reward"] < 0.9
+    assert ledger["scalar_reward"] == compose_reward_ledger(
+        _semantic_artifact(), profile=profile
+    )["scalar_reward"]

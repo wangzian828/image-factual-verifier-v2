@@ -1,0 +1,11 @@
+{
+  "schema_version": "ifv-rl-reward-profile-v1",
+  "profile_id": "ifv-semantic-balanced-v4",
+  "weights": {
+    "classification_correct": 0.25,
+    "strict_trace_audit": 0.15,
+    "verdict_blind_agreement": 0.2,
+    "verdict_sufficiency": 0.25,
+    "verdict_swap_rejection": 0.15
+  }
+}
