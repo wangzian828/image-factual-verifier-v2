@@ -20,6 +20,7 @@ from src.orchestrator.discrepancy_coverage import (
     audit_discrepancy_coverage,
     compile_discrepancy_verdict_basis,
 )
+from src.orchestrator.evidence_policy import query_targets_fact_check_answer
 from src.orchestrator.runtime_case import verify_case_image
 from src.orchestrator.runtime_events import CaseRuntimeStore, current_case_runtime_store
 from src.orchestrator.progress_control import (
@@ -534,6 +535,7 @@ class Orchestrator:
                 self._validate_image_account_planning(
                     investigation,
                     parsed,
+                    source_access_policy=self.source_access_policy,
                 )
             ),
             max_output_tokens=self._stage_output_tokens("PLANNING", 8192),
@@ -2052,7 +2054,23 @@ class Orchestrator:
     def _validate_image_account_planning(
         investigation: ImageOnlyInvestigationState,
         parsed: ImageAccountPlanningOutput,
+        *,
+        source_access_policy: Optional[SourceAccessPolicy] = None,
     ) -> tuple[bool, str]:
+        policy = source_access_policy or SourceAccessPolicy()
+        blocked_queries = [
+            query
+            for hypothesis in parsed.search_hypotheses
+            for query in hypothesis.queries
+            if query_targets_fact_check_answer(query)
+            or policy.blocked_query_reference(query)
+        ]
+        if blocked_queries:
+            return False, (
+                "SearchHypothesis queries must seek underlying facts or sources, "
+                "not a ready-made fact-check verdict or an excluded source. "
+                "Rewrite the blocked queries without changing the ImageClaims."
+            )
         candidate = investigation.model_copy(deep=True)
         update = apply_image_account_planning(candidate, parsed)
         if not update.get("accepted", False):

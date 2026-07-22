@@ -838,6 +838,67 @@ def test_successful_planning_revision_is_not_a_protocol_rejection(
     assert report.stats["protocol_rejections"] == 0
 
 
+def test_policy_rejected_query_is_warning_but_canonical_query_is_hard(
+    tmp_path: Path,
+) -> None:
+    trace_path = _scripted_trace(tmp_path)
+    trace = json.loads(trace_path.read_text(encoding="utf-8"))
+    trace["state"]["all_steps"].insert(
+        2,
+        {
+            "round": 1,
+            "stage": "image_account_planning",
+            "action_type": "planning_revision",
+            "tool_name": "",
+            "tool_args": {},
+            "tool_result": "",
+            "output": {
+                "search_hypotheses": [
+                    {"queries": ["viral image hoax visible person product"]}
+                ]
+            },
+            "metadata": {
+                "stage": "image_account_planning",
+                "planning_revision_reason": "query policy rejected the proposal",
+                "policy_action": {
+                    "search_hypotheses": [
+                        {"queries": ["viral image hoax visible person product"]}
+                    ]
+                },
+            },
+        },
+    )
+    trace_path.write_text(
+        json.dumps(trace, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    corrected = audit_trace(trace_path)
+
+    assert not corrected.failures(strict_scheduler=True)
+    assert corrected.stats["fact_check_query_leaks"] == 0
+    assert corrected.stats["fact_check_query_rejections"] == 2
+    assert {
+        item.code for item in corrected.warnings(strict_scheduler=True)
+    } >= {"FACT_CHECK_QUERY_REJECTED"}
+
+    trace = json.loads(trace_path.read_text(encoding="utf-8"))
+    investigation = trace["state"]["investigation_state"]
+    investigation["tasks"][0]["suggested_queries"] = [
+        "viral image hoax visible person product"
+    ]
+    trace_path.write_text(
+        json.dumps(trace, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    leaked = audit_trace(trace_path)
+
+    assert "FACT_CHECK_QUERY_LEAK" in {
+        item.code for item in leaked.failures(strict_scheduler=True)
+    }
+
+
 def test_strict_audit_rejects_post_determination_action(
     tmp_path: Path,
 ) -> None:

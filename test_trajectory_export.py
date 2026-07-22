@@ -101,6 +101,22 @@ def test_v4_exporter_uses_discrepancy_stage_labels_and_quality_gate(
     assert all(item.trajectory_version == "ifv-policy-v2" for item in examples)
     assert all(set(item.policy_action_loss_mask) == {1} for item in examples)
 
+    revision = json.loads(json.dumps(trace["state"]["all_steps"][0]))
+    revision["action_type"] = "planning_revision"
+    revision["metadata"]["interaction_id"] = "planning-rejected"
+    revision["metadata"]["policy_action"] = {
+        "search_hypotheses": [
+            {"queries": ["viral image hoax visible person product"]}
+        ]
+    }
+    trace["state"]["all_steps"].insert(0, revision)
+
+    revised_examples = export_policy_examples(trace)
+
+    assert [item.step_id for item in revised_examples] == [
+        item.step_id for item in examples
+    ]
+
     trace["state"]["investigation_state"]["material_discrepancies"][0][
         "visual_anchor_fact_ids"
     ] = ["fact-claim-v4"]

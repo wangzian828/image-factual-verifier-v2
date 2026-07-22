@@ -445,10 +445,36 @@ def _looks_like_query_key(key: str) -> bool:
     return lowered in {"query", "queries", "suggested_query", "suggested_queries", "crop_query", "vlm_query"}
 
 
+def _policy_rejected_step_for_path(
+    trace: Mapping[str, Any],
+    path: str,
+) -> Mapping[str, Any] | None:
+    """Return the step when a forbidden proposal was blocked before execution."""
+
+    match = re.search(r"(?:^|\.)all_steps\[(\d+)\](?:\.|$)", path)
+    if match is None:
+        return None
+    steps = _rows(_state(trace).get("all_steps"))
+    index = int(match.group(1))
+    if index >= len(steps):
+        return None
+    step = steps[index]
+    metadata = _mapping(step.get("metadata"))
+    if (
+        str(step.get("action_type", ""))
+        in {*REJECTION_ACTIONS, "planning_revision"}
+        or metadata.get("search_policy_rejection") is True
+        or int(metadata.get("policy_filtered_query_count", 0) or 0) > 0
+    ):
+        return step
+    return None
+
+
 def _audit_leaks(trace: Mapping[str, Any], report: TraceReport) -> None:
     seen: set[tuple[str, str]] = set()
     url_count = 0
     query_count = 0
+    rejected_query_count = 0
     for key, raw_value, path in _iter_named_values(trace):
         query_key = _looks_like_query_key(key)
         if _looks_like_url_key(key):
@@ -474,13 +500,23 @@ def _audit_leaks(trace: Mapping[str, Any], report: TraceReport) -> None:
             signature = ("query", path)
             if signature not in seen:
                 seen.add(signature)
-                query_count += 1
-                _issue(
-                    report,
-                    "FACT_CHECK_QUERY_LEAK",
-                    f"{url_query_leak} leaked into the trace: {raw_value!r}",
-                    location=path,
-                )
+                if _policy_rejected_step_for_path(trace, path) is not None:
+                    rejected_query_count += 1
+                    _issue(
+                        report,
+                        "FACT_CHECK_QUERY_REJECTED",
+                        f"{url_query_leak} was rejected before execution: {raw_value!r}",
+                        category=CORRECTION,
+                        location=path,
+                    )
+                else:
+                    query_count += 1
+                    _issue(
+                        report,
+                        "FACT_CHECK_QUERY_LEAK",
+                        f"{url_query_leak} leaked into the trace: {raw_value!r}",
+                        location=path,
+                    )
         if query_key:
             query_domain = _fact_check_query_reference(raw_value)
             oriented = query_targets_fact_check_answer(raw_value)
@@ -488,20 +524,31 @@ def _audit_leaks(trace: Mapping[str, Any], report: TraceReport) -> None:
                 signature = ("query", path)
                 if signature not in seen:
                     seen.add(signature)
-                    query_count += 1
                     detail = (
                         f"known fact-check domain {query_domain!r} is named in query"
                         if query_domain
                         else "fact-check-oriented query"
                     )
-                    _issue(
-                        report,
-                        "FACT_CHECK_QUERY_LEAK",
-                        f"{detail} leaked into the trace: {raw_value!r}",
-                        location=path,
-                    )
+                    if _policy_rejected_step_for_path(trace, path) is not None:
+                        rejected_query_count += 1
+                        _issue(
+                            report,
+                            "FACT_CHECK_QUERY_REJECTED",
+                            f"{detail} was rejected before execution: {raw_value!r}",
+                            category=CORRECTION,
+                            location=path,
+                        )
+                    else:
+                        query_count += 1
+                        _issue(
+                            report,
+                            "FACT_CHECK_QUERY_LEAK",
+                            f"{detail} leaked into the trace: {raw_value!r}",
+                            location=path,
+                        )
     report.stats["fact_check_url_leaks"] = url_count
     report.stats["fact_check_query_leaks"] = query_count
+    report.stats["fact_check_query_rejections"] = rejected_query_count
 
 
 

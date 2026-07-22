@@ -964,7 +964,7 @@ html&gt;body{padding:0}&lt;/style&gt;
         {
           icon: &quot;list-tree&quot;,
           label: &quot;先写图像主张，再开放规划现实调查&quot;,
-          action: &quot;先把 ImageClaim 写成图像让读者接受的正向现实命题，不把怀疑、冲突或真假结论写进 Claim；再独立提出开放调查路线，查询底层事实与来源，而不是寻找现成的事实核查答案。非空 queries 由 Runtime 自动开放 text_search，不要求模型重复声明。&quot;,
+          action: &quot;先把 ImageClaim 写成图像让读者接受的正向现实命题，不把怀疑、冲突或真假结论写进 Claim；再独立提出开放调查路线，查询底层事实与来源，而不是寻找现成的事实核查答案。非空 queries 由 Runtime 自动开放 text_search，不要求模型重复声明；整份 Planning 在原子写入前通过 SourceAccessPolicy，受限查询只会触发重写，不会被静默改词或部分提交。&quot;,
           state: &quot;ImageClaim（图像主张） · SearchHypothesis（开放路线） · ResearchTask（账本归属） · planning thought tokens&quot;,
           example: &quot;图中提出某个事件地点；调查计划不只搜索该地点是否出现，而是询问事件实际发生在哪里，并寻找官方记录。&quot;
         },

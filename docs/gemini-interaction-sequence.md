@@ -77,7 +77,10 @@ Core instruction:
   attachment to the image account is bookkeeping, not a semantic conclusion.
   Non-empty `queries` already declare a text-search route, so the runtime derives
   `text_search` without changing the query text. `suggested_tools` only carries
-  additional useful capabilities.
+  additional useful capabilities. Before atomic state application, every planned
+  query must pass the same SourceAccessPolicy used by the search executor. A blocked
+  Planning object is returned for bounded correction and recorded as
+  `planning_revision`; it is never partially filtered into canonical state.
 
 Exact instruction:
 
@@ -132,6 +135,11 @@ ReAct request is `tool_roundtrip`; and a retry after runtime rejection is
 Multi-step correction chains retain every parent link. Strict audit accepts a
 rejection only when that chain reaches a valid same-stage output; an unrelated
 later request cannot erase it.
+
+Source-policy audit distinguishes lifecycle from content. A forbidden query that
+entered canonical tasks or reached a provider is a hard failure. A model proposal
+that was explicitly rejected before state commit or execution remains a correction
+warning, and a `planning_revision` is never exported as a supervised policy action.
 
 A duplicate native call receives the exact rejected tool name and normalized
 arguments so the model can change the call instead of guessing what collided. If

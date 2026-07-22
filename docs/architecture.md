@@ -81,6 +81,10 @@ Planning must provide at least one route with an executable first hop; the runti
 does not constrain the route's factual angle. Any explicit planned web query must
 include `text_search` in that Hypothesis so the query is executable rather than dead
 context.
+Planned queries must also pass the active SourceAccessPolicy before the Planning
+object is atomically committed. The runtime rejects the whole object for correction;
+it does not rewrite or partially install the model's query list. The same policy is
+rechecked immediately before search execution.
 
 ### MaterialDiscrepancy
 
@@ -182,6 +186,9 @@ terminal Coverage, basis/Judgment equality, interaction ancestry, action-count p
 and absence of post-verdict actions. For Qwen, protocol-correction ancestry uses
 durable context request IDs rather than invented provider Interaction IDs, including
 multi-hop retries.
+Source-policy violations in canonical state or executed retrieval remain hard audit
+failures. Explicitly rejected, unexecuted model proposals are correction warnings;
+their rejected Planning steps are excluded from policy supervision.
 
 Local student profiles also own their serving endpoint instead of inheriting the
 shared legacy `QWEN_LOCAL_BASE_URL`. `student-qwen3-vl-local` defaults to port 8899;

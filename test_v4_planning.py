@@ -27,6 +27,7 @@ from src.orchestrator.image_only_prompts import (
 )
 from src.orchestrator.stage_runner import InteractionSession
 from src.orchestrator.runtime_case import image_sha256
+from src.orchestrator.source_access import SourceAccessPolicy
 from src.orchestrator.state import (
     Entity,
     ImageOnlyRuntimeCase,
@@ -138,6 +139,7 @@ class ImageAccountPlanningBackend:
     def __init__(self, *, unknown_anchor: bool = False) -> None:
         self.unknown_anchor = unknown_anchor
         self.requests: list[dict[str, Any]] = []
+        self.anchor_id = ""
 
     async def create_interaction(self, **kwargs: Any) -> dict[str, Any]:
         self.requests.append(kwargs)
@@ -150,8 +152,9 @@ class ImageAccountPlanningBackend:
             )
             context = json.loads(text)
             anchor_id = context["visual_fact_anchors"][0]["fact_id"]
+            self.anchor_id = anchor_id
         else:
-            anchor_id = "unknown-anchor"
+            anchor_id = self.anchor_id or "unknown-anchor"
         if self.unknown_anchor:
             anchor_id = "unknown-anchor"
         response = {
@@ -206,6 +209,19 @@ class ImageAccountPlanningBackend:
                 }
             ],
         }
+
+
+class PolicyRevisionPlanningBackend(ImageAccountPlanningBackend):
+    async def create_interaction(self, **kwargs: Any) -> dict[str, Any]:
+        response = await super().create_interaction(**kwargs)
+        if len(self.requests) == 1:
+            content = response["steps"][0]["content"][0]
+            payload = json.loads(content["text"])
+            payload["search_hypotheses"][0]["queries"] = [
+                "viral image hoax visible person product"
+            ]
+            content["text"] = json.dumps(payload)
+        return response
 
 
 class PlanningThenReactBackend(ImageAccountPlanningBackend):
@@ -459,6 +475,44 @@ def test_image_account_planning_is_image_root_and_installs_claim_graph(
     snapshot = planning_step.metadata["policy_input"]["input_payload"]
     assert any(item.get("runtime_image") is True for item in snapshot)
     assert all("data" not in item for item in snapshot if isinstance(item, dict))
+
+
+def test_image_account_planning_rejects_policy_query_before_atomic_commit(
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "planning-query-policy.jpg"
+    image_path.write_bytes(b"v4-planning-query-policy")
+    state, investigation = _state(image_path)
+    backend = PolicyRevisionPlanningBackend()
+    orchestrator = Orchestrator(
+        validate_startup=False,
+        source_access_policy=SourceAccessPolicy(
+            policy_id="evaluation",
+            excluded_domains=frozenset({"factcrescendo.com"}),
+        ),
+    )
+    orchestrator.llm = backend
+
+    asyncio.run(
+        orchestrator._run_image_account_planning(
+            state,
+            investigation,
+            interaction_session=InteractionSession(),
+        )
+    )
+
+    assert len(backend.requests) == 2
+    assert state.all_steps[0].action_type == "planning_revision"
+    assert "ready-made fact-check verdict" in state.all_steps[0].metadata[
+        "planning_revision_reason"
+    ]
+    assert state.all_steps[1].action_type != "planning_revision"
+    assert investigation.search_hypotheses[0].queries == [
+        "person source capture held object"
+    ]
+    assert investigation.tasks[-1].suggested_queries == [
+        "person source capture held object"
+    ]
 
 
 def test_image_account_planning_context_excludes_judgment_controls(

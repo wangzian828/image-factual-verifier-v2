@@ -28,6 +28,10 @@ It must still emit at least one executable route; this is a structural requireme
 not a rule about which fact the route should investigate. Non-empty Hypothesis
 `queries` already declare a text-search route, so the reducer derives `text_search`
 without editing query content. `suggested_tools` carries additional capabilities.
+Before the reducer commits any Claim, Hypothesis, or Task, the complete Planning
+object is checked against the active SourceAccessPolicy. A blocked query causes a
+bounded `planning_revision`; the runtime neither rewrites the query nor commits the
+safe-looking siblings from that rejected object.
 
 Each ImageClaim states the underlying real-world proposition conveyed to the
 viewer. It does not replace that proposition with the easier meta-claim that visible
@@ -145,3 +149,4 @@ the same complete basis. Neither mode adds facts. The strict auditor and
 `ifv-policy-v2` exporter reject unknown IDs,
 misalignment, post-verdict actions, protocol rejection, private evaluator data, or
 active legacy core ownership.
+Rejected Planning revisions remain visible for audit but are not SFT targets.

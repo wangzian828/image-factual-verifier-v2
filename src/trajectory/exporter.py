@@ -493,6 +493,8 @@ def export_policy_examples(
 
     candidates: List[tuple[int, Mapping[str, Any], str]] = []
     for index, step in enumerate(_rows(state.get("all_steps"))):
+        if str(step.get("action_type", "")) == "planning_revision":
+            continue
         stage = str(step.get("stage", "")).strip()
         example_type = _example_type(stage)
         metadata = _mapping(step.get("metadata"))
