@@ -42,7 +42,7 @@ def _parse_args() -> argparse.Namespace:
         "--model",
         default=os.getenv("IFV_SEMANTIC_JUDGE_MODEL", "gemini-3.5-flash"),
     )
-    parser.add_argument("--max-tokens", type=int, default=2400)
+    parser.add_argument("--max-tokens", type=int, default=4096)
     parser.add_argument("--timeout", type=float, default=180.0)
     parser.add_argument("--force", action="store_true")
     return parser.parse_args()
@@ -165,6 +165,7 @@ async def _run(args: argparse.Namespace) -> Dict[str, Any]:
                 reward_input_sha256=sha256_json(packet),
                 provider=args.provider,
                 model=args.model,
+                generation_version=judge.generation_identity,
             )
             artifact = None if args.force else cache.load(cache_key)
             from_cache = artifact is not None

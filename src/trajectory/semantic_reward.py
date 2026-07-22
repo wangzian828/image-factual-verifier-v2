@@ -29,6 +29,7 @@ SEMANTIC_REWARD_SCHEMA_VERSION = "ifv-semantic-reward-v1"
 SEMANTIC_REWARD_INPUT_VERSION = "ifv-semantic-reward-input-v1"
 BLIND_PROMPT_VERSION = "ifv-semantic-blind-v2"
 AWARE_PROMPT_VERSION = "ifv-semantic-aware-counterfactual-v2"
+JUDGE_GENERATION_VERSION = "minimal-thinking-4096-v1"
 
 BLIND_SYSTEM_PROMPT = (
     "You are a frozen post-rollout factuality auditor. Judge only the supplied "
@@ -378,7 +379,7 @@ class SemanticRewardJudge:
         *,
         provider: str | None = None,
         model: str | None = None,
-        max_tokens: int = 2400,
+        max_tokens: int = 4096,
     ) -> None:
         self.backend = backend
         self.provider = str(
@@ -386,6 +387,10 @@ class SemanticRewardJudge:
         )
         self.model = str(model or getattr(backend, "model_name", "unknown"))
         self.max_tokens = int(max_tokens)
+
+    @property
+    def generation_identity(self) -> str:
+        return f"{JUDGE_GENERATION_VERSION}:max_tokens={self.max_tokens}"
 
     async def _call(
         self,
@@ -416,6 +421,7 @@ class SemanticRewardJudge:
                 store=True,
                 max_tokens=self.max_tokens,
                 temperature=0.0,
+                generation_config={"thinking_level": "minimal"},
             )
             _, status = validate_interaction_response(interaction)
             if status != "completed":
@@ -487,6 +493,8 @@ class SemanticRewardJudge:
                 "provider": self.provider,
                 "model": self.model,
                 "prompt_versions": [BLIND_PROMPT_VERSION, AWARE_PROMPT_VERSION],
+                "generation_version": JUDGE_GENERATION_VERSION,
+                "max_tokens": self.max_tokens,
                 "image_view": image_view,
                 "calls": [blind_call.audit, aware_call.audit],
             },
@@ -669,6 +677,7 @@ class SemanticRewardCache:
         reward_input_sha256: str,
         provider: str,
         model: str,
+        generation_version: str = JUDGE_GENERATION_VERSION,
     ) -> str:
         return sha256_json(
             {
@@ -676,6 +685,7 @@ class SemanticRewardCache:
                 "reward_input_sha256": reward_input_sha256,
                 "provider": provider,
                 "model": model,
+                "generation_version": generation_version,
                 "prompt_versions": [BLIND_PROMPT_VERSION, AWARE_PROMPT_VERSION],
             }
         )
