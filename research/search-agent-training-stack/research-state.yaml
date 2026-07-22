@@ -6,13 +6,23 @@ project:
   domain: "multimodal agent post-training"
 
 literature:
-  key_papers: []
+  key_papers:
+    - "StepSearch (2505.15107): gold support-document and search-key process rewards"
+    - "TIPS (2603.22293): answer-likelihood potential shaping"
+    - "LOTAPO (2607.13501): leave-one-turn counterfactual attribution"
+    - "RewardFlow (2603.18859): state-graph reward propagation"
+    - "CW-GRPO (2604.14267): LLM-judge contribution-weighted advantage redistribution"
+    - "PRInTS (2511.19314): Monte-Carlo information-gain PRM and recursive context summary"
+    - "FaithMed (2607.01440): Gemini step rubric rewards in GiGPO"
+    - "TRACE (2607.13988): frozen-reference turn-level TD credit"
   open_problems:
     - "Few search-agent projects combine image-conditioned state, real web tools, evidence-chain rewards, and deterministic stopping."
     - "Repository claims often hide whether training is full-parameter, LoRA, or inference-only."
   evidence_gaps:
     - "Exact GPU and memory behavior for Qwen3-VL-8B full-parameter RL on 4xA100-40GB."
     - "Checkpoint/resume maturity for long-horizon multimodal tool environments."
+    - "Human-calibrated agreement of Gemini turn labels with counterfactual contribution on IFV trajectories."
+    - "A trainer path that maps IFV turn credit to corresponding policy-token spans rather than broadcasting one episode scalar."
 
 hypotheses:
   - id: H1
@@ -33,12 +43,18 @@ hypotheses:
     motivation: "The runtime has explicit semantic boundaries that should remain auditable during RL."
     parent: null
     priority: high
+  - id: H4
+    statement: "Calibrated turn-level process credit is necessary to distinguish useful, redundant, misleading, and regressive investigation steps in IFV long-horizon trajectories."
+    status: supported
+    motivation: "Terminal correctness and selected-basis quality cannot localize the search or belief-update decisions responsible for success and failure."
+    parent: null
+    priority: high
 
 experiments:
   proxy_metric: "Evidence-backed framework fit score over SFT, VLM, full-parameter, environment, reward, distributed, recovery, and integration criteria"
   baseline_value: null
   best_value: "split stack: ms-swift SFT + rLLM/veRL RL"
-  total_runs: 3
+  total_runs: 4
   trajectory:
     - run_id: "survey_001"
       hypothesis: "H1"
@@ -61,11 +77,18 @@ experiments:
       wall_time_min: null
       change_summary: "Gateway-captured independent LLM calls preserve IFV stage boundaries without rewriting the state machine."
       timestamp: "2026-07-17"
+    - run_id: "survey_004"
+      hypothesis: "H4"
+      metric_value: "supported"
+      delta: null
+      wall_time_min: null
+      change_summary: "Expanded source audit found multiple released turn-credit implementations and invalidated the earlier outcome-only generalization."
+      timestamp: "2026-07-22"
 
 outer_loop:
-  cycle: 1
-  last_direction: deepen
-  last_reflection: "Adopt a split stack. Validate rLLM gateway protocol and gpu13 memory before freezing the RL backend; keep OpenRLHF as fallback."
+  cycle: 2
+  last_direction: pivot
+  last_reflection: "Keep the split stack, but require a turn-aware RL integration. Calibrate Gemini process labels against counterfactual/state-delta credit before optimizer use; begin with outcome-gated advantage redistribution."
 
 workspace:
   findings: "findings.md"

@@ -51,15 +51,26 @@ and trace persistence.
   auditable runtime already exists.
 - IFV's online policy calls are text-only. Perception and image-comparison model calls
   belong to a frozen environment endpoint, even when both endpoints use Qwen.
-- Search-R1, ReCall, DeepResearcher, rLLM SearchReward, and WebAgent-R1 all rely
-  primarily on terminal outcome or environment-success rewards. Released code does
-  not establish a mature generic per-search-step semantic reward.
-- R-Search provides the closest useful process precedent: the policy submits selected
-  raw Evidence, a frozen verifier answers using only that Evidence, and a deterministic
-  comparator checks the verifier answer against gold.
+- First-generation systems including Search-R1, ReCall, DeepResearcher and the built-in
+  rLLM SearchReward rely primarily on terminal outcome. That observation must not be
+  generalized to recent search-agent training: StepSearch, TIPS, LOTAPO, RewardFlow,
+  CW-GRPO, FaithMed and SearchEyes/HaPO all expose a real process-credit path in code
+  and training configuration.
+- The recent implementations span several non-equivalent mechanisms: gold retrieval
+  coverage, answerability potentials, counterfactual turn attribution, semantic step
+  judges, state-graph propagation and outcome-advantage redistribution.
+- R-Search's selected-Evidence verifier remains the right terminal evidence-quality
+  component, but it does not replace turn-level process credit.
+- Gemini's best-supported role is a frozen post-rollout process teacher and calibrator.
+  It should score bounded action/observation transitions with evidence citations, not
+  generate the policy's only trajectories or act as the sole truth source.
+- PRInTS demonstrates that long-context management and process evaluation should be
+  designed together: recursively preserve findings, uncertainty and plans while
+  evaluating the latest tool response and current step.
 - Current rLLM/veRL transforms broadcast `trajectory.reward` across trainable action
-  tokens. IFV therefore needs an episode/trajectory join; a terminal-step JSON record
-  alone is not a trainer integration.
+  tokens. IFV therefore needs both an episode join and a custom turn/segment-aware
+  transform or advantage estimator; a terminal-step JSON record alone cannot train
+  the investigated process behavior.
 
 ## Lessons and Constraints
 
@@ -77,7 +88,10 @@ and trace persistence.
 - Do not let the reward judge see Evidence outside the Agent-selected verdict basis.
 - Do not score ImageClaim status agreement until visual-observation and world-fact
   semantics are separated.
-- Do not add per-step cost or search-count shaping before ranking calibration.
+- Do not ask a teacher for an unrestricted scalar over hidden thinking. The process
+  packet must identify pre-state, action, observation, state delta and cited IDs.
+- Do not add per-step cost or search-count shaping before same-policy ranking
+  calibration.
 
 ## Open Questions
 
@@ -87,10 +101,14 @@ and trace persistence.
   ZeRO-3 offload?
 - Can an 8B language-policy RL smoke fit with three training GPUs plus one rollout GPU,
   or must the first RL optimizer smoke use a smaller checkpoint?
-- Which initial estimator is most stable for the available rollout group size:
-  RLOO, REINFORCE baseline, or DAPO without group-variance normalization?
-- Does selected-basis recoverability correlate with human ordering on fixed-policy
-  K-sample groups, or does it only reproduce outcome correctness?
+- Does Gemini turn-level evidence-gain/direction/belief-update/regression labeling
+  agree with human labels and counterfactual contribution on fixed-policy K-samples?
+- Can an IFV-specific outcome-gated estimator preserve useful prefixes of failed
+  trajectories without giving positive total credit to incorrect episodes?
+- Is a custom rLLM transform sufficient, or should distinct turn advantages be
+  implemented directly in the veRL-derived trainer?
+- Does selected-basis recoverability add trajectory-ranking signal beyond outcome
+  correctness when combined with process credit?
 
 ## Optimization Trajectory
 
