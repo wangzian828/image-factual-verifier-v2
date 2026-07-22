@@ -35,7 +35,10 @@ from src.orchestrator.context_workspace import (
     render_stage_handoff,
     render_stage_request,
 )
-from src.orchestrator.tool_cache import ToolResultCache
+from src.orchestrator.tool_cache import (
+    ToolResultCache,
+    WEB_EVIDENCE_CONTRACT_VERSION,
+)
 from src.orchestrator.tool_result import ToolResultContractError, parse_tool_result, serialize_tool_result
 from src.orchestrator.source_access import SourceAccessPolicy
 from src.tools.base import BaseTool
@@ -3142,6 +3145,8 @@ class StageRunner:
         args.pop("__evidence_goal", None)
         if tool_name in {"compare_with_reference", "analyze_visual_anomalies"} and self.image_path:
             args["__image_input__"] = self.image_path
+        if tool_name in {"visit", "crop_and_search"}:
+            args["__web_evidence_contract__"] = WEB_EVIDENCE_CONTRACT_VERSION
         return args
 
     def _build_tool_response_message(
@@ -3401,6 +3406,8 @@ class StageRunner:
                 "retrieval_goal": str(item.get("retrieval_goal", "")),
                 "relevance": item.get("relevance", "low"),
                 "stance": item.get("stance", "unclear"),
+                "relation_scope": item.get("relation_scope", "unclear"),
+                "relation_stance": item.get("relation_stance", "unclear"),
                 "directness": item.get("directness", "none"),
                 "context_only": bool(item.get("context_only", False)),
                 "temporal_alignment": item.get(
@@ -3431,6 +3438,14 @@ class StageRunner:
                         "retrieval_goal": str(item.get("retrieval_goal", "")),
                         "relevance": item.get("relevance", "low"),
                         "stance": item.get("stance", "unclear"),
+                        "relation_scope": item.get(
+                            "relation_scope",
+                            "unclear",
+                        ),
+                        "relation_stance": item.get(
+                            "relation_stance",
+                            "unclear",
+                        ),
                         "directness": item.get("directness", "none"),
                         "temporal_alignment": item.get(
                             "temporal_alignment",
@@ -3451,6 +3466,8 @@ class StageRunner:
             "image_claim": str(data.get("image_claim", "")),
             "retrieval_goal": str(data.get("retrieval_goal", "")),
             "stance": data.get("stance", "unclear"),
+            "relation_scope": data.get("relation_scope", "unclear"),
+            "relation_stance": data.get("relation_stance", "unclear"),
             "directness": data.get("directness", "none"),
             "temporal_alignment": data.get(
                 "temporal_alignment",
@@ -3519,11 +3536,25 @@ class StageRunner:
         return {
             "regions": regions,
             "summary": str(data.get("summary", ""))[:320],
-            "evidence": str(data.get("evidence", ""))[:320],
+            "evidence": str(data.get("evidence", "")),
+            "image_claim": str(data.get("image_claim", "")),
+            "retrieval_goal": str(data.get("retrieval_goal", "")),
+            "selected_url": str(data.get("selected_url", "")),
+            "relevance": data.get("relevance", "low"),
+            "stance": data.get("stance", "unclear"),
+            "relation_scope": data.get("relation_scope", "unclear"),
+            "relation_stance": data.get("relation_stance", "unclear"),
+            "directness": data.get("directness", "none"),
+            "context_only": bool(data.get("context_only", False)),
             "temporal_alignment": data.get(
                 "temporal_alignment",
                 "not_applicable",
             ),
+            "artifact_sha256": data.get("artifact_sha256", ""),
+            "evidence_span": data.get("evidence_span", {}),
+            "retrieved_at": data.get("retrieved_at", ""),
+            "injection_flags": data.get("injection_flags", []),
+            "evidence_eligible": bool(data.get("evidence_eligible", False)),
         }
 
     def _validate_output_with_error(

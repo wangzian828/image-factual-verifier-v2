@@ -196,7 +196,14 @@ class CropAndSearchTool(BaseTool):
             "evidence": str(best_region.get("evidence", "")),
             "relevance": str(best_region.get("relevance", "low")),
             "stance": str(best_region.get("stance", "unclear")),
+            "relation_scope": str(
+                best_region.get("relation_scope", "unclear")
+            ),
+            "relation_stance": str(
+                best_region.get("relation_stance", "unclear")
+            ),
             "directness": str(best_region.get("directness", "none")),
+            "context_only": bool(best_region.get("context_only", False)),
             "temporal_alignment": str(
                 best_region.get("temporal_alignment", "not_applicable")
             ),
@@ -273,6 +280,8 @@ class CropAndSearchTool(BaseTool):
                     "rationale": "No result pages available from visual search.",
                     "relevance": "low",
                     "stance": "unclear",
+                    "relation_scope": "unclear",
+                    "relation_stance": "unclear",
                     "directness": "none",
                     "temporal_alignment": "unknown",
                     "artifact_sha256": "",
@@ -307,7 +316,16 @@ class CropAndSearchTool(BaseTool):
                 "summary": visit_result.get("summary", ""),
                 "relevance": visit_result.get("relevance", "low"),
                 "stance": visit_result.get("stance", "unclear"),
+                "relation_scope": visit_result.get(
+                    "relation_scope",
+                    "unclear",
+                ),
+                "relation_stance": visit_result.get(
+                    "relation_stance",
+                    "unclear",
+                ),
                 "directness": visit_result.get("directness", "none"),
+                "context_only": bool(visit_result.get("context_only", False)),
                 "temporal_alignment": visit_result.get(
                     "temporal_alignment",
                     "not_applicable",
@@ -342,6 +360,8 @@ class CropAndSearchTool(BaseTool):
                 "summary": "",
                 "relevance": "low",
                 "stance": "unclear",
+                "relation_scope": "unclear",
+                "relation_stance": "unclear",
                 "directness": "none",
                 "temporal_alignment": "unknown",
                 "artifact_sha256": "",

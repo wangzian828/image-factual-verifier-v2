@@ -83,7 +83,10 @@ from src.orchestrator.state import (
     TextRegion,
     VerificationState,
 )
-from src.orchestrator.tool_cache import ToolResultCache
+from src.orchestrator.tool_cache import (
+    ToolResultCache,
+    WEB_EVIDENCE_CONTRACT_VERSION,
+)
 from src.orchestrator.tool_health import require_tools, summarize_health
 from src.orchestrator.tool_registry import (
     REQUIRED_TOOLS,
@@ -3277,6 +3280,8 @@ class Orchestrator:
         cache_args = dict(tool_args)
         if tool_name in {"compare_with_reference", "analyze_visual_anomalies"} and image_path:
             cache_args["__image_input__"] = image_path
+        if tool_name in {"visit", "crop_and_search"}:
+            cache_args["__web_evidence_contract__"] = WEB_EVIDENCE_CONTRACT_VERSION
         return cache_args
 
     def _parse_perception_result(self, tool_result: str) -> PerceptionReport:

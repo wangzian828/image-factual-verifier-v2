@@ -92,7 +92,9 @@ def test_extractor_rejects_unknown_passage_id(monkeypatch: pytest.MonkeyPatch) -
         _extract(client, "The source page contains a different statement.", "verify")
 
 
-def test_extractor_rejects_invalid_stance(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_extractor_rejects_invalid_relation_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     client = JinaReaderClient(fetch_provider="jina")
     monkeypatch.setattr(
         client,
@@ -102,11 +104,37 @@ def test_extractor_rejects_invalid_stance(monkeypatch: pytest.MonkeyPatch) -> No
             "passage_id": 0,
             "summary": "Relevant statement.",
             "relevance": "high",
-            "stance": "probably_supports",
+            "stance": "support",
+            "relation_scope": "same_incident",
+            "relation_stance": "supports",
+            "directness": "direct",
         },
     )
 
-    with pytest.raises(RuntimeError, match="invalid stance"):
+    with pytest.raises(RuntimeError, match="invalid relation_scope"):
+        _extract(client, "The source page contains this statement.", "verify")
+
+
+def test_extractor_rejects_invalid_relation_stance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = JinaReaderClient(fetch_provider="jina")
+    monkeypatch.setattr(
+        client,
+        "_extract_with_llm",
+        lambda _content, **_kwargs: {
+            "rationale": "relevant",
+            "passage_id": 0,
+            "summary": "Relevant statement.",
+            "relevance": "high",
+            "stance": "support",
+            "relation_scope": "same_relation",
+            "relation_stance": "probably_supports",
+            "directness": "direct",
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="invalid relation_stance"):
         _extract(client, "The source page contains this statement.", "verify")
 
 
@@ -149,6 +177,8 @@ NASA describes Artemis II as a crewed lunar flyby around the Moon.
             "summary": "NASA describes a crewed lunar flyby.",
             "relevance": "high",
             "stance": "support",
+            "relation_scope": "same_relation",
+            "relation_stance": "supports",
             "directness": "direct",
         }
 
@@ -198,6 +228,8 @@ def test_long_document_ranking_can_select_evidence_after_first_12k(
             "summary": target,
             "relevance": "high",
             "stance": "refute",
+            "relation_scope": "same_relation",
+            "relation_stance": "contradicts",
             "directness": "direct",
             "temporal_alignment": "not_applicable",
         }
@@ -331,6 +363,8 @@ def test_retrieval_goal_selects_passage_but_stance_targets_image_claim(
             "summary": target,
             "relevance": "high",
             "stance": "refute",
+            "relation_scope": "same_relation",
+            "relation_stance": "contradicts",
             "directness": "direct",
             "temporal_alignment": "not_applicable",
         }
@@ -386,6 +420,8 @@ def test_extractor_preserves_related_context_when_no_passage_directly_resolves_g
             "summary": "Monarchs migrate to overwintering sites in Mexico.",
             "relevance": "low",
             "stance": "unclear",
+            "relation_scope": "partial_relation",
+            "relation_stance": "background",
             "directness": "none",
             "temporal_alignment": "not_applicable",
         }
@@ -422,6 +458,8 @@ def test_extractor_does_not_invent_context_when_no_passage_is_selected(
             "summary": "No relevant evidence.",
             "relevance": "low",
             "stance": "unclear",
+            "relation_scope": "unclear",
+            "relation_stance": "unclear",
             "directness": "none",
             "temporal_alignment": "not_applicable",
         },
@@ -469,6 +507,8 @@ def test_extractor_returns_independent_primary_and_supporting_exact_spans(
             "summary": "Andreea Esca is impersonated in health-product scams.",
             "relevance": "high",
             "stance": "refute",
+            "relation_scope": "same_relation",
+            "relation_stance": "contradicts",
             "directness": "direct",
             "temporal_alignment": "not_applicable",
         }
@@ -520,6 +560,8 @@ def test_extractor_attaches_preceding_exact_span_for_deictic_primary(
             "summary": "PRO TV denies the referenced video.",
             "relevance": "high",
             "stance": "refute",
+            "relation_scope": "same_relation",
+            "relation_stance": "contradicts",
             "directness": "direct",
             "temporal_alignment": "not_applicable",
         }

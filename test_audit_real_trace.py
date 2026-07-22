@@ -71,6 +71,9 @@ def _v4_trace(tmp_path: Path) -> Path:
                 "stance": "refute",
                 "quality": "strong",
                 "directness": "direct",
+                "claim_binding": "source_assertion",
+                "relation_scope": "same_relation",
+                "relation_stance": "contradicts",
                 "risk_flags": [],
             }
         ],

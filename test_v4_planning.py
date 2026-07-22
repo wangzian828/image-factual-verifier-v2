@@ -118,6 +118,8 @@ class VisitToolFixture(BaseTool):
                     "evidence": text,
                     "relevance": "high",
                     "stance": "refute",
+                    "relation_scope": "same_relation",
+                    "relation_stance": "contradicts",
                     "directness": "direct",
                     "context_only": False,
                     "temporal_alignment": "not_applicable",
@@ -823,6 +825,8 @@ def test_discrepancy_decision_consumes_pending_result_on_same_chain(
         quality="strong",
         directness="direct",
         claim_binding="source_assertion",
+        relation_scope="same_relation",
+        relation_stance="contradicts",
     )
     investigation.evidence.append(evidence)
     finding = Finding(

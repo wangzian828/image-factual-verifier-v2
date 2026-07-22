@@ -527,6 +527,8 @@ class ControlledVisitTool(StaticTool):
             "summary": excerpt,
             "relevance": "high",
             "stance": "support",
+            "relation_scope": "same_relation",
+            "relation_stance": "supports",
             "directness": "direct",
             "temporal_alignment": "not_applicable",
             "artifact_sha256": hashlib.sha256(excerpt.encode()).hexdigest(),
@@ -865,6 +867,8 @@ def test_scripted_screenshot_source_record_trajectory(
                 "summary": statement,
                 "relevance": "high",
                 "stance": "support",
+                "relation_scope": "same_relation",
+                "relation_stance": "supports",
                 "directness": "direct",
                 "temporal_alignment": "not_applicable",
                 "artifact_sha256": hashlib.sha256(
@@ -953,6 +957,8 @@ def test_scripted_screenshot_source_record_trajectory(
                     "summary": statement,
                     "relevance": "high",
                     "stance": "support",
+                    "relation_scope": "same_relation",
+                    "relation_stance": "supports",
                     "directness": "direct",
                     "temporal_alignment": "at_target_time",
                     "artifact_sha256": hashlib.sha256(

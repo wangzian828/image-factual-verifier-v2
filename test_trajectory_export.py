@@ -607,6 +607,8 @@ def test_process_scorer_accepts_semantic_refutation_with_text_sufficient_bridge(
         "quality": "moderate",
         "directness": "indirect",
         "claim_binding": "source_assertion",
+        "relation_scope": "same_relation",
+        "relation_stance": "contradicts",
         "risk_flags": [],
     }
     trace = {

@@ -20,9 +20,22 @@ def evidence_direction_is_coherent(evidence: Any, stance: str) -> bool:
 
     if str(evidence_value(evidence, "stance", "")) != stance:
         return False
-    if str(evidence_value(evidence, "evidence_kind", "")) != (
-        "reference_comparison"
-    ):
+    evidence_kind = str(evidence_value(evidence, "evidence_kind", ""))
+    if evidence_kind == "web_span":
+        expected_relation_stance = {
+            "support": "supports",
+            "refute": "contradicts",
+        }.get(stance)
+        return bool(
+            expected_relation_stance
+            and str(evidence_value(evidence, "claim_binding", ""))
+            == "source_assertion"
+            and str(evidence_value(evidence, "relation_scope", ""))
+            == "same_relation"
+            and str(evidence_value(evidence, "relation_stance", ""))
+            == expected_relation_stance
+        )
+    if evidence_kind != "reference_comparison":
         return True
 
     same_capture = evidence_value(

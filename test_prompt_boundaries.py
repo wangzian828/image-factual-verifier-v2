@@ -1,4 +1,4 @@
-from src.integrations.browse.jina_reader import EXTRACT_PROMPT
+from src.integrations.browse.jina_reader import EXTRACT_PROMPT, EXTRACT_SCHEMA
 from src.orchestrator.image_only_prompts import (
     DISCREPANCY_DECISION_SYSTEM_PROMPT,
     DISCREPANCY_REACT_SYSTEM_PROMPT,
@@ -50,6 +50,19 @@ def test_hot_path_prompts_stay_semantic_and_compact() -> None:
     assert "does not support its truth" in browse_prompt
     assert "explicit denial refutes it" in browse_prompt
     assert "need not settle every clause" in browse_prompt
+    assert set(EXTRACT_SCHEMA["properties"]["relation_scope"]["enum"]) == {
+        "same_relation",
+        "partial_relation",
+        "different_instance",
+        "unclear",
+    }
+    assert set(EXTRACT_SCHEMA["properties"]["relation_stance"]["enum"]) == {
+        "supports",
+        "contradicts",
+        "background",
+        "unclear",
+    }
+    assert "stance" not in EXTRACT_SCHEMA["properties"]
     assert "runtime owns task state" in react_prompt
     assert "validates grounding" in planning_prompt
     assert "do not own the verdict" in image_account_prompt

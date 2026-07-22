@@ -130,6 +130,8 @@ def _append_frozen_evidence(
         quality="strong",
         directness="direct",
         claim_binding=str(fixture["claim_binding"]),
+        relation_scope=str(fixture.get("relation_scope", "unclear")),
+        relation_stance=str(fixture.get("relation_stance", "unclear")),
         same_subject_or_scene=fixture.get("same_subject_or_scene"),
         same_capture_or_near_duplicate=fixture.get(
             "same_capture_or_near_duplicate"

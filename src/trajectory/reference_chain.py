@@ -15,6 +15,9 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Mapping, Protocol, Sequence
 
 from src.orchestrator.llm_backend import LLMBackend
+from src.orchestrator.evidence_semantics import (
+    evidence_is_qualified_for_stance,
+)
 from src.trajectory.scoring import (
     _basis_same_capture_source_context,
     _canonical_url,
@@ -154,6 +157,8 @@ Do not invent a new target or reward extra facts. Return exactly one JSON object
                     "quality",
                     "directness",
                     "claim_binding",
+                    "relation_scope",
+                    "relation_stance",
                     "same_subject_or_scene",
                     "same_capture_or_near_duplicate",
                     "likely_different_original_capture",
@@ -237,14 +242,12 @@ def _qualified_semantic_candidate(
     evidence: Mapping[str, Any],
     successful_calls: set[str],
 ) -> bool:
-    return all(
-        (
-            str(evidence.get("directness", "")) == "direct",
-            str(evidence.get("quality", "")) in {"strong", "moderate"},
-            not evidence.get("risk_flags"),
-            str(evidence.get("function_call_id", "")).strip()
-            in successful_calls,
-        )
+    stance = str(evidence.get("stance", "")).strip()
+    return bool(
+        stance in {"support", "refute"}
+        and evidence_is_qualified_for_stance(evidence, stance)
+        and str(evidence.get("function_call_id", "")).strip()
+        in successful_calls
     )
 
 

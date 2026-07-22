@@ -1842,6 +1842,8 @@ def test_evidence_consumes_retrieval_batch_without_sibling_sweep() -> None:
                 "summary": statement,
                 "relevance": "high",
                 "stance": "support",
+                "relation_scope": "same_relation",
+                "relation_stance": "supports",
                 "directness": "direct",
                 "temporal_alignment": "not_applicable",
                 "artifact_sha256": "a" * 64,
@@ -2967,6 +2969,8 @@ def test_original_social_post_can_support_its_own_source_record_match() -> None:
                     "summary": statement,
                     "relevance": "high",
                     "stance": "support",
+                    "relation_scope": "same_relation",
+                    "relation_stance": "supports",
                     "directness": "direct",
                     "temporal_alignment": "not_applicable",
                     "artifact_sha256": "1" * 64,
@@ -3045,6 +3049,8 @@ def test_current_mutable_social_metadata_cannot_refute_older_source_record() -> 
                     "summary": statement,
                     "relevance": "high",
                     "stance": "refute",
+                    "relation_scope": "same_relation",
+                    "relation_stance": "contradicts",
                     "directness": "direct",
                     "temporal_alignment": "not_applicable",
                     "artifact_sha256": "2" * 64,
@@ -3105,6 +3111,8 @@ def test_related_reply_cannot_support_the_original_source_record() -> None:
                     "summary": statement,
                     "relevance": "high",
                     "stance": "support",
+                    "relation_scope": "same_relation",
+                    "relation_stance": "supports",
                     "directness": "direct",
                     "temporal_alignment": "before_or_at_cutoff",
                     "artifact_sha256": "5" * 64,
@@ -3165,6 +3173,8 @@ def test_temporally_aligned_social_record_can_refute_source_match() -> None:
                     "summary": statement,
                     "relevance": "high",
                     "stance": "refute",
+                    "relation_scope": "same_relation",
+                    "relation_stance": "contradicts",
                     "directness": "direct",
                     "temporal_alignment": "before_or_at_cutoff",
                     "artifact_sha256": "3" * 64,
@@ -3234,6 +3244,8 @@ def test_adjacent_date_with_unknown_timezone_cannot_refute_source_match() -> Non
                     "summary": statement,
                     "relevance": "high",
                     "stance": "refute",
+                    "relation_scope": "same_relation",
+                    "relation_stance": "contradicts",
                     "directness": "direct",
                     "temporal_alignment": "before_or_at_cutoff",
                     "artifact_sha256": "4" * 64,
@@ -3384,6 +3396,8 @@ def test_supporting_finding_does_not_close_unresolved_decisive_task() -> None:
         "summary": statement,
         "relevance": "high",
         "stance": "support",
+        "relation_scope": "same_relation",
+        "relation_stance": "supports",
         "directness": "direct",
         "temporal_alignment": "not_applicable",
         "artifact_sha256": "c" * 64,
@@ -3702,6 +3716,8 @@ def test_different_capture_can_assist_independent_source_assertion() -> None:
                     "summary": statement,
                     "relevance": "high",
                     "stance": "refute",
+                    "relation_scope": "same_relation",
+                    "relation_stance": "contradicts",
                     "directness": "direct",
                     "temporal_alignment": "not_applicable",
                     "artifact_sha256": "9" * 64,
@@ -3794,6 +3810,8 @@ def test_evidence_decision_context_excludes_retrieval_side_semantics() -> None:
                     "rationale": "A model rationale says the claim is false.",
                     "relevance": "low",
                     "stance": "unclear",
+                    "relation_scope": "partial_relation",
+                    "relation_stance": "background",
                     "directness": "none",
                     "context_only": True,
                     "temporal_alignment": "not_applicable",
@@ -3999,6 +4017,8 @@ def test_event_refinement_cannot_switch_to_source_record_attribution() -> None:
                     "summary": statement,
                     "relevance": "high",
                     "stance": "neutral",
+                    "relation_scope": "partial_relation",
+                    "relation_stance": "background",
                     "directness": "direct",
                     "temporal_alignment": "not_applicable",
                     "artifact_sha256": "b" * 64,
@@ -4104,6 +4124,8 @@ def test_scene_support_requires_near_duplicate_and_source_assertion() -> None:
                     "summary": statement,
                     "relevance": "high",
                     "stance": "support",
+                    "relation_scope": "same_relation",
+                    "relation_stance": "supports",
                     "directness": "direct",
                     "temporal_alignment": "not_applicable",
                     "artifact_sha256": "a" * 64,
@@ -4207,6 +4229,8 @@ def test_context_only_web_span_is_reviewable_but_not_prejudged_as_a_finding() ->
                     "summary": "Monarchs migrate to Mexico for winter.",
                     "relevance": "low",
                     "stance": "unclear",
+                    "relation_scope": "partial_relation",
+                    "relation_stance": "background",
                     "directness": "none",
                     "context_only": True,
                     "temporal_alignment": "not_applicable",
@@ -4230,6 +4254,104 @@ def test_context_only_web_span_is_reviewable_but_not_prejudged_as_a_finding() ->
     assert evidence.quality == "weak"
     assert evidence.directness == "indirect"
     assert evidence.stance == "neutral"
+    assert update["created_finding_ids"] == []
+
+
+def test_same_complete_web_relation_can_create_directional_evidence() -> None:
+    case, state = _runtime_state()
+    task = next(
+        item for item in state.tasks if state.core_verdict_fact_id in item.fact_ids
+    )
+    statement = (
+        "The official record identifies a different vessel for the same voyage."
+    )
+
+    update = record_tool_observation(
+        state,
+        _step(
+            task_id=task.task_id,
+            call_id="call-same-relation",
+            tool_name="visit",
+            result=json.dumps(
+                {
+                    "status": "success",
+                    "url": "https://example.org/official-voyage",
+                    "selected_url": "https://example.org/official-voyage",
+                    "evidence": statement,
+                    "relevance": "high",
+                    "stance": "refute",
+                    "relation_scope": "same_relation",
+                    "relation_stance": "contradicts",
+                    "directness": "direct",
+                    "context_only": False,
+                    "temporal_alignment": "not_applicable",
+                    "artifact_sha256": "6" * 64,
+                    "evidence_span": {"start": 0, "end": len(statement)},
+                    "retrieved_at": datetime.now(timezone.utc).isoformat(),
+                    "injection_flags": [],
+                    "evidence_eligible": True,
+                }
+            ),
+        ),
+        image_sha256=case.image_sha256,
+    )
+
+    evidence = next(
+        item
+        for item in state.evidence
+        if item.evidence_id == update["created_evidence_ids"][0]
+    )
+    assert evidence.stance == "refute"
+    assert evidence.relation_scope == "same_relation"
+    assert evidence.relation_stance == "contradicts"
+    assert len(update["created_finding_ids"]) == 1
+
+
+def test_different_web_instance_remains_neutral_context() -> None:
+    case, state = _runtime_state()
+    task = next(
+        item for item in state.tasks if state.core_verdict_fact_id in item.fact_ids
+    )
+    statement = "A different voyage used another vessel."
+
+    update = record_tool_observation(
+        state,
+        _step(
+            task_id=task.task_id,
+            call_id="call-different-instance",
+            tool_name="visit",
+            result=json.dumps(
+                {
+                    "status": "success",
+                    "url": "https://example.org/different-voyage",
+                    "selected_url": "https://example.org/different-voyage",
+                    "evidence": statement,
+                    "relevance": "high",
+                    "stance": "refute",
+                    "relation_scope": "different_instance",
+                    "relation_stance": "contradicts",
+                    "directness": "direct",
+                    "context_only": False,
+                    "temporal_alignment": "not_applicable",
+                    "artifact_sha256": "7" * 64,
+                    "evidence_span": {"start": 0, "end": len(statement)},
+                    "retrieved_at": datetime.now(timezone.utc).isoformat(),
+                    "injection_flags": [],
+                    "evidence_eligible": True,
+                }
+            ),
+        ),
+        image_sha256=case.image_sha256,
+    )
+
+    evidence = next(
+        item
+        for item in state.evidence
+        if item.evidence_id == update["created_evidence_ids"][0]
+    )
+    assert evidence.stance == "neutral"
+    assert evidence.directness == "indirect"
+    assert evidence.relation_scope == "different_instance"
     assert update["created_finding_ids"] == []
     assert pending_evidence_decision_ids(state) == [evidence.evidence_id]
     assert evidence_decision_checkpoint_reason(
@@ -4379,6 +4501,8 @@ def test_generic_official_support_cannot_resolve_scene_without_visual_bridge() -
         "summary": statement,
         "relevance": "high",
         "stance": "support",
+        "relation_scope": "same_relation",
+        "relation_stance": "supports",
         "directness": "direct",
         "temporal_alignment": "not_applicable",
         "artifact_sha256": "b" * 64,
@@ -4439,6 +4563,8 @@ def test_unbound_official_refutation_cannot_resolve_generic_scene() -> None:
         "summary": statement,
         "relevance": "high",
         "stance": "refute",
+        "relation_scope": "same_relation",
+        "relation_stance": "contradicts",
         "directness": "direct",
         "temporal_alignment": "not_applicable",
         "artifact_sha256": "d" * 64,
@@ -4668,6 +4794,8 @@ def test_real_order_atomic_location_refutation_compiles_fake_without_source_bind
                     "summary": statement,
                     "relevance": "high",
                     "stance": "refute",
+                    "relation_scope": "same_relation",
+                    "relation_stance": "contradicts",
                     "directness": "direct",
                     "temporal_alignment": "not_applicable",
                     "artifact_sha256": "f" * 64,
@@ -4767,6 +4895,8 @@ def test_indirect_explicit_refutation_triggers_semantic_checkpoint() -> None:
                     "summary": statement,
                     "relevance": "high",
                     "stance": "refute",
+                    "relation_scope": "same_relation",
+                    "relation_stance": "contradicts",
                     "directness": "indirect",
                     "temporal_alignment": "not_applicable",
                     "artifact_sha256": "b" * 64,
@@ -4813,6 +4943,8 @@ def test_direct_web_span_rechecks_after_prior_insufficient_decision() -> None:
                     "summary": first_statement,
                     "relevance": "low",
                     "stance": "unclear",
+                    "relation_scope": "partial_relation",
+                    "relation_stance": "background",
                     "directness": "none",
                     "context_only": True,
                     "temporal_alignment": "not_applicable",
@@ -4859,6 +4991,8 @@ def test_direct_web_span_rechecks_after_prior_insufficient_decision() -> None:
                     "summary": direct_statement,
                     "relevance": "high",
                     "stance": "support",
+                    "relation_scope": "same_relation",
+                    "relation_stance": "supports",
                     "directness": "direct",
                     "temporal_alignment": "not_applicable",
                     "artifact_sha256": "5" * 64,
@@ -4947,6 +5081,8 @@ def test_evidence_decision_refines_unknown_subject_without_expanding_scope() -> 
                     "summary": statement,
                     "relevance": "high",
                     "stance": "support",
+                    "relation_scope": "same_relation",
+                    "relation_stance": "supports",
                     "directness": "direct",
                     "temporal_alignment": "not_applicable",
                     "artifact_sha256": "e" * 64,
@@ -5046,6 +5182,8 @@ def test_evidence_decision_can_generalize_visible_object_to_grounded_category() 
                     "summary": statement,
                     "relevance": "high",
                     "stance": "refute",
+                    "relation_scope": "same_relation",
+                    "relation_stance": "contradicts",
                     "directness": "direct",
                     "temporal_alignment": "not_applicable",
                     "artifact_sha256": "8" * 64,
@@ -5140,6 +5278,8 @@ def test_object_category_refinement_rejects_category_absent_from_exact_evidence(
                     "summary": statement,
                     "relevance": "high",
                     "stance": "refute",
+                    "relation_scope": "same_relation",
+                    "relation_stance": "contradicts",
                     "directness": "direct",
                     "temporal_alignment": "not_applicable",
                     "artifact_sha256": "7" * 64,
@@ -5207,6 +5347,8 @@ def test_evidence_decision_rejects_peripheral_metadata_as_core_refinement() -> N
                     "summary": statement,
                     "relevance": "high",
                     "stance": "support",
+                    "relation_scope": "same_relation",
+                    "relation_stance": "supports",
                     "directness": "direct",
                     "temporal_alignment": "not_applicable",
                     "artifact_sha256": "d" * 64,
@@ -5278,6 +5420,8 @@ def test_evidence_decision_keeps_insufficient_when_optional_refinement_is_invali
                     "summary": statement,
                     "relevance": "high",
                     "stance": "neutral",
+                    "relation_scope": "partial_relation",
+                    "relation_stance": "background",
                     "directness": "direct",
                     "temporal_alignment": "not_applicable",
                     "artifact_sha256": "c" * 64,
@@ -5394,6 +5538,8 @@ def test_evidence_decision_rejects_refinement_that_replaces_location() -> None:
                     "summary": statement,
                     "relevance": "high",
                     "stance": "support",
+                    "relation_scope": "same_relation",
+                    "relation_stance": "supports",
                     "directness": "direct",
                     "temporal_alignment": "not_applicable",
                     "artifact_sha256": "a" * 64,
@@ -6156,6 +6302,8 @@ def _record_visual_hypothesis_evidence(case, state) -> tuple[str, str]:
                     "summary": statement,
                     "relevance": "high",
                     "stance": "neutral",
+                    "relation_scope": "partial_relation",
+                    "relation_stance": "background",
                     "directness": "direct",
                     "temporal_alignment": "not_applicable",
                     "artifact_sha256": "d" * 64,
@@ -6484,6 +6632,8 @@ def test_source_record_fact_may_keep_exact_capture_as_open_requirement() -> None
                     "summary": statement,
                     "relevance": "medium",
                     "stance": "neutral",
+                    "relation_scope": "partial_relation",
+                    "relation_stance": "background",
                     "directness": "indirect",
                     "temporal_alignment": "not_applicable",
                     "artifact_sha256": "a" * 64,

@@ -132,13 +132,13 @@ the investigation to reconstruct every other aspect of the image first.
 ## Observation semantics
 
 Search and reverse-image output create Discovery. A fetched exact web passage or
-successful visual observation may create Evidence. Extractor stance is
-query-relative; it cannot change an ImageClaim. Only an accepted Discrepancy Decision
-updates ImageClaim semantics.
-
-Web stance follows whether the exact passage makes the bound Claim true or false.
-Merely reporting that the Claim was asserted is not support for its truth, while a
-direct denial is refutation. The action's retrieval goal never reverses this logic.
+successful visual observation may create Evidence. The extractor labels whether the
+passage covers the same complete Claim relation, a partial relation, a different
+instance, or an unclear scope; it separately labels support, contradiction,
+background, or uncertainty. Only a same complete relation with support or
+contradiction is directional. Other exact spans remain reviewable neutral context.
+The action's retrieval goal selects text but never determines these labels or changes
+an ImageClaim. Only an accepted Discrepancy Decision updates Claim semantics.
 
 Evidence and Findings preserve task ownership. A discrepancy affecting multiple
 claims needs owned qualified Evidence for every affected claim and visible anchors

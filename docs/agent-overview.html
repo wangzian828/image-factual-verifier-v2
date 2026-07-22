@@ -971,8 +971,8 @@ html&gt;body{padding:0}&lt;/style&gt;
         {
           icon: &quot;search&quot;,
           label: &quot;围绕一个任务执行一个真实工具动作&quot;,
-          action: &quot;模型在一个 Task 的合法路线中选择一个工具。访问网页时再选择该 Task 拥有的一条 ImageClaim，并说明要从页面寻找什么；Runtime 注入准确的 Claim 原文。每个动作使用独立工具短链。若纠错预算内仍只重复已拒绝路线，Runtime 不再请求模型，而是封闭该 Task 并进入 Decision。&quot;,
-          state: &quot;Task 绑定的 URL / Claim ID / retrieval goal · Discovery 或原始工具结果 · 成功调用 ID；或可审计的 blocked Task / Failure&quot;,
+          action: &quot;模型在一个 Task 的合法路线中选择一个工具。访问网页时再选择该 Task 拥有的一条 ImageClaim，并说明要从页面寻找什么；Runtime 注入准确的 Claim 原文。网页抽取器分别标注关系作用域和正文方向，只有同一完整关系上的支持或矛盾才能成为方向性 Evidence。每个动作使用独立工具短链；若纠错预算内仍只重复已拒绝路线，Runtime 封闭该 Task 并进入 Decision。&quot;,
+          state: &quot;Task 绑定的 URL / Claim ID / retrieval goal · relation_scope / relation_stance · Discovery、方向性 Evidence 或中性上下文 · 成功调用 ID&quot;,
           example: &quot;反向搜图找到相关 Moon Tree 图片；随后访问 NASA 候选页，取得 Johnson Space Center 的原文。&quot;
         },
         {

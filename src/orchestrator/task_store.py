@@ -5131,14 +5131,40 @@ def _record_evidence_and_findings(
             source_url,
             injection_flags=record.get("injection_flags", []),
         )
-        context_only = bool(record.get("context_only", False))
+        relation_scope = str(
+            record.get("relation_scope", "unclear")
+        ).strip().lower()
+        relation_stance = str(
+            record.get("relation_stance", "unclear")
+        ).strip().lower()
+        if relation_scope not in {
+            "same_relation",
+            "partial_relation",
+            "different_instance",
+            "unclear",
+        }:
+            relation_scope = "unclear"
+        if relation_stance not in {
+            "supports",
+            "contradicts",
+            "background",
+            "unclear",
+        }:
+            relation_stance = "unclear"
+        directional_relation = (
+            relation_scope == "same_relation"
+            and relation_stance in {"supports", "contradicts"}
+        )
+        context_only = bool(record.get("context_only", False)) or not (
+            directional_relation
+        )
         stance = (
-            "neutral"
-            if context_only
-            else {
-                "support": "support",
-                "refute": "refute",
-            }.get(str(record.get("stance", "")).strip().lower(), "neutral")
+            {
+                "supports": "support",
+                "contradicts": "refute",
+            }.get(relation_stance, "neutral")
+            if not context_only
+            else "neutral"
         )
         relevance = str(record.get("relevance", "")).strip().lower()
         quality = (
@@ -5193,6 +5219,8 @@ def _record_evidence_and_findings(
                         else "indirect"
                     ),
                     claim_binding="source_assertion",
+                    relation_scope=relation_scope,
+                    relation_stance=relation_stance,
                     temporal_alignment=str(
                         record.get("temporal_alignment", "")
                     ).strip(),

@@ -14,6 +14,9 @@ from src.orchestrator.tool_result import parse_tool_result
 from src.redaction import sanitize_for_persistence
 
 
+WEB_EVIDENCE_CONTRACT_VERSION = "relation-scope-v3"
+
+
 def _stable_json_dumps(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 

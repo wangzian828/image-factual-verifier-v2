@@ -117,12 +117,14 @@ Gemini owns:
 
 Search titles, snippets, and reverse-image matches are Discovery only. Web Evidence
 requires a fetched exact span, offsets, canonical source, artifact hash, retrieval
-time, directness, stance, and successful function-call provenance. Page retrieval
-uses an explicit two-field contract: `retrieval_goal` selects relevant passages,
-while stance is judged only against one model-selected, task-owned `image_claim`
-whose exact text the runtime binds from its Claim ID. Each ReAct action exposes one
-task-scoped route family, preventing invalid cross-task URL/Claim combinations.
-Both fields remain in the canonical tool result and Evidence ledger. Visual Evidence
+time, directness, relation scope/stance, and successful function-call provenance.
+`retrieval_goal` selects relevant passages; `relation_scope` and `relation_stance`
+are judged only against one model-selected, task-owned `image_claim` whose exact text
+the runtime binds from its Claim ID. Only a same complete relation with supporting or
+contradicting text is directional; partial relations, different instances, and
+background remain neutral context. Each ReAct action exposes one task-scoped route
+family, preventing invalid cross-task URL/Claim combinations. These fields remain in
+the canonical tool result and Evidence ledger. Visual Evidence
 requires a successful focused observation or reference comparison with image hashes
 and provenance. General anomaly opinions are diagnostic only.
 

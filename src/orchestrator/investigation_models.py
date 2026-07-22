@@ -259,6 +259,18 @@ class InvestigationEvidence(StrictModel):
         "same_subject",
         "same_capture",
     ] = "none"
+    relation_scope: Literal[
+        "same_relation",
+        "partial_relation",
+        "different_instance",
+        "unclear",
+    ] = "unclear"
+    relation_stance: Literal[
+        "supports",
+        "contradicts",
+        "background",
+        "unclear",
+    ] = "unclear"
     same_subject_or_scene: Optional[bool] = None
     same_capture_or_near_duplicate: Optional[bool] = None
     likely_different_original_capture: Optional[bool] = None

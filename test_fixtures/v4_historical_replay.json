@@ -52,6 +52,8 @@
     "retrieved_at": "2026-07-16T20:09:09.134496+00:00",
     "stance": "refute",
     "claim_binding": "source_assertion",
+    "relation_scope": "same_relation",
+    "relation_stance": "contradicts",
     "assessment_rationale": "The fetched historical description identifies the vehicle as a decorated public trip to see the coronation, not a bus on which the Queen rode.",
     "discrepancy": "The bus carried members of the public to see the coronation; presenting the Queen as its upper-deck passenger materially substitutes the event participants."
   },
@@ -105,6 +107,8 @@
     "retrieved_at": "2026-07-16T18:54:04.525572+00:00",
     "stance": "refute",
     "claim_binding": "source_assertion",
+    "relation_scope": "same_relation",
+    "relation_stance": "contradicts",
     "assessment_rationale": "The ecological range evidence directly contradicts the visibly anchored Antarctica habitat relation.",
     "discrepancy": "The image places monarch butterflies in a natural Antarctic habitat outside their documented range, creating a decisive ecological contradiction."
   }

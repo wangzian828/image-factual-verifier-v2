@@ -124,6 +124,8 @@ def test_semantic_recovery_accepts_same_source_page_version(
             "stance": "refute",
             "quality": "strong",
             "claim_binding": "source_assertion",
+            "relation_scope": "same_relation",
+            "relation_stance": "contradicts",
             "same_subject_or_scene": None,
             "same_capture_or_near_duplicate": None,
             "likely_different_original_capture": None,

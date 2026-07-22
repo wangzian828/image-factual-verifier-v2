@@ -1163,6 +1163,8 @@ def render_query_concept_extraction_context(
                     "evidence_id": item.evidence_id,
                     "evidence_kind": item.evidence_kind,
                     "claim_binding": item.claim_binding,
+                    "relation_scope": item.relation_scope,
+                    "relation_stance": item.relation_stance,
                     "exact_text": item.exact_text,
                 }
                 for item in state.evidence
@@ -1327,6 +1329,8 @@ def _render_semantic_evidence(item: Any) -> Dict[str, Any]:
         "source_class": item.source_class,
         "exact_text": item.exact_text,
         "claim_binding": item.claim_binding,
+        "relation_scope": item.relation_scope,
+        "relation_stance": item.relation_stance,
         "same_subject_or_scene": item.same_subject_or_scene,
         "same_capture_or_near_duplicate": item.same_capture_or_near_duplicate,
         "likely_different_original_capture": (
