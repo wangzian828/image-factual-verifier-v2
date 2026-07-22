@@ -14,11 +14,25 @@ _UNSUPPORTED_ANNOTATION_KEYS = {
     "title",
 }
 
+_UNSUPPORTED_VALIDATION_KEYS = {
+    "minLength",
+    "maxLength",
+    "minItems",
+    "maxItems",
+    "minimum",
+    "maximum",
+    "exclusiveMinimum",
+    "exclusiveMaximum",
+    "pattern",
+    "format",
+}
+
 
 def normalize_json_schema(
     schema: Mapping[str, Any],
     *,
     require_all_properties: bool = True,
+    strip_validation_constraints: bool = False,
 ) -> dict[str, Any]:
     """Inline local refs and emit the REST structured-output schema subset."""
 
@@ -45,10 +59,13 @@ def normalize_json_schema(
                 merged.update({key: value for key, value in node.items() if key != "$ref"})
                 return resolve(merged, (*stack, name))
 
+        excluded_keys = set(_UNSUPPORTED_ANNOTATION_KEYS)
+        if strip_validation_constraints:
+            excluded_keys.update(_UNSUPPORTED_VALIDATION_KEYS)
         normalized = {
             key: resolve(value, stack)
             for key, value in node.items()
-            if key not in _UNSUPPORTED_ANNOTATION_KEYS and key != "$ref"
+            if key not in excluded_keys and key != "$ref"
         }
         properties = normalized.get("properties")
         if isinstance(properties, dict):

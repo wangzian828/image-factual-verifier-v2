@@ -483,6 +483,7 @@ def _response_format(model: type[_StrictModel]) -> Dict[str, Any]:
         "schema": normalize_json_schema(
             model.model_json_schema(),
             require_all_properties=True,
+            strip_validation_constraints=True,
         ),
     }
 
