@@ -283,6 +283,69 @@ def test_qwen_forced_tool_stage_boundary_hides_tools() -> None:
     assert backend.requests[1]["response_format"]["type"] == "json_schema"
 
 
+def test_qwen_protocol_exhaustion_returns_opt_in_bounded_boundary(
+    tmp_path: Path,
+) -> None:
+    backend = QwenFakeBackend(
+        [
+            _tool_response(
+                query="already attempted",
+                call_id="call-duplicate-1",
+                question_id="task-1",
+            ),
+            _tool_response(
+                query="already attempted",
+                call_id="call-duplicate-2",
+                question_id="task-1",
+            ),
+        ]
+    )
+    prior = StageStep(
+        action_type="tool_call",
+        tool_name="lookup_fact",
+        tool_args={
+            "query": "already attempted",
+            "__question_id": "task-1",
+        },
+    )
+    runner = StageRunner(
+        llm=backend,
+        system_prompt="Investigate the relevant fact.",
+        tools=[LookupTool()],
+        output_schema=AnswerOutput,
+        max_rounds=1,
+        max_protocol_corrections=1,
+        force_tool_each_round=True,
+        prior_steps=[prior],
+        stage_name="verification",
+        question_claims={"task-1": "Verify the transport."},
+        attach_image=False,
+        stop_output_factory=lambda: AnswerOutput(answer="checkpoint"),
+        protocol_exhaustion_boundary=True,
+        runtime_store=CaseRuntimeStore(
+            tmp_path,
+            case_id="bounded-protocol",
+            attempt_id="attempt",
+        ),
+    )
+
+    parsed, steps = asyncio.run(runner.run("Find a new route."))
+
+    assert parsed == AnswerOutput(answer="checkpoint")
+    assert [step.action_type for step in steps] == [
+        "format_error",
+        "format_error",
+        "output",
+    ]
+    assert len(backend.requests) == 2
+    assert steps[-1].metadata[
+        "protocol_correction_exhaustion_boundary"
+    ] is True
+    assert steps[-1].metadata["deterministic_segment_boundary"] is True
+    assert steps[-1].metadata["protocol_corrections_used"] == 1
+    assert steps[-1].metadata["resolved_rejection_request_ids"]
+
+
 def test_runtime_constrained_optional_tool_selector_becomes_required() -> None:
     reference_url = "https://example.org/pending-reference.jpg"
     runner = StageRunner(

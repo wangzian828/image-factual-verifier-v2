@@ -1195,6 +1195,54 @@ def test_protocol_correction_exhaustion_is_a_hard_failure_without_forced_output(
     )
 
 
+def test_native_protocol_exhaustion_returns_opt_in_bounded_boundary(
+    tmp_path,
+) -> None:
+    first = _completed_response()
+    first["id"] = "interaction-bounded-1"
+    second = _completed_response()
+    second["id"] = "interaction-bounded-2"
+    backend = NativeFakeBackend([first, second])
+    runner = StageRunner(
+        llm=backend,
+        system_prompt="Investigate.",
+        tools=[RecordingTool()],
+        output_schema=ToolStageOutput,
+        max_rounds=1,
+        max_protocol_corrections=1,
+        stage_name="verification",
+        min_tool_calls=1,
+        force_tool_each_round=True,
+        attach_image=False,
+        protocol_exhaustion_boundary=True,
+        runtime_store=CaseRuntimeStore(
+            tmp_path,
+            case_id="bounded-native-protocol",
+            attempt_id="attempt",
+        ),
+        stop_output_factory=lambda: ToolStageOutput(
+            coverage_complete=False,
+            unresolved_priority_questions=["return to decision checkpoint"],
+        ),
+    )
+
+    parsed, steps = asyncio.run(runner.run("- [q1] verify"))
+
+    assert parsed is not None
+    assert parsed.coverage_complete is False
+    assert len(backend.requests) == 2
+    assert [step.action_type for step in steps] == [
+        "output_rejected",
+        "output_rejected",
+        "output",
+    ]
+    assert steps[-1].metadata[
+        "protocol_correction_exhaustion_boundary"
+    ] is True
+    assert steps[-1].metadata["deterministic_segment_boundary"] is True
+    assert steps[-1].metadata["resolved_rejection_request_ids"]
+
+
 def test_native_invalid_final_schema_is_rejected() -> None:
     invalid = _completed_response()
     invalid["steps"][0]["content"][0]["text"] = json.dumps(

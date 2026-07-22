@@ -112,6 +112,7 @@ from src.orchestrator.task_store import (
     query_replan_candidate_task_ids,
     remaining_material_routes,
     remaining_claim_hypothesis_routes,
+    record_route_selection_exhaustion,
     record_tool_observation,
     runtime_task_tool_names,
     state_from_bootstrap,
@@ -1066,6 +1067,22 @@ class Orchestrator:
                 runtime_case,
                 interaction_session=InteractionSession(),
             )
+            if observation_update.get("route_selection_exhausted"):
+                await self._run_discrepancy_decision(
+                    state,
+                    investigation,
+                    reviewed_evidence_ids=(
+                        discrepancy_decision_evidence_ids(investigation)
+                    ),
+                    trigger="scheduled_boundary",
+                    interaction_session=None,
+                )
+                audit_discrepancy_coverage(
+                    investigation,
+                    decision_checkpoint=True,
+                )
+                self._sync_image_only_state(state, investigation)
+                continue
             trigger = discrepancy_decision_checkpoint_reason(
                 investigation,
                 update=observation_update,
@@ -1230,6 +1247,7 @@ class Orchestrator:
             max_protocol_corrections=4,
             max_tool_calls_per_turn=1,
             force_tool_each_round=True,
+            protocol_exhaustion_boundary=True,
             interaction_session=interaction_session,
             question_is_active=lambda task_id: any(
                 task.task_id == task_id
@@ -1239,8 +1257,11 @@ class Orchestrator:
                 for task in investigation.tasks
             ),
             stop_output_factory=lambda: InvestigationSegmentOutput(
-                segment_summary="The deterministic v4 action boundary was reached.",
-                ready_for_reflection=False,
+                segment_summary=(
+                    "The bounded route-selection correction chain was exhausted; "
+                    "return to a discrepancy checkpoint."
+                ),
+                ready_for_reflection=True,
             ),
             request_timeout_seconds=self.stage_request_timeout_seconds,
             tool_timeout_seconds=self.tool_action_timeout_seconds,
@@ -1273,6 +1294,37 @@ class Orchestrator:
                 "v4 discrepancy ReAct did not reach a valid action boundary"
             )
         if not observation_update:
+            boundary_step = next(
+                (
+                    step
+                    for step in reversed(steps)
+                    if step.metadata.get(
+                        "protocol_correction_exhaustion_boundary"
+                    )
+                ),
+                None,
+            )
+            if boundary_step is not None:
+                request_ids = list(
+                    boundary_step.metadata.get(
+                        "resolved_rejection_request_ids", []
+                    )
+                    or []
+                )
+                observation_update = record_route_selection_exhaustion(
+                    investigation,
+                    task_id=next(iter(task_ids)),
+                    request_id=(
+                        str(request_ids[-1])
+                        if request_ids
+                        else "route-selection-boundary"
+                    ),
+                )
+                boundary_step.metadata["investigation_state_update"] = (
+                    observation_update
+                )
+                self._sync_image_only_state(state, investigation)
+                return observation_update
             raise RuntimeError("v4 discrepancy ReAct executed no accepted action")
         return observation_update
 

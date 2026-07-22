@@ -126,6 +126,7 @@ class StageRunner:
         force_tool_each_round: bool = False,
         question_is_active: Optional[Callable[[str], bool]] = None,
         stop_output_factory: Optional[Callable[[], BaseModel]] = None,
+        protocol_exhaustion_boundary: bool = False,
         request_timeout_seconds: Optional[float] = None,
         tool_timeout_seconds: Optional[float] = None,
         tool_argument_constraints: Optional[
@@ -189,6 +190,7 @@ class StageRunner:
         self.force_tool_each_round = bool(force_tool_each_round)
         self.question_is_active = question_is_active
         self.stop_output_factory = stop_output_factory
+        self.protocol_exhaustion_boundary = bool(protocol_exhaustion_boundary)
         self.tool_argument_constraints = deepcopy(
             tool_argument_constraints or {}
         )
@@ -295,7 +297,16 @@ class StageRunner:
             dict.fromkeys(configured_question_ids or context_question_ids)
         )
         if self._uses_native_interactions():
-            return await self._run_native_interactions(input_context)
+            try:
+                return await self._run_native_interactions(input_context)
+            except RuntimeError as exc:
+                partial_steps = list(getattr(exc, "stage_steps", []) or [])
+                boundary = self._protocol_exhaustion_stage_boundary(
+                    partial_steps
+                )
+                if boundary is not None:
+                    return boundary
+                raise
         if self._uses_native_structured_output():
             return await self._run_native_structured_output(input_context)
 
@@ -718,6 +729,10 @@ class StageRunner:
                 continue
             break
 
+        boundary = self._protocol_exhaustion_stage_boundary(steps)
+        if boundary is not None:
+            return boundary
+
         last_rejection_reason = ""
         for prior_step in reversed(steps):
             candidate_reason = str(
@@ -794,6 +809,57 @@ class StageRunner:
         )
         steps.append(final_step)
         return forced, steps
+
+    def _protocol_exhaustion_stage_boundary(
+        self,
+        steps: List[StageStep],
+    ) -> Optional[Tuple[BaseModel, List[StageStep]]]:
+        """Close one failed correction chain without inventing a tool action.
+
+        This is opt-in because a generic structured-output stage should still fail
+        closed.  A bounded ReAct orchestrator may instead return to its semantic
+        checkpoint after the model repeatedly fails to select a new executable
+        route.  The boundary records every rejected provider request it resolves;
+        it does not count as an action or claim that a retrieval route succeeded.
+        """
+
+        if not self.protocol_exhaustion_boundary or self.stop_output_factory is None:
+            return None
+        exhausted = [
+            step
+            for step in steps
+            if bool(step.metadata.get("correction_budget_exhausted"))
+        ]
+        if not exhausted:
+            return None
+        resolved_request_ids = list(
+            dict.fromkeys(
+                str(step.metadata.get("context_request_id", "")).strip()
+                for step in steps
+                if step.action_type in {"format_error", "output_rejected"}
+                and str(step.metadata.get("context_request_id", "")).strip()
+            )
+        )
+        parsed = self.stop_output_factory()
+        boundary_step = StageStep(
+            round=len(steps) + 1,
+            stage_name=self.stage_name,
+            action_type="output",
+            output=parsed.model_dump(),
+            metadata={
+                "stage": self.stage_name,
+                "deterministic_segment_boundary": True,
+                "protocol_correction_exhaustion_boundary": True,
+                "resolved_rejection_request_ids": resolved_request_ids,
+                "protocol_corrections_used": max(
+                    int(step.metadata.get("protocol_corrections_used", 0) or 0)
+                    for step in exhausted
+                ),
+                "termination_reason": "protocol_correction_budget_exhausted",
+            },
+        )
+        steps.append(boundary_step)
+        return parsed, steps
 
     def _uses_native_interactions(self) -> bool:
         """Use Gemini's native function protocol when this stage has tools."""

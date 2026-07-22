@@ -135,9 +135,12 @@ later request cannot erase it.
 
 A duplicate native call receives the exact rejected tool name and normalized
 arguments so the model can change the call instead of guessing what collided. If
-the bounded correction budget ends, the final segment-boundary request exposes no
-tools and uses the stage JSON schema; tool calls cannot leak into a response that
-the runtime will parse as structured output.
+the v4 ReAct correction budget ends without an executable action, the runtime does
+not send another model request. It appends a deterministic bounded boundary that
+names the rejected request IDs, records the active Task as `blocked` without
+incrementing `action_count`, and starts a standalone Discrepancy Decision. That
+checkpoint may add a genuinely different hypothesis or proceed with the unresolved
+gap. Other stages retain fail-closed correction behavior.
 
 Qwen3.5 semantic stages use its official non-greedy sampling profile. Planning has
 `thinking_token_budget=1024`; Discrepancy Decision and Judgment use 2,048, and
@@ -165,8 +168,8 @@ combination.
   - inspect existing candidates before expanding search.
   - use archive recall only as a bounded aid to an otherwise executable task; exact
     read follows one selected recall result.
-- Output: one native function call or bounded segment output
-- Next: deterministic tool execution.
+- Output: one native function call, or a deterministic correction-exhaustion boundary
+- Next: deterministic tool execution; an exhausted route returns to Discrepancy Decision.
 
 Exact instruction:
 
@@ -341,7 +344,8 @@ Every prompt or interaction-order change must update:
 
 The local deterministic and mocked-Interactions gates pass for the complete v4
 chain, including standalone-stage lifecycle checks, short native tool roundtrips,
-claim/hypothesis ownership, sparse decisions, atomic reducers, terminal Coverage,
-strict audit, and policy export. The 2026-07-20 Queen canary produced a correct,
-evidence-determined `fake` with no protocol rejection; corrected strict audit and
-heterogeneous live canaries remain pending.
+bounded route-selection exhaustion, claim/hypothesis ownership, sparse decisions,
+atomic reducers, terminal Coverage, strict audit, and policy export. The frozen
+`cd0c04f` Qwen3.5 batch completed its first four cases with zero engineering errors
+and strict-audit failures. Its fifth case exposed repeated rejected route selection;
+the bounded boundary is locally gated and awaits the same-case live rerun.

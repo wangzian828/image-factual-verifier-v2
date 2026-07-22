@@ -1,5 +1,25 @@
 # Image-Centric Runtime Research Log
 
+## 2026-07-22 — Monarch gate accepted and full 20 launched
+
+- `qwen35-monarch-dedup-cd0c04f` completed with correct `fake`, zero
+  engineering errors, two investigation actions, seven model calls, and a
+  provenance-complete evidence-determined basis in 121.42 seconds.
+- Strict scheduler audit passed with no rejection and one successfully recovered
+  correction warning. The high-salience Claim was refuted, its decisive discrepancy
+  was established, and the runtime stopped immediately as `verdict_determined`.
+- The frozen `cd0c04f` runtime is now running the sole concurrency-1 batch
+  `qwen35-full20-cd0c04f`. Any engineering error stops that batch for generic root
+  cause repair; the 20 cases remain evaluation-only.
+- The first three completed cases all have successful canonical traces and pass
+  strict scheduler audit with zero scheduler, protocol, or route-control rejection.
+  They exercise immediate evidence determination, meaningful-route exhaustion, and
+  the 24-action cap. The largest observed provider request remains below 128K; the
+  roughly 0.8M prompt-token totals are sums across independent short requests rather
+  than one inherited conversation. A separate incremental audit guard now stops only
+  this batch if a later final trace contains an engineering error or fails strict
+  audit.
+
 ## 2026-07-22 — repeated canonical discrepancy
 
 - `qwen35-monarch-atomic-9ac16e2` accepted an earlier medium-Claim biological
@@ -124,3 +144,27 @@
 - Persisted policy snapshots replace binary image data with a `runtime_image`
   reference.
 - Deterministic result: `332 passed`.
+
+## 2026-07-22 — frozen full20 route-selection exhaustion
+
+- `qwen35-full20-cd0c04f` completed four canonical cases before the incremental
+  guard stopped the batch. All four had zero engineering errors and passed strict
+  scheduler audit with zero scheduler/protocol/route-control rejection. Their
+  exits covered evidence-determined `real`, meaningful-route exhaustion, a
+  24-action `real`, and a 24-action `fake` with an image/ecology discrepancy.
+- The fifth case, `case_3b6245ba631c3d94`, failed after 20 accepted investigation
+  actions. Qwen repeatedly selected already executed search/recall routes in one
+  ReAct segment. Runtime correctly rejected the duplicates, but after four
+  corrections the old forced-output request rejected the model's checkpoint output
+  with `min_tool_calls=1` and escalated the segment to an engineering error.
+- The locked generic repair changes no Prompt, query, Evidence, duplicate, action,
+  or verdict gate. v4 ReAct alone may close an exhausted route-selection correction
+  chain with a deterministic boundary: no additional provider request, no invented
+  tool action, and no `action_count` increment. The active Task becomes `blocked`,
+  its hypothesis becomes `exhausted`, and a non-recoverable `protocol_error` Failure
+  returns canonical state to standalone Discrepancy Decision.
+- Strict audit accepts the boundary only through explicit rejected request IDs and
+  reports it as a warning. Scoring and policy export still exclude every episode
+  containing protocol rejection, so this fallback cannot become preferred SFT data.
+  Local Qwen and Gemini lifecycle tests, reducer tests, and strict-audit tests pass;
+  the failed case is the next and only live rerun before a fresh full20 directory.

@@ -34,6 +34,7 @@ from src.orchestrator.task_store import (
     apply_discrepancy_decision,
     apply_image_account_planning,
     archive_recall_available,
+    record_route_selection_exhaustion,
     record_tool_observation,
     remaining_claim_hypothesis_routes,
     runtime_task_tool_names,
@@ -144,6 +145,30 @@ def _planned_state() -> ImageOnlyInvestigationState:
     update = apply_image_account_planning(state, _planning_output())
     assert update["accepted"] is True
     return state
+
+
+def test_route_selection_exhaustion_blocks_task_without_counting_an_action() -> None:
+    state = _planned_state()
+    task = state.tasks[0]
+    state.pending_archive_read_ids = ["memory-pending"]
+    state.recommended_next_task_ids = [task.task_id]
+
+    update = record_route_selection_exhaustion(
+        state,
+        task_id=task.task_id,
+        request_id="req-route-selection",
+    )
+
+    assert state.action_count == 0
+    assert update["route_selection_exhausted"] is True
+    assert update["task_status"] == "blocked"
+    assert task.status == "blocked"
+    assert state.search_hypotheses[0].status == "exhausted"
+    assert state.failures[0].code == "protocol_error"
+    assert state.failures[0].recoverable is False
+    assert state.pending_archive_read_ids == []
+    assert state.recommended_next_task_ids == []
+    assert remaining_claim_hypothesis_routes(state) == []
 
 
 def test_planning_query_can_establish_the_underlying_fact_independently() -> None:

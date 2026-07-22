@@ -913,7 +913,7 @@ html&gt;body{padding:0}&lt;/style&gt;
     &lt;/div&gt;
     &lt;div class=&quot;ifv-lane&quot;&gt;
       &lt;span class=&quot;viz-badge ifv-lane-label&quot;&gt;Runtime 负责裁决&lt;/span&gt;
-      &lt;span class=&quot;ifv-lane-copy&quot;&gt;协议校验 · 原子归约 · 路线账本 · Coverage · basis 编译&lt;/span&gt;
+      &lt;span class=&quot;ifv-lane-copy&quot;&gt;协议校验 · 原子归约 · 路线账本 · 纠错耗尽回到 Decision · Coverage · basis 编译&lt;/span&gt;
     &lt;/div&gt;
   &lt;/div&gt;
 
@@ -928,6 +928,7 @@ html&gt;body{padding:0}&lt;/style&gt;
   &lt;div class=&quot;ifv-guardrails&quot; aria-label=&quot;Investigation limits&quot;&gt;
     &lt;span class=&quot;viz-badge&quot;&gt;每回合 1 个工具调用&lt;/span&gt;
     &lt;span class=&quot;viz-badge&quot;&gt;合格 Evidence 触发稀疏 Decision&lt;/span&gt;
+    &lt;span class=&quot;viz-badge&quot;&gt;重复路线纠错耗尽：blocked Task → Decision&lt;/span&gt;
     &lt;span class=&quot;viz-badge&quot;&gt;结论确定立即停止&lt;/span&gt;
   &lt;/div&gt;
 
@@ -970,14 +971,14 @@ html&gt;body{padding:0}&lt;/style&gt;
         {
           icon: &quot;search&quot;,
           label: &quot;围绕一个任务执行一个真实工具动作&quot;,
-          action: &quot;模型在一个 Task 的合法路线中选择一个工具。访问网页时再选择该 Task 拥有的一条 ImageClaim，并说明要从页面寻找什么；Runtime 注入准确的 Claim 原文。每个动作使用独立工具短链。&quot;,
-          state: &quot;Task 绑定的 URL / Claim ID / retrieval goal · Discovery 或原始工具结果 · 成功调用 ID 和来源信息&quot;,
+          action: &quot;模型在一个 Task 的合法路线中选择一个工具。访问网页时再选择该 Task 拥有的一条 ImageClaim，并说明要从页面寻找什么；Runtime 注入准确的 Claim 原文。每个动作使用独立工具短链。若纠错预算内仍只重复已拒绝路线，Runtime 不再请求模型，而是封闭该 Task 并进入 Decision。&quot;,
+          state: &quot;Task 绑定的 URL / Claim ID / retrieval goal · Discovery 或原始工具结果 · 成功调用 ID；或可审计的 blocked Task / Failure&quot;,
           example: &quot;反向搜图找到相关 Moon Tree 图片；随后访问 NASA 候选页，取得 Johnson Space Center 的原文。&quot;
         },
         {
           icon: &quot;refresh-cw&quot;,
           label: &quot;语义 Decision + 确定性 Coverage&quot;,
-          action: &quot;Runtime 验证来源和调用链并生成 Evidence、Finding 或 Failure；独立 Gemini Decision 只提议本轮更新，已记录冲突保持有效且不可重复提交；Runtime 原子校验后运行 Coverage。高显著 Claim 的 refuted、决定性冲突与 fake 必须在同一对象内闭合。&quot;,
+          action: &quot;Runtime 验证来源和调用链并生成 Evidence、Finding 或 Failure；独立 Decision 只提议本轮更新，也接收 blocked 路线留下的未解决缺口，可新增不同路线或正常结算。Runtime 原子校验后运行 Coverage；已记录冲突保持有效且不可重复提交。&quot;,
           state: &quot;Evidence · Finding · ClaimAssessment · MaterialDiscrepancy · Coverage&quot;,
           example: &quot;NASA 官方直接说明真实仪式在 Johnson Space Center，反驳 Kennedy 地点；决定性事实变为 refuted，Coverage 已足够判 fake。&quot;
         },

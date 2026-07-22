@@ -461,6 +461,102 @@ def test_strict_audit_accepts_multihop_qwen_protocol_correction(
     assert report.stats["successful_protocol_corrections"] == 2
 
 
+def test_strict_audit_accepts_bounded_protocol_exhaustion_boundary(
+    tmp_path: Path,
+) -> None:
+    trace_path = _v4_trace(tmp_path)
+    trace = json.loads(trace_path.read_text(encoding="utf-8"))
+    steps = trace["state"]["all_steps"]
+    for index, step in enumerate(steps):
+        metadata = step["metadata"]
+        metadata["native_interactions"] = False
+        metadata["native_chat_completions"] = True
+        metadata["context_request_id"] = f"req-bounded-fixture-{index}"
+        metadata["parent_context_request_id"] = None
+        metadata["interaction_lifecycle_kind"] = (
+            "tool_roundtrip"
+            if step["stage"] == "image_only_discrepancy_investigation"
+            else "standalone_request"
+        )
+    judgment_index = next(
+        index
+        for index, step in enumerate(steps)
+        if step["stage"] == "image_only_discrepancy_judgment"
+    )
+    source = next(
+        step
+        for step in steps
+        if step["stage"] == "image_only_discrepancy_investigation"
+    )
+    rejected_root = {
+        **source,
+        "action_type": "format_error",
+        "metadata": {
+            **source["metadata"],
+            "native_interactions": False,
+            "native_chat_completions": True,
+            "context_request_id": "req-route-root",
+            "parent_context_request_id": None,
+            "interaction_lifecycle_kind": "tool_roundtrip",
+            "duplicate_tool_call": True,
+            "rejection_reason": "the selected call duplicates an executed route",
+        },
+    }
+    rejected_correction = {
+        **source,
+        "action_type": "format_error",
+        "metadata": {
+            **source["metadata"],
+            "native_interactions": False,
+            "native_chat_completions": True,
+            "context_request_id": "req-route-correction",
+            "parent_context_request_id": "req-route-root",
+            "interaction_lifecycle_kind": "protocol_correction",
+            "duplicate_tool_call": True,
+            "correction_budget_exhausted": True,
+            "rejection_reason": "the selected call still duplicates an executed route",
+        },
+    }
+    boundary = {
+        "round": 99,
+        "stage": "image_only_discrepancy_investigation",
+        "action_type": "output",
+        "output": {
+            "segment_summary": "Return to a discrepancy checkpoint.",
+            "ready_for_reflection": True,
+        },
+        "metadata": {
+            "stage": "image_only_discrepancy_investigation",
+            "deterministic_segment_boundary": True,
+            "protocol_correction_exhaustion_boundary": True,
+            "resolved_rejection_request_ids": [
+                "req-route-root",
+                "req-route-correction",
+            ],
+        },
+    }
+    steps[judgment_index:judgment_index] = [
+        rejected_root,
+        rejected_correction,
+        boundary,
+    ]
+    trace_path.write_text(
+        json.dumps(trace, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    report = audit_trace(trace_path)
+
+    assert not report.failures(strict_scheduler=True)
+    assert report.stats["bounded_protocol_fallbacks"] == 2
+    assert report.stats["route_control_rejections"] == 0
+    assert {
+        issue.code
+        for issue in report.warnings(strict_scheduler=True)
+        if issue.code == "PROTOCOL_EXHAUSTION_BOUNDARY"
+    } == {"PROTOCOL_EXHAUSTION_BOUNDARY"}
+
+
 def test_strict_audit_rejects_v4_discrepancy_alignment_tampering(
     tmp_path: Path,
 ) -> None:

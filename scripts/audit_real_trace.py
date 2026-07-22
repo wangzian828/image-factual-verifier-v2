@@ -38,6 +38,7 @@ SCHEDULER = "scheduler"
 PROTOCOL = "protocol"
 ROUTE_CONTROL = "route_control"
 CORRECTION = "correction"
+BOUNDED_FALLBACK = "bounded_fallback"
 REJECTION_ACTIONS = frozenset({"format_error", "output_rejected"})
 WEB_EVIDENCE_TOOLS = frozenset({"visit", "crop_and_search"})
 KNOWN_FACT_CHECK_QUERY_POLICY = SourceAccessPolicy(
@@ -539,6 +540,7 @@ def _audit_rejections(
     protocol_count = 0
     route_control_count = 0
     corrected_count = 0
+    bounded_fallback_count = 0
 
     def rejected(candidate: Mapping[str, Any]) -> bool:
         candidate_metadata = _mapping(candidate.get("metadata"))
@@ -597,6 +599,34 @@ def _audit_rejections(
                 reachable_rejected_ids.add(candidate_id)
         return False
 
+    def eventually_reaches_bounded_fallback(
+        rejected_index: int,
+        rejected_step: Mapping[str, Any],
+    ) -> bool:
+        root_id = attempt_id(rejected_step)
+        if not root_id:
+            return False
+        stage = str(rejected_step.get("stage", ""))
+        for candidate in steps[rejected_index + 1 :]:
+            if str(candidate.get("stage", "")) != stage:
+                continue
+            candidate_metadata = _mapping(candidate.get("metadata"))
+            if not candidate_metadata.get(
+                "protocol_correction_exhaustion_boundary"
+            ):
+                continue
+            resolved = {
+                str(item).strip()
+                for item in candidate_metadata.get(
+                    "resolved_rejection_request_ids", []
+                )
+                or []
+                if str(item).strip()
+            }
+            if root_id in resolved:
+                return True
+        return False
+
     for index, step in enumerate(steps):
         metadata = _mapping(step.get("metadata"))
         if str(step.get("action_type", "")) in {
@@ -607,6 +637,7 @@ def _audit_rejections(
         if not rejected(step):
             continue
         corrected = eventually_corrected(index, step)
+        bounded_fallback = eventually_reaches_bounded_fallback(index, step)
         reason = str(metadata.get("rejection_reason", "")).strip()
         if not reason:
             try:
@@ -621,12 +652,16 @@ def _audit_rejections(
         category = (
             CORRECTION
             if corrected
+            else BOUNDED_FALLBACK
+            if bounded_fallback
             else ROUTE_CONTROL
             if route_control
             else _rejection_category(step)
         )
         if category == CORRECTION:
             corrected_count += 1
+        elif category == BOUNDED_FALLBACK:
+            bounded_fallback_count += 1
         elif category == ROUTE_CONTROL:
             route_control_count += 1
         elif category == SCHEDULER:
@@ -638,6 +673,8 @@ def _audit_rejections(
             (
                 "PROTOCOL_CORRECTION"
                 if category == CORRECTION
+                else "PROTOCOL_EXHAUSTION_BOUNDARY"
+                if category == BOUNDED_FALLBACK
                 else "ROUTE_CONTROL_REJECTION"
                 if category == ROUTE_CONTROL
                 else "SCHEDULER_REJECTION"
@@ -652,6 +689,7 @@ def _audit_rejections(
     report.stats["protocol_rejections"] = protocol_count
     report.stats["route_control_rejections"] = route_control_count
     report.stats["successful_protocol_corrections"] = corrected_count
+    report.stats["bounded_protocol_fallbacks"] = bounded_fallback_count
 
 
 

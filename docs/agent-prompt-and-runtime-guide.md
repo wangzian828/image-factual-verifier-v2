@@ -82,12 +82,20 @@ After tool execution, the runtime reduces the canonical result, stores the nativ
 that pending result followed by one `user_input` containing the newly compiled state.
 No provider, model, or wire-protocol switch may hide an error.
 
+If v4 ReAct repeatedly selects rejected duplicate routes until its correction budget
+ends, Runtime sends no extra model request and invents no search. It appends a
+deterministic boundary tied to the rejected request IDs, records the current Task as
+`blocked` without increasing the action count, and starts a standalone Discrepancy
+Decision. The episode remains visible to audit and is ineligible for policy export.
+Transport, schema, lifecycle, and non-v4 correction exhaustion still fail closed.
+
 ## Discrepancy Decision
 
-The standalone checkpoint runs sparsely after qualified direct Evidence, same-capture/reference
-comparison, a material Evidence boundary, or immediately before unresolved
-termination. It sees ImageClaims, hypotheses, exact Evidence, visible anchors,
-attempted routes, and remaining budgets through the explicit workspace handoff.
+The standalone checkpoint runs sparsely after qualified direct Evidence,
+same-capture/reference comparison, a material Evidence boundary, bounded route
+selection exhaustion, or immediately before unresolved termination. It sees
+ImageClaims, hypotheses, exact Evidence, visible anchors, attempted routes, failures,
+and remaining budgets through the explicit workspace handoff.
 
 It may assess claims, establish or conflict a MaterialDiscrepancy, add/retire bounded
 hypotheses, request one Evidence-motivated visual reinspection, and propose a verdict.

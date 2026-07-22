@@ -5538,6 +5538,65 @@ def _task_by_id(
     )
 
 
+def record_route_selection_exhaustion(
+    state: ImageOnlyInvestigationState,
+    *,
+    task_id: str,
+    request_id: str,
+) -> Dict[str, Any]:
+    """Record a bounded policy-routing failure without inventing an action.
+
+    The model has already consumed the stage's protocol-correction budget while
+    proposing only rejected calls.  Blocking this task prevents a zero-action
+    loop; a subsequent Discrepancy Decision may still add a different hypothesis
+    or proceed with an explicitly unresolved gap.
+    """
+
+    task = _task_by_id(state, task_id)
+    if task is None or task.status not in {"active", "pending"}:
+        raise ValueError(
+            "route-selection exhaustion requires one active runtime task"
+        )
+    failure_id = _append_failure(
+        state,
+        task,
+        call_id=request_id or stable_id("route-request", task_id),
+        tool_name="route_controller",
+        code="protocol_error",
+        message=(
+            "The policy exhausted its bounded protocol-correction chain without "
+            "selecting a new executable tool action."
+        ),
+        recoverable=False,
+    )
+    task.status = "blocked"
+    hypothesis = next(
+        (
+            item
+            for item in state.search_hypotheses
+            if item.hypothesis_id == task.hypothesis_id
+        ),
+        None,
+    )
+    if hypothesis is not None:
+        hypothesis.status = "exhausted"
+    # A blocked task cannot own the next exact archive read. The recalled memory
+    # remains durable and may be selected again by a later hypothesis; only the
+    # ephemeral pending selector is cleared to avoid a zero-action retry loop.
+    state.pending_archive_read_ids = []
+    state.recommended_next_task_ids = [
+        item for item in state.recommended_next_task_ids if item != task.task_id
+    ]
+    return {
+        "action_count": state.action_count,
+        "task_id": task.task_id,
+        "task_status": task.status,
+        "created_failure_ids": [failure_id],
+        "pending_archive_read_ids": [],
+        "route_selection_exhausted": True,
+    }
+
+
 def _append_failure(
     state: ImageOnlyInvestigationState,
     task: ResearchTask,
@@ -5546,6 +5605,7 @@ def _append_failure(
     tool_name: str,
     code: str,
     message: str,
+    recoverable: bool = True,
 ) -> str:
     failure_id = stable_id(
         "failure",
@@ -5564,6 +5624,7 @@ def _append_failure(
                 function_call_id=call_id,
                 tool_name=tool_name,
                 code=code,
+                recoverable=recoverable,
                 message=message[:4000],
             )
         )

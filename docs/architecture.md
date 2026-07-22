@@ -51,8 +51,10 @@ The local Qwen Chat Completions transport has no provider Interaction ID, so the
 runtime records equivalent request ancestry itself. Context manifests distinguish
 `standalone_request`, `tool_roundtrip`, and `protocol_correction`; only a correction
 may set `parent_request_id` to the rejected request. The strict auditor follows this
-chain transitively and requires it to end in an accepted output before classifying
-the rejection as recovered.
+chain transitively. A rejection is recovered only by an accepted same-stage output.
+If v4 ReAct exhausts route-selection corrections, a deterministic boundary must
+explicitly name the rejected request IDs; audit reports a bounded-fallback warning,
+and training export still excludes the episode.
 
 ## State ownership
 
@@ -142,16 +144,23 @@ from inventing or dropping basis identifiers.
   Claims of any salience, together with their recorded anchors, Evidence, Findings,
   and an explicit gap explaining why the evidence-determined exit did not fire.
 
-Failure to find a discrepancy is not evidence of reality. Provider, protocol,
-runtime, required-tool, and all-tools-failed conditions are engineering errors and
-end before Judgment.
+Failure to find a discrepancy is not evidence of reality. Provider/transport
+failure, malformed structured output, lifecycle corruption, required-tool failure,
+and all-tools-failed conditions are engineering errors and end before Judgment.
+Repeated selection of already rejected but otherwise well-formed routes is handled
+only in v4 ReAct: after its bounded correction chain, Runtime records a non-recoverable
+`protocol_error` Failure, blocks that Task, and returns to Discrepancy Decision. It
+does not fabricate Evidence, an action, or a factual conclusion.
 
 ## Stop and budgets
 
 The hard action cap is 24. One accepted native tool call is one action. The v4 loop
 stops immediately after terminal Coverage, before any further search. Normal stops
 are `verdict_determined`, `meaningful_routes_exhausted`, and
-`hard_budget_exhausted`; provider/protocol failures remain `engineering_error`.
+`hard_budget_exhausted`; provider and unrecoverable protocol/runtime failures remain
+`engineering_error`. The explicit v4 route-selection boundary is a scheduler
+checkpoint, not a stop reason: Decision may open a new route or let normal route
+exhaustion/budget logic reach binary Judgment.
 The remaining-route inventory includes only tasks that still own at least one
 `open`, `conflicted`, or `unresolved` ImageClaim. A stale active task attached only
 to supported/refuted Claims cannot keep the investigation alive or trigger a
