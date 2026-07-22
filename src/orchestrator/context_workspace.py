@@ -15,6 +15,36 @@ from src.orchestrator.task_store import pending_discrepancy_evidence_ids
 
 HANDOFF_SCHEMA_VERSION = "ifv-stage-handoff-v1"
 WORKSPACE_SCHEMA_VERSION = "ifv-explicit-workspace-v1"
+MODEL_WORKSPACE_PROJECTION_VERSION = "ifv-model-workspace-projection-v1"
+
+
+# These stages already compile a complete, stage-owned input projection in
+# image_only_prompts.py.  Re-sending the general workspace made the local Qwen
+# request carry two copies of the same Claims, routes, Discoveries and Evidence.
+# Keep only material that is intentionally absent from the stage projection and
+# may be needed to continue a bounded investigation.
+_MODEL_WORKSPACE_FIELDS_BY_STAGE: dict[str, tuple[str, ...]] = {
+    "verification": (
+        "protected_findings",
+        "protected_evidence",
+        "recalled_materials",
+        "visual_reinspections",
+        "open_questions",
+        "budget",
+    ),
+    "image_only_discrepancy_decision": (
+        "protected_findings",
+        "protected_evidence",
+        "recalled_materials",
+        "visual_reinspections",
+        "open_questions",
+        "budget",
+    ),
+    # Judgment receives a runtime-compiled bounded basis with all allowed
+    # Claims, anchors, Findings and Evidence.  General workspace history must
+    # not override or dilute that basis.
+    "image_only_discrepancy_judgment": (),
+}
 
 
 class StrictModel(BaseModel):
@@ -355,12 +385,19 @@ def render_stage_request(packet: StageHandoffPacket) -> str:
         "workspace_version": packet.workspace.workspace_version,
         "compaction": packet.compaction,
     }
-    # Initial image-account planning already receives the complete bootstrap
-    # projection in stage_input (perception, OCR, entities, facts, anchors and
-    # tasks).  Re-embedding the same workspace added no model-visible facts and
-    # consumed roughly a quarter of the local Qwen context.  The complete
-    # workspace remains in the immutable handoff artifact for replay/audit.
-    if packet.target_stage != "image_account_planning":
+    if packet.target_stage in _MODEL_WORKSPACE_FIELDS_BY_STAGE:
+        fields = _MODEL_WORKSPACE_FIELDS_BY_STAGE[packet.target_stage]
+        workspace = packet.workspace.model_dump(mode="json")
+        projection = {field: workspace[field] for field in fields}
+        runtime_handoff["workspace_projection"] = {
+            "schema_version": MODEL_WORKSPACE_PROJECTION_VERSION,
+            "mode": "stage_minimal",
+            "included_fields": list(fields),
+            "full_workspace_archived": True,
+        }
+        if projection:
+            runtime_handoff["workspace"] = projection
+    elif packet.target_stage != "image_account_planning":
         runtime_handoff["workspace"] = packet.workspace.model_dump(mode="json")
     payload = {
         **dict(stage_input),

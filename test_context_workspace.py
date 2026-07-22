@@ -168,3 +168,46 @@ def test_initial_planning_request_does_not_duplicate_workspace() -> None:
     assert '"workspace_version"' in rendered
     assert '"workspace"' not in rendered
     assert '"task_id": "task-1"' in rendered
+
+
+def test_complete_stage_requests_keep_only_their_workspace_addendum() -> None:
+    state = _state()
+    packet = build_stage_handoff(
+        state,
+        target_stage="verification",
+        stage_input={
+            "image_claims": [item.model_dump(mode="json") for item in state.image_claims],
+            "active_tasks": [item.model_dump(mode="json") for item in state.tasks],
+        },
+        available_tools=["text_search"],
+    )
+    packet.workspace.recent_discoveries = [
+        {"discovery_id": "discovery-1", "snippet": "background"}
+    ]
+    packet.workspace.attempted_routes = [
+        {"tool": "text_search", "query": "background"}
+    ]
+
+    rendered = render_stage_request(packet)
+
+    assert '"workspace_projection"' in rendered
+    assert '"protected_evidence"' in rendered
+    assert '"recent_discoveries"' not in rendered
+    assert '"attempted_routes"' not in rendered
+    # The full workspace remains on the packet for archive/audit and recall.
+    assert packet.workspace.recent_discoveries
+    assert packet.workspace.attempted_routes
+
+
+def test_bounded_judgment_request_omits_general_workspace() -> None:
+    packet = build_stage_handoff(
+        _state(),
+        target_stage="image_only_discrepancy_judgment",
+        stage_input={"compiled_verdict": "fake", "compiled_basis": {"claim_ids": ["claim-1"]}},
+    )
+
+    rendered = render_stage_request(packet)
+
+    assert '"workspace_projection"' in rendered
+    assert '"full_workspace_archived": true' in rendered
+    assert '"workspace": {' not in rendered
