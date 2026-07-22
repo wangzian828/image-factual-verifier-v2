@@ -164,10 +164,22 @@ class _MockJudgeBackend:
 def test_reward_packet_excludes_reasoning_and_blind_call_hides_policy_labels() -> None:
     trace = _trace()
     trace["state"]["all_steps"] = [
-        {"metadata": {"reasoning": "private policy reasoning"}}
+        {
+            "stage": "image_account_planning",
+            "action_type": "output",
+            "metadata": {
+                "reasoning": "private policy reasoning",
+                "interaction_id": "interaction-plan",
+                "policy_input": {"safe": "input"},
+                "policy_action": {"safe": "action"},
+            },
+        }
     ]
     packet = build_semantic_reward_input(trace)
     assert "reasoning" not in json.dumps(packet)
+    assert packet["rollout"]["policy_step_ids"] == [
+        "case-semantic-reward:image_account_planning:interaction-plan"
+    ]
 
 
 def test_frozen_judge_builds_counterfactual_semantic_artifact() -> None:

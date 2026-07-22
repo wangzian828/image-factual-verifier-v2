@@ -156,6 +156,64 @@ def _project_evidence(item: Mapping[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _policy_example_type(stage: str) -> str | None:
+    """Keep step IDs byte-for-byte aligned with trajectory.exporter."""
+
+    if stage in {
+        "image_only_investigation",
+        "image_only_discrepancy_investigation",
+    }:
+        return "react"
+    if stage == "image_only_reflection":
+        return "reflection"
+    if stage in {
+        "image_only_judgment",
+        "image_only_discrepancy_judgment",
+    }:
+        return "judgment"
+    if stage == "image_only_evidence_decision":
+        return "evidence_decision"
+    if stage == "image_only_discrepancy_decision":
+        return "discrepancy_decision"
+    if stage == "image_only_query_concept_extraction":
+        return "query_concept_extraction"
+    if stage == "image_only_query_replan":
+        return "query_replan"
+    if stage in {"image_only_planning", "image_only_attribution_planning"}:
+        return "planning"
+    if stage == "image_account_planning":
+        return "image_account_planning"
+    return None
+
+
+def _policy_step_ids(trace: Mapping[str, Any], episode_id: str) -> List[str]:
+    state = _mapping(trace.get("state"))
+    step_ids: List[str] = []
+    for index, step in enumerate(_rows(state.get("all_steps"))):
+        if str(step.get("action_type", "")) == "planning_revision":
+            continue
+        example_type = _policy_example_type(str(step.get("stage", "")))
+        metadata = _mapping(step.get("metadata"))
+        if example_type is None:
+            continue
+        if not isinstance(metadata.get("policy_input"), Mapping):
+            continue
+        if not isinstance(metadata.get("policy_action"), Mapping):
+            continue
+        if str(step.get("action_type", "")) in {
+            "format_error",
+            "output_rejected",
+        }:
+            continue
+        interaction_id = str(metadata.get("interaction_id", "")).strip()
+        step_ids.append(
+            f"{episode_id}:{example_type}:{interaction_id}"
+            if interaction_id
+            else f"{episode_id}:{example_type}:{index + 1}"
+        )
+    return step_ids
+
+
 def build_semantic_reward_input(
     trace: Mapping[str, Any],
     *,
@@ -258,9 +316,11 @@ def build_semantic_reward_input(
             }
         )
 
+    case_id = str(trace.get("image_id") or state.get("image_id") or "")
+    policy_step_ids = _policy_step_ids(trace, case_id)
     return {
         "schema_version": SEMANTIC_REWARD_INPUT_VERSION,
-        "case_id": str(trace.get("image_id") or state.get("image_id") or ""),
+        "case_id": case_id,
         "decision_policy_version": str(
             trace.get("decision_policy_version")
             or state.get("decision_policy_version")
@@ -273,6 +333,11 @@ def build_semantic_reward_input(
         "claim_assessments": assessments,
         "material_discrepancies": discrepancies,
         "recorded_verdict": verdict,
+        "rollout": {
+            "episode_id": case_id,
+            "policy_step_ids": policy_step_ids,
+            "terminal_policy_step_id": policy_step_ids[-1] if policy_step_ids else "",
+        },
         "verdict_basis": basis,
         "unresolved_gaps": [
             str(value) for value in basis.get("unresolved_gaps", [])
@@ -643,6 +708,7 @@ def build_semantic_reward_artifact(
             "sha256": sha256_json(packet),
             "image": packet.get("image"),
         },
+        "rollout": packet.get("rollout"),
         "judge": dict(judge_audit),
         "blind_judgment": blind.model_dump(mode="json"),
         "aware_counterfactual_judgment": aware.model_dump(mode="json"),
