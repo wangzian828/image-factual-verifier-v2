@@ -655,6 +655,52 @@ def test_qwen_final_schema_rejection_preserves_raw_json_and_reason(
     ]
 
 
+def test_qwen_opt_in_decision_protocol_exhaustion_returns_boundary(
+    tmp_path: Path,
+) -> None:
+    invalid_raw = {
+        "choices": [
+            {"message": {"role": "assistant", "content": "{}"}}
+        ]
+    }
+    invalid_response = LLMResponse(
+        text="{}",
+        prompt_tokens=10,
+        completion_tokens=2,
+        raw=invalid_raw,
+    )
+    backend = QwenFakeBackend([invalid_response, invalid_response])
+    runner = StageRunner(
+        llm=backend,
+        system_prompt="Return one decision.",
+        tools=[],
+        output_schema=AnswerOutput,
+        max_rounds=1,
+        attach_image=False,
+        runtime_store=CaseRuntimeStore(
+            tmp_path,
+            case_id="decision-protocol-boundary",
+            attempt_id="attempt",
+        ),
+        protocol_exhaustion_boundary=True,
+        stop_output_factory=lambda: AnswerOutput(answer="checkpoint"),
+    )
+
+    parsed, steps = asyncio.run(runner.run("Return a decision."))
+
+    assert parsed == AnswerOutput(answer="checkpoint")
+    assert len(backend.requests) == 2
+    assert [step.action_type for step in steps] == [
+        "output_rejected",
+        "output_rejected",
+        "output",
+    ]
+    assert steps[-1].metadata[
+        "protocol_correction_exhaustion_boundary"
+    ] is True
+    assert steps[-1].metadata["resolved_rejection_request_ids"]
+
+
 def test_qwen_forced_output_preserves_final_budget_and_thinking_policy() -> None:
     empty_raw = {
         "choices": [

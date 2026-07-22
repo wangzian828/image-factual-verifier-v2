@@ -151,6 +151,9 @@ Repeated selection of already rejected but otherwise well-formed routes is handl
 only in v4 ReAct: after its bounded correction chain, Runtime records a non-recoverable
 `protocol_error` Failure, blocks that Task, and returns to Discrepancy Decision. It
 does not fabricate Evidence, an action, or a factual conclusion.
+The v4 Discrepancy Decision has a separate no-op `continue` boundary for an
+exhausted schema/semantic correction chain; it preserves the workspace and returns
+to normal route or binary-settlement logic without inventing a state update.
 
 ## Stop and budgets
 

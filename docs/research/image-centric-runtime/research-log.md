@@ -171,3 +171,24 @@
   with zero scheduler/protocol/route-control rejection. This run did not need the
   fallback: it reached normal `hard_budget_exhausted` binary Judgment after the
   former repeated-route segment, confirming the old engineering error is gone.
+
+## 2026-07-22 — full20 Decision correction exhaustion
+
+- The fresh `qwen35-full20-d05d672` batch was stopped at the third case as soon as
+  its runtime emitted an `engineering_error` snapshot. The first two cases had
+  reached final-state snapshots with no such event; no later cases were allowed to
+  run.
+- `case_17bcbf3a0705ce2e` reached a Discrepancy Decision with several independent
+  validator errors. After the model corrected most fields, its final retry left
+  `material_discrepancy.statement` empty, so schema validation rejected the update
+  and the old pipeline raised `Discrepancy Decision did not produce a valid atomic
+  update`. This is semantic-checkpoint protocol exhaustion, not provider or
+  retrieval failure.
+- The generic repair opts v4 Discrepancy Decision into the same deterministic
+  bounded boundary used by ReAct. After the last rejected schema/semantic retry it
+  sends no third provider request and returns a no-op `continue` Decision with an
+  explicit rationale. It cannot invent IDs, Evidence, discrepancies, or a binary
+  verdict; normal route-exhaustion and 24-action settlement remain unchanged.
+- Local StageRunner, reducer, audit, compile, and full-test gates are the next
+  prerequisite. Then only this failed case is rerun on the new commit; a clean
+  single-case audit is required before restarting full20 from a new directory.

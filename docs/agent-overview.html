@@ -978,7 +978,7 @@ html&gt;body{padding:0}&lt;/style&gt;
         {
           icon: &quot;refresh-cw&quot;,
           label: &quot;语义 Decision + 确定性 Coverage&quot;,
-          action: &quot;Runtime 验证来源和调用链并生成 Evidence、Finding 或 Failure；独立 Decision 只提议本轮更新，也接收 blocked 路线留下的未解决缺口，可新增不同路线或正常结算。Runtime 原子校验后运行 Coverage；已记录冲突保持有效且不可重复提交。&quot;,
+          action: &quot;Runtime 验证来源和调用链并生成 Evidence、Finding 或 Failure；独立 Decision 只提议本轮更新，也接收 blocked 路线留下的未解决缺口，可新增不同路线或正常结算。若最后一次更新仍非法，Runtime 写入不改变事实的 continue checkpoint。Runtime 原子校验后运行 Coverage；已记录冲突保持有效且不可重复提交。&quot;,
           state: &quot;Evidence · Finding · ClaimAssessment · MaterialDiscrepancy · Coverage&quot;,
           example: &quot;NASA 官方直接说明真实仪式在 Johnson Space Center，反驳 Kennedy 地点；决定性事实变为 refuted，Coverage 已足够判 fake。&quot;
         },

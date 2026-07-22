@@ -88,6 +88,9 @@ deterministic boundary tied to the rejected request IDs, records the current Tas
 `blocked` without increasing the action count, and starts a standalone Discrepancy
 Decision. The episode remains visible to audit and is ineligible for policy export.
 Transport, schema, lifecycle, and non-v4 correction exhaustion still fail closed.
+The v4 Discrepancy Decision may use the same deterministic boundary as an empty
+`continue` checkpoint after its final rejected update; it never invents a Claim,
+Evidence, discrepancy, or binary verdict.
 
 ## Discrepancy Decision
 

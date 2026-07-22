@@ -808,6 +808,17 @@ class StageRunner:
             metadata={"stage": self.stage_name, **forced_meta},
         )
         steps.append(final_step)
+        if forced is None and self.protocol_exhaustion_boundary:
+            # A semantic checkpoint may opt into a deterministic no-op boundary
+            # after its last schema/validator retry. Do not issue a third provider
+            # request or turn an invalid checkpoint into a factual decision.
+            final_step.metadata["correction_budget_exhausted"] = True
+            final_step.metadata["termination_reason"] = (
+                "protocol_correction_budget_exhausted"
+            )
+            boundary = self._protocol_exhaustion_stage_boundary(steps)
+            if boundary is not None:
+                return boundary
         return forced, steps
 
     def _protocol_exhaustion_stage_boundary(

@@ -1365,6 +1365,14 @@ class Orchestrator:
                 8192,
             ),
             generation_config=self._stage_generation_config("EVIDENCE_DECISION"),
+            protocol_exhaustion_boundary=True,
+            stop_output_factory=lambda: DiscrepancyDecisionOutput(
+                verdict_proposal="continue",
+                rationale=(
+                    "No atomic Decision update was accepted; continue with the "
+                    "recorded workspace and unresolved gaps."
+                ),
+            ),
             request_timeout_seconds=self.stage_request_timeout_seconds,
         )
         parsed, steps = await runner.run(

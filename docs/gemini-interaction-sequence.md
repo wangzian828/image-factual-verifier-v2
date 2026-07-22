@@ -140,7 +140,10 @@ not send another model request. It appends a deterministic bounded boundary that
 names the rejected request IDs, records the active Task as `blocked` without
 incrementing `action_count`, and starts a standalone Discrepancy Decision. That
 checkpoint may add a genuinely different hypothesis or proceed with the unresolved
-gap. Other stages retain fail-closed correction behavior.
+gap. Other stages retain fail-closed correction behavior. The v4 Discrepancy
+Decision uses the same boundary as a no-op `continue` checkpoint when its final
+schema/semantic retry is rejected; it never fabricates a Claim, Evidence,
+discrepancy, or binary verdict.
 
 Qwen3.5 semantic stages use its official non-greedy sampling profile. Planning has
 `thinking_token_budget=1024`; Discrepancy Decision and Judgment use 2,048, and

@@ -171,6 +171,27 @@ def test_route_selection_exhaustion_blocks_task_without_counting_an_action() -> 
     assert remaining_claim_hypothesis_routes(state) == []
 
 
+def test_discrepancy_checkpoint_noop_is_an_accepted_nonterminal_update() -> None:
+    state = _planned_state()
+    update = apply_discrepancy_decision(
+        state,
+        DiscrepancyDecisionOutput(
+            verdict_proposal="continue",
+            rationale=(
+                "No atomic Decision update was accepted; continue with the "
+                "recorded workspace and unresolved gaps."
+            ),
+        ),
+        reviewed_evidence_ids=[],
+        trigger="scheduled_boundary",
+    )
+
+    assert update["accepted"] is True
+    assert update["verdict_proposal"] == "continue"
+    assert state.proposed_verdict == "continue"
+    assert state.discrepancy_decisions[-1].trigger == "scheduled_boundary"
+
+
 def test_planning_query_can_establish_the_underlying_fact_independently() -> None:
     state = _state()
     output = _planning_output()
