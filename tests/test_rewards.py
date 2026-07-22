@@ -159,11 +159,13 @@ def test_profile_file_is_versioned_and_loadable() -> None:
     assert profile["weights"]["classification_correct"] == pytest.approx(0.20)
 
 
-def test_v2_profile_penalizes_claim_label_disagreement() -> None:
+def test_v3_profile_penalizes_claim_label_disagreement() -> None:
     root = Path(__file__).resolve().parents[1]
-    profile = load_reward_profile(root / "configs" / "rl" / "semantic-reward-v2.json")
-    assert profile["profile_id"] == "ifv-semantic-balanced-v2"
-    assert profile["weights"]["claim_label_agreement"] == pytest.approx(0.10)
+    profile = load_reward_profile(root / "configs" / "rl" / "semantic-reward-v3.json")
+    assert profile["profile_id"] == "ifv-semantic-balanced-v3"
+    assert profile["weights"]["claim_label_agreement"] == pytest.approx(0.15)
+    assert "evidence_dropout_sensitivity" not in profile["weights"]
+    assert "rubber_stamp_resistance" not in profile["weights"]
 
     artifact = _semantic_artifact()
     artifact["metrics"]["claim_label_agreement"] = 0.0

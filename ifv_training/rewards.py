@@ -23,13 +23,16 @@ DEFAULT_COMPONENT_WEIGHTS = {
     "classification_correct": 0.15,
     "strict_trace_audit": 0.10,
     "verdict_blind_agreement": 0.10,
-    "claim_label_agreement": 0.10,
+    "claim_label_agreement": 0.15,
     "claim_entailment": 0.10,
     "evidence_citation_fidelity": 0.10,
-    "verdict_sufficiency": 0.15,
+    "verdict_sufficiency": 0.20,
     "verdict_swap_rejection": 0.10,
-    "evidence_dropout_sensitivity": 0.05,
-    "rubber_stamp_resistance": 0.05,
+}
+
+SUPPORTED_COMPONENT_WEIGHTS = frozenset(DEFAULT_COMPONENT_WEIGHTS) | {
+    "evidence_dropout_sensitivity",
+    "rubber_stamp_resistance",
 }
 
 
@@ -201,7 +204,7 @@ def load_reward_profile(path: Path | None = None) -> dict[str, Any]:
     if path is None:
         return {
             "schema_version": REWARD_PROFILE_SCHEMA_VERSION,
-            "profile_id": "ifv-semantic-balanced-v2",
+            "profile_id": "ifv-semantic-balanced-v3",
             "weights": dict(DEFAULT_COMPONENT_WEIGHTS),
         }
     profile = load_json(path)
@@ -213,7 +216,7 @@ def load_reward_profile(path: Path | None = None) -> dict[str, Any]:
     raw_weights = _mapping(profile.get("weights"), location="profile.weights")
     weights: dict[str, float] = {}
     for name, value in raw_weights.items():
-        if name not in DEFAULT_COMPONENT_WEIGHTS:
+        if name not in SUPPORTED_COMPONENT_WEIGHTS:
             raise ValueError(f"unknown reward component weight: {name}")
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise ValueError(f"weight {name} must be numeric")
