@@ -185,6 +185,7 @@ async def _run_frozen_judge_builds_counterfactual_semantic_artifact() -> None:
     assert '"recorded_verdict"' not in first_request
     assert '"recorded_status"' not in first_request
     assert '"stance"' not in first_request
+    assert "not the probability that the claim is true" in first_request
 
     artifact = build_semantic_reward_artifact(
         trace=trace,
@@ -228,8 +229,8 @@ def test_semantic_reward_cache_is_content_addressed(tmp_path: Path) -> None:
             "provider": "gemini",
             "model": "judge-model",
             "prompt_versions": [
-                "ifv-semantic-blind-v1",
-                "ifv-semantic-aware-counterfactual-v1",
+                "ifv-semantic-blind-v2",
+                "ifv-semantic-aware-counterfactual-v2",
             ],
         }
     )
