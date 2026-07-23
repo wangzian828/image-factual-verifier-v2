@@ -240,6 +240,7 @@ def test_qwen35_training_bootstrap_is_fresh_pinned_and_isolated() -> None:
     assert "get_model_processor" in source
     assert "Qwen3_5ForConditionalGeneration" in source
     assert "is_causal_conv1d_available" in source
+    assert "is_flash_attn_2_available" in source
     assert 'enable_thinking=False' in source
     assert "ms-swift==4.4.2" in sft
     assert "transformers==5.12.1" in sft

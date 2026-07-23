@@ -58,7 +58,7 @@ import torch
 from transformers import Qwen3_5ForConditionalGeneration
 from transformers.utils.import_utils import (
     is_causal_conv1d_available,
-    is_flash_attention_2_available,
+    is_flash_attn_2_available,
     is_flash_linear_attention_available,
 )
 from swift import get_model_processor, get_template
@@ -76,7 +76,7 @@ print(json.dumps({
     "model_loaded": loaded is not None,
     "model_class": Qwen3_5ForConditionalGeneration.__name__,
     "causal_conv1d_available": is_causal_conv1d_available(),
-    "flash_attention_2_available": is_flash_attention_2_available(),
+    "flash_attention_2_available": is_flash_attn_2_available(),
     "flash_linear_attention_available": is_flash_linear_attention_available(),
 }, indent=2))
 PY
