@@ -254,6 +254,22 @@ def test_qwen35_optimizer_offload_probe_keeps_parameters_on_gpu() -> None:
     assert 'elif [[ -f "$config" ]]' in common
 
 
+def test_qwen35_batch2_capacity_probe_is_optimizer_only_and_bounded() -> None:
+    source = _source(
+        "configs/sft/qwen3.5-full-1step-batch2-optimizer-offload.env"
+    )
+
+    assert "IFV_MAX_STEPS=1" in source
+    assert "IFV_TRAIN_BATCH_SIZE=2" in source
+    assert "IFV_EVAL_BATCH_SIZE=1" in source
+    assert "IFV_GRADIENT_ACCUMULATION_STEPS=1" in source
+    assert (
+        "IFV_DEEPSPEED=training/configs/deepspeed/zero3-optimizer-offload.json"
+        in source
+    )
+    assert "IFV_MAX_LENGTH=32768" in source
+
+
 def test_qwen35_training_bootstrap_is_fresh_pinned_and_isolated() -> None:
     source = _source("scripts/server/bootstrap_qwen35_training_gpu13.sh")
     sft = _source("requirements/train-qwen35.txt")
