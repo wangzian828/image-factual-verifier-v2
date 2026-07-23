@@ -1,6 +1,6 @@
 {
-  "schema_version": "ifv-sft-time-estimate-v1",
-  "created_at": "2026-07-23T16:40:00+08:00",
+  "schema_version": "ifv-sft-time-estimate-v2",
+  "created_at": "2026-07-23T18:00:00+08:00",
   "model": "Qwen3.5-9B",
   "accepted_cases": {
     "train": 22,
@@ -21,10 +21,10 @@
   },
   "training": {
     "gpu_ids": [4, 5, 6, 7],
-    "per_device_batch_size": 2,
+    "per_device_batch_size": 1,
     "world_size": 4,
     "global_batch_size": 8,
-    "gradient_accumulation_steps": 1,
+    "gradient_accumulation_steps": 2,
     "epochs": 3,
     "optimizer_steps": 99,
     "learning_rate": 0.00001,
@@ -54,12 +54,19 @@
       "eval_seconds": 24.29,
       "eval_loss": 0.5181,
       "passed": true
+    },
+    "batch2_full_run": {
+      "failed_optimizer_step": 26,
+      "failure": "cuda_oom_on_multimodal_long_batch",
+      "peak_allocated_gib": 32.93,
+      "largest_additional_allocation_gib": 9.79,
+      "passed": false
     }
   },
   "prediction": {
-    "training_seconds_center": 4160,
-    "training_minutes_center": 69.3,
-    "wall_clock_minutes_range": [90, 120],
+    "training_seconds_center": 6593,
+    "training_minutes_center": 109.9,
+    "wall_clock_minutes_range": [130, 180],
     "includes": [
       "model and DeepSpeed initialization",
       "periodic validation",
