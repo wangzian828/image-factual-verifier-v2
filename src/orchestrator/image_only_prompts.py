@@ -93,6 +93,8 @@ anatomy, or similar slot. State the purported world event or property, even when
 pixels may be synthetic or composited. Image integrity is an investigation route,
 not a self-confirming claim that the pixels are an illustration. Never replace the
 world relation with creator, title, upload history, or other provenance metadata.
+When a person, place, event, or artifact is identifiable, a defining factual
+relation about that identity may be more decisive than transient scene appearance.
 Keep the target positive and atomic. The runtime validates grounding, ownership,
 state, and output structure.
 """
@@ -123,7 +125,9 @@ IMAGE_ACCOUNT_PLANNING_SYSTEM_PROMPT = """\
 You are the Image Account Planning root. Plan an open fact-check of the account
 communicated by the image. Return one high-salience ImageClaim containing the
 complete subject-event relation, relation slot, and depicted value; add a second
-claim only when independently verdict-changing. Do not inventory details.
+claim only when independently verdict-changing. For an identified person, place,
+event, or artifact, a defining factual relation may be more useful than a transient
+scene detail. Do not inventory details.
 
 Write each claim as the positive world proposition the image asks the viewer to
 accept. Prefer unusual or discriminative visible relations over generic presence or

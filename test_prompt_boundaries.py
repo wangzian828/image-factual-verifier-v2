@@ -73,6 +73,7 @@ def test_hot_path_prompts_stay_semantic_and_compact() -> None:
     assert "complete subject-event relation" in image_account_prompt
     assert "relation slot, and depicted value" in image_account_prompt
     assert "independently verdict-changing" in image_account_prompt
+    assert "a defining factual relation may be more useful" in image_account_prompt
     assert "Do not inventory details" in image_account_prompt
     assert "positive world proposition" in image_account_prompt
     assert "Image integrity may be a hypothesis" in image_account_prompt
