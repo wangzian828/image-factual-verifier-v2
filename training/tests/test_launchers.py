@@ -222,7 +222,10 @@ def test_qwen35_full_parameter_step_profiles_exist() -> None:
 def test_qwen35_pilot30_profile_matches_frozen_optimizer_budget() -> None:
     source = _source("configs/sft/qwen3.5-full-pilot30.env")
 
-    assert "IFV_MAX_STEPS=197" in source
+    assert "IFV_MAX_STEPS=99" in source
+    assert "IFV_TRAIN_BATCH_SIZE=2" in source
+    assert "IFV_GRADIENT_ACCUMULATION_STEPS=1" in source
+    assert "IFV_GROUP_BY_LENGTH=true" in source
     assert "IFV_MAX_LENGTH=32768" in source
     assert "IFV_IMAGE_MAX_TOKEN_NUM=1024" in source
     assert "IFV_TUNER_TYPE=full" in source
