@@ -7,7 +7,10 @@ from pathlib import Path
 import pytest
 
 from scripts.trajectory.audit_dataset import audit_dataset
-from scripts.trajectory.export_dataset import export_dataset
+from scripts.trajectory.export_dataset import (
+    _cross_case_source_families,
+    export_dataset,
+)
 from src.trajectory.exporter import export_policy_examples
 from src.trajectory.perception_exporter import export_perception_example
 from test_image_only_trajectory import (
@@ -107,6 +110,23 @@ def test_dataset_export_is_episode_and_source_family_split_safe(
     assert report["episode_count"] == 1
     assert sum(manifest["perception_example_counts"].values()) == 1
     assert report["teacher_score_distribution"]["mean"] == 4.75
+
+
+def test_cross_case_source_families_exclude_domain_fallbacks() -> None:
+    trace = {
+        "state": {
+            "investigation_state": {
+                "evidence": [
+                    {"source_family": "domain:wikipedia.org"},
+                    {"source_family": "domain:facebook.com"},
+                    {"source_family": "content:" + "a" * 64},
+                    {"source_family": "content:" + "a" * 64},
+                ]
+            }
+        }
+    }
+
+    assert _cross_case_source_families(trace) == ["content:" + "a" * 64]
 
 
 def test_dataset_audit_rejects_private_policy_input(

@@ -111,13 +111,22 @@ def _collect_runtime_ids(trace: Mapping[str, Any]) -> set[str]:
     return result
 
 
-def _source_families(trace: Mapping[str, Any]) -> List[str]:
+def _cross_case_source_families(trace: Mapping[str, Any]) -> List[str]:
+    """Return only source identities that can indicate cross-case leakage.
+
+    ``source_family`` has two runtime meanings: a content digest when fetched
+    content is available, and a registered-domain fallback otherwise.  A
+    shared content digest can make two cases near-duplicates; merely visiting
+    the same host (for example Wikipedia) cannot.  Domain families remain
+    useful inside one investigation for source-diversity accounting, but must
+    not merge unrelated cases into one train/validation component.
+    """
     state = _mapping(trace.get("state"))
     investigation = _mapping(state.get("investigation_state"))
     families = {
         str(item.get("source_family", "")).strip()
         for item in _rows(investigation.get("evidence"))
-        if str(item.get("source_family", "")).strip()
+        if str(item.get("source_family", "")).strip().startswith("content:")
     }
     return sorted(families)
 
@@ -363,7 +372,7 @@ def export_dataset(
                 "case_id": case_id,
                 "source_run_id": manifest.get("run_id"),
                 "source_trace": str(trace_path),
-                "source_family_keys": _source_families(trace),
+                "source_family_keys": _cross_case_source_families(trace),
                 "runtime_ids": sorted(_collect_runtime_ids(trace)),
                 "teacher_score": float(
                     _mapping(semantic.get("metrics")).get(
