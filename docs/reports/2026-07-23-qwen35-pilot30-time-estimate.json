@@ -72,5 +72,14 @@
       "periodic validation",
       "checkpoint serialization"
     ]
+  },
+  "fallback_two_gpu": {
+    "gpu_ids": [6, 7],
+    "per_device_batch_size": 1,
+    "world_size": 2,
+    "gradient_accumulation_steps": 4,
+    "global_batch_size": 8,
+    "reason": "GPUs 4 and 5 were claimed by another user after the four-GPU run stopped",
+    "expected_wall_clock_minutes_range": [220, 320]
   }
 }

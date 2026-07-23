@@ -236,6 +236,22 @@ def test_qwen35_pilot30_profile_matches_frozen_optimizer_budget() -> None:
     )
 
 
+def test_qwen35_pilot30_two_gpu_profile_preserves_global_batch() -> None:
+    source = _source("configs/sft/qwen3.5-full-pilot30-2gpu.env")
+
+    assert "IFV_MAX_STEPS=99" in source
+    assert "IFV_TRAIN_BATCH_SIZE=1" in source
+    assert "IFV_GRADIENT_ACCUMULATION_STEPS=4" in source
+    assert "IFV_SAVE_STEPS=25" in source
+    assert "IFV_GROUP_BY_LENGTH=true" in source
+    assert "IFV_MAX_LENGTH=32768" in source
+    assert "IFV_IMAGE_MAX_TOKEN_NUM=1024" in source
+    assert (
+        "IFV_DEEPSPEED=training/configs/deepspeed/zero3-optimizer-offload.json"
+        in source
+    )
+
+
 def test_qwen35_zero3_speed_probe_is_full_parameter_and_32k() -> None:
     source = _source("configs/sft/qwen3.5-full-1step-zero3.env")
 
