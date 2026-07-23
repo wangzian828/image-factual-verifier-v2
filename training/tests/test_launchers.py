@@ -233,6 +233,19 @@ def test_qwen35_zero3_speed_probe_is_full_parameter_and_32k() -> None:
     assert "IFV_FREEZE_LLM=false" in source
 
 
+def test_qwen35_optimizer_offload_probe_keeps_parameters_on_gpu() -> None:
+    profile = _source("configs/sft/qwen3.5-full-1step-optimizer-offload.env")
+    config = _source("configs/deepspeed/zero3-optimizer-offload.json")
+    common = _source("scripts/lib/common.sh")
+
+    assert "IFV_DEEPSPEED=training/configs/deepspeed/zero3-optimizer-offload.json" in profile
+    assert '"offload_optimizer"' in config
+    assert '"device": "cpu"' in config
+    assert '"offload_param"' in config
+    assert '"device": "none"' in config
+    assert 'elif [[ -f "$config" ]]' in common
+
+
 def test_qwen35_training_bootstrap_is_fresh_pinned_and_isolated() -> None:
     source = _source("scripts/server/bootstrap_qwen35_training_gpu13.sh")
     sft = _source("requirements/train-qwen35.txt")

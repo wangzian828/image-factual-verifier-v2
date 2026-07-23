@@ -47,7 +47,23 @@ configure_cuda_toolkit() {
 }
 
 prepare_deepspeed_cpu_adam() {
-  if [[ "${IFV_DEEPSPEED:-}" != "zero3_offload" ]]; then
+  local config="${IFV_DEEPSPEED:-}"
+  local needs_cpu_adam=false
+  if [[ "$config" == "zero3_offload" ]]; then
+    needs_cpu_adam=true
+  elif [[ -f "$config" ]] && python - "$config" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    config = json.load(handle)
+device = config.get("zero_optimization", {}).get("offload_optimizer", {}).get("device")
+raise SystemExit(0 if device == "cpu" else 1)
+PY
+  then
+    needs_cpu_adam=true
+  fi
+  if [[ "$needs_cpu_adam" != "true" ]]; then
     return 0
   fi
   configure_cuda_toolkit
@@ -139,8 +155,8 @@ require_full_parameter_profile() {
       exit 2
     fi
   done
-  if [[ "$IFV_DEEPSPEED" != "zero3" && "$IFV_DEEPSPEED" != "zero3_offload" ]]; then
-    echo "full-parameter training requires IFV_DEEPSPEED=zero3 or zero3_offload" >&2
+  if [[ "$IFV_DEEPSPEED" != "zero3" && "$IFV_DEEPSPEED" != "zero3_offload" && ! -s "$IFV_DEEPSPEED" ]]; then
+    echo "full-parameter training requires IFV_DEEPSPEED=zero3, zero3_offload, or a non-empty DeepSpeed config" >&2
     exit 2
   fi
 }
