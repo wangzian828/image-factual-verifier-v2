@@ -101,9 +101,10 @@ def _load_cache(path: Path) -> Dict[str, Any] | None:
 async def _run(args: argparse.Namespace) -> Dict[str, Any]:
     run_dir = args.run_dir.expanduser().resolve()
     manifest = _json_object(run_dir / "run_manifest.json")
-    if manifest.get("status") != "completed":
+    if manifest.get("status") not in {"completed", "completed_with_errors"}:
         raise RuntimeError(
-            "private gold may be loaded only after the rollout run is completed"
+            "private gold may be loaded only after the rollout run reaches a "
+            "terminal completed status"
         )
     source_policy = manifest.get("source_access_policy")
     source_policy_active = bool(
