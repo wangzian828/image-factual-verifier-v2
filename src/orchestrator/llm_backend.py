@@ -418,17 +418,17 @@ class APIBackend(LLMBackend):
             if parts:
                 return "\n".join(parts)
 
-        # Some reasoning-aware servers place constrained JSON in this field
-        # because the checkpoint's generation prompt begins inside <think>.
-        # Only schema-bound requests may consume it; their normal parser still
-        # validates the candidate before it can become a canonical action.
-        reasoning = message.get("reasoning_content")
-        if (
-            allow_reasoning_fallback
-            and isinstance(reasoning, str)
-            and reasoning.strip()
-        ):
-            return reasoning
+        # Reasoning-aware servers use either ``reasoning_content`` (older
+        # OpenAI-compatible runtimes) or ``reasoning`` (current vLLM).  A
+        # checkpoint can place a constrained candidate there when generation
+        # begins inside <think>.  Only schema-bound requests may consume it;
+        # their normal stage parser still validates the candidate before it can
+        # become a canonical action.
+        if allow_reasoning_fallback:
+            for field in ("reasoning_content", "reasoning"):
+                reasoning = message.get(field)
+                if isinstance(reasoning, str) and reasoning.strip():
+                    return reasoning
 
         return ""
 

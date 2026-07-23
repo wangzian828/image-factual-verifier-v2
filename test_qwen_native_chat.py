@@ -934,6 +934,14 @@ def test_qwen_reasoning_fallback_is_limited_to_schema_bound_requests() -> None:
         allow_reasoning_fallback=True,
     ) == '{"answer":"coach"}'
 
+    choice["message"]["reasoning_content"] = None
+    choice["message"]["reasoning"] = '{"answer":"carriage"}'
+    assert APIBackend._extract_chat_completion_text(choice) == ""
+    assert APIBackend._extract_chat_completion_text(
+        choice,
+        allow_reasoning_fallback=True,
+    ) == '{"answer":"carriage"}'
+
 
 def test_qwen_http_error_preserves_bounded_provider_detail() -> None:
     async def run() -> None:

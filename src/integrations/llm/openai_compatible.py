@@ -148,9 +148,10 @@ class OpenAICompatibleChatClient:
         """Return only a JSON-object candidate from a constrained chat reply.
 
         Qwen Thinking servers may place a schema-constrained final object in
-        ``reasoning_content`` while leaving canonical ``content`` null.  This
-        fallback is intentionally limited to this JSON-only client method and
-        accepts the alternate field only when it is itself a complete object.
+        ``reasoning_content`` (older runtimes) or ``reasoning`` (current vLLM)
+        while leaving canonical ``content`` null.  This fallback is
+        intentionally limited to this JSON-only client method and accepts an
+        alternate field only when it is itself a complete object.
         """
 
         message = choice.get("message") or {}
@@ -158,15 +159,18 @@ class OpenAICompatibleChatClient:
         if isinstance(content, str) and content.strip():
             return content.strip()
 
-        reasoning = message.get("reasoning_content")
-        if not isinstance(reasoning, str) or not reasoning.strip():
-            return ""
-        candidate = reasoning.strip()
-        try:
-            parsed = json.loads(candidate)
-        except json.JSONDecodeError:
-            return ""
-        return candidate if isinstance(parsed, dict) else ""
+        for field in ("reasoning_content", "reasoning"):
+            reasoning = message.get(field)
+            if not isinstance(reasoning, str) or not reasoning.strip():
+                continue
+            candidate = reasoning.strip()
+            try:
+                parsed = json.loads(candidate)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict):
+                return candidate
+        return ""
 
     def _create_responses_json_completion(
         self,

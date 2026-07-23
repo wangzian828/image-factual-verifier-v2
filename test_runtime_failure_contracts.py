@@ -428,6 +428,11 @@ def test_compatible_json_client_accepts_valid_reasoning_object_only() -> None:
     assert OpenAICompatibleChatClient._extract_chat_json_text(choice) == ""
     choice["message"]["reasoning_content"] = '[{"image_type": "photo"}]'
     assert OpenAICompatibleChatClient._extract_chat_json_text(choice) == ""
+    choice["message"]["reasoning_content"] = None
+    choice["message"]["reasoning"] = '{"entities": [], "image_type": "illustration"}'
+    assert OpenAICompatibleChatClient._extract_chat_json_text(choice) == (
+        '{"entities": [], "image_type": "illustration"}'
+    )
 
 
 def test_compatible_json_client_forwards_chat_template_kwargs(
