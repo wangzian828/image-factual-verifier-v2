@@ -39,6 +39,29 @@ configure_cuda_toolkit() {
   fi
   export CUDA_HOME="$candidate"
   export PATH="$CUDA_HOME/bin:$PATH"
+  local curand_dir
+  curand_dir="$CUDA_HOME/lib/python$(python -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')/site-packages/nvidia/curand/lib"
+  if [[ -d "$curand_dir" ]]; then
+    export LD_LIBRARY_PATH="$CUDA_HOME/lib:$curand_dir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+  fi
+}
+
+prepare_deepspeed_cpu_adam() {
+  if [[ "${IFV_DEEPSPEED:-}" != "zero3_offload" ]]; then
+    return 0
+  fi
+  configure_cuda_toolkit
+  if [[ ! -e "$CUDA_HOME/lib/libcurand.so" ]]; then
+    echo "DeepSpeed CPUAdam requires $CUDA_HOME/lib/libcurand.so; rebuild the frozen SFT environment" >&2
+    exit 2
+  fi
+  MAX_JOBS="${MAX_JOBS:-4}" python - <<'PY'
+from deepspeed.ops.op_builder.cpu_adam import CPUAdamBuilder
+
+module = CPUAdamBuilder().load(verbose=True)
+if module.__name__ != "cpu_adam":
+    raise RuntimeError(f"unexpected DeepSpeed CPUAdam module: {module.__name__}")
+PY
 }
 
 require_training_gpus() {

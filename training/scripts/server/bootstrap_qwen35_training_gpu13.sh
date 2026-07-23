@@ -82,6 +82,31 @@ print(json.dumps({
 PY
 }
 
+link_torch_cuda_runtime() {
+  local prefix="$1"
+  local curand_dir="$prefix/lib/python3.12/site-packages/nvidia/curand/lib"
+  local curand_so
+  curand_so="$(find "$curand_dir" -maxdepth 1 -type f -name 'libcurand.so.*' -print -quit)"
+  if [[ -z "$curand_so" ]]; then
+    echo "nvidia-curand runtime library is missing below $curand_dir" >&2
+    exit 2
+  fi
+  ln -sfn "$curand_so" "$prefix/lib/libcurand.so"
+}
+
+prebuild_cpu_adam() {
+  local prefix="$1"
+  CUDA_HOME="$prefix" PATH="$prefix/bin:$PATH" \
+    LD_LIBRARY_PATH="$prefix/lib:$prefix/lib/python3.12/site-packages/nvidia/curand/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+    MAX_JOBS=4 "$prefix/bin/python" - <<'PY'
+from deepspeed.ops.op_builder.cpu_adam import CPUAdamBuilder
+
+module = CPUAdamBuilder().load(verbose=True)
+if module.__name__ != "cpu_adam":
+    raise RuntimeError(f"unexpected DeepSpeed CPUAdam module: {module.__name__}")
+PY
+}
+
 install_sft() {
   prepare_base "$SFT_PREFIX" 12.8.93
   "$SFT_PREFIX/bin/python" -m pip install \
@@ -90,6 +115,8 @@ install_sft() {
     "$SFT_PREFIX/bin/python" -m pip install \
     --no-build-isolation --requirement "$REPO_ROOT/requirements/train-qwen35.txt"
   "$SFT_PREFIX/bin/python" -m pip install --no-deps --editable "$REPO_ROOT"
+  link_torch_cuda_runtime "$SFT_PREFIX"
+  prebuild_cpu_adam "$SFT_PREFIX"
   freeze_env "$SFT_PREFIX" ifv-qwen35-sft-ms-swift442
   "$SFT_PREFIX/bin/swift" sft --help >/dev/null
   CUDA_HOME="$SFT_PREFIX" PATH="$SFT_PREFIX/bin:$PATH" \

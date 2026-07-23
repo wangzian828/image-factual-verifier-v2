@@ -22,6 +22,7 @@ load_profile "$SFT_PROFILE"
 require_idle_gpus
 require_full_parameter_profile
 require_model_path
+prepare_deepspeed_cpu_adam
 require_value EXPERIMENT_ID
 
 candidate_train_datasets=(

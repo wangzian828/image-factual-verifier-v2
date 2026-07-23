@@ -138,6 +138,8 @@ def test_launchers_enforce_physical_gpu_allowlist() -> None:
 
     assert 'IFV_ALLOWED_GPU_IDS:-4,5,6,7' in common
     assert 'configure_cuda_toolkit' in common
+    assert 'prepare_deepspeed_cpu_adam' in common
+    assert 'libcurand.so' in common
     assert 'IFV_CUDA_HOME' in common
     assert 'NCCL_CUMEM_HOST_ENABLE' in common
     assert 'MPLBACKEND=Agg' in common
@@ -234,6 +236,8 @@ def test_qwen35_training_bootstrap_is_fresh_pinned_and_isolated() -> None:
     assert 'prepare_base "$RL_PREFIX" 13.0.88' in source
     assert '"cuda-nvcc=$cuda_nvcc_version"' in source
     assert 'CUDA_HOME="$SFT_PREFIX"' in source
+    assert 'link_torch_cuda_runtime "$SFT_PREFIX"' in source
+    assert 'prebuild_cpu_adam "$SFT_PREFIX"' in source
     assert "refusing to modify an existing environment" in source
     assert "ifv-qwen35-sft-ms-swift442" in source
     assert "ifv-qwen35-rl-ms-swift442-vllm0221" in source
