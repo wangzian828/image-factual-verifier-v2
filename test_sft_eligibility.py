@@ -6,6 +6,7 @@ from typing import Any, Dict, List
 
 from src.orchestrator.llm_backend import LLMResponse
 from src.trajectory.sft_eligibility import (
+    SFT_ELIGIBILITY_SYSTEM_PROMPT,
     SFTEligibilityJudge,
     SFTEligibilityJudgment,
     build_sft_eligibility_artifact,
@@ -181,6 +182,49 @@ def test_model_review_cannot_override_runtime_evidence_metadata() -> None:
     )
 
 
+def test_supported_target_accepts_equivalent_verified_value() -> None:
+    trace = _trace()
+    trace["verdict"] = "real"
+    trace["verdict_basis"]["discrepancy_ids"] = []
+    trace["state"]["investigation_state"]["evidence"][0].update(
+        {
+            "exact_text": "A won the 2026 final.",
+            "relation_stance": "supports",
+            "stance": "support",
+        }
+    )
+    gold = _gold()
+    gold["label"] = "supported"
+    gold["key_error"] = None
+    gold["evidence_target"]["required_stance"] = "supports"
+    judgment = _judgment(
+        key_error_slot_alignment="not_applicable",
+        verified_value_alignment="equivalent",
+        evidence_reviews=[
+            {
+                "evidence_id": "evidence-1",
+                "relation_match": "same_relation",
+                "directness": "direct",
+                "stance": "supports",
+                "target_value_stated": True,
+                "explanation": "The exact span states A as the winner.",
+            }
+        ],
+    )
+
+    metrics = sft_eligibility_metrics(
+        build_sft_eligibility_input(trace, gold),
+        judgment,
+    )
+
+    assert metrics["error_slot_and_value_aligned"] is True
+    assert sft_eligibility_passes(
+        metrics,
+        strict_trace_audit_pass=True,
+        engineering_valid=True,
+    )
+
+
 def test_private_structured_judge_is_one_post_rollout_call() -> None:
     async def run() -> None:
         packet = build_sft_eligibility_input(_trace(), _gold())
@@ -203,3 +247,9 @@ def test_private_structured_judge_is_one_post_rollout_call() -> None:
         assert len(artifact["judge"]["calls"]) == 1
 
     asyncio.run(run())
+
+
+def test_private_judge_stance_is_relative_to_candidate_claim() -> None:
+    prompt = " ".join(SFT_ELIGIBILITY_SYSTEM_PROMPT.split())
+    assert "Every Evidence stance is relative to the candidate Claim" in prompt
+    assert "verified alternative contradicts a candidate" in prompt

@@ -27,17 +27,22 @@ from src.trajectory.semantic_reward import (
 
 SFT_ELIGIBILITY_SCHEMA_VERSION = "ifv-sft-eligibility-v1"
 SFT_ELIGIBILITY_INPUT_VERSION = "ifv-sft-eligibility-input-v1"
-SFT_ELIGIBILITY_PROMPT_VERSION = "ifv-sft-private-structured-gate-v1"
-SFT_ELIGIBILITY_GENERATION_VERSION = "minimal-thinking-4096-v1"
-SFT_ELIGIBILITY_POSTPROCESS_VERSION = "structured-relation-gate-v1"
+SFT_ELIGIBILITY_PROMPT_VERSION = "ifv-sft-private-structured-gate-v2"
+SFT_ELIGIBILITY_GENERATION_VERSION = "minimal-thinking-4096-v2"
+SFT_ELIGIBILITY_POSTPROCESS_VERSION = "structured-relation-gate-v2"
 
 SFT_ELIGIBILITY_SYSTEM_PROMPT = (
     "You are a frozen post-rollout SFT eligibility auditor. Compare the completed "
     "candidate with the private structured target. Judge the semantic identity of "
     "the subject-event-slot relation and its depicted and verified values, whether "
     "the cited exact Evidence directly decides that same relation, and whether the "
-    "stated boundary is respected. Do not search. Do not reward matching wording or "
-    "a matching URL. Cite only supplied Claim and Evidence IDs."
+    "stated boundary is respected. Every Evidence stance is relative to the candidate "
+    "Claim: an exact span stating the verified alternative contradicts a candidate "
+    "that depicts another value, even though it supports the private target's correct "
+    "value. For a supported target, verified_value_alignment may be equivalent when "
+    "the candidate recovers that value; key_error_slot_alignment remains not_applicable. "
+    "Do not search. Do not reward matching wording or a matching URL. Cite only "
+    "supplied Claim and Evidence IDs."
 )
 
 
@@ -296,7 +301,8 @@ def sft_eligibility_metrics(
     else:
         error_aligned = bool(
             judgment.key_error_slot_alignment == "not_applicable"
-            and judgment.verified_value_alignment == "not_applicable"
+            and judgment.verified_value_alignment
+            in {"equivalent", "not_applicable"}
             and not judgment.spurious_error
         )
     verdict_correct = str(packet.get("recorded_verdict", "")) == expected_verdict
