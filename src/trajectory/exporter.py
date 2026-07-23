@@ -432,11 +432,19 @@ def _v4_quality_gate(trace: Mapping[str, Any], state: Mapping[str, Any]) -> None
                 "v4 policy export rejects incomplete verdict Finding/Evidence chain"
             )
     audits = _rows(investigation.get("discrepancy_coverage_audits"))
+    investigation_stop = str(investigation.get("stop_reason", ""))
     terminal = [
         item
         for item in audits
-        if item.get("complete") is True
-        and str(item.get("stop_reason", "")) == "verdict_determined"
+        if (
+            investigation_stop
+            and str(item.get("stop_reason", "")) == investigation_stop
+            or not investigation_stop
+            and item.get("complete") is True
+            and str(item.get("stop_reason", "")) == "verdict_determined"
+        )
+        and str(item.get("stop_reason", ""))
+        in {"verdict_determined", "meaningful_routes_exhausted", "hard_budget_exhausted"}
     ]
     if not terminal:
         raise ValueError("v4 policy export requires terminal discrepancy Coverage")
@@ -453,11 +461,6 @@ def _v4_quality_gate(trace: Mapping[str, Any], state: Mapping[str, Any]) -> None
     ]
     if len(action_steps) > terminal_actions:
         raise ValueError("v4 policy export rejects post-verdict actions")
-    if any(
-        str(item.get("action_type", "")) in {"format_error", "output_rejected"}
-        for item in _rows(state.get("all_steps"))
-    ):
-        raise ValueError("v4 policy export rejects protocol-rejected episodes")
 
 
 def export_policy_examples(
@@ -493,7 +496,11 @@ def export_policy_examples(
 
     candidates: List[tuple[int, Mapping[str, Any], str]] = []
     for index, step in enumerate(_rows(state.get("all_steps"))):
-        if str(step.get("action_type", "")) == "planning_revision":
+        if str(step.get("action_type", "")) in {
+            "planning_revision",
+            "format_error",
+            "output_rejected",
+        }:
             continue
         stage = str(step.get("stage", "")).strip()
         example_type = _example_type(stage)

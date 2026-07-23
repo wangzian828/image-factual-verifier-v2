@@ -13,13 +13,19 @@ import argparse
 import hashlib
 import json
 import shutil
+import sys
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from src.trajectory.exporter import export_policy_examples
 
 
 SCHEMA_VERSION = "ifv-accepted-teacher-release-v1"
 JSONL_ARTIFACTS = (
-    "policy_trajectories.jsonl",
     "perception_trajectories.jsonl",
     "trajectory_scores.jsonl",
     "run_results.jsonl",
@@ -168,6 +174,17 @@ def stage_release(
                 "eligibility": eligibility,
                 "semantic_path": semantic_row["path"],
                 "semantic": semantic,
+                "source_metadata": {
+                    "source_run_id": str(manifest.get("run_id", run_dir.name)),
+                    "runtime_commit": str(manifest.get("git_commit", "")),
+                    "release_id": str((manifest.get("benchmark") or {}).get("release_id", "")),
+                    "runtime_contract_version": str(
+                        (manifest.get("benchmark") or {}).get("runtime_contract_version", "")
+                    ),
+                    "process_reference_protocol_version": str(
+                        manifest.get("process_reference_protocol_version", "")
+                    ),
+                },
             }
             current = selected.get(case_id)
             if current is None or (score, candidate["run_id"], episode_id) > (
@@ -183,6 +200,7 @@ def stage_release(
     selected_rows = []
     selected_by_run: Dict[Path, set[str]] = {}
     selected_cases_by_run: Dict[Path, set[str]] = {}
+    policy_rows: list[Dict[str, Any]] = []
     (output_dir / "eligibility").mkdir(parents=True, exist_ok=True)
     (output_dir / "semantic_rewards").mkdir(parents=True, exist_ok=True)
     for case_id, candidate in sorted(selected.items()):
@@ -199,6 +217,14 @@ def stage_release(
             candidate["semantic_path"],
             output_dir / "semantic_rewards" / candidate["semantic_path"].name,
         )
+        trace = _load_json(candidate["trace_path"])
+        exported_policy = export_policy_examples(
+            trace,
+            source_metadata=candidate["source_metadata"],
+        )
+        if not exported_policy:
+            raise ValueError(f"accepted trace exported no policy examples: {case_id}")
+        policy_rows.extend(item.model_dump(mode="json") for item in exported_policy)
         selected_rows.append(
             {
                 "case_id": case_id,
@@ -212,6 +238,7 @@ def stage_release(
             }
         )
 
+    _write_jsonl(output_dir / "policy_trajectories.jsonl", policy_rows)
     for artifact_name in JSONL_ARTIFACTS:
         rows: list[Dict[str, Any]] = []
         for run_dir, episode_ids in selected_by_run.items():

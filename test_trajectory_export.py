@@ -128,6 +128,35 @@ def test_v4_exporter_uses_discrepancy_stage_labels_and_quality_gate(
         raise AssertionError("v4 exporter must reject discrepancy misalignment")
 
 
+def test_v4_exporter_skips_corrected_rejections_and_accepts_terminal_route_exhaustion(
+    tmp_path: Path,
+) -> None:
+    trace = json.loads(_v4_trace(tmp_path).read_text(encoding="utf-8"))
+    for step in trace["state"]["all_steps"]:
+        metadata = step.setdefault("metadata", {})
+        metadata["policy_input"] = {"input_payload": {"stage": step["stage"]}}
+        metadata["policy_action"] = (
+            {"type": "tool_call", "name": step["tool_name"], "arguments": {}}
+            if step["action_type"] == "tool_call"
+            else {"type": "output", "value": {"stage": step["stage"]}}
+        )
+    rejected = json.loads(json.dumps(trace["state"]["all_steps"][-2]))
+    rejected["action_type"] = "output_rejected"
+    rejected["metadata"]["interaction_id"] = "corrected-rejection"
+    trace["state"]["all_steps"].insert(-2, rejected)
+    investigation = trace["state"]["investigation_state"]
+    investigation["stop_reason"] = "meaningful_routes_exhausted"
+    terminal = investigation["discrepancy_coverage_audits"][-1]
+    terminal["complete"] = False
+    terminal["stop_reason"] = "meaningful_routes_exhausted"
+
+    examples = export_policy_examples(trace)
+
+    assert examples
+    assert all("corrected-rejection" not in item.step_id for item in examples)
+    assert all(item.action_valid for item in examples)
+
+
 def test_v4_process_scorer_uses_discrepancy_alignment_and_stop_quality(
     tmp_path: Path,
 ) -> None:
