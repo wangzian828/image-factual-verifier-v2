@@ -238,10 +238,13 @@ def test_qwen35_training_bootstrap_is_fresh_pinned_and_isolated() -> None:
     assert "ifv-qwen35-rl-ms-swift442-vllm0221" in source
     assert "pip freeze --all" in source
     assert "get_model_processor" in source
+    assert "Qwen3_5ForConditionalGeneration" in source
+    assert "is_causal_conv1d_available" in source
     assert 'enable_thinking=False' in source
     assert "ms-swift==4.4.2" in sft
     assert "transformers==5.12.1" in sft
     assert "flash-linear-attention==0.5.1" in sft
-    assert "causal-conv1d==1.6.2.post1" in sft
+    assert "causal-conv1d==1.6.2.post1" not in sft
+    assert "flash-attn==2.8.3" not in sft
     assert "vllm==0.22.1" in rl
     assert "llguidance==1.7.5" in rl

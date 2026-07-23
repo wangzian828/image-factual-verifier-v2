@@ -55,6 +55,12 @@ freeze_env() {
   CUDA_VISIBLE_DEVICES=4 "$prefix/bin/python" - <<'PY' >"$out/qwen35-import-gate.json"
 import json
 import torch
+from transformers import Qwen3_5ForConditionalGeneration
+from transformers.utils.import_utils import (
+    is_causal_conv1d_available,
+    is_flash_attention_2_available,
+    is_flash_linear_attention_available,
+)
 from swift import get_model_processor, get_template
 
 model = "/gsdata/home/wza/models/Qwen3.5-9B"
@@ -68,6 +74,10 @@ print(json.dumps({
     "processor": type(processor).__name__,
     "template": type(template).__name__,
     "model_loaded": loaded is not None,
+    "model_class": Qwen3_5ForConditionalGeneration.__name__,
+    "causal_conv1d_available": is_causal_conv1d_available(),
+    "flash_attention_2_available": is_flash_attention_2_available(),
+    "flash_linear_attention_available": is_flash_linear_attention_available(),
 }, indent=2))
 PY
 }

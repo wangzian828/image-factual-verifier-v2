@@ -4,7 +4,9 @@ transformers==5.12.1
 deepspeed==0.19.2
 qwen-vl-utils==0.0.14
 flash-linear-attention==0.5.1
-causal-conv1d==1.6.2.post1
-flash-attn==2.8.3
+# gpu-13 uses glibc 2.28.  The published causal-conv1d and flash-attn wheels
+# require a newer glibc, while Qwen3.5/Transformers provide the supported
+# PyTorch causal-convolution fallback and the training profile freezes SDPA.
+# Do not install metadata-visible but unloadable optional CUDA extensions.
 liger-kernel
 huggingface-hub>=0.34,<2
