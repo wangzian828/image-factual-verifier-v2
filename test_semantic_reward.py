@@ -120,7 +120,7 @@ def _judgment(**updates: Any) -> TrajectorySemanticJudgment:
         "belief_revision": 0.8,
         "overall_process_quality": 0.87,
         "evidence_ids": ["evidence-1"],
-        "useful_turn_ids": ["case-1--group--r000:turn:turn-1"],
+        "useful_turn_ids": ["turn-001"],
         "problematic_turn_ids": [],
         "explanation": "A productive search yielded decisive official Evidence.",
     }
@@ -152,6 +152,8 @@ def test_packet_is_episode_aware_and_excludes_hidden_answers() -> None:
     assert packet["rollout"]["episode_id"] == "case-1--group--r000"
     rendered = json.dumps(packet, ensure_ascii=False)
     assert "hidden policy thinking" not in rendered
+    assert packet["investigation_turns"][0]["turn_id"] == "turn-001"
+    assert "case-1--group--r000:turn:turn-1" not in rendered
     assert packet["investigation_turns"][0]["state_delta"]["gain"] == "evidence_gain"
 
 
@@ -210,8 +212,8 @@ def test_semantic_reward_cache_is_versioned_and_content_addressed(
             "reward_input_sha256": "b" * 64,
             "provider": "gemini",
             "model": "judge-model",
-            "generation_version": "minimal-thinking-4096-v4",
-            "postprocess_version": "trajectory-semantic-audit-v1",
-            "prompt_versions": ["ifv-semantic-trajectory-blind-v1"],
+            "generation_version": "minimal-thinking-4096-v5",
+            "postprocess_version": "trajectory-semantic-audit-v2",
+            "prompt_versions": ["ifv-semantic-trajectory-blind-v2"],
         }
     )
