@@ -74,8 +74,9 @@ def test_hot_path_prompts_stay_semantic_and_compact() -> None:
     assert "relation slot, and depicted value" in image_account_prompt
     assert "independently verdict-changing" in image_account_prompt
     assert "Do not inventory details" in image_account_prompt
-    assert "positive proposition" in image_account_prompt
-    assert "integrity may be its central relation" in image_account_prompt
+    assert "positive world proposition" in image_account_prompt
+    assert "Image integrity may be a hypothesis" in image_account_prompt
+    assert "do not turn an obvious visual style into a claim" in image_account_prompt
     assert "what the slot's verified value is" in image_account_prompt
     assert "Image clues guide retrieval but do not restrict it" in image_account_prompt
     assert "Prior knowledge is a lead" in image_account_prompt
@@ -83,6 +84,7 @@ def test_hot_path_prompts_stay_semantic_and_compact() -> None:
     assert "Output: account_summary" in image_account_prompt
     assert "not a boundary on the investigation" in discrepancy_react_prompt
     assert "Frame retrieval around what actually happened" in discrepancy_react_prompt
+    assert "actual value of the same relation slot" in discrepancy_react_prompt
     assert "identical image can be found" in discrepancy_react_prompt
     assert "only tool Evidence establishes a fact" in discrepancy_react_prompt
     assert "Do not change the ImageClaim" in discrepancy_react_prompt
@@ -93,6 +95,7 @@ def test_hot_path_prompts_stay_semantic_and_compact() -> None:
     assert "neutral Evidence cannot" in discrepancy_prompt
     assert "support means it is true" in discrepancy_prompt
     assert "refute means it is false" in discrepancy_prompt
+    assert "competing value for the same subject-event relation" in discrepancy_prompt
     assert "does not establish semantic coverage" in discrepancy_prompt
     assert "allowed visual anchors" in discrepancy_prompt
     assert "MaterialDiscrepancy" in discrepancy_prompt

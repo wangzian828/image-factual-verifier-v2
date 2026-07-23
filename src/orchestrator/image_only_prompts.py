@@ -87,15 +87,14 @@ Return exactly one small, decisive, pixel-grounded proposition: subject, event o
 context, relation slot, and the value shown by the image. The proposition is the
 real-world fact the image asks the viewer to accept, not a list of visible details.
 
-Use the most specific visible relation that can change the verdict (a person's
-action, place, date, object, color, physical position, or similar slot). If a
-concrete subject-event or attribute relation is visible, make that the target even
-when the image may also be synthetic or composited. Treat integrity as a secondary
-route in that case. Make authenticity the target only when the image's core account
-is itself about being an authentic photograph/document, or when no concrete factual
-relation can be stated from the image. Never replace a world relation with creator,
-title, upload history, or other provenance metadata. Keep the target positive and
-atomic. The runtime validates grounding, ownership, state, and output structure.
+Prefer a specific, discriminative relation over a generic scene description:
+an action, identity, number, text, date, object, color, physical position, unusual
+anatomy, or similar slot. State the purported world event or property, even when the
+pixels may be synthetic or composited. Image integrity is an investigation route,
+not a self-confirming claim that the pixels are an illustration. Never replace the
+world relation with creator, title, upload history, or other provenance metadata.
+Keep the target positive and atomic. The runtime validates grounding, ownership,
+state, and output structure.
 """
 
 
@@ -104,7 +103,9 @@ Choose exactly one runtime-authorized tool action that most reduces uncertainty
 about an unresolved ImageClaim. Its attached SearchHypothesis supplies context and
 ownership, not a boundary on the investigation. Frame retrieval around what actually
 happened, not merely whether the image's proposed value or an identical image can be
-found. Prior knowledge may supply leads, but only tool Evidence establishes a fact.
+found. When direct queries repeat the proposed value without useful evidence, omit
+that value and retrieve the actual value of the same relation slot. Prior knowledge
+may supply leads, but only tool Evidence establishes a fact.
 Do not change the ImageClaim.
 
 Inspect a promising page or reference image before repeating retrieval for that
@@ -124,12 +125,12 @@ communicated by the image. Return one high-salience ImageClaim containing the
 complete subject-event relation, relation slot, and depicted value; add a second
 claim only when independently verdict-changing. Do not inventory details.
 
-Write each claim as the positive proposition the image asks the viewer to accept.
-Prefer the concrete subject-event or attribute relation and its slot/value. If the
-claim explicitly asserts an authentic photograph or document, integrity may be its
-central relation; otherwise keep integrity as a secondary hypothesis. SearchHypotheses
-ask what actually happened and what the slot's verified value is. Image clues guide
-retrieval but do not restrict it.
+Write each claim as the positive world proposition the image asks the viewer to
+accept. Prefer unusual or discriminative visible relations over generic presence or
+scene descriptions. Image integrity may be a hypothesis that refutes the purported
+world relation, but do not turn an obvious visual style into a claim that proves
+itself. SearchHypotheses ask what actually happened and what the slot's verified
+value is. Image clues guide retrieval but do not restrict it.
 Prior knowledge is a lead; only tool Evidence establishes a fact. Hypotheses do not
 own the verdict.
 
@@ -206,6 +207,8 @@ Use Evidence only in its recorded admissible_stances; neutral Evidence cannot
 support or refute a Claim.
 Assessment labels describe the exact ImageClaim: support means it is true and
 refute means it is false.
+Direct Evidence stating a competing value for the same subject-event relation
+refutes the depicted value even when the exact depicted wording is absent.
 Task ownership permits review but does not establish semantic coverage; update only
 the Claims the Evidence actually addresses and use their allowed visual anchors.
 Treat qualified refutation of a high-salience Claim as decisive; unresolved other
