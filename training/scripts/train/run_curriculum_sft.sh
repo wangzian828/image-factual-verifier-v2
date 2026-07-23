@@ -132,6 +132,9 @@ args=(
 if [[ "${IFV_ADD_NON_THINKING_PREFIX:-false}" == "true" ]]; then
   args+=(--add_non_thinking_prefix true)
 fi
+if [[ -n "${IFV_GROUP_BY_LENGTH:-}" ]]; then
+  args+=(--group_by_length "$IFV_GROUP_BY_LENGTH")
+fi
 if [[ -n "${IFV_EXPERTS_IMPL:-}" ]]; then
   args+=(--experts_impl "$IFV_EXPERTS_IMPL")
 fi

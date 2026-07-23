@@ -270,6 +270,18 @@ def test_qwen35_batch2_capacity_probe_is_optimizer_only_and_bounded() -> None:
     assert "IFV_MAX_LENGTH=32768" in source
 
 
+def test_qwen35_batch2_length_grouped_probe_uses_native_sampler() -> None:
+    source = _source(
+        "configs/sft/qwen3.5-full-10step-batch2-length-grouped.env"
+    )
+    launcher = _source("scripts/train/run_curriculum_sft.sh")
+
+    assert "IFV_MAX_STEPS=10" in source
+    assert "IFV_TRAIN_BATCH_SIZE=2" in source
+    assert "IFV_GROUP_BY_LENGTH=true" in source
+    assert 'args+=(--group_by_length "$IFV_GROUP_BY_LENGTH")' in launcher
+
+
 def test_qwen35_training_bootstrap_is_fresh_pinned_and_isolated() -> None:
     source = _source("scripts/server/bootstrap_qwen35_training_gpu13.sh")
     sft = _source("requirements/train-qwen35.txt")
