@@ -224,6 +224,15 @@ def test_qwen35_pilot30_profile_matches_frozen_optimizer_budget() -> None:
     assert "IFV_DEEPSPEED=zero3_offload" in source
 
 
+def test_qwen35_zero3_speed_probe_is_full_parameter_and_32k() -> None:
+    source = _source("configs/sft/qwen3.5-full-1step-zero3.env")
+
+    assert "IFV_DEEPSPEED=zero3" in source
+    assert "IFV_TUNER_TYPE=full" in source
+    assert "IFV_MAX_LENGTH=32768" in source
+    assert "IFV_FREEZE_LLM=false" in source
+
+
 def test_qwen35_training_bootstrap_is_fresh_pinned_and_isolated() -> None:
     source = _source("scripts/server/bootstrap_qwen35_training_gpu13.sh")
     sft = _source("requirements/train-qwen35.txt")
