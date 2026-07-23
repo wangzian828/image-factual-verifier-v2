@@ -27,7 +27,7 @@ if [[ "$CONTEXT_LENGTH" -ne 131072 ]]; then
 fi
 
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-4,5}"
-require_idle_gpus
+require_idle_runtime_gpus
 IFS=',' read -r -a visible_devices <<<"$CUDA_VISIBLE_DEVICES"
 if [[ "$TP_SIZE" -ne "${#visible_devices[@]}" ]]; then
   echo "tensor parallel size $TP_SIZE must equal visible GPU count ${#visible_devices[@]}" >&2

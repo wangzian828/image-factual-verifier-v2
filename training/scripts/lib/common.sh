@@ -80,8 +80,7 @@ if module.__name__ != "cpu_adam":
 PY
 }
 
-require_training_gpus() {
-  configure_cuda_toolkit
+require_visible_gpus() {
   require_value CUDA_VISIBLE_DEVICES
   IFS=',' read -r -a devices <<<"$CUDA_VISIBLE_DEVICES"
   if [[ "${#devices[@]}" -lt 1 || "${#devices[@]}" -gt 4 ]]; then
@@ -119,8 +118,12 @@ export MPLBACKEND=Agg
   export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 }
 
-require_idle_gpus() {
-  require_training_gpus
+require_training_gpus() {
+  configure_cuda_toolkit
+  require_visible_gpus
+}
+
+require_idle_gpu_memory() {
   local device used util
   IFS=',' read -r -a devices <<<"$CUDA_VISIBLE_DEVICES"
   for device in "${devices[@]}"; do
@@ -136,6 +139,16 @@ require_idle_gpus() {
       exit 2
     fi
   done
+}
+
+require_idle_gpus() {
+  require_training_gpus
+  require_idle_gpu_memory
+}
+
+require_idle_runtime_gpus() {
+  require_visible_gpus
+  require_idle_gpu_memory
 }
 
 require_full_parameter_profile() {

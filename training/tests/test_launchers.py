@@ -58,7 +58,7 @@ def test_serving_launcher_uses_qwen3_vl_lmdeploy_protocol() -> None:
     assert "--logprobs-mode raw_logprobs" in source
     assert "--distributed-executor-backend" in source
     assert "--session-len" in source
-    assert "require_idle_gpus" in source
+    assert "require_idle_runtime_gpus" in source
 
 
 def test_locked_vllm_launcher_uses_native_qwen3_vl_protocol() -> None:
@@ -72,7 +72,7 @@ def test_locked_vllm_launcher_uses_native_qwen3_vl_protocol() -> None:
     assert "--tool-call-parser qwen3_xml" in source
     assert '"image":1,"video":0' in source
     assert "--enable-tokenizer-info-endpoint" in source
-    assert "require_idle_gpus" in source
+    assert "require_idle_runtime_gpus" in source
     assert "131072" in source
     assert "NCCL_CUMEM_HOST_ENABLE=0" in source
     assert "--disable-custom-all-reduce" in source
@@ -92,7 +92,7 @@ def test_qwen35_launcher_uses_native_multimodal_hybrid_thinking_protocol() -> No
     assert '"enable_thinking":false' in source
     assert '"image":1,"video":0' in source
     assert "--enable-tokenizer-info-endpoint" in source
-    assert "require_idle_gpus" in source
+    assert "require_idle_runtime_gpus" in source
     assert "131072" in source
     assert "NCCL_CUMEM_HOST_ENABLE=0" in source
     assert "--disable-custom-all-reduce" in source

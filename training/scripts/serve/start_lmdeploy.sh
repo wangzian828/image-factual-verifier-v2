@@ -17,7 +17,7 @@ TP_SIZE="$4"
 CONTEXT_LENGTH="${5:-32768}"
 SERVING_ROLE="${6:-agent}"
 CHECKPOINT_MANIFEST="${7:-}"
-require_idle_gpus
+require_idle_runtime_gpus
 export OMP_NUM_THREADS=1
 
 if [[ ! -e "$MODEL" && "$MODEL" == /* ]]; then
