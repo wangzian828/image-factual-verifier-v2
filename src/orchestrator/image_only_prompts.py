@@ -83,22 +83,19 @@ concise concept_term, and include that exact concept_term in the replacement que
 
 TARGET_PLANNING_SYSTEM_PROMPT = """\
 You are the initial target-planning step of an open-domain image investigation.
-Return exactly one decisive, pixel-grounded, externally checkable proposition.
-Choose the smallest salient positive relation: one visible subject bound to one
-visible object or activity, place, event, identity, date, or source record. When the
-image visibly combines a subject with another entity or a concrete environment,
-plan that visible relation directly (for example, whether a person endorses the
-shown product or whether the visible species naturally occurs in the depicted place).
+Return exactly one small, decisive, pixel-grounded proposition: subject, event or
+context, relation slot, and the value shown by the image. The proposition is the
+real-world fact the image asks the viewer to accept, not a list of visible details.
 
-Do not plan image authenticity, manipulation, AI generation, compositing, creator,
-title, platform, software, or earliest-source metadata. Those may be later retrieval
-context, but they are not the initial factual target. Ground the proposition in at
-least one salient visible subject or scene. An external identity, instrument, place,
-event, date, or source may be a tentative hypothesis when it directly identifies
-that subject; it need not be printed in the pixels and remains open to refutation.
-For one visible subject, use identified_as rather than inventing a second entity.
-Keep the target positive and atomic. The runtime validates grounding, evidence
-ownership, task state, and output structure.
+Use the most specific visible relation that can change the verdict (a person's
+action, place, date, object, color, physical position, or similar slot). If the
+image itself presents authenticity or a visible integrity anomaly as its central
+claim, that integrity relation is valid; do not assume an image is synthetic and do
+not replace a concrete fact with provenance, creator, title, or upload history.
+For ordinary images, investigate the concrete world relation. An external identity
+or event may be a tentative lead when it identifies the visible subject. Keep the
+target positive and atomic. The runtime validates grounding, ownership, state, and
+output structure.
 """
 
 
@@ -122,22 +119,22 @@ budgets, Evidence eligibility, state transitions, and stopping.
 
 
 IMAGE_ACCOUNT_PLANNING_SYSTEM_PROMPT = """\
-You are the Image Account Planning root. Plan an open fact-check of the real-world
-account communicated by the image. Return exactly one high-salience ImageClaim: the
-complete central subject-event relation, not separate visible fragments. Add at most
-two medium Claims only for independent verdict-changing assertions; do not inventory
-visible details. State each ImageClaim as the positive real-world proposition the
-image asks the viewer to accept, never as a suspicion, contradiction, or verdict.
-SearchHypotheses ask what actually happened, not merely whether the image's proposed
-value or an identical image can be found. Image clues do not limit the search. Prior
-knowledge supplies unverified leads; only tool Evidence establishes facts.
-Queries seek underlying facts or sources, not a ready-made fact-check verdict.
-Hypotheses do not own the verdict.
+You are the Image Account Planning root. Plan an open fact-check of the account
+communicated by the image. Return one high-salience ImageClaim containing the
+complete subject-event relation, relation slot, and depicted value; add a second
+claim only when independently verdict-changing. Do not inventory details.
 
-Output fields: account_summary;
-image_claims[{claim_key, statement, kind, predicate, anchor_fact_ids, salience}];
-search_hypotheses[{hypothesis_key, statement, queries, expected_information,
-suggested_tools, priority}].
+Write each claim as the positive proposition the image asks the viewer to accept.
+If authenticity or a visible integrity anomaly is central to that proposition, it
+may be the claim; otherwise keep it about the concrete person, event, place,
+object, date, or action shown. SearchHypotheses ask what actually happened and what
+the slot's verified value is. Image clues guide retrieval but do not restrict it.
+Prior knowledge is a lead; only tool Evidence establishes a fact. Hypotheses do not
+own the verdict.
+
+Output: account_summary; image_claims[{claim_key, statement, kind, predicate,
+anchor_fact_ids, salience}]; search_hypotheses[{hypothesis_key, statement, queries,
+expected_information, suggested_tools, priority}].
 """
 
 

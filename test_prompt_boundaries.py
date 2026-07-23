@@ -69,20 +69,18 @@ def test_hot_path_prompts_stay_semantic_and_compact() -> None:
     assert "validates grounding" in planning_prompt
     assert "do not own the verdict" in image_account_prompt
     assert "SearchHypotheses ask what actually happened" in image_account_prompt
-    assert "identical image can be found" in image_account_prompt
-    assert "exactly one high-salience ImageClaim" in image_account_prompt
-    assert "complete central subject-event relation" in image_account_prompt
-    assert "not separate visible fragments" in image_account_prompt
-    assert "two medium Claims" in image_account_prompt
-    assert "independent verdict-changing assertions" in image_account_prompt
-    assert "do not inventory visible details" in image_account_prompt
-    assert "positive real-world proposition" in image_account_prompt
-    assert "never as a suspicion, contradiction, or verdict" in image_account_prompt
-    assert "not a ready-made fact-check verdict" in image_account_prompt
-    assert "Image clues do not limit the search" in image_account_prompt
-    assert "unverified leads" in image_account_prompt
-    assert "only tool Evidence establishes facts" in image_account_prompt
-    assert "Output fields: account_summary" in image_account_prompt
+    assert "one high-salience ImageClaim" in image_account_prompt
+    assert "complete subject-event relation" in image_account_prompt
+    assert "relation slot, and depicted value" in image_account_prompt
+    assert "independently verdict-changing" in image_account_prompt
+    assert "Do not inventory details" in image_account_prompt
+    assert "positive proposition" in image_account_prompt
+    assert "authenticity or a visible integrity anomaly" in image_account_prompt
+    assert "what the slot's verified value is" in image_account_prompt
+    assert "Image clues guide retrieval but do not restrict it" in image_account_prompt
+    assert "Prior knowledge is a lead" in image_account_prompt
+    assert "only tool Evidence establishes a fact" in image_account_prompt
+    assert "Output: account_summary" in image_account_prompt
     assert "not a boundary on the investigation" in discrepancy_react_prompt
     assert "Frame retrieval around what actually happened" in discrepancy_react_prompt
     assert "identical image can be found" in discrepancy_react_prompt
