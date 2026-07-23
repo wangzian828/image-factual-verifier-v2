@@ -140,6 +140,7 @@ def test_launchers_enforce_physical_gpu_allowlist() -> None:
     assert 'configure_cuda_toolkit' in common
     assert 'IFV_CUDA_HOME' in common
     assert 'NCCL_CUMEM_HOST_ENABLE' in common
+    assert 'MPLBACKEND=Agg' in common
     assert "outside the allowed physical GPU set" in common
     assert "$1 + 0 >= 4 && $1 + 0 <= 7" in selector
 

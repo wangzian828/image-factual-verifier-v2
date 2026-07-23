@@ -69,7 +69,11 @@ require_training_gpus() {
     seen+="$device,"
   done
   export NPROC_PER_NODE="${#devices[@]}"
-  export OMP_NUM_THREADS=1
+export OMP_NUM_THREADS=1
+# Training runs are non-interactive.  A Jupyter kernel may export the inline
+# matplotlib backend, which makes ms-swift's final loss-plot hook fail after a
+# successful optimizer step.  Pin a headless backend for every launcher.
+export MPLBACKEND=Agg
   # Required on gpu-13: the R580/NCCL 2.27 default cuMem-host allocation path
   # has previously crashed during multi-rank startup.
   export NCCL_CUMEM_HOST_ENABLE="${NCCL_CUMEM_HOST_ENABLE:-0}"
