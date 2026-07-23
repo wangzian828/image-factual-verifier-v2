@@ -123,7 +123,11 @@ def _component_candidates(
 ) -> list[str]:
     def matches(name: str) -> bool:
         lowered = name.casefold()
-        if not lowered.endswith(".weight"):
+        # A multimodal connector can expose trainable projection biases while
+        # its smallest normalization weight stays bit-identical in BF16.  Both
+        # tensors are valid evidence that the component participated in full
+        # training, so audit parameters rather than weights alone.
+        if not lowered.endswith((".weight", ".bias")):
             return False
         if component == "language":
             return (
@@ -173,7 +177,12 @@ def _component_weight_deltas(
                 numel = 1
                 for value in shape:
                     numel *= value
-                if 0 < numel <= 10_000_000:
+                # Connector/merger projections are intentionally larger than
+                # the small language/vision probes.  Keep those components
+                # bounded, but large enough to inspect a real multimodal
+                # projection instead of only its normalization tensors.
+                max_numel = 50_000_000 if component == "aligner" else 10_000_000
+                if 0 < numel <= max_numel:
                     ranked.append((numel, name))
             except Exception as exc:
                 errors.append(f"{name}: {type(exc).__name__}: {exc}")

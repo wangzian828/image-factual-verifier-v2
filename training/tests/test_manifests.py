@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from ifv_training.checkpoints import (
+    _component_candidates,
     build_checkpoint_manifest,
     build_serving_profile,
 )
@@ -72,3 +73,17 @@ def test_environment_manifest_records_framework_and_lock(tmp_path: Path) -> None
     assert manifest["framework_release"]["git_tag"] == "v4.4.2"
     assert len(manifest["framework_release"]["git_commit"]) == 40
     assert len(manifest["package_lock"]["sha256"]) == 64
+
+
+def test_full_checkpoint_component_candidates_include_merger_bias_and_projection() -> None:
+    names = {
+        "model.visual.merger.linear_fc1.bias",
+        "model.visual.merger.linear_fc1.weight",
+        "model.visual.merger.norm.weight",
+        "model.visual.blocks.0.norm1.weight",
+    }
+
+    candidates = _component_candidates(names, "aligner")
+
+    assert "model.visual.merger.linear_fc1.bias" in candidates
+    assert "model.visual.merger.linear_fc1.weight" in candidates
