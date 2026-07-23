@@ -75,7 +75,7 @@ def test_hot_path_prompts_stay_semantic_and_compact() -> None:
     assert "independently verdict-changing" in image_account_prompt
     assert "Do not inventory details" in image_account_prompt
     assert "positive proposition" in image_account_prompt
-    assert "authenticity or a visible integrity anomaly" in image_account_prompt
+    assert "integrity may be its central relation" in image_account_prompt
     assert "what the slot's verified value is" in image_account_prompt
     assert "Image clues guide retrieval but do not restrict it" in image_account_prompt
     assert "Prior knowledge is a lead" in image_account_prompt

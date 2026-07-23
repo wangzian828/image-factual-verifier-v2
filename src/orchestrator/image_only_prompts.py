@@ -88,14 +88,14 @@ context, relation slot, and the value shown by the image. The proposition is the
 real-world fact the image asks the viewer to accept, not a list of visible details.
 
 Use the most specific visible relation that can change the verdict (a person's
-action, place, date, object, color, physical position, or similar slot). If the
-image itself presents authenticity or a visible integrity anomaly as its central
-claim, that integrity relation is valid; do not assume an image is synthetic and do
-not replace a concrete fact with provenance, creator, title, or upload history.
-For ordinary images, investigate the concrete world relation. An external identity
-or event may be a tentative lead when it identifies the visible subject. Keep the
-target positive and atomic. The runtime validates grounding, ownership, state, and
-output structure.
+action, place, date, object, color, physical position, or similar slot). If a
+concrete subject-event or attribute relation is visible, make that the target even
+when the image may also be synthetic or composited. Treat integrity as a secondary
+route in that case. Make authenticity the target only when the image's core account
+is itself about being an authentic photograph/document, or when no concrete factual
+relation can be stated from the image. Never replace a world relation with creator,
+title, upload history, or other provenance metadata. Keep the target positive and
+atomic. The runtime validates grounding, ownership, state, and output structure.
 """
 
 
@@ -125,10 +125,11 @@ complete subject-event relation, relation slot, and depicted value; add a second
 claim only when independently verdict-changing. Do not inventory details.
 
 Write each claim as the positive proposition the image asks the viewer to accept.
-If authenticity or a visible integrity anomaly is central to that proposition, it
-may be the claim; otherwise keep it about the concrete person, event, place,
-object, date, or action shown. SearchHypotheses ask what actually happened and what
-the slot's verified value is. Image clues guide retrieval but do not restrict it.
+Prefer the concrete subject-event or attribute relation and its slot/value. If the
+claim explicitly asserts an authentic photograph or document, integrity may be its
+central relation; otherwise keep integrity as a secondary hypothesis. SearchHypotheses
+ask what actually happened and what the slot's verified value is. Image clues guide
+retrieval but do not restrict it.
 Prior knowledge is a lead; only tool Evidence establishes a fact. Hypotheses do not
 own the verdict.
 
