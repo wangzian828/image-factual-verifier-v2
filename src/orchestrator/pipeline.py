@@ -3090,7 +3090,6 @@ class Orchestrator:
                     "PLANNING",
                     "EVIDENCE_DECISION",
                     "REFLECTION",
-                    "JUDGMENT",
                 }
                 default = (
                     "true" if normalized_stage in thinking_stages else "false"
@@ -3128,7 +3127,6 @@ class Orchestrator:
                         "PLANNING": 1024,
                         "EVIDENCE_DECISION": 2048,
                         "REFLECTION": 1536,
-                        "JUDGMENT": 2048,
                     }.get(normalized_stage, 1024)
                     env_name = f"QWEN_{normalized_stage}_THINKING_TOKEN_BUDGET"
                     raw_budget = os.getenv(env_name, str(default_budget)).strip()

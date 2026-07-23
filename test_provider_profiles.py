@@ -208,10 +208,12 @@ def test_qwen35_uses_hybrid_stage_reasoning_defaults() -> None:
     assert orchestrator._stage_generation_config("REFLECTION")[
         "thinking_token_budget"
     ] == 1536
-    assert orchestrator._stage_generation_config("JUDGMENT")[
-        "thinking_token_budget"
-    ] == 2048
-    for stage in ["VERIFICATION", "QUERY_REPLAN", "QUERY_CONCEPT_EXTRACTION"]:
+    for stage in [
+        "VERIFICATION",
+        "QUERY_REPLAN",
+        "QUERY_CONCEPT_EXTRACTION",
+        "JUDGMENT",
+    ]:
         config = orchestrator._stage_generation_config(stage)
         assert config["enable_thinking"] is False
         assert config["temperature"] == 0.7
