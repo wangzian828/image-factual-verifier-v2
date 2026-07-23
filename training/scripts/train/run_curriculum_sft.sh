@@ -24,7 +24,7 @@ require_full_parameter_profile
 require_model_path
 require_value EXPERIMENT_ID
 
-train_datasets=(
+candidate_train_datasets=(
   "$PERCEPTION_DIR/train.jsonl"
   "$POLICY_DIR/train.group-planning.jsonl"
   "$POLICY_DIR/train.group-react.jsonl"
@@ -32,7 +32,7 @@ train_datasets=(
   "$POLICY_DIR/train.group-reflection.jsonl"
   "$POLICY_DIR/train.group-judgment.jsonl"
 )
-validation_datasets=(
+candidate_validation_datasets=(
   "$PERCEPTION_DIR/validation.jsonl"
   "$POLICY_DIR/validation.group-planning.jsonl"
   "$POLICY_DIR/validation.group-react.jsonl"
@@ -40,8 +40,35 @@ validation_datasets=(
   "$POLICY_DIR/validation.group-reflection.jsonl"
   "$POLICY_DIR/validation.group-judgment.jsonl"
 )
-for dataset in "${train_datasets[@]}" "${validation_datasets[@]}"; do
-  require_dataset "$dataset"
+candidate_channels=(perception planning react decision reflection judgment)
+candidate_weights=(0.20 0.15 0.35 0.20 0.05 0.05)
+train_datasets=()
+validation_datasets=()
+active_channels=()
+active_weights=()
+for index in "${!candidate_channels[@]}"; do
+  train_dataset="${candidate_train_datasets[$index]}"
+  validation_dataset="${candidate_validation_datasets[$index]}"
+  if [[ -s "$train_dataset" && -s "$validation_dataset" ]]; then
+    train_datasets+=("$train_dataset")
+    validation_datasets+=("$validation_dataset")
+    active_channels+=("${candidate_channels[$index]}")
+    active_weights+=("${candidate_weights[$index]}")
+  elif [[ -s "$train_dataset" || -s "$validation_dataset" ]]; then
+    echo "curriculum channel has only one non-empty split: ${candidate_channels[$index]}" >&2
+    exit 2
+  else
+    echo "Skipping absent curriculum channel: ${candidate_channels[$index]}" >&2
+  fi
+done
+if [[ "${#active_channels[@]}" -lt 1 ]]; then
+  echo "no non-empty curriculum channels are available" >&2
+  exit 2
+fi
+weight_sum="$({ printf '%s\n' "${active_weights[@]}"; } | awk '{sum += $1} END {printf "%.12g", sum}')"
+interleave_prob=()
+for weight in "${active_weights[@]}"; do
+  interleave_prob+=("$(awk -v numerator="$weight" -v denominator="$weight_sum" 'BEGIN {printf "%.12g", numerator / denominator}')")
 done
 
 OUTPUT_DIR="$DATA_ROOT/checkpoints/$EXPERIMENT_ID"
@@ -50,13 +77,23 @@ LOG_DIR="$EXPERIMENT_DIR"
 new_output_dir "$OUTPUT_DIR"
 new_output_dir "$EXPERIMENT_DIR"
 record_environment "$EXPERIMENT_DIR"
+{
+  printf 'channel\tweight\ttrain_dataset\tvalidation_dataset\n'
+  for index in "${!active_channels[@]}"; do
+    printf '%s\t%s\t%s\t%s\n' \
+      "${active_channels[$index]}" \
+      "${interleave_prob[$index]}" \
+      "${train_datasets[$index]}" \
+      "${validation_datasets[$index]}"
+  done
+} >"$EXPERIMENT_DIR/curriculum-selection.tsv"
 
 args=(
   swift sft
   --model "$IFV_MODEL_ID"
   --dataset "${train_datasets[@]}"
   --val_dataset "${validation_datasets[@]}"
-  --interleave_prob 0.20 0.15 0.35 0.20 0.05 0.05
+  --interleave_prob "${interleave_prob[@]}"
   --stopping_strategy all_exhausted
   --split_dataset_ratio 0
   --strict true

@@ -21,7 +21,9 @@ def test_sft_launchers_delegate_training_to_ms_swift() -> None:
         assert "NPROC_PER_NODE=2" not in source
         assert "--resume_from_checkpoint" in source
         assert "--deepspeed" in source
-    assert "--interleave_prob 0.20 0.15 0.35 0.20 0.05 0.05" in curriculum
+    assert "candidate_weights=(0.20 0.15 0.35 0.20 0.05 0.05)" in curriculum
+    assert 'Skipping absent curriculum channel' in curriculum
+    assert '--interleave_prob "${interleave_prob[@]}"' in curriculum
     assert "train.group-decision.jsonl" in curriculum
 
 
@@ -205,6 +207,18 @@ def test_qwen35_full_parameter_step_profiles_exist() -> None:
         assert "IFV_FREEZE_LLM=false" in source
         assert "IFV_FREEZE_VIT=false" in source
         assert "IFV_FREEZE_ALIGNER=false" in source
+        assert "IFV_MAX_LENGTH=32768" in source
+        assert "IFV_IMAGE_MAX_TOKEN_NUM=1024" in source
+
+
+def test_qwen35_pilot30_profile_matches_frozen_optimizer_budget() -> None:
+    source = _source("configs/sft/qwen3.5-full-pilot30.env")
+
+    assert "IFV_MAX_STEPS=197" in source
+    assert "IFV_MAX_LENGTH=32768" in source
+    assert "IFV_IMAGE_MAX_TOKEN_NUM=1024" in source
+    assert "IFV_TUNER_TYPE=full" in source
+    assert "IFV_DEEPSPEED=zero3_offload" in source
 
 
 def test_qwen35_training_bootstrap_is_fresh_pinned_and_isolated() -> None:
