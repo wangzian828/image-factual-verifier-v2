@@ -159,6 +159,20 @@ async def _run(args: argparse.Namespace) -> Dict[str, Any]:
         for trace_path in trace_paths:
             trace = _load_json(trace_path)
             trace_sha = sha256_file(trace_path)
+            recorded_verdict = str(trace.get("verdict", "")).strip()
+            if recorded_verdict not in {"real", "fake"}:
+                rows.append(
+                    {
+                        "case_id": str(trace.get("case_id") or trace_path.stem),
+                        "episode_id": str(trace.get("image_id") or trace_path.stem),
+                        "artifact": None,
+                        "artifact_id": None,
+                        "semantic_audit_pass": False,
+                        "from_cache": False,
+                        "excluded_reason": "non_binary_verdict",
+                    }
+                )
+                continue
             image_path = _resolve_image_path(
                 trace,
                 explicit_image=args.image,
