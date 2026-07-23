@@ -212,6 +212,11 @@ def test_qwen35_full_parameter_step_profiles_exist() -> None:
         assert "IFV_FREEZE_ALIGNER=false" in source
         assert "IFV_MAX_LENGTH=32768" in source
         assert "IFV_IMAGE_MAX_TOKEN_NUM=1024" in source
+        if steps in (3, 20):
+            assert (
+                "IFV_DEEPSPEED=training/configs/deepspeed/zero3-optimizer-offload.json"
+                in source
+            )
 
 
 def test_qwen35_pilot30_profile_matches_frozen_optimizer_budget() -> None:
@@ -221,7 +226,10 @@ def test_qwen35_pilot30_profile_matches_frozen_optimizer_budget() -> None:
     assert "IFV_MAX_LENGTH=32768" in source
     assert "IFV_IMAGE_MAX_TOKEN_NUM=1024" in source
     assert "IFV_TUNER_TYPE=full" in source
-    assert "IFV_DEEPSPEED=zero3_offload" in source
+    assert (
+        "IFV_DEEPSPEED=training/configs/deepspeed/zero3-optimizer-offload.json"
+        in source
+    )
 
 
 def test_qwen35_zero3_speed_probe_is_full_parameter_and_32k() -> None:
