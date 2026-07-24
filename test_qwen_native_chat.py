@@ -127,6 +127,81 @@ def _output_response() -> LLMResponse:
     )
 
 
+def _reasoning_only_response(payload: str) -> LLMResponse:
+    raw = {
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "reasoning": payload,
+                }
+            }
+        ]
+    }
+    return LLMResponse(
+        text=payload,
+        prompt_tokens=30,
+        completion_tokens=6,
+        raw=raw,
+    )
+
+
+def test_qwen_reasoning_only_invalid_schema_retries_once_in_direct_mode() -> None:
+    backend = QwenFakeBackend(
+        [
+            _reasoning_only_response(
+                '{"claim_key":"legacy-claim","kind":"text_claim"}'
+            ),
+            _output_response(),
+        ]
+    )
+    runner = StageRunner(
+        llm=backend,
+        system_prompt="Return the structured result.",
+        tools=[],
+        output_schema=AnswerOutput,
+        max_rounds=2,
+        stage_name="image_account_planning",
+        attach_image=False,
+        generation_config={
+            "enable_thinking": True,
+            "thinking_token_budget": 1024,
+            "temperature": 1.0,
+        },
+    )
+
+    parsed, steps = asyncio.run(runner.run("Inspect the image."))
+
+    assert parsed == AnswerOutput(answer="ceremonial coach")
+    assert [step.action_type for step in steps] == ["output_rejected", "output"]
+    assert backend.requests[0]["generation_config"]["enable_thinking"] is True
+    assert backend.requests[0]["generation_config"]["thinking_token_budget"] == 1024
+    assert backend.requests[1]["generation_config"]["enable_thinking"] is False
+    assert "thinking_token_budget" not in backend.requests[1]["generation_config"]
+    assert backend.requests[1]["generation_config"]["temperature"] == 1.0
+
+
+def test_qwen_reasoning_only_valid_schema_is_accepted_without_direct_retry() -> None:
+    backend = QwenFakeBackend([_reasoning_only_response('{"answer":"coach"}')])
+    runner = StageRunner(
+        llm=backend,
+        system_prompt="Return the structured result.",
+        tools=[],
+        output_schema=AnswerOutput,
+        max_rounds=2,
+        stage_name="image_account_planning",
+        attach_image=False,
+        generation_config={"enable_thinking": True, "thinking_token_budget": 1024},
+    )
+
+    parsed, steps = asyncio.run(runner.run("Inspect the image."))
+
+    assert parsed == AnswerOutput(answer="coach")
+    assert [step.action_type for step in steps] == ["output"]
+    assert len(backend.requests) == 1
+
+
 def test_qwen_native_function_round_trip_uses_tool_role() -> None:
     backend = QwenFakeBackend([_tool_response(), _output_response()])
     tool = LookupTool()

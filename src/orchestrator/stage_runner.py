@@ -341,14 +341,51 @@ class StageRunner:
             else "standalone_request"
         )
         next_parent_context_request_id = ""
+        next_generation_config: Optional[Dict[str, Any]] = None
+
+        def direct_schema_generation_config() -> Optional[Dict[str, Any]]:
+            """Disable hidden reasoning only for a rejected schema retry.
+
+            A Qwen Chat Completions response may contain a candidate solely in
+            its reasoning field.  Valid candidates still pass the normal schema
+            validator.  When that candidate is invalid, repeating the original
+            thinking request can replay the same stale schema indefinitely.
+            Keep the first request unchanged, but make its correction a direct
+            structured-output request.  This changes decoding only; it neither
+            accepts nor translates an invalid response.
+            """
+
+            if not (
+                native_chat
+                and not self.tools_list
+                and self.output_schema is not None
+                and bool(self.generation_config.get("enable_thinking"))
+            ):
+                return None
+            config = dict(self.generation_config)
+            config["enable_thinking"] = False
+            config.pop("thinking_token_budget", None)
+            return config
+
+        def needs_direct_schema_correction(affected: StageStep) -> bool:
+            return bool(
+                affected.metadata.get("response_content_chars", 0) == 0
+                and affected.metadata.get("response_reasoning_chars", 0) > 0
+                and direct_schema_generation_config() is not None
+            )
 
         def request_chat_protocol_correction(
             affected: StageStep,
             reason: str,
+            *,
+            direct_schema_output: bool = False,
         ) -> bool:
             nonlocal correction_turns
             nonlocal next_lifecycle_kind
             nonlocal next_parent_context_request_id
+            nonlocal next_generation_config
+            if direct_schema_output:
+                next_generation_config = direct_schema_generation_config()
             if not correction_only_turns:
                 next_lifecycle_kind = "protocol_correction"
                 next_parent_context_request_id = str(
@@ -394,6 +431,7 @@ class StageRunner:
                 ),
                 lifecycle_kind=next_lifecycle_kind,
                 parent_context_request_id=next_parent_context_request_id,
+                generation_config=next_generation_config,
             )
             next_lifecycle_kind = (
                 "tool_roundtrip"
@@ -401,6 +439,7 @@ class StageRunner:
                 else "standalone_request"
             )
             next_parent_context_request_id = ""
+            next_generation_config = None
             step = StageStep(
                 round=round_num,
                 stage_name=self.stage_name,
@@ -707,7 +746,11 @@ class StageRunner:
                         ),
                     }
                 )
-                if request_chat_protocol_correction(step, rejection_reason):
+                if request_chat_protocol_correction(
+                    step,
+                    rejection_reason,
+                    direct_schema_output=needs_direct_schema_correction(step),
+                ):
                     continue
                 break
 
@@ -728,6 +771,7 @@ class StageRunner:
             if request_chat_protocol_correction(
                 step,
                 "the response was neither a function call nor valid JSON",
+                direct_schema_output=needs_direct_schema_correction(step),
             ):
                 continue
             break
