@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 from src.orchestrator.investigation_models import (
     ClaimAssessmentProposal,
+    DiscrepancyDecisionProposalOutput,
     DiscrepancyDecisionOutput,
     FactOrigin,
     Finding,
@@ -18,22 +19,29 @@ from src.orchestrator.investigation_models import (
     InvestigationBrief,
     InvestigationEvidence,
     MaterialDiscrepancy,
+    MaterialDiscrepancyDraft,
     MaterialDiscrepancyProposal,
     NewSearchHypothesis,
     SearchHypothesisProposal,
     VisualEntity,
     VisualFact,
+    VisualReinspectionProposal,
     VisualReinspectionRequest,
 )
 from src.orchestrator.discrepancy_coverage import (
     audit_discrepancy_coverage,
     compile_discrepancy_verdict_basis,
 )
+from src.orchestrator.image_only_prompts import (
+    DISCREPANCY_DECISION_SYSTEM_PROMPT,
+    render_discrepancy_decision_context,
+)
 from src.orchestrator.task_store import (
     MAX_ARCHIVE_RECALL_ROUTES_PER_TASK,
     apply_discrepancy_decision,
     apply_image_account_planning,
     archive_recall_available,
+    bind_discrepancy_decision_runtime_ids,
     record_route_selection_exhaustion,
     record_tool_observation,
     remaining_claim_hypothesis_routes,
@@ -270,6 +278,94 @@ def _append_evidence(state: ImageOnlyInvestigationState) -> InvestigationEvidenc
     state.findings.append(finding)
     task.finding_ids.append(finding.finding_id)
     return evidence
+
+
+def _append_source_visual_conflict_pair(
+    state: ImageOnlyInvestigationState,
+    *,
+    visual_answer_status: str = "observed",
+    link_visual_to_reinspection: bool = True,
+) -> tuple[InvestigationEvidence, InvestigationEvidence]:
+    claim = state.image_claims[0]
+    task = next(task for task in state.tasks if claim.claim_id in task.claim_ids)
+    source = InvestigationEvidence(
+        evidence_id="evidence-source-bare-hand",
+        task_id=task.task_id,
+        fact_ids=[claim.fact_id],
+        function_call_id="call-source-bare-hand",
+        tool_name="visit",
+        evidence_kind="web_span",
+        source_url="https://example.org/official-caption",
+        source_family="domain:example.org",
+        exact_text="The source caption says the handshake happened without wearing gloves.",
+        span_start=0,
+        span_end=68,
+        artifact_sha256="b" * 64,
+        retrieved_at=datetime.now(timezone.utc).isoformat(),
+        stance="support",
+        quality="strong",
+        directness="direct",
+        claim_binding="source_assertion",
+        relation_scope="same_relation",
+        relation_stance="supports",
+    )
+    state.evidence.append(source)
+
+    visual_request = apply_discrepancy_decision(
+        state,
+        DiscrepancyDecisionOutput(
+            visual_reinspection=VisualReinspectionRequest(
+                reason="relation",
+                scope="relation",
+                question=(
+                    "Is the hand used in the visible handshake bare or covered by "
+                    "a white glove?"
+                ),
+                expected_property="the handshake hand is covered by a white glove",
+                anchor_fact_ids=claim.anchor_fact_ids,
+                grounding_evidence_ids=[source.evidence_id],
+            ),
+            verdict_proposal="continue",
+            rationale="A source visible-property claim needs focused pixel review.",
+        ),
+        reviewed_evidence_ids=[source.evidence_id],
+        trigger="qualified_evidence",
+    )
+    assert visual_request["accepted"] is True, visual_request
+    record = state.visual_reinspections[-1]
+    visual = InvestigationEvidence(
+        evidence_id=f"evidence-visual-glove-{visual_answer_status}",
+        task_id=record.task_id,
+        fact_ids=[claim.fact_id],
+        function_call_id=f"call-visual-glove-{visual_answer_status}",
+        tool_name="focused_visual_inspection",
+        evidence_kind="image_region",
+        source_family="visual:focused_visual_inspection",
+        exact_text=(
+            "Focused visual inspection observes that the handshake hand is "
+            "covered by a white glove."
+        ),
+        image_region=[0.25, 0.25, 0.75, 0.75],
+        artifact_sha256="c" * 64,
+        retrieved_at=datetime.now(timezone.utc).isoformat(),
+        stance="neutral",
+        quality="strong",
+        directness="direct",
+        claim_binding="pixel_observation",
+        visual_question_id=(
+            record.visual_question_id
+            if link_visual_to_reinspection
+            else "visual-question-unrelated"
+        ),
+        visual_scope="relation",
+        visual_answer_status=visual_answer_status,
+    )
+    state.evidence.append(visual)
+    record.status = "resolved"
+    record.evidence_ids = [visual.evidence_id] if link_visual_to_reinspection else []
+    visual_task = next(item for item in state.tasks if item.task_id == record.task_id)
+    visual_task.status = "resolved"
+    return source, visual
 
 
 def test_archive_memory_actions_update_memory_state_without_fact_failure() -> None:
@@ -1083,6 +1179,402 @@ def test_visual_reinspection_can_target_open_claim_without_assessment() -> None:
     assert state.discrepancy_decisions[0].accepted_visual_question_id
 
 
+def test_discrepancy_decision_accepts_source_visual_composite_refute() -> None:
+    state = _planned_state()
+    source, visual = _append_source_visual_conflict_pair(state)
+    claim = state.image_claims[0]
+
+    update = apply_discrepancy_decision(
+        state,
+        DiscrepancyDecisionOutput(
+            claim_assessments=[
+                ClaimAssessmentProposal(
+                    claim_id=claim.claim_id,
+                    assessment="refuted",
+                    selected_evidence_ids=[source.evidence_id, visual.evidence_id],
+                    rationale=(
+                        "The source says the visible handshake hand is bare, "
+                        "while focused inspection observes a white glove."
+                    ),
+                )
+            ],
+            material_discrepancy=MaterialDiscrepancyProposal(
+                statement=(
+                    "The source-pixel account conflicts on whether the visible "
+                    "handshake hand is bare or gloved."
+                ),
+                affected_claim_ids=[claim.claim_id],
+                visual_anchor_fact_ids=claim.anchor_fact_ids,
+                evidence_ids=[source.evidence_id, visual.evidence_id],
+                materiality="decisive",
+                status="established",
+                rationale="The conflict changes a high-salience visible relation.",
+            ),
+            verdict_proposal="fake",
+            rationale="A decisive source-pixel discrepancy is established.",
+        ),
+        reviewed_evidence_ids=[source.evidence_id, visual.evidence_id],
+        trigger="qualified_evidence",
+    )
+
+    assert update["accepted"] is True, update
+    assert source.stance == "support"
+    assert visual.stance == "neutral"
+    assert len(update["created_composite_finding_ids"]) == 1
+    composite = next(
+        item
+        for item in state.findings
+        if item.finding_id == update["created_composite_finding_ids"][0]
+    )
+    assert composite.stance == "refute"
+    assert composite.evidence_ids == [source.evidence_id, visual.evidence_id]
+    assert "composite:source_visual_discrepancy" in composite.source_family_ids
+
+    coverage = audit_discrepancy_coverage(state, decision_checkpoint=True)
+    verdict, basis = compile_discrepancy_verdict_basis(state)
+    assert coverage.complete is True
+    assert verdict == "fake"
+    assert basis.finding_ids == [composite.finding_id]
+    assert basis.evidence_ids == [source.evidence_id, visual.evidence_id]
+
+
+def test_source_visual_composite_rejects_unlinked_visual_evidence() -> None:
+    state = _planned_state()
+    source, visual = _append_source_visual_conflict_pair(
+        state,
+        link_visual_to_reinspection=False,
+    )
+    claim = state.image_claims[0]
+    before = state.model_dump(mode="json")
+
+    update = apply_discrepancy_decision(
+        state,
+        DiscrepancyDecisionOutput(
+            claim_assessments=[
+                ClaimAssessmentProposal(
+                    claim_id=claim.claim_id,
+                    assessment="refuted",
+                    selected_evidence_ids=[source.evidence_id, visual.evidence_id],
+                    rationale="This cites an unrelated neutral visual observation.",
+                )
+            ],
+            material_discrepancy=MaterialDiscrepancyProposal(
+                statement="An unrelated visual observation must not refute the Claim.",
+                affected_claim_ids=[claim.claim_id],
+                visual_anchor_fact_ids=claim.anchor_fact_ids,
+                evidence_ids=[source.evidence_id, visual.evidence_id],
+                materiality="decisive",
+                status="established",
+                rationale="The proposed composite has no runtime reinspection link.",
+            ),
+            verdict_proposal="fake",
+            rationale="This must fail closed.",
+        ),
+        reviewed_evidence_ids=[source.evidence_id, visual.evidence_id],
+        trigger="qualified_evidence",
+    )
+
+    assert update["accepted"] is False
+    assert "qualified refute" in update["rejected_reason"]
+    assert state.model_dump(mode="json") == before
+
+
+def test_source_visual_composite_rejects_ambiguous_visual_result() -> None:
+    state = _planned_state()
+    source, visual = _append_source_visual_conflict_pair(
+        state,
+        visual_answer_status="ambiguous",
+    )
+    claim = state.image_claims[0]
+    before = state.model_dump(mode="json")
+
+    update = apply_discrepancy_decision(
+        state,
+        DiscrepancyDecisionOutput(
+            claim_assessments=[
+                ClaimAssessmentProposal(
+                    claim_id=claim.claim_id,
+                    assessment="refuted",
+                    selected_evidence_ids=[source.evidence_id, visual.evidence_id],
+                    rationale="The focused visual result is ambiguous.",
+                )
+            ],
+            material_discrepancy=MaterialDiscrepancyProposal(
+                statement="An ambiguous visual result must not establish a conflict.",
+                affected_claim_ids=[claim.claim_id],
+                visual_anchor_fact_ids=claim.anchor_fact_ids,
+                evidence_ids=[source.evidence_id, visual.evidence_id],
+                materiality="decisive",
+                status="established",
+                rationale="The pixel side is not resolved.",
+            ),
+            verdict_proposal="fake",
+            rationale="This must fail closed.",
+        ),
+        reviewed_evidence_ids=[source.evidence_id, visual.evidence_id],
+        trigger="qualified_evidence",
+    )
+
+    assert update["accepted"] is False
+    assert "qualified refute" in update["rejected_reason"]
+    assert state.model_dump(mode="json") == before
+
+
+def test_source_visual_composite_requires_visual_evidence_in_discrepancy() -> None:
+    state = _planned_state()
+    source, visual = _append_source_visual_conflict_pair(state)
+    claim = state.image_claims[0]
+    before = state.model_dump(mode="json")
+
+    update = apply_discrepancy_decision(
+        state,
+        DiscrepancyDecisionOutput(
+            claim_assessments=[
+                ClaimAssessmentProposal(
+                    claim_id=claim.claim_id,
+                    assessment="refuted",
+                    selected_evidence_ids=[source.evidence_id, visual.evidence_id],
+                    rationale="The assessment includes both sides of the conflict.",
+                )
+            ],
+            material_discrepancy=MaterialDiscrepancyProposal(
+                statement="The discrepancy omits the visual side of the conflict.",
+                affected_claim_ids=[claim.claim_id],
+                visual_anchor_fact_ids=claim.anchor_fact_ids,
+                evidence_ids=[source.evidence_id],
+                materiality="decisive",
+                status="established",
+                rationale="The proposed discrepancy is incomplete.",
+            ),
+            verdict_proposal="fake",
+            rationale="This must fail closed.",
+        ),
+        reviewed_evidence_ids=[source.evidence_id, visual.evidence_id],
+        trigger="qualified_evidence",
+    )
+
+    assert update["accepted"] is False
+    assert "qualified refute" in update["rejected_reason"]
+    assert state.model_dump(mode="json") == before
+
+
+def test_runtime_binds_visual_proposal_to_atomic_evidence_fact() -> None:
+    """A multi-claim task must not broaden a fact-bound visual reinspection."""
+
+    state = _planned_state()
+    evidence = _append_evidence(state)
+    evidence.stance = "neutral"
+    evidence.claim_binding = "source_assertion"
+    evidence.relation_scope = "same_relation"
+    evidence.relation_stance = "background"
+    evidence.same_capture_or_near_duplicate = None
+    evidence.edit_evidence_present = None
+    state.findings.clear()
+    state.tasks[0].finding_ids.clear()
+    claim = state.image_claims[0]
+    task = next(item for item in state.tasks if claim.claim_id in item.claim_ids)
+    claim_fact = next(item for item in state.facts if item.fact_id == claim.fact_id)
+    medium_fact = claim_fact.model_copy(
+        update={
+            "fact_id": "fact-background-location",
+            "statement": "The background building is a particular office complex.",
+            "status": "active",
+        }
+    )
+    medium_claim = claim.model_copy(
+        update={
+            "claim_id": "claim-background-location",
+            "fact_id": medium_fact.fact_id,
+            "statement": medium_fact.statement,
+            "salience": "medium",
+            "status": "open",
+            "task_ids": [task.task_id],
+        }
+    )
+    state.facts.append(medium_fact)
+    state.image_claims.append(medium_claim)
+    task.fact_ids.append(medium_fact.fact_id)
+    task.claim_ids.append(medium_claim.claim_id)
+    state.search_hypotheses[0].claim_ids.append(medium_claim.claim_id)
+
+    proposal = DiscrepancyDecisionProposalOutput(
+        visual_reinspection=VisualReinspectionProposal(
+            reason="relation",
+            scope="relation",
+            question="Is the visible object on the support or beside it?",
+            expected_property="on versus beside",
+        ),
+        verdict_proposal="continue",
+        rationale="Reinspect the one fact-bound high-salience relation.",
+    )
+    bound, reason = bind_discrepancy_decision_runtime_ids(
+        state,
+        proposal,
+        reviewed_evidence_ids=[evidence.evidence_id],
+    )
+
+    assert reason == ""
+    assert bound is not None
+    assert bound.visual_reinspection is not None
+    assert bound.visual_reinspection.anchor_fact_ids == claim.anchor_fact_ids
+    assert bound.visual_reinspection.grounding_evidence_ids == [
+        evidence.evidence_id
+    ]
+    update = apply_discrepancy_decision(
+        state,
+        bound,
+        reviewed_evidence_ids=[evidence.evidence_id],
+        trigger="qualified_evidence",
+    )
+    assert update["accepted"] is True, update
+    visual_task = next(
+        item
+        for item in state.tasks
+        if item.task_id == state.visual_reinspections[0].task_id
+    )
+    assert visual_task.claim_ids == [claim.claim_id]
+    proposal_schema = VisualReinspectionProposal.model_json_schema()["properties"]
+    assert "anchor_fact_ids" not in proposal_schema
+    assert "grounding_evidence_ids" not in proposal_schema
+
+
+def test_runtime_binds_material_discrepancy_visual_anchors() -> None:
+    state = _planned_state()
+    evidence = _append_evidence(state)
+    claim = state.image_claims[0]
+    proposal = DiscrepancyDecisionProposalOutput(
+        claim_assessments=[
+            ClaimAssessmentProposal(
+                claim_id=claim.claim_id,
+                assessment="refuted",
+                selected_evidence_ids=[evidence.evidence_id],
+                rationale="The qualified source comparison refutes the Claim.",
+            )
+        ],
+        material_discrepancy=MaterialDiscrepancyDraft(
+            statement="The source comparison contradicts the visible relation.",
+            affected_claim_ids=[claim.claim_id],
+            evidence_ids=[evidence.evidence_id],
+            materiality="decisive",
+            status="established",
+            rationale="The changed relation is decisive.",
+        ),
+        verdict_proposal="fake",
+        rationale="A decisive high-salience discrepancy is established.",
+    )
+
+    bound, reason = bind_discrepancy_decision_runtime_ids(
+        state,
+        proposal,
+        reviewed_evidence_ids=[evidence.evidence_id],
+    )
+
+    assert reason == ""
+    assert bound is not None
+    assert bound.material_discrepancy is not None
+    assert bound.material_discrepancy.visual_anchor_fact_ids == claim.anchor_fact_ids
+    update = apply_discrepancy_decision(
+        state,
+        bound,
+        reviewed_evidence_ids=[evidence.evidence_id],
+        trigger="qualified_evidence",
+    )
+    assert update["accepted"] is True, update
+    draft_schema = MaterialDiscrepancyDraft.model_json_schema()["properties"]
+    assert "visual_anchor_fact_ids" not in draft_schema
+
+
+def test_discrepancy_context_flags_evidence_to_visual_alignment_candidate() -> None:
+    state = _planned_state()
+    claim = state.image_claims[0]
+    task = next(task for task in state.tasks if claim.claim_id in task.claim_ids)
+    evidence = InvestigationEvidence(
+        evidence_id="evidence-without-gloves",
+        task_id=task.task_id,
+        fact_ids=[claim.fact_id],
+        function_call_id="call-without-gloves",
+        tool_name="visit",
+        evidence_kind="web_span",
+        source_url="https://example.org/diana",
+        source_family="domain:example.org",
+        exact_text=(
+            "The archived caption says the handshake happened without wearing "
+            "gloves."
+        ),
+        span_start=0,
+        span_end=72,
+        artifact_sha256="d" * 64,
+        retrieved_at=datetime.now(timezone.utc).isoformat(),
+        stance="support",
+        quality="strong",
+        directness="direct",
+        claim_binding="source_assertion",
+        relation_scope="same_relation",
+        relation_stance="supports",
+    )
+    state.evidence.append(evidence)
+    state.findings.append(
+        Finding(
+            finding_id="finding-without-gloves",
+            task_id=task.task_id,
+            fact_ids=[claim.fact_id],
+            statement=evidence.exact_text,
+            stance="support",
+            evidence_ids=[evidence.evidence_id],
+            source_family_ids=[evidence.source_family],
+            quality="supporting",
+        )
+    )
+
+    context = json.loads(
+        render_discrepancy_decision_context(
+            state,
+            reviewed_evidence_ids=[evidence.evidence_id],
+            trigger="qualified_evidence",
+        )
+    )
+
+    candidates = context["evidence_to_visual_alignment_candidates"]
+    assert candidates == [
+        {
+            "evidence_id": evidence.evidence_id,
+            "evidence_text": evidence.exact_text,
+            "claim_id": claim.claim_id,
+            "claim_statement": claim.statement,
+            "claim_status": "open",
+            "current_image_account": state.image_account_summary,
+            "allowed_visual_anchors": [
+                {
+                    "fact_id": claim.anchor_fact_ids[0],
+                    "statement": state.facts[0].statement,
+                }
+            ],
+            "required_review": candidates[0]["required_review"],
+        }
+    ]
+    assert "targeted visual_reinspection" in candidates[0]["required_review"]
+    assert "glove versus bare hand" in DISCREPANCY_DECISION_SYSTEM_PROMPT
+    assert "unverified visible hypothesis" in DISCREPANCY_DECISION_SYSTEM_PROMPT
+    assert "generic AI" in DISCREPANCY_DECISION_SYSTEM_PROMPT
+    assert context["runtime_visual_reinspection_binding"] == {
+        "status": "available",
+        "candidates": [
+            {
+                "claim_id": claim.claim_id,
+                "claim_fact_id": claim.fact_id,
+                "anchor_fact_ids": claim.anchor_fact_ids,
+                "grounding_evidence_ids": [evidence.evidence_id],
+            }
+        ],
+        "binding": {
+            "claim_id": claim.claim_id,
+            "claim_fact_id": claim.fact_id,
+            "anchor_fact_ids": claim.anchor_fact_ids,
+            "grounding_evidence_ids": [evidence.evidence_id],
+        },
+    }
+
+
 def test_discrepancy_decision_rejects_fake_without_decisive_discrepancy() -> None:
     state = _planned_state()
     evidence = _append_evidence(state)
@@ -1489,7 +1981,7 @@ def test_bounded_basis_keeps_supported_high_and_unresolved_medium_claims() -> No
         trigger="before_unresolved",
     )
 
-    assert update["accepted"] is True, update
+    assert update["accepted"] is True
     coverage = audit_discrepancy_coverage(state, decision_checkpoint=True)
     verdict, basis = compile_discrepancy_verdict_basis(state)
     assert coverage.stop_reason == "meaningful_routes_exhausted"

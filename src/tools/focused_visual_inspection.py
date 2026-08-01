@@ -18,15 +18,21 @@ FOCUSED_VISUAL_INSPECTION_PROMPT = """\
 You are the visual observation stage of an image fact-search agent.
 
 Inspect the supplied views of one original input image to answer one focused
-visual question that arose during web investigation. The first image is always
-the complete original. Later images are deterministic detail views derived from
-pixel/OCR anchors in that same original.
+visual question that arose during web investigation. Views may arrive as separate
+images in listed order or as one labeled contact sheet whose panels carry their
+view_index. View 0 is always the complete original. Later views are deterministic
+details derived from pixel/OCR anchors in that same original.
 
 Treat names, identities, places, events, and expected properties in the request
 as hypotheses, not as facts. Report only what the supplied pixels show. Separate
 literal observations from interpretation, preserve ambiguity, and do not use
 outside knowledge, search memory, source reputation, or the surrounding factual
 claim to fill missing visual details. Do not decide the benchmark verdict.
+When the question concerns an interaction between multiple people or objects,
+first identify which participant owns the queried visible property. Do not
+transfer a property from the other participant. For either/or questions, state
+which alternative is visible in the summary while keeping answer_status relative
+to the single expected_property.
 
 Return:
 - answer_status=observed only when the expected visible property is actually
@@ -130,6 +136,11 @@ class FocusedVisualInspectionTool(BaseTool):
     client: Optional[Any] = field(default=None, repr=False)
     provider: str = "gemini"
     model_name: str = "gemini-3.6-flash"
+    max_images_per_prompt: int = field(
+        default_factory=lambda: _positive_env_int(
+            "IFV_FOCUSED_VISUAL_MAX_IMAGES_PER_PROMPT"
+        )
+    )
 
     def _get_client(self) -> Any:
         if self.client is None:
@@ -175,14 +186,23 @@ class FocusedVisualInspectionTool(BaseTool):
         }
         try:
             before_version = str(params.get("before_understanding_version", "")).strip()
-            parsed = self._get_client().create_images_json(
+            client = self._get_client()
+            request_image_inputs, image_packet_mode = _single_image_packet_if_needed(
+                client,
+                image_inputs,
+                views,
+                temporary_paths,
+                max_images_per_prompt=self.max_images_per_prompt,
+            )
+            request_context["image_packet_mode"] = image_packet_mode
+            parsed = client.create_images_json(
                 system_prompt=FOCUSED_VISUAL_INSPECTION_PROMPT,
                 user_text=(
                     "Answer the focused visual question using the supplied views "
                     "in their listed order.\n\n"
                     + json.dumps(request_context, ensure_ascii=False, indent=2)
                 ),
-                image_inputs=image_inputs,
+                image_inputs=request_image_inputs,
                 max_tokens=2400,
                 model_name=self.model_name,
                 response_schema=FOCUSED_VISUAL_INSPECTION_SCHEMA,
@@ -331,6 +351,113 @@ def _prepare_views(
         if len(views) >= 5:
             break
     return image_inputs, views, temporary_paths
+
+
+def _single_image_packet_if_needed(
+    client: Any,
+    image_inputs: Sequence[str],
+    views: Sequence[Mapping[str, Any]],
+    temporary_paths: List[str],
+    *,
+    max_images_per_prompt: int = 0,
+) -> tuple[List[str], str]:
+    """Return a one-image contact sheet for clients that cannot accept multi-view packets."""
+
+    max_images = max_images_per_prompt or _client_max_images_per_prompt(client)
+    if max_images != 1 or len(image_inputs) <= 1:
+        return list(image_inputs), "separate_images"
+    contact_sheet_path = _build_contact_sheet(image_inputs, views)
+    temporary_paths.append(contact_sheet_path)
+    return [contact_sheet_path], "labeled_contact_sheet"
+
+
+def _client_max_images_per_prompt(client: Any) -> Optional[int]:
+    for name in (
+        "max_images_per_prompt",
+        "limit_mm_per_prompt",
+        "limit_multimodal_per_prompt",
+        "max_multimodal_per_prompt",
+    ):
+        value = getattr(client, name, None)
+        if isinstance(value, int) and value > 0:
+            return value
+    provider = str(getattr(client, "provider", "")).strip().lower()
+    # The locally hosted Qwen service used for replay is configured with a
+    # single-image multimodal limit. Avoid a failing multi-image request.
+    if provider == "qwen_local":
+        return 1
+    return None
+
+
+def _positive_env_int(name: str) -> int:
+    raw = os.getenv(name, "").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return 0
+    return value if value > 0 else 0
+
+
+def _build_contact_sheet(
+    image_inputs: Sequence[str],
+    views: Sequence[Mapping[str, Any]],
+) -> str:
+    from PIL import Image, ImageDraw, ImageFont
+
+    loaded = []
+    for path in image_inputs:
+        with Image.open(path) as source:
+            loaded.append(source.convert("RGB"))
+    if not loaded:
+        raise ValueError("contact sheet requires at least one image")
+    thumb_width = 640
+    label_height = 44
+    gap = 16
+    thumbs = []
+    for image in loaded:
+        thumb = image.copy()
+        thumb.thumbnail((thumb_width, thumb_width), Image.Resampling.LANCZOS)
+        thumbs.append(thumb)
+    columns = 2 if len(thumbs) > 1 else 1
+    rows = (len(thumbs) + columns - 1) // columns
+    cell_width = thumb_width
+    cell_height = max(thumb.height for thumb in thumbs) + label_height
+    sheet = Image.new(
+        "RGB",
+        (
+            columns * cell_width + (columns + 1) * gap,
+            rows * cell_height + (rows + 1) * gap,
+        ),
+        "white",
+    )
+    draw = ImageDraw.Draw(sheet)
+    try:
+        font = ImageFont.truetype("arial.ttf", 24)
+    except Exception:
+        font = ImageFont.load_default()
+    for index, thumb in enumerate(thumbs):
+        row = index // columns
+        col = index % columns
+        left = gap + col * (cell_width + gap)
+        top = gap + row * (cell_height + gap)
+        view = views[index] if index < len(views) else {}
+        label = f"view_index {view.get('view_index', index)}: {view.get('kind', 'view')}"
+        draw.text((left, top), label[:80], fill=(0, 0, 0), font=font)
+        image_top = top + label_height
+        sheet.paste(thumb, (left, image_top))
+        draw.rectangle(
+            [left, image_top, left + thumb.width - 1, image_top + thumb.height - 1],
+            outline=(0, 0, 0),
+            width=2,
+        )
+    handle = tempfile.NamedTemporaryFile(
+        prefix="ifv_visual_contact_sheet_",
+        suffix=".jpg",
+        delete=False,
+    )
+    handle.close()
+    sheet.save(handle.name, format="JPEG", quality=90, optimize=True)
+    return handle.name
 
 
 def _bounded_view(image: Any) -> Any:

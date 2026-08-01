@@ -12,6 +12,7 @@ from src.orchestrator.investigation_models import (
     ImageOnlyInvestigationState,
 )
 from src.orchestrator.task_store import (
+    COMPOSITE_SOURCE_VISUAL_DISCREPANCY_FAMILY,
     MAX_TOOL_ACTIONS,
     pending_discrepancy_evidence_ids,
     pending_visual_reinspection,
@@ -297,6 +298,25 @@ def _directional_verdict_chain(
     for claim_id in claim_ids:
         claim = claim_by_id[claim_id]
         matched = None
+        if stance == "refute":
+            composite = next(
+                (
+                    item
+                    for item in state.findings
+                    if item.stance == "refute"
+                    and COMPOSITE_SOURCE_VISUAL_DISCREPANCY_FAMILY
+                    in item.source_family_ids
+                    and claim.fact_id in item.fact_ids
+                    and set(item.evidence_ids) <= set(candidate_evidence_ids)
+                    and item.task_id in task_by_id
+                    and claim_id in task_by_id[item.task_id].claim_ids
+                ),
+                None,
+            )
+            if composite is not None:
+                selected_evidence_ids.extend(composite.evidence_ids)
+                selected_finding_ids.append(composite.finding_id)
+                continue
         for evidence_id in candidate_evidence_ids:
             evidence = evidence_by_id.get(evidence_id)
             if evidence is None or not evidence_is_qualified_for_stance(

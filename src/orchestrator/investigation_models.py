@@ -590,6 +590,28 @@ class VisualReinspectionRequest(StrictModel):
     grounding_evidence_ids: List[str] = Field(min_length=1, max_length=8)
 
 
+class VisualReinspectionProposal(StrictModel):
+    """Model-authored visual question before runtime-owned ID binding."""
+
+    reason: Literal[
+        "identity",
+        "relation",
+        "location",
+        "event",
+        "text",
+        "integrity",
+    ]
+    scope: Literal[
+        "subject",
+        "relation",
+        "scene",
+        "text",
+        "integrity",
+    ]
+    question: str = Field(min_length=1, max_length=800)
+    expected_property: str = Field(min_length=1, max_length=800)
+
+
 class ClaimAssessmentProposal(StrictModel):
     claim_id: str = Field(min_length=1, max_length=100)
     assessment: Literal[
@@ -607,6 +629,17 @@ class MaterialDiscrepancyProposal(StrictModel):
     statement: str = Field(min_length=1, max_length=1600)
     affected_claim_ids: List[str] = Field(min_length=1, max_length=3)
     visual_anchor_fact_ids: List[str] = Field(min_length=1, max_length=12)
+    evidence_ids: List[str] = Field(min_length=1, max_length=20)
+    materiality: Literal["decisive", "supporting"] = "decisive"
+    status: Literal["established", "conflicted"] = "established"
+    rationale: str = Field(min_length=1, max_length=1600)
+
+
+class MaterialDiscrepancyDraft(StrictModel):
+    """Model-authored discrepancy before runtime-owned visual-anchor binding."""
+
+    statement: str = Field(min_length=1, max_length=1600)
+    affected_claim_ids: List[str] = Field(min_length=1, max_length=3)
     evidence_ids: List[str] = Field(min_length=1, max_length=20)
     materiality: Literal["decisive", "supporting"] = "decisive"
     status: Literal["established", "conflicted"] = "established"
@@ -676,6 +709,33 @@ class DiscrepancyDecisionOutput(StrictModel):
             set(self.retire_hypothesis_ids)
         ):
             raise ValueError("retired search hypothesis IDs must be unique")
+        return self
+
+
+class DiscrepancyDecisionProposalOutput(DiscrepancyDecisionOutput):
+    """Model-facing v4 Decision output with runtime-bound visual references."""
+
+    material_discrepancy: Optional[MaterialDiscrepancyDraft] = None
+    visual_reinspection: Optional[VisualReinspectionProposal] = None
+
+    @model_validator(mode="after")
+    def validate_sparse_visual_transition(
+        self,
+    ) -> "DiscrepancyDecisionProposalOutput":
+        if self.visual_reinspection is None:
+            return self
+        if self.claim_assessments or self.material_discrepancy is not None:
+            raise ValueError(
+                "visual reinspection proposal must not copy claim or discrepancy IDs"
+            )
+        if self.retire_hypothesis_ids or self.new_hypotheses:
+            raise ValueError(
+                "visual reinspection proposal must be the only state transition"
+            )
+        if self.verdict_proposal != "continue":
+            raise ValueError(
+                "visual reinspection proposal requires verdict_proposal='continue'"
+            )
         return self
 
 

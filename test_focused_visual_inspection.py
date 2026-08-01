@@ -4,7 +4,10 @@ from pathlib import Path
 
 from PIL import Image
 
-from src.tools.focused_visual_inspection import FocusedVisualInspectionTool
+from src.tools.focused_visual_inspection import (
+    FocusedVisualInspectionTool,
+    _single_image_packet_if_needed,
+)
 
 
 class RecordingMultiViewClient:
@@ -108,3 +111,44 @@ def test_focused_visual_inspection_keeps_global_question_on_original(
     assert client.calls[0]["image_inputs"] != [str(image_path)]
     assert len(client.calls[0]["image_inputs"]) == 1
     assert not Path(client.calls[0]["image_inputs"][0]).exists()
+
+
+class _SingleImageQwenClient:
+    provider = "qwen_local"
+
+
+def test_qwen_local_receives_one_labeled_contact_sheet(tmp_path: Path) -> None:
+    original = tmp_path / "original.png"
+    detail = tmp_path / "detail.png"
+    Image.new("RGB", (800, 500), "red").save(original)
+    Image.new("RGB", (300, 600), "blue").save(detail)
+    temporary_paths: list[str] = []
+
+    image_inputs, packet_mode = _single_image_packet_if_needed(
+        _SingleImageQwenClient(),
+        [str(original), str(detail)],
+        [
+            {
+                "view_index": 0,
+                "kind": "original",
+                "region": [0.0, 0.0, 1.0, 1.0],
+            },
+            {
+                "view_index": 1,
+                "kind": "anchor_detail",
+                "region": [0.2, 0.2, 0.6, 0.8],
+            },
+        ],
+        temporary_paths,
+    )
+
+    assert packet_mode == "labeled_contact_sheet"
+    assert image_inputs == temporary_paths
+    assert len(image_inputs) == 1
+    contact_sheet = Path(image_inputs[0])
+    assert contact_sheet.exists()
+    with Image.open(contact_sheet) as image:
+        assert image.width > 640
+        assert image.height > 500
+
+    contact_sheet.unlink()

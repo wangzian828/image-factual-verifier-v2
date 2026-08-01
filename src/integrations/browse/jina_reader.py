@@ -58,6 +58,17 @@ relation may contradict the claim even when the page never mentions the image's
 proposed value.
 An explicit denial refutes it; the selected passage need not settle every clause.
 
+passage_id owns relation_scope and relation_stance. When candidate passages carry
+different factual edges, choose as passage_id the passage whose asserted relation
+value most directly changes the truth of any material clause in the image claim.
+A passage that only confirms subject identity, existence, event, or location must
+not be primary when another passage states a competing value for the same visible
+attribute or relation. Put the identity/scope passage in supporting_passage_ids;
+supporting context must never dilute or override the primary directional stance.
+Related object mentions are not value agreement: for example, saying that a subject
+is on an object contradicts a claim that the same subject is beside that object,
+even though both passages mention the same subject and object.
+
 Use only supplied passages. Choose passage_id=-1 when none supplies a material
 factual edge. Up to two supporting passages may establish scope or identity. Do not
 select mere keyword repetition or add facts in the summary. Mark direct only when

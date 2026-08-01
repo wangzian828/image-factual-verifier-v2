@@ -11,6 +11,7 @@ from typing import Any, Dict, Iterable, Iterator, List, Mapping, Sequence
 from src.orchestrator.investigation_models import (
     BootstrapInvestigation,
     ClaimAssessment,
+    DiscrepancyDecisionProposalOutput,
     DiscrepancyDecisionOutput,
     DiscrepancyDecisionRecord,
     EvidenceDecisionOutput,
@@ -72,6 +73,128 @@ MAX_IMAGE_CLAIMS = 3
 MAX_SEARCH_HYPOTHESES = 12
 MAX_NEW_HYPOTHESES_PER_DECISION = 3
 MAX_V4_VISUAL_REINSPECTIONS = 1
+COMPOSITE_SOURCE_VISUAL_DISCREPANCY_FAMILY = (
+    "composite:source_visual_discrepancy"
+)
+
+
+def discrepancy_visual_reinspection_binding(
+    state: ImageOnlyInvestigationState,
+    *,
+    reviewed_evidence_ids: Sequence[str],
+) -> Dict[str, Any]:
+    """Resolve a visual proposal to one claim using recorded atomic fact binding."""
+
+    evidence_by_id = {item.evidence_id: item for item in state.evidence}
+    fact_by_id = {item.fact_id: item for item in state.facts}
+    task_by_id = {item.task_id: item for item in state.tasks}
+    reviewed_ids = list(dict.fromkeys(reviewed_evidence_ids))
+    candidates: List[Dict[str, Any]] = []
+    for claim in state.image_claims:
+        if claim.status not in {"open", "unresolved", "conflicted"}:
+            continue
+        anchor_fact_ids = [
+            fact_id
+            for fact_id in claim.anchor_fact_ids
+            if fact_id in fact_by_id
+            and fact_by_id[fact_id].origin.type in {"input_image", "ocr"}
+        ][:6]
+        grounding_evidence_ids = []
+        for evidence_id in reviewed_ids:
+            evidence = evidence_by_id.get(evidence_id)
+            if evidence is None or evidence.evidence_kind == "image_region":
+                continue
+            task = task_by_id.get(evidence.task_id)
+            if (
+                claim.fact_id in evidence.fact_ids
+                and task is not None
+                and claim.claim_id in task.claim_ids
+            ):
+                grounding_evidence_ids.append(evidence_id)
+        if anchor_fact_ids and grounding_evidence_ids:
+            candidates.append(
+                {
+                    "claim_id": claim.claim_id,
+                    "claim_fact_id": claim.fact_id,
+                    "anchor_fact_ids": anchor_fact_ids,
+                    "grounding_evidence_ids": grounding_evidence_ids[:8],
+                }
+            )
+    status = (
+        "available"
+        if len(candidates) == 1
+        else "ambiguous"
+        if candidates
+        else "unavailable"
+    )
+    return {
+        "status": status,
+        "candidates": candidates,
+        "binding": candidates[0] if status == "available" else None,
+    }
+
+
+def bind_discrepancy_decision_runtime_ids(
+    state: ImageOnlyInvestigationState,
+    output: DiscrepancyDecisionProposalOutput,
+    *,
+    reviewed_evidence_ids: Sequence[str],
+) -> tuple[DiscrepancyDecisionOutput | None, str]:
+    """Build the persisted Decision object without asking the model to copy IDs."""
+
+    payload = output.model_dump(mode="json")
+    discrepancy = output.material_discrepancy
+    if discrepancy is not None:
+        claim_by_id = {claim.claim_id: claim for claim in state.image_claims}
+        unknown_claim_ids = [
+            claim_id
+            for claim_id in discrepancy.affected_claim_ids
+            if claim_id not in claim_by_id
+        ]
+        if unknown_claim_ids:
+            return None, (
+                "runtime discrepancy binding cites unknown ImageClaim(s): "
+                + ", ".join(unknown_claim_ids)
+            )
+        required_anchor_ids: List[str] = []
+        remaining_anchor_ids: List[str] = []
+        for claim_id in discrepancy.affected_claim_ids:
+            allowed = list(dict.fromkeys(claim_by_id[claim_id].anchor_fact_ids))
+            if not allowed:
+                return None, (
+                    "runtime discrepancy binding found no pixel/OCR anchor for "
+                    f"ImageClaim {claim_id!r}"
+                )
+            required_anchor_ids.append(allowed[0])
+            remaining_anchor_ids.extend(allowed[1:])
+        visual_anchor_fact_ids = list(
+            dict.fromkeys([*required_anchor_ids, *remaining_anchor_ids])
+        )[:12]
+        payload["material_discrepancy"] = {
+            **discrepancy.model_dump(mode="json"),
+            "visual_anchor_fact_ids": visual_anchor_fact_ids,
+        }
+
+    proposal = output.visual_reinspection
+    if proposal is None:
+        return DiscrepancyDecisionOutput.model_validate(payload), ""
+    resolved = discrepancy_visual_reinspection_binding(
+        state,
+        reviewed_evidence_ids=reviewed_evidence_ids,
+    )
+    binding = resolved.get("binding")
+    if not isinstance(binding, Mapping):
+        return None, (
+            "runtime visual reinspection binding is "
+            f"{resolved['status']}; exactly one unresolved ImageClaim must have "
+            "reviewed non-visual Evidence bound to its atomic fact"
+        )
+    payload["visual_reinspection"] = {
+        **proposal.model_dump(mode="json"),
+        "anchor_fact_ids": list(binding["anchor_fact_ids"]),
+        "grounding_evidence_ids": list(binding["grounding_evidence_ids"]),
+    }
+    return DiscrepancyDecisionOutput.model_validate(payload), ""
 
 
 def _runtime_hypothesis_tools(
@@ -935,7 +1058,221 @@ def _claim_directional_chain_ids(
             for evidence_id in finding.evidence_ids
         )
     }
+    if stance == "refute":
+        composite_evidence_ids, composite_finding_ids = (
+            _composite_source_visual_refute_finding_ids(
+                state,
+                claim_id=claim_id,
+                claim_fact_id=claim_fact_id,
+                evidence_ids=evidence_ids,
+                evidence_by_id=evidence_by_id,
+                task_by_id=task_by_id,
+            )
+        )
+        qualified_evidence_ids.update(composite_evidence_ids)
+        finding_ids.update(composite_finding_ids)
     return qualified_evidence_ids, finding_ids
+
+
+def _is_composite_source_visual_discrepancy_finding(
+    finding: Finding,
+) -> bool:
+    return (
+        finding.stance == "refute"
+        and COMPOSITE_SOURCE_VISUAL_DISCREPANCY_FAMILY
+        in finding.source_family_ids
+    )
+
+
+def _composite_source_visual_refute_evidence_ids(
+    state: ImageOnlyInvestigationState,
+    *,
+    claim_id: str,
+    claim_fact_id: str,
+    evidence_ids: Sequence[str],
+    evidence_by_id: Mapping[str, InvestigationEvidence],
+    task_by_id: Mapping[str, ResearchTask],
+) -> List[str]:
+    """Return a narrow source+pixel conflict chain without relabeling Evidence.
+
+    This is for cases like a source stating a visible property for an event
+    while a focused reinspection of the original pixels observes the competing
+    property.  Neither Evidence record changes stance; the directional object is
+    the composite Finding created by the Decision reducer.
+    """
+
+    owned_ids = [
+        evidence_id
+        for evidence_id in dict.fromkeys(evidence_ids)
+        if evidence_id in evidence_by_id
+        and evidence_by_id[evidence_id].task_id in task_by_id
+        and claim_id
+            in task_by_id[evidence_by_id[evidence_id].task_id].claim_ids
+        and claim_fact_id in evidence_by_id[evidence_id].fact_ids
+    ]
+    source_ids = [
+        evidence_id
+        for evidence_id in owned_ids
+        if evidence_by_id[evidence_id].evidence_kind == "web_span"
+        and evidence_by_id[evidence_id].directness == "direct"
+        and evidence_by_id[evidence_id].claim_binding == "source_assertion"
+        and evidence_by_id[evidence_id].quality in {"strong", "moderate"}
+    ]
+    visual_ids = [
+        evidence_id
+        for evidence_id in owned_ids
+        if evidence_by_id[evidence_id].evidence_kind == "image_region"
+        and evidence_by_id[evidence_id].tool_name == "focused_visual_inspection"
+        and evidence_by_id[evidence_id].claim_binding == "pixel_observation"
+        and evidence_by_id[evidence_id].visual_answer_status
+        in {"observed", "not_observed"}
+        and evidence_by_id[evidence_id].visual_scope in {
+            "subject",
+            "relation",
+            "scene",
+            "text",
+        }
+    ]
+    if not source_ids or not visual_ids:
+        return []
+
+    # A composite refutation is only admissible when the focused visual result
+    # was produced by the exact runtime-owned reinspection that was grounded in
+    # the selected source Evidence.  This keeps neutral pixel observations
+    # neutral while still allowing the Decision reducer to represent a source /
+    # pixel conflict as one directional Finding.
+    for record in state.visual_reinspections:
+        if (
+            record.status != "resolved"
+            or record.fact_id != claim_fact_id
+            or not set(record.request.grounding_evidence_ids) & set(source_ids)
+        ):
+            continue
+        linked_visual_ids = [
+            evidence_id
+            for evidence_id in visual_ids
+            if evidence_id in record.evidence_ids
+            and evidence_by_id[evidence_id].task_id == record.task_id
+            and evidence_by_id[evidence_id].visual_question_id
+            == record.visual_question_id
+            and evidence_by_id[evidence_id].visual_answer_status
+            in {"observed", "not_observed"}
+        ]
+        if not linked_visual_ids:
+            continue
+        linked_source_ids = [
+            evidence_id
+            for evidence_id in source_ids
+            if evidence_id in record.request.grounding_evidence_ids
+        ]
+        if linked_source_ids:
+            return list(dict.fromkeys([linked_source_ids[0], linked_visual_ids[0]]))
+    return []
+
+
+def _composite_source_visual_refute_finding_ids(
+    state: ImageOnlyInvestigationState,
+    *,
+    claim_id: str,
+    claim_fact_id: str,
+    evidence_ids: Sequence[str],
+    evidence_by_id: Mapping[str, InvestigationEvidence],
+    task_by_id: Mapping[str, ResearchTask],
+) -> tuple[set[str], set[str]]:
+    selected = set(
+        _composite_source_visual_refute_evidence_ids(
+            state,
+            claim_id=claim_id,
+            claim_fact_id=claim_fact_id,
+            evidence_ids=evidence_ids,
+            evidence_by_id=evidence_by_id,
+            task_by_id=task_by_id,
+        )
+    )
+    if not selected:
+        return set(), set()
+    finding_ids = {
+        finding.finding_id
+        for finding in state.findings
+        if _is_composite_source_visual_discrepancy_finding(finding)
+        and claim_fact_id in finding.fact_ids
+        and set(finding.evidence_ids) <= set(evidence_ids)
+        and selected <= set(finding.evidence_ids)
+        and finding.task_id in task_by_id
+        and claim_id in task_by_id[finding.task_id].claim_ids
+    }
+    return selected if finding_ids else set(), finding_ids
+
+
+def _append_composite_source_visual_discrepancy_findings(
+    state: ImageOnlyInvestigationState,
+    output: DiscrepancyDecisionOutput,
+    *,
+    claim_by_id: Mapping[str, ImageClaim],
+    evidence_by_id: Mapping[str, InvestigationEvidence],
+    task_by_id: Mapping[str, ResearchTask],
+    decision_ordinal: int,
+) -> List[str]:
+    discrepancy = output.material_discrepancy
+    if (
+        discrepancy is None
+        or discrepancy.status != "established"
+        or discrepancy.materiality != "decisive"
+    ):
+        return []
+    created_ids: List[str] = []
+    for claim_id in discrepancy.affected_claim_ids:
+        claim = claim_by_id.get(claim_id)
+        if claim is None:
+            continue
+        selected_ids = _composite_source_visual_refute_evidence_ids(
+            state,
+            claim_id=claim_id,
+            claim_fact_id=claim.fact_id,
+            evidence_ids=discrepancy.evidence_ids,
+            evidence_by_id=evidence_by_id,
+            task_by_id=task_by_id,
+        )
+        if not selected_ids:
+            continue
+        source_task_id = evidence_by_id[selected_ids[0]].task_id
+        finding_id = stable_id(
+            "finding",
+            state.brief.case_id,
+            state.action_count,
+            decision_ordinal,
+            claim_id,
+            "composite-source-visual-refute",
+            selected_ids,
+        )
+        if any(item.finding_id == finding_id for item in state.findings):
+            continue
+        finding = Finding(
+            finding_id=finding_id,
+            task_id=source_task_id,
+            fact_ids=[claim.fact_id],
+            statement=discrepancy.statement[:1200],
+            stance="refute",
+            evidence_ids=selected_ids,
+            source_family_ids=list(
+                dict.fromkeys(
+                    [
+                        COMPOSITE_SOURCE_VISUAL_DISCREPANCY_FAMILY,
+                        *(
+                            evidence_by_id[evidence_id].source_family
+                            for evidence_id in selected_ids
+                        ),
+                    ]
+                )
+            )[:20],
+            quality="decisive",
+        )
+        state.findings.append(finding)
+        task = task_by_id.get(source_task_id)
+        if task is not None and finding_id not in task.finding_ids:
+            task.finding_ids.append(finding_id)
+        created_ids.append(finding_id)
+    return created_ids
 
 
 def _discrepancy_contract_errors(
@@ -999,7 +1336,19 @@ def _discrepancy_contract_errors(
                 evidence_by_id=evidence_by_id,
                 task_by_id=task_by_id,
             )
-            if not qualified_ids:
+            composite_candidate_ids = (
+                _composite_source_visual_refute_evidence_ids(
+                    state,
+                    claim_id=claim.claim_id,
+                    claim_fact_id=claim.fact_id,
+                    evidence_ids=known_ids,
+                    evidence_by_id=evidence_by_id,
+                    task_by_id=task_by_id,
+                )
+                if stance == "refute"
+                else []
+            )
+            if not qualified_ids and not composite_candidate_ids:
                 selected_directions = sorted(
                     {evidence_by_id[item].stance for item in known_ids}
                 )
@@ -1010,7 +1359,7 @@ def _discrepancy_contract_errors(
                     f"{', '.join(selected_directions) or 'none'}. Omit the "
                     "assessment or keep it insufficient; do not relabel Evidence"
                 )
-            elif not finding_ids:
+            elif not finding_ids and not composite_candidate_ids:
                 errors.append(
                     f"{proposal.assessment} assessment for ImageClaim "
                     f"{proposal.claim_id!r} requires a {stance} Finding -> "
@@ -1094,6 +1443,19 @@ def _discrepancy_contract_errors(
                 "discrepancy uses unreviewed Evidence: "
                 + ", ".join(unreviewed_discrepancy_ids)
             )
+        composite_discrepancy_ids = {
+            evidence_id
+            for claim_id in discrepancy.affected_claim_ids
+            if claim_id in claim_by_id
+            for evidence_id in _composite_source_visual_refute_evidence_ids(
+                state,
+                claim_id=claim_id,
+                claim_fact_id=claim_by_id[claim_id].fact_id,
+                evidence_ids=known_discrepancy_ids,
+                evidence_by_id=evidence_by_id,
+                task_by_id=task_by_id,
+            )
+        }
         if (
             discrepancy.materiality == "decisive"
             and discrepancy.status == "established"
@@ -1101,6 +1463,7 @@ def _discrepancy_contract_errors(
                 evidence_is_qualified_for_stance(evidence_by_id[item], "refute")
                 for item in known_discrepancy_ids
             )
+            and not composite_discrepancy_ids
         ):
             selected_directions = sorted(
                 {evidence_by_id[item].stance for item in known_discrepancy_ids}
@@ -1168,6 +1531,14 @@ def _discrepancy_contract_errors(
                     evidence_by_id=evidence_by_id,
                     task_by_id=task_by_id,
                 )[1]
+                and not _composite_source_visual_refute_evidence_ids(
+                    state,
+                    claim_id=claim_id,
+                    claim_fact_id=claim.fact_id,
+                    evidence_ids=owned_ids,
+                    evidence_by_id=evidence_by_id,
+                    task_by_id=task_by_id,
+                )
             ):
                 errors.append(
                     f"affected ImageClaim {claim_id!r} requires an owned qualified "
@@ -1356,6 +1727,17 @@ def apply_discrepancy_decision(
             "rejected_reason": "; ".join(contract_errors),
         }
 
+    created_composite_finding_ids = (
+        _append_composite_source_visual_discrepancy_findings(
+            candidate,
+            output,
+            claim_by_id=claim_by_id,
+            evidence_by_id=evidence_by_id,
+            task_by_id=task_by_id,
+            decision_ordinal=decision_ordinal,
+        )
+    )
+
     accepted_assessment_ids: List[str] = []
     for proposal in output.claim_assessments:
         evidence_ids = list(dict.fromkeys(proposal.selected_evidence_ids))
@@ -1479,18 +1861,22 @@ def apply_discrepancy_decision(
             }
         affected_claim_ids = list(dict.fromkeys(discrepancy.affected_claim_ids))
         discrepancy_evidence_ids = list(dict.fromkeys(discrepancy.evidence_ids))
-        qualified_discrepancy_evidence_ids = {
-            evidence_id
-            for evidence_id in discrepancy_evidence_ids
-            if evidence_is_qualified_for_stance(
-                evidence_by_id[evidence_id],
-                "refute",
-            )
-        }
+        has_discrepancy_refute_chain = any(
+            _claim_directional_chain_ids(
+                candidate,
+                claim_id=claim_id,
+                claim_fact_id=claim_by_id[claim_id].fact_id,
+                evidence_ids=discrepancy_evidence_ids,
+                stance="refute",
+                evidence_by_id=evidence_by_id,
+                task_by_id=task_by_id,
+            )[1]
+            for claim_id in affected_claim_ids
+        )
         if (
             discrepancy.materiality == "decisive"
             and discrepancy.status == "established"
-            and not qualified_discrepancy_evidence_ids
+            and not has_discrepancy_refute_chain
         ):
             return {
                 "accepted": False,
@@ -1728,7 +2114,9 @@ def apply_discrepancy_decision(
             for claim_id in unresolved_assessment_claim_ids
             if set(anchor_ids) & set(claim_by_id[claim_id].anchor_fact_ids)
             and any(
-                claim_id
+                claim_by_id[claim_id].fact_id
+                in evidence_by_id[evidence_id].fact_ids
+                and claim_id
                 in task_by_id[evidence_by_id[evidence_id].task_id].claim_ids
                 for evidence_id in grounding_ids
                 if evidence_by_id[evidence_id].task_id in task_by_id
@@ -1895,6 +2283,7 @@ def apply_discrepancy_decision(
         "decision_id": decision_id,
         "accepted_assessment_ids": accepted_assessment_ids,
         "accepted_discrepancy_id": discrepancy_id,
+        "created_composite_finding_ids": created_composite_finding_ids,
         "accepted_hypothesis_ids": accepted_hypothesis_ids,
         "retired_hypothesis_ids": retired_ids,
         "accepted_visual_question_id": accepted_visual_question_id,

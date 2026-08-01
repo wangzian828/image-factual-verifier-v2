@@ -12,6 +12,7 @@ from src.orchestrator.investigation_models import (
     VerdictBasis,
 )
 from src.orchestrator.task_store import (
+    discrepancy_visual_reinspection_binding,
     remaining_claim_hypothesis_routes,
     remaining_material_routes,
 )
@@ -213,6 +214,48 @@ Assessment labels describe the exact ImageClaim: support means it is true and
 refute means it is false.
 Direct Evidence stating a competing value for the same subject-event relation
 refutes the depicted value even when the exact depicted wording is absent.
+Before supporting a Claim or proposing real, align every newly reviewed source fact
+with the pixels. A source may verify that the depicted subject or event exists while
+still contradicting a visible attribute or relation in this image. Event-level or
+identity-level agreement therefore does not prove that the complete visible account
+matches the source.
+When reviewed Evidence introduces a concrete value for a property that is visible
+but absent, coarse, ambiguous, or potentially incompatible in the current visual
+account, request visual_reinspection while budget remains. Phrase the question as a
+direct pixel discriminator for that property (for example glove versus bare hand,
+on versus beside, or one instrument versus another), and name the competing
+alternatives in the question. Set expected_property to one concrete visible
+property to verify in the image, not an A-vs-B label; prefer the image-side
+candidate when the current image account and source fact already name opposing
+values. Use scope=relation for properties of an interaction or spatial relation
+(for example a glove on the hand used in a handshake, or on versus beside),
+scope=subject for an attribute of one object/person, and scope=text only for
+legible text. Do not redirect such a check to generic AI artifact, anatomy,
+realism, or provenance inspection unless the Evidence itself introduces an
+integrity question.
+If the current pixel/OCR anchors do not state either visual alternative, the new
+source detail is an unverified visible hypothesis, not yet support or refutation of
+the complete image account. In that situation, keep the affected Claim insufficient
+and request visual_reinspection; do not create a MaterialDiscrepancy until a pixel
+observation establishes which alternative the original image shows.
+After focused visual Evidence is available, explicitly reconcile its observations
+with the source fact. If the pixels and source disagree on the visible property, do
+not ignore the visual observation or treat the source's event match as support for
+the complete ImageClaim. In a source-pixel conflict, cite both the source Evidence
+and the focused visual Evidence in claim_assessments[].selected_evidence_ids and
+material_discrepancy.evidence_ids; keep their recorded stances unchanged while the
+Decision records the composite discrepancy.
+For a visual_reinspection transition, emit only reason, scope, question, and
+expected_property inside visual_reinspection. Leave claim_assessments,
+material_discrepancy, retire_hypothesis_ids, and new_hypotheses empty, and keep
+verdict_proposal=continue. The runtime binds the unique canonical Claim, pixel/OCR
+anchors, and reviewed grounding Evidence from runtime_visual_reinspection_binding;
+never copy those IDs into the visual proposal. Request reinspection only when that
+binding reports status=available.
+When proposing material_discrepancy, do not copy visual_anchor_fact_ids. The
+runtime derives the canonical pixel/OCR anchors from affected_claim_ids. Select
+only the exact affected Claim(s) and reviewed Evidence chain; never broaden a
+discrepancy to another task-owned Claim without its own directional chain.
 Task ownership permits review but does not establish semantic coverage; update only
 the Claims the Evidence actually addresses and use their allowed visual anchors.
 Treat qualified refutation of a high-salience Claim as decisive; unresolved other
@@ -929,6 +972,60 @@ def render_discrepancy_decision_context(
                 "task_owned_claim_ids": list(task.claim_ids),
             }
         )
+    visual_alignment_candidates = []
+    if len(state.visual_reinspections) < 1:
+        facts_by_id = {item.fact_id: item for item in state.facts}
+        claims_by_id = {item.claim_id: item for item in state.image_claims}
+        for ownership in reviewed_evidence_ownership:
+            evidence_id = ownership["evidence_id"]
+            evidence = evidence_by_id.get(evidence_id)
+            if evidence is None or evidence.evidence_kind == "image_region":
+                continue
+            for claim_id in ownership["claim_ids"]:
+                claim = claims_by_id.get(claim_id)
+                if claim is None or claim.status not in {
+                    "open",
+                    "unresolved",
+                    "conflicted",
+                }:
+                    continue
+                if claim.fact_id not in evidence.fact_ids:
+                    continue
+                visual_alignment_candidates.append(
+                    # This is advisory context, not a deterministic verdict rule.
+                    # The Decision stage still owns the semantic judgment, but it
+                    # now sees the exact source text beside the current pixel
+                    # anchors so evidence-introduced visible attributes are less
+                    # likely to be mistaken for complete image-account support.
+                    {
+                        "evidence_id": evidence_id,
+                        "evidence_text": evidence.exact_text[:1200],
+                        "claim_id": claim_id,
+                        "claim_statement": claim.statement,
+                        "claim_status": claim.status,
+                        "current_image_account": state.image_account_summary,
+                        "allowed_visual_anchors": [
+                            {
+                                "fact_id": fact_id,
+                                "statement": facts_by_id[fact_id].statement,
+                            }
+                            for fact_id in claim.anchor_fact_ids
+                            if fact_id in facts_by_id
+                        ],
+                        "required_review": (
+                            "Check whether this Evidence introduces a concrete "
+                            "visible attribute or relation that is absent, coarse, "
+                            "ambiguous, or potentially incompatible in the current "
+                            "visual account. If so, request one targeted "
+                            "visual_reinspection before supporting the Claim or "
+                            "proposing real."
+                        ),
+                    }
+                )
+    runtime_visual_binding = discrepancy_visual_reinspection_binding(
+        state,
+        reviewed_evidence_ids=reviewed,
+    )
     return json.dumps(
         {
             "trigger": trigger,
@@ -959,6 +1056,10 @@ def render_discrepancy_decision_context(
             "reviewable_claim_ids": list(dict.fromkeys(reviewable_claim_ids)),
             "claim_update_space": claim_update_space,
             "reviewed_directional_chains": reviewed_directional_chains,
+            "evidence_to_visual_alignment_candidates": (
+                visual_alignment_candidates[:12]
+            ),
+            "runtime_visual_reinspection_binding": runtime_visual_binding,
             "ownership_note": (
                 "Ownership permits review; it does not prove that Evidence "
                 "semantically addresses every owned Claim."

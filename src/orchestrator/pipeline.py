@@ -56,6 +56,7 @@ from src.orchestrator.image_only_prompts import (
 )
 from src.orchestrator.investigation_models import (
     EvidenceDecisionOutput,
+    DiscrepancyDecisionProposalOutput,
     DiscrepancyDecisionOutput,
     DiscrepancyJudgment,
     DiscrepancyJudgmentOutput,
@@ -106,6 +107,7 @@ from src.orchestrator.task_store import (
     apply_reflection,
     apply_target_planning,
     archive_recall_available,
+    bind_discrepancy_decision_runtime_ids,
     discrepancy_decision_checkpoint_reason,
     discrepancy_decision_evidence_ids,
     evidence_decision_checkpoint_reason,
@@ -1356,7 +1358,7 @@ class Orchestrator:
             llm=self.llm,
             system_prompt=self._sp(IMAGE_ONLY_DISCREPANCY_DECISION_PROMPT),
             tools=[],
-            output_schema=DiscrepancyDecisionOutput,
+            output_schema=DiscrepancyDecisionProposalOutput,
             max_rounds=2,
             stage_name="image_only_discrepancy_decision",
             runtime_store=state.runtime_store,
@@ -1377,7 +1379,7 @@ class Orchestrator:
             ),
             generation_config=self._stage_generation_config("EVIDENCE_DECISION"),
             protocol_exhaustion_boundary=True,
-            stop_output_factory=lambda: DiscrepancyDecisionOutput(
+            stop_output_factory=lambda: DiscrepancyDecisionProposalOutput(
                 verdict_proposal="continue",
                 rationale=(
                     "No atomic Decision update was accepted; continue with the "
@@ -1399,9 +1401,20 @@ class Orchestrator:
             raise RuntimeError(
                 "Discrepancy Decision did not produce a valid atomic update"
             )
-        update = apply_discrepancy_decision(
+        bound, binding_error = bind_discrepancy_decision_runtime_ids(
             investigation,
             parsed,
+            reviewed_evidence_ids=reviewed_evidence_ids,
+        )
+        if bound is None:
+            self._sync_image_only_state(state, investigation)
+            raise RuntimeError(
+                "Discrepancy Decision lost its runtime ID binding: "
+                + binding_error
+            )
+        update = apply_discrepancy_decision(
+            investigation,
+            bound,
             reviewed_evidence_ids=reviewed_evidence_ids,
             trigger=trigger,
         )
@@ -2100,15 +2113,22 @@ class Orchestrator:
     @staticmethod
     def _validate_discrepancy_decision(
         investigation: ImageOnlyInvestigationState,
-        parsed: DiscrepancyDecisionOutput,
+        parsed: DiscrepancyDecisionProposalOutput,
         *,
         reviewed_evidence_ids: Sequence[str],
         trigger: str,
     ) -> tuple[bool, str]:
+        bound, binding_error = bind_discrepancy_decision_runtime_ids(
+            investigation,
+            parsed,
+            reviewed_evidence_ids=reviewed_evidence_ids,
+        )
+        if bound is None:
+            return False, binding_error
         candidate = investigation.model_copy(deep=True)
         update = apply_discrepancy_decision(
             candidate,
-            parsed,
+            bound,
             reviewed_evidence_ids=reviewed_evidence_ids,
             trigger=trigger,
         )
