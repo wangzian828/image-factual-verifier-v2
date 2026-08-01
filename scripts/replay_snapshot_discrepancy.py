@@ -26,6 +26,11 @@ from src.eval.release_adapter import (
     image_only_case_from_runtime_row,
     resolve_runtime_image_path,
 )
+from src.eval.scoring_release_adapter import (
+    SCORING_PACKAGE_SCHEMA_VERSION,
+    load_scoring_release,
+    resolve_scoring_image_path,
+)
 from src.orchestrator.discrepancy_coverage import (
     audit_discrepancy_coverage,
     compile_discrepancy_verdict_basis,
@@ -70,6 +75,21 @@ def _load_runtime_row(benchmark: Path, case_id: str) -> dict[str, Any]:
             if isinstance(row, Mapping) and str(row.get("case_id")) == case_id:
                 return dict(row)
     raise KeyError(f"case_id not found in benchmark: {case_id}")
+
+
+def _runtime_case_from_benchmark(
+    benchmark: Path,
+    case_id: str,
+):
+    row = _load_runtime_row(benchmark, case_id)
+    manifest_path = benchmark.parent.parent / "manifest.json"
+    manifest = _load_json_object(manifest_path)
+    if str(manifest.get("schema_version") or "") == SCORING_PACKAGE_SCHEMA_VERSION:
+        release = load_scoring_release(benchmark)
+        row = resolve_scoring_image_path(row, release)
+    else:
+        row = resolve_runtime_image_path(row, benchmark)
+    return image_only_case_from_runtime_row(row)
 
 
 def _snapshot_investigation(snapshot: Mapping[str, Any]) -> ImageOnlyInvestigationState:
@@ -142,11 +162,7 @@ async def replay_snapshot(args: argparse.Namespace) -> dict[str, Any]:
         args.source_evidence_id,
     )
 
-    runtime_row = resolve_runtime_image_path(
-        _load_runtime_row(benchmark_path, case_id),
-        benchmark_path,
-    )
-    runtime_case = image_only_case_from_runtime_row(runtime_row)
+    runtime_case = _runtime_case_from_benchmark(benchmark_path, case_id)
     verify_case_image(runtime_case, runtime_case.image_path)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
