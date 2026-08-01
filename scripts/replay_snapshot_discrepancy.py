@@ -45,7 +45,10 @@ from src.orchestrator.runtime_events import (
 )
 from src.orchestrator.stage_runner import InteractionSession
 from src.orchestrator.state import VerificationState
-from src.orchestrator.task_store import pending_visual_reinspection
+from src.orchestrator.task_store import (
+    COMPOSITE_SOURCE_VISUAL_DISCREPANCY_FAMILY,
+    pending_visual_reinspection,
+)
 
 
 def _ensure_loopback_no_proxy() -> None:
@@ -147,6 +150,16 @@ def _collect_records(investigation: ImageOnlyInvestigationState) -> dict[str, An
     }
 
 
+def _composite_finding_ids(
+    investigation: ImageOnlyInvestigationState,
+) -> list[str]:
+    return [
+        item.finding_id
+        for item in investigation.findings
+        if COMPOSITE_SOURCE_VISUAL_DISCREPANCY_FAMILY in item.source_family_ids
+    ]
+
+
 async def replay_snapshot(args: argparse.Namespace) -> dict[str, Any]:
     snapshot_path = args.snapshot.expanduser().resolve()
     benchmark_path = args.benchmark.expanduser().resolve()
@@ -233,6 +246,11 @@ async def replay_snapshot(args: argparse.Namespace) -> dict[str, Any]:
                 trigger="qualified_evidence",
                 interaction_session=InteractionSession(),
             )
+        visual_evidence_ids = (
+            list(pending_record.evidence_ids)
+            if pending_record is not None
+            else []
+        )
         audit = audit_discrepancy_coverage(investigation, decision_checkpoint=True)
         compile_error = ""
         compiled_verdict = ""
@@ -242,6 +260,29 @@ async def replay_snapshot(args: argparse.Namespace) -> dict[str, Any]:
             basis_payload = basis.model_dump(mode="json")
         except Exception as exc:
             compile_error = f"{type(exc).__name__}: {exc}"
+        composite_finding_ids = _composite_finding_ids(investigation)
+        composite_created_ids = (
+            list(decision_2.get("created_composite_finding_ids", []))
+            if decision_2 is not None
+            else []
+        )
+        basis_evidence_ids = (
+            list(basis_payload.get("evidence_ids", []))
+            if basis_payload is not None
+            else []
+        )
+        basis_finding_ids = (
+            list(basis_payload.get("finding_ids", []))
+            if basis_payload is not None
+            else []
+        )
+        composite_success = bool(
+            composite_created_ids
+            and set(composite_created_ids) <= set(composite_finding_ids)
+            and set(composite_created_ids) <= set(basis_finding_ids)
+            and set(source_evidence_ids) <= set(basis_evidence_ids)
+            and bool(set(visual_evidence_ids) & set(basis_evidence_ids))
+        )
         result = {
             "snapshot_path": str(snapshot_path),
             "benchmark_path": str(benchmark_path),
@@ -255,6 +296,8 @@ async def replay_snapshot(args: argparse.Namespace) -> dict[str, Any]:
             "compiled_verdict": compiled_verdict,
             "compiled_basis": basis_payload,
             "compile_error": compile_error,
+            "composite_finding_ids": composite_finding_ids,
+            "composite_success": composite_success,
             "runtime_store": runtime_store.descriptor,
             "records": _collect_records(investigation),
             "stage_steps": state.to_dict().get("all_steps", []),
@@ -298,6 +341,8 @@ def main() -> int:
         ),
         "visual_inspection_ran": result["visual_inspection_update"] is not None,
         "compiled_verdict": result["compiled_verdict"],
+        "composite_finding_ids": result["composite_finding_ids"],
+        "composite_success": result["composite_success"],
         "decision_mode": (
             result["compiled_basis"]["decision_mode"]
             if result["compiled_basis"] is not None
