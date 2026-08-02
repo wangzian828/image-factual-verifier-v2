@@ -1668,6 +1668,25 @@ def _resolved_visual_evidence_requirements_for_review(
     return list(deduplicated.values())
 
 
+def _format_visual_requirement_claim_map(
+    requirements: Sequence[Mapping[str, Any]],
+) -> str:
+    parts: List[str] = []
+    for requirement in requirements:
+        evidence_id = str(requirement.get("evidence_id", ""))
+        claim_ids = [
+            str(claim_id)
+            for claim_id in requirement.get("claim_ids", []) or []
+        ]
+        if evidence_id and claim_ids:
+            parts.append(
+                f"{evidence_id} -> claim_ids [{', '.join(claim_ids)}]"
+            )
+        elif evidence_id:
+            parts.append(evidence_id)
+    return "; ".join(parts)
+
+
 def _discrepancy_contract_errors(
     state: ImageOnlyInvestigationState,
     output: DiscrepancyDecisionOutput,
@@ -1717,10 +1736,18 @@ def _discrepancy_contract_errors(
         decision_claim_ids.update(output.material_discrepancy.affected_claim_ids)
     if required_visual_evidence_ids and not consumed_visual_evidence_ids:
         if output.visual_evidence_disposition is None:
+            claim_map = _format_visual_requirement_claim_map(
+                required_visual_evidence_requirements
+            )
             errors.append(
                 "Decision must consume the resolved focused visual Evidence "
                 + ", ".join(required_visual_evidence_ids)
-                + " in an assessment or discrepancy, or explicitly set "
+                + " in an assessment or discrepancy"
+                + (f" ({claim_map})" if claim_map else "")
+                + ". If you update any listed ImageClaim, add its visual Evidence "
+                "ID to claim_assessments[].selected_evidence_ids or "
+                "material_discrepancy.evidence_ids; only for a different current "
+                "Claim/discrepancy may you explicitly set "
                 "visual_evidence_disposition=irrelevant_to_current_claim_or_discrepancy"
             )
         else:

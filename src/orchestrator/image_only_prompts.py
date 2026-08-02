@@ -1070,20 +1070,32 @@ def render_discrepancy_decision_context(
         ]
         if visual_evidence_ids:
             visual_task = task_by_id.get(record.task_id)
+            visual_claim_ids = (
+                list(visual_task.claim_ids)
+                if visual_task is not None
+                else []
+            )
             resolved_focused_visual_evidence_requirements.append(
                 {
                     "visual_question_id": record.visual_question_id,
-                    "claim_ids": (
-                        list(visual_task.claim_ids)
-                        if visual_task is not None
-                        else []
-                    ),
+                    "claim_ids": visual_claim_ids,
                     "question": record.request.question,
                     "expected_property": record.request.expected_property,
                     "grounding_evidence_ids": list(
                         record.request.grounding_evidence_ids
                     ),
                     "visual_evidence_ids": visual_evidence_ids,
+                    "required_action": {
+                        "same_claim_rule": (
+                            "If this Decision assesses or proposes a discrepancy "
+                            "for any listed claim_id, include the listed "
+                            "visual_evidence_ids in that assessment or "
+                            "discrepancy. Do not use visual_evidence_disposition "
+                            "for those same claim_ids."
+                        ),
+                        "claim_ids": visual_claim_ids,
+                        "visual_evidence_ids": visual_evidence_ids,
+                    },
                     "required_review": (
                         "Consume the pixel Evidence in this Decision or explicitly "
                         "record why it is irrelevant to the current "

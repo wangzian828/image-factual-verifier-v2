@@ -1872,6 +1872,10 @@ def test_second_decision_must_consume_resolved_visual_evidence_or_explain_irrele
     ]
     assert len(requirements) == 1
     assert requirements[0]["claim_ids"] == [claim.claim_id]
+    assert requirements[0]["required_action"]["claim_ids"] == [claim.claim_id]
+    assert requirements[0]["required_action"]["visual_evidence_ids"] == [
+        visual.evidence_id
+    ]
 
     ignored = apply_discrepancy_decision(
         state,
@@ -1893,6 +1897,8 @@ def test_second_decision_must_consume_resolved_visual_evidence_or_explain_irrele
 
     assert ignored["accepted"] is False
     assert "must consume the resolved focused visual Evidence" in ignored["rejected_reason"]
+    assert visual.evidence_id in ignored["rejected_reason"]
+    assert claim.claim_id in ignored["rejected_reason"]
     assert state.model_dump(mode="json") == before
 
     same_claim_disposition = apply_discrepancy_decision(
