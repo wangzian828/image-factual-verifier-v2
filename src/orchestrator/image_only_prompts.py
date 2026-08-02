@@ -252,6 +252,9 @@ does not answer the current Claim/discrepancy may you set
 visual_evidence_disposition.disposition to
 irrelevant_to_current_claim_or_discrepancy and give a concrete rationale. Never
 silently revert to source-only support or a source-only verdict after that check.
+If your assessment or discrepancy updates any Claim owned by that resolved visual
+task, it is the same Claim for this rule and you must consume the pixel Evidence;
+do not use an irrelevant disposition to bypass it.
 For a visual_reinspection transition, emit only reason, scope, question, and
 expected_property inside visual_reinspection. Leave claim_assessments,
 material_discrepancy, retire_hypothesis_ids, new_hypotheses, and
@@ -1066,9 +1069,15 @@ def render_discrepancy_decision_context(
             == record.visual_question_id
         ]
         if visual_evidence_ids:
+            visual_task = task_by_id.get(record.task_id)
             resolved_focused_visual_evidence_requirements.append(
                 {
                     "visual_question_id": record.visual_question_id,
+                    "claim_ids": (
+                        list(visual_task.claim_ids)
+                        if visual_task is not None
+                        else []
+                    ),
                     "question": record.request.question,
                     "expected_property": record.request.expected_property,
                     "grounding_evidence_ids": list(

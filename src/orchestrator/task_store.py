@@ -436,6 +436,12 @@ def _runtime_specific_visual_request_payload(
 ) -> Dict[str, Any]:
     payload = proposal.model_dump(mode="json")
     source_visible_property = extract_source_visible_property(source_text)
+    # Keep the pixel target literal and source-grounded. The model may add a
+    # useful discriminator in the question, but it must not invent an
+    # unmentioned contrast such as "cheeks versus nose bridge" as the property
+    # the focused inspection is expected to verify.
+    if source_visible_property:
+        payload["expected_property"] = source_visible_property[:240]
     if not _visual_request_needs_runtime_detail(
         proposal,
         source_text=source_text,
@@ -1621,22 +1627,25 @@ def _append_composite_source_visual_discrepancy_findings(
     return created_ids
 
 
-def _resolved_visual_evidence_required_for_review(
+def _resolved_visual_evidence_requirements_for_review(
     state: ImageOnlyInvestigationState,
     *,
     reviewed_evidence_ids: Sequence[str],
     evidence_by_id: Mapping[str, InvestigationEvidence],
-) -> List[str]:
-    """Return focused pixel Evidence that the current Decision must address."""
+) -> List[Dict[str, Any]]:
+    """Return focused pixel Evidence and its task-owned Claims for review."""
 
     reviewed = set(reviewed_evidence_ids)
-    required: List[str] = []
+    task_by_id = {item.task_id: item for item in state.tasks}
+    required: List[Dict[str, Any]] = []
     for record in state.visual_reinspections:
         if (
             record.status != "resolved"
             or not (set(record.request.grounding_evidence_ids) & reviewed)
         ):
             continue
+        task = task_by_id.get(record.task_id)
+        claim_ids = list(task.claim_ids) if task is not None else []
         for evidence_id in record.evidence_ids:
             evidence = evidence_by_id.get(evidence_id)
             if (
@@ -1646,8 +1655,17 @@ def _resolved_visual_evidence_required_for_review(
                 and evidence.tool_name == "focused_visual_inspection"
                 and evidence.visual_question_id == record.visual_question_id
             ):
-                required.append(evidence_id)
-    return list(dict.fromkeys(required))
+                required.append(
+                    {
+                        "evidence_id": evidence_id,
+                        "claim_ids": claim_ids,
+                        "visual_question_id": record.visual_question_id,
+                    }
+                )
+    deduplicated: Dict[str, Dict[str, Any]] = {}
+    for requirement in required:
+        deduplicated.setdefault(str(requirement["evidence_id"]), requirement)
+    return list(deduplicated.values())
 
 
 def _discrepancy_contract_errors(
@@ -1664,11 +1682,22 @@ def _discrepancy_contract_errors(
 
     errors: list[str] = []
     reviewed_ids = set(reviewed_evidence_ids)
-    required_visual_evidence_ids = _resolved_visual_evidence_required_for_review(
-        state,
-        reviewed_evidence_ids=reviewed_evidence_ids,
-        evidence_by_id=evidence_by_id,
+    required_visual_evidence_requirements = (
+        _resolved_visual_evidence_requirements_for_review(
+            state,
+            reviewed_evidence_ids=reviewed_evidence_ids,
+            evidence_by_id=evidence_by_id,
+        )
     )
+    required_visual_evidence_ids = [
+        str(item["evidence_id"])
+        for item in required_visual_evidence_requirements
+    ]
+    required_visual_claim_ids = {
+        str(claim_id)
+        for item in required_visual_evidence_requirements
+        for claim_id in item["claim_ids"]
+    }
     selected_visual_evidence_ids = {
         evidence_id
         for proposal in output.claim_assessments
@@ -1681,6 +1710,11 @@ def _discrepancy_contract_errors(
     consumed_visual_evidence_ids = (
         set(required_visual_evidence_ids) & selected_visual_evidence_ids
     )
+    decision_claim_ids = {
+        proposal.claim_id for proposal in output.claim_assessments
+    }
+    if output.material_discrepancy is not None:
+        decision_claim_ids.update(output.material_discrepancy.affected_claim_ids)
     if required_visual_evidence_ids and not consumed_visual_evidence_ids:
         if output.visual_evidence_disposition is None:
             errors.append(
@@ -1689,6 +1723,18 @@ def _discrepancy_contract_errors(
                 + " in an assessment or discrepancy, or explicitly set "
                 "visual_evidence_disposition=irrelevant_to_current_claim_or_discrepancy"
             )
+        else:
+            same_claim_ids = sorted(
+                decision_claim_ids & required_visual_claim_ids
+            )
+            if same_claim_ids:
+                errors.append(
+                    "Decision updates the same ImageClaim(s) as resolved focused "
+                    "visual Evidence and must consume that Evidence; "
+                    "visual_evidence_disposition=irrelevant_to_current_claim_or_discrepancy "
+                    "is not allowed: "
+                    + ", ".join(same_claim_ids)
+                )
     elif (
         output.visual_evidence_disposition is not None
         and consumed_visual_evidence_ids

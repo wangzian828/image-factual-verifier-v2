@@ -1832,7 +1832,9 @@ def test_runtime_binding_rewrites_long_source_text_to_visible_property() -> None
                 reason="integrity",
                 scope="integrity",
                 question="Does the original image show generic AI artifacts?",
-                expected_property=evidence.exact_text,
+                expected_property=(
+                    "distribution_of_orange_pigmentation_on_cheeks_vs_nose_bridge"
+                ),
             ),
             rationale="Rewrite the source binding to a concrete pixel property.",
         ),
@@ -1843,9 +1845,11 @@ def test_runtime_binding_rewrites_long_source_text_to_visible_property() -> None
     assert bound is not None
     request = bound.visual_reinspection
     assert request is not None
-    assert "orange" in request.expected_property.casefold()
-    assert "mouth" in request.expected_property.casefold()
-    assert "facebook" not in request.expected_property.casefold()
+    assert request.expected_property == extract_source_visible_property(
+        evidence.exact_text
+    )
+    assert "cheeks" not in request.expected_property.casefold()
+    assert "bridge" not in request.expected_property.casefold()
     assert len(request.expected_property) <= 240
     assert request.reason != "integrity"
     assert request.scope != "integrity"
@@ -1856,6 +1860,18 @@ def test_second_decision_must_consume_resolved_visual_evidence_or_explain_irrele
     source, visual = _append_source_visual_conflict_pair(state)
     claim = state.image_claims[0]
     before = state.model_dump(mode="json")
+    decision_context = json.loads(
+        render_discrepancy_decision_context(
+            state,
+            reviewed_evidence_ids=[source.evidence_id, visual.evidence_id],
+            trigger="qualified_evidence",
+        )
+    )
+    requirements = decision_context[
+        "resolved_focused_visual_evidence_requirements"
+    ]
+    assert len(requirements) == 1
+    assert requirements[0]["claim_ids"] == [claim.claim_id]
 
     ignored = apply_discrepancy_decision(
         state,
@@ -1877,6 +1893,37 @@ def test_second_decision_must_consume_resolved_visual_evidence_or_explain_irrele
 
     assert ignored["accepted"] is False
     assert "must consume the resolved focused visual Evidence" in ignored["rejected_reason"]
+    assert state.model_dump(mode="json") == before
+
+    same_claim_disposition = apply_discrepancy_decision(
+        state,
+        DiscrepancyDecisionOutput(
+            claim_assessments=[
+                ClaimAssessmentProposal(
+                    claim_id=claim.claim_id,
+                    assessment="insufficient",
+                    rationale=(
+                        "This still updates the Claim that the focused inspection "
+                        "was created to resolve."
+                    ),
+                )
+            ],
+            visual_evidence_disposition=VisualEvidenceDisposition(
+                disposition="irrelevant_to_current_claim_or_discrepancy",
+                rationale=(
+                    "The visual observation was already considered elsewhere, "
+                    "but this Decision would still update the same Claim."
+                ),
+            ),
+            verdict_proposal="continue",
+            rationale="This disposition must not bypass same-Claim consumption.",
+        ),
+        reviewed_evidence_ids=[source.evidence_id, visual.evidence_id],
+        trigger="qualified_evidence",
+    )
+
+    assert same_claim_disposition["accepted"] is False
+    assert "updates the same ImageClaim" in same_claim_disposition["rejected_reason"]
     assert state.model_dump(mode="json") == before
 
     disposition = apply_discrepancy_decision(
