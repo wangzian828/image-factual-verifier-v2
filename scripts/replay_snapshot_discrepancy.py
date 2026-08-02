@@ -270,13 +270,22 @@ async def replay_snapshot(args: argparse.Namespace) -> dict[str, Any]:
         )
         audit = audit_discrepancy_coverage(investigation, decision_checkpoint=True)
         compile_error = ""
+        compile_skipped_reason = ""
         compiled_verdict = ""
         basis_payload: dict[str, Any] | None = None
-        try:
-            compiled_verdict, basis = compile_discrepancy_verdict_basis(investigation)
-            basis_payload = basis.model_dump(mode="json")
-        except Exception as exc:
-            compile_error = f"{type(exc).__name__}: {exc}"
+        if audit.stop_reason == "continue":
+            compile_skipped_reason = (
+                "The replay remains nonterminal after the bounded Decision "
+                "sequence; verdict-basis compilation is intentionally skipped."
+            )
+        else:
+            try:
+                compiled_verdict, basis = compile_discrepancy_verdict_basis(
+                    investigation
+                )
+                basis_payload = basis.model_dump(mode="json")
+            except Exception as exc:
+                compile_error = f"{type(exc).__name__}: {exc}"
         composite_finding_ids = _composite_finding_ids(investigation)
         composite_created_ids = (
             list(decision_2.get("created_composite_finding_ids", []))
@@ -315,6 +324,7 @@ async def replay_snapshot(args: argparse.Namespace) -> dict[str, Any]:
             "compiled_verdict": compiled_verdict,
             "compiled_basis": basis_payload,
             "compile_error": compile_error,
+            "compile_skipped_reason": compile_skipped_reason,
             "composite_finding_ids": composite_finding_ids,
             "composite_success": composite_success,
             "runtime_store": runtime_store.descriptor,
@@ -353,12 +363,23 @@ def _build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = _build_parser().parse_args()
     result = asyncio.run(replay_snapshot(args))
+    replay_status = (
+        "engineering_error"
+        if result["engineering_error"]
+        else "compile_error"
+        if result["compile_error"]
+        else "terminal"
+        if result["compiled_basis"] is not None
+        else "nonterminal_continue"
+    )
     summary = {
         "case_id": result["case_id"],
+        "replay_status": replay_status,
         "reinspection_requested": bool(
             result["records"]["visual_reinspections"]
         ),
         "visual_inspection_ran": result["visual_inspection_update"] is not None,
+        "coverage_stop_reason": result["coverage_audit"]["stop_reason"],
         "compiled_verdict": result["compiled_verdict"],
         "engineering_error": result["engineering_error"],
         "engineering_error_stage": result["engineering_error_stage"],
@@ -380,6 +401,27 @@ def main() -> int:
             else []
         ),
         "compile_error": result["compile_error"],
+        "compile_skipped_reason": result["compile_skipped_reason"],
+        "decision_1_exhaustion_fallback": bool(
+            result["decision_1_update"].get(
+                "deterministic_decision_exhaustion_fallback",
+                False,
+            )
+        ),
+        "decision_2_exhaustion_fallback": bool(
+            result["decision_2_update"]
+            and result["decision_2_update"].get(
+                "deterministic_decision_exhaustion_fallback",
+                False,
+            )
+        ),
+        "decision_2_visual_consumption_fallback": bool(
+            result["decision_2_update"]
+            and result["decision_2_update"].get(
+                "deterministic_visual_consumption_fallback",
+                False,
+            )
+        ),
         "output": str(args.output.expanduser().resolve()),
     }
     print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
