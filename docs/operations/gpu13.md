@@ -415,6 +415,12 @@ Write replay output under the data root (for example,
 `/gsdata/home/wza/image-factual-verifier-v4/runs/replays/<run-id>/`) and never
 overwrite the historical evaluation run or write artifacts into a Git checkout.
 
+For `qwen_local` snapshot replays, the harness fills the local OpenAI-compatible
+base URL when `--llm-base-url` / `--vlm-base-url` are omitted. For Gemini
+Interactions replays, leave those base URL flags unset so the Gemini adapter uses
+`GEMINI_INTERACTIONS_URL` or its official default; do not point Gemini at the local
+Qwen `/v1` endpoint.
+
 The frozen `process_reference_protocol.json` still names the older strict
 acceptable-evidence and citation metrics. Current runtime scoring intentionally uses
 chain-only recovery instead. Do not edit the release in place; correct this metadata
