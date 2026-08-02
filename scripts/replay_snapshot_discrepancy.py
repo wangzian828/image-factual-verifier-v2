@@ -201,6 +201,12 @@ async def replay_snapshot(args: argparse.Namespace) -> dict[str, Any]:
     )
 
     _ensure_loopback_no_proxy()
+    llm_base_url = args.llm_base_url
+    vlm_base_url = args.vlm_base_url
+    if not llm_base_url and args.provider == "qwen_local":
+        llm_base_url = "http://127.0.0.1:8901/v1"
+    if not vlm_base_url and args.vlm_provider == "qwen_local":
+        vlm_base_url = "http://127.0.0.1:8901/v1"
     orchestrator = Orchestrator(
         provider=args.provider,
         model_name=args.model,
@@ -208,8 +214,8 @@ async def replay_snapshot(args: argparse.Namespace) -> dict[str, Any]:
         vlm_model=args.vlm_model,
         llm_wire_api=args.llm_wire_api,
         vlm_wire_api=args.vlm_wire_api,
-        llm_base_url=args.llm_base_url,
-        vlm_base_url=args.vlm_base_url,
+        llm_base_url=llm_base_url or None,
+        vlm_base_url=vlm_base_url or None,
         validate_startup=False,
         sampling_seed=args.sampling_seed,
     )
@@ -338,8 +344,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--vlm-model", default="ifv-qwen3.5-9b")
     parser.add_argument("--llm-wire-api", default="chat_completions")
     parser.add_argument("--vlm-wire-api", default="chat_completions")
-    parser.add_argument("--llm-base-url", default="http://127.0.0.1:8901/v1")
-    parser.add_argument("--vlm-base-url", default="http://127.0.0.1:8901/v1")
+    parser.add_argument("--llm-base-url", default="")
+    parser.add_argument("--vlm-base-url", default="")
     parser.add_argument("--sampling-seed", type=int)
     return parser
 

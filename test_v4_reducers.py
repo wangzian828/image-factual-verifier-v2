@@ -1630,10 +1630,7 @@ def test_discrepancy_context_flags_evidence_to_visual_alignment_candidate() -> N
                 "claim_fact_id": claim.fact_id,
                 "anchor_fact_ids": claim.anchor_fact_ids,
                 "grounding_evidence_ids": [evidence.evidence_id],
-                "source_visible_property_hint": (
-                    "The archived caption says the handshake happened without "
-                    "wearing gloves."
-                ),
+                "source_visible_property_hint": "without wearing gloves",
             }
         ],
         "binding": {
@@ -1641,10 +1638,7 @@ def test_discrepancy_context_flags_evidence_to_visual_alignment_candidate() -> N
             "claim_fact_id": claim.fact_id,
             "anchor_fact_ids": claim.anchor_fact_ids,
             "grounding_evidence_ids": [evidence.evidence_id],
-            "source_visible_property_hint": (
-                "The archived caption says the handshake happened without "
-                "wearing gloves."
-            ),
+            "source_visible_property_hint": "without wearing gloves",
         },
     }
 
@@ -1772,6 +1766,13 @@ def test_source_visible_property_extraction_is_short_and_rejects_scene_support()
     assert extract_source_visible_property(
         "The source describes a surgical team working in an operating room."
     ) == ""
+    assert (
+        extract_source_visible_property(
+            "A famous photograph shows her shaking a patient's hand without "
+            "wearing gloves."
+        )
+        == "without wearing gloves"
+    )
 
 
 def test_runtime_binding_requires_a_concrete_source_visible_property() -> None:

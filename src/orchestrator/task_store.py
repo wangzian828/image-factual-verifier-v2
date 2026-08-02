@@ -337,6 +337,24 @@ def extract_source_visible_property(source_text: str) -> str:
             if match:
                 ranked.append((score + 4, _one_line(match.group(0))[:240]))
                 continue
+        if objects and relations:
+            object_pattern = "|".join(
+                re.escape(item) for item in sorted(_SOURCE_PROPERTY_OBJECT_TOKENS)
+            )
+            relation_patterns = (
+                rf"\bwithout\s+wearing\s+(?:a\s+|the\s+)?(?:{object_pattern})\b",
+                rf"\bwearing\s+(?:a\s+|the\s+)?[^.;]{{0,40}}\b(?:{object_pattern})\b",
+                rf"\b(?:bare|gloved)\s+(?:hand|hands)\b",
+                rf"\b(?:hand|hands)\s+[^.;]{{0,60}}\b(?:bare|gloved|glove|gloves)\b",
+            )
+            for pattern in relation_patterns:
+                match = re.search(pattern, sentence, flags=re.IGNORECASE)
+                if match:
+                    ranked.append((score + 4, _one_line(match.group(0))[:240]))
+                    break
+            else:
+                ranked.append((score, sentence[:240]))
+            continue
         ranked.append((score, sentence[:240]))
     if not ranked:
         return ""
