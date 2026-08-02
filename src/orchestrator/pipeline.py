@@ -1359,7 +1359,7 @@ class Orchestrator:
             system_prompt=self._sp(IMAGE_ONLY_DISCREPANCY_DECISION_PROMPT),
             tools=[],
             output_schema=DiscrepancyDecisionProposalOutput,
-            max_rounds=2,
+            max_rounds=3,
             stage_name="image_only_discrepancy_decision",
             runtime_store=state.runtime_store,
             handoff_state=investigation,

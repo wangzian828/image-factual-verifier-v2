@@ -3838,8 +3838,14 @@ class StageRunner:
                     "[claim-Y]', if you assess claim-Y or propose a discrepancy "
                     "for claim-Y, include evidence-X in "
                     "claim_assessments[].selected_evidence_ids or in "
-                    "material_discrepancy.evidence_ids. Do not set "
-                    "visual_evidence_disposition for that same claim. "
+                    "material_discrepancy.evidence_ids. Copy Evidence IDs "
+                    "exactly from the feedback; do not shorten or alter any "
+                    "character. Do not set visual_evidence_disposition for that "
+                    "same claim. If validator feedback says supported/refuted "
+                    "lacks a qualified directional Finding chain, change that "
+                    "same Claim assessment to insufficient, still include the "
+                    "mapped visual Evidence ID, and keep verdict_proposal "
+                    "continue. "
                 )
         return message + f"Runtime validator feedback: {reason}"
 
