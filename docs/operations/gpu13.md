@@ -1,8 +1,18 @@
-# gpu-13 Operations Guide
+# gpu-13 / Image Factual Verifier 私有运维配置档
 
-This document records the verified deployment path for the `wza` account on
-`gpu-13`. It intentionally contains no Jupyter password, API key, private key, or
-other credential.
+This project profile records the verified Image Factual Verifier deployment,
+data, evaluation, and replay details for the `wza` account on `gpu-13`.
+
+Internal only. Do not include this file in an external handoff package.
+
+The shareable host-independent guide lives in
+[`remote-jupyter-operations.md`](remote-jupyter-operations.md). New projects
+should start from
+[`remote-jupyter-project-profile-template.md`](remote-jupyter-project-profile-template.md)
+instead of copying this private IFV-specific profile.
+
+This profile intentionally contains no Jupyter password, API key, private key,
+or other credential.
 
 ## Non-Negotiable Rules
 
@@ -78,6 +88,10 @@ python -m pip install websocket-client
 $env:JUPYTER_REMOTE_BASE = "http://127.0.0.1:8333"
 python scripts/server/jupyter_remote.py --kernel-name ifv-agent --shell "hostname; id -un"
 ```
+
+The client intentionally has no built-in server URL. Set
+`JUPYTER_REMOTE_BASE` in every new PowerShell process or pass `--base`
+explicitly; this keeps the shareable Python client free of private topology.
 
 The Windows workstation also has a local companion copy at:
 

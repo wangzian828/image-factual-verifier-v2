@@ -18,7 +18,7 @@ import requests
 import websocket
 
 
-DEFAULT_BASE = os.environ.get("JUPYTER_REMOTE_BASE", "http://127.0.0.1:8333")
+DEFAULT_BASE = os.environ.get("JUPYTER_REMOTE_BASE", "").strip()
 DEFAULT_PASSWORD = os.environ.get("JUPYTER_REMOTE_PASSWORD")
 
 
@@ -316,7 +316,14 @@ def wrap_shell(command: str) -> str:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--base", default=DEFAULT_BASE)
+    parser.add_argument(
+        "--base",
+        default=DEFAULT_BASE,
+        help=(
+            "tunneled Jupyter base URL "
+            "(required unless JUPYTER_REMOTE_BASE is set)"
+        ),
+    )
     parser.add_argument("--password", default=DEFAULT_PASSWORD)
     parser.add_argument(
         "--kernel-name",
@@ -348,6 +355,11 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     configure_stdio()
     args = parse_args()
+    if not args.base:
+        raise SystemExit(
+            "set JUPYTER_REMOTE_BASE or pass --base with the tunneled "
+            "Jupyter http(s) URL"
+        )
     base = normalize_base(args.base)
     password = args.password
     if not password:
