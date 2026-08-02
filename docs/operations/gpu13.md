@@ -6,10 +6,9 @@ data, evaluation, and replay details for the `wza` account on `gpu-13`.
 Internal only. Do not include this file in an external handoff package.
 
 The shareable host-independent guide lives in
-[`remote-jupyter-operations.md`](remote-jupyter-operations.md). New projects
-should start from
-[`remote-jupyter-project-profile-template.md`](remote-jupyter-project-profile-template.md)
-instead of copying this private IFV-specific profile.
+[`remote-jupyter-operations.md`](remote-jupyter-operations.md). It documents
+only the generic SSH tunnel and Jupyter client workflow; it does not include
+this private host or project configuration.
 
 This profile intentionally contains no Jupyter password, API key, private key,
 or other credential.

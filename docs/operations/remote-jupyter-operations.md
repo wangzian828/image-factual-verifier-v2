@@ -1,110 +1,88 @@
-# 通用远程 Jupyter 运维指南
+# SSH 隧道与远程 Jupyter 通用运维指南
 
-本文是可对外交付的项目无关 runbook，适用于通过 Windows 控制端、SSH
-端口转发和 Jupyter 在远程计算服务器上部署、更新、验证和运行任意项目。
-
-项目仓库、分支、Conda 环境、Jupyter kernel、数据目录、启动脚本和验收命令
-不得写死在本文件中；这些内容必须放在项目配置档中。
-
-- 新项目模板：
-  [`remote-jupyter-project-profile-template.md`](remote-jupyter-project-profile-template.md)
-
-本文不得包含真实主机地址、用户名、密码、项目私有路径、代理地址或内部服务信息。
-
-## 1. 参考拓扑
-
-典型控制链路：
+本文可直接提供给使用自己服务器、自己账号和自己凭据的人。它只描述一种通用
+控制方式：
 
 ```text
-Windows 控制端
-  -> SSH <control-host>:<control-port>，用户 <remote-user>
-  -> 本地 127.0.0.1:<local-port> 转发到远端 Jupyter
-  -> Jupyter kernel 以 <remote-user> 身份在 <expected-hostname> 执行
+本地 Windows
+  -> SSH 本地端口转发
+  -> 远程 Jupyter
+  -> Jupyter kernel 执行 Python 或 shell 命令
 ```
 
-控制入口通常只用于运维命令，不应用于传输大型代码包、数据集或模型。代码应由
-服务器从 Git 远端拉取，数据应由服务器从批准的数据源下载或从服务器存储读取。
+除管理员指定的共享出网代理外，本文不包含任何真实服务器地址、账号、SSH/Jupyter
+端口、密码、项目名或内部目录。
 
-## 2. 不可破坏的通用规则
-
-1. 源码只在本地工作区修改。
-2. 本地提交并推送后，服务器只能 clone、fetch、fast-forward、安装和运行。
-3. 不得直接编辑、覆盖或 reset 服务器项目源码。
-4. 服务器工作树不干净时停止更新，先确认脏文件归属。
-5. 每次执行前验证 `hostname`、`id -un`、项目 kernel 和关键环境变量。
-6. 项目 profile 必须声明线程、GPU 和并发限制；若平台要求
-   `OMP_NUM_THREADS=1`，所有项目入口必须统一执行。
-7. 密码、API key、私钥只能通过交互输入、进程环境或权限为 `600` 的未跟踪
-   配置文件提供。
-8. 数据集、模型缓存、日志、trace 和生成产物必须位于仓库之外。
-9. 长任务必须声明日志、PID、输出目录、停止方式和完成验收方式。
-10. 项目 profile 必须记录真实 checkout、branch、kernel、环境和数据根目录。
-
-## 3. 控制端参数
-
-PowerShell 会话中可统一定义：
-
-```powershell
-$RemoteControlHost = "<control-host>"
-$RemoteControlPort = <control-port>
-$RemoteUser = "<remote-user>"
-$LocalJupyterPort = <local-port>
-$RemoteJupyterPort = <remote-port>
-$ExpectedHostname = "<expected-hostname>"
-```
-
-项目参数由项目 profile 提供：
-
-```powershell
-$ProjectRepo = "<absolute-local-checkout>"
-$ProjectKernel = "<project-kernel>"
-$ProjectCheckout = "/absolute/server/checkout"
-$ProjectRunWrapper = "<optional project run wrapper>"
-```
-
-不要把密码放入这些变量示例、PowerShell profile、Git 配置或脚本。
-
-## 4. 依赖边界
-
-| 运维能力 | 必需依赖 | 是否依赖项目代码 |
-|---|---|---|
-| 建立 SSH 隧道 | Windows OpenSSH `ssh.exe` | 否 |
-| 浏览器访问 Jupyter | 浏览器、Jupyter 密码 | 否 |
-| 非交互执行 Jupyter 命令 | Python、`requests`、`websocket-client`、Jupyter 控制客户端 | 依赖通用客户端代码，不依赖业务代码 |
-| 启动项目 kernel | 已安装 kernelspec 及其 wrapper | 通常是 |
-| 注入项目环境变量 | 项目环境脚本或等价配置 | 通常是 |
-| 安装项目环境 | 项目 bootstrap 脚本或明确的安装命令 | 通常是 |
-| 安全更新 checkout | Git；可选项目 updater | updater 是项目代码 |
-| 启动后台评测/训练 | 项目 launcher/worker | 是 |
-
-当前仓库中的通用 Jupyter 客户端是：
+配套客户端：
 
 ```text
 scripts/server/jupyter_remote.py
 ```
 
-它只依赖 Jupyter REST/WebSocket 协议，不导入项目业务模块，可以复制到独立运维
-工具目录使用。删除或无法访问该文件时，非交互控制路径不可用；浏览器 Jupyter
-路径仍然可用。
+## 1. 适用前提
 
-项目 profile 必须单独列出所有项目代码依赖。不得把项目 wrapper 描述成宿主机
-的固有能力。
+远程侧需要满足：
 
-## 5. 建立本地 SSH 隧道
+- 用户拥有自己的 SSH 账号；
+- SSH 能到达运行 Jupyter 的服务器，或能到达已有 Jupyter 转发的控制节点；
+- 用户拥有自己的 Jupyter 登录凭据；
+- Jupyter 至少提供一个可用 kernel，例如 `python3`；
+- 远程 shell 中可以执行目标命令。
+
+本地 Windows 需要：
+
+- OpenSSH 客户端 `ssh.exe`；
+- Python 3；
+- Python 包 `requests` 和 `websocket-client`；
+- 本文配套的 `jupyter_remote.py`。
+
+安装 Python 依赖：
+
+```powershell
+python -m pip install requests websocket-client
+```
+
+## 2. 填写自己的连接参数
+
+在 PowerShell 当前会话定义：
+
+```powershell
+$ControlHost = "<ssh-host>"
+$ControlPort = <ssh-port>
+$RemoteUser = "<your-ssh-user>"
+$LocalJupyterPort = <unused-local-port>
+$RemoteJupyterHost = "127.0.0.1"
+$RemoteJupyterPort = <remote-jupyter-port>
+$ExpectedHostname = "<expected-server-hostname>"
+$KernelName = "python3"
+$Client = "<path-to-jupyter_remote.py>"
+```
+
+如果 Jupyter 位于 SSH 目标机之外，应将 `$RemoteJupyterHost` 改成 SSH
+目标机可访问的 Jupyter 地址。
+
+不要把密码写入本文、脚本、PowerShell profile 或 Git。
+
+## 3. 建立 SSH 隧道
 
 在 Windows PowerShell 中运行：
 
 ```powershell
 ssh -F NUL -N `
-  -L "127.0.0.1:${LocalJupyterPort}:127.0.0.1:${RemoteJupyterPort}" `
-  -p $RemoteControlPort `
+  -L "127.0.0.1:${LocalJupyterPort}:${RemoteJupyterHost}:${RemoteJupyterPort}" `
+  -p $ControlPort `
   -o ExitOnForwardFailure=yes `
   -o ServerAliveInterval=30 `
   -o ServerAliveCountMax=3 `
-  "${RemoteUser}@${RemoteControlHost}"
+  "${RemoteUser}@${ControlHost}"
 ```
 
-`-F NUL` 用于避免用户 SSH 配置中的无关转发影响本链路。SSH 密码应交互输入。
+说明：
+
+- `-F NUL` 避免本机 SSH 配置中的其他转发干扰本次连接；
+- `ExitOnForwardFailure=yes` 确保端口转发失败时立即退出；
+- SSH 密码应由终端交互读取；
+- 保持该 SSH 进程运行，关闭它会同时关闭隧道。
 
 检查本地监听：
 
@@ -114,253 +92,262 @@ Get-NetTCPConnection `
   -LocalPort $LocalJupyterPort
 ```
 
-Jupyter 返回登录页、`405` 或其他 Tornado 响应，均可证明 HTTP 已到达服务；
-认证和 kernel 执行仍需继续验证。
-
-## 6. Jupyter 控制方式
-
-### 6.1 浏览器方式
-
-打开：
-
-```text
-http://127.0.0.1:<local-port>/tree
-```
-
-输入 Jupyter 密码。项目任务必须选择项目 profile 指定的 kernel；基础
-`python3` kernel 只应用于控制面诊断或项目环境尚未安装时的 bootstrap。
-
-### 6.2 非交互客户端
-
-控制端依赖：
+也可以在浏览器打开：
 
 ```powershell
-python -m pip install requests websocket-client
+Start-Process "http://127.0.0.1:${LocalJupyterPort}/tree"
 ```
 
-从项目 profile 指定的位置运行客户端：
+看到 Jupyter 登录页只能证明网络链路已通；仍需验证登录、kernel 和实际执行主机。
+
+## 4. 使用通用 Jupyter 客户端
+
+`jupyter_remote.py` 通过 Jupyter REST API 登录、创建或复用 kernel，再通过
+WebSocket 执行代码。
+
+先为当前 PowerShell 进程设置隧道地址：
 
 ```powershell
-$Client = Join-Path $ProjectRepo "scripts/server/jupyter_remote.py"
-$env:JUPYTER_REMOTE_BASE = "http://127.0.0.1:<local-port>"
-python $Client --kernel-name $ProjectKernel --shell `
+$env:JUPYTER_REMOTE_BASE = "http://127.0.0.1:${LocalJupyterPort}"
+```
+
+客户端不包含默认服务器地址。也可以在每次调用时显式传入：
+
+```powershell
+python $Client `
+  --base "http://127.0.0.1:${LocalJupyterPort}" `
+  --kernel-name $KernelName `
+  --shell 'hostname'
+```
+
+未提供密码时，客户端会交互读取 Jupyter 密码且不回显。
+
+无人值守任务可以只在当前进程中注入：
+
+```powershell
+$env:JUPYTER_REMOTE_PASSWORD = "<supplied-securely>"
+python $Client --kernel-name $KernelName --shell 'hostname'
+Remove-Item Env:JUPYTER_REMOTE_PASSWORD
+```
+
+不要把真实密码保存在 `.ps1`、`.bat`、shell profile、命令示例或日志中。
+
+## 5. 最低连接验收
+
+```powershell
+python $Client --kernel-name $KernelName --shell `
   'hostname; id -un; printf "OMP_NUM_THREADS=%s\n" "$OMP_NUM_THREADS"'
 ```
 
-默认情况下客户端交互读取密码且不回显。无人值守时可只为当前进程设置
-`JUPYTER_REMOTE_PASSWORD`；执行结束后清除该变量，不得持久化。
+确认：
 
-最低验收：
+- `hostname` 是预期服务器；
+- `id -un` 是对方自己的账号；
+- kernel 是预期 kernel；
+- `OMP_NUM_THREADS=1`。
 
-```text
-hostname = <expected-hostname>
-id -un   = <remote-user>
-required environment variables = project profile values
-kernel   = 项目 profile 指定的 kernel
-```
+`OMP_NUM_THREADS=1` 是通用运行基线，用于避免 OpenMP 在共享服务器上创建过多
+CPU 线程；它不是任何具体项目的专属变量。
 
-列出或停止 kernel：
+如果现有 kernel 没有设置，可以在远程命令中显式设置：
 
 ```powershell
-python $Client --list-kernels
-python $Client --stop-kernel "<kernel-id>"
+python $Client --kernel-name $KernelName --shell `
+  'export OMP_NUM_THREADS=1; command-to-run'
 ```
+
+长期使用时，应将该变量放入对方自己的 kernel、环境入口或作业启动器中。
+
+## 6. 服务器出网代理
+
+这组服务器访问 GitHub、PyPI、Hugging Face 等公网服务时使用：
+
+```text
+http://100.10.1.210:47899
+```
+
+在远程 shell、Jupyter kernel 环境或作业启动器中统一设置：
+
+```bash
+export http_proxy=http://100.10.1.210:47899
+export https_proxy="$http_proxy"
+export HTTP_PROXY="$http_proxy"
+export HTTPS_PROXY="$https_proxy"
+export NO_PROXY=127.0.0.1,localhost,::1
+export no_proxy="$NO_PROXY"
+export OMP_NUM_THREADS=1
+```
+
+旧端口 `47894` 已废弃，不应继承或继续使用。如果登录 shell、Jupyter 服务或
+历史配置仍带有旧值，应由当前命令或 kernel 环境显式覆盖。
+
+最低出网检查：
+
+```bash
+curl -fsSI --max-time 20 https://github.com/ >/dev/null
+python -m pip index versions requests >/dev/null
+```
+
+本地或远程 loopback 服务必须由 `NO_PROXY`/`no_proxy` 绕过代理，否则健康检查
+可能收到代理生成的 `503`。
 
 ## 7. PowerShell 到 Bash 的引用规则
 
-传给 `--shell` 的完整 Bash 命令必须作为一个 PowerShell 单引号参数。
+传给 `--shell` 的完整 Bash 命令应作为一个 PowerShell 单引号参数。
 
 正确：
 
 ```powershell
-python $Client --kernel-name $ProjectKernel --shell `
-  'cd /absolute/server/checkout && ./project-runner command --input "/data/a b"'
+python $Client --kernel-name $KernelName --shell `
+  'cd /absolute/remote/path && command --input "/data/file with spaces"'
 ```
 
 错误：
 
 ```powershell
-python $Client --kernel-name $ProjectKernel --shell `
-  "cd $ProjectCheckout && command --input \"$remote_path\""
+python $Client --kernel-name $KernelName --shell `
+  "cd $RemotePath && command --input \"$RemoteFile\""
 ```
 
-双引号会让 PowerShell 在命令到达服务器前展开 `$变量` 和 `$(表达式)`。
-不要在外层单引号内部写 `\"`；反斜杠会原样到达 Bash。
+外层双引号会让 PowerShell 在命令到达远程 Bash 前展开 `$变量` 和
+`$(表达式)`。
 
-长命令使用标准输入，降低本地引用风险：
+在外层单引号内直接使用 Bash 的 `"..."`，不要写成 `\"...\"`。
+
+## 8. 执行长命令
+
+使用标准输入传递多行 shell：
 
 ```powershell
 @'
 set -euo pipefail
-cd /absolute/server/checkout
-./project-runner command --input /absolute/input --output /absolute/output
-'@ | python $Client --kernel-name $ProjectKernel --shell --stdin --timeout 600
+export OMP_NUM_THREADS=1
+cd /absolute/remote/path
+command --input /absolute/input --output /absolute/output
+'@ | python $Client `
+  --kernel-name $KernelName `
+  --shell `
+  --stdin `
+  --timeout 600
 ```
 
-`--timeout` 是控制客户端等待时间，不应替代项目自身的 action、provider、
-stage 或作业超时。
+`--timeout` 是本地客户端等待 Jupyter kernel 返回结果的时间。长任务还应有自身
+的超时、日志、PID 和停止机制。
 
-## 8. 项目接入契约
+不要用一个前台 Jupyter 调用无限等待训练或服务进程。长任务应由远程作业启动器、
+systemd、调度器或经过验证的后台脚本管理。
 
-每个项目必须从模板建立 profile，并至少填写：
+## 9. Kernel 管理
 
-| 字段 | 要求 |
-|---|---|
-| 本地 checkout | 唯一允许编辑源码的位置 |
-| Git remote 与 branch | 服务器同步来源 |
-| 服务器 clean checkout | 不与数据、日志混放 |
-| Conda/venv | 明确 Python 版本和安装方式 |
-| Jupyter kernel | 名称、安装脚本、wrapper 路径 |
-| 环境入口 | proxy、`OMP_NUM_THREADS=1`、缓存和凭据文件 |
-| 数据根目录 | 仓库外绝对路径 |
-| 更新命令 | 必须拒绝脏工作树并只允许 fast-forward |
-| 运行命令 | 前台和后台方式 |
-| 日志/PID | 路径、权限、清理规则 |
-| 验收门禁 | 测试、健康检查和真实 provider probe |
-| 停止/恢复 | 信号、PID、checkpoint 和重启方式 |
+列出当前 kernel：
 
-如果项目没有 wrapper，也可以使用原生命令，但 profile 必须完整写出环境变量和
-验收步骤，不能依赖登录 shell 中的偶然状态。
-
-## 9. 通用部署和更新流程
-
-### 9.1 首次部署
-
-1. 本地完成测试、commit 和 push。
-2. 通过 Jupyter 控制面确认主机、用户和线程变量。
-3. 由服务器通过 Git HTTPS/SSH clone；不得通过控制入口复制仓库。
-4. 在仓库外创建数据、缓存和日志目录。
-5. 执行项目 profile 的 bootstrap。
-6. 安装并验证项目 kernel。
-7. 运行确定性测试，再运行最小真实 provider probe。
-
-### 9.2 日常更新
-
-1. 本地 commit 并 push。
-2. 服务器检查 `git status --porcelain` 必须为空。
-3. fetch 指定 branch 到明确 tracking ref。
-4. 只允许 fast-forward 到远端提交。
-5. 必要时重新 bootstrap 或安装依赖。
-6. 记录服务器 `HEAD`、测试结果和运行 ID。
-
-禁止：
-
-- 在服务器源码中手工修补；
-- 使用 `git reset --hard` 清理未知脏文件；
-- 在未验证 branch/tracking ref 时执行模糊的 `git pull`；
-- 将数据或运行产物写入 checkout。
-
-## 10. 运行与后台任务
-
-前台命令应通过项目 profile 的环境入口执行：
-
-```bash
-cd /absolute/server/checkout
-./project-runner python -m pytest -q
+```powershell
+python $Client --list-kernels
 ```
 
-长任务必须由项目 launcher 管理。launcher 至少应：
+复用已有 kernel：
 
-- 使用新或空的输出目录；
-- 将 stdout/stderr 写入仓库外日志；
-- 将 PID 写入当前用户拥有且非符号链接的目录；
-- 使用 `umask 077` 保护日志和 PID；
-- 转发 `INT`/`TERM` 给子进程；
-- 记录开始时间、结束时间和退出码；
-- 不把凭据写入日志或命令行快照。
+```powershell
+python $Client `
+  --kernel "<kernel-id>" `
+  --shell `
+  'hostname; id -un'
+```
 
-## 11. 数据、缓存和凭据
+停止 kernel：
 
-通用目录原则：
+```powershell
+python $Client --stop-kernel "<kernel-id>"
+```
+
+默认情况下，客户端创建的临时 kernel 会在命令结束后停止。使用 `--keep` 才会
+保留，并输出 kernel ID。
+
+## 10. 小文件上传
+
+客户端支持通过 Jupyter Contents API 上传一个文件：
+
+```powershell
+python $Client `
+  --upload "<local-file>" "<remote-relative-path>"
+```
+
+该功能适合小型配置或辅助文件，不适合大型数据集、模型或仓库同步。大型内容应使用
+服务器侧 Git、对象存储、数据挂载或管理员批准的传输方式。
+
+上传路径必须是 Jupyter 根目录下的规范相对路径，不能包含 `..`。
+
+## 11. 安全规则
+
+- 每个人使用自己的 SSH/Jupyter 账号和权限；
+- 不共享密码、cookie、API key、私钥或现成登录会话；
+- 凭据只通过交互输入、密码管理器或当前进程环境提供；
+- 不在命令、日志和截图中打印凭据；
+- 除本文明确列出的共享出网代理外，不把真实主机、端口、账号和内部服务信息
+  写入通用文档；
+- 修改或删除远程文件前，先确认绝对路径和权限边界；
+- 不使用 Jupyter 控制链路传输大型敏感数据；
+- 使用完毕后停止不再需要的 kernel，并关闭 SSH 隧道。
+
+## 12. 常见故障
+
+### 本地端口未监听
+
+- 检查 SSH 进程是否仍在运行；
+- 确认本地端口未被占用；
+- 确认 `ExitOnForwardFailure=yes` 没有报错。
+
+### 本地端口监听，但浏览器或客户端超时
+
+- 确认远端 Jupyter host/port；
+- 确认 SSH 目标机能访问 Jupyter；
+- 重建 SSH 隧道；
+- 检查本机代理是否错误处理 loopback。
+
+### Jupyter 登录失败
+
+- 使用对方自己的 Jupyter 密码；
+- 确认连接的是正确 Jupyter 实例；
+- 不要把 SSH 密码误当成 Jupyter 密码。
+
+### 命令在错误服务器执行
+
+- 立即运行 `hostname` 和 `id -un`；
+- 停止错误 kernel；
+- 选择或创建正确服务器上的 kernel。
+
+### `unrecognized arguments`
+
+通常是 PowerShell 引用失败，远程命令可能尚未执行。改用外层单引号或
+`--stdin`。
+
+### 大约 120 秒后超时
+
+提高客户端 `--timeout`，但同时检查远程任务是否真的有界。
+
+### 本地服务被代理返回 `503`
+
+确保远程环境中的 `NO_PROXY` 和 `no_proxy` 包含：
 
 ```text
-<project-data-root>/
-  datasets/
-  artifacts/
-  benchmarks/
-  cache/
-  runs/
-    _logs/
-    traces/
-    eval/
-  generated/
+127.0.0.1,localhost,::1
 ```
 
-项目可以调整目录名，但必须保持仓库与大数据/运行产物分离。
+### 公网下载连接到旧代理端口
 
-推荐凭据文件：
+检查大小写代理变量，覆盖任何指向 `47894` 的旧值，统一使用
+`http://100.10.1.210:47899`。
+
+## 13. 可发送文件
+
+只需发送：
 
 ```text
-~/.config/<project>/runtime.env
+remote-jupyter-operations.md
+jupyter_remote.py
 ```
 
-要求：
+发送前再次确认两个文件中不存在真实账号、SSH/Jupyter 主机和端口、密码、内部
+目录、项目名或仓库地址。共享出网代理地址是本文有意保留的服务器环境配置。
 
-```bash
-chmod 600 ~/.config/<project>/runtime.env
-```
-
-项目 wrapper 应只导出凭据文件路径，不打印、复制或提交凭据内容。
-
-## 12. 故障定位顺序
-
-1. 本地端口是否监听。
-2. SSH 进程是否仍在运行。
-3. Jupyter 登录是否成功。
-4. kernel 名称是否存在。
-5. `hostname` 是否与 profile 一致。
-6. 用户是否与 profile 一致。
-7. 线程、GPU 和并发变量是否与 profile 一致。
-8. 项目 checkout 是否 clean、HEAD 是否正确。
-9. loopback 是否加入 `NO_PROXY`/`no_proxy`。
-10. 项目 proxy、数据根目录、凭据文件和服务健康检查是否符合 profile。
-
-常见现象：
-
-- 本地转发端口监听但 HTTP 卡住：重建 SSH 隧道。
-- Jupyter 可登录但命令在错误主机执行：停止错误 kernel，使用项目 kernel。
-- `/health` 返回代理生成的 `503`：检查 loopback `NO_PROXY`。
-- Git fetch 成功但 branch 未更新：检查单分支 clone 的 refspec，显式 fetch
-  tracking ref。
-- `unrecognized arguments`：通常是 PowerShell 引用失败，远端命令尚未执行。
-- 长命令在约 120 秒停止：提高 Jupyter 客户端 `--timeout`，同时保留项目内部
-  有界超时。
-
-## 13. 每次运行前检查单
-
-```text
-[ ] SSH/Jupyter 链路可用
-[ ] hostname 与项目 profile 一致
-[ ] 远程用户与项目 profile 一致
-[ ] 使用正确项目 kernel
-[ ] 线程、GPU 和并发变量符合 profile
-[ ] 服务器 checkout clean
-[ ] HEAD 与目标提交一致
-[ ] 数据和输出位于 checkout 外
-[ ] 凭据只存在于安全输入或未跟踪 600 文件
-[ ] 命令使用项目环境入口
-[ ] 长任务已定义日志、PID、停止和验收方式
-```
-
-## 14. 对外交付边界
-
-可以发送：
-
-```text
-docs/operations/remote-jupyter-operations.md
-docs/operations/remote-jupyter-project-profile-template.md
-scripts/server/jupyter_remote.py
-```
-
-发送前再次扫描真实用户名、主机/IP、端口、代理、项目名、仓库地址、目录和凭据。
-
-不要发送：
-
-```text
-任何真实主机或项目 profile
-.env、runtime.env、PowerShell profile
-SSH/Jupyter/API 凭据
-内部 HANDOFF、运行日志、trace、数据路径或服务地址
-```
-
-SSH/Jupyter 权限必须由管理员通过安全渠道单独授予，不能附在交付包中。
+SSH/Jupyter 权限由服务器管理员直接授予对方，不通过文档或 Python 文件传递。
