@@ -55,6 +55,7 @@ from src.orchestrator.image_only_prompts import (
     select_discrepancy_react_tasks as select_image_only_discrepancy_react_tasks,
 )
 from src.orchestrator.investigation_models import (
+    ClaimAssessmentProposal,
     EvidenceDecisionOutput,
     DiscrepancyDecisionProposalOutput,
     DiscrepancyDecisionOutput,
@@ -1419,10 +1420,38 @@ class Orchestrator:
             trigger=trigger,
         )
         if not update.get("accepted", False):
+            rejected_reason = str(
+                update.get("rejected_reason", "unknown validation error")
+            )
+            fallback = self._resolved_visual_consumption_fallback(
+                investigation,
+                reviewed_evidence_ids=reviewed_evidence_ids,
+                rejected_reason=rejected_reason,
+            )
+            if fallback is not None:
+                update = apply_discrepancy_decision(
+                    investigation,
+                    fallback,
+                    reviewed_evidence_ids=reviewed_evidence_ids,
+                    trigger=trigger,
+                )
+                if update.get("accepted", False):
+                    update["deterministic_visual_consumption_fallback"] = True
+                    update["fallback_rejected_reason"] = rejected_reason
+                    progress = (
+                        record_decision_progress(investigation, update)
+                        if self._discrepancy_progress_signature(investigation)
+                        != before_signature
+                        else None
+                    )
+                    if progress is not None:
+                        update["progress"] = progress.model_dump(mode="json")
+                    self._sync_image_only_state(state, investigation)
+                    return update
             self._sync_image_only_state(state, investigation)
             raise RuntimeError(
                 "Discrepancy Decision failed deterministic application: "
-                + str(update.get("rejected_reason", "unknown validation error"))
+                + rejected_reason
             )
         progress = (
             record_decision_progress(investigation, update)
@@ -1434,6 +1463,93 @@ class Orchestrator:
             update["progress"] = progress.model_dump(mode="json")
         self._sync_image_only_state(state, investigation)
         return update
+
+    @staticmethod
+    def _resolved_visual_consumption_fallback(
+        investigation: ImageOnlyInvestigationState,
+        *,
+        reviewed_evidence_ids: Sequence[str],
+        rejected_reason: str,
+    ) -> DiscrepancyDecisionOutput | None:
+        """Conservatively consume resolved pixel Evidence after correction exhaustion.
+
+        This fallback is intentionally non-substantive: it never supports, refutes,
+        creates a discrepancy, retires routes, or proposes a terminal verdict.  It
+        only records an ``insufficient`` assessment with the exact resolved focused
+        visual Evidence ID after the model repeatedly failed the same provenance
+        requirement.  That keeps the source-pixel check auditable without silently
+        downgrading to a source-only Decision.
+        """
+
+        if "must consume the resolved focused visual Evidence" not in rejected_reason:
+            return None
+        reviewed = set(str(item) for item in reviewed_evidence_ids)
+        task_by_id = {item.task_id: item for item in investigation.tasks}
+        evidence_by_id = {
+            item.evidence_id: item for item in investigation.evidence
+        }
+        assessments: List[ClaimAssessmentProposal] = []
+        seen_claim_ids: set[str] = set()
+        for record in investigation.visual_reinspections:
+            if (
+                record.status != "resolved"
+                or not (set(record.request.grounding_evidence_ids) & reviewed)
+            ):
+                continue
+            task = task_by_id.get(record.task_id)
+            if task is None:
+                continue
+            visual_evidence_ids = [
+                evidence_id
+                for evidence_id in record.evidence_ids
+                if evidence_id in reviewed
+                and evidence_id in evidence_by_id
+                and evidence_by_id[evidence_id].evidence_kind == "image_region"
+                and evidence_by_id[evidence_id].tool_name
+                == "focused_visual_inspection"
+                and evidence_by_id[evidence_id].visual_question_id
+                == record.visual_question_id
+            ]
+            if not visual_evidence_ids:
+                continue
+            for claim_id in task.claim_ids:
+                if claim_id in seen_claim_ids:
+                    continue
+                assessments.append(
+                    ClaimAssessmentProposal(
+                        claim_id=claim_id,
+                        assessment="insufficient",
+                        selected_evidence_ids=list(
+                            dict.fromkeys(visual_evidence_ids)
+                        ),
+                        remaining_gap=(
+                            "resolved focused visual Evidence was recorded, "
+                            "but no accepted semantic support/refute/discrepancy "
+                            "update survived runtime validation"
+                        ),
+                        rationale=(
+                            "Deterministic fallback after correction exhaustion: "
+                            "consume the resolved pixel Evidence conservatively "
+                            "without changing the Claim to supported or refuted."
+                        ),
+                    )
+                )
+                seen_claim_ids.add(claim_id)
+                if len(assessments) >= 3:
+                    break
+            if len(assessments) >= 3:
+                break
+        if not assessments:
+            return None
+        return DiscrepancyDecisionOutput(
+            claim_assessments=assessments,
+            verdict_proposal="continue",
+            rationale=(
+                "Conservative runtime fallback consumed resolved focused visual "
+                "Evidence after model correction exhaustion; no terminal verdict "
+                "or discrepancy was inferred."
+            ),
+        )
 
     @staticmethod
     def _discrepancy_progress_signature(
