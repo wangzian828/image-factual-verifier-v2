@@ -1238,6 +1238,63 @@ def test_discrepancy_decision_accepts_source_visual_composite_refute() -> None:
     assert basis.evidence_ids == [source.evidence_id, visual.evidence_id]
 
 
+def test_source_visual_composite_allows_reinspection_specific_visual_fact() -> None:
+    state = _planned_state()
+    source, visual = _append_source_visual_conflict_pair(state)
+    claim = state.image_claims[0]
+    visual_record = state.visual_reinspections[-1]
+    visual_task = next(item for item in state.tasks if item.task_id == visual_record.task_id)
+    detail_fact = state.facts[0].model_copy(deep=True)
+    detail_fact.fact_id = "fact-focused-visual-detail"
+    detail_fact.statement = (
+        "Focused visual inspection records the visible handshake-hand covering."
+    )
+    state.facts.append(detail_fact)
+    visual.fact_ids = [detail_fact.fact_id]
+    visual_record.fact_id = detail_fact.fact_id
+    visual_task.fact_ids = [detail_fact.fact_id]
+
+    update = apply_discrepancy_decision(
+        state,
+        DiscrepancyDecisionOutput(
+            claim_assessments=[
+                ClaimAssessmentProposal(
+                    claim_id=claim.claim_id,
+                    assessment="refuted",
+                    selected_evidence_ids=[source.evidence_id, visual.evidence_id],
+                    rationale=(
+                        "The source and focused pixel observation conflict on the "
+                        "visible relation."
+                    ),
+                )
+            ],
+            material_discrepancy=MaterialDiscrepancyProposal(
+                statement=(
+                    "The source-pixel account conflicts on the visible "
+                    "handshake-hand property."
+                ),
+                affected_claim_ids=[claim.claim_id],
+                visual_anchor_fact_ids=claim.anchor_fact_ids,
+                evidence_ids=[source.evidence_id, visual.evidence_id],
+                materiality="decisive",
+                status="established",
+                rationale="The pixel observation is linked through the runtime task.",
+            ),
+            verdict_proposal="fake",
+            rationale="A decisive source-pixel discrepancy is established.",
+        ),
+        reviewed_evidence_ids=[source.evidence_id, visual.evidence_id],
+        trigger="qualified_evidence",
+    )
+
+    assert update["accepted"] is True, update
+    assert len(update["created_composite_finding_ids"]) == 1
+    audit_discrepancy_coverage(state, decision_checkpoint=True)
+    verdict, basis = compile_discrepancy_verdict_basis(state)
+    assert verdict == "fake"
+    assert basis.evidence_ids == [source.evidence_id, visual.evidence_id]
+
+
 def test_source_visual_composite_rejects_unlinked_visual_evidence() -> None:
     state = _planned_state()
     source, visual = _append_source_visual_conflict_pair(
@@ -1573,6 +1630,69 @@ def test_discrepancy_context_flags_evidence_to_visual_alignment_candidate() -> N
             "grounding_evidence_ids": [evidence.evidence_id],
         },
     }
+
+
+def test_runtime_binding_rewrites_generic_visual_reinspection_text() -> None:
+    state = _planned_state()
+    evidence = _append_evidence(state)
+
+    bound, error = bind_discrepancy_decision_runtime_ids(
+        state,
+        DiscrepancyDecisionProposalOutput(
+            visual_reinspection=VisualReinspectionProposal(
+                reason="text",
+                scope="relation",
+                question="text",
+                expected_property="text",
+            ),
+            verdict_proposal="continue",
+            rationale="The source-introduced visible property needs a pixel check.",
+        ),
+        reviewed_evidence_ids=[evidence.evidence_id],
+    )
+
+    assert error == ""
+    assert bound is not None
+    request = bound.visual_reinspection
+    assert request is not None
+    assert request.question != "text"
+    assert request.expected_property != "text"
+    assert "microphone" in request.question
+    assert "microphone" in request.expected_property
+    assert request.anchor_fact_ids == state.image_claims[0].anchor_fact_ids
+    assert request.grounding_evidence_ids == [evidence.evidence_id]
+
+
+def test_runtime_binding_rewrites_misdirected_integrity_visual_question() -> None:
+    state = _planned_state()
+    evidence = _append_evidence(state)
+
+    bound, error = bind_discrepancy_decision_runtime_ids(
+        state,
+        DiscrepancyDecisionProposalOutput(
+            visual_reinspection=VisualReinspectionProposal(
+                reason="integrity",
+                scope="integrity",
+                question="Does the image show generic AI artifacts?",
+                expected_property="generic AI artifact inspection",
+            ),
+            verdict_proposal="continue",
+            rationale=(
+                "The source introduces a visible object property, not an "
+                "integrity claim."
+            ),
+        ),
+        reviewed_evidence_ids=[evidence.evidence_id],
+    )
+
+    assert error == ""
+    assert bound is not None
+    request = bound.visual_reinspection
+    assert request is not None
+    assert request.reason != "integrity"
+    assert request.scope != "integrity"
+    assert "generic AI" not in request.question
+    assert "microphone" in request.question
 
 
 def test_discrepancy_decision_rejects_fake_without_decisive_discrepancy() -> None:

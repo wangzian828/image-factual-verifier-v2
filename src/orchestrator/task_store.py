@@ -76,6 +76,55 @@ MAX_V4_VISUAL_REINSPECTIONS = 1
 COMPOSITE_SOURCE_VISUAL_DISCREPANCY_FAMILY = (
     "composite:source_visual_discrepancy"
 )
+_GENERIC_VISUAL_REQUEST_TOKENS = {
+    "check",
+    "confirm",
+    "determine",
+    "evidence",
+    "focus",
+    "focused",
+    "image",
+    "inspect",
+    "observation",
+    "original",
+    "photo",
+    "photograph",
+    "picture",
+    "pixel",
+    "pixels",
+    "property",
+    "question",
+    "review",
+    "see",
+    "show",
+    "shows",
+    "text",
+    "visible",
+    "visual",
+}
+_INTEGRITY_REQUEST_TOKENS = {
+    "ai",
+    "anatomy",
+    "artifact",
+    "artifacts",
+    "digital",
+    "fake",
+    "generated",
+    "manipulated",
+    "photoshop",
+    "provenance",
+    "realism",
+}
+_INTEGRITY_EVIDENCE_TOKENS = {
+    "ai",
+    "artificial",
+    "digitally",
+    "fake",
+    "generated",
+    "manipulated",
+    "photoshop",
+    "synthetic",
+}
 
 
 def discrepancy_visual_reinspection_binding(
@@ -134,6 +183,115 @@ def discrepancy_visual_reinspection_binding(
     }
 
 
+def _one_line(value: str) -> str:
+    return " ".join(str(value).split())
+
+
+def _clip_text(value: str, limit: int) -> str:
+    text = _one_line(value)
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 1)].rstrip() + "…"
+
+
+def _source_text_for_visual_binding(
+    evidence_by_id: Mapping[str, InvestigationEvidence],
+    evidence_ids: Sequence[str],
+) -> str:
+    return " ".join(
+        _one_line(evidence_by_id[evidence_id].exact_text)
+        for evidence_id in evidence_ids
+        if evidence_id in evidence_by_id
+        and _one_line(evidence_by_id[evidence_id].exact_text)
+    )
+
+
+def _evidence_introduces_integrity_question(source_text: str) -> bool:
+    return bool(
+        _semantic_request_tokens(source_text) & _INTEGRITY_EVIDENCE_TOKENS
+    )
+
+
+def _visual_request_needs_runtime_detail(
+    proposal: Any,
+    *,
+    source_text: str,
+) -> bool:
+    tokens = _semantic_request_tokens(
+        f"{proposal.question} {proposal.expected_property}"
+    )
+    informative_tokens = tokens - _GENERIC_VISUAL_REQUEST_TOKENS
+    if len(informative_tokens) < 2:
+        return True
+    if (
+        tokens & _INTEGRITY_REQUEST_TOKENS
+        and not _evidence_introduces_integrity_question(source_text)
+    ):
+        return True
+    return False
+
+
+def _non_integrity_visual_scope(claim_statement: str, fallback: str) -> str:
+    if fallback != "integrity":
+        return fallback
+    tokens = _semantic_request_tokens(claim_statement)
+    if tokens & {"beside", "between", "holding", "inside", "next", "on", "under"}:
+        return "relation"
+    if tokens & {"lobby", "plaza", "street", "building", "room", "scene"}:
+        return "scene"
+    return "subject"
+
+
+def _non_integrity_visual_reason(scope: str, fallback: str) -> str:
+    if fallback != "integrity":
+        return fallback
+    if scope == "relation":
+        return "relation"
+    if scope == "scene":
+        return "location"
+    if scope == "text":
+        return "text"
+    return "identity"
+
+
+def _runtime_specific_visual_request_payload(
+    proposal: Any,
+    *,
+    claim: ImageClaim,
+    source_text: str,
+) -> Dict[str, Any]:
+    payload = proposal.model_dump(mode="json")
+    if not _visual_request_needs_runtime_detail(
+        proposal,
+        source_text=source_text,
+    ):
+        return payload
+
+    source_fragment = _clip_text(source_text, 420)
+    claim_fragment = _clip_text(claim.statement, 260)
+    if not source_fragment:
+        source_fragment = claim_fragment
+    scope = _non_integrity_visual_scope(claim.statement, payload["scope"])
+    reason = _non_integrity_visual_reason(scope, payload["reason"])
+    payload.update(
+        {
+            "reason": reason,
+            "scope": scope,
+            "question": _clip_text(
+                "Does the original image visibly show the source-grounded "
+                f"property: {source_fragment}? Compare against the current "
+                f"ImageClaim: {claim_fragment}",
+                800,
+            ),
+            "expected_property": _clip_text(
+                f"source-grounded visible property: {source_fragment}",
+                800,
+            ),
+        }
+    )
+    return payload
+
+
 def bind_discrepancy_decision_runtime_ids(
     state: ImageOnlyInvestigationState,
     output: DiscrepancyDecisionProposalOutput,
@@ -189,8 +347,22 @@ def bind_discrepancy_decision_runtime_ids(
             f"{resolved['status']}; exactly one unresolved ImageClaim must have "
             "reviewed non-visual Evidence bound to its atomic fact"
         )
+    evidence_by_id = {item.evidence_id: item for item in state.evidence}
+    claim_by_id = {claim.claim_id: claim for claim in state.image_claims}
+    claim = claim_by_id.get(str(binding["claim_id"]))
+    if claim is None:
+        return None, "runtime visual reinspection binding cites an unknown Claim"
+    source_text = _source_text_for_visual_binding(
+        evidence_by_id,
+        list(binding["grounding_evidence_ids"]),
+    )
+    request_payload = _runtime_specific_visual_request_payload(
+        proposal,
+        claim=claim,
+        source_text=source_text,
+    )
     payload["visual_reinspection"] = {
-        **proposal.model_dump(mode="json"),
+        **request_payload,
         "anchor_fact_ids": list(binding["anchor_fact_ids"]),
         "grounding_evidence_ids": list(binding["grounding_evidence_ids"]),
     }
@@ -1101,7 +1273,7 @@ def _composite_source_visual_refute_evidence_ids(
     the composite Finding created by the Decision reducer.
     """
 
-    owned_ids = [
+    source_ids = [
         evidence_id
         for evidence_id in dict.fromkeys(evidence_ids)
         if evidence_id in evidence_by_id
@@ -1109,10 +1281,6 @@ def _composite_source_visual_refute_evidence_ids(
         and claim_id
             in task_by_id[evidence_by_id[evidence_id].task_id].claim_ids
         and claim_fact_id in evidence_by_id[evidence_id].fact_ids
-    ]
-    source_ids = [
-        evidence_id
-        for evidence_id in owned_ids
         if evidence_by_id[evidence_id].evidence_kind == "web_span"
         and evidence_by_id[evidence_id].directness == "direct"
         and evidence_by_id[evidence_id].claim_binding == "source_assertion"
@@ -1120,7 +1288,11 @@ def _composite_source_visual_refute_evidence_ids(
     ]
     visual_ids = [
         evidence_id
-        for evidence_id in owned_ids
+        for evidence_id in dict.fromkeys(evidence_ids)
+        if evidence_id in evidence_by_id
+        and evidence_by_id[evidence_id].task_id in task_by_id
+        and claim_id
+            in task_by_id[evidence_by_id[evidence_id].task_id].claim_ids
         if evidence_by_id[evidence_id].evidence_kind == "image_region"
         and evidence_by_id[evidence_id].tool_name == "focused_visual_inspection"
         and evidence_by_id[evidence_id].claim_binding == "pixel_observation"
@@ -1144,7 +1316,8 @@ def _composite_source_visual_refute_evidence_ids(
     for record in state.visual_reinspections:
         if (
             record.status != "resolved"
-            or record.fact_id != claim_fact_id
+            or record.task_id not in task_by_id
+            or claim_id not in task_by_id[record.task_id].claim_ids
             or not set(record.request.grounding_evidence_ids) & set(source_ids)
         ):
             continue
