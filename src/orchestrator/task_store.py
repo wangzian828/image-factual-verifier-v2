@@ -2273,6 +2273,26 @@ def apply_discrepancy_decision(
             "accepted": False,
             "rejected_reason": "qualified Evidence checkpoint requires Evidence",
         }
+    if (
+        trigger == "qualified_evidence"
+        and reviewed_ids
+        and not output.claim_assessments
+        and output.material_discrepancy is None
+        and not output.retire_hypothesis_ids
+        and not output.new_hypotheses
+        and output.visual_reinspection is None
+        and output.visual_evidence_disposition is None
+        and output.verdict_proposal == "continue"
+    ):
+        return {
+            "accepted": False,
+            "rejected_reason": (
+                "qualified Evidence checkpoint must record a Claim assessment, "
+                "discrepancy, route update, visual reinspection, or explicit "
+                "resolved-visual disposition; an empty continue Decision would "
+                "silently leave reviewed Evidence unconsumed"
+            ),
+        }
     if any(item not in hypothesis_by_id for item in output.retire_hypothesis_ids):
         return {"accepted": False, "rejected_reason": "decision cites unknown SearchHypothesis"}
     if len(output.new_hypotheses) > MAX_NEW_HYPOTHESES_PER_DECISION:

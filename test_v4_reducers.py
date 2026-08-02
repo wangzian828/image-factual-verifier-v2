@@ -206,6 +206,27 @@ def test_discrepancy_checkpoint_noop_is_an_accepted_nonterminal_update() -> None
     assert state.discrepancy_decisions[-1].trigger == "scheduled_boundary"
 
 
+def test_qualified_evidence_checkpoint_rejects_empty_continue() -> None:
+    state = _planned_state()
+    evidence = _append_evidence(state)
+    before = state.model_dump(mode="json")
+
+    update = apply_discrepancy_decision(
+        state,
+        DiscrepancyDecisionOutput(
+            verdict_proposal="continue",
+            rationale="Leave the reviewed Evidence untouched.",
+        ),
+        reviewed_evidence_ids=[evidence.evidence_id],
+        trigger="qualified_evidence",
+    )
+
+    assert update["accepted"] is False
+    assert "empty continue Decision" in update["rejected_reason"]
+    assert "reviewed Evidence unconsumed" in update["rejected_reason"]
+    assert state.model_dump(mode="json") == before
+
+
 def test_decision_exhaustion_fallback_records_reviewed_evidence_only() -> None:
     state = _planned_state()
     evidence = _append_evidence(state)
