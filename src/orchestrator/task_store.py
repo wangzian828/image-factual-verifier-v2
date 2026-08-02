@@ -340,6 +340,14 @@ def extract_source_visible_property(source_text: str) -> str:
         )
         if score < 4:
             continue
+        version_match = re.search(
+            r"\bversion\s+of\s+(?:a\s+|an\s+|the\s+)?([^.;]{3,100})",
+            sentence,
+            flags=re.IGNORECASE,
+        )
+        if version_match:
+            ranked.append((score + 3, _one_line(version_match.group(1))[:120]))
+            continue
         if colors and body:
             pattern = (
                 r"\b(?:"

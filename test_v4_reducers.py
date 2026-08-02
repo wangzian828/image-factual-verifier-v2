@@ -1787,6 +1787,12 @@ def test_source_visible_property_extraction_is_short_and_rejects_scene_support()
         )
         == "pink granite plaza with pools and greenery"
     )
+    assert (
+        extract_source_visible_property(
+            "It's a terrible taxidermy version of a female White-Faced Saki."
+        )
+        == "female White-Faced Saki"
+    )
 
 
 def test_runtime_binding_requires_a_concrete_source_visible_property() -> None:
