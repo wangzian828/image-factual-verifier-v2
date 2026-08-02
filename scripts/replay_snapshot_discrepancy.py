@@ -226,26 +226,37 @@ async def replay_snapshot(args: argparse.Namespace) -> dict[str, Any]:
         pending_record = pending_visual_reinspection(investigation)
         decision_2: dict[str, Any] | None = None
         reviewed_after_visual = list(source_evidence_ids)
+        engineering_error = ""
+        engineering_error_stage = ""
         if pending_record is not None:
-            visual_update = await orchestrator._run_image_only_visual_reinspection(
-                state,
-                investigation,
-                image_path=runtime_case.image_path,
-                runtime_case=runtime_case,
-                visual_question_id=pending_record.visual_question_id,
-            )
-            reviewed_after_visual.extend(
-                evidence_id
-                for evidence_id in pending_record.evidence_ids
-                if evidence_id not in reviewed_after_visual
-            )
-            decision_2 = await orchestrator._run_discrepancy_decision(
-                state,
-                investigation,
-                reviewed_evidence_ids=reviewed_after_visual,
-                trigger="qualified_evidence",
-                interaction_session=InteractionSession(),
-            )
+            try:
+                visual_update = await orchestrator._run_image_only_visual_reinspection(
+                    state,
+                    investigation,
+                    image_path=runtime_case.image_path,
+                    runtime_case=runtime_case,
+                    visual_question_id=pending_record.visual_question_id,
+                )
+            except Exception as exc:
+                engineering_error = f"{type(exc).__name__}: {exc}"
+                engineering_error_stage = "image_only_visual_reinspection"
+            if not engineering_error:
+                reviewed_after_visual.extend(
+                    evidence_id
+                    for evidence_id in pending_record.evidence_ids
+                    if evidence_id not in reviewed_after_visual
+                )
+                try:
+                    decision_2 = await orchestrator._run_discrepancy_decision(
+                        state,
+                        investigation,
+                        reviewed_evidence_ids=reviewed_after_visual,
+                        trigger="qualified_evidence",
+                        interaction_session=InteractionSession(),
+                    )
+                except Exception as exc:
+                    engineering_error = f"{type(exc).__name__}: {exc}"
+                    engineering_error_stage = "image_only_discrepancy_decision"
         visual_evidence_ids = (
             list(pending_record.evidence_ids)
             if pending_record is not None
@@ -292,6 +303,8 @@ async def replay_snapshot(args: argparse.Namespace) -> dict[str, Any]:
             "decision_1_update": decision_1,
             "visual_inspection_update": visual_update,
             "decision_2_update": decision_2,
+            "engineering_error": engineering_error,
+            "engineering_error_stage": engineering_error_stage,
             "coverage_audit": audit.model_dump(mode="json"),
             "compiled_verdict": compiled_verdict,
             "compiled_basis": basis_payload,
@@ -341,6 +354,8 @@ def main() -> int:
         ),
         "visual_inspection_ran": result["visual_inspection_update"] is not None,
         "compiled_verdict": result["compiled_verdict"],
+        "engineering_error": result["engineering_error"],
+        "engineering_error_stage": result["engineering_error_stage"],
         "composite_finding_ids": result["composite_finding_ids"],
         "composite_success": result["composite_success"],
         "decision_mode": (
