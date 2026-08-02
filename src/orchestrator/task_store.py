@@ -164,6 +164,8 @@ _SOURCE_PROPERTY_BODY_TOKENS = {
     "eyes",
     "face",
     "facial",
+    "finger",
+    "fingers",
     "hand",
     "hands",
     "lips",
@@ -338,6 +340,17 @@ def extract_source_visible_property(source_text: str) -> str:
             + 2 * len(objects)
             + 2 * relations
         )
+        count_body_match = re.search(
+            r"\b(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|\d+)"
+            r"\s+(?:finger|fingers|hand|hands|eye|eyes|tail|tails)\b",
+            sentence,
+            flags=re.IGNORECASE,
+        )
+        if count_body_match:
+            ranked.append(
+                (score + 6, _one_line(count_body_match.group(0))[:120])
+            )
+            continue
         if score < 4:
             continue
         version_match = re.search(

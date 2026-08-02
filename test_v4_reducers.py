@@ -1793,6 +1793,12 @@ def test_source_visible_property_extraction_is_short_and_rejects_scene_support()
         )
         == "female White-Faced Saki"
     )
+    assert (
+        extract_source_visible_property(
+            "Netanyahu With 'Six Fingers'?"
+        )
+        == "Six Fingers"
+    )
 
 
 def test_runtime_binding_requires_a_concrete_source_visible_property() -> None:
