@@ -171,3 +171,87 @@ pixel/OCR anchors 中已经存在。因此该样本不满足“新知识揭示�
 
 完成这两类补充后，再实现最小 intervention，并在同一 frozen snapshot 集合上做成对
 replay；不要用 free-running rollout 的搜索随机性替代机制消融。
+
+## 9. 2026-08-02 补充冻结样本
+
+本轮在不修改 Agent prompt、schema、reducer 或控制流的前提下，继续用
+/tmp/ifv-github-dcf8452 clean clone（detached d7f4e69）和 reviewed-52
+冻结快照补齐两类诊断轨迹。远端执行仍按 docs/operations/gpu13.md 走
+Jupyter ifv-agent kernel；执行前确认 hostname=gpu-13、id -un=wza、
+OMP_NUM_THREADS=1，服务器 checkout 保持 clean。
+
+### 9.1 Support-alignment：mummy mouth / gold foil
+
+- case：case_720d256cc8126414
+- attempt：063605-b33a11
+- snapshot：snapshot-00000043.json
+- source Evidence：evidence-5f3857502783a04b0fe9
+- result：
+  /gsdata/home/wza/image-factual-verifier-v4/runs/replays/mummy-mouth-snapshot43-support-d7f4e69/result.json
+
+Decision 1 请求了复看，但请求退化为 question="text"、
+expected_property="text"，没有把 source-side property 明确写进问题。focused
+visual inspection 仍创建了 evidence-0becb8f6d30afa9c54a0，状态为
+observed，多视图记录到 skull oral cavity 内的 gold foil，置信度约
+0.95–0.99。
+
+Decision 2 接受 assessment-2a72d7950c51052df52e，coverage 将该 claim 标为
+supported，同时引用 source Evidence 与 pixel Evidence。该样本没有生成错误
+composite，也没有终局 verdict（compile_error 为非终局状态下的预期保护）。
+定性结论：post-reinspection consumption 在同向证据场景下可工作；但
+trigger/question bridge 仍会产生不必要且退化的复看请求。
+
+### 9.2 Visual-ambiguous：Seagram lobby / pink granite plaza
+
+- case：case_6d6fcf2764792b69
+- attempt：063341-9ca2a1
+- snapshot：snapshot-00000045.json
+- source Evidence：evidence-421bd99084a14098d0d8
+- result：
+  /gsdata/home/wza/image-factual-verifier-v4/runs/replays/seagram-lobby-snapshot45-ambiguous-candidate-d7f4e69/result.json
+
+该样本的 source text 描述 Seagram Building 西侧 plaza 为 pink granite、带低矮
+retaining walls 与 marble caps。Decision 1 生成了 source-specific 复看问题：
+Does the visible exterior plaza feature pink granite paving and low retaining walls with marble caps?
+
+focused visual inspection 创建 evidence-ebde6e83deaa07ab0e1a，状态为
+ambiguous。工具正确指出图像是黑白图：能看到浅色铺装和带 cap 的低矮围墙，
+但不能从像素确认“pink”这一颜色/material 属性。Decision 2 没有接受新的
+assessment、discrepancy 或 composite，verdict 继续为 continue，coverage 仍为
+非终局。这满足 strict visual-ambiguous 样本要求：像素证据被记录，但不被升级为
+支持或反驳 basis。
+
+### 9.3 额外筛选结果
+
+为避免硬凑 ambiguous，本轮还回放并排除了多条候选：
+
+- Egyptian Harper：case_cc2cb1ea9f311ea1，snapshot 22；未触发复看。
+- 2026 quarters：case_399fb6435459a100，snapshot 22；未触发复看。
+- Saki / L'Hoest：case_79488c4a92b0b00d，snapshot 29；未触发复看。
+- L'Hoest morphology：case_fc1f88152596276b，snapshot 50；未触发复看。
+- Saint Francis / Saint Anthony：已触发复看但以高置信 observed 断言 Tau cross，
+  不属于 ambiguous。
+- Maid Marian / Ribbons：case_9647ef7ca00bfbb8，snapshot 64；触发并返回
+  not_observed，非 strict ambiguous。它另外暴露一个消费问题：Decision 2 能
+  形成 decisive discrepancy，但最终 compiled basis 仍只列 source Evidence，漏掉
+  新 pixel Evidence。
+- 其他小字/身份/场景候选（Bolt scoreboard、World Series scoreboard、Advance
+  Auto donation、Netanyahu robe、Tour/Sagrada、Black Nazarene、Oxford rugby、
+  Trump/Epstein AI、Durst robot、Jantar Mantar、volcanic island、tall ships、Taiwan
+  altar）要么未触发复看，要么返回高置信 observed，未产生 strict ambiguous。
+
+### 9.4 更新后的诊断口径
+
+补充后，冻结 replay 覆盖从 5 条 canonical trace 扩展为 7 条核心诊断轨迹
+（原 5 条 + support-alignment + visual-ambiguous）。严格 composite success 仍只有
+Diana。新增两条的局部计数为：
+
+- visual reinspection requested：2/2；
+- source-specific question：1/2（Seagram 成功；mummy mouth 退化为 text）；
+- focused visual result useful：2/2（mummy 为 observed，Seagram 为 ambiguous）；
+- ambiguous preserved without false composite/verdict：1/1（Seagram）；
+- false composite in support-alignment：0/1。
+
+因此下一步仍按原 no-go/go 判断推进：先做最小 intervention，优先修
+source-specific question gating 与 post-reinspection evidence consumption；仍不引入
+belief graph 或新的全局 visual interpretation state。
