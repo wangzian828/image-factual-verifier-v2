@@ -1773,6 +1773,20 @@ def test_source_visible_property_extraction_is_short_and_rejects_scene_support()
         )
         == "without wearing gloves"
     )
+    assert (
+        extract_source_visible_property(
+            "Inside a Roman-era tomb in Egypt's Minya Governorate, archaeologists "
+            "found something tucked inside the mouth of a mummy."
+        )
+        == "something tucked inside the mouth of a mummy"
+    )
+    assert (
+        extract_source_visible_property(
+            "A pink granite plaza with pools and greenery lies on the western "
+            "side of the Seagram Building."
+        )
+        == "pink granite plaza with pools and greenery"
+    )
 
 
 def test_runtime_binding_requires_a_concrete_source_visible_property() -> None:

@@ -3832,6 +3832,15 @@ class StageRunner:
                 "directional Finding chain. Address every independent error in "
                 "the validator feedback. "
             )
+            if "resolved focused visual Evidence" in reason:
+                message += (
+                    "For each feedback mapping like 'evidence-X -> claim_ids "
+                    "[claim-Y]', if you assess claim-Y or propose a discrepancy "
+                    "for claim-Y, include evidence-X in "
+                    "claim_assessments[].selected_evidence_ids or in "
+                    "material_discrepancy.evidence_ids. Do not set "
+                    "visual_evidence_disposition for that same claim. "
+                )
         return message + f"Runtime validator feedback: {reason}"
 
     def _has_duplicate_tool_call(self, steps: List[StageStep], tool_name: str, tool_args: Dict[str, Any]) -> bool:

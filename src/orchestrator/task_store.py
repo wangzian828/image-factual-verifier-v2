@@ -144,9 +144,15 @@ _SOURCE_PROPERTY_MATERIAL_TOKENS = {
     "aluminum",
     "bronze",
     "concrete",
+    "foil",
     "glass",
+    "gold",
+    "granite",
+    "marble",
     "metal",
+    "papyrus",
     "plastic",
+    "silver",
     "steel",
     "stone",
     "wood",
@@ -170,12 +176,21 @@ _SOURCE_PROPERTY_OBJECT_TOKENS = {
     "boulder",
     "glove",
     "gloves",
+    "greenery",
     "instrument",
     "microphone",
+    "mummy",
+    "plaza",
+    "pools",
+    "rosary",
     "ribbon",
     "ribbons",
+    "scroll",
+    "skull",
     "statue",
     "tray",
+    "wall",
+    "walls",
 }
 _SOURCE_PROPERTY_RELATION_PHRASES = (
     "around",
@@ -336,6 +351,33 @@ def extract_source_visible_property(source_text: str) -> str:
             match = re.search(pattern, sentence, flags=re.IGNORECASE)
             if match:
                 ranked.append((score + 4, _one_line(match.group(0))[:240]))
+                continue
+        if colors and (materials or objects):
+            descriptor_tokens = (
+                _SOURCE_PROPERTY_COLOR_TOKENS
+                | _SOURCE_PROPERTY_MATERIAL_TOKENS
+                | _SOURCE_PROPERTY_OBJECT_TOKENS
+            )
+            pattern = (
+                r"\b(?:"
+                + "|".join(sorted(_SOURCE_PROPERTY_COLOR_TOKENS))
+                + r")\b[^.;]{0,100}\b(?:"
+                + "|".join(sorted(descriptor_tokens))
+                + r")\b"
+            )
+            match = re.search(pattern, sentence, flags=re.IGNORECASE)
+            if match:
+                ranked.append((score + 4, _one_line(match.group(0))[:240]))
+                continue
+        if "tucked inside" in lowered and "mouth" in lowered:
+            match = re.search(
+                r"\b(?:something|object|item|foil|gold foil)?\s*tucked\s+inside\s+"
+                r"(?:the\s+)?mouth\s+of\s+(?:a\s+|the\s+)?(?:mummy|skull)\b",
+                sentence,
+                flags=re.IGNORECASE,
+            )
+            if match:
+                ranked.append((score + 5, _one_line(match.group(0))[:240]))
                 continue
         if objects and relations:
             object_pattern = "|".join(
