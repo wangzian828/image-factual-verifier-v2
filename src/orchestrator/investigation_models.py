@@ -681,6 +681,13 @@ class NewSearchHypothesis(StrictModel):
         return self
 
 
+class VisualEvidenceDisposition(StrictModel):
+    """Explicit audit note for a resolved pixel check that is not consumed."""
+
+    disposition: Literal["irrelevant_to_current_claim_or_discrepancy"]
+    rationale: str = Field(min_length=12, max_length=800)
+
+
 class DiscrepancyDecisionOutput(StrictModel):
     claim_assessments: List[ClaimAssessmentProposal] = Field(
         default_factory=list,
@@ -693,6 +700,7 @@ class DiscrepancyDecisionOutput(StrictModel):
         max_length=3,
     )
     visual_reinspection: Optional[VisualReinspectionRequest] = None
+    visual_evidence_disposition: Optional[VisualEvidenceDisposition] = None
     verdict_proposal: Literal[
         "continue",
         "fake",
@@ -717,6 +725,37 @@ class DiscrepancyDecisionProposalOutput(DiscrepancyDecisionOutput):
 
     material_discrepancy: Optional[MaterialDiscrepancyDraft] = None
     visual_reinspection: Optional[VisualReinspectionProposal] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def project_mixed_visual_transition(cls, value: object) -> object:
+        """Keep a visual request from smuggling a semantic Decision with it."""
+
+        if not isinstance(value, dict) or value.get("visual_reinspection") is None:
+            return value
+        if not any(
+            (
+                value.get("claim_assessments"),
+                value.get("material_discrepancy") is not None,
+                value.get("retire_hypothesis_ids"),
+                value.get("new_hypotheses"),
+                value.get("visual_evidence_disposition") is not None,
+                value.get("verdict_proposal", "continue") != "continue",
+            )
+        ):
+            return value
+        projected = dict(value)
+        projected.update(
+            {
+                "claim_assessments": [],
+                "material_discrepancy": None,
+                "retire_hypothesis_ids": [],
+                "new_hypotheses": [],
+                "visual_evidence_disposition": None,
+                "verdict_proposal": "continue",
+            }
+        )
+        return projected
 
     @model_validator(mode="after")
     def validate_sparse_visual_transition(

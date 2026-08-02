@@ -245,9 +245,17 @@ the complete ImageClaim. In a source-pixel conflict, cite both the source Eviden
 and the focused visual Evidence in claim_assessments[].selected_evidence_ids and
 material_discrepancy.evidence_ids; keep their recorded stances unchanged while the
 Decision records the composite discrepancy.
+When resolved_focused_visual_evidence_requirements is non-empty, this is the second
+Decision after a source-grounded pixel check. Consume its listed pixel Evidence in a
+Claim assessment or MaterialDiscrepancy. Only when the pixel observation genuinely
+does not answer the current Claim/discrepancy may you set
+visual_evidence_disposition.disposition to
+irrelevant_to_current_claim_or_discrepancy and give a concrete rationale. Never
+silently revert to source-only support or a source-only verdict after that check.
 For a visual_reinspection transition, emit only reason, scope, question, and
 expected_property inside visual_reinspection. Leave claim_assessments,
-material_discrepancy, retire_hypothesis_ids, and new_hypotheses empty, and keep
+material_discrepancy, retire_hypothesis_ids, new_hypotheses, and
+visual_evidence_disposition empty, and keep
 verdict_proposal=continue. The runtime binds the unique canonical Claim, pixel/OCR
 anchors, and reviewed grounding Evidence from runtime_visual_reinspection_binding;
 never copy those IDs into the visual proposal. Request reinspection only when that
@@ -972,6 +980,17 @@ def render_discrepancy_decision_context(
                 "task_owned_claim_ids": list(task.claim_ids),
             }
         )
+    runtime_visual_binding = discrepancy_visual_reinspection_binding(
+        state,
+        reviewed_evidence_ids=reviewed,
+    )
+    binding_hint_by_claim_id = {
+        str(item.get("claim_id")): str(
+            item.get("source_visible_property_hint", "")
+        )
+        for item in runtime_visual_binding.get("candidates", [])
+        if isinstance(item, dict)
+    }
     visual_alignment_candidates = []
     if len(state.visual_reinspections) < 1:
         facts_by_id = {item.fact_id: item for item in state.facts}
@@ -1003,6 +1022,9 @@ def render_discrepancy_decision_context(
                         "claim_id": claim_id,
                         "claim_statement": claim.statement,
                         "claim_status": claim.status,
+                        "source_visible_property_hint": (
+                            binding_hint_by_claim_id.get(claim_id, "")
+                        ),
                         "current_image_account": state.image_account_summary,
                         "allowed_visual_anchors": [
                             {
@@ -1022,10 +1044,44 @@ def render_discrepancy_decision_context(
                         ),
                     }
                 )
-    runtime_visual_binding = discrepancy_visual_reinspection_binding(
-        state,
-        reviewed_evidence_ids=reviewed,
-    )
+    resolved_focused_visual_evidence_requirements = []
+    for record in state.visual_reinspections:
+        if (
+            record.status != "resolved"
+            or not (
+                set(record.request.grounding_evidence_ids)
+                & reviewed_set
+            )
+        ):
+            continue
+        visual_evidence_ids = [
+            evidence_id
+            for evidence_id in record.evidence_ids
+            if evidence_id in reviewed_set
+            and evidence_id in evidence_by_id
+            and evidence_by_id[evidence_id].evidence_kind == "image_region"
+            and evidence_by_id[evidence_id].tool_name
+            == "focused_visual_inspection"
+            and evidence_by_id[evidence_id].visual_question_id
+            == record.visual_question_id
+        ]
+        if visual_evidence_ids:
+            resolved_focused_visual_evidence_requirements.append(
+                {
+                    "visual_question_id": record.visual_question_id,
+                    "question": record.request.question,
+                    "expected_property": record.request.expected_property,
+                    "grounding_evidence_ids": list(
+                        record.request.grounding_evidence_ids
+                    ),
+                    "visual_evidence_ids": visual_evidence_ids,
+                    "required_review": (
+                        "Consume the pixel Evidence in this Decision or explicitly "
+                        "record why it is irrelevant to the current "
+                        "Claim/discrepancy."
+                    ),
+                }
+            )
     return json.dumps(
         {
             "trigger": trigger,
@@ -1060,6 +1116,9 @@ def render_discrepancy_decision_context(
                 visual_alignment_candidates[:12]
             ),
             "runtime_visual_reinspection_binding": runtime_visual_binding,
+            "resolved_focused_visual_evidence_requirements": (
+                resolved_focused_visual_evidence_requirements[:4]
+            ),
             "ownership_note": (
                 "Ownership permits review; it does not prove that Evidence "
                 "semantically addresses every owned Claim."

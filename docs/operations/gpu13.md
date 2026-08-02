@@ -152,6 +152,24 @@ form with a harmless `printf` or path-existence check. Treat any
 `unrecognized arguments` error from `jupyter_remote.py` as a local quoting failure;
 the intended remote command did not run.
 
+### Long Jupyter commands
+
+`jupyter_remote.py` uses a 120-second execution timeout by default. Pass a larger
+explicit timeout for a foreground replay, provider probe, or other command that can
+legitimately exceed that control-plane limit:
+
+```powershell
+@'
+cd /absolute/remote/checkout
+scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent python scripts/replay_snapshot_discrepancy.py ...
+'@ | python scripts/server/jupyter_remote.py --kernel-name ifv-agent --shell `
+  --stdin --timeout 240
+```
+
+The timeout is for the Windows-to-Jupyter control client, not permission to run
+unbounded work. Keep the runtime's own bounded action, provider, and stage limits
+in effect.
+
 On 2026-07-15, the `8333` path was authenticated and verified with
 `hostname=gpu-13`, `id -un=wza`, and the `ifv-agent` kernel. Credentials were supplied
 only to the controlling process and were not written to the checkout, logs, or this
@@ -375,6 +393,27 @@ source-access policy active with 3 excluded provenance URLs
 The release is a `development_subset`, not a formal three-class benchmark. The
 data-owned release audit's perfect predictions verify packaging/scorer consistency;
 they are not Agent results.
+
+### Frozen historical snapshot replays
+
+`scripts/replay_snapshot_discrepancy.py` is a mechanism validator, not a
+free-running evaluator. It restores a historical investigation snapshot, injects
+only explicitly selected public source Evidence, runs the bounded Decision →
+focused-pixel → Decision sequence, and writes a separate replay artifact.
+
+Some archived reviewed-52 traces predate the active automatic-diverse-20 release.
+For those snapshots, use the scoring release named by the historical run manifest,
+not the current 20-case runtime release. The reviewed-52 replay verified on
+2026-08-02 used:
+
+```text
+/gsdata/home/wza/image-factual-verifier-data-pipeline-data/benchmarks/releases/
+ifv-scoring-gold-v1-reviewed-52-20260723/runtime_input/cases.jsonl
+```
+
+Write replay output under the data root (for example,
+`/gsdata/home/wza/image-factual-verifier-v4/runs/replays/<run-id>/`) and never
+overwrite the historical evaluation run or write artifacts into a Git checkout.
 
 The frozen `process_reference_protocol.json` still names the older strict
 acceptable-evidence and citation metrics. Current runtime scoring intentionally uses

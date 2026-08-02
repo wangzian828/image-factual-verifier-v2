@@ -1570,6 +1570,21 @@ class Orchestrator:
             step,
             image_sha256=runtime_case.image_sha256,
         )
+        visual_failure_guard = not bool(update.get("created_evidence_ids"))
+        if visual_failure_guard:
+            failure_messages = [
+                item.message
+                for item in investigation.failures
+                if item.failure_id in set(update.get("created_failure_ids", []))
+            ]
+            guard_message = (
+                "Focused visual reinspection produced no pixel Evidence; refusing "
+                "to continue into a source-only follow-up Decision."
+            )
+            if failure_messages:
+                guard_message += " Tool failure: " + failure_messages[0][:800]
+            update["focused_visual_failure_guard"] = guard_message
+            step.metadata["focused_visual_failure_guard"] = guard_message
         progress = record_action_progress(
             investigation,
             update,
@@ -1583,6 +1598,8 @@ class Orchestrator:
         step.metadata["investigation_state_update"] = update
         self._record_stage_steps(state, [step])
         self._sync_image_only_state(state, investigation)
+        if visual_failure_guard:
+            raise RuntimeError(update["focused_visual_failure_guard"])
         return update
 
     async def _run_image_only_evidence_decision(

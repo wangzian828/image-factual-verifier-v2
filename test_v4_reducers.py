@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,6 +25,7 @@ from src.orchestrator.investigation_models import (
     NewSearchHypothesis,
     SearchHypothesisProposal,
     VisualEntity,
+    VisualEvidenceDisposition,
     VisualFact,
     VisualReinspectionProposal,
     VisualReinspectionRequest,
@@ -42,12 +44,16 @@ from src.orchestrator.task_store import (
     apply_image_account_planning,
     archive_recall_available,
     bind_discrepancy_decision_runtime_ids,
+    discrepancy_visual_reinspection_binding,
+    extract_source_visible_property,
     record_route_selection_exhaustion,
     record_tool_observation,
     remaining_claim_hypothesis_routes,
     runtime_task_tool_names,
 )
+from src.orchestrator.pipeline import Orchestrator
 from src.orchestrator.stage_runner import StageStep
+from src.orchestrator.state import ImageOnlyRuntimeCase, VerificationState
 
 
 def _state() -> ImageOnlyInvestigationState:
@@ -1599,6 +1605,9 @@ def test_discrepancy_context_flags_evidence_to_visual_alignment_candidate() -> N
             "claim_id": claim.claim_id,
             "claim_statement": claim.statement,
             "claim_status": "open",
+            "source_visible_property_hint": candidates[0][
+                "source_visible_property_hint"
+            ],
             "current_image_account": state.image_account_summary,
             "allowed_visual_anchors": [
                 {
@@ -1621,6 +1630,10 @@ def test_discrepancy_context_flags_evidence_to_visual_alignment_candidate() -> N
                 "claim_fact_id": claim.fact_id,
                 "anchor_fact_ids": claim.anchor_fact_ids,
                 "grounding_evidence_ids": [evidence.evidence_id],
+                "source_visible_property_hint": (
+                    "The archived caption says the handshake happened without "
+                    "wearing gloves."
+                ),
             }
         ],
         "binding": {
@@ -1628,6 +1641,10 @@ def test_discrepancy_context_flags_evidence_to_visual_alignment_candidate() -> N
             "claim_fact_id": claim.fact_id,
             "anchor_fact_ids": claim.anchor_fact_ids,
             "grounding_evidence_ids": [evidence.evidence_id],
+            "source_visible_property_hint": (
+                "The archived caption says the handshake happened without "
+                "wearing gloves."
+            ),
         },
     }
 
@@ -1693,6 +1710,259 @@ def test_runtime_binding_rewrites_misdirected_integrity_visual_question() -> Non
     assert request.scope != "integrity"
     assert "generic AI" not in request.question
     assert "microphone" in request.question
+
+
+def test_mixed_visual_decision_projects_to_only_visual_transition() -> None:
+    payload = {
+        "claim_assessments": [
+            {
+                "claim_id": "claim-guess",
+                "assessment": "refuted",
+                "selected_evidence_ids": ["evidence-guess"],
+                "rationale": "This semantic conclusion must not be accepted yet.",
+            }
+        ],
+        "material_discrepancy": {
+            "statement": "A speculative discrepancy.",
+            "affected_claim_ids": ["claim-guess"],
+            "evidence_ids": ["evidence-guess"],
+            "rationale": "Pixels have not yet been inspected.",
+        },
+        "new_hypotheses": [
+            {
+                "claim_ids": ["claim-guess"],
+                "statement": "A speculative new route.",
+                "queries": ["speculative route"],
+                "expected_information": "Speculative information.",
+                "suggested_tools": ["text_search"],
+            }
+        ],
+        "visual_reinspection": {
+            "reason": "identity",
+            "scope": "subject",
+            "question": "Does the animal have an orange patch around its mouth?",
+            "expected_property": "orange patch around the mouth",
+        },
+        "verdict_proposal": "real",
+        "rationale": "The visual check must be isolated first.",
+    }
+
+    parsed = DiscrepancyDecisionProposalOutput.model_validate(payload)
+
+    assert parsed.visual_reinspection is not None
+    assert parsed.claim_assessments == []
+    assert parsed.material_discrepancy is None
+    assert parsed.new_hypotheses == []
+    assert parsed.retire_hypothesis_ids == []
+    assert parsed.verdict_proposal == "continue"
+
+
+def test_source_visible_property_extraction_is_short_and_rejects_scene_support() -> None:
+    source = (
+        "A New York Times article quoted a Facebook post before describing a "
+        "newly identified Congo monkey with an orange patch around its nose and "
+        "mouth. The social post included publication metadata and a long URL."
+    )
+    property_hint = extract_source_visible_property(source)
+
+    assert "orange" in property_hint.casefold()
+    assert "mouth" in property_hint.casefold()
+    assert "facebook" not in property_hint.casefold()
+    assert len(property_hint) <= 240
+    assert extract_source_visible_property(
+        "The source describes a surgical team working in an operating room."
+    ) == ""
+
+
+def test_runtime_binding_requires_a_concrete_source_visible_property() -> None:
+    state = _planned_state()
+    evidence = _append_evidence(state)
+    evidence.evidence_kind = "web_span"
+    evidence.span_start = 0
+    evidence.span_end = len(evidence.exact_text)
+    evidence.exact_text = (
+        "The source reports that a surgical team works in an operating room."
+    )
+    evidence.claim_binding = "source_assertion"
+    evidence.relation_scope = "same_relation"
+    evidence.relation_stance = "supports"
+
+    binding = discrepancy_visual_reinspection_binding(
+        state,
+        reviewed_evidence_ids=[evidence.evidence_id],
+    )
+    bound, error = bind_discrepancy_decision_runtime_ids(
+        state,
+        DiscrepancyDecisionProposalOutput(
+            visual_reinspection=VisualReinspectionProposal(
+                reason="identity",
+                scope="subject",
+                question="Does the foreground show a specimen or an instrument?",
+                expected_property="foreground object type",
+            ),
+            rationale="A broad source statement must not authorize this check.",
+        ),
+        reviewed_evidence_ids=[evidence.evidence_id],
+    )
+
+    assert binding["status"] == "unavailable"
+    assert bound is None
+    assert "binding is unavailable" in error
+
+
+def test_runtime_binding_rewrites_long_source_text_to_visible_property() -> None:
+    state = _planned_state()
+    evidence = _append_evidence(state)
+    evidence.evidence_kind = "web_span"
+    evidence.span_start = 0
+    evidence.span_end = 182
+    evidence.exact_text = (
+        "Facebook metadata and a New York Times excerpt describe Likweli as a "
+        "new monkey with an orange patch around its nose and mouth, followed by "
+        "unrelated publication metadata and a long source attribution."
+    )
+    evidence.claim_binding = "source_assertion"
+    evidence.relation_scope = "same_relation"
+    evidence.relation_stance = "supports"
+
+    bound, error = bind_discrepancy_decision_runtime_ids(
+        state,
+        DiscrepancyDecisionProposalOutput(
+            visual_reinspection=VisualReinspectionProposal(
+                reason="integrity",
+                scope="integrity",
+                question="Does the original image show generic AI artifacts?",
+                expected_property=evidence.exact_text,
+            ),
+            rationale="Rewrite the source binding to a concrete pixel property.",
+        ),
+        reviewed_evidence_ids=[evidence.evidence_id],
+    )
+
+    assert error == ""
+    assert bound is not None
+    request = bound.visual_reinspection
+    assert request is not None
+    assert "orange" in request.expected_property.casefold()
+    assert "mouth" in request.expected_property.casefold()
+    assert "facebook" not in request.expected_property.casefold()
+    assert len(request.expected_property) <= 240
+    assert request.reason != "integrity"
+    assert request.scope != "integrity"
+
+
+def test_second_decision_must_consume_resolved_visual_evidence_or_explain_irrelevance() -> None:
+    state = _planned_state()
+    source, visual = _append_source_visual_conflict_pair(state)
+    claim = state.image_claims[0]
+    before = state.model_dump(mode="json")
+
+    ignored = apply_discrepancy_decision(
+        state,
+        DiscrepancyDecisionOutput(
+            claim_assessments=[
+                ClaimAssessmentProposal(
+                    claim_id=claim.claim_id,
+                    assessment="supported",
+                    selected_evidence_ids=[source.evidence_id],
+                    rationale="This source-only conclusion improperly ignores pixels.",
+                )
+            ],
+            verdict_proposal="continue",
+            rationale="The focused Evidence must be addressed.",
+        ),
+        reviewed_evidence_ids=[source.evidence_id, visual.evidence_id],
+        trigger="qualified_evidence",
+    )
+
+    assert ignored["accepted"] is False
+    assert "must consume the resolved focused visual Evidence" in ignored["rejected_reason"]
+    assert state.model_dump(mode="json") == before
+
+    disposition = apply_discrepancy_decision(
+        state,
+        DiscrepancyDecisionOutput(
+            visual_evidence_disposition=VisualEvidenceDisposition(
+                disposition="irrelevant_to_current_claim_or_discrepancy",
+                rationale=(
+                    "The focused hand-covering observation does not answer the "
+                    "separate scene-location claim currently under review."
+                ),
+            ),
+            verdict_proposal="continue",
+            rationale="Record the non-use of the resolved visual observation.",
+        ),
+        reviewed_evidence_ids=[source.evidence_id, visual.evidence_id],
+        trigger="qualified_evidence",
+    )
+
+    assert disposition["accepted"] is True, disposition
+    assert state.discrepancy_decisions[-1].output.visual_evidence_disposition
+
+
+def test_focused_visual_failure_guard_blocks_source_only_follow_up(
+    tmp_path: Path,
+) -> None:
+    state = _planned_state()
+    source, _ = _append_source_visual_conflict_pair(
+        state,
+        link_visual_to_reinspection=True,
+    )
+    record = state.visual_reinspections[-1]
+    record.status = "pending"
+    record.evidence_ids = []
+    visual_task = next(task for task in state.tasks if task.task_id == record.task_id)
+    visual_task.status = "active"
+    image_path = tmp_path / "fixture.jpg"
+    image_path.write_bytes(b"focused-visual-failure")
+    runtime_case = ImageOnlyRuntimeCase(
+        case_id=state.brief.case_id,
+        image_path=str(image_path),
+        image_sha256="f" * 64,
+    )
+    verification = VerificationState(
+        image_id=runtime_case.case_id,
+        image_path=runtime_case.image_path,
+        runtime_case=runtime_case,
+        input_mode="image_only",
+        investigation_state=state,
+    )
+    orchestrator = Orchestrator(
+        provider="gemini",
+        model_name="controlled",
+        validate_startup=False,
+    )
+
+    async def failing_tool(*_args: object, **_kwargs: object) -> tuple[str, dict[str, object]]:
+        return (
+            json.dumps(
+                {
+                    "status": "error",
+                    "error": "provider unavailable during focused inspection",
+                }
+            ),
+            {"tool_success": False, "tool_exception": "ProviderUnavailable"},
+        )
+
+    orchestrator._execute_tool = failing_tool  # type: ignore[method-assign]
+
+    with pytest.raises(
+        RuntimeError,
+        match="refusing to continue into a source-only follow-up Decision",
+    ):
+        asyncio.run(
+            orchestrator._run_image_only_visual_reinspection(
+                verification,
+                state,
+                image_path=str(image_path),
+                runtime_case=runtime_case,
+                visual_question_id=record.visual_question_id,
+            )
+        )
+
+    assert state.visual_reinspections[-1].status == "failed"
+    assert state.failures[-1].tool_name == "focused_visual_inspection"
+    assert source.evidence_id in state.visual_reinspections[-1].request.grounding_evidence_ids
 
 
 def test_discrepancy_decision_rejects_fake_without_decisive_discrepancy() -> None:

@@ -125,6 +125,102 @@ _INTEGRITY_EVIDENCE_TOKENS = {
     "photoshop",
     "synthetic",
 }
+_SOURCE_PROPERTY_COLOR_TOKENS = {
+    "amber",
+    "black",
+    "blue",
+    "brown",
+    "gray",
+    "green",
+    "grey",
+    "orange",
+    "pink",
+    "purple",
+    "red",
+    "white",
+    "yellow",
+}
+_SOURCE_PROPERTY_MATERIAL_TOKENS = {
+    "aluminum",
+    "bronze",
+    "concrete",
+    "glass",
+    "metal",
+    "plastic",
+    "steel",
+    "stone",
+    "wood",
+}
+_SOURCE_PROPERTY_BODY_TOKENS = {
+    "beak",
+    "chin",
+    "eye",
+    "eyes",
+    "face",
+    "facial",
+    "hand",
+    "hands",
+    "lips",
+    "mouth",
+    "nose",
+    "tail",
+}
+_SOURCE_PROPERTY_OBJECT_TOKENS = {
+    "banner",
+    "boulder",
+    "glove",
+    "gloves",
+    "instrument",
+    "microphone",
+    "ribbon",
+    "ribbons",
+    "statue",
+    "tray",
+}
+_SOURCE_PROPERTY_RELATION_PHRASES = (
+    "around",
+    "beside",
+    "between",
+    "covered by",
+    "holding",
+    "inside",
+    "next to",
+    "on top of",
+    "on the",
+    "under",
+    "wearing",
+    "without wearing",
+)
+_SOURCE_PROPERTY_STOP_TOKENS = {
+    "about",
+    "after",
+    "and",
+    "are",
+    "at",
+    "by",
+    "for",
+    "from",
+    "has",
+    "have",
+    "image",
+    "in",
+    "is",
+    "it",
+    "of",
+    "on",
+    "or",
+    "photo",
+    "photograph",
+    "pictured",
+    "says",
+    "shows",
+    "source",
+    "that",
+    "the",
+    "this",
+    "to",
+    "with",
+}
 
 
 def discrepancy_visual_reinspection_binding(
@@ -149,6 +245,7 @@ def discrepancy_visual_reinspection_binding(
             and fact_by_id[fact_id].origin.type in {"input_image", "ocr"}
         ][:6]
         grounding_evidence_ids = []
+        source_fragments = []
         for evidence_id in reviewed_ids:
             evidence = evidence_by_id.get(evidence_id)
             if evidence is None or evidence.evidence_kind == "image_region":
@@ -160,13 +257,22 @@ def discrepancy_visual_reinspection_binding(
                 and claim.claim_id in task.claim_ids
             ):
                 grounding_evidence_ids.append(evidence_id)
-        if anchor_fact_ids and grounding_evidence_ids:
+                source_fragments.append(evidence.exact_text)
+        source_visible_property_hint = extract_source_visible_property(
+            " ".join(source_fragments),
+        )
+        if (
+            anchor_fact_ids
+            and grounding_evidence_ids
+            and source_visible_property_hint
+        ):
             candidates.append(
                 {
                     "claim_id": claim.claim_id,
                     "claim_fact_id": claim.fact_id,
                     "anchor_fact_ids": anchor_fact_ids,
                     "grounding_evidence_ids": grounding_evidence_ids[:8],
+                    "source_visible_property_hint": source_visible_property_hint,
                 }
             )
     status = (
@@ -185,6 +291,57 @@ def discrepancy_visual_reinspection_binding(
 
 def _one_line(value: str) -> str:
     return " ".join(str(value).split())
+
+
+def extract_source_visible_property(source_text: str) -> str:
+    """Return one short, source-grounded property that pixels can inspect."""
+
+    text = _one_line(source_text)
+    if not text:
+        return ""
+    sentences = [
+        _one_line(item)
+        for item in re.split(r"(?<=[.!?;])\s+", text)
+        if _one_line(item)
+    ]
+    ranked: List[tuple[int, str]] = []
+    for sentence in sentences:
+        lowered = sentence.casefold()
+        tokens = _semantic_request_tokens(sentence)
+        colors = tokens & _SOURCE_PROPERTY_COLOR_TOKENS
+        materials = tokens & _SOURCE_PROPERTY_MATERIAL_TOKENS
+        body = tokens & _SOURCE_PROPERTY_BODY_TOKENS
+        objects = tokens & _SOURCE_PROPERTY_OBJECT_TOKENS
+        relations = sum(
+            phrase in lowered
+            for phrase in _SOURCE_PROPERTY_RELATION_PHRASES
+        )
+        score = (
+            4 * len(colors)
+            + 3 * len(materials)
+            + 2 * len(body)
+            + 2 * len(objects)
+            + 2 * relations
+        )
+        if score < 4:
+            continue
+        if colors and body:
+            pattern = (
+                r"\b(?:"
+                + "|".join(sorted(_SOURCE_PROPERTY_COLOR_TOKENS))
+                + r")\b[^.;]{0,120}\b(?:"
+                + "|".join(sorted(_SOURCE_PROPERTY_BODY_TOKENS))
+                + r")\b"
+            )
+            match = re.search(pattern, sentence, flags=re.IGNORECASE)
+            if match:
+                ranked.append((score + 4, _one_line(match.group(0))[:240]))
+                continue
+        ranked.append((score, sentence[:240]))
+    if not ranked:
+        return ""
+    ranked.sort(key=lambda item: (-item[0], len(item[1]), item[1].casefold()))
+    return ranked[0][1]
 
 
 def _clip_text(value: str, limit: int) -> str:
@@ -216,12 +373,29 @@ def _visual_request_needs_runtime_detail(
     proposal: Any,
     *,
     source_text: str,
+    source_visible_property: str,
 ) -> bool:
-    tokens = _semantic_request_tokens(
+    request_text = _one_line(
         f"{proposal.question} {proposal.expected_property}"
     )
+    tokens = _semantic_request_tokens(request_text)
     informative_tokens = tokens - _GENERIC_VISUAL_REQUEST_TOKENS
     if len(informative_tokens) < 2:
+        return True
+    source_normalized = _one_line(source_text)
+    if (
+        len(source_normalized) >= 80
+        and source_normalized.casefold() in request_text.casefold()
+    ):
+        return True
+    if len(_one_line(proposal.expected_property)) > 240:
+        return True
+    property_tokens = (
+        _semantic_request_tokens(source_visible_property)
+        - _SOURCE_PROPERTY_STOP_TOKENS
+    )
+    request_tokens = tokens - _SOURCE_PROPERTY_STOP_TOKENS
+    if property_tokens and not (property_tokens & request_tokens):
         return True
     if (
         tokens & _INTEGRITY_REQUEST_TOKENS
@@ -261,13 +435,15 @@ def _runtime_specific_visual_request_payload(
     source_text: str,
 ) -> Dict[str, Any]:
     payload = proposal.model_dump(mode="json")
+    source_visible_property = extract_source_visible_property(source_text)
     if not _visual_request_needs_runtime_detail(
         proposal,
         source_text=source_text,
+        source_visible_property=source_visible_property,
     ):
         return payload
 
-    source_fragment = _clip_text(source_text, 420)
+    source_fragment = source_visible_property
     claim_fragment = _clip_text(claim.statement, 260)
     if not source_fragment:
         source_fragment = claim_fragment
@@ -278,15 +454,12 @@ def _runtime_specific_visual_request_payload(
             "reason": reason,
             "scope": scope,
             "question": _clip_text(
-                "Does the original image visibly show the source-grounded "
+                "Does the original image visibly show this source-grounded "
                 f"property: {source_fragment}? Compare against the current "
                 f"ImageClaim: {claim_fragment}",
                 800,
             ),
-            "expected_property": _clip_text(
-                f"source-grounded visible property: {source_fragment}",
-                800,
-            ),
+            "expected_property": source_fragment[:240],
         }
     )
     return payload
@@ -1448,6 +1621,35 @@ def _append_composite_source_visual_discrepancy_findings(
     return created_ids
 
 
+def _resolved_visual_evidence_required_for_review(
+    state: ImageOnlyInvestigationState,
+    *,
+    reviewed_evidence_ids: Sequence[str],
+    evidence_by_id: Mapping[str, InvestigationEvidence],
+) -> List[str]:
+    """Return focused pixel Evidence that the current Decision must address."""
+
+    reviewed = set(reviewed_evidence_ids)
+    required: List[str] = []
+    for record in state.visual_reinspections:
+        if (
+            record.status != "resolved"
+            or not (set(record.request.grounding_evidence_ids) & reviewed)
+        ):
+            continue
+        for evidence_id in record.evidence_ids:
+            evidence = evidence_by_id.get(evidence_id)
+            if (
+                evidence_id in reviewed
+                and evidence is not None
+                and evidence.evidence_kind == "image_region"
+                and evidence.tool_name == "focused_visual_inspection"
+                and evidence.visual_question_id == record.visual_question_id
+            ):
+                required.append(evidence_id)
+    return list(dict.fromkeys(required))
+
+
 def _discrepancy_contract_errors(
     state: ImageOnlyInvestigationState,
     output: DiscrepancyDecisionOutput,
@@ -1462,6 +1664,47 @@ def _discrepancy_contract_errors(
 
     errors: list[str] = []
     reviewed_ids = set(reviewed_evidence_ids)
+    required_visual_evidence_ids = _resolved_visual_evidence_required_for_review(
+        state,
+        reviewed_evidence_ids=reviewed_evidence_ids,
+        evidence_by_id=evidence_by_id,
+    )
+    selected_visual_evidence_ids = {
+        evidence_id
+        for proposal in output.claim_assessments
+        for evidence_id in proposal.selected_evidence_ids
+    }
+    if output.material_discrepancy is not None:
+        selected_visual_evidence_ids.update(
+            output.material_discrepancy.evidence_ids
+        )
+    consumed_visual_evidence_ids = (
+        set(required_visual_evidence_ids) & selected_visual_evidence_ids
+    )
+    if required_visual_evidence_ids and not consumed_visual_evidence_ids:
+        if output.visual_evidence_disposition is None:
+            errors.append(
+                "Decision must consume the resolved focused visual Evidence "
+                + ", ".join(required_visual_evidence_ids)
+                + " in an assessment or discrepancy, or explicitly set "
+                "visual_evidence_disposition=irrelevant_to_current_claim_or_discrepancy"
+            )
+    elif (
+        output.visual_evidence_disposition is not None
+        and consumed_visual_evidence_ids
+    ):
+        errors.append(
+            "Decision must not mark resolved focused visual Evidence irrelevant "
+            "when it also selects that Evidence"
+        )
+    elif (
+        output.visual_evidence_disposition is not None
+        and not required_visual_evidence_ids
+    ):
+        errors.append(
+            "visual_evidence_disposition is allowed only for a reviewed resolved "
+            "focused visual Evidence record"
+        )
     valid_assessments: dict[str, Any] = {}
 
     for proposal in output.claim_assessments:
