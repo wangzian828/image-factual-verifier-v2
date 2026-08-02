@@ -206,6 +206,60 @@ def test_discrepancy_checkpoint_noop_is_an_accepted_nonterminal_update() -> None
     assert state.discrepancy_decisions[-1].trigger == "scheduled_boundary"
 
 
+def test_decision_exhaustion_fallback_records_reviewed_evidence_only() -> None:
+    state = _planned_state()
+    evidence = _append_evidence(state)
+    claim = state.image_claims[0]
+
+    fallback = Orchestrator._decision_correction_exhaustion_fallback(
+        state,
+        reviewed_evidence_ids=[evidence.evidence_id],
+        rejected_reason=(
+            "fake verdict requires a valid decisive established discrepancy; "
+            "visual reinspection request duplicates an existing route"
+        ),
+    )
+
+    assert fallback is not None
+    update = apply_discrepancy_decision(
+        state,
+        fallback,
+        reviewed_evidence_ids=[evidence.evidence_id],
+        trigger="qualified_evidence",
+    )
+
+    assert update["accepted"] is True
+    assert update["verdict_proposal"] == "continue"
+    assert state.proposed_verdict == "continue"
+    assert state.material_discrepancies == []
+    assert state.claim_assessments[-1].claim_id == claim.claim_id
+    assert state.claim_assessments[-1].assessment == "insufficient"
+    assert state.claim_assessments[-1].evidence_ids == [evidence.evidence_id]
+    assert "without inferring support" in state.claim_assessments[-1].rationale
+
+
+def test_protocol_exhaustion_reason_uses_last_validator_feedback() -> None:
+    steps = [
+        StageStep(
+            action_type="output_rejected",
+            metadata={"rejection_reason": "first rejection"},
+        ),
+        StageStep(
+            action_type="output_rejected",
+            metadata={"rejection_reason": "final validator feedback"},
+        ),
+        StageStep(
+            action_type="output",
+            metadata={"protocol_correction_exhaustion_boundary": True},
+        ),
+    ]
+
+    assert (
+        Orchestrator._protocol_exhaustion_rejection_reason(steps)
+        == "final validator feedback"
+    )
+
+
 def test_planning_query_can_establish_the_underlying_fact_independently() -> None:
     state = _state()
     output = _planning_output()

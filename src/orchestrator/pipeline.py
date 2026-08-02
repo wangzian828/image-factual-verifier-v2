@@ -1397,6 +1397,24 @@ class Orchestrator:
             )
         )
         self._record_stage_steps(state, steps)
+        exhaustion_reason = self._protocol_exhaustion_rejection_reason(steps)
+        if exhaustion_reason:
+            fallback_update = self._apply_discrepancy_decision_fallback(
+                state,
+                investigation,
+                reviewed_evidence_ids=reviewed_evidence_ids,
+                rejected_reason=exhaustion_reason,
+                before_signature=before_signature,
+                trigger=trigger,
+                exhaustion_boundary=True,
+            )
+            if fallback_update is not None:
+                return fallback_update
+            self._sync_image_only_state(state, investigation)
+            raise RuntimeError(
+                "Discrepancy Decision exhausted protocol correction budget: "
+                + exhaustion_reason
+            )
         if parsed is None:
             self._sync_image_only_state(state, investigation)
             raise RuntimeError(
@@ -1423,36 +1441,90 @@ class Orchestrator:
             rejected_reason = str(
                 update.get("rejected_reason", "unknown validation error")
             )
-            fallback = self._resolved_visual_consumption_fallback(
+            fallback_update = self._apply_discrepancy_decision_fallback(
+                state,
                 investigation,
                 reviewed_evidence_ids=reviewed_evidence_ids,
                 rejected_reason=rejected_reason,
+                before_signature=before_signature,
+                trigger=trigger,
+                exhaustion_boundary=False,
             )
-            if fallback is not None:
-                update = apply_discrepancy_decision(
-                    investigation,
-                    fallback,
-                    reviewed_evidence_ids=reviewed_evidence_ids,
-                    trigger=trigger,
-                )
-                if update.get("accepted", False):
-                    update["deterministic_visual_consumption_fallback"] = True
-                    update["fallback_rejected_reason"] = rejected_reason
-                    progress = (
-                        record_decision_progress(investigation, update)
-                        if self._discrepancy_progress_signature(investigation)
-                        != before_signature
-                        else None
-                    )
-                    if progress is not None:
-                        update["progress"] = progress.model_dump(mode="json")
-                    self._sync_image_only_state(state, investigation)
-                    return update
+            if fallback_update is not None:
+                return fallback_update
             self._sync_image_only_state(state, investigation)
             raise RuntimeError(
                 "Discrepancy Decision failed deterministic application: "
                 + rejected_reason
             )
+        progress = (
+            record_decision_progress(investigation, update)
+            if self._discrepancy_progress_signature(investigation)
+            != before_signature
+            else None
+        )
+        if progress is not None:
+            update["progress"] = progress.model_dump(mode="json")
+        self._sync_image_only_state(state, investigation)
+        return update
+
+    @staticmethod
+    def _protocol_exhaustion_rejection_reason(
+        steps: Sequence[StageStep],
+    ) -> str:
+        if not any(
+            bool(step.metadata.get("protocol_correction_exhaustion_boundary"))
+            for step in steps
+        ):
+            return ""
+        for step in reversed(steps):
+            reason = str(step.metadata.get("rejection_reason", "")).strip()
+            if reason:
+                return reason
+        return "protocol correction budget exhausted before an accepted Decision"
+
+    def _apply_discrepancy_decision_fallback(
+        self,
+        state: VerificationState,
+        investigation: ImageOnlyInvestigationState,
+        *,
+        reviewed_evidence_ids: Sequence[str],
+        rejected_reason: str,
+        before_signature: tuple[Any, ...],
+        trigger: str,
+        exhaustion_boundary: bool,
+    ) -> Optional[Dict[str, Any]]:
+        fallback = self._resolved_visual_consumption_fallback(
+            investigation,
+            reviewed_evidence_ids=reviewed_evidence_ids,
+            rejected_reason=rejected_reason,
+        )
+        fallback_kind = "visual_consumption"
+        if fallback is None and exhaustion_boundary:
+            fallback = self._decision_correction_exhaustion_fallback(
+                investigation,
+                reviewed_evidence_ids=reviewed_evidence_ids,
+                rejected_reason=rejected_reason,
+            )
+            fallback_kind = "decision_correction_exhaustion"
+        if fallback is None:
+            return None
+
+        update = apply_discrepancy_decision(
+            investigation,
+            fallback,
+            reviewed_evidence_ids=reviewed_evidence_ids,
+            trigger=trigger,
+        )
+        if not update.get("accepted", False):
+            return None
+        if fallback_kind == "visual_consumption":
+            update["deterministic_visual_consumption_fallback"] = True
+        else:
+            update["deterministic_decision_exhaustion_fallback"] = True
+        update["fallback_rejected_reason"] = rejected_reason
+        if exhaustion_boundary:
+            update["protocol_correction_exhaustion_boundary"] = True
         progress = (
             record_decision_progress(investigation, update)
             if self._discrepancy_progress_signature(investigation)
@@ -1548,6 +1620,81 @@ class Orchestrator:
                 "Conservative runtime fallback consumed resolved focused visual "
                 "Evidence after model correction exhaustion; no terminal verdict "
                 "or discrepancy was inferred."
+            ),
+        )
+
+    @staticmethod
+    def _decision_correction_exhaustion_fallback(
+        investigation: ImageOnlyInvestigationState,
+        *,
+        reviewed_evidence_ids: Sequence[str],
+        rejected_reason: str,
+    ) -> DiscrepancyDecisionOutput | None:
+        """Record reviewed Evidence conservatively after Decision retry exhaustion.
+
+        This fallback is intentionally non-substantive. It never supports or
+        refutes a Claim, creates a discrepancy, changes routes, or proposes a
+        terminal verdict. It only prevents a correction-exhausted Decision
+        checkpoint from being recorded as a successful empty no-op.
+        """
+
+        reviewed = list(dict.fromkeys(str(item) for item in reviewed_evidence_ids))
+        if not reviewed:
+            return None
+        evidence_by_id = {
+            item.evidence_id: item for item in investigation.evidence
+        }
+        task_by_id = {item.task_id: item for item in investigation.tasks}
+        claim_evidence_ids: Dict[str, List[str]] = {}
+        for evidence_id in reviewed:
+            evidence = evidence_by_id.get(evidence_id)
+            if evidence is None:
+                continue
+            task = task_by_id.get(evidence.task_id)
+            if task is None:
+                continue
+            for claim_id in task.claim_ids:
+                claim_evidence_ids.setdefault(claim_id, []).append(evidence_id)
+
+        reason = " ".join(str(rejected_reason).split())
+        if len(reason) > 420:
+            reason = reason[:417].rstrip() + "..."
+        assessments: List[ClaimAssessmentProposal] = []
+        for claim in investigation.image_claims:
+            evidence_ids = list(
+                dict.fromkeys(claim_evidence_ids.get(claim.claim_id, []))
+            )
+            if not evidence_ids:
+                continue
+            assessments.append(
+                ClaimAssessmentProposal(
+                    claim_id=claim.claim_id,
+                    assessment="insufficient",
+                    selected_evidence_ids=evidence_ids[:20],
+                    remaining_gap=(
+                        "Discrepancy Decision correction budget was exhausted "
+                        "before an accepted semantic support/refute/discrepancy "
+                        "update; reviewed Evidence is recorded for follow-up."
+                    ),
+                    rationale=(
+                        "Deterministic fallback after Decision correction "
+                        "exhaustion: preserve reviewed Evidence without "
+                        "inferring support, refutation, discrepancy, or verdict. "
+                        f"Last validator feedback: {reason}"
+                    ),
+                )
+            )
+            if len(assessments) >= 3:
+                break
+        if not assessments:
+            return None
+        return DiscrepancyDecisionOutput(
+            claim_assessments=assessments,
+            verdict_proposal="continue",
+            rationale=(
+                "Conservative runtime fallback recorded reviewed Evidence after "
+                "Decision correction exhaustion; no terminal verdict or "
+                "discrepancy was inferred."
             ),
         )
 
