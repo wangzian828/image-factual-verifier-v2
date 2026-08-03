@@ -342,6 +342,17 @@ def test_fsdp2_exporter_merges_audits_and_reload_smokes() -> None:
     assert "parameter_count > 9_000_000_000" in probe
 
 
+def test_full_checkpoint_exporter_initializes_runtime_and_reload_smokes() -> None:
+    source = _source("scripts/export/register_full_checkpoint.sh")
+
+    assert "configure_training_runtime" in source
+    assert "audit-full-checkpoint" in source
+    assert "checkpoint-manifest" in source
+    assert "load_qwen35_checkpoint.py" in source
+    assert "--model-dir \"$CHECKPOINT_DIR\"" in source
+    assert "load-smoke.json" in source
+
+
 def test_qwen35_flash_cached_and_no_offload_profiles_exist() -> None:
     cached = _source("configs/sft/qwen3.5-full-pilot30-2gpu-flash-offload-cached.env")
     four_gpu = _source("configs/sft/qwen3.5-full-pilot30-4gpu-flash-no-offload.env")

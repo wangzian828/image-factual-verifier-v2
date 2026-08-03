@@ -14,6 +14,7 @@ CHECKPOINT_DIR="$1"
 BASE_MODEL_DIR="$2"
 EXPORT_ID="$3"
 DATASET_MANIFEST="$4"
+configure_training_runtime
 if [[ ! -d "$CHECKPOINT_DIR" ]]; then
   echo "checkpoint does not exist: $CHECKPOINT_DIR" >&2
   exit 2
@@ -42,5 +43,9 @@ python -m ifv_training checkpoint-manifest \
   --output "$OUTPUT_DIR/checkpoint-manifest.json" \
   --base-model-id "$BASE_MODEL_DIR" \
   --method full
+
+python training/scripts/probe/load_qwen35_checkpoint.py \
+  --model-dir "$CHECKPOINT_DIR" \
+  --output "$OUTPUT_DIR/load-smoke.json"
 
 printf '%s\n' "$CHECKPOINT_DIR" >"$OUTPUT_DIR/model-path.txt"
