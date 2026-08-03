@@ -52,7 +52,6 @@ service_was_running=false
 cleanup() {
   local status="$?"
   trap - EXIT
-  rmdir "$LOCK_DIR" 2>/dev/null || true
   if [[ "$service_was_running" == "true" ]]; then
     if ! CUDA_VISIBLE_DEVICES=4,5 OMP_NUM_THREADS=1 \
       bash "$SERVICE_MANAGER" start >>"$RUN_ROOT/service-restore.log" 2>&1; then
@@ -60,6 +59,7 @@ cleanup() {
       status=1
     fi
   fi
+  rmdir "$LOCK_DIR" 2>/dev/null || true
   exit "$status"
 }
 trap cleanup EXIT
