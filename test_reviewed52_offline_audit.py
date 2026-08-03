@@ -91,6 +91,9 @@ def test_offline_audit_classifies_every_candidate_and_links_replay() -> None:
     assert report["replay_linked_candidate_count"] == 1
     assert report["replay_matched_summary_count"] == 1
     assert report["replay_unmatched_summary_count"] == 0
+    assert report["qualified_unique_case_evidence_count"] == 1
+    assert report["qualified_replay_matched_count"] == 1
+    assert report["qualified_replay_unavailable_count"] == 0
     rows = {
         row["evidence_id"]: row
         for row in report["candidates"]

@@ -337,6 +337,12 @@ def audit_manifest(
         for row in audited
         if row["replay"]["available"]
     }
+    qualified_keys = {
+        (row["case_id"], row["evidence_id"])
+        for row in audited
+        if row["primary_status"] == "strictly_qualified"
+    }
+    qualified_replay_matched_keys = qualified_keys & replay_matched_keys
     primary_case_counts = {
         key: len(
             {
@@ -383,6 +389,13 @@ def audit_manifest(
         "replay_unmatched_summary_count": (
             len(replay_by_key) - len(replay_matched_keys)
         ),
+        "qualified_unique_case_evidence_count": len(qualified_keys),
+        "qualified_replay_matched_count": len(
+            qualified_replay_matched_keys
+        ),
+        "qualified_replay_unavailable_count": (
+            len(qualified_keys) - len(qualified_replay_matched_keys)
+        ),
         "candidates": audited,
     }
 
@@ -426,6 +439,9 @@ def _markdown(report: Mapping[str, Any]) -> str:
         f"- unique case/Evidence pairs: {report.get('unique_case_evidence_count')}",
         f"- classified exactly once: {report.get('classification_complete')}",
         f"- replay-linked rows: {report.get('replay_linked_candidate_count')}",
+        "- strictly qualified replay coverage: "
+        f"{report.get('qualified_replay_matched_count')}/"
+        f"{report.get('qualified_unique_case_evidence_count')}",
         "",
         "## Primary status",
         "",
