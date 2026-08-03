@@ -1866,7 +1866,7 @@ def test_source_visible_property_extraction_is_short_and_rejects_scene_support()
         extract_source_visible_property(
             "It's a terrible taxidermy version of a female White-Faced Saki."
         )
-        == "female White-Faced Saki"
+        == ""
     )
     assert (
         extract_source_visible_property(

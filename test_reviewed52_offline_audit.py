@@ -78,6 +78,7 @@ def test_offline_audit_classifies_every_candidate_and_links_replay() -> None:
     report = audit_manifest(manifest, replay_batch=replay)
 
     assert report["candidate_evidence_count"] == 4
+    assert report["unique_case_evidence_count"] == 4
     assert report["classified_candidate_count"] == 4
     assert report["classification_complete"] is True
     assert report["primary_status_counts"] == {
@@ -88,6 +89,8 @@ def test_offline_audit_classifies_every_candidate_and_links_replay() -> None:
         "hint_only_unqualified": 0,
     }
     assert report["replay_linked_candidate_count"] == 1
+    assert report["replay_matched_summary_count"] == 1
+    assert report["replay_unmatched_summary_count"] == 0
     rows = {
         row["evidence_id"]: row
         for row in report["candidates"]

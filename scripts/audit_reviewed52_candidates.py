@@ -329,6 +329,34 @@ def audit_manifest(
     )
     case_counts = Counter(row["case_id"] for row in audited)
     replay_linked = sum(row["replay"]["available"] for row in audited)
+    unique_evidence_keys = {
+        (row["case_id"], row["evidence_id"]) for row in audited
+    }
+    replay_matched_keys = {
+        (row["case_id"], row["evidence_id"])
+        for row in audited
+        if row["replay"]["available"]
+    }
+    primary_case_counts = {
+        key: len(
+            {
+                row["case_id"]
+                for row in audited
+                if row["primary_status"] == key
+            }
+        )
+        for key in PRIMARY_STATUS_ORDER
+    }
+    flag_unique_evidence_counts = {
+        flag: len(
+            {
+                (row["case_id"], row["evidence_id"])
+                for row in audited
+                if flag in row["flags"]
+            }
+        )
+        for flag in flag_counts
+    }
     return {
         "schema_version": "ifv-reviewed52-offline-audit-v1",
         "source_manifest_schema_version": manifest.get("schema_version", ""),
@@ -336,19 +364,24 @@ def audit_manifest(
         "case_count_scanned": manifest.get("case_count_scanned"),
         "snapshot_count_scanned": manifest.get("snapshot_count_scanned"),
         "candidate_evidence_count": len(audited),
+        "unique_case_evidence_count": len(unique_evidence_keys),
         "classified_candidate_count": len(audited),
         "classification_complete": len(audited) == len(candidates),
         "primary_status_counts": {
             key: primary_counts.get(key, 0)
             for key in PRIMARY_STATUS_ORDER
         },
+        "primary_status_case_counts": primary_case_counts,
         "flag_counts": dict(sorted(flag_counts.items())),
+        "flag_unique_case_evidence_counts": dict(
+            sorted(flag_unique_evidence_counts.items())
+        ),
         "case_candidate_counts": dict(sorted(case_counts.items())),
         "replay_summary_count": len(replay_by_key),
         "replay_linked_candidate_count": replay_linked,
-        "replay_unmatched_summary_count": max(
-            0,
-            len(replay_by_key) - replay_linked,
+        "replay_matched_summary_count": len(replay_matched_keys),
+        "replay_unmatched_summary_count": (
+            len(replay_by_key) - len(replay_matched_keys)
         ),
         "candidates": audited,
     }
@@ -358,13 +391,21 @@ def _markdown(report: Mapping[str, Any]) -> str:
     primary = report.get("primary_status_counts") or {}
     flags = report.get("flag_counts") or {}
     candidates = report.get("candidates") or []
+    risky_by_key: dict[tuple[str, str], Mapping[str, Any]] = {}
+    for row in candidates:
+        if not isinstance(row, Mapping) or int(row.get("risk_score") or 0) <= 0:
+            continue
+        key = (
+            str(row.get("case_id") or ""),
+            str(row.get("evidence_id") or ""),
+        )
+        incumbent = risky_by_key.get(key)
+        if incumbent is None or int(row.get("risk_score") or 0) > int(
+            incumbent.get("risk_score") or 0
+        ):
+            risky_by_key[key] = row
     risky = sorted(
-        (
-            row
-            for row in candidates
-            if isinstance(row, Mapping)
-            and int(row.get("risk_score") or 0) > 0
-        ),
+        risky_by_key.values(),
         key=lambda row: (
             -int(row.get("risk_score") or 0),
             str(row.get("case_id") or ""),
@@ -382,6 +423,7 @@ def _markdown(report: Mapping[str, Any]) -> str:
         f"- cases: {report.get('case_count_scanned')}",
         f"- snapshots: {report.get('snapshot_count_scanned')}",
         f"- candidate Evidence rows: {report.get('candidate_evidence_count')}",
+        f"- unique case/Evidence pairs: {report.get('unique_case_evidence_count')}",
         f"- classified exactly once: {report.get('classification_complete')}",
         f"- replay-linked rows: {report.get('replay_linked_candidate_count')}",
         "",
@@ -468,6 +510,9 @@ def main() -> int:
                 ],
                 "classification_complete": report[
                     "classification_complete"
+                ],
+                "unique_case_evidence_count": report[
+                    "unique_case_evidence_count"
                 ],
                 "primary_status_counts": report[
                     "primary_status_counts"

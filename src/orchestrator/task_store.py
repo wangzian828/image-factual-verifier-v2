@@ -324,6 +324,14 @@ def extract_source_visible_property(source_text: str) -> str:
     ranked: List[tuple[int, str]] = []
     for sentence in sentences:
         lowered = sentence.casefold()
+        if re.search(
+            r"\b(?:taxidermy|stuffed|model|replica)\s+version\s+of\b",
+            lowered,
+        ):
+            # A taxonomic/common-name label is an identity hypothesis, not a
+            # concrete visible property. It may motivate source research, but
+            # it cannot by itself authorize a focused pixel comparison.
+            continue
         tokens = _semantic_request_tokens(sentence)
         colors = tokens & _SOURCE_PROPERTY_COLOR_TOKENS
         materials = tokens & _SOURCE_PROPERTY_MATERIAL_TOKENS
@@ -392,14 +400,6 @@ def extract_source_visible_property(source_text: str) -> str:
                 held = _one_line(held_match.group("held"))
                 clothing = f"{clothing}; holding {held}"
             ranked.append((score + 8, clothing[:220]))
-            continue
-        version_match = re.search(
-            r"\bversion\s+of\s+(?:a\s+|an\s+|the\s+)?([^.;]{3,100})",
-            sentence,
-            flags=re.IGNORECASE,
-        )
-        if version_match:
-            ranked.append((score + 3, _one_line(version_match.group(1))[:120]))
             continue
         if colors and body:
             pattern = (
