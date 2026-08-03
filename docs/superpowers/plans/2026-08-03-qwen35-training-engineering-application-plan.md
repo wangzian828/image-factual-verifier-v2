@@ -653,3 +653,24 @@ the additional persistent-off and prefetch-four ablations. Short matrix runs are
 screening measurements, not promotion evidence; the selected setting must repeat
 the ten-step validation/save/resume/reload gate. Compare unique rows/second and
 sampled GPU utilization, not framework rank-counted throughput alone.
+
+The no-language-checkpoint two-step capacity gate was rejected before the first
+optimizer step. On the longest grouped batch, rank 0 reached about 39.32 GiB in
+use and failed in a language MLP projection while requesting another 482 MiB with
+only 134 MiB free. Ordinary language-model activation checkpointing therefore
+remains required for this dataset, global batch, and 40 GiB cards.
+
+The physical 4-7 GPU set is not showing a pathological offload link:
+
+- measured H2D payload bandwidth was 23.87-24.59 GB/s;
+- measured D2H payload bandwidth was 26.26-26.28 GB/s;
+- local HBM read/write and stream-add measurements were about 1.35-1.37 TB/s;
+- every GPU pair is connected through the reported NV12 fabric.
+
+The ms-swift cached dataset is also narrower than an encoded-tensor cache. Its
+Arrow rows contain normalized messages, image paths, and precomputed lengths.
+ms-swift 4.4.2 wraps those rows in `LazyLLMDataset` and calls `template.encode`
+during item retrieval, so multimodal image open/decode/processor work still occurs
+during training. Dataloader tuning and a later encoded-image cache remain real
+engineering tasks; the current cache only removes dataset reconstruction and
+length-precomputation work.
