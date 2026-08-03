@@ -674,3 +674,27 @@ during item retrieval, so multimodal image open/decode/processor work still occu
 during training. Dataloader tuning and a later encoded-image cache remain real
 engineering tasks; the current cache only removes dataset reconstruction and
 length-precomputation work.
+
+## 18. ZeRO-3 CPUAdam OpenMP protocol
+
+The generic server baseline remains `OMP_NUM_THREADS=1`. That value is appropriate
+for shared-server control-plane commands and prevents accidental thread storms, but
+it may underutilize the CPU during intentional optimizer offload. The installed
+DeepSpeed 0.19.2 CPUAdam implementation contains OpenMP parallel loops, while the
+four-rank training launcher previously forced every rank to one OpenMP thread.
+
+The bounded training-specific protocol is:
+
+1. keep the launcher default at one thread;
+2. allow only an explicit `IFV_OMP_NUM_THREADS` training-profile override;
+3. compare `4/8/16` threads per rank against the frozen one-thread baseline using
+   the same two optimizer steps, cached rows, four physical GPUs, four dataloader
+   workers, global batch eight, and activation checkpointing;
+4. sample GPU utilization and host CPU pressure during every run;
+5. reject a setting on CPU oversubscription, process instability, lower useful-row
+   throughput, or no material gain beyond run variance;
+6. only the smallest materially faster setting may advance to a ten-step
+   validation/save gate and the later dataloader matrix.
+
+This is a scoped CPU-offload exception, not a change to the general Jupyter/server
+operations recommendation.

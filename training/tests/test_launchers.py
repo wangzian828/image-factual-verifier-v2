@@ -148,6 +148,7 @@ def test_launchers_enforce_physical_gpu_allowlist() -> None:
     assert 'x86_64-conda-linux-gnu-g++' in common
     assert 'TORCH_EXTENSIONS_DIR' in common
     assert 'HF_DATASETS_CACHE' in common
+    assert 'OMP_NUM_THREADS="${IFV_OMP_NUM_THREADS:-1}"' in common
     assert 'NCCL_CUMEM_HOST_ENABLE' in common
     assert 'MPLBACKEND=Agg' in common
     assert "between one and eight GPUs" in common
@@ -498,6 +499,24 @@ def test_qwen35_fsdp2_candidate_profiles_are_backend_exclusive() -> None:
     assert "IFV_MAX_STEPS=11" in zero3_no_checkpoint_resume
     assert "IFV_SAVE_STEPS=11" in zero3_no_checkpoint_resume
     assert "IFV_EVAL_STEPS=11" in zero3_no_checkpoint_resume
+
+
+def test_qwen35_zero3_cpu_adam_thread_profiles_are_bounded() -> None:
+    profiles = {
+        threads: _source(
+            f"configs/sft/qwen3.5-full-2step-4gpu-zero3-offload-cached-omp{threads}.env"
+        )
+        for threads in (4, 8, 16)
+    }
+
+    for threads, source in profiles.items():
+        assert "IFV_DEEPSPEED=training/configs/deepspeed/zero3-optimizer-offload.json" in source
+        assert "IFV_FSDP" not in source
+        assert "IFV_MAX_STEPS=2" in source
+        assert "IFV_GRADIENT_ACCUMULATION_STEPS=2" in source
+        assert "IFV_GRADIENT_CHECKPOINTING=true" in source
+        assert "IFV_DATALOADER_NUM_WORKERS=4" in source
+        assert f"IFV_OMP_NUM_THREADS={threads}" in source
 
 
 def test_qwen35_zero3_speed_probe_is_full_parameter_and_32k() -> None:
