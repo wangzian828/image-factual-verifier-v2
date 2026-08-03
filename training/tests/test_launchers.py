@@ -519,6 +519,31 @@ def test_qwen35_zero3_cpu_adam_thread_profiles_are_bounded() -> None:
         assert f"IFV_OMP_NUM_THREADS={threads}" in source
 
 
+def test_qwen35_zero3_dataloader_worker_profiles_are_bounded() -> None:
+    profiles = {
+        workers: _source(
+            "configs/sft/"
+            f"qwen3.5-full-2step-4gpu-zero3-offload-cached-workers{workers}-omp8.env"
+        )
+        for workers in (0, 2, 4, 8)
+    }
+
+    for workers, source in profiles.items():
+        assert "IFV_DEEPSPEED=training/configs/deepspeed/zero3-optimizer-offload.json" in source
+        assert "IFV_FSDP" not in source
+        assert "IFV_MAX_STEPS=2" in source
+        assert "IFV_GRADIENT_ACCUMULATION_STEPS=2" in source
+        assert "IFV_GRADIENT_CHECKPOINTING=true" in source
+        assert "IFV_OMP_NUM_THREADS=8" in source
+        assert f"IFV_DATALOADER_NUM_WORKERS={workers}" in source
+
+    assert "IFV_DATALOADER_PERSISTENT_WORKERS" not in profiles[0]
+    assert "IFV_DATALOADER_PREFETCH_FACTOR" not in profiles[0]
+    for workers in (2, 4, 8):
+        assert "IFV_DATALOADER_PERSISTENT_WORKERS=true" in profiles[workers]
+        assert "IFV_DATALOADER_PREFETCH_FACTOR=2" in profiles[workers]
+
+
 def test_qwen35_zero3_speed_probe_is_full_parameter_and_32k() -> None:
     source = _source("configs/sft/qwen3.5-full-1step-zero3.env")
 
