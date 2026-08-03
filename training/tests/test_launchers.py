@@ -148,7 +148,9 @@ def test_launchers_enforce_physical_gpu_allowlist() -> None:
     assert 'x86_64-conda-linux-gnu-g++' in common
     assert 'TORCH_EXTENSIONS_DIR' in common
     assert 'HF_DATASETS_CACHE' in common
-    assert 'OMP_NUM_THREADS="${IFV_OMP_NUM_THREADS:-1}"' in common
+    assert 'omp_threads="${IFV_OMP_NUM_THREADS:-1}"' in common
+    assert "server policy requires IFV_OMP_NUM_THREADS=1" in common
+    assert "export OMP_NUM_THREADS=1" in common
     assert 'NCCL_CUMEM_HOST_ENABLE' in common
     assert 'MPLBACKEND=Agg' in common
     assert "between one and eight GPUs" in common
@@ -622,11 +624,11 @@ def test_qwen35_zero3_dataloader_followup_profiles_are_bounded() -> None:
 def test_qwen35_zero3_workers0_production_profiles_are_bounded() -> None:
     ten_step = _source(
         "configs/sft/"
-        "qwen3.5-full-10step-4gpu-zero3-offload-cached-workers0-omp8.env"
+        "qwen3.5-full-10step-4gpu-zero3-offload-cached-workers0-omp1.env"
     )
     resume = _source(
         "configs/sft/"
-        "qwen3.5-full-11step-resume-4gpu-zero3-offload-cached-workers0-omp8.env"
+        "qwen3.5-full-11step-resume-4gpu-zero3-offload-cached-workers0-omp1.env"
     )
 
     for source in (ten_step, resume):
@@ -637,7 +639,7 @@ def test_qwen35_zero3_workers0_production_profiles_are_bounded() -> None:
         assert "IFV_DATALOADER_NUM_WORKERS=0" in source
         assert "IFV_DATALOADER_PERSISTENT_WORKERS" not in source
         assert "IFV_DATALOADER_PREFETCH_FACTOR" not in source
-        assert "IFV_OMP_NUM_THREADS=8" in source
+        assert "IFV_OMP_NUM_THREADS=1" in source
 
     assert "IFV_MAX_STEPS=10" in ten_step
     assert "IFV_SAVE_STEPS=10" in ten_step
@@ -647,14 +649,14 @@ def test_qwen35_zero3_workers0_production_profiles_are_bounded() -> None:
     assert "IFV_EVAL_STEPS=11" in resume
 
 
-def test_qwen35_two_gpu_instrumentation_and_resume_profiles_are_bounded() -> None:
+def test_qwen35_two_gpu_server_safe_and_resume_profiles_are_bounded() -> None:
     one_step = _source(
         "configs/sft/"
-        "qwen3.5-full-1step-2gpu-zero3-offload-cached-workers0-omp8.env"
+        "qwen3.5-full-1step-2gpu-zero3-offload-cached-workers0-omp1.env"
     )
     resume = _source(
         "configs/sft/"
-        "qwen3.5-full-2step-resume-2gpu-zero3-offload-cached-workers0-omp8.env"
+        "qwen3.5-full-2step-resume-2gpu-zero3-offload-cached-workers0-omp1.env"
     )
 
     for source in (one_step, resume):
@@ -663,7 +665,7 @@ def test_qwen35_two_gpu_instrumentation_and_resume_profiles_are_bounded() -> Non
         assert "IFV_GRADIENT_ACCUMULATION_STEPS=4" in source
         assert "IFV_GRADIENT_CHECKPOINTING=true" in source
         assert "IFV_DATALOADER_NUM_WORKERS=0" in source
-        assert "IFV_OMP_NUM_THREADS=8" in source
+        assert "IFV_OMP_NUM_THREADS=1" in source
         assert "IFV_MAX_LENGTH=32768" in source
 
     assert "IFV_MAX_STEPS=1" in one_step

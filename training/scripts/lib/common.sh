@@ -159,7 +159,12 @@ require_visible_gpus() {
     seen+="$device,"
   done
   export NPROC_PER_NODE="${#devices[@]}"
-  export OMP_NUM_THREADS="${IFV_OMP_NUM_THREADS:-1}"
+  local omp_threads="${IFV_OMP_NUM_THREADS:-1}"
+  if [[ "$omp_threads" != "1" ]]; then
+    echo "server policy requires IFV_OMP_NUM_THREADS=1; got: $omp_threads" >&2
+    exit 2
+  fi
+  export OMP_NUM_THREADS=1
 # Training runs are non-interactive.  A Jupyter kernel may export the inline
 # matplotlib backend, which makes ms-swift's final loss-plot hook fail after a
 # successful optimizer step.  Pin a headless backend for every launcher.

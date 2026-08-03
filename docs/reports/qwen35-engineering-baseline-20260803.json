@@ -19,15 +19,18 @@
     "max_length": 32768,
     "attention_implementation": "flash_attn",
     "activation_checkpointing": true,
-    "omp_threads_per_rank": 8,
+    "omp_threads_per_rank": 1,
     "dataloader_num_workers": 0,
     "group_by_length": true,
     "dataset_mode": "cached_ms_swift_rows",
-    "promotion_status": "promoted_current_safe_path"
+    "profile_id": "qwen3.5-full-10step-4gpu-zero3-offload-cached-workers0-omp1.env",
+    "promotion_status": "server_safe_omp1_policy"
   },
   "production_gate": {
     "experiment_id": "qwen35-zero3-offload-flash-4gpu-globalbatch8-production-workers0-omp8-10step-gate-c0c8e57-20260803",
     "profile_id": "qwen3.5-full-10step-4gpu-zero3-offload-cached-workers0-omp8.env",
+    "historical_omp_threads_per_rank": 8,
+    "eligible_under_current_server_thread_policy": false,
     "steps": 10,
     "unique_samples": 80,
     "unique_samples_per_second": 0.372613,
@@ -45,6 +48,26 @@
     "validation": true,
     "checkpoint_save": true,
     "clean_exit": true
+  },
+  "thread_policy": {
+    "required_omp_threads_per_rank": 1,
+    "launcher_enforced": true,
+    "reason": "server stability policy requires OMP_NUM_THREADS=1 for every project process",
+    "historical_omp8_results_retained": true,
+    "historical_omp8_speedup_percent": 10.6,
+    "historical_omp8_status": "benchmark_evidence_only_not_runnable_under_current_policy",
+    "server_safe_control": {
+      "unique_samples_per_second": 0.248911,
+      "steady_unique_samples_per_second": 0.221239,
+      "peak_gpu_memory_gib": 18.63,
+      "eval_loss": 0.526,
+      "train_runtime_seconds": 381.9,
+      "train_validation_checkpoint_save": true
+    },
+    "current_four_gpu_profile": "training/configs/sft/qwen3.5-full-10step-4gpu-zero3-offload-cached-workers0-omp1.env",
+    "current_four_gpu_resume_profile": "training/configs/sft/qwen3.5-full-11step-resume-4gpu-zero3-offload-cached-workers0-omp1.env",
+    "current_two_gpu_profile": "training/configs/sft/qwen3.5-full-1step-2gpu-zero3-offload-cached-workers0-omp1.env",
+    "current_two_gpu_resume_profile": "training/configs/sft/qwen3.5-full-2step-resume-2gpu-zero3-offload-cached-workers0-omp1.env"
   },
   "engineering_application_gate": {
     "status": "passed",
@@ -84,6 +107,8 @@
     },
     "two_gpu_one_step": {
       "experiment_id": "qwen35-zero3-offload-2gpu-cache-resource-1step-gate-b369c7a-20260803",
+      "historical_omp_threads_per_rank": 8,
+      "eligible_under_current_server_thread_policy": false,
       "physical_gpus": [4, 5],
       "world_size": 2,
       "global_batch_size": 8,
@@ -106,6 +131,8 @@
     },
     "two_gpu_resume": {
       "experiment_id": "qwen35-zero3-offload-2gpu-cache-resource-resume-gate-b369c7a-20260803",
+      "historical_omp_threads_per_rank": 8,
+      "eligible_under_current_server_thread_policy": false,
       "source_global_step": 1,
       "advanced_global_step": 2,
       "resume_advanced": true,
@@ -140,9 +167,9 @@
   },
   "screening": {
     "cpuadam_omp_threads": {
-      "1": {"unique_samples_per_second": 0.208388, "decision": "control"},
+      "1": {"unique_samples_per_second": 0.208388, "decision": "required_server_policy"},
       "4": {"unique_samples_per_second": 0.201309, "decision": "reject"},
-      "8": {"unique_samples_per_second": 0.230548, "decision": "advance"},
+      "8": {"unique_samples_per_second": 0.230548, "decision": "measured_fastest_but_operationally_rejected"},
       "16": {"unique_samples_per_second": 0.223776, "decision": "reject"}
     },
     "dataloader_workers": {
@@ -210,11 +237,15 @@
     "two_gpu_one_step_profile": "training/logs/qwen35-zero3-offload-2gpu-cache-resource-1step-gate-b369c7a-20260803/profile.json",
     "two_gpu_one_step_checkpoint": "training/checkpoints/qwen35-zero3-offload-2gpu-cache-resource-1step-gate-b369c7a-20260803/v0-20260803-194432/checkpoint-1",
     "two_gpu_resume_profile": "training/logs/qwen35-zero3-offload-2gpu-cache-resource-resume-gate-b369c7a-20260803/profile.json",
-    "two_gpu_resume_checkpoint": "training/checkpoints/qwen35-zero3-offload-2gpu-cache-resource-resume-gate-b369c7a-20260803/v0-20260803-195249/checkpoint-2"
+    "two_gpu_resume_checkpoint": "training/checkpoints/qwen35-zero3-offload-2gpu-cache-resource-resume-gate-b369c7a-20260803/v0-20260803-195249/checkpoint-2",
+    "current_four_gpu_omp1_profile": "training/configs/sft/qwen3.5-full-10step-4gpu-zero3-offload-cached-workers0-omp1.env",
+    "current_four_gpu_omp1_resume_profile": "training/configs/sft/qwen3.5-full-11step-resume-4gpu-zero3-offload-cached-workers0-omp1.env",
+    "current_two_gpu_omp1_profile": "training/configs/sft/qwen3.5-full-1step-2gpu-zero3-offload-cached-workers0-omp1.env",
+    "current_two_gpu_omp1_resume_profile": "training/configs/sft/qwen3.5-full-2step-resume-2gpu-zero3-offload-cached-workers0-omp1.env"
   },
   "operational_notes": {
     "generic_server_omp_threads": 1,
-    "training_only_omp_override": 8,
+    "training_only_omp_override": "disabled",
     "cache_rows_still_decode_images_lazily": true,
     "encoded_image_cache": "future_engineering_task",
     "formal_base_service_restore": {

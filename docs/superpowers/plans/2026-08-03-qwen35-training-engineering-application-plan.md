@@ -677,26 +677,26 @@ length-precomputation work.
 
 ## 18. ZeRO-3 CPUAdam OpenMP protocol
 
-The generic server baseline remains `OMP_NUM_THREADS=1`. That value is appropriate
-for shared-server control-plane commands and prevents accidental thread storms, but
-it may underutilize the CPU during intentional optimizer offload. The installed
-DeepSpeed 0.19.2 CPUAdam implementation contains OpenMP parallel loops, while the
-four-rank training launcher previously forced every rank to one OpenMP thread.
+The server policy is `OMP_NUM_THREADS=1` for every project process, including
+training. That value prevents accidental thread storms and avoids the known
+server-side instability associated with wider OpenMP execution. The installed
+DeepSpeed 0.19.2 CPUAdam implementation contains OpenMP parallel loops, so wider
+thread counts were measured historically, but they are no longer eligible for
+operational use.
 
 The bounded training-specific protocol is:
 
 1. keep the launcher default at one thread;
-2. allow only an explicit `IFV_OMP_NUM_THREADS` training-profile override;
+2. reject any profile that requests `IFV_OMP_NUM_THREADS` other than one;
 3. compare `4/8/16` threads per rank against the frozen one-thread baseline using
    the same two optimizer steps, cached rows, four physical GPUs, four dataloader
    workers, global batch eight, and activation checkpointing;
 4. sample GPU utilization and host CPU pressure during every run;
 5. reject a setting on CPU oversubscription, process instability, lower useful-row
    throughput, or no material gain beyond run variance;
-6. only the smallest materially faster setting may advance to a ten-step
-   validation/save gate and the later dataloader matrix.
+6. retain wider-thread results only as benchmark evidence.
 
-This is a scoped CPU-offload exception, not a change to the general Jupyter/server
+There is no longer a CPU-offload exception to the general Jupyter/server
 operations recommendation.
 
 Because unrelated CPU-intensive jobs appeared after the original one-thread
@@ -718,16 +718,16 @@ save, and clean process exit with a reported 18.62 GiB peak:
 | 16 | 71.50 s | 0.223776 | 0.5908 | reject; smaller setting is faster |
 
 The eight-thread profile was about 10.6% faster than the contemporaneous
-one-thread control on observed useful-row throughput. It therefore advances to
-the dataloader matrix as an explicit training-only override. The generic
-operations baseline remains `OMP_NUM_THREADS=1`, and the later ten-step
-production gate must still confirm that the short-run gain persists.
+one-thread control on observed useful-row throughput. This remains useful
+performance evidence, but the server stability policy overrides that speed
+result. Eight threads is rejected operationally; the production setting is one
+thread per rank.
 
 ### 18.2 Dataloader screening result
 
 The primary and follow-up matrices all used the same cached rows, four physical
 GPUs, global batch eight, activation checkpointing, FlashAttention, and the
-training-only eight-thread CPUAdam setting:
+historical eight-thread CPUAdam benchmark setting:
 
 | Workers/rank | Persistent | Prefetch | Unique samples/s | Eval loss | Decision |
 |---:|:---:|---:|---:|---:|---|
@@ -745,13 +745,13 @@ lazy image decode and processor work while multiprocessing adds process startup,
 IPC, memory, and teardown overhead. The production candidate therefore uses
 `dataloader_num_workers=0` and omits persistence and prefetch arguments.
 
-### 18.3 Production ten-step and resume result
+### 18.3 Historical eight-thread ten-step and resume result
 
-The promoted profile combines:
+The measured-fastest historical profile combined:
 
 - DeepSpeed ZeRO-3 optimizer CPU offload, with parameters kept on GPU;
 - physical GPUs 4-7 and global batch eight;
-- `OMP_NUM_THREADS=8` as a training-only override;
+- `OMP_NUM_THREADS=8` as a historical benchmark override;
 - `dataloader_num_workers=0`;
 - FlashAttention and ordinary language/vision activation checkpointing;
 - grouped cached rows and a 32768-token maximum length.
@@ -778,6 +778,10 @@ advanced to global step 11, reran validation, saved checkpoint 11, and exited
 cleanly. Reading the four optimizer shards is an explicit operational cost: the
 resume initialization took several minutes before the additional training step
 began. The step-11 profile is a recovery gate rather than a throughput benchmark.
+
+The train/eval/save/resume result remains valid evidence about the backend,
+checkpoint, and cached-data path. It is not the current runnable recommendation:
+the server thread policy now requires the equivalent OMP1 profile.
 
 ## 19. Serving/checkpoint closeout (2026-08-03)
 
@@ -844,7 +848,7 @@ global batch            8
 max length              32768
 attention               FlashAttention
 activation checkpoint   enabled
-OMP override            IFV_OMP_NUM_THREADS=8
+OMP threads             IFV_OMP_NUM_THREADS=1
 dataloader workers      0
 ```
 
@@ -963,9 +967,11 @@ training/diagnostics/gpu-io-gpu7-ee678ba-20260803
 
 ### 20.3 Two-GPU train/save gate
 
-The bounded fallback gate used physical GPUs 4 and 5, ZeRO-3 optimizer CPU
-offload, parameters on GPU, global batch eight, FlashAttention, activation
-checkpointing, cached rows, `IFV_OMP_NUM_THREADS=8`, and zero dataloader workers.
+The bounded fallback gate historically used physical GPUs 4 and 5, ZeRO-3
+optimizer CPU offload, parameters on GPU, global batch eight, FlashAttention,
+activation checkpointing, cached rows, `IFV_OMP_NUM_THREADS=8`, and zero
+dataloader workers. Its measured result remains evidence, but future fallback
+runs must use the equivalent OMP1 profile.
 
 | Metric | Step-1 gate |
 |---|---:|
@@ -1040,4 +1046,27 @@ physical GPUs                    4,5
 ```
 
 The current training recommendation remains the four-GPU ZeRO-3 optimizer-offload
-profile in section 19.3.
+OMP1 profile in section 19.3.
+
+## 21. Mandatory one-thread server policy
+
+The operational decision supersedes the provisional OMP8 speed promotion:
+
+- every project process, including CPUAdam training, uses
+  `OMP_NUM_THREADS=1`;
+- `training/scripts/lib/common.sh` rejects any
+  `IFV_OMP_NUM_THREADS` value other than one;
+- historical OMP4/8/16 profiles and artifacts are retained for audit and are not
+  silently rewritten;
+- new OMP1 production and recovery profiles are the only supported launch
+  profiles:
+
+```text
+training/configs/sft/qwen3.5-full-10step-4gpu-zero3-offload-cached-workers0-omp1.env
+training/configs/sft/qwen3.5-full-11step-resume-4gpu-zero3-offload-cached-workers0-omp1.env
+training/configs/sft/qwen3.5-full-1step-2gpu-zero3-offload-cached-workers0-omp1.env
+training/configs/sft/qwen3.5-full-2step-resume-2gpu-zero3-offload-cached-workers0-omp1.env
+```
+
+The accepted tradeoff is lower measured CPUAdam throughput in exchange for
+server stability and compliance with the existing operations policy.
