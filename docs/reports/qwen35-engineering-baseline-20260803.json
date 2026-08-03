@@ -46,6 +46,98 @@
     "checkpoint_save": true,
     "clean_exit": true
   },
+  "engineering_application_gate": {
+    "status": "passed",
+    "code_revision": "b369c7a",
+    "purpose": "fail-closed cache provenance, resource observability, and bounded two-GPU train/save/resume fallback validation",
+    "promotion_effect": "does_not_replace_the_four_gpu_recommended_profile",
+    "cache_registration": {
+      "cache_id": "qwen35-pilot30-v3-3571ef8-cached-img512-sdpa-20260803-031028",
+      "train_rows": 445,
+      "validation_rows": 81,
+      "train_source_sha256": "8b0935665108b4601c879e8ba7b714e639fa942a00c06ba07364bc8ddbb3a1a9",
+      "validation_source_sha256": "f204f90f5070e30de2bed9cc25f99255285d9c68091bd3fac6c3c872999ab6e3",
+      "historical_manifest_sha256": "3a57b1fa95902270d9d58df2390056e4a14149361b6d106d4be2630363f06a93",
+      "historical_artifacts_verified": 9,
+      "historical_cache_env_sha256": "7a69a6a3d8f3b29d96417e19306aba721dcffe2c1737fcaa1ef0450053e2af6f",
+      "registered_environment_sha256": "e8a40dd920e0f15d93ad1cfc5beeb202ed3a83973c433d37cfe2990536d10249",
+      "current_manifest_sha256": "e75c7f95f5fdd72c1e2fb18759821b600a61ae2016115419fb50f6983c2c3d07",
+      "cache_gate": true,
+      "provenance_repair_artifact": "training/logs/cache-registration/qwen35-pilot30-v3-3571ef8-provenance-repair-b369c7a/verification.json"
+    },
+    "resource_monitor_smoke": {
+      "physical_gpu": 7,
+      "sample_count": 15,
+      "process_tree_peak_rss_mib": 837.426,
+      "gpu_peak_process_memory_mib": 1516,
+      "gpu_peak_whole_memory_mib": 1525,
+      "artifact": "training/logs/diagnostics/qwen35-resource-monitor-ee678ba-gpu7"
+    },
+    "gpu_io_diagnostic": {
+      "logical_to_physical_gpu": {"0": 7},
+      "h2d_gb_per_second": 25.913,
+      "d2h_gb_per_second": 25.888,
+      "hbm_read_write_gb_per_second": 1372.482,
+      "stream_add_gb_per_second": 1359.59,
+      "json_and_tsv_written": true,
+      "artifact": "training/diagnostics/gpu-io-gpu7-ee678ba-20260803"
+    },
+    "two_gpu_one_step": {
+      "experiment_id": "qwen35-zero3-offload-2gpu-cache-resource-1step-gate-b369c7a-20260803",
+      "physical_gpus": [4, 5],
+      "world_size": 2,
+      "global_batch_size": 8,
+      "step_wall_seconds": 70.33,
+      "unique_samples_per_second": 0.113749,
+      "loss": 0.4776,
+      "eval_loss": 0.6591,
+      "eval_runtime_seconds": 56.48,
+      "trainer_runtime_seconds": 251.5,
+      "resource_wall_seconds": 396.831,
+      "process_tree_peak_rss_mib": 205300.031,
+      "gpu_peak_whole_memory_mib": {"4": 25611, "5": 25351},
+      "checkpoint_global_step": 1,
+      "checkpoint_bytes": 131758462277,
+      "optimizer_state_available": true,
+      "scheduler_state_available": true,
+      "rng_state_available": true,
+      "cache_gate": true,
+      "passed_production_gate": true
+    },
+    "two_gpu_resume": {
+      "experiment_id": "qwen35-zero3-offload-2gpu-cache-resource-resume-gate-b369c7a-20260803",
+      "source_global_step": 1,
+      "advanced_global_step": 2,
+      "resume_advanced": true,
+      "step_wall_seconds": 74.23,
+      "unique_samples_per_second": 0.107773,
+      "loss": 0.4303,
+      "eval_loss": 0.599,
+      "eval_runtime_seconds": 48.02,
+      "trainer_runtime_seconds": 231.9,
+      "resource_wall_seconds": 590.848,
+      "pre_trainer_and_resume_overhead_seconds": 358.948,
+      "process_tree_peak_rss_mib": 218584.883,
+      "gpu_peak_whole_memory_mib": {"4": 24513, "5": 24333},
+      "checkpoint_global_step": 2,
+      "checkpoint_bytes": 131758463207,
+      "optimizer_state_available": true,
+      "scheduler_state_available": true,
+      "rng_state_available": true,
+      "cache_gate": true,
+      "passed_production_gate": true
+    },
+    "discovered_and_fixed": [
+      "sourcing an unexported cache.env did not propagate cached dataset variables into a child launcher",
+      "the existing-cache registrar mutated a historically hashed cache.env after preflight verification",
+      "historical provenance verification checked only the historical manifest file hash rather than each historical artifact"
+    ],
+    "known_warnings": [
+      "the host kernel is 4.18.0 while the training stack recommends 5.5 or newer; both bounded gates completed without a hang",
+      "Transformers emitted lr_scheduler.step-before-optimizer.step warnings under DeepSpeed CPUAdam; losses remained finite and resume advanced, but this warning should stay visible in future long-run audits",
+      "the two-GPU fallback is operationally valid but much slower and more CPU-memory intensive than the promoted four-GPU path"
+    ]
+  },
   "screening": {
     "cpuadam_omp_threads": {
       "1": {"unique_samples_per_second": 0.208388, "decision": "control"},
@@ -114,7 +206,11 @@
     "training_profile": "training/logs/qwen35-zero3-offload-flash-4gpu-globalbatch8-production-workers0-omp8-10step-gate-c0c8e57-20260803/profile.json",
     "resume_profile": "training/logs/qwen35-zero3-offload-flash-4gpu-globalbatch8-production-workers0-omp8-resume11-gate-c0c8e57-20260803/profile.json",
     "checkpoint_export": "training/exports/qwen35-zero3-offload-flash-4gpu-globalbatch8-production-workers0-omp8-checkpoint10-reload-smoke-870d79b-20260803",
-    "checkpoint_path": "training/checkpoints/qwen35-zero3-offload-flash-4gpu-globalbatch8-production-workers0-omp8-10step-gate-c0c8e57-20260803/checkpoint-10"
+    "checkpoint_path": "training/checkpoints/qwen35-zero3-offload-flash-4gpu-globalbatch8-production-workers0-omp8-10step-gate-c0c8e57-20260803/checkpoint-10",
+    "two_gpu_one_step_profile": "training/logs/qwen35-zero3-offload-2gpu-cache-resource-1step-gate-b369c7a-20260803/profile.json",
+    "two_gpu_one_step_checkpoint": "training/checkpoints/qwen35-zero3-offload-2gpu-cache-resource-1step-gate-b369c7a-20260803/v0-20260803-194432/checkpoint-1",
+    "two_gpu_resume_profile": "training/logs/qwen35-zero3-offload-2gpu-cache-resource-resume-gate-b369c7a-20260803/profile.json",
+    "two_gpu_resume_checkpoint": "training/checkpoints/qwen35-zero3-offload-2gpu-cache-resource-resume-gate-b369c7a-20260803/v0-20260803-195249/checkpoint-2"
   },
   "operational_notes": {
     "generic_server_omp_threads": 1,
@@ -129,6 +225,8 @@
       "health_http_status": 200,
       "models_http_status": 200,
       "context_length": 131072,
+      "cold_start_seconds_after_engineering_gates": 190.9,
+      "restored_after_two_gpu_train_save_resume": true,
       "temporary_checkpoint_port_8902_closed": true
     },
     "credentials_included": false

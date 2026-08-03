@@ -1,7 +1,7 @@
 # Qwen3.5 training engineering application plan
 
 日期：2026-08-03
-状态：已完成；推荐配置、checkpoint/reload、serving gate、文档与双端测试均已落盘
+状态：已完成；推荐配置、cache provenance、资源监控、checkpoint/reload、serving gate、文档与双端测试均已落盘
 范围：把 `modern_genai_bilibili` 中可迁移的训练、数据、诊断、serving 与未来 RL 工程经验应用到 IFV Qwen3.5-9B。
 
 本计划延续：
@@ -876,3 +876,168 @@ Final state:
 
 The transient restart delay was external GPU occupancy, not a model or checkpoint
 failure.
+
+## 20. Cached-data provenance and two-GPU fallback closeout
+
+### 20.1 Cache registration boundary
+
+The legacy ms-swift cache was registered without reconstructing the original raw
+curriculum from unverified inputs. The registration gate:
+
+- verified all nine files in the historical manifest before migration;
+- recovered a source snapshot only from the SHA-verified Arrow cache;
+- confirmed 445 train rows, 81 validation rows, and the same seven columns;
+- recorded the recovered train and validation SHA-256 values;
+- recorded the original cache-build contract: max length 32768, SDPA, image token
+  limit 512, and the non-thinking prefix;
+- produced a version-2 manifest and a fail-closed launcher gate.
+
+The first real two-GPU launch exposed an environment propagation defect before any
+GPU memory was allocated. The historical `cache.env` contained ordinary shell
+assignments, so sourcing it and then invoking the launcher as a child process did
+not export `IFV_CACHED_DATASET` or `IFV_CACHED_VAL_DATASET`. The child launcher
+therefore fell back to the deleted raw curriculum and exited with code 2.
+
+The same investigation found a stricter provenance defect: the legacy registrar
+had appended new variables to the historically hashed `cache.env` after historical
+preflight verification. That made the original historical manifest stale even
+though the new manifest accepted the modified file.
+
+Revision `b369c7a` closes both gaps:
+
+1. newly built cache environment files use explicit `export` statements;
+2. registering a historical cache writes a separate `registered-cache.env` and
+   never mutates the historical `cache.env`;
+3. every cached-data gate verifies each artifact named by the historical manifest,
+   not only the historical manifest file hash;
+4. the existing cache was repaired by restoring the original 366-byte
+   `cache.env`, preserving the failed mutated copy in the registration audit,
+   generating `registered-cache.env`, rebuilding the current manifest, and
+   rerunning verification.
+
+Post-repair facts:
+
+```text
+historical artifacts verified     9
+historical cache.env SHA-256       7a69a6a3d8f3b29d96417e19306aba721dcffe2c1737fcaa1ef0450053e2af6f
+registered-cache.env SHA-256       e8a40dd920e0f15d93ad1cfc5beeb202ed3a83973c433d37cfe2990536d10249
+current manifest SHA-256           e75c7f95f5fdd72c1e2fb18759821b600a61ae2016115419fb50f6983c2c3d07
+cache gate                         passed
+```
+
+Artifact:
+
+```text
+training/logs/cache-registration/qwen35-pilot30-v3-3571ef8-provenance-repair-b369c7a/verification.json
+```
+
+### 20.2 Resource and GPU diagnostic gates
+
+The resource monitor now records the full Linux process tree rather than only the
+launcher PID. It also records per-physical-GPU process memory, whole-GPU memory,
+GPU utilization, JSONL samples, and a summary. A GPU-7 smoke completed with:
+
+```text
+samples                         15
+process-tree peak RSS           837.426 MiB
+process GPU-memory peak         1516 MiB
+whole-GPU memory peak           1525 MiB
+```
+
+The physical/logical GPU diagnostic produced both JSON and TSV and confirmed
+logical GPU 0 mapped to physical GPU 7:
+
+```text
+H2D                             25.913 GB/s
+D2H                             25.888 GB/s
+HBM read/write                  1372.482 GB/s
+stream add                      1359.590 GB/s
+```
+
+Artifacts:
+
+```text
+training/logs/diagnostics/qwen35-resource-monitor-ee678ba-gpu7
+training/diagnostics/gpu-io-gpu7-ee678ba-20260803
+```
+
+### 20.3 Two-GPU train/save gate
+
+The bounded fallback gate used physical GPUs 4 and 5, ZeRO-3 optimizer CPU
+offload, parameters on GPU, global batch eight, FlashAttention, activation
+checkpointing, cached rows, `IFV_OMP_NUM_THREADS=8`, and zero dataloader workers.
+
+| Metric | Step-1 gate |
+|---|---:|
+| optimizer-step wall time | 70.33 s |
+| useful rows/s | 0.113749 |
+| train loss | 0.4776 |
+| eval loss | 0.6591 |
+| eval runtime | 56.48 s |
+| full trainer runtime including eval/save | 251.5 s |
+| full monitored wall time | 396.831 s |
+| process-tree peak RSS | 205300.031 MiB |
+| whole-GPU peak, physical 4/5 | 25611 / 25351 MiB |
+| checkpoint bytes | 131758462277 |
+
+The run exited zero, passed validation, saved checkpoint 1, retained optimizer,
+scheduler, and per-rank RNG state, passed the cache gate, and produced
+`passed_production_gate=true`.
+
+### 20.4 Two-GPU resume gate
+
+The recovery gate loaded checkpoint 1, including both approximately 56.5 GB ZeRO
+optimizer shards, and advanced to global step 2:
+
+| Metric | Resume gate |
+|---|---:|
+| source step -> final step | 1 -> 2 |
+| optimizer-step wall time | 74.23 s |
+| useful rows/s | 0.107773 |
+| train loss | 0.4303 |
+| eval loss | 0.5990 |
+| eval runtime | 48.02 s |
+| full trainer runtime including eval/save | 231.9 s |
+| full monitored wall time | 590.848 s |
+| pre-trainer/model-and-state reload overhead | 358.948 s |
+| process-tree peak RSS | 218584.883 MiB |
+| whole-GPU peak, physical 4/5 | 24513 / 24333 MiB |
+| checkpoint bytes | 131758463207 |
+
+The new checkpoint 2 contains model, optimizer, scheduler, and RNG state.
+`resume.advanced=true`, validation passed, the process exited zero, and the final
+profile again reports `passed_production_gate=true`.
+
+These gates prove that the two-GPU path is a valid recovery/fallback path, not that
+it should replace the four-GPU production profile. It is roughly four times slower
+per useful row than the promoted four-GPU steady window and requires more than
+200 GiB peak process-tree RSS during full-state save or restore.
+
+### 20.5 Remaining visible warnings
+
+The bounded gates completed despite these warnings, which remain documented rather
+than silently suppressed:
+
+- the server kernel is 4.18.0 while the stack recommends kernel 5.5 or newer;
+- Transformers reports `lr_scheduler.step()` before `optimizer.step()` under the
+  DeepSpeed CPUAdam path; losses stayed finite and resume advanced, but future
+  long runs should retain this log audit;
+- changing the bounded resume profile from eval/save step 1 to step 2 produces the
+  expected trainer-state argument mismatch warning.
+
+### 20.6 Final service state
+
+After both gates released GPUs 4 and 5, the formal base-model service was restored
+only through `manage_vllm_qwen35.sh`. Cold startup took about 191 seconds.
+Independent checks then confirmed:
+
+```text
+service                          ifv-qwen3.5-9b
+port                             8901
+/health                          HTTP 200
+/v1/models                       HTTP 200
+physical GPUs                    4,5
+```
+
+The current training recommendation remains the four-GPU ZeRO-3 optimizer-offload
+profile in section 19.3.
