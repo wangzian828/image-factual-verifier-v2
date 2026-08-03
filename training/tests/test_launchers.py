@@ -566,6 +566,34 @@ def test_qwen35_zero3_dataloader_followup_profiles_are_bounded() -> None:
     assert "IFV_DATALOADER_PREFETCH_FACTOR=4" in prefetch4
 
 
+def test_qwen35_zero3_workers0_production_profiles_are_bounded() -> None:
+    ten_step = _source(
+        "configs/sft/"
+        "qwen3.5-full-10step-4gpu-zero3-offload-cached-workers0-omp8.env"
+    )
+    resume = _source(
+        "configs/sft/"
+        "qwen3.5-full-11step-resume-4gpu-zero3-offload-cached-workers0-omp8.env"
+    )
+
+    for source in (ten_step, resume):
+        assert "IFV_DEEPSPEED=training/configs/deepspeed/zero3-optimizer-offload.json" in source
+        assert "IFV_FSDP" not in source
+        assert "IFV_GRADIENT_ACCUMULATION_STEPS=2" in source
+        assert "IFV_GRADIENT_CHECKPOINTING=true" in source
+        assert "IFV_DATALOADER_NUM_WORKERS=0" in source
+        assert "IFV_DATALOADER_PERSISTENT_WORKERS" not in source
+        assert "IFV_DATALOADER_PREFETCH_FACTOR" not in source
+        assert "IFV_OMP_NUM_THREADS=8" in source
+
+    assert "IFV_MAX_STEPS=10" in ten_step
+    assert "IFV_SAVE_STEPS=10" in ten_step
+    assert "IFV_EVAL_STEPS=10" in ten_step
+    assert "IFV_MAX_STEPS=11" in resume
+    assert "IFV_SAVE_STEPS=11" in resume
+    assert "IFV_EVAL_STEPS=11" in resume
+
+
 def test_qwen35_zero3_speed_probe_is_full_parameter_and_32k() -> None:
     source = _source("configs/sft/qwen3.5-full-1step-zero3.env")
 
