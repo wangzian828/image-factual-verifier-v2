@@ -698,3 +698,9 @@ The bounded training-specific protocol is:
 
 This is a scoped CPU-offload exception, not a change to the general Jupyter/server
 operations recommendation.
+
+Because unrelated CPU-intensive jobs appeared after the original one-thread
+baseline, the thread matrix also requires a contemporaneous `OMP_NUM_THREADS=1`
+two-step control. The final thread decision compares the same-load-window
+`1/4/8/16` runs; the older ten-step baseline remains useful for production
+throughput but is not sufficient by itself to attribute a small OpenMP delta.

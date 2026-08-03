@@ -506,7 +506,7 @@ def test_qwen35_zero3_cpu_adam_thread_profiles_are_bounded() -> None:
         threads: _source(
             f"configs/sft/qwen3.5-full-2step-4gpu-zero3-offload-cached-omp{threads}.env"
         )
-        for threads in (4, 8, 16)
+        for threads in (1, 4, 8, 16)
     }
 
     for threads, source in profiles.items():
