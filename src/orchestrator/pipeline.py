@@ -1638,6 +1638,16 @@ class Orchestrator:
         checkpoint from being recorded as a successful empty no-op.
         """
 
+        if (
+            "must request targeted visual_reinspection before semantically "
+            "using source Evidence"
+            in rejected_reason
+        ):
+            # A source-to-pixel gate is an executable mechanism requirement,
+            # not an optional semantic update. Recording source Evidence as an
+            # ordinary insufficient assessment here would silently skip the
+            # required tool transition, so fail closed at the caller instead.
+            return None
         reviewed = list(dict.fromkeys(str(item) for item in reviewed_evidence_ids))
         if not reviewed:
             return None

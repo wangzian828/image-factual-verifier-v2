@@ -2128,6 +2128,123 @@ def test_runtime_binding_prefers_selected_visual_evidence_over_conflicting_irrel
     assert visual.evidence_id in bound.claim_assessments[0].selected_evidence_ids
 
 
+def test_source_assertion_visible_property_requires_visual_before_discrepancy() -> None:
+    state = _planned_state()
+    claim = state.image_claims[0]
+    task = next(
+        item for item in state.tasks if claim.claim_id in item.claim_ids
+    )
+    source = InvestigationEvidence(
+        evidence_id="evidence-source-visible-property",
+        task_id=task.task_id,
+        fact_ids=[claim.fact_id],
+        function_call_id="call-source-visible-property",
+        tool_name="visit",
+        evidence_kind="web_span",
+        source_url="https://example.org/source",
+        source_family="domain:example.org",
+        exact_text=(
+            "The source says the presenter is holding a silver microphone."
+        ),
+        span_start=0,
+        span_end=60,
+        artifact_sha256="d" * 64,
+        retrieved_at=datetime.now(timezone.utc).isoformat(),
+        stance="refute",
+        quality="strong",
+        directness="direct",
+        claim_binding="source_assertion",
+        relation_scope="same_relation",
+        relation_stance="contradicts",
+    )
+    state.evidence.append(source)
+    state.findings.append(
+        Finding(
+            finding_id="finding-source-visible-property",
+            task_id=task.task_id,
+            fact_ids=[claim.fact_id],
+            statement="The source contradicts the visible held object.",
+            stance="refute",
+            evidence_ids=[source.evidence_id],
+            source_family_ids=[source.source_family],
+            quality="decisive",
+        )
+    )
+    before = state.model_dump(mode="json")
+
+    source_only = apply_discrepancy_decision(
+        state,
+        DiscrepancyDecisionOutput(
+            claim_assessments=[
+                ClaimAssessmentProposal(
+                    claim_id=claim.claim_id,
+                    assessment="refuted",
+                    selected_evidence_ids=[source.evidence_id],
+                    rationale="Improper source-only semantic conclusion.",
+                )
+            ],
+            material_discrepancy=MaterialDiscrepancyProposal(
+                statement="The source names a different held object.",
+                affected_claim_ids=[claim.claim_id],
+                visual_anchor_fact_ids=claim.anchor_fact_ids,
+                evidence_ids=[source.evidence_id],
+                materiality="decisive",
+                status="established",
+                rationale="This must wait for a pixel check.",
+            ),
+            verdict_proposal="fake",
+            rationale="Improperly skip the required focused visual check.",
+        ),
+        reviewed_evidence_ids=[source.evidence_id],
+        trigger="qualified_evidence",
+    )
+
+    assert source_only["accepted"] is False
+    assert "must request targeted visual_reinspection" in source_only[
+        "rejected_reason"
+    ]
+    assert state.model_dump(mode="json") == before
+
+    visual_request = apply_discrepancy_decision(
+        state,
+        DiscrepancyDecisionOutput(
+            visual_reinspection=VisualReinspectionRequest(
+                reason="relation",
+                scope="relation",
+                question=(
+                    "Is the presenter visibly holding a silver microphone?"
+                ),
+                expected_property="holding a silver microphone",
+                anchor_fact_ids=claim.anchor_fact_ids,
+                grounding_evidence_ids=[source.evidence_id],
+            ),
+            verdict_proposal="continue",
+            rationale="Inspect the source-grounded visible property first.",
+        ),
+        reviewed_evidence_ids=[source.evidence_id],
+        trigger="qualified_evidence",
+    )
+
+    assert visual_request["accepted"] is True, visual_request
+    assert visual_request["accepted_visual_question_id"]
+
+
+def test_source_visual_gate_cannot_use_generic_decision_exhaustion_fallback() -> None:
+    state = _planned_state()
+    evidence = _append_evidence(state)
+
+    fallback = Orchestrator._decision_correction_exhaustion_fallback(
+        state,
+        reviewed_evidence_ids=[evidence.evidence_id],
+        rejected_reason=(
+            "Decision must request targeted visual_reinspection before "
+            "semantically using source Evidence with a concrete visible property"
+        ),
+    )
+
+    assert fallback is None
+
+
 @pytest.mark.parametrize(
     ("tool_payload", "metadata", "expected_code"),
     [

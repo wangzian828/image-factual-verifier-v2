@@ -1896,6 +1896,45 @@ def _discrepancy_contract_errors(
     }
     if output.material_discrepancy is not None:
         decision_claim_ids.update(output.material_discrepancy.affected_claim_ids)
+    pending_source_visual_binding = (
+        discrepancy_visual_reinspection_binding(
+            state,
+            reviewed_evidence_ids=reviewed_evidence_ids,
+        )
+        if not required_visual_evidence_ids
+        else {"status": "unavailable", "binding": None}
+    )
+    pending_binding = pending_source_visual_binding.get("binding")
+    if isinstance(pending_binding, Mapping):
+        pending_grounding_ids = {
+            str(item)
+            for item in pending_binding.get("grounding_evidence_ids", []) or []
+            if str(item) in evidence_by_id
+            and evidence_by_id[str(item)].claim_binding == "source_assertion"
+        }
+        pending_claim_id = str(pending_binding.get("claim_id") or "")
+        prior_source_visual_attempt = any(
+            pending_grounding_ids
+            & set(record.request.grounding_evidence_ids)
+            for record in state.visual_reinspections
+        )
+        semantically_uses_pending_source = bool(
+            pending_grounding_ids & selected_visual_evidence_ids
+            or pending_claim_id in decision_claim_ids
+        )
+        if (
+            pending_grounding_ids
+            and not prior_source_visual_attempt
+            and semantically_uses_pending_source
+            and output.visual_reinspection is None
+        ):
+            errors.append(
+                "Decision must request targeted visual_reinspection before "
+                "semantically using source Evidence with a concrete visible "
+                "property for ImageClaim "
+                f"{pending_claim_id!r}; keep the Claim insufficient and emit "
+                "only the visual_reinspection transition"
+            )
     if required_visual_evidence_ids and not consumed_visual_evidence_ids:
         if output.visual_evidence_disposition is None:
             claim_map = _format_visual_requirement_claim_map(
