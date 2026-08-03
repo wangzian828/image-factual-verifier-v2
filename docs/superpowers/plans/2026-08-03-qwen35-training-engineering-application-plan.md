@@ -582,3 +582,31 @@ registrar cannot consume it directly. The locked production gate is:
    vLLM serving environment.
 
 The source FSDP shards are never deleted by the exporter.
+
+## 16. Unique-sample throughput correction and SP1 gate
+
+The successful SP4 run has sequence-parallel size 4 and data-parallel size 1. Its
+epoch progression proves that each optimizer step consumes one unique dataset row,
+not four. Framework `train_samples_per_second` counts physical rank participation
+and therefore overstates unique-example throughput for this configuration.
+
+All comparisons must report:
+
+- world size;
+- sequence-parallel size;
+- data-parallel size;
+- unique samples per optimizer step;
+- cumulative and steady unique samples per second.
+
+The next bounded gates remove sequence parallel while retaining BF16 parameters and
+AdamW:
+
+1. SP1, accumulation 1: four unique samples per optimizer step;
+2. SP1, accumulation 2: eight unique samples per optimizer step, matching the
+   existing ZeRO-3 optimizer-offload global batch;
+3. use `group_by_length=true`, which is effective on the non-SP dataloader and puts
+   the longest rows into the first distributed mega-batch;
+4. run two steps before any 10-step promotion, because optimizer state is created
+   after the first step;
+5. require the first-step loss to remain aligned with the frozen reference and
+   require validation/save before promotion.

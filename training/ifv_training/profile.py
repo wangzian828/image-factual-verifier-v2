@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import json
 import re
+import shlex
 from pathlib import Path
 from statistics import mean
 from typing import Any
@@ -90,6 +91,39 @@ def _metric_value(row: dict[str, Any], *names: str) -> float | None:
     return None
 
 
+def _elapsed_seconds(value: Any) -> float | None:
+    if not isinstance(value, str):
+        return None
+    total = 0.0
+    matched = False
+    for amount, suffix in re.findall(r"(\d+(?:\.\d+)?)\s*([hms])", value):
+        matched = True
+        factor = {"h": 3600.0, "m": 60.0, "s": 1.0}[suffix]
+        total += float(amount) * factor
+    return total if matched else None
+
+
+def _command_value(command: str, name: str) -> str | None:
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        tokens = command.split()
+    flag = f"--{name}"
+    for index, token in enumerate(tokens[:-1]):
+        if token == flag:
+            return tokens[index + 1]
+    return None
+
+
+def _int_value(value: str | None, default: int | None = None) -> int | None:
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
 def summarize_training_log(
     train_log: Path,
     *,
@@ -100,10 +134,25 @@ def summarize_training_log(
     metrics: list[dict[str, Any]] = []
     errors: dict[str, list[int]] = {name: [] for name in ERROR_PATTERNS}
     line_count = 0
+    launch_command = ""
+    world_size: int | None = None
+    train_dataset_size: int | None = None
 
     with train_log.open(encoding="utf-8", errors="replace") as handle:
         for line_number, line in enumerate(handle, start=1):
             line_count = line_number
+            if line.startswith("Executing:") and not launch_command:
+                launch_command = line.removeprefix("Executing:").strip()
+            elif line.startswith("run sh: `") and not launch_command:
+                launch_command = line.removeprefix("run sh: `").rsplit("`", 1)[0]
+            if world_size is None:
+                match = re.search(r"\bworld_size:\s*(\d+)", line)
+                if match:
+                    world_size = int(match.group(1))
+            if train_dataset_size is None and "train_dataset" in line:
+                match = re.search(r"\bsize=(\d+)", line)
+                if match:
+                    train_dataset_size = int(match.group(1))
             for name, pattern in ERROR_PATTERNS.items():
                 if pattern.search(line):
                     errors[name].append(line_number)
@@ -140,6 +189,76 @@ def summarize_training_log(
     ]
     steps = [int(row["global_step"]) for row in metrics if isinstance(row.get("global_step"), int)]
     steady_values = speed_values[-steady_window:] if steady_window > 0 else []
+    elapsed_values = [
+        value
+        for row in train_step_metrics
+        if (value := _elapsed_seconds(row.get("elapsed_time"))) is not None
+    ]
+    step_wall_values: list[float] = []
+    for index, cumulative_mean in enumerate(speed_values):
+        previous_total = speed_values[index - 1] * index if index else 0.0
+        current_total = cumulative_mean * (index + 1)
+        step_wall_values.append(
+            round(max(0.0, current_total - previous_total), 6)
+        )
+    steady_step_wall = (
+        step_wall_values[-steady_window:] if steady_window > 0 else []
+    )
+    step_wall_mean = (
+        round(mean(step_wall_values), 6) if step_wall_values else None
+    )
+    steady_step_wall_mean = (
+        round(mean(steady_step_wall), 6) if steady_step_wall else None
+    )
+
+    train_batch_size = _int_value(
+        _command_value(launch_command, "per_device_train_batch_size")
+    )
+    gradient_accumulation = _int_value(
+        _command_value(launch_command, "gradient_accumulation_steps")
+    )
+    sequence_parallel_size = _int_value(
+        _command_value(launch_command, "sequence_parallel_size"),
+        1,
+    )
+    data_parallel_size = None
+    if (
+        world_size is not None
+        and sequence_parallel_size is not None
+        and sequence_parallel_size > 0
+        and world_size % sequence_parallel_size == 0
+    ):
+        data_parallel_size = world_size // sequence_parallel_size
+    unique_samples_per_step = None
+    if (
+        train_batch_size is not None
+        and gradient_accumulation is not None
+        and data_parallel_size is not None
+    ):
+        unique_samples_per_step = (
+            train_batch_size * gradient_accumulation * data_parallel_size
+        )
+    observed_train_steps = len(train_step_metrics)
+    observed_unique_samples = (
+        observed_train_steps * unique_samples_per_step
+        if unique_samples_per_step is not None
+        else None
+    )
+    train_elapsed = sum(step_wall_values) if step_wall_values else (
+        elapsed_values[-1] if elapsed_values else None
+    )
+    unique_samples_per_second = (
+        round(observed_unique_samples / train_elapsed, 6)
+        if observed_unique_samples is not None and train_elapsed
+        else None
+    )
+    steady_unique_samples_per_second = (
+        round(unique_samples_per_step / steady_step_wall_mean, 6)
+        if unique_samples_per_step is not None
+        and steady_step_wall_mean
+        and steady_step_wall_mean > 0
+        else None
+    )
 
     detected_errors = {name: lines for name, lines in errors.items() if lines}
     return {
@@ -165,6 +284,31 @@ def summarize_training_log(
             "mean": mean(speed_values) if speed_values else None,
             "steady_window": steady_window,
             "steady_mean": mean(steady_values) if steady_values else None,
+        },
+        "step_wall_seconds": {
+            "count": len(step_wall_values),
+            "values": step_wall_values,
+            "mean": step_wall_mean,
+            "steady_window": steady_window,
+            "steady_mean": steady_step_wall_mean,
+        },
+        "parallelism": {
+            "world_size": world_size,
+            "sequence_parallel_size": sequence_parallel_size,
+            "data_parallel_size": data_parallel_size,
+            "per_device_train_batch_size": train_batch_size,
+            "gradient_accumulation_steps": gradient_accumulation,
+            "unique_samples_per_optimizer_step": unique_samples_per_step,
+        },
+        "throughput": {
+            "train_dataset_size": train_dataset_size,
+            "observed_train_steps": observed_train_steps,
+            "observed_unique_samples": observed_unique_samples,
+            "train_elapsed_seconds": train_elapsed,
+            "unique_samples_per_second": unique_samples_per_second,
+            "steady_unique_samples_per_second": (
+                steady_unique_samples_per_second
+            ),
         },
         "memory_gib": {
             "count": len(memory_values),

@@ -11,14 +11,19 @@ def test_training_profile_summarizes_ms_swift_metric_lines(tmp_path: Path) -> No
     train_log.write_text(
         "\n".join(
             [
+                "Executing: swift sft --per_device_train_batch_size 1 "
+                "--gradient_accumulation_steps 2 --sequence_parallel_size 4",
+                "[INFO:swift] rank: 0, local_rank: 0, world_size: 4",
                 "{'loss': '1.50', 'global_step/max_steps': '1/10', "
-                "'memory(GiB)': '21.5', 'train_speed(s/it)': '31.2'}",
+                "'elapsed_time': '31s', 'memory(GiB)': '21.5', "
+                "'train_speed(s/it)': '31.2'}",
                 "{'loss': '1.20', 'global_step/max_steps': '2/10', "
-                "'memory(GiB)': '22.0', 'train_speed(s/it)': '28.8'}",
+                "'elapsed_time': '58s', 'memory(GiB)': '22.0', "
+                "'train_speed(s/it)': '28.8'}",
                 "{'eval_loss': '0.52', 'global_step/max_steps': '2/10'}",
                 "{'train_runtime': '88.0', 'global_step/max_steps': '2/10', "
                 "'train_speed(s/it)': '44.0'}",
-                "{'model_type': 'qwen3_5', 'hidden_size': 4096}",
+                '{"train_dataset": "size=445"}',
             ]
         )
         + "\n",
@@ -43,6 +48,16 @@ def test_training_profile_summarizes_ms_swift_metric_lines(tmp_path: Path) -> No
     assert result["steps"]["last"] == 2
     assert result["speed_seconds_per_step"]["steady_mean"] == 30.0
     assert result["speed_seconds_per_step"]["last"] == 28.8
+    assert result["step_wall_seconds"]["values"] == [31.2, 26.4]
+    assert result["step_wall_seconds"]["steady_mean"] == 28.8
+    assert result["parallelism"]["world_size"] == 4
+    assert result["parallelism"]["sequence_parallel_size"] == 4
+    assert result["parallelism"]["data_parallel_size"] == 1
+    assert result["parallelism"]["unique_samples_per_optimizer_step"] == 2
+    assert result["throughput"]["train_dataset_size"] == 445
+    assert result["throughput"]["observed_unique_samples"] == 4
+    assert result["throughput"]["unique_samples_per_second"] == 0.069444
+    assert result["throughput"]["steady_unique_samples_per_second"] == 0.069444
     assert result["runtime_seconds"]["train_runtime"] == 88.0
     assert result["memory_gib"]["max"] == 22.0
     assert result["loss"]["last"] == 1.2
