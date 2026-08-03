@@ -724,6 +724,50 @@ def test_qwen35_zero3_workers0_production_profiles_are_bounded() -> None:
     assert "IFV_EVAL_STEPS=11" in resume
 
 
+def test_qwen35_zero3_workers4_production_profiles_are_bounded() -> None:
+    ten_step = _source(
+        "configs/sft/"
+        "qwen3.5-full-10step-4gpu-zero3-offload-cached-workers4-omp1.env"
+    )
+    resume = _source(
+        "configs/sft/"
+        "qwen3.5-full-11step-resume-4gpu-zero3-offload-cached-workers4-omp1.env"
+    )
+
+    for source in (ten_step, resume):
+        assert "IFV_DEEPSPEED=training/configs/deepspeed/zero3-optimizer-offload.json" in source
+        assert "IFV_FSDP" not in source
+        assert "IFV_GRADIENT_ACCUMULATION_STEPS=2" in source
+        assert "IFV_GRADIENT_CHECKPOINTING=true" in source
+        assert "IFV_DATALOADER_NUM_WORKERS=4" in source
+        assert "IFV_DATALOADER_PERSISTENT_WORKERS=true" in source
+        assert "IFV_DATALOADER_PREFETCH_FACTOR=2" in source
+        assert "IFV_OMP_NUM_THREADS=1" in source
+        assert "IFV_ENCODE_CACHE_ENABLED=true" in source
+        assert "IFV_ENCODE_CACHE_MODE=readonly" in source
+
+    assert "IFV_MAX_STEPS=10" in ten_step
+    assert "IFV_SAVE_STEPS=10" in ten_step
+    assert "IFV_EVAL_STEPS=10" in ten_step
+    assert "IFV_MAX_STEPS=11" in resume
+    assert "IFV_SAVE_STEPS=11" in resume
+    assert "IFV_EVAL_STEPS=11" in resume
+
+
+def test_qwen35_omp1_closeout_runner_is_fail_closed() -> None:
+    source = _source("scripts/train/run_qwen35_omp1_closeout.sh")
+
+    assert 'CUDA_VISIBLE_DEVICES:-}" != "4,5,6,7"' in source
+    assert "qwen3.5-full-2step-4gpu-zero3-offload-cached-workers0-omp1.env" in source
+    assert "qwen3.5-full-2step-4gpu-zero3-offload-cached-workers4-omp1.env" in source
+    assert "passed_production_gate" in source
+    assert "speeds[1] > speeds[0] * 1.05" in source
+    assert "checkpoint-10" in source
+    assert "hits != requests or misses != 0" in source
+    assert 'bash "$SERVICE_MANAGER" stop' in source
+    assert 'bash "$SERVICE_MANAGER" start' in source
+
+
 def test_qwen35_two_gpu_server_safe_and_resume_profiles_are_bounded() -> None:
     one_step = _source(
         "configs/sft/"
