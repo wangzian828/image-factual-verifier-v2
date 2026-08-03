@@ -16,6 +16,7 @@ def test_training_profile_summarizes_ms_swift_metric_lines(tmp_path: Path) -> No
                 "{'loss': '1.20', 'global_step/max_steps': '2/10', "
                 "'memory(GiB)': '22.0', 'train_speed(s/it)': '28.8'}",
                 "{'eval_loss': '0.52', 'global_step/max_steps': '2/10'}",
+                "{'model_type': 'qwen3_5', 'hidden_size': 4096}",
             ]
         )
         + "\n",

@@ -22,6 +22,20 @@ ERROR_PATTERNS = {
     "traceback": re.compile(r"^Traceback \(most recent call last\):"),
 }
 
+METRIC_KEYS = {
+    "loss",
+    "eval_loss",
+    "global_step/max_steps",
+    "train_speed(s/it)",
+    "memory(GiB)",
+    "token_acc",
+    "grad_norm",
+    "learning_rate",
+    "epoch",
+    "train_runtime",
+    "eval_runtime",
+}
+
 
 def _coerce_number(value: Any) -> Any:
     if isinstance(value, (int, float)):
@@ -52,6 +66,8 @@ def _parse_metric_dict(line: str) -> dict[str, Any] | None:
     except (SyntaxError, ValueError):
         return None
     if not isinstance(parsed, dict):
+        return None
+    if not METRIC_KEYS.intersection(str(key) for key in parsed):
         return None
     return {str(key): _coerce_number(value) for key, value in parsed.items()}
 

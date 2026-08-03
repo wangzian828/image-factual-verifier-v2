@@ -240,6 +240,19 @@ require_full_parameter_profile() {
   fi
 }
 
+configure_distributed_backend() {
+  if [[ -n "${IFV_FSDP:-}" ]]; then
+    # ms-swift resolves the default model device map before its FSDP argument
+    # initialization runs.  Set Accelerate's FSDP marker early so the model is
+    # loaded on CPU/meta rather than materialized in full on every GPU first.
+    export ACCELERATE_USE_FSDP=true
+    export FSDP_VERSION="${IFV_FSDP_VERSION:-2}"
+  else
+    unset ACCELERATE_USE_FSDP
+    unset FSDP_VERSION
+  fi
+}
+
 require_model_path() {
   require_value IFV_MODEL_ID
   if [[ "$IFV_MODEL_ID" == REQUIRED_* ]]; then

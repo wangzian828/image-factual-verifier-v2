@@ -22,6 +22,7 @@ load_profile "$SFT_PROFILE"
 configure_training_runtime
 require_idle_gpus
 require_full_parameter_profile
+configure_distributed_backend
 require_model_path
 prepare_deepspeed_cpu_adam
 require_value EXPERIMENT_ID

@@ -73,6 +73,9 @@ def test_environment_manifest_records_framework_and_lock(tmp_path: Path) -> None
     assert manifest["framework_release"]["git_tag"] == "v4.4.2"
     assert len(manifest["framework_release"]["git_commit"]) == 40
     assert len(manifest["package_lock"]["sha256"]) == 64
+    assert "flash-attn" in manifest["packages"]
+    assert "flash-linear-attention" in manifest["packages"]
+    assert "causal-conv1d" in manifest["packages"]
 
 
 def test_full_checkpoint_component_candidates_include_merger_bias_and_projection() -> None:

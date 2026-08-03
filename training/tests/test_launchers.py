@@ -292,6 +292,7 @@ def test_sft_launchers_support_fsdp2_gradient_checkpointing_and_sequence_paralle
 
     for source in (single, curriculum):
         assert "training_backend_args" in source
+        assert "configure_distributed_backend" in source
         assert 'training_backend_args+=(--deepspeed "$IFV_DEEPSPEED")' in source
         assert 'training_backend_args+=(--fsdp "$IFV_FSDP")' in source
         assert '--gradient_checkpointing "${IFV_GRADIENT_CHECKPOINTING:-true}"' in source
@@ -301,6 +302,8 @@ def test_sft_launchers_support_fsdp2_gradient_checkpointing_and_sequence_paralle
     assert "requires exactly one backend" in common
     assert "do not set both IFV_DEEPSPEED and IFV_FSDP" in common
     assert "IFV_FSDP=fsdp2" in common
+    assert "ACCELERATE_USE_FSDP=true" in common
+    assert 'FSDP_VERSION="${IFV_FSDP_VERSION:-2}"' in common
 
 
 def test_curriculum_cache_exporter_uses_ms_swift_cached_dataset_contract() -> None:
