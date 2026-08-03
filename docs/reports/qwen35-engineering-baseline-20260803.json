@@ -121,7 +121,16 @@
     "training_only_omp_override": 8,
     "cache_rows_still_decode_images_lazily": true,
     "encoded_image_cache": "future_engineering_task",
-    "formal_base_service_restore": "blocked_by_non_owned_gpu_occupancy_at_report_time",
+    "formal_base_service_restore": {
+      "status": "running_and_healthy",
+      "served_model": "ifv-qwen3.5-9b",
+      "port": 8901,
+      "physical_gpus": [4, 5],
+      "health_http_status": 200,
+      "models_http_status": 200,
+      "context_length": 131072,
+      "temporary_checkpoint_port_8902_closed": true
+    },
     "credentials_included": false
   }
 }

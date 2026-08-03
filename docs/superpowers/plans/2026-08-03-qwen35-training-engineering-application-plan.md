@@ -1,7 +1,7 @@
 # Qwen3.5 training engineering application plan
 
 日期：2026-08-03
-状态：核心训练、checkpoint、reload 与 serving gate 已完成；文档、测试和正式服务复查中
+状态：已完成；推荐配置、checkpoint/reload、serving gate、文档与双端测试均已落盘
 范围：把 `modern_genai_bilibili` 中可迁移的训练、数据、诊断、serving 与未来 RL 工程经验应用到 IFV Qwen3.5-9B。
 
 本计划延续：
@@ -855,10 +855,10 @@ document. Do not reopen them without a new memory or hardware premise.
 ### 19.4 Operational handoff state
 
 The temporary checkpoint service was stopped through
-`manage_vllm_qwen35.sh stop`. Restarting the formal base-model service was
-attempted through the same lifecycle script, but the launcher correctly refused
-while another user's process occupied the selected runtime GPU set. No process
-was killed or otherwise modified. A later operator may rerun:
+`manage_vllm_qwen35.sh stop`. The first formal base-model restart attempt was
+correctly refused while another user's process occupied the selected runtime GPU
+set; no process was killed or otherwise modified. After GPUs 4 and 5 became idle,
+the same lifecycle script restored the formal service:
 
 ```bash
 CUDA_VISIBLE_DEVICES=4,5 bash training/scripts/serve/manage_vllm_qwen35.sh start
@@ -866,5 +866,13 @@ bash training/scripts/serve/manage_vllm_qwen35.sh status
 curl --noproxy '*' -fsS http://127.0.0.1:8901/health
 ```
 
-Only retry after the launcher reports the selected GPUs idle. This is an
-environment-state blocker, not a model or checkpoint failure.
+Final state:
+
+- formal service `ifv-qwen3.5-9b` is running on port 8901;
+- lifecycle ownership check passes;
+- `/health` returns HTTP 200;
+- `/v1/models` returns HTTP 200 and declares 131,072 context;
+- temporary checkpoint port 8902 is closed.
+
+The transient restart delay was external GPU occupancy, not a model or checkpoint
+failure.
