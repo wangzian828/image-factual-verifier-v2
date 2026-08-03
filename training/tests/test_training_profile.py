@@ -165,3 +165,38 @@ def test_training_profile_proves_cache_validation_save_resume_and_resources(
     assert result["resume"]["advanced"] is True
     assert result["resources"]["summary"]["process_tree_peak_rss_mib"] == 12345.0
     assert result["cached_dataset_gate"]["passed"] is True
+
+
+def test_scheduler_warning_requires_wrapper_false_positive_audit(
+    tmp_path: Path,
+) -> None:
+    train_log = tmp_path / "train.log"
+    train_log.write_text(
+        "Detected call of `lr_scheduler.step()` before `optimizer.step()`.\n",
+        encoding="utf-8",
+    )
+
+    unresolved = summarize_training_log(train_log)
+
+    assert unresolved["scheduler_order"]["warning_count"] == 1
+    assert unresolved["scheduler_order"]["audit_required"] is True
+    assert unresolved["scheduler_order"]["passed"] is False
+
+    audit = tmp_path / "scheduler-audit.json"
+    audit.write_text(
+        json.dumps(
+            {
+                "schema_version": "ifv-deepspeed-scheduler-audit-v1",
+                "passed": True,
+                "classification": "wrapper_false_positive",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    resolved = summarize_training_log(
+        train_log,
+        scheduler_audit=audit,
+    )
+
+    assert resolved["scheduler_order"]["passed"] is True

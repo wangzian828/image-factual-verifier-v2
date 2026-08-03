@@ -22,6 +22,9 @@ ERROR_PATTERNS = {
     "nan_or_inf": re.compile(r"\b(nan|inf)\b", re.IGNORECASE),
     "traceback": re.compile(r"^Traceback \(most recent call last\):"),
 }
+SCHEDULER_ORDER_WARNING = re.compile(
+    r"Detected call of `lr_scheduler\.step\(\)` before `optimizer\.step\(\)`"
+)
 
 METRIC_KEYS = {
     "loss",
@@ -198,6 +201,7 @@ def summarize_training_log(
     resource_summary: Path | None = None,
     cache_verification: Path | None = None,
     encode_cache_report: Path | None = None,
+    scheduler_audit: Path | None = None,
     train_exit_code: int | None = None,
 ) -> dict[str, Any]:
     metrics: list[dict[str, Any]] = []
@@ -207,6 +211,7 @@ def summarize_training_log(
     world_size: int | None = None
     train_dataset_size: int | None = None
     checkpoint_save_paths: list[str] = []
+    scheduler_order_warning_lines: list[int] = []
     last_model_checkpoint = ""
     best_model_checkpoint = ""
     end_time_observed = False
@@ -249,6 +254,8 @@ def summarize_training_log(
             for name, pattern in ERROR_PATTERNS.items():
                 if pattern.search(line):
                     errors[name].append(line_number)
+            if SCHEDULER_ORDER_WARNING.search(line):
+                scheduler_order_warning_lines.append(line_number)
             metric = _parse_metric_dict(line)
             if metric is None:
                 continue
@@ -389,6 +396,7 @@ def summarize_training_log(
     resource_payload = _load_sidecar(resource_summary)
     cache_payload = _load_sidecar(cache_verification)
     encode_cache_payload = _load_sidecar(encode_cache_report)
+    scheduler_audit_payload = _load_sidecar(scheduler_audit)
     clean_exit = (
         train_exit_code == 0
         if train_exit_code is not None
@@ -437,6 +445,14 @@ def summarize_training_log(
         if isinstance(encode_cache_payload, dict)
         else not encode_cache_required
     )
+    scheduler_audit_required = bool(scheduler_order_warning_lines)
+    scheduler_audit_passed = (
+        scheduler_audit_payload.get("passed") is True
+        and scheduler_audit_payload.get("classification")
+        == "wrapper_false_positive"
+        if isinstance(scheduler_audit_payload, dict)
+        else not scheduler_audit_required
+    )
     passed_production_gate = all(
         (
             not detected_errors,
@@ -448,6 +464,7 @@ def summarize_training_log(
             resource_passed,
             cache_passed,
             encode_cache_passed,
+            scheduler_audit_passed,
         )
     )
     train_runtime = (
@@ -590,6 +607,14 @@ def summarize_training_log(
             "passed": encode_cache_passed,
             "report": encode_cache_payload,
         },
+        "scheduler_order": {
+            "warning_lines": scheduler_order_warning_lines,
+            "warning_count": len(scheduler_order_warning_lines),
+            "audit_required": scheduler_audit_required,
+            "audit_path": str(scheduler_audit) if scheduler_audit else "",
+            "passed": scheduler_audit_passed,
+            "audit": scheduler_audit_payload,
+        },
     }
 
 
@@ -603,6 +628,7 @@ def write_training_profile(
     resource_summary: Path | None = None,
     cache_verification: Path | None = None,
     encode_cache_report: Path | None = None,
+    scheduler_audit: Path | None = None,
     train_exit_code: int | None = None,
 ) -> dict[str, Any]:
     result = summarize_training_log(
@@ -613,6 +639,7 @@ def write_training_profile(
         resource_summary=resource_summary,
         cache_verification=cache_verification,
         encode_cache_report=encode_cache_report,
+        scheduler_audit=scheduler_audit,
         train_exit_code=train_exit_code,
     )
     output.parent.mkdir(parents=True, exist_ok=True)

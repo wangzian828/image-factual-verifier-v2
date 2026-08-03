@@ -273,6 +273,23 @@ if [[ -n "$ENCODE_CACHE_REPORT" ]]; then
     --metrics-dir "$IFV_ENCODE_CACHE_METRICS_DIR" \
     --output "$ENCODE_CACHE_REPORT" || encode_cache_status="$?"
 fi
+scheduler_audit_status=0
+SCHEDULER_AUDIT=""
+if [[ "$train_status" -eq 0 ]]; then
+  latest_checkpoint="$(
+    find "$OUTPUT_DIR" -type d -name 'checkpoint-*' -print |
+      sort -V |
+      tail -n 1
+  )"
+  if [[ -n "$latest_checkpoint" && -s "$latest_checkpoint/scheduler.pt" ]]; then
+    SCHEDULER_AUDIT="$EXPERIMENT_DIR/scheduler-order-audit.json"
+    IFV_ENCODE_CACHE_ENABLED=false python \
+      "$REPO_ROOT/training/scripts/probe/audit_deepspeed_scheduler.py" \
+      --train-log "$LOG_DIR/train.log" \
+      --checkpoint "$latest_checkpoint" \
+      --output "$SCHEDULER_AUDIT" || scheduler_audit_status="$?"
+  fi
+fi
 profile_status=0
 profile_args=(
   python -m ifv_training training-profile
@@ -289,9 +306,15 @@ fi
 if [[ -n "$ENCODE_CACHE_REPORT" ]]; then
   profile_args+=(--encode-cache-report "$ENCODE_CACHE_REPORT")
 fi
+if [[ -n "$SCHEDULER_AUDIT" ]]; then
+  profile_args+=(--scheduler-audit "$SCHEDULER_AUDIT")
+fi
 "${profile_args[@]}" || profile_status="$?"
 if [[ "$train_status" -eq 0 && "$encode_cache_status" -ne 0 ]]; then
   exit "$encode_cache_status"
+fi
+if [[ "$train_status" -eq 0 && "$scheduler_audit_status" -ne 0 ]]; then
+  exit "$scheduler_audit_status"
 fi
 if [[ "$train_status" -eq 0 && "$profile_status" -ne 0 ]]; then
   exit "$profile_status"

@@ -292,6 +292,9 @@ def test_sft_launchers_support_cached_datasets_and_tunable_dataloaders() -> None
         assert "configure_encode_cache" in source
         assert "encode-cache-report.json" in source
         assert "--encode-cache-report" in source
+        assert "scheduler-order-audit.json" in source
+        assert "audit_deepspeed_scheduler.py" in source
+        assert "--scheduler-audit" in source
         assert 'IFV_DATASET_NUM_PROC:-2' in source
         assert 'IFV_DATALOADER_NUM_WORKERS:-2' in source
         assert "IFV_DATALOADER_PERSISTENT_WORKERS" in source
@@ -321,6 +324,19 @@ def test_ms_swift_encode_cache_is_content_addressed_and_fail_closed() -> None:
     assert "torch.equal" in prewarm
     assert "install_ms_swift_encode_cache" in bootstrap
     assert "os._exit(70)" in bootstrap
+
+
+def test_deepspeed_scheduler_warning_has_a_persisted_audit_gate() -> None:
+    source = _source("scripts/probe/audit_deepspeed_scheduler.py")
+    profile = _source("ifv_training/profile.py")
+
+    assert "DeepSpeedEngineWrapper.backward" in source
+    assert "DeepSpeedOptimizerWrapper.step" in source
+    assert "scheduler_last_epoch_matches_global_step" in source
+    assert "deepspeed_skipped_steps_zero" in source
+    assert "wrapper_false_positive" in source
+    assert "scheduler_order_warning_lines" in profile
+    assert "scheduler_audit_passed" in profile
 
 
 def test_sft_launchers_support_fsdp2_gradient_checkpointing_and_sequence_parallel() -> None:
