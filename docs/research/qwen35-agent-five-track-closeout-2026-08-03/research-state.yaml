@@ -8,16 +8,12 @@ project:
 literature:
   key_papers: []
   open_problems:
-    - "ms-swift cached rows still perform lazy image/template encoding"
-    - "DeepSpeed CPUAdam emits a Transformers scheduler-order warning"
-    - "full resumable ZeRO-3 checkpoints exceed 120 GiB"
-    - "reviewed-52 still exposes source-property, Decision-consumption, and visual-failure semantics bugs"
+    - "Final OMP1 four-GPU hardware closeout is waiting for physical GPU 6 to become idle"
+    - "A fresh Gemini online replay cannot run without a configured Gemini credential"
+    - "The model's verdict terminality remains rollout-sensitive even when the mechanism contract passes"
   evidence_gaps:
     - "exact OMP1 workers0 versus workers4 comparison"
-    - "processor-cache semantic equivalence and throughput"
-    - "whether scheduler warning reflects a real missed optimizer step"
-    - "safe checkpoint-I/O savings that preserve resume"
-    - "paired replay results over the frozen reviewed-52 diagnostic set"
+    - "final production throughput and resume sidecars from the pending four-GPU window"
 
 hypotheses:
   - id: H1
@@ -28,25 +24,25 @@ hypotheses:
     priority: high
   - id: H2
     statement: "A content-addressed processor/image cache can remove repeated decode and preprocessing while preserving model inputs exactly."
-    status: active
+    status: completed
     motivation: "The current Arrow cache stores rows and paths, not encoded multimodal inputs."
     parent: null
     priority: high
   - id: H3
     statement: "The scheduler-order warning is either a wrapper false positive or a real skipped schedule value and can be resolved or gated deterministically."
-    status: active
+    status: completed
     motivation: "Long training must not silently use the wrong learning-rate schedule."
     parent: null
     priority: high
   - id: H4
     statement: "Checkpoint latency can be reduced or better separated without removing optimizer, scheduler, RNG, or model reload guarantees."
-    status: active
+    status: completed
     motivation: "Save and resume dominate short-run wall time and write more than 120 GiB."
     parent: null
     priority: medium
   - id: H5
     statement: "Minimal deterministic guards can fix source-property extraction, post-reinspection consumption, and focused-visual exhaustion over frozen reviewed-52 snapshots."
-    status: active
+    status: completed
     motivation: "Free-running rollout variance must not obscure the mechanism under test."
     parent: null
     priority: high
@@ -55,13 +51,41 @@ experiments:
   proxy_metric: "production-gate pass plus useful samples/second or strict replay mechanism success"
   baseline_value: null
   best_value: null
-  total_runs: 0
-  trajectory: []
+  total_runs: 8
+  trajectory:
+    - experiment_id: "encode-cache-c73d0c1"
+      hypothesis: "H2"
+      metric_value: 1.0
+      baseline: "lazy image/template encoding"
+      delta: "526/526 warm hits; exact payload equivalence gate passed"
+      wall_time_min: 3.0
+      change_summary: "Content-addressed processor payload cache with readonly production mode"
+    - experiment_id: "scheduler-audit-411a8f1"
+      hypothesis: "H3"
+      metric_value: 1.0
+      baseline: "visible Transformers scheduler warning"
+      delta: "10/10 DeepSpeed steps and scheduler steps; no skipped optimizer step"
+      wall_time_min: 2.0
+      change_summary: "Classified warning as DeepSpeed wrapper bookkeeping false positive"
+    - experiment_id: "checkpoint-io-13bb645"
+      hypothesis: "H4"
+      metric_value: 31.18
+      baseline: "122.71 GiB four-way checkpoint"
+      delta: "31.18 s total write window; optimizer state retained"
+      wall_time_min: 4.0
+      change_summary: "Four-way checkpoint phase profiling and integrity gate"
+    - experiment_id: "reviewed52-qwen-0e45675-seed11"
+      hypothesis: "H5"
+      metric_value: 1.0
+      baseline: "source-only or silent visual-failure fallback"
+      delta: "9/9 resolved pixel Evidence consumed; 0 engineering failures"
+      wall_time_min: 15.0
+      change_summary: "Short source hints plus Decision-2 visual-consumption audit"
 
 outer_loop:
-  cycle: 0
+  cycle: 1
   last_direction: deepen
-  last_reflection: "Begin with frozen protocols; do offline implementation while waiting for a safe four-GPU window."
+  last_reflection: "The mechanism contracts are now passing; final direction is a bounded OMP1 four-GPU closeout, not more prompt or model-state redesign."
 
 workspace:
   findings: "docs/research/qwen35-agent-five-track-closeout-2026-08-03/findings.md"
