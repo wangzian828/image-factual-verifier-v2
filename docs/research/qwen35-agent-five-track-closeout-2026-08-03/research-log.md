@@ -10,6 +10,10 @@
 | 6 | 2026-08-03 | results | H5 source-visible-property extractor now emits concise pixel-checkable hints for animal attributes, clothing, gloves, sky colors, relations, and counts. |
 | 7 | 2026-08-03 | results | Reviewed-52 frozen Qwen batch completed 9/9 qualified cases with 9/9 focused visual runs, 9/9 Decision-2 visual consumption compliance, zero engineering failures, zero missing consumption, and zero deterministic fallback use. |
 | 8 | 2026-08-03 | protocol | OMP1 closeout runner and a safe GPU waiter were installed. The waiter will stop only the managed 4/5 vLLM service after the reviewed replay is complete and physical 6/7 are idle, then restore the service after worker comparison, 10-step save, and step-11 resume. |
+| 9 | 2026-08-03 | outer loop | GPU 6 remains occupied by another user, so the research continues on independent work rather than treating the hardware window as a global blocker. |
+| 10 | 2026-08-03 | protocol | Locked H6: controlled focused-visual timeout/provider/schema/empty/budget/error and Decision-exhaustion matrix with fail-closed source-only semantics. |
+| 11 | 2026-08-03 | protocol | Locked H7: deterministic offline classification of all 976 reviewed-52 candidate Evidence rows plus optional frozen replay linkage. |
+| 12 | 2026-08-03 | protocol | Locked H8: prepare OMP1 workers0/workers4 20-step profiles and a fail-closed H1-winner-driven formal pilot path; do not run before H1 resolves. |
 
 Protocol commits must precede result commits. Free-running search rollout is not a
 substitute for the frozen Agent replay protocols.

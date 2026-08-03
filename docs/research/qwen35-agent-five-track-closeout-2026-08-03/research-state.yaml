@@ -46,6 +46,24 @@ hypotheses:
     motivation: "Free-running rollout variance must not obscure the mechanism under test."
     parent: null
     priority: high
+  - id: H6
+    statement: "Every focused-visual failure mode can be represented by a stable failure code and can fail closed before any source-only follow-up Decision."
+    status: active
+    motivation: "Provider exhaustion and malformed visual output must never be mistaken for source support."
+    parent: H5
+    priority: high
+  - id: H7
+    statement: "A deterministic full-manifest audit can expose source-hint and Decision gaps hidden outside the nine strictly qualified replay cases."
+    status: active
+    motivation: "The expanded sample objective is engineering error discovery across all 976 candidate Evidence rows."
+    parent: H5
+    priority: high
+  - id: H8
+    statement: "The H1 winner can be promoted through a 20-step steady-state gate into a fail-closed formal pilot profile."
+    status: active
+    motivation: "Two-step throughput is insufficient evidence for long-run dataloader, CPUAdam, evaluation, and checkpoint behavior."
+    parent: H1
+    priority: high
 
 experiments:
   proxy_metric: "production-gate pass plus useful samples/second or strict replay mechanism success"
@@ -83,9 +101,9 @@ experiments:
       change_summary: "Short source hints plus Decision-2 visual-consumption audit"
 
 outer_loop:
-  cycle: 1
+  cycle: 2
   last_direction: deepen
-  last_reflection: "The mechanism contracts are now passing; final direction is a bounded OMP1 four-GPU closeout, not more prompt or model-state redesign."
+  last_reflection: "While H1 waits for a safe four-GPU window, deepen the failure semantics, audit all reviewed-52 candidates offline, and prepare—but do not execute—the winner-gated 20-step and pilot path."
 
 workspace:
   findings: "docs/research/qwen35-agent-five-track-closeout-2026-08-03/findings.md"
