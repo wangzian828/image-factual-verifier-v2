@@ -109,7 +109,11 @@ def _category(path: Path) -> str:
     return "model_assets"
 
 
-def _phase(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
+def _phase(
+    rows: Iterable[dict[str, Any]],
+    *,
+    start_override_ns: int | None = None,
+) -> dict[str, Any]:
     selected = list(rows)
     if not selected:
         return {
@@ -120,7 +124,12 @@ def _phase(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
             "span_seconds": 0.0,
             "throughput_bytes_per_second": None,
         }
-    start = min(int(row["mtime_ns"]) for row in selected)
+    observed_start = min(int(row["mtime_ns"]) for row in selected)
+    start = (
+        int(start_override_ns)
+        if start_override_ns is not None
+        else observed_start
+    )
     end = max(int(row["mtime_ns"]) for row in selected)
     span = max(0.0, (end - start) / 1e9)
     total = sum(int(row["bytes"]) for row in selected)
@@ -128,6 +137,7 @@ def _phase(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
         "file_count": len(selected),
         "bytes": total,
         "start_mtime_ns": start,
+        "first_completion_mtime_ns": observed_start,
         "end_mtime_ns": end,
         "span_seconds": span,
         "throughput_bytes_per_second": (
@@ -154,7 +164,7 @@ def checkpoint_io_profile(checkpoint: Path) -> dict[str, Any]:
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
         grouped[str(row["category"])].append(row)
-    phases = {
+    categories = {
         category: _phase(grouped.get(category, []))
         for category in (
             "model_export",
@@ -166,6 +176,26 @@ def checkpoint_io_profile(checkpoint: Path) -> dict[str, Any]:
     }
     first_mtime = min((int(row["mtime_ns"]) for row in rows), default=0)
     last_mtime = max((int(row["mtime_ns"]) for row in rows), default=0)
+    model_rows = [
+        *grouped.get("model_export", []),
+        *grouped.get("model_assets", []),
+    ]
+    model_phase = _phase(model_rows)
+    model_end = int(model_phase["end_mtime_ns"] or first_mtime)
+    deepspeed_phase = _phase(
+        grouped.get("deepspeed_model_state", []),
+        start_override_ns=model_end,
+    )
+    deepspeed_end = int(deepspeed_phase["end_mtime_ns"] or model_end)
+    optimizer_phase = _phase(
+        grouped.get("optimizer_state", []),
+        start_override_ns=deepspeed_end,
+    )
+    optimizer_end = int(optimizer_phase["end_mtime_ns"] or deepspeed_end)
+    recovery_phase = _phase(
+        grouped.get("recovery_metadata", []),
+        start_override_ns=optimizer_end,
+    )
     total_bytes = sum(int(row["bytes"]) for row in rows)
     optimizer_files = grouped.get("optimizer_state", [])
     model_files = grouped.get("model_export", [])
@@ -198,7 +228,13 @@ def checkpoint_io_profile(checkpoint: Path) -> dict[str, Any]:
         "optimizer_rank_file_bytes": sorted(
             int(row["bytes"]) for row in optimizer_files
         ),
-        "phases": phases,
+        "categories": categories,
+        "pipeline_phases": {
+            "model_and_assets": model_phase,
+            "deepspeed_model_state": deepspeed_phase,
+            "optimizer_state": optimizer_phase,
+            "recovery_finalize": recovery_phase,
+        },
         "checks": checks,
         "passed": all(checks.values()),
         "files": rows,

@@ -41,8 +41,9 @@ def test_checkpoint_io_profile_separates_model_optimizer_and_metadata(
     assert result["passed"] is True
     assert result["total_bytes"] == 134
     assert result["optimizer_rank_file_count"] == 1
-    assert result["phases"]["model_export"]["bytes"] == 24
-    assert result["phases"]["optimizer_state"]["bytes"] == 101
+    assert result["categories"]["model_export"]["bytes"] == 24
+    assert result["categories"]["optimizer_state"]["bytes"] == 101
+    assert result["pipeline_phases"]["optimizer_state"]["span_seconds"] == 2.0
     assert result["write_window_seconds"] == 5.2
 
 
