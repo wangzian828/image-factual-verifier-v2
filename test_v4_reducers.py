@@ -1874,6 +1874,16 @@ def test_source_visible_property_extraction_is_short_and_rejects_scene_support()
         )
         == "Six Fingers"
     )
+    assert (
+        extract_source_visible_property(
+            "31K views · 268 reactions | The medium-sized monkey with an "
+            "orange-colored patch around its nose and mouth, known locally as "
+            "Likweli, joins a very short list of newly identified African "
+            "monkey species. Read more: https://nyti.ms/4bJd2wn | The New "
+            "York Times"
+        )
+        == "orange-colored patch around its nose and mouth"
+    )
 
 
 def test_runtime_binding_requires_a_concrete_source_visible_property() -> None:
@@ -2055,8 +2065,29 @@ def test_second_decision_must_consume_resolved_visual_evidence_or_explain_irrele
     assert state.discrepancy_decisions[-1].output.visual_evidence_disposition
 
 
+@pytest.mark.parametrize(
+    ("error_text", "metadata", "expected_code"),
+    [
+        (
+            "provider unavailable during focused inspection",
+            {"tool_success": False, "tool_exception": "ProviderUnavailable"},
+            "provider_unavailable",
+        ),
+        (
+            "focused visual task exhausted its correction budget",
+            {
+                "tool_success": False,
+                "correction_budget_exhausted": True,
+            },
+            "budget_exhausted",
+        ),
+    ],
+)
 def test_focused_visual_failure_guard_blocks_source_only_follow_up(
     tmp_path: Path,
+    error_text: str,
+    metadata: dict[str, object],
+    expected_code: str,
 ) -> None:
     state = _planned_state()
     source, _ = _append_source_visual_conflict_pair(
@@ -2093,10 +2124,10 @@ def test_focused_visual_failure_guard_blocks_source_only_follow_up(
             json.dumps(
                 {
                     "status": "error",
-                    "error": "provider unavailable during focused inspection",
+                    "error": error_text,
                 }
             ),
-            {"tool_success": False, "tool_exception": "ProviderUnavailable"},
+            metadata,
         )
 
     orchestrator._execute_tool = failing_tool  # type: ignore[method-assign]
@@ -2117,6 +2148,7 @@ def test_focused_visual_failure_guard_blocks_source_only_follow_up(
 
     assert state.visual_reinspections[-1].status == "failed"
     assert state.failures[-1].tool_name == "focused_visual_inspection"
+    assert state.failures[-1].code == expected_code
     assert source.evidence_id in state.visual_reinspections[-1].request.grounding_evidence_ids
 
 

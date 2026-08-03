@@ -268,6 +268,19 @@ async def replay_snapshot(args: argparse.Namespace) -> dict[str, Any]:
             if pending_record is not None
             else []
         )
+        failure_by_id = {
+            item.failure_id: item for item in investigation.failures
+        }
+        engineering_failure_ids = (
+            list(pending_record.failure_ids)
+            if pending_record is not None and engineering_error
+            else []
+        )
+        engineering_failure_codes = [
+            failure_by_id[failure_id].code
+            for failure_id in engineering_failure_ids
+            if failure_id in failure_by_id
+        ]
         audit = audit_discrepancy_coverage(investigation, decision_checkpoint=True)
         compile_error = ""
         compile_skipped_reason = ""
@@ -320,6 +333,8 @@ async def replay_snapshot(args: argparse.Namespace) -> dict[str, Any]:
             "decision_2_update": decision_2,
             "engineering_error": engineering_error,
             "engineering_error_stage": engineering_error_stage,
+            "engineering_failure_ids": engineering_failure_ids,
+            "engineering_failure_codes": engineering_failure_codes,
             "coverage_audit": audit.model_dump(mode="json"),
             "compiled_verdict": compiled_verdict,
             "compiled_basis": basis_payload,
@@ -383,6 +398,8 @@ def main() -> int:
         "compiled_verdict": result["compiled_verdict"],
         "engineering_error": result["engineering_error"],
         "engineering_error_stage": result["engineering_error_stage"],
+        "engineering_failure_ids": result["engineering_failure_ids"],
+        "engineering_failure_codes": result["engineering_failure_codes"],
         "composite_finding_ids": result["composite_finding_ids"],
         "composite_success": result["composite_success"],
         "decision_mode": (

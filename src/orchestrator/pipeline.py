@@ -1835,8 +1835,8 @@ class Orchestrator:
         )
         visual_failure_guard = not bool(update.get("created_evidence_ids"))
         if visual_failure_guard:
-            failure_messages = [
-                item.message
+            failure_records = [
+                item
                 for item in investigation.failures
                 if item.failure_id in set(update.get("created_failure_ids", []))
             ]
@@ -1844,10 +1844,25 @@ class Orchestrator:
                 "Focused visual reinspection produced no pixel Evidence; refusing "
                 "to continue into a source-only follow-up Decision."
             )
-            if failure_messages:
-                guard_message += " Tool failure: " + failure_messages[0][:800]
+            if failure_records:
+                guard_message += (
+                    f" Tool failure [{failure_records[0].code}]: "
+                    + failure_records[0].message[:800]
+                )
             update["focused_visual_failure_guard"] = guard_message
+            update["focused_visual_failure"] = {
+                "failure_ids": [
+                    item.failure_id for item in failure_records
+                ],
+                "failure_codes": [
+                    item.code for item in failure_records
+                ],
+                "source_only_follow_up_blocked": True,
+            }
             step.metadata["focused_visual_failure_guard"] = guard_message
+            step.metadata["focused_visual_failure"] = dict(
+                update["focused_visual_failure"]
+            )
         progress = record_action_progress(
             investigation,
             update,

@@ -6640,6 +6640,16 @@ def _append_failure(
 
 def _failure_code(message: str) -> str:
     lowered = str(message or "").lower()
+    if any(
+        token in lowered
+        for token in (
+            "budget exhausted",
+            "correction budget",
+            "task exhausted",
+            "tool budget",
+        )
+    ):
+        return "budget_exhausted"
     if "timeout" in lowered:
         return "timeout"
     if any(
