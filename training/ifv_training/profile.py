@@ -5,7 +5,7 @@ import json
 import re
 import shlex
 from pathlib import Path
-from statistics import mean
+from statistics import mean, median, pstdev
 from typing import Any
 
 
@@ -92,6 +92,19 @@ def _metric_value(row: dict[str, Any], *names: str) -> float | None:
         if isinstance(value, (int, float)):
             return float(value)
     return None
+
+
+def _quantile(values: list[float], fraction: float) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(float(value) for value in values)
+    if len(ordered) == 1:
+        return ordered[0]
+    position = max(0.0, min(1.0, fraction)) * (len(ordered) - 1)
+    lower = int(position)
+    upper = min(len(ordered) - 1, lower + 1)
+    weight = position - lower
+    return ordered[lower] * (1.0 - weight) + ordered[upper] * weight
 
 
 def _elapsed_seconds(value: Any) -> float | None:
@@ -311,6 +324,40 @@ def summarize_training_log(
     )
     steady_step_wall_mean = (
         round(mean(steady_step_wall), 6) if steady_step_wall else None
+    )
+    steady_step_wall_median = (
+        round(median(steady_step_wall), 6) if steady_step_wall else None
+    )
+    steady_step_wall_p90 = (
+        round(float(_quantile(steady_step_wall, 0.90)), 6)
+        if steady_step_wall
+        else None
+    )
+    steady_step_wall_max = (
+        round(max(steady_step_wall), 6) if steady_step_wall else None
+    )
+    steady_step_wall_cv = (
+        round(pstdev(steady_step_wall) / steady_step_wall_mean, 6)
+        if len(steady_step_wall) > 1
+        and steady_step_wall_mean is not None
+        and steady_step_wall_mean > 0
+        else 0.0
+        if steady_step_wall
+        else None
+    )
+    stall_threshold = (
+        round(steady_step_wall_median * 1.5, 6)
+        if steady_step_wall_median is not None
+        else None
+    )
+    steady_stall_count = (
+        sum(value > stall_threshold for value in steady_step_wall)
+        if stall_threshold is not None
+        else 0
+    )
+    startup_step_count = max(
+        0,
+        len(step_wall_values) - len(steady_step_wall),
     )
 
     train_batch_size = _int_value(
@@ -534,8 +581,16 @@ def summarize_training_log(
             "count": len(step_wall_values),
             "values": step_wall_values,
             "mean": step_wall_mean,
+            "startup_count": startup_step_count,
             "steady_window": steady_window,
+            "steady_count": len(steady_step_wall),
             "steady_mean": steady_step_wall_mean,
+            "steady_median": steady_step_wall_median,
+            "steady_p90": steady_step_wall_p90,
+            "steady_max": steady_step_wall_max,
+            "steady_coefficient_of_variation": steady_step_wall_cv,
+            "steady_stall_threshold": stall_threshold,
+            "steady_stall_count": steady_stall_count,
         },
         "parallelism": {
             "world_size": world_size,

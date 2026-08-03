@@ -6,8 +6,10 @@ from ifv_training.resource_monitor import summarize_resource_samples
 def test_resource_summary_aggregates_process_tree_and_gpu_peaks() -> None:
     samples = [
         {
+            "timestamp_epoch": 10.0,
             "process_count": 3,
             "process_tree_rss_mib": 100.0,
+            "process_tree_cpu_seconds": 4.0,
             "gpu": {
                 "process_memory_mib_by_physical_gpu": {"4": 1000, "5": 900},
                 "whole_gpu_memory_mib_by_physical_gpu": {"4": 1100, "5": 950},
@@ -15,8 +17,10 @@ def test_resource_summary_aggregates_process_tree_and_gpu_peaks() -> None:
             },
         },
         {
+            "timestamp_epoch": 12.0,
             "process_count": 5,
             "process_tree_rss_mib": 250.0,
+            "process_tree_cpu_seconds": 10.0,
             "gpu": {
                 "process_memory_mib_by_physical_gpu": {"4": 1500, "5": 1200},
                 "whole_gpu_memory_mib_by_physical_gpu": {"4": 1600, "5": 1300},
@@ -44,4 +48,19 @@ def test_resource_summary_aggregates_process_tree_and_gpu_peaks() -> None:
     assert result["gpu_mean_utilization_percent_by_physical_gpu"] == {
         "4": 40,
         "5": 40,
+    }
+    assert result["process_tree_cpu_core_equivalents"] == {
+        "count": 1,
+        "mean": 3.0,
+        "median": 3.0,
+        "p90": 3.0,
+        "max": 3.0,
+    }
+    assert result["gpu_utilization_percent_by_physical_gpu"]["4"] == {
+        "count": 2,
+        "mean": 40,
+        "median": 40,
+        "p90": 56.0,
+        "max": 60,
+        "busy_fraction_ge_80": 0.0,
     }

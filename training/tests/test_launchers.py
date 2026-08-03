@@ -768,6 +768,56 @@ def test_qwen35_omp1_closeout_runner_is_fail_closed() -> None:
     assert 'bash "$SERVICE_MANAGER" start' in source
 
 
+def test_qwen35_omp1_stability_and_pilot_profiles_are_winner_gated() -> None:
+    profiles = {
+        (phase, workers): _source(
+            "configs/sft/"
+            f"qwen3.5-full-{phase}-4gpu-zero3-offload-cached-"
+            f"workers{workers}-omp1.env"
+        )
+        for phase in ("20step", "pilot30")
+        for workers in (0, 4)
+    }
+    for (phase, workers), source in profiles.items():
+        assert (
+            "IFV_DEEPSPEED=training/configs/deepspeed/"
+            "zero3-optimizer-offload.json"
+        ) in source
+        assert "IFV_GRADIENT_ACCUMULATION_STEPS=2" in source
+        assert "IFV_GRADIENT_CHECKPOINTING=true" in source
+        assert "IFV_ATTN_IMPL=flash_attn" in source
+        assert "IFV_MAX_LENGTH=32768" in source
+        assert f"IFV_DATALOADER_NUM_WORKERS={workers}" in source
+        assert "IFV_OMP_NUM_THREADS=1" in source
+        assert "IFV_TRAINING_STEADY_WINDOW=15" in source
+        assert "IFV_ENCODE_CACHE_MODE=readonly" in source
+        if workers == 4:
+            assert "IFV_DATALOADER_PERSISTENT_WORKERS=true" in source
+            assert "IFV_DATALOADER_PREFETCH_FACTOR=2" in source
+        else:
+            assert "IFV_DATALOADER_PERSISTENT_WORKERS" not in source
+            assert "IFV_DATALOADER_PREFETCH_FACTOR" not in source
+        if phase == "20step":
+            assert "IFV_MAX_STEPS=20" in source
+            assert "IFV_SAVE_STEPS=20" in source
+            assert "IFV_EVAL_STEPS=20" in source
+        else:
+            assert "IFV_MAX_STEPS=99" in source
+            assert "IFV_SAVE_STEPS=25" in source
+            assert "IFV_EVAL_STEPS=25" in source
+
+    runner = _source("scripts/train/run_qwen35_omp1_followup.sh")
+    assert "ifv-qwen35-omp1-closeout-v1" in runner
+    assert "H1 closeout summary did not pass" in runner
+    assert 'winner not in {"workers0", "workers4"}' in runner
+    assert "pilot requires the matching stability summary" in runner
+    assert "stability winner does not match H1 closeout winner" in runner
+    assert "GPU $index is not idle" in runner
+    assert "20-step stability profile requires 15 steady steps" in runner
+    assert "hits != requests or misses != 0" in runner
+    assert "legacy-20" not in runner
+
+
 def test_qwen35_two_gpu_server_safe_and_resume_profiles_are_bounded() -> None:
     one_step = _source(
         "configs/sft/"

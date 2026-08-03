@@ -50,6 +50,16 @@ def test_training_profile_summarizes_ms_swift_metric_lines(tmp_path: Path) -> No
     assert result["speed_seconds_per_step"]["last"] == 28.8
     assert result["step_wall_seconds"]["values"] == [31.2, 26.4]
     assert result["step_wall_seconds"]["steady_mean"] == 28.8
+    assert result["step_wall_seconds"]["startup_count"] == 0
+    assert result["step_wall_seconds"]["steady_count"] == 2
+    assert result["step_wall_seconds"]["steady_median"] == 28.8
+    assert result["step_wall_seconds"]["steady_p90"] == 30.72
+    assert result["step_wall_seconds"]["steady_max"] == 31.2
+    assert (
+        result["step_wall_seconds"]["steady_coefficient_of_variation"]
+        == 0.083333
+    )
+    assert result["step_wall_seconds"]["steady_stall_count"] == 0
     assert result["parallelism"]["world_size"] == 4
     assert result["parallelism"]["sequence_parallel_size"] == 4
     assert result["parallelism"]["data_parallel_size"] == 1

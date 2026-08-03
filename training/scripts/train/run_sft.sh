@@ -233,6 +233,7 @@ profile_args=(
   python -m ifv_training training-profile
   --train-log "$LOG_DIR/train.log"
   --output "$LOG_DIR/profile.json"
+  --steady-window "${IFV_TRAINING_STEADY_WINDOW:-5}"
   --experiment-id "$EXPERIMENT_ID"
   --profile-id "$(basename "$SFT_PROFILE")"
   --resource-summary "$RESOURCE_SUMMARY"
