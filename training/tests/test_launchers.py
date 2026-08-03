@@ -638,6 +638,36 @@ def test_qwen35_zero3_dataloader_worker_profiles_are_bounded() -> None:
         assert "IFV_DATALOADER_PREFETCH_FACTOR=2" in profiles[workers]
 
 
+def test_qwen35_zero3_omp1_cached_worker_profiles_are_bounded() -> None:
+    profiles = {
+        workers: _source(
+            "configs/sft/"
+            f"qwen3.5-full-2step-4gpu-zero3-offload-cached-workers{workers}-omp1.env"
+        )
+        for workers in (0, 4)
+    }
+
+    for workers, source in profiles.items():
+        assert "IFV_DEEPSPEED=training/configs/deepspeed/zero3-optimizer-offload.json" in source
+        assert "IFV_FSDP" not in source
+        assert "IFV_MAX_STEPS=2" in source
+        assert "IFV_GRADIENT_ACCUMULATION_STEPS=2" in source
+        assert "IFV_GRADIENT_CHECKPOINTING=true" in source
+        assert "IFV_OMP_NUM_THREADS=1" in source
+        assert f"IFV_DATALOADER_NUM_WORKERS={workers}" in source
+        assert "IFV_ENCODE_CACHE_ENABLED=true" in source
+        assert (
+            "IFV_ENCODE_CACHE_NAMESPACE="
+            "qwen35-pilot30-v3-img1024-ml32768-v1"
+        ) in source
+        assert "IFV_ENCODE_CACHE_MODE=readonly" in source
+
+    assert "IFV_DATALOADER_PERSISTENT_WORKERS" not in profiles[0]
+    assert "IFV_DATALOADER_PREFETCH_FACTOR" not in profiles[0]
+    assert "IFV_DATALOADER_PERSISTENT_WORKERS=true" in profiles[4]
+    assert "IFV_DATALOADER_PREFETCH_FACTOR=2" in profiles[4]
+
+
 def test_qwen35_zero3_dataloader_followup_profiles_are_bounded() -> None:
     no_persist = _source(
         "configs/sft/"
@@ -679,6 +709,12 @@ def test_qwen35_zero3_workers0_production_profiles_are_bounded() -> None:
         assert "IFV_DATALOADER_PERSISTENT_WORKERS" not in source
         assert "IFV_DATALOADER_PREFETCH_FACTOR" not in source
         assert "IFV_OMP_NUM_THREADS=1" in source
+        assert "IFV_ENCODE_CACHE_ENABLED=true" in source
+        assert (
+            "IFV_ENCODE_CACHE_NAMESPACE="
+            "qwen35-pilot30-v3-img1024-ml32768-v1"
+        ) in source
+        assert "IFV_ENCODE_CACHE_MODE=readonly" in source
 
     assert "IFV_MAX_STEPS=10" in ten_step
     assert "IFV_SAVE_STEPS=10" in ten_step
