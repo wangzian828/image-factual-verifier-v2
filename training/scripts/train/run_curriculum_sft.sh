@@ -57,35 +57,13 @@ train_datasets=()
 validation_datasets=()
 active_channels=()
 active_weights=()
-for index in "${!candidate_channels[@]}"; do
-  train_dataset="${candidate_train_datasets[$index]}"
-  validation_dataset="${candidate_validation_datasets[$index]}"
-  if [[ -s "$train_dataset" && -s "$validation_dataset" ]]; then
-    train_datasets+=("$train_dataset")
-    validation_datasets+=("$validation_dataset")
-    active_channels+=("${candidate_channels[$index]}")
-    active_weights+=("${candidate_weights[$index]}")
-  elif [[ -s "$train_dataset" || -s "$validation_dataset" ]]; then
-    echo "curriculum channel has only one non-empty split: ${candidate_channels[$index]}" >&2
-    exit 2
-  else
-    echo "Skipping absent curriculum channel: ${candidate_channels[$index]}" >&2
-  fi
-done
-if [[ "${#active_channels[@]}" -lt 1 ]]; then
-  echo "no non-empty curriculum channels are available" >&2
-  exit 2
-fi
-weight_sum="$({ printf '%s\n' "${active_weights[@]}"; } | awk '{sum += $1} END {printf "%.12g", sum}')"
 interleave_prob=()
-for weight in "${active_weights[@]}"; do
-  interleave_prob+=("$(awk -v numerator="$weight" -v denominator="$weight_sum" 'BEGIN {printf "%.12g", numerator / denominator}')")
-done
-
 dataset_args=()
 cached_train_datasets=()
 cached_val_datasets=()
+cached_mode=false
 if [[ -n "${IFV_CACHED_DATASET:-}" || -n "${IFV_CACHED_VAL_DATASET:-}" ]]; then
+  cached_mode=true
   if [[ -z "${IFV_CACHED_DATASET:-}" || -z "${IFV_CACHED_VAL_DATASET:-}" ]]; then
     echo "cached training requires both IFV_CACHED_DATASET and IFV_CACHED_VAL_DATASET" >&2
     exit 2
@@ -111,6 +89,29 @@ if [[ -n "${IFV_CACHED_DATASET:-}" || -n "${IFV_CACHED_VAL_DATASET:-}" ]]; then
   fi
   dataset_args+=(--cached_val_dataset "${cached_val_datasets[@]}")
 else
+  for index in "${!candidate_channels[@]}"; do
+    train_dataset="${candidate_train_datasets[$index]}"
+    validation_dataset="${candidate_validation_datasets[$index]}"
+    if [[ -s "$train_dataset" && -s "$validation_dataset" ]]; then
+      train_datasets+=("$train_dataset")
+      validation_datasets+=("$validation_dataset")
+      active_channels+=("${candidate_channels[$index]}")
+      active_weights+=("${candidate_weights[$index]}")
+    elif [[ -s "$train_dataset" || -s "$validation_dataset" ]]; then
+      echo "curriculum channel has only one non-empty split: ${candidate_channels[$index]}" >&2
+      exit 2
+    else
+      echo "Skipping absent curriculum channel: ${candidate_channels[$index]}" >&2
+    fi
+  done
+  if [[ "${#active_channels[@]}" -lt 1 ]]; then
+    echo "no non-empty curriculum channels are available" >&2
+    exit 2
+  fi
+  weight_sum="$({ printf '%s\n' "${active_weights[@]}"; } | awk '{sum += $1} END {printf "%.12g", sum}')"
+  for weight in "${active_weights[@]}"; do
+    interleave_prob+=("$(awk -v numerator="$weight" -v denominator="$weight_sum" 'BEGIN {printf "%.12g", numerator / denominator}')")
+  done
   dataset_args+=(
     --dataset "${train_datasets[@]}"
     --val_dataset "${validation_datasets[@]}"
@@ -133,16 +134,31 @@ if [[ "${#cached_train_datasets[@]}" -gt 0 ]]; then
     cached_train_datasets \
     cached_val_datasets
 fi
-{
-  printf 'channel\tweight\ttrain_dataset\tvalidation_dataset\n'
-  for index in "${!active_channels[@]}"; do
-    printf '%s\t%s\t%s\t%s\n' \
-      "${active_channels[$index]}" \
-      "${interleave_prob[$index]}" \
-      "${train_datasets[$index]}" \
-      "${validation_datasets[$index]}"
-  done
-} >"$EXPERIMENT_DIR/curriculum-selection.tsv"
+if [[ "$cached_mode" == "true" ]]; then
+  {
+    printf 'cache_index\ttrain_cache\tvalidation_cache\tmanifest\n'
+    read -r -a cached_manifests <<<"${IFV_CACHED_DATASET_MANIFEST:-}"
+    for index in "${!cached_train_datasets[@]}"; do
+      manifest="${cached_manifests[$index]:-${cached_train_datasets[$index]}/../dataset-manifest.json}"
+      printf '%s\t%s\t%s\t%s\n' \
+        "$index" \
+        "${cached_train_datasets[$index]}" \
+        "${cached_val_datasets[$index]}" \
+        "$manifest"
+    done
+  } >"$EXPERIMENT_DIR/curriculum-selection.tsv"
+else
+  {
+    printf 'channel\tweight\ttrain_dataset\tvalidation_dataset\n'
+    for index in "${!active_channels[@]}"; do
+      printf '%s\t%s\t%s\t%s\n' \
+        "${active_channels[$index]}" \
+        "${interleave_prob[$index]}" \
+        "${train_datasets[$index]}" \
+        "${validation_datasets[$index]}"
+    done
+  } >"$EXPERIMENT_DIR/curriculum-selection.tsv"
+fi
 
 args=(
   swift sft

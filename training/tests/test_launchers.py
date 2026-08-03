@@ -300,6 +300,8 @@ def test_sft_launchers_support_cached_datasets_and_tunable_dataloaders() -> None
         assert "python -m ifv_training training-profile" in source
         assert '--output "$LOG_DIR/profile.json"' in source
         assert 'train_status="${PIPESTATUS[0]}"' in source
+    assert "cached_mode=true" in curriculum
+    assert "cache_index" in curriculum
 
 
 def test_sft_launchers_support_fsdp2_gradient_checkpointing_and_sequence_parallel() -> None:
