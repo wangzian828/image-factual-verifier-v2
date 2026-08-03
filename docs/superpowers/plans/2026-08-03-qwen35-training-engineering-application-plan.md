@@ -512,3 +512,28 @@ A new profile becomes the recommended training path only if all are true:
 
 If none of the candidates clear this bar, keep the tuned ZeRO-3 optimizer-offload path and
 apply only the safe data/cache/locality improvements.
+
+## 13. Locked four-GPU experiment sequence (2026-08-03)
+
+The following sequence is pre-registered before the remaining multi-step runs:
+
+1. Treat FSDP2 + SP4 + padding-free + gradient accumulation 2 as a negative
+   control. It reached the backward pass but OOMed while requesting 1.29 GiB with
+   only about 1.10 GiB free.
+2. Promote gradient accumulation 1 only as a candidate. Its one-step gate completed
+   train, full validation, sharded save, and clean process exit with a 36.56 GiB
+   peak per GPU.
+3. Run the explicit accumulation-1 profile for 10 optimizer steps on physical GPUs
+   4-7, using the frozen cached train and validation datasets.
+4. Resume the resulting sharded checkpoint and advance at least one additional
+   optimizer step. Check optimizer, scheduler, RNG, and global-step restoration.
+5. Test checkpoint registration plus a serving-compatible model reload. Add an
+   explicit FSDP2 export path if the sharded checkpoint cannot be consumed directly.
+6. Re-run the four-GPU ZeRO-3 optimizer-offload baseline with the same cached
+   datasets and compare examples/second as well as seconds/optimizer-step, because
+   accumulation 1 changes the FSDP2 global batch from 8 to 4.
+7. Only after both backends pass save/resume/reload, vary dataloader workers,
+   persistence, and prefetch. Keep the fastest stable setting, preferring the simpler
+   configuration when differences are within run variance.
+
+No profile is promoted from a one-step result alone.

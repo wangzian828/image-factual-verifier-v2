@@ -349,10 +349,25 @@ def test_qwen35_fsdp2_candidate_profiles_are_backend_exclusive() -> None:
     one_step = _source("configs/sft/qwen3.5-full-1step-4gpu-fsdp2-no-offload.env")
     ten_step = _source("configs/sft/qwen3.5-full-10step-4gpu-fsdp2-no-offload.env")
     padding_free = _source("configs/sft/qwen3.5-full-10step-4gpu-fsdp2-padding-free.env")
-    sp4 = _source("configs/sft/qwen3.5-full-10step-4gpu-fsdp2-sp4-padding-free.env")
+    sp4_negative = _source(
+        "configs/sft/qwen3.5-full-10step-4gpu-fsdp2-sp4-padding-free.env"
+    )
+    sp4_one_step = _source(
+        "configs/sft/qwen3.5-full-1step-4gpu-fsdp2-sp4-padding-free-accum1.env"
+    )
+    sp4_ten_step = _source(
+        "configs/sft/qwen3.5-full-10step-4gpu-fsdp2-sp4-padding-free-accum1.env"
+    )
     zero3_cached = _source("configs/sft/qwen3.5-full-10step-4gpu-zero3-offload-cached.env")
 
-    for source in (one_step, ten_step, padding_free, sp4):
+    for source in (
+        one_step,
+        ten_step,
+        padding_free,
+        sp4_negative,
+        sp4_one_step,
+        sp4_ten_step,
+    ):
         assert "IFV_FSDP=fsdp2" in source
         assert "IFV_DEEPSPEED" not in source
         assert "IFV_GRADIENT_CHECKPOINTING=false" in source
@@ -363,8 +378,15 @@ def test_qwen35_fsdp2_candidate_profiles_are_backend_exclusive() -> None:
     assert "IFV_MAX_STEPS=1" in one_step
     assert "IFV_MAX_STEPS=10" in ten_step
     assert "IFV_PADDING_FREE=true" in padding_free
-    assert "IFV_PADDING_FREE=true" in sp4
-    assert "IFV_SEQUENCE_PARALLEL_SIZE=4" in sp4
+    for source in (sp4_negative, sp4_one_step, sp4_ten_step):
+        assert "IFV_PADDING_FREE=true" in source
+        assert "IFV_SEQUENCE_PARALLEL_SIZE=4" in source
+    assert "IFV_GRADIENT_ACCUMULATION_STEPS=2" in sp4_negative
+    assert "bounded negative control" in sp4_negative
+    assert "IFV_MAX_STEPS=1" in sp4_one_step
+    assert "IFV_GRADIENT_ACCUMULATION_STEPS=1" in sp4_one_step
+    assert "IFV_MAX_STEPS=10" in sp4_ten_step
+    assert "IFV_GRADIENT_ACCUMULATION_STEPS=1" in sp4_ten_step
     assert "IFV_DEEPSPEED=training/configs/deepspeed/zero3-optimizer-offload.json" in zero3_cached
     assert "IFV_FSDP" not in zero3_cached
     assert "IFV_GRADIENT_CHECKPOINTING=true" in zero3_cached
