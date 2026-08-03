@@ -1,0 +1,72 @@
+project:
+  title: "Qwen3.5 and reviewed-52 five-track engineering closeout"
+  question: "Can the OMP1 production path, image preprocessing, scheduler/checkpoint behavior, and reviewed-52 Agent mechanism be made production-safe without changing training or verdict semantics?"
+  status: active
+  started: "2026-08-03"
+  domain: "distributed multimodal training and evidence-grounded Agent runtime"
+
+literature:
+  key_papers: []
+  open_problems:
+    - "ms-swift cached rows still perform lazy image/template encoding"
+    - "DeepSpeed CPUAdam emits a Transformers scheduler-order warning"
+    - "full resumable ZeRO-3 checkpoints exceed 120 GiB"
+    - "reviewed-52 still exposes source-property, Decision-consumption, and visual-failure semantics bugs"
+  evidence_gaps:
+    - "exact OMP1 workers0 versus workers4 comparison"
+    - "processor-cache semantic equivalence and throughput"
+    - "whether scheduler warning reflects a real missed optimizer step"
+    - "safe checkpoint-I/O savings that preserve resume"
+    - "paired replay results over the frozen reviewed-52 diagnostic set"
+
+hypotheses:
+  - id: H1
+    statement: "Under mandatory OMP1, the best dataloader worker count must be remeasured; workers0 is not assumed to remain optimal."
+    status: active
+    motivation: "The existing worker matrix used OMP8 and may interact with CPU contention."
+    parent: null
+    priority: high
+  - id: H2
+    statement: "A content-addressed processor/image cache can remove repeated decode and preprocessing while preserving model inputs exactly."
+    status: active
+    motivation: "The current Arrow cache stores rows and paths, not encoded multimodal inputs."
+    parent: null
+    priority: high
+  - id: H3
+    statement: "The scheduler-order warning is either a wrapper false positive or a real skipped schedule value and can be resolved or gated deterministically."
+    status: active
+    motivation: "Long training must not silently use the wrong learning-rate schedule."
+    parent: null
+    priority: high
+  - id: H4
+    statement: "Checkpoint latency can be reduced or better separated without removing optimizer, scheduler, RNG, or model reload guarantees."
+    status: active
+    motivation: "Save and resume dominate short-run wall time and write more than 120 GiB."
+    parent: null
+    priority: medium
+  - id: H5
+    statement: "Minimal deterministic guards can fix source-property extraction, post-reinspection consumption, and focused-visual exhaustion over frozen reviewed-52 snapshots."
+    status: active
+    motivation: "Free-running rollout variance must not obscure the mechanism under test."
+    parent: null
+    priority: high
+
+experiments:
+  proxy_metric: "production-gate pass plus useful samples/second or strict replay mechanism success"
+  baseline_value: null
+  best_value: null
+  total_runs: 0
+  trajectory: []
+
+outer_loop:
+  cycle: 0
+  last_direction: deepen
+  last_reflection: "Begin with frozen protocols; do offline implementation while waiting for a safe four-GPU window."
+
+workspace:
+  findings: "docs/research/qwen35-agent-five-track-closeout-2026-08-03/findings.md"
+  log: "docs/research/qwen35-agent-five-track-closeout-2026-08-03/research-log.md"
+  literature_dir: "docs/research/qwen35-agent-five-track-closeout-2026-08-03/literature/"
+  experiments_dir: "docs/research/qwen35-agent-five-track-closeout-2026-08-03/experiments/"
+  to_human_dir: "docs/research/qwen35-agent-five-track-closeout-2026-08-03/to_human/"
+  paper_dir: ""
