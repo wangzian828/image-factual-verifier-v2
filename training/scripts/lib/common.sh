@@ -39,11 +39,63 @@ configure_cuda_toolkit() {
   fi
   export CUDA_HOME="$candidate"
   export PATH="$CUDA_HOME/bin:$PATH"
+  local python_bin
+  python_bin="$CUDA_HOME/bin/python"
+  if [[ ! -x "$python_bin" ]]; then
+    python_bin="python"
+  fi
+  local python_minor
+  python_minor="$("$python_bin" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+  local torch_lib
+  torch_lib="$CUDA_HOME/lib/python$python_minor/site-packages/torch/lib"
+  local target_lib="$CUDA_HOME/targets/x86_64-linux/lib"
   local curand_dir
-  curand_dir="$CUDA_HOME/lib/python$(python -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')/site-packages/nvidia/curand/lib"
+  curand_dir="$CUDA_HOME/lib/python$python_minor/site-packages/nvidia/curand/lib"
+  if [[ -d "$target_lib" ]]; then
+    export LD_LIBRARY_PATH="$target_lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+  fi
+  if [[ -d "$torch_lib" ]]; then
+    export LD_LIBRARY_PATH="$torch_lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+  fi
   if [[ -d "$curand_dir" ]]; then
     export LD_LIBRARY_PATH="$CUDA_HOME/lib:$curand_dir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
   fi
+}
+
+configure_conda_compilers() {
+  if [[ -x "$CUDA_HOME/bin/x86_64-conda-linux-gnu-gcc" ]]; then
+    export CC="${CC:-$CUDA_HOME/bin/x86_64-conda-linux-gnu-gcc}"
+  fi
+  if [[ -x "$CUDA_HOME/bin/x86_64-conda-linux-gnu-g++" ]]; then
+    export CXX="${CXX:-$CUDA_HOME/bin/x86_64-conda-linux-gnu-g++}"
+    export CUDAHOSTCXX="${CUDAHOSTCXX:-$CUDA_HOME/bin/x86_64-conda-linux-gnu-g++}"
+  fi
+}
+
+configure_training_caches() {
+  local cache_root="${IFV_TRAINING_CACHE_ROOT:-$DATA_ROOT/cache}"
+  mkdir -p \
+    "$cache_root/huggingface" \
+    "$cache_root/huggingface/datasets" \
+    "$cache_root/torch" \
+    "$cache_root/torch-extensions" \
+    "$cache_root/triton" \
+    "$DATA_ROOT/tmp"
+  export HF_HOME="${HF_HOME:-$cache_root/huggingface}"
+  export HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-$cache_root/huggingface/datasets}"
+  export TORCH_HOME="${TORCH_HOME:-$cache_root/torch}"
+  export TRITON_CACHE_DIR="${TRITON_CACHE_DIR:-$cache_root/triton}"
+  export TMPDIR="${TMPDIR:-$DATA_ROOT/tmp}"
+  if [[ -n "${CUDA_HOME:-}" ]]; then
+    export TORCH_EXTENSIONS_DIR="${TORCH_EXTENSIONS_DIR:-$cache_root/torch-extensions/$(basename "$CUDA_HOME")}"
+    mkdir -p "$TORCH_EXTENSIONS_DIR"
+  fi
+}
+
+configure_training_runtime() {
+  configure_cuda_toolkit
+  configure_conda_compilers
+  configure_training_caches
 }
 
 prepare_deepspeed_cpu_adam() {
@@ -66,7 +118,7 @@ PY
   if [[ "$needs_cpu_adam" != "true" ]]; then
     return 0
   fi
-  configure_cuda_toolkit
+  configure_training_runtime
   if [[ ! -e "$CUDA_HOME/lib/libcurand.so" ]]; then
     echo "DeepSpeed CPUAdam requires $CUDA_HOME/lib/libcurand.so; rebuild the frozen SFT environment" >&2
     exit 2
@@ -83,8 +135,8 @@ PY
 require_visible_gpus() {
   require_value CUDA_VISIBLE_DEVICES
   IFS=',' read -r -a devices <<<"$CUDA_VISIBLE_DEVICES"
-  if [[ "${#devices[@]}" -lt 1 || "${#devices[@]}" -gt 4 ]]; then
-    echo "CUDA_VISIBLE_DEVICES must name between one and four GPUs, got: $CUDA_VISIBLE_DEVICES" >&2
+  if [[ "${#devices[@]}" -lt 1 || "${#devices[@]}" -gt 8 ]]; then
+    echo "CUDA_VISIBLE_DEVICES must name between one and eight GPUs, got: $CUDA_VISIBLE_DEVICES" >&2
     exit 2
   fi
   local seen=","
@@ -116,10 +168,11 @@ export MPLBACKEND=Agg
   # has previously crashed during multi-rank startup.
   export NCCL_CUMEM_HOST_ENABLE="${NCCL_CUMEM_HOST_ENABLE:-0}"
   export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
+  export PYTORCH_ALLOC_CONF="${PYTORCH_ALLOC_CONF:-$PYTORCH_CUDA_ALLOC_CONF}"
 }
 
 require_training_gpus() {
-  configure_cuda_toolkit
+  configure_training_runtime
   require_visible_gpus
 }
 
@@ -156,7 +209,6 @@ require_full_parameter_profile() {
   require_value IFV_FREEZE_LLM
   require_value IFV_FREEZE_VIT
   require_value IFV_FREEZE_ALIGNER
-  require_value IFV_DEEPSPEED
   if [[ "$IFV_TUNER_TYPE" != "full" ]]; then
     echo "full-parameter training requires IFV_TUNER_TYPE=full" >&2
     exit 2
@@ -168,8 +220,22 @@ require_full_parameter_profile() {
       exit 2
     fi
   done
-  if [[ "$IFV_DEEPSPEED" != "zero3" && "$IFV_DEEPSPEED" != "zero3_offload" && ! -s "$IFV_DEEPSPEED" ]]; then
-    echo "full-parameter training requires IFV_DEEPSPEED=zero3, zero3_offload, or a non-empty DeepSpeed config" >&2
+  local deepspeed_config="${IFV_DEEPSPEED:-}"
+  local fsdp_config="${IFV_FSDP:-}"
+  if [[ -z "$deepspeed_config" && -z "$fsdp_config" ]]; then
+    echo "full-parameter training requires exactly one backend: IFV_DEEPSPEED or IFV_FSDP" >&2
+    exit 2
+  fi
+  if [[ -n "$deepspeed_config" && -n "$fsdp_config" ]]; then
+    echo "full-parameter training requires exactly one backend; do not set both IFV_DEEPSPEED and IFV_FSDP" >&2
+    exit 2
+  fi
+  if [[ -n "$deepspeed_config" && "$deepspeed_config" != "zero3" && "$deepspeed_config" != "zero3_offload" && ! -s "$deepspeed_config" ]]; then
+    echo "full-parameter DeepSpeed training requires IFV_DEEPSPEED=zero3, zero3_offload, or a non-empty DeepSpeed config" >&2
+    exit 2
+  fi
+  if [[ -n "$fsdp_config" && "$fsdp_config" != "fsdp2" && ! -s "$fsdp_config" ]]; then
+    echo "full-parameter FSDP training requires IFV_FSDP=fsdp2 or a non-empty FSDP config" >&2
     exit 2
   fi
 }

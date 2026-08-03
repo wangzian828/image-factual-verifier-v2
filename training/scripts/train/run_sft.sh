@@ -19,13 +19,49 @@ RESUME_CHECKPOINT="${6:-}"
 
 load_profile "$MODEL_PROFILE"
 load_profile "$SFT_PROFILE"
+configure_training_runtime
 require_idle_gpus
 require_full_parameter_profile
 require_model_path
 prepare_deepspeed_cpu_adam
-require_dataset "$TRAIN_DATASET"
-require_dataset "$VAL_DATASET"
 require_value EXPERIMENT_ID
+
+training_backend_args=()
+if [[ -n "${IFV_DEEPSPEED:-}" ]]; then
+  training_backend_args+=(--deepspeed "$IFV_DEEPSPEED")
+fi
+if [[ -n "${IFV_FSDP:-}" ]]; then
+  training_backend_args+=(--fsdp "$IFV_FSDP")
+fi
+
+dataset_args=()
+if [[ -n "${IFV_CACHED_DATASET:-}" ]]; then
+  read -r -a cached_train_datasets <<<"$IFV_CACHED_DATASET"
+  for cached_dataset in "${cached_train_datasets[@]}"; do
+    if [[ ! -d "$cached_dataset" ]]; then
+      echo "cached training dataset does not exist: $cached_dataset" >&2
+      exit 2
+    fi
+  done
+  dataset_args+=(--cached_dataset "${cached_train_datasets[@]}")
+else
+  require_dataset "$TRAIN_DATASET"
+  dataset_args+=(--dataset "$TRAIN_DATASET")
+fi
+
+if [[ -n "${IFV_CACHED_VAL_DATASET:-}" ]]; then
+  read -r -a cached_val_datasets <<<"$IFV_CACHED_VAL_DATASET"
+  for cached_dataset in "${cached_val_datasets[@]}"; do
+    if [[ ! -d "$cached_dataset" ]]; then
+      echo "cached validation dataset does not exist: $cached_dataset" >&2
+      exit 2
+    fi
+  done
+  dataset_args+=(--cached_val_dataset "${cached_val_datasets[@]}")
+else
+  require_dataset "$VAL_DATASET"
+  dataset_args+=(--val_dataset "$VAL_DATASET")
+fi
 
 OUTPUT_DIR="$DATA_ROOT/checkpoints/$EXPERIMENT_ID"
 EXPERIMENT_DIR="$DATA_ROOT/logs/$EXPERIMENT_ID"
@@ -37,8 +73,7 @@ record_environment "$EXPERIMENT_DIR"
 args=(
   swift sft
   --model "$IFV_MODEL_ID"
-  --dataset "$TRAIN_DATASET"
-  --val_dataset "$VAL_DATASET"
+  "${dataset_args[@]}"
   --split_dataset_ratio 0
   --strict true
   --load_from_cache_file "$IFV_LOAD_FROM_CACHE_FILE"
@@ -52,9 +87,8 @@ args=(
   --freeze_llm "$IFV_FREEZE_LLM"
   --freeze_vit "$IFV_FREEZE_VIT"
   --freeze_aligner "$IFV_FREEZE_ALIGNER"
-  --gradient_checkpointing true
+  --gradient_checkpointing "${IFV_GRADIENT_CHECKPOINTING:-true}"
   --vit_gradient_checkpointing "$IFV_VIT_GRADIENT_CHECKPOINTING"
-  --gradient_checkpointing_kwargs '{"use_reentrant": false}'
   --eval_strategy steps
   --eval_steps "$IFV_EVAL_STEPS"
   --save_strategy steps
@@ -66,12 +100,27 @@ args=(
   --loss_scale "$IFV_LOSS_SCALE"
   --output_dir "$OUTPUT_DIR"
   --warmup_ratio 0.05
-  --deepspeed "$IFV_DEEPSPEED"
-  --dataset_num_proc 2
-  --dataloader_num_workers 2
+  "${training_backend_args[@]}"
+  --dataset_num_proc "${IFV_DATASET_NUM_PROC:-2}"
+  --dataloader_num_workers "${IFV_DATALOADER_NUM_WORKERS:-2}"
   --report_to tensorboard
 )
 
+if [[ "${IFV_GRADIENT_CHECKPOINTING:-true}" == "true" ]]; then
+  args+=(--gradient_checkpointing_kwargs '{"use_reentrant": false}')
+fi
+if [[ -n "${IFV_DATALOADER_PREFETCH_FACTOR:-}" ]]; then
+  args+=(--dataloader_prefetch_factor "$IFV_DATALOADER_PREFETCH_FACTOR")
+fi
+if [[ -n "${IFV_DATALOADER_PERSISTENT_WORKERS:-}" ]]; then
+  args+=(--dataloader_persistent_workers "$IFV_DATALOADER_PERSISTENT_WORKERS")
+fi
+if [[ -n "${IFV_PADDING_FREE:-}" ]]; then
+  args+=(--padding_free "$IFV_PADDING_FREE")
+fi
+if [[ -n "${IFV_SEQUENCE_PARALLEL_SIZE:-}" ]]; then
+  args+=(--sequence_parallel_size "$IFV_SEQUENCE_PARALLEL_SIZE")
+fi
 if [[ "${IFV_ADD_NON_THINKING_PREFIX:-false}" == "true" ]]; then
   args+=(--add_non_thinking_prefix true)
 fi
@@ -88,4 +137,17 @@ fi
 
 export IMAGE_MAX_TOKEN_NUM="$IFV_IMAGE_MAX_TOKEN_NUM"
 print_command "${args[@]}"
+set +e
 "${args[@]}" 2>&1 | tee "$LOG_DIR/train.log"
+train_status="${PIPESTATUS[0]}"
+set -e
+profile_status=0
+python -m ifv_training training-profile \
+  --train-log "$LOG_DIR/train.log" \
+  --output "$LOG_DIR/profile.json" \
+  --experiment-id "$EXPERIMENT_ID" \
+  --profile-id "$(basename "$SFT_PROFILE")" || profile_status="$?"
+if [[ "$train_status" -eq 0 && "$profile_status" -ne 0 ]]; then
+  exit "$profile_status"
+fi
+exit "$train_status"

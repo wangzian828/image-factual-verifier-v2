@@ -22,6 +22,13 @@ SFT 使用经过审计的阶段样本，不把整段长期对话或历史 hidden
 正式数据必须来自非冻结评测集，并经过图像、工具 schema、阶段归属、loss mask、split 和
 去重门禁。优先采用成熟的 ms-swift + DeepSpeed/FSDP；本项目不自建训练循环。
 
+Qwen3.5 训练工程摘录见
+[`docs/qwen35-engineering-notes-from-modern-genai-bilibili.md`](docs/qwen35-engineering-notes-from-modern-genai-bilibili.md)，
+应用计划见
+[`../docs/superpowers/plans/2026-08-03-qwen35-training-engineering-application-plan.md`](../docs/superpowers/plans/2026-08-03-qwen35-training-engineering-application-plan.md)；
+两者记录 FSDP2、sequence parallel、padding-free、CPU offload locality、dataset cache
+和 checkpoint memory gates 的可迁移经验与落地顺序。
+
 ## RL：标准 GRPO
 
 同一题目生成多条完全隔离的完整 episode。Qwen 在每次参数更新后重新 on-policy 采样；

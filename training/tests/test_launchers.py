@@ -135,16 +135,30 @@ def test_vllm_lifecycle_only_stops_its_verified_process_group() -> None:
 def test_launchers_enforce_physical_gpu_allowlist() -> None:
     common = _source("scripts/lib/common.sh")
     selector = _source("scripts/server/select_idle_gpus.sh")
+    diagnose = _source("scripts/server/diagnose_gpu_io.sh")
+    measure = _source("scripts/server/measure_gpu_io.py")
 
     assert 'IFV_ALLOWED_GPU_IDS:-4,5,6,7' in common
+    assert 'configure_training_runtime' in common
     assert 'configure_cuda_toolkit' in common
+    assert 'configure_conda_compilers' in common
     assert 'prepare_deepspeed_cpu_adam' in common
     assert 'libcurand.so' in common
     assert 'IFV_CUDA_HOME' in common
+    assert 'x86_64-conda-linux-gnu-g++' in common
+    assert 'TORCH_EXTENSIONS_DIR' in common
+    assert 'HF_DATASETS_CACHE' in common
     assert 'NCCL_CUMEM_HOST_ENABLE' in common
     assert 'MPLBACKEND=Agg' in common
+    assert "between one and eight GPUs" in common
     assert "outside the allowed physical GPU set" in common
     assert "$1 + 0 >= 4 && $1 + 0 <= 7" in selector
+    assert "measure_gpu_io.py" in diagnose
+    assert 'GPU_LIST="${2:-visible}"' in diagnose
+    assert "nvidia-smi topo -m" in diagnose
+    assert "cpu-affinity.txt" in diagnose
+    assert "ifv-gpu-io-diagnostic-v1" in measure
+    assert "pin_memory=True" in measure
 
 
 def test_gpu13_bootstrap_isolates_serving_from_sft_installation() -> None:
@@ -250,6 +264,107 @@ def test_qwen35_pilot30_two_gpu_profile_preserves_global_batch() -> None:
         "IFV_DEEPSPEED=training/configs/deepspeed/zero3-optimizer-offload.json"
         in source
     )
+
+
+def test_sft_launchers_support_cached_datasets_and_tunable_dataloaders() -> None:
+    single = _source("scripts/train/run_sft.sh")
+    curriculum = _source("scripts/train/run_curriculum_sft.sh")
+
+    for source in (single, curriculum):
+        assert "configure_training_runtime" in source
+        assert "IFV_CACHED_DATASET" in source
+        assert "--cached_dataset" in source
+        assert "IFV_CACHED_VAL_DATASET" in source
+        assert "--cached_val_dataset" in source
+        assert 'IFV_DATASET_NUM_PROC:-2' in source
+        assert 'IFV_DATALOADER_NUM_WORKERS:-2' in source
+        assert "IFV_DATALOADER_PERSISTENT_WORKERS" in source
+        assert "IFV_DATALOADER_PREFETCH_FACTOR" in source
+        assert "python -m ifv_training training-profile" in source
+        assert '--output "$LOG_DIR/profile.json"' in source
+        assert 'train_status="${PIPESTATUS[0]}"' in source
+
+
+def test_sft_launchers_support_fsdp2_gradient_checkpointing_and_sequence_parallel() -> None:
+    single = _source("scripts/train/run_sft.sh")
+    curriculum = _source("scripts/train/run_curriculum_sft.sh")
+    common = _source("scripts/lib/common.sh")
+
+    for source in (single, curriculum):
+        assert "training_backend_args" in source
+        assert 'training_backend_args+=(--deepspeed "$IFV_DEEPSPEED")' in source
+        assert 'training_backend_args+=(--fsdp "$IFV_FSDP")' in source
+        assert '--gradient_checkpointing "${IFV_GRADIENT_CHECKPOINTING:-true}"' in source
+        assert '--gradient_checkpointing_kwargs' in source
+        assert 'args+=(--sequence_parallel_size "$IFV_SEQUENCE_PARALLEL_SIZE")' in source
+
+    assert "requires exactly one backend" in common
+    assert "do not set both IFV_DEEPSPEED and IFV_FSDP" in common
+    assert "IFV_FSDP=fsdp2" in common
+
+
+def test_curriculum_cache_exporter_uses_ms_swift_cached_dataset_contract() -> None:
+    source = _source("scripts/train/cache_curriculum_sft.sh")
+
+    assert "swift export" in source
+    assert "--to_cached_dataset true" in source
+    assert "--cached_dataset" not in source
+    assert "--interleave_prob" in source
+    assert "--stopping_strategy all_exhausted" in source
+    assert "cache.env" in source
+    assert "source-dataset-fingerprints.tsv" in source
+    assert "sha256sum" in source
+    assert "IFV_CACHED_DATASET" in source
+    assert "IFV_CACHED_VAL_DATASET" in source
+
+
+def test_qwen35_flash_cached_and_no_offload_profiles_exist() -> None:
+    cached = _source("configs/sft/qwen3.5-full-pilot30-2gpu-flash-offload-cached.env")
+    four_gpu = _source("configs/sft/qwen3.5-full-pilot30-4gpu-flash-no-offload.env")
+    four_gpu_gate = _source("configs/sft/qwen3.5-full-1step-4gpu-flash-no-offload.env")
+    five_gpu_gate = _source("configs/sft/qwen3.5-full-1step-5gpu-flash-no-offload.env")
+    oom_gate = _source("configs/sft/qwen3.5-full-1step-2gpu-flash-no-offload.env")
+    no_offload = _source("configs/deepspeed/zero3-no-offload.json")
+
+    assert "IFV_ATTN_IMPL=flash_attn" in cached
+    assert "IFV_LOAD_FROM_CACHE_FILE=true" in cached
+    assert "IFV_DATALOADER_PERSISTENT_WORKERS=true" in cached
+    assert "IFV_DEEPSPEED=training/configs/deepspeed/zero3-no-offload.json" in four_gpu
+    assert "IFV_GRADIENT_ACCUMULATION_STEPS=2" in four_gpu
+    assert "IFV_MAX_STEPS=1" in four_gpu_gate
+    assert "IFV_GRADIENT_ACCUMULATION_STEPS=2" in four_gpu_gate
+    assert "IFV_MAX_STEPS=1" in five_gpu_gate
+    assert "IFV_GRADIENT_ACCUMULATION_STEPS=1" in five_gpu_gate
+    assert "IFV_MAX_STEPS=1" in oom_gate
+    assert "IFV_GRADIENT_ACCUMULATION_STEPS=4" in oom_gate
+    assert '"stage": 3' in no_offload
+    assert "offload_optimizer" not in no_offload
+    assert "offload_param" not in no_offload
+
+
+def test_qwen35_fsdp2_candidate_profiles_are_backend_exclusive() -> None:
+    one_step = _source("configs/sft/qwen3.5-full-1step-4gpu-fsdp2-no-offload.env")
+    ten_step = _source("configs/sft/qwen3.5-full-10step-4gpu-fsdp2-no-offload.env")
+    padding_free = _source("configs/sft/qwen3.5-full-10step-4gpu-fsdp2-padding-free.env")
+    sp4 = _source("configs/sft/qwen3.5-full-10step-4gpu-fsdp2-sp4-padding-free.env")
+    zero3_cached = _source("configs/sft/qwen3.5-full-10step-4gpu-zero3-offload-cached.env")
+
+    for source in (one_step, ten_step, padding_free, sp4):
+        assert "IFV_FSDP=fsdp2" in source
+        assert "IFV_DEEPSPEED" not in source
+        assert "IFV_GRADIENT_CHECKPOINTING=false" in source
+        assert "IFV_ATTN_IMPL=flash_attn" in source
+        assert "IFV_MAX_LENGTH=32768" in source
+        assert "IFV_TUNER_TYPE=full" in source
+
+    assert "IFV_MAX_STEPS=1" in one_step
+    assert "IFV_MAX_STEPS=10" in ten_step
+    assert "IFV_PADDING_FREE=true" in padding_free
+    assert "IFV_PADDING_FREE=true" in sp4
+    assert "IFV_SEQUENCE_PARALLEL_SIZE=4" in sp4
+    assert "IFV_DEEPSPEED=training/configs/deepspeed/zero3-optimizer-offload.json" in zero3_cached
+    assert "IFV_FSDP" not in zero3_cached
+    assert "IFV_GRADIENT_CHECKPOINTING=true" in zero3_cached
 
 
 def test_qwen35_zero3_speed_probe_is_full_parameter_and_32k() -> None:

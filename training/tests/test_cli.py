@@ -87,3 +87,35 @@ def test_build_run_rewards_cli_executes_real_branch(
         ).splitlines()
     ]
     assert groups[0]["skip_reason"] == "insufficient_valid_members"
+
+
+def test_training_profile_cli_executes_real_branch(
+    tmp_path: Path,
+    monkeypatch: object,
+) -> None:
+    train_log = tmp_path / "train.log"
+    train_log.write_text(
+        "{'global_step/max_steps': '1/1', 'train_speed(s/it)': '12.5'}\n",
+        encoding="utf-8",
+    )
+    output = tmp_path / "profile.json"
+    argv = [
+        "ifv-training",
+        "training-profile",
+        "--train-log",
+        str(train_log),
+        "--output",
+        str(output),
+        "--experiment-id",
+        "exp-cli",
+        "--profile-id",
+        "profile-cli",
+    ]
+    monkeypatch.setattr(sys, "argv", argv)  # type: ignore[attr-defined]
+
+    cli.main()
+
+    result = json.loads(output.read_text(encoding="utf-8"))
+    assert result["experiment_id"] == "exp-cli"
+    assert result["profile_id"] == "profile-cli"
+    assert result["speed_seconds_per_step"]["last"] == 12.5

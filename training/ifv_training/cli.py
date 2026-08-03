@@ -17,6 +17,7 @@ from .perception import (
     convert_perception_runs,
 )
 from .policy import convert_policy_dataset
+from .profile import write_training_profile
 from .rewards import (
     build_and_write_ledger,
     build_ledgers_from_run_artifacts,
@@ -133,6 +134,13 @@ def _parser() -> argparse.ArgumentParser:
     run_rewards.add_argument("--ledger-output", type=Path, required=True)
     run_rewards.add_argument("--group-output", type=Path, required=True)
     run_rewards.add_argument("--minimum-valid-members", type=int, default=2)
+
+    training_profile = subparsers.add_parser("training-profile")
+    training_profile.add_argument("--train-log", type=Path, required=True)
+    training_profile.add_argument("--output", type=Path, required=True)
+    training_profile.add_argument("--steady-window", type=int, default=5)
+    training_profile.add_argument("--experiment-id", default="")
+    training_profile.add_argument("--profile-id", default="")
     return parser
 
 
@@ -248,6 +256,14 @@ def main() -> None:
                 1 for group in groups if group.get("trainable") is True
             ),
         }
+    elif args.command == "training-profile":
+        result = write_training_profile(
+            train_log=args.train_log,
+            output=args.output,
+            steady_window=args.steady_window,
+            experiment_id=args.experiment_id,
+            profile_id=args.profile_id,
+        )
     else:
         raise AssertionError(args.command)
     print(json.dumps(result, ensure_ascii=False, indent=2))
