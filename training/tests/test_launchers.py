@@ -406,6 +406,15 @@ def test_qwen35_fsdp2_candidate_profiles_are_backend_exclusive() -> None:
         "configs/sft/qwen3.5-full-2step-4gpu-fsdp2-sp4-padding-free-accum8-bf16params.env"
     )
     zero3_cached = _source("configs/sft/qwen3.5-full-10step-4gpu-zero3-offload-cached.env")
+    zero3_no_checkpoint_gate = _source(
+        "configs/sft/qwen3.5-full-2step-4gpu-zero3-offload-cached-no-llm-checkpoint.env"
+    )
+    zero3_no_checkpoint_ten = _source(
+        "configs/sft/qwen3.5-full-10step-4gpu-zero3-offload-cached-no-llm-checkpoint.env"
+    )
+    zero3_no_checkpoint_resume = _source(
+        "configs/sft/qwen3.5-full-11step-resume-4gpu-zero3-offload-cached-no-llm-checkpoint.env"
+    )
 
     for source in (
         one_step,
@@ -471,6 +480,24 @@ def test_qwen35_fsdp2_candidate_profiles_are_backend_exclusive() -> None:
     assert "IFV_DEEPSPEED=training/configs/deepspeed/zero3-optimizer-offload.json" in zero3_cached
     assert "IFV_FSDP" not in zero3_cached
     assert "IFV_GRADIENT_CHECKPOINTING=true" in zero3_cached
+    for source in (
+        zero3_no_checkpoint_gate,
+        zero3_no_checkpoint_ten,
+        zero3_no_checkpoint_resume,
+    ):
+        assert "IFV_DEEPSPEED=training/configs/deepspeed/zero3-optimizer-offload.json" in source
+        assert "IFV_FSDP" not in source
+        assert "IFV_GRADIENT_CHECKPOINTING=false" in source
+        assert "IFV_VIT_GRADIENT_CHECKPOINTING=true" in source
+        assert "IFV_GRADIENT_ACCUMULATION_STEPS=2" in source
+        assert "IFV_MAX_LENGTH=32768" in source
+    assert "IFV_MAX_STEPS=2" in zero3_no_checkpoint_gate
+    assert "IFV_MAX_STEPS=10" in zero3_no_checkpoint_ten
+    assert "IFV_SAVE_STEPS=10" in zero3_no_checkpoint_ten
+    assert "IFV_EVAL_STEPS=10" in zero3_no_checkpoint_ten
+    assert "IFV_MAX_STEPS=11" in zero3_no_checkpoint_resume
+    assert "IFV_SAVE_STEPS=11" in zero3_no_checkpoint_resume
+    assert "IFV_EVAL_STEPS=11" in zero3_no_checkpoint_resume
 
 
 def test_qwen35_zero3_speed_probe_is_full_parameter_and_32k() -> None:

@@ -624,3 +624,32 @@ The remaining bounded topology probes are:
 - SP4 + accumulation 8: global-batch-8 control. It is expected to amortize optimizer
   overhead but cannot increase the number of unique samples processed per
   microbatch.
+
+## 17. ZeRO-3 activation-recompute and dataloader protocol
+
+The fair four-GPU ZeRO-3 optimizer-offload baseline completed ten optimizer steps,
+validation, full model save, and DeepSpeed state save on the frozen cached dataset.
+It processed eight unique rows per optimizer step, reached 18.63 GiB reported peak
+GPU memory, and sustained 0.249 unique rows/second over the ten training steps.
+This is faster in useful-row throughput than the raw SP4 FSDP2 step time suggests,
+because SP4 processes only one unique row per optimizer step.
+
+The next bounded speed hypothesis is that ordinary language-model activation
+checkpointing is unnecessarily conservative on the offload path:
+
+1. keep optimizer CPU offload, global batch eight, the same physical GPUs, cached
+   rows, seed/order, FlashAttention, and visual gradient checkpointing;
+2. set only `gradient_checkpointing=false`;
+3. run two optimizer steps first, so the longest grouped batch and post-step
+   optimizer state are both exercised;
+4. reject immediately on OOM, NaN/Inf, NCCL failure, or loss divergence;
+5. only after the two-step capacity gate, run ten steps with validation and save,
+   then resume checkpoint 10 to step 11 and reload the saved full model.
+
+After the backend/recompute choice is stable, run the dataloader matrix on that
+choice. The primary matrix is workers `0/2/4/8`, with persistent workers and
+prefetch two for nonzero workers. Only the best nonzero worker count receives
+the additional persistent-off and prefetch-four ablations. Short matrix runs are
+screening measurements, not promotion evidence; the selected setting must repeat
+the ten-step validation/save/resume/reload gate. Compare unique rows/second and
+sampled GPU utilization, not framework rank-counted throughput alone.
