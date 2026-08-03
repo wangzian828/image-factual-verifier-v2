@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import inspect
 import json
 import math
 from pathlib import Path
 import re
+import textwrap
 from typing import Any, Mapping
 
 
@@ -36,6 +38,17 @@ def _source_contract() -> dict[str, Any]:
     optimizer_step = inspect.getsource(DeepSpeedOptimizerWrapper.step)
     accelerator_backward = inspect.getsource(Accelerator.backward)
     trainer_epoch = inspect.getsource(Trainer._run_epoch)
+    optimizer_tree = ast.parse(textwrap.dedent(optimizer_step))
+    optimizer_functions = [
+        item
+        for item in optimizer_tree.body
+        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
+    ]
+    optimizer_step_is_noop = bool(
+        optimizer_functions
+        and len(optimizer_functions[0].body) == 1
+        and isinstance(optimizer_functions[0].body[0], ast.Pass)
+    )
     checks = {
         "accelerator_routes_backward_to_deepspeed": (
             "self.deepspeed_engine_wrapped.backward" in accelerator_backward
@@ -43,12 +56,7 @@ def _source_contract() -> dict[str, Any]:
         "deepspeed_backward_performs_engine_step": (
             "self.engine.step()" in engine_backward
         ),
-        "deepspeed_optimizer_wrapper_step_is_noop": bool(
-            re.search(
-                r"def step\\(self\\):\\s*\\n\\s*pass\\b",
-                optimizer_step,
-            )
-        ),
+        "deepspeed_optimizer_wrapper_step_is_noop": optimizer_step_is_noop,
         "trainer_calls_wrapper_step_before_scheduler": (
             0
             <= trainer_epoch.find("self.optimizer.step()")
