@@ -610,3 +610,17 @@ AdamW:
    after the first step;
 5. require the first-step loss to remain aligned with the frozen reference and
    require validation/save before promotion.
+
+The SP1 gate failed before its first optimizer step on the longest grouped batch:
+Qwen3.5 Gated DeltaNet requested another 272 MiB with only about 118 MiB free.
+Because this happened in the first microbatch, reducing gradient accumulation does
+not change the failure. SP1 is rejected for this dataset and 40 GiB cards.
+
+The remaining bounded topology probes are:
+
+- SP2 + accumulation 4: DP=2 and eight unique samples per optimizer step;
+- SP2 + accumulation 1: fallback capacity/throughput measurement if accumulation 4
+  fails because of no-sync gradient residency;
+- SP4 + accumulation 8: global-batch-8 control. It is expected to amortize optimizer
+  overhead but cannot increase the number of unique samples processed per
+  microbatch.

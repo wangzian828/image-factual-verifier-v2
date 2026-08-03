@@ -396,6 +396,15 @@ def test_qwen35_fsdp2_candidate_profiles_are_backend_exclusive() -> None:
     sp1_accum2 = _source(
         "configs/sft/qwen3.5-full-2step-4gpu-fsdp2-padding-free-accum2-bf16params.env"
     )
+    sp2_accum1 = _source(
+        "configs/sft/qwen3.5-full-2step-4gpu-fsdp2-sp2-padding-free-accum1-bf16params.env"
+    )
+    sp2_accum4 = _source(
+        "configs/sft/qwen3.5-full-2step-4gpu-fsdp2-sp2-padding-free-accum4-bf16params.env"
+    )
+    sp4_accum8 = _source(
+        "configs/sft/qwen3.5-full-2step-4gpu-fsdp2-sp4-padding-free-accum8-bf16params.env"
+    )
     zero3_cached = _source("configs/sft/qwen3.5-full-10step-4gpu-zero3-offload-cached.env")
 
     for source in (
@@ -411,6 +420,9 @@ def test_qwen35_fsdp2_candidate_profiles_are_backend_exclusive() -> None:
         sp4_resume,
         sp1_accum1,
         sp1_accum2,
+        sp2_accum1,
+        sp2_accum4,
+        sp4_accum8,
     ):
         assert "IFV_FSDP=fsdp2" in source
         assert "IFV_DEEPSPEED" not in source
@@ -449,6 +461,13 @@ def test_qwen35_fsdp2_candidate_profiles_are_backend_exclusive() -> None:
         assert "IFV_GROUP_BY_LENGTH=true" in source
     assert "IFV_GRADIENT_ACCUMULATION_STEPS=1" in sp1_accum1
     assert "IFV_GRADIENT_ACCUMULATION_STEPS=2" in sp1_accum2
+    for source in (sp2_accum1, sp2_accum4):
+        assert "IFV_SEQUENCE_PARALLEL_SIZE=2" in source
+        assert "IFV_BF16=false" in source
+    assert "IFV_GRADIENT_ACCUMULATION_STEPS=1" in sp2_accum1
+    assert "IFV_GRADIENT_ACCUMULATION_STEPS=4" in sp2_accum4
+    assert "IFV_SEQUENCE_PARALLEL_SIZE=4" in sp4_accum8
+    assert "IFV_GRADIENT_ACCUMULATION_STEPS=8" in sp4_accum8
     assert "IFV_DEEPSPEED=training/configs/deepspeed/zero3-optimizer-offload.json" in zero3_cached
     assert "IFV_FSDP" not in zero3_cached
     assert "IFV_GRADIENT_CHECKPOINTING=true" in zero3_cached
