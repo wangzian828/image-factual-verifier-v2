@@ -126,6 +126,12 @@ LOG_DIR="$EXPERIMENT_DIR"
 new_output_dir "$OUTPUT_DIR"
 new_output_dir "$EXPERIMENT_DIR"
 record_environment "$EXPERIMENT_DIR"
+CHECKPOINT_PREFLIGHT="$EXPERIMENT_DIR/checkpoint-storage-preflight.json"
+python -m ifv_training checkpoint-storage-preflight \
+  --output-dir "$OUTPUT_DIR" \
+  --estimated-checkpoint-bytes "${IFV_CHECKPOINT_ESTIMATED_BYTES:-150000000000}" \
+  --reserve-multiplier "${IFV_CHECKPOINT_RESERVE_MULTIPLIER:-1.25}" \
+  --output "$CHECKPOINT_PREFLIGHT"
 CACHE_VERIFICATION=""
 if [[ "${#cached_train_datasets[@]}" -gt 0 ]]; then
   CACHE_VERIFICATION="$EXPERIMENT_DIR/cached-dataset-gate.json"
@@ -275,6 +281,8 @@ if [[ -n "$ENCODE_CACHE_REPORT" ]]; then
 fi
 scheduler_audit_status=0
 SCHEDULER_AUDIT=""
+checkpoint_io_status=0
+CHECKPOINT_IO_PROFILE=""
 if [[ "$train_status" -eq 0 ]]; then
   latest_checkpoint="$(
     find "$OUTPUT_DIR" -type d -name 'checkpoint-*' -print |
@@ -282,6 +290,11 @@ if [[ "$train_status" -eq 0 ]]; then
       tail -n 1
   )"
   if [[ -n "$latest_checkpoint" && -s "$latest_checkpoint/scheduler.pt" ]]; then
+    CHECKPOINT_IO_PROFILE="$EXPERIMENT_DIR/checkpoint-io-profile.json"
+    IFV_ENCODE_CACHE_ENABLED=false python -m ifv_training \
+      checkpoint-io-profile \
+      --checkpoint "$latest_checkpoint" \
+      --output "$CHECKPOINT_IO_PROFILE" || checkpoint_io_status="$?"
     SCHEDULER_AUDIT="$EXPERIMENT_DIR/scheduler-order-audit.json"
     IFV_ENCODE_CACHE_ENABLED=false python \
       "$REPO_ROOT/training/scripts/probe/audit_deepspeed_scheduler.py" \
@@ -309,12 +322,19 @@ fi
 if [[ -n "$SCHEDULER_AUDIT" ]]; then
   profile_args+=(--scheduler-audit "$SCHEDULER_AUDIT")
 fi
+profile_args+=(--checkpoint-preflight "$CHECKPOINT_PREFLIGHT")
+if [[ -n "$CHECKPOINT_IO_PROFILE" ]]; then
+  profile_args+=(--checkpoint-io-profile "$CHECKPOINT_IO_PROFILE")
+fi
 "${profile_args[@]}" || profile_status="$?"
 if [[ "$train_status" -eq 0 && "$encode_cache_status" -ne 0 ]]; then
   exit "$encode_cache_status"
 fi
 if [[ "$train_status" -eq 0 && "$scheduler_audit_status" -ne 0 ]]; then
   exit "$scheduler_audit_status"
+fi
+if [[ "$train_status" -eq 0 && "$checkpoint_io_status" -ne 0 ]]; then
+  exit "$checkpoint_io_status"
 fi
 if [[ "$train_status" -eq 0 && "$profile_status" -ne 0 ]]; then
   exit "$profile_status"

@@ -148,11 +148,33 @@ def test_training_profile_proves_cache_validation_save_resume_and_resources(
         ),
         encoding="utf-8",
     )
+    checkpoint_preflight = tmp_path / "checkpoint-preflight.json"
+    checkpoint_preflight.write_text(
+        json.dumps(
+            {
+                "schema_version": "ifv-checkpoint-storage-preflight-v1",
+                "passed": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    checkpoint_io = tmp_path / "checkpoint-io.json"
+    checkpoint_io.write_text(
+        json.dumps(
+            {
+                "schema_version": "ifv-checkpoint-io-profile-v1",
+                "passed": True,
+            }
+        ),
+        encoding="utf-8",
+    )
 
     result = summarize_training_log(
         train_log,
         resource_summary=resource_summary,
         cache_verification=cache_verification,
+        checkpoint_preflight=checkpoint_preflight,
+        checkpoint_io_profile=checkpoint_io,
         train_exit_code=0,
     )
 
@@ -165,6 +187,8 @@ def test_training_profile_proves_cache_validation_save_resume_and_resources(
     assert result["resume"]["advanced"] is True
     assert result["resources"]["summary"]["process_tree_peak_rss_mib"] == 12345.0
     assert result["cached_dataset_gate"]["passed"] is True
+    assert result["checkpoint_storage_preflight"]["passed"] is True
+    assert result["checkpoint_io"]["passed"] is True
 
 
 def test_scheduler_warning_requires_wrapper_false_positive_audit(

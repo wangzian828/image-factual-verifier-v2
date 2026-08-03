@@ -295,6 +295,12 @@ def test_sft_launchers_support_cached_datasets_and_tunable_dataloaders() -> None
         assert "scheduler-order-audit.json" in source
         assert "audit_deepspeed_scheduler.py" in source
         assert "--scheduler-audit" in source
+        assert "checkpoint-storage-preflight.json" in source
+        assert "checkpoint-io-profile.json" in source
+        assert "checkpoint-storage-preflight" in source
+        assert "checkpoint-io-profile" in source
+        assert "--checkpoint-preflight" in source
+        assert "--checkpoint-io-profile" in source
         assert 'IFV_DATASET_NUM_PROC:-2' in source
         assert 'IFV_DATALOADER_NUM_WORKERS:-2' in source
         assert "IFV_DATALOADER_PERSISTENT_WORKERS" in source

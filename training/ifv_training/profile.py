@@ -202,6 +202,8 @@ def summarize_training_log(
     cache_verification: Path | None = None,
     encode_cache_report: Path | None = None,
     scheduler_audit: Path | None = None,
+    checkpoint_preflight: Path | None = None,
+    checkpoint_io_profile: Path | None = None,
     train_exit_code: int | None = None,
 ) -> dict[str, Any]:
     metrics: list[dict[str, Any]] = []
@@ -397,6 +399,8 @@ def summarize_training_log(
     cache_payload = _load_sidecar(cache_verification)
     encode_cache_payload = _load_sidecar(encode_cache_report)
     scheduler_audit_payload = _load_sidecar(scheduler_audit)
+    checkpoint_preflight_payload = _load_sidecar(checkpoint_preflight)
+    checkpoint_io_payload = _load_sidecar(checkpoint_io_profile)
     clean_exit = (
         train_exit_code == 0
         if train_exit_code is not None
@@ -453,6 +457,18 @@ def summarize_training_log(
         if isinstance(scheduler_audit_payload, dict)
         else not scheduler_audit_required
     )
+    checkpoint_preflight_required = checkpoint_required
+    checkpoint_preflight_passed = (
+        checkpoint_preflight_payload.get("passed") is True
+        if isinstance(checkpoint_preflight_payload, dict)
+        else not checkpoint_preflight_required
+    )
+    checkpoint_io_required = checkpoint_required
+    checkpoint_io_passed = (
+        checkpoint_io_payload.get("passed") is True
+        if isinstance(checkpoint_io_payload, dict)
+        else not checkpoint_io_required
+    )
     passed_production_gate = all(
         (
             not detected_errors,
@@ -465,6 +481,8 @@ def summarize_training_log(
             cache_passed,
             encode_cache_passed,
             scheduler_audit_passed,
+            checkpoint_preflight_passed,
+            checkpoint_io_passed,
         )
     )
     train_runtime = (
@@ -615,6 +633,22 @@ def summarize_training_log(
             "passed": scheduler_audit_passed,
             "audit": scheduler_audit_payload,
         },
+        "checkpoint_storage_preflight": {
+            "required": checkpoint_preflight_required,
+            "report_path": (
+                str(checkpoint_preflight) if checkpoint_preflight else ""
+            ),
+            "passed": checkpoint_preflight_passed,
+            "report": checkpoint_preflight_payload,
+        },
+        "checkpoint_io": {
+            "required": checkpoint_io_required,
+            "report_path": (
+                str(checkpoint_io_profile) if checkpoint_io_profile else ""
+            ),
+            "passed": checkpoint_io_passed,
+            "report": checkpoint_io_payload,
+        },
     }
 
 
@@ -629,6 +663,8 @@ def write_training_profile(
     cache_verification: Path | None = None,
     encode_cache_report: Path | None = None,
     scheduler_audit: Path | None = None,
+    checkpoint_preflight: Path | None = None,
+    checkpoint_io_profile: Path | None = None,
     train_exit_code: int | None = None,
 ) -> dict[str, Any]:
     result = summarize_training_log(
@@ -640,6 +676,8 @@ def write_training_profile(
         cache_verification=cache_verification,
         encode_cache_report=encode_cache_report,
         scheduler_audit=scheduler_audit,
+        checkpoint_preflight=checkpoint_preflight,
+        checkpoint_io_profile=checkpoint_io_profile,
         train_exit_code=train_exit_code,
     )
     output.parent.mkdir(parents=True, exist_ok=True)

@@ -10,6 +10,11 @@ from .checkpoints import (
     build_checkpoint_manifest,
     build_serving_profile,
 )
+from .checkpoint_io import (
+    checkpoint_io_profile,
+    checkpoint_storage_preflight,
+    write_json as write_checkpoint_json,
+)
 from .encode_cache import aggregate_encode_cache_metrics
 from .io import load_json, load_jsonl, write_json, write_jsonl
 from .manifests import (
@@ -172,11 +177,31 @@ def _parser() -> argparse.ArgumentParser:
     training_profile.add_argument("--cache-verification", type=Path)
     training_profile.add_argument("--encode-cache-report", type=Path)
     training_profile.add_argument("--scheduler-audit", type=Path)
+    training_profile.add_argument("--checkpoint-preflight", type=Path)
+    training_profile.add_argument("--checkpoint-io-profile", type=Path)
     training_profile.add_argument("--train-exit-code", type=int)
 
     encode_cache_report = subparsers.add_parser("encode-cache-report")
     encode_cache_report.add_argument("--metrics-dir", type=Path, required=True)
     encode_cache_report.add_argument("--output", type=Path, required=True)
+
+    checkpoint_preflight = subparsers.add_parser("checkpoint-storage-preflight")
+    checkpoint_preflight.add_argument("--output-dir", type=Path, required=True)
+    checkpoint_preflight.add_argument(
+        "--estimated-checkpoint-bytes",
+        type=int,
+        required=True,
+    )
+    checkpoint_preflight.add_argument(
+        "--reserve-multiplier",
+        type=float,
+        default=1.25,
+    )
+    checkpoint_preflight.add_argument("--output", type=Path, required=True)
+
+    checkpoint_profile = subparsers.add_parser("checkpoint-io-profile")
+    checkpoint_profile.add_argument("--checkpoint", type=Path, required=True)
+    checkpoint_profile.add_argument("--output", type=Path, required=True)
     return parser
 
 
@@ -318,6 +343,8 @@ def main() -> None:
             cache_verification=args.cache_verification,
             encode_cache_report=args.encode_cache_report,
             scheduler_audit=args.scheduler_audit,
+            checkpoint_preflight=args.checkpoint_preflight,
+            checkpoint_io_profile=args.checkpoint_io_profile,
             train_exit_code=args.train_exit_code,
         )
     elif args.command == "encode-cache-report":
@@ -325,6 +352,22 @@ def main() -> None:
             args.metrics_dir,
             output=args.output,
         )
+        if not result["passed"]:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            raise SystemExit(1)
+    elif args.command == "checkpoint-storage-preflight":
+        result = checkpoint_storage_preflight(
+            args.output_dir,
+            estimated_checkpoint_bytes=args.estimated_checkpoint_bytes,
+            reserve_multiplier=args.reserve_multiplier,
+        )
+        write_checkpoint_json(args.output, result)
+        if not result["passed"]:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            raise SystemExit(1)
+    elif args.command == "checkpoint-io-profile":
+        result = checkpoint_io_profile(args.checkpoint)
+        write_checkpoint_json(args.output, result)
         if not result["passed"]:
             print(json.dumps(result, ensure_ascii=False, indent=2))
             raise SystemExit(1)
