@@ -285,9 +285,6 @@ class PlanningThenReactBackend(ImageAccountPlanningBackend):
                                             "affected_claim_ids": [
                                                 claim["claim_id"]
                                             ],
-                                            "visual_anchor_fact_ids": claim[
-                                                "anchor_fact_ids"
-                                            ],
                                             "evidence_ids": [
                                                 evidence["evidence_id"]
                                             ],
@@ -301,6 +298,7 @@ class PlanningThenReactBackend(ImageAccountPlanningBackend):
                                         "retire_hypothesis_ids": [],
                                         "new_hypotheses": [],
                                         "visual_reinspection": None,
+                                        "visual_evidence_disposition": None,
                                         "verdict_proposal": "fake",
                                         "rationale": (
                                             "Qualified Evidence establishes a "
