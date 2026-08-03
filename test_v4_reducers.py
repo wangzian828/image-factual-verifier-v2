@@ -2254,6 +2254,83 @@ def test_focused_visual_failure_guard_blocks_source_only_follow_up(
     assert source.evidence_id in state.visual_reinspections[-1].request.grounding_evidence_ids
 
 
+def test_focused_visual_outer_timeout_uses_real_tool_deadline(
+    tmp_path: Path,
+) -> None:
+    state = _planned_state()
+    _append_source_visual_conflict_pair(
+        state,
+        link_visual_to_reinspection=True,
+    )
+    record = state.visual_reinspections[-1]
+    record.status = "pending"
+    record.evidence_ids = []
+    visual_task = next(
+        task for task in state.tasks if task.task_id == record.task_id
+    )
+    visual_task.status = "active"
+    image_path = tmp_path / "fixture.jpg"
+    image_path.write_bytes(b"focused-visual-timeout")
+    runtime_case = ImageOnlyRuntimeCase(
+        case_id=state.brief.case_id,
+        image_path=str(image_path),
+        image_sha256="e" * 64,
+    )
+    verification = VerificationState(
+        image_id=runtime_case.case_id,
+        image_path=runtime_case.image_path,
+        runtime_case=runtime_case,
+        input_mode="image_only",
+        investigation_state=state,
+    )
+    orchestrator = Orchestrator(
+        provider="gemini",
+        model_name="controlled",
+        validate_startup=False,
+    )
+
+    class HangingFocusedTool:
+        parameters = {
+            "properties": {
+                "image_input": {"type": "string"},
+            }
+        }
+
+        async def call_async(
+            self,
+            _params: dict[str, object],
+        ) -> dict[str, object]:
+            await asyncio.sleep(0.2)
+            return {"status": "success", "summary": "too late"}
+
+    orchestrator.all_tools["focused_visual_inspection"] = HangingFocusedTool()
+    orchestrator.tool_action_timeout_seconds = 0.01
+
+    with pytest.raises(
+        RuntimeError,
+        match="Tool failure \\[timeout\\]",
+    ):
+        asyncio.run(
+            orchestrator._run_image_only_visual_reinspection(
+                verification,
+                state,
+                image_path=str(image_path),
+                runtime_case=runtime_case,
+                visual_question_id=record.visual_question_id,
+            )
+        )
+
+    assert state.visual_reinspections[-1].status == "failed"
+    assert state.failures[-1].code == "timeout"
+    assert state.failures[-1].recoverable is False
+    timeout_step = verification.all_steps[-1]
+    assert timeout_step.metadata["tool_exception"] == "ToolActionTimeout"
+    assert timeout_step.metadata["tool_timeout_seconds"] == 0.01
+    assert timeout_step.metadata["focused_visual_failure"][
+        "source_only_follow_up_blocked"
+    ] is True
+
+
 def test_discrepancy_decision_rejects_fake_without_decisive_discrepancy() -> None:
     state = _planned_state()
     evidence = _append_evidence(state)
