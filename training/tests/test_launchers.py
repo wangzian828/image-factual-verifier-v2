@@ -333,6 +333,7 @@ def test_fsdp2_exporter_merges_audits_and_reload_smokes() -> None:
     probe = _source("scripts/probe/load_qwen35_checkpoint.py")
 
     assert "merge_fsdp_weights" in source
+    assert "configure_training_runtime" in source
     assert "--state-checkpoint-dir" in source
     assert "cached-dataset-manifest" in source
     assert "load_qwen35_checkpoint.py" in source

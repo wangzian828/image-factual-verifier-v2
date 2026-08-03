@@ -14,6 +14,7 @@ CHECKPOINT_DIR="$1"
 BASE_MODEL_DIR="$2"
 EXPORT_ID="$3"
 CACHE_DIR="$4"
+configure_training_runtime
 MODEL_SHARDS="$CHECKPOINT_DIR/pytorch_model_fsdp_0"
 if [[ ! -s "$MODEL_SHARDS/.metadata" ]]; then
   echo "FSDP2 model shards are missing: $MODEL_SHARDS" >&2
