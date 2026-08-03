@@ -2089,6 +2089,45 @@ def test_second_decision_must_consume_resolved_visual_evidence_or_explain_irrele
     assert state.discrepancy_decisions[-1].output.visual_evidence_disposition
 
 
+def test_runtime_binding_prefers_selected_visual_evidence_over_conflicting_irrelevance() -> None:
+    state = _planned_state()
+    source, visual = _append_source_visual_conflict_pair(state)
+    claim = state.image_claims[0]
+
+    bound, error = bind_discrepancy_decision_runtime_ids(
+        state,
+        DiscrepancyDecisionProposalOutput(
+            claim_assessments=[
+                ClaimAssessmentProposal(
+                    claim_id=claim.claim_id,
+                    assessment="insufficient",
+                    selected_evidence_ids=[visual.evidence_id],
+                    rationale="Consume the resolved focused visual Evidence.",
+                )
+            ],
+            visual_evidence_disposition=VisualEvidenceDisposition(
+                disposition="irrelevant_to_current_claim_or_discrepancy",
+                rationale="Contradictory model branch that must be removed.",
+            ),
+            verdict_proposal="continue",
+            rationale="The pixel Evidence is the auditable branch.",
+        ),
+        reviewed_evidence_ids=[source.evidence_id, visual.evidence_id],
+    )
+
+    assert error == ""
+    assert bound is not None
+    assert bound.visual_evidence_disposition is None
+    update = apply_discrepancy_decision(
+        state,
+        bound,
+        reviewed_evidence_ids=[source.evidence_id, visual.evidence_id],
+        trigger="qualified_evidence",
+    )
+    assert update["accepted"] is True, update
+    assert visual.evidence_id in bound.claim_assessments[0].selected_evidence_ids
+
+
 @pytest.mark.parametrize(
     ("tool_payload", "metadata", "expected_code"),
     [

@@ -601,6 +601,42 @@ def bind_discrepancy_decision_runtime_ids(
     """Build the persisted Decision object without asking the model to copy IDs."""
 
     payload = output.model_dump(mode="json")
+    resolved_visual_requirements = (
+        _resolved_visual_evidence_requirements_for_review(
+            state,
+            reviewed_evidence_ids=reviewed_evidence_ids,
+            evidence_by_id={
+                item.evidence_id: item for item in state.evidence
+            },
+        )
+    )
+    resolved_visual_ids = {
+        str(item["evidence_id"])
+        for item in resolved_visual_requirements
+    }
+    selected_visual_ids = {
+        str(evidence_id)
+        for assessment in output.claim_assessments
+        for evidence_id in assessment.selected_evidence_ids
+    }
+    if output.material_discrepancy is not None:
+        selected_visual_ids.update(
+            str(evidence_id)
+            for evidence_id in output.material_discrepancy.evidence_ids
+        )
+    disposition = payload.get("visual_evidence_disposition")
+    if (
+        isinstance(disposition, Mapping)
+        and disposition.get("disposition")
+        == "irrelevant_to_current_claim_or_discrepancy"
+        and resolved_visual_ids & selected_visual_ids
+    ):
+        # The model occasionally emits both mutually exclusive branches. A
+        # selected resolved pixel Evidence is the stronger, auditable action;
+        # drop only the contradictory disposition and preserve all semantic
+        # assessments/discrepancy fields unchanged. Direct reducer callers
+        # still receive the strict rejection when they bypass this binding.
+        payload["visual_evidence_disposition"] = None
     discrepancy = output.material_discrepancy
     if discrepancy is not None:
         claim_by_id = {claim.claim_id: claim for claim in state.image_claims}
