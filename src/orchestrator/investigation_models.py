@@ -311,6 +311,7 @@ class InvestigationFailure(StrictModel):
     tool_name: str = Field(min_length=1, max_length=100)
     code: Literal[
         "tool_error",
+        "rate_limited",
         "provider_unavailable",
         "access_limited",
         "malformed_result",

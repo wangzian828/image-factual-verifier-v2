@@ -285,6 +285,17 @@ async def replay_snapshot(args: argparse.Namespace) -> dict[str, Any]:
             for failure_id in engineering_failure_ids
             if failure_id in failure_by_id
         ]
+        source_only_follow_up_blocked = bool(
+            engineering_error_stage == "image_only_visual_reinspection"
+            and pending_record is not None
+            and pending_record.status == "failed"
+            and decision_2 is None
+        )
+        decision_2_skipped_reason = (
+            "focused_visual_failure_guard"
+            if source_only_follow_up_blocked
+            else ""
+        )
         audit = audit_discrepancy_coverage(investigation, decision_checkpoint=True)
         compile_error = ""
         compile_skipped_reason = ""
@@ -339,6 +350,8 @@ async def replay_snapshot(args: argparse.Namespace) -> dict[str, Any]:
             "engineering_error_stage": engineering_error_stage,
             "engineering_failure_ids": engineering_failure_ids,
             "engineering_failure_codes": engineering_failure_codes,
+            "source_only_follow_up_blocked": source_only_follow_up_blocked,
+            "decision_2_skipped_reason": decision_2_skipped_reason,
             "coverage_audit": audit.model_dump(mode="json"),
             "compiled_verdict": compiled_verdict,
             "compiled_basis": basis_payload,
@@ -404,6 +417,10 @@ def main() -> int:
         "engineering_error_stage": result["engineering_error_stage"],
         "engineering_failure_ids": result["engineering_failure_ids"],
         "engineering_failure_codes": result["engineering_failure_codes"],
+        "source_only_follow_up_blocked": result[
+            "source_only_follow_up_blocked"
+        ],
+        "decision_2_skipped_reason": result["decision_2_skipped_reason"],
         "composite_finding_ids": result["composite_finding_ids"],
         "composite_success": result["composite_success"],
         "decision_mode": (

@@ -2090,26 +2090,102 @@ def test_second_decision_must_consume_resolved_visual_evidence_or_explain_irrele
 
 
 @pytest.mark.parametrize(
-    ("error_text", "metadata", "expected_code"),
+    ("tool_payload", "metadata", "expected_code"),
     [
         (
-            "provider unavailable during focused inspection",
+            {
+                "status": "error",
+                "error": (
+                    "ToolActionTimeout: focused_visual_inspection exceeded 0.1s"
+                ),
+            },
+            {
+                "tool_success": False,
+                "tool_exception": "ToolActionTimeout",
+                "tool_timeout_seconds": 0.1,
+            },
+            "timeout",
+        ),
+        (
+            {
+                "status": "error",
+                "error": (
+                    "GeminiInteractionsHTTPError: request failed with HTTP 429 "
+                    "after 3 retries"
+                ),
+            },
+            {
+                "tool_success": False,
+                "tool_exception": "GeminiInteractionsHTTPError",
+            },
+            "rate_limited",
+        ),
+        (
+            {
+                "status": "error",
+                "error": (
+                    "GeminiInteractionsHTTPError: request failed with HTTP 503 "
+                    "after 3 retries"
+                ),
+            },
+            {
+                "tool_success": False,
+                "tool_exception": "GeminiInteractionsHTTPError",
+            },
+            "provider_unavailable",
+        ),
+        (
+            {
+                "status": "error",
+                "error": (
+                    "Focused visual inspection failed: ValueError: "
+                    "answer_status is missing or invalid"
+                ),
+            },
+            {"tool_success": False},
+            "malformed_result",
+        ),
+        (
+            {
+                "status": "success",
+                "summary": "",
+                "observations": [],
+            },
+            {"tool_success": True},
+            "no_results",
+        ),
+        (
+            {
+                "status": "error",
+                "error": "provider unavailable during focused inspection",
+            },
             {"tool_success": False, "tool_exception": "ProviderUnavailable"},
             "provider_unavailable",
         ),
         (
-            "focused visual task exhausted its correction budget",
+            {
+                "status": "error",
+                "error": "focused visual task exhausted its correction budget",
+            },
             {
                 "tool_success": False,
                 "correction_budget_exhausted": True,
             },
             "budget_exhausted",
         ),
+        (
+            {
+                "status": "error",
+                "error": "focused inspection returned an explicit failure payload",
+            },
+            {"tool_success": False},
+            "tool_error",
+        ),
     ],
 )
 def test_focused_visual_failure_guard_blocks_source_only_follow_up(
     tmp_path: Path,
-    error_text: str,
+    tool_payload: dict[str, object],
     metadata: dict[str, object],
     expected_code: str,
 ) -> None:
@@ -2118,6 +2194,9 @@ def test_focused_visual_failure_guard_blocks_source_only_follow_up(
         state,
         link_visual_to_reinspection=True,
     )
+    initial_evidence_ids = {
+        evidence.evidence_id for evidence in state.evidence
+    }
     record = state.visual_reinspections[-1]
     record.status = "pending"
     record.evidence_ids = []
@@ -2144,15 +2223,7 @@ def test_focused_visual_failure_guard_blocks_source_only_follow_up(
     )
 
     async def failing_tool(*_args: object, **_kwargs: object) -> tuple[str, dict[str, object]]:
-        return (
-            json.dumps(
-                {
-                    "status": "error",
-                    "error": error_text,
-                }
-            ),
-            metadata,
-        )
+        return (json.dumps(tool_payload), metadata)
 
     orchestrator._execute_tool = failing_tool  # type: ignore[method-assign]
 
@@ -2171,8 +2242,15 @@ def test_focused_visual_failure_guard_blocks_source_only_follow_up(
         )
 
     assert state.visual_reinspections[-1].status == "failed"
+    assert state.visual_reinspections[-1].evidence_ids == []
     assert state.failures[-1].tool_name == "focused_visual_inspection"
     assert state.failures[-1].code == expected_code
+    assert state.failures[-1].recoverable is False
+    assert not any(
+        evidence.evidence_id not in initial_evidence_ids
+        and evidence.tool_name == "focused_visual_inspection"
+        for evidence in state.evidence
+    )
     assert source.evidence_id in state.visual_reinspections[-1].request.grounding_evidence_ids
 
 

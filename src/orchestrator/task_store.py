@@ -1161,6 +1161,7 @@ def record_tool_observation(
                     tool_name=tool_name,
                     code="no_results",
                     message="Tool completed successfully but returned no usable result.",
+                    recoverable=tool_name != "focused_visual_inspection",
                 )
             )
     else:
@@ -1170,8 +1171,12 @@ def record_tool_observation(
                 task,
                 call_id=call_id,
                 tool_name=tool_name,
-                code=_failure_code(str(data.get("error", ""))),
+                code=_failure_code(
+                    str(data.get("error", "")),
+                    metadata=metadata,
+                ),
                 message=str(data.get("error", "tool call failed")),
+                recoverable=tool_name != "focused_visual_inspection",
             )
         )
 
@@ -6678,8 +6683,14 @@ def _append_failure(
     return failure_id
 
 
-def _failure_code(message: str) -> str:
+def _failure_code(
+    message: str,
+    *,
+    metadata: Mapping[str, Any] | None = None,
+) -> str:
     lowered = str(message or "").lower()
+    metadata = metadata or {}
+    exception_name = str(metadata.get("tool_exception", "")).casefold()
     if any(
         token in lowered
         for token in (
@@ -6690,8 +6701,39 @@ def _failure_code(message: str) -> str:
         )
     ):
         return "budget_exhausted"
-    if "timeout" in lowered:
+    if "timeout" in lowered or "timeout" in exception_name:
         return "timeout"
+    if any(
+        token in lowered
+        for token in (
+            "http 429",
+            "status 429",
+            "status=429",
+            "too many requests",
+            "rate limit",
+            "rate-limit",
+            "resource_exhausted",
+        )
+    ):
+        return "rate_limited"
+    if any(
+        token in lowered
+        for token in (
+            "http 500",
+            "http 502",
+            "http 503",
+            "http 504",
+            "status 500",
+            "status 502",
+            "status 503",
+            "status 504",
+            "status=500",
+            "status=502",
+            "status=503",
+            "status=504",
+        )
+    ):
+        return "provider_unavailable"
     if any(
         token in lowered
         for token in ("blocked", "access", "captcha", "download")
@@ -6699,10 +6741,22 @@ def _failure_code(message: str) -> str:
         return "access_limited"
     if any(token in lowered for token in ("provider", "unavailable")):
         return "provider_unavailable"
+    if any(
+        token in lowered
+        for token in (
+            "toolresultcontracterror",
+            "tool result is not",
+            "tool result is missing",
+            "invalid json",
+            "malformed",
+            "answer_status is missing or invalid",
+            "summary is required",
+            "response schema",
+        )
+    ) or exception_name == "toolresultcontracterror":
+        return "malformed_result"
     if any(token in lowered for token in ("argument", "unknown", "schema")):
         return "protocol_error"
-    if any(token in lowered for token in ("json", "malformed")):
-        return "malformed_result"
     return "tool_error"
 
 

@@ -123,6 +123,12 @@ def _summary(result: Mapping[str, Any]) -> dict[str, Any]:
             "engineering_failure_codes",
             [],
         ),
+        "source_only_follow_up_blocked": bool(
+            result.get("source_only_follow_up_blocked")
+        ),
+        "decision_2_skipped_reason": str(
+            result.get("decision_2_skipped_reason") or ""
+        ),
         "reinspection_requested": bool(visual_records),
         "visual_inspection_ran": result.get("visual_inspection_update")
         is not None,
@@ -258,6 +264,10 @@ def main() -> int:
         "subprocess_failure_count": len(failures),
         "engineering_error_count": sum(
             bool(item["engineering_error"]) for item in summaries
+        ),
+        "source_only_follow_up_blocked_count": sum(
+            bool(item["source_only_follow_up_blocked"])
+            for item in summaries
         ),
         "reinspection_requested_count": sum(
             bool(item["reinspection_requested"]) for item in summaries
