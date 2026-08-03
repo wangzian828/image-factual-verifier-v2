@@ -1,0 +1,127 @@
+{
+  "schema_version": "ifv-qwen35-engineering-baseline-v1",
+  "created_at": "2026-08-03",
+  "scope": {
+    "model": "Qwen3.5-9B",
+    "training_framework": "ms-swift 4.4.2",
+    "task": "full-parameter multimodal SFT engineering application",
+    "source_notes": "training/docs/qwen35-engineering-notes-from-modern-genai-bilibili.md"
+  },
+  "recommended_profile": {
+    "physical_gpus": [4, 5, 6, 7],
+    "world_size": 4,
+    "backend": "DeepSpeed ZeRO-3",
+    "optimizer_offload": "cpu",
+    "parameter_offload": "none",
+    "per_device_train_batch_size": 1,
+    "gradient_accumulation_steps": 2,
+    "global_batch_size": 8,
+    "max_length": 32768,
+    "attention_implementation": "flash_attn",
+    "activation_checkpointing": true,
+    "omp_threads_per_rank": 8,
+    "dataloader_num_workers": 0,
+    "group_by_length": true,
+    "dataset_mode": "cached_ms_swift_rows",
+    "promotion_status": "promoted_current_safe_path"
+  },
+  "production_gate": {
+    "experiment_id": "qwen35-zero3-offload-flash-4gpu-globalbatch8-production-workers0-omp8-10step-gate-c0c8e57-20260803",
+    "profile_id": "qwen3.5-full-10step-4gpu-zero3-offload-cached-workers0-omp8.env",
+    "steps": 10,
+    "unique_samples": 80,
+    "unique_samples_per_second": 0.372613,
+    "steady_unique_samples_per_second": 0.444198,
+    "step_wall_seconds": {
+      "first": 33.59,
+      "mean": 21.47,
+      "last": 16.79,
+      "last_five_mean": 18.01
+    },
+    "peak_gpu_memory_gib": 18.63,
+    "eval_loss": 0.5223,
+    "train_runtime_seconds": 270.9,
+    "basic_log_gate": true,
+    "validation": true,
+    "checkpoint_save": true,
+    "clean_exit": true
+  },
+  "screening": {
+    "cpuadam_omp_threads": {
+      "1": {"unique_samples_per_second": 0.208388, "decision": "control"},
+      "4": {"unique_samples_per_second": 0.201309, "decision": "reject"},
+      "8": {"unique_samples_per_second": 0.230548, "decision": "advance"},
+      "16": {"unique_samples_per_second": 0.223776, "decision": "reject"}
+    },
+    "dataloader_workers": {
+      "0": {"unique_samples_per_second": 0.285205, "decision": "advance"},
+      "2": {"unique_samples_per_second": 0.258481, "decision": "reject"},
+      "4": {"unique_samples_per_second": 0.268908, "decision": "best_nonzero_control"},
+      "8": {"unique_samples_per_second": 0.242057, "decision": "reject"},
+      "4_no_persistent": {"unique_samples_per_second": 0.243309, "decision": "reject"},
+      "4_prefetch_4": {"unique_samples_per_second": 0.228571, "decision": "reject"}
+    },
+    "known_rejections": [
+      "4-GPU ZeRO-3 no-offload",
+      "FSDP2 steady-state candidates",
+      "FSDP2 sequence-parallel candidates",
+      "ZeRO-3 without language activation checkpointing"
+    ]
+  },
+  "checkpoint_gate": {
+    "checkpoint_step": 10,
+    "parameter_count": 9409813744,
+    "dtype": "torch.bfloat16",
+    "model_class": "Qwen3_5ForConditionalGeneration",
+    "processor_class": "Qwen3VLProcessor",
+    "full_parameter_audit": true,
+    "language_weights_updated": true,
+    "vision_weights_updated": true,
+    "aligner_weights_updated": true,
+    "optimizer_state_available": true,
+    "scheduler_state_available": true,
+    "rng_state_available": true,
+    "cpu_reload": true,
+    "resume": {
+      "experiment_id": "qwen35-zero3-offload-flash-4gpu-globalbatch8-production-workers0-omp8-resume11-gate-c0c8e57-20260803",
+      "restored_global_step": 10,
+      "advanced_global_step": 11,
+      "optimizer_scheduler_rng_restored": true,
+      "validation": true,
+      "checkpoint_11_saved": true,
+      "clean_exit": true
+    }
+  },
+  "serving_gate": {
+    "served_model": "ifv-qwen3.5-9b-checkpoint10-smoke",
+    "context_length": 131072,
+    "tensor_parallel_size": 2,
+    "thinking_off": true,
+    "thinking_on_with_separated_reasoning": true,
+    "image_input": true,
+    "strict_json_schema": true,
+    "independent_tool_roundtrips": 2,
+    "loopback_proxy_bypass": true,
+    "passed": true,
+    "structured_output_policy": {
+      "reasoning_only_is_not_acceptance": true,
+      "direct_schema_correction_is_bounded": true,
+      "tool_failure_is_not_source_support": true
+    },
+    "artifact": "training/logs/serving/ifv-qwen3.5-9b-checkpoint10-smoke/checkpoint10-endpoint-gates.json"
+  },
+  "artifacts": {
+    "training_profile": "training/logs/qwen35-zero3-offload-flash-4gpu-globalbatch8-production-workers0-omp8-10step-gate-c0c8e57-20260803/profile.json",
+    "resume_profile": "training/logs/qwen35-zero3-offload-flash-4gpu-globalbatch8-production-workers0-omp8-resume11-gate-c0c8e57-20260803/profile.json",
+    "checkpoint_export": "training/exports/qwen35-zero3-offload-flash-4gpu-globalbatch8-production-workers0-omp8-checkpoint10-reload-smoke-870d79b-20260803",
+    "checkpoint_path": "training/checkpoints/qwen35-zero3-offload-flash-4gpu-globalbatch8-production-workers0-omp8-10step-gate-c0c8e57-20260803/checkpoint-10"
+  },
+  "operational_notes": {
+    "generic_server_omp_threads": 1,
+    "training_only_omp_override": 8,
+    "cache_rows_still_decode_images_lazily": true,
+    "encoded_image_cache": "future_engineering_task",
+    "formal_base_service_restore": "blocked_by_non_owned_gpu_occupancy_at_report_time",
+    "credentials_included": false
+  }
+}

@@ -9,9 +9,16 @@ from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
-from urllib.request import Request, urlopen
+from urllib.request import (
+    ProxyHandler,
+    Request,
+    build_opener,
+)
 
 from jsonschema import Draft202012Validator
+
+
+_LOCAL_OPENER = build_opener(ProxyHandler({}))
 
 
 def _data_url(path: Path) -> str:
@@ -27,7 +34,7 @@ def _request(url: str, payload: dict[str, Any] | None = None) -> Any:
         headers={"Content-Type": "application/json", "Authorization": "Bearer none"},
     )
     try:
-        with urlopen(request, timeout=600) as response:
+        with _LOCAL_OPENER.open(request, timeout=600) as response:
             raw = response.read()
     except HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
@@ -67,12 +74,114 @@ def _reasoning(message: dict[str, Any]) -> str:
 
 
 def _body(model: str, messages: list[dict[str, Any]], *, thinking: bool) -> dict[str, Any]:
-    return {
+    body = {
         "model": model,
         "temperature": 0,
         "max_tokens": 4096,
         "messages": messages,
         "chat_template_kwargs": {"enable_thinking": thinking},
+    }
+    if thinking:
+        body.update(
+            {
+                "temperature": 1.0,
+                "top_p": 0.95,
+                "top_k": 20,
+                "min_p": 0.0,
+                "presence_penalty": 1.5,
+                "repetition_penalty": 1.0,
+                "thinking_token_budget": 1024,
+            }
+        )
+    return body
+
+
+def _schema_body(
+    model: str,
+    messages: list[dict[str, Any]],
+    schema: dict[str, Any],
+    *,
+    thinking: bool,
+) -> dict[str, Any]:
+    body = _body(model, messages, thinking=thinking)
+    body["response_format"] = {
+        "type": "json_schema",
+        "json_schema": {"name": "probe_status", "strict": True, "schema": schema},
+    }
+    return body
+
+
+def _structured_with_bounded_correction(
+    base_url: str,
+    model: str,
+    schema: dict[str, Any],
+) -> dict[str, Any]:
+    """Exercise the production thinking->direct-schema recovery boundary.
+
+    Qwen3.5 may finish a thinking+schema request with the candidate only in
+    ``reasoning`` and no visible ``content``.  That is not source support and
+    must not be accepted as structured output.  The runtime's bounded repair
+    retries the same schema once with thinking disabled.
+    """
+
+    initial = _completion(
+        base_url,
+        _schema_body(
+            model,
+            [{"role": "user", "content": "Return status ready and count 1."}],
+            schema,
+            thinking=True,
+        ),
+    )
+    initial_message = initial["message"]
+    initial_content = initial_message.get("content")
+    initial_reasoning = _reasoning(initial_message)
+    initial_meta = {
+        "finish_reason": initial["finish_reason"],
+        "content_chars": len(initial_content.strip())
+        if isinstance(initial_content, str)
+        else 0,
+        "reasoning_chars": len(initial_reasoning),
+        "usage": initial["usage"],
+    }
+
+    if isinstance(initial_content, str) and initial_content.strip():
+        parsed = json.loads(initial_content)
+        Draft202012Validator(schema).validate(parsed)
+        return {
+            "output": parsed,
+            "accepted_mode": "thinking_schema",
+            "initial": initial_meta,
+            "correction": None,
+        }
+
+    if not initial_reasoning:
+        raise RuntimeError(
+            "structured: empty content was not accompanied by separated reasoning"
+        )
+
+    correction = _completion(
+        base_url,
+        _schema_body(
+            model,
+            [{"role": "user", "content": "Return status ready and count 1."}],
+            schema,
+            thinking=False,
+        ),
+    )
+    correction_content = _content(correction["message"], "structured correction")
+    parsed = json.loads(correction_content)
+    Draft202012Validator(schema).validate(parsed)
+    return {
+        "output": parsed,
+        "accepted_mode": "direct_schema_correction",
+        "initial": initial_meta,
+        "correction": {
+            "finish_reason": correction["finish_reason"],
+            "content_chars": len(correction_content),
+            "reasoning_chars": len(_reasoning(correction["message"])),
+            "usage": correction["usage"],
+        },
     }
 
 
@@ -159,20 +268,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "required": ["status", "count"],
         "additionalProperties": False,
     }
-    structured_body = _body(
-        model,
-        [{"role": "user", "content": "Return status ready and count 1."}],
-        thinking=True,
-    )
-    structured_body["response_format"] = {
-        "type": "json_schema",
-        "json_schema": {"name": "probe_status", "strict": True, "schema": schema},
-    }
-    structured = _completion(base_url, structured_body)
-    parsed = json.loads(_content(structured["message"], "structured"))
-    Draft202012Validator(schema).validate(parsed)
-    if not _reasoning(structured["message"]):
-        raise RuntimeError("structured: thinking-on reasoning was empty")
+    structured = _structured_with_bounded_correction(base_url, model, schema)
 
     tools = [
         {
@@ -262,7 +358,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "usage": thinking["usage"],
             },
             "image": {"content": image_content, "usage": image["usage"]},
-            "reasoning_then_schema": parsed,
+            "reasoning_then_schema": structured,
             "independent_tool_roundtrips": round_results,
         },
     }

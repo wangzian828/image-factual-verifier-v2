@@ -1,7 +1,7 @@
 # Qwen3.5 training engineering application plan
 
 日期：2026-08-03
-状态：计划；等待逐项执行与实测更新
+状态：核心训练、checkpoint、reload 与 serving gate 已完成；文档、测试和正式服务复查中
 范围：把 `modern_genai_bilibili` 中可迁移的训练、数据、诊断、serving 与未来 RL 工程经验应用到 IFV Qwen3.5-9B。
 
 本计划延续：
@@ -705,7 +705,7 @@ two-step control. The final thread decision compares the same-load-window
 `1/4/8/16` runs; the older ten-step baseline remains useful for production
 throughput but is not sufficient by itself to attribute a small OpenMP delta.
 
-### 15.4 CPUAdam thread screening result
+### 18.1 CPUAdam thread screening result
 
 All four bounded profiles completed two optimizer steps, validation, checkpoint
 save, and clean process exit with a reported 18.62 GiB peak:
@@ -722,3 +722,149 @@ one-thread control on observed useful-row throughput. It therefore advances to
 the dataloader matrix as an explicit training-only override. The generic
 operations baseline remains `OMP_NUM_THREADS=1`, and the later ten-step
 production gate must still confirm that the short-run gain persists.
+
+### 18.2 Dataloader screening result
+
+The primary and follow-up matrices all used the same cached rows, four physical
+GPUs, global batch eight, activation checkpointing, FlashAttention, and the
+training-only eight-thread CPUAdam setting:
+
+| Workers/rank | Persistent | Prefetch | Unique samples/s | Eval loss | Decision |
+|---:|:---:|---:|---:|---:|---|
+| 0 | n/a | n/a | 0.285205 | 0.5913 | advance |
+| 2 | true | 2 | 0.258481 | 0.5913 | reject |
+| 4 | true | 2 | 0.268908 | 0.5907 | best nonzero control |
+| 8 | true | 2 | 0.242057 | 0.5912 | reject |
+| 4 | false | 2 | 0.243309 | 0.5910 | reject |
+| 4 | true | 4 | 0.228571 | 0.5906 | reject |
+
+All candidates completed train, validation, save, and clean exit at a reported
+18.62 GiB peak. Zero dataloader workers was about 6.1% faster than the best
+nonzero candidate. This is consistent with the cached Arrow rows still requiring
+lazy image decode and processor work while multiprocessing adds process startup,
+IPC, memory, and teardown overhead. The production candidate therefore uses
+`dataloader_num_workers=0` and omits persistence and prefetch arguments.
+
+### 18.3 Production ten-step and resume result
+
+The promoted profile combines:
+
+- DeepSpeed ZeRO-3 optimizer CPU offload, with parameters kept on GPU;
+- physical GPUs 4-7 and global batch eight;
+- `OMP_NUM_THREADS=8` as a training-only override;
+- `dataloader_num_workers=0`;
+- FlashAttention and ordinary language/vision activation checkpointing;
+- grouped cached rows and a 32768-token maximum length.
+
+The formal ten-step gate completed training, validation, full model save, and
+DeepSpeed optimizer-state save:
+
+| Metric | Promoted profile | Earlier safe baseline |
+|---|---:|---:|
+| observed unique samples/s | 0.372613 | 0.248911 |
+| steady unique samples/s | 0.444198 | 0.221239 |
+| last-five step-wall mean | 18.01 s | not recorded as a matched steady window |
+| reported peak GPU memory | 18.63 GiB | 18.63 GiB |
+| eval loss | 0.5223 | 0.5260 |
+| end-to-end train runtime | 270.9 s | 381.9 s |
+
+Observed useful-row throughput improved by about 49.7%, while the steady-window
+throughput approximately doubled. The checkpoint is about 123 GiB because each
+of four ranks stores an approximately 28.2 GiB optimizer shard in addition to
+the full BF16 model and small scheduler/RNG state.
+
+Resume from checkpoint 10 restored the optimizer, scheduler, RNG, and global step,
+advanced to global step 11, reran validation, saved checkpoint 11, and exited
+cleanly. Reading the four optimizer shards is an explicit operational cost: the
+resume initialization took several minutes before the additional training step
+began. The step-11 profile is a recovery gate rather than a throughput benchmark.
+
+## 19. Serving/checkpoint closeout (2026-08-03)
+
+### 19.1 Checkpoint audit and CPU reload
+
+The checkpoint-10 export gate passed with the training runtime initialized before
+the Python reload process. The earlier reload attempt accidentally used the
+system C++ runtime and failed on `CXXABI_1.3.15`; this is fixed in
+`870d79b` by making `register_full_checkpoint.sh` call
+`configure_training_runtime` before the audit and reload smoke.
+
+The passing audit confirms:
+
+- full-parameter training, with language, vision, and aligner all unfrozen;
+- four BF16 model shards;
+- four DeepSpeed optimizer shards, scheduler state, and per-rank RNG state;
+- language, vision, and aligner weights all changed relative to the base model;
+- `Qwen3_5ForConditionalGeneration`, `Qwen3VLProcessor`, and
+  `9,409,813,744` parameters on CPU reload.
+
+### 19.2 Checkpoint serving endpoint gate
+
+The temporary checkpoint-10 vLLM service passed the bounded endpoint probe on
+two independent tool roundtrips. The gate covered:
+
+- loopback health and model discovery;
+- 131,072-token context declaration;
+- thinking off and thinking on with separated reasoning;
+- image input;
+- strict JSON Schema output;
+- native tool call, `role=tool` continuation, and a second independent round.
+
+The probe initially exposed a real protocol edge: with greedy decoding,
+thinking plus JSON Schema could consume the whole output budget in `reasoning`,
+leaving `content=null` and `finish_reason=length`. That response is not accepted
+as structured evidence. The probe now follows the production boundary:
+
+1. use the Qwen3.5 non-greedy sampling profile and a 1,024-token reasoning wall;
+2. accept only validated visible JSON;
+3. if a response has separated reasoning but no visible content, retry the same
+   schema once with thinking disabled;
+4. fail closed if neither attempt returns valid JSON.
+
+The probe also uses an explicit no-proxy opener for loopback requests, so an
+external proxy cannot turn a healthy local endpoint into a false 503.
+
+Artifact:
+
+```text
+training/logs/serving/ifv-qwen3.5-9b-checkpoint10-smoke/checkpoint10-endpoint-gates.json
+```
+
+### 19.3 Final engineering decision
+
+Promote the four-GPU ZeRO-3 optimizer-CPU-offload profile as the current IFV
+Qwen3.5 training path:
+
+```text
+GPUs                    4-7
+backend                 DeepSpeed ZeRO-3
+optimizer offload       CPU
+parameter placement     GPU
+global batch            8
+max length              32768
+attention               FlashAttention
+activation checkpoint   enabled
+OMP override            IFV_OMP_NUM_THREADS=8
+dataloader workers      0
+```
+
+FSDP2, sequence-parallel, no-language-checkpointing, and nonzero dataloader
+worker profiles remain rejected or deferred by the measured gates in this
+document. Do not reopen them without a new memory or hardware premise.
+
+### 19.4 Operational handoff state
+
+The temporary checkpoint service was stopped through
+`manage_vllm_qwen35.sh stop`. Restarting the formal base-model service was
+attempted through the same lifecycle script, but the launcher correctly refused
+while another user's process occupied the selected runtime GPU set. No process
+was killed or otherwise modified. A later operator may rerun:
+
+```bash
+CUDA_VISIBLE_DEVICES=4,5 bash training/scripts/serve/manage_vllm_qwen35.sh start
+bash training/scripts/serve/manage_vllm_qwen35.sh status
+curl --noproxy '*' -fsS http://127.0.0.1:8901/health
+```
+
+Only retry after the launcher reports the selected GPUs idle. This is an
+environment-state blocker, not a model or checkpoint failure.
