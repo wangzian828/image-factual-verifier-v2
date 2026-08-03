@@ -9,8 +9,13 @@ from ifv_training.checkpoints import (
     build_checkpoint_manifest,
     build_serving_profile,
 )
+from ifv_training import manifests as manifests_module
 from ifv_training.io import write_json
-from ifv_training.manifests import environment_manifest
+from ifv_training.manifests import (
+    cached_dataset_manifest,
+    environment_manifest,
+    verify_cached_dataset,
+)
 
 
 def test_checkpoint_and_serving_manifests(tmp_path: Path) -> None:
@@ -103,3 +108,137 @@ def test_fsdp_optimizer_shards_are_recognized(tmp_path: Path) -> None:
     files = _optimizer_state_files(checkpoint)
 
     assert [path.name for path in files] == [".metadata", "__0_0.distcp"]
+
+
+def test_cached_dataset_manifest_records_profile_source_mtime_and_shape(
+    tmp_path: Path,
+    monkeypatch: object,
+) -> None:
+    cache = tmp_path / "cache-v2"
+    (cache / "train").mkdir(parents=True)
+    (cache / "val").mkdir()
+    (cache / "train" / "data.arrow").write_bytes(b"train")
+    (cache / "val" / "data.arrow").write_bytes(b"validation")
+    source = tmp_path / "train.jsonl"
+    source.write_text('{"row": 1}\n', encoding="utf-8")
+    (cache / "source-dataset-fingerprints.tsv").write_text(
+        "channel\tsplit\tpath\tbytes\tmtime_ns\tsha256\n"
+        f"planning\ttrain\t{source}\t{source.stat().st_size}\t"
+        f"{source.stat().st_mtime_ns}\t"
+        f"{manifests_module.sha256_file(source)}\n",
+        encoding="utf-8",
+    )
+    write_json(
+        cache / "cache-profile.json",
+        {
+            "schema_version": "ifv-cached-dataset-profile-v1",
+            "cache_id": cache.name,
+            "sft_profile": {"id": "profile.env"},
+        },
+    )
+    monkeypatch.setattr(  # type: ignore[attr-defined]
+        manifests_module,
+        "_dataset_shape",
+        lambda path: {
+            "rows": 3 if path.name == "train" else 2,
+            "columns": ["messages", "images"],
+        },
+    )
+
+    result = cached_dataset_manifest(cache)
+
+    assert result["schema_version"] == "ifv-cached-dataset-manifest-v2"
+    assert result["metadata"]["train_rows"] == 3
+    assert result["metadata"]["validation_rows"] == 2
+    fingerprint = result["metadata"]["source_dataset_fingerprints"][0]
+    assert fingerprint["mtime_ns"] == source.stat().st_mtime_ns
+    assert result["metadata"]["cache_profile"]["sft_profile"]["id"] == "profile.env"
+
+
+def test_cached_dataset_verifier_fails_closed_on_source_or_artifact_drift(
+    tmp_path: Path,
+    monkeypatch: object,
+) -> None:
+    cache = tmp_path / "cache-contract"
+    train = cache / "train"
+    validation = cache / "val"
+    train.mkdir(parents=True)
+    validation.mkdir()
+    (train / "data.arrow").write_bytes(b"train")
+    (validation / "data.arrow").write_bytes(b"validation")
+    source = tmp_path / "source.jsonl"
+    source.write_text('{"row": 1}\n', encoding="utf-8")
+    source_fingerprint = {
+        "channel": "planning",
+        "split": "train",
+        "path": str(source),
+        "bytes": source.stat().st_size,
+        "mtime_ns": source.stat().st_mtime_ns,
+        "sha256": manifests_module.sha256_file(source),
+    }
+    artifacts = []
+    for path in sorted(cache.rglob("*")):
+        if path.is_file():
+            artifacts.append(
+                {
+                    "path": str(path.relative_to(cache)),
+                    "bytes": path.stat().st_size,
+                    "sha256": manifests_module.sha256_file(path),
+                }
+            )
+    write_json(
+        cache / "dataset-manifest.json",
+        {
+            "schema_version": "ifv-cached-dataset-manifest-v2",
+            "kind": "ms-swift-cached-dataset",
+            "dataset_version": cache.name,
+            "metadata": {
+                "cache_layout": {"train": "train", "validation": "val"},
+                "train_rows": 3,
+                "validation_rows": 2,
+                "train_columns": ["messages"],
+                "validation_columns": ["messages"],
+                "source_dataset_fingerprints": [source_fingerprint],
+            },
+            "artifacts": artifacts,
+        },
+    )
+    monkeypatch.setattr(  # type: ignore[attr-defined]
+        manifests_module,
+        "_dataset_shape",
+        lambda path: {
+            "rows": 3 if path.name == "train" else 2,
+            "columns": ["messages"],
+        },
+    )
+
+    accepted = verify_cached_dataset(
+        cache_dir=cache,
+        train_dir=train,
+        validation_dir=validation,
+    )
+    assert accepted["passed"] is True
+
+    source.write_text('{"row": 2, "changed": true}\n', encoding="utf-8")
+    rejected_source = verify_cached_dataset(
+        cache_dir=cache,
+        train_dir=train,
+        validation_dir=validation,
+    )
+    assert rejected_source["passed"] is False
+    assert any(
+        error.startswith("source_dataset_")
+        for error in rejected_source["errors"]
+    )
+
+    (train / "data.arrow").write_bytes(b"drift")
+    rejected_cache = verify_cached_dataset(
+        cache_dir=cache,
+        train_dir=train,
+        validation_dir=validation,
+    )
+    assert rejected_cache["passed"] is False
+    assert any(
+        error.startswith("cache_artifact_")
+        for error in rejected_cache["errors"]
+    )

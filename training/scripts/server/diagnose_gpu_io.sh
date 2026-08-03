@@ -33,6 +33,8 @@ taskset -pc $$ >"$OUTPUT_DIR/cpu-affinity.txt" 2>&1 || true
 
 python "$SCRIPT_DIR/measure_gpu_io.py" \
   --gpus "$GPU_LIST" \
-  >"$OUTPUT_DIR/gpu-io.json"
+  --output "$OUTPUT_DIR/gpu-io.json" \
+  --tsv-output "$OUTPUT_DIR/gpu-io.tsv" \
+  --quiet
 
 printf 'GPU I/O diagnostic written to %s\n' "$OUTPUT_DIR"

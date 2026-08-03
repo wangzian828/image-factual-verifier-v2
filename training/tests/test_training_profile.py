@@ -79,3 +79,89 @@ def test_training_profile_detects_error_signals_and_writes_json(tmp_path: Path) 
     assert result["passed_basic_log_gate"] is False
     assert "cuda_oom" in result["detected_errors"]
     assert persisted["speed_seconds_per_step"]["last"] == 66.17
+
+
+def test_training_profile_proves_cache_validation_save_resume_and_resources(
+    tmp_path: Path,
+) -> None:
+    resume = tmp_path / "checkpoint-10"
+    resume.mkdir()
+    (resume / "optimizer.pt").write_bytes(b"optimizer")
+    (resume / "scheduler.pt").write_bytes(b"scheduler")
+    (resume / "rng_state_0.pth").write_bytes(b"rng")
+    (resume / "trainer_state.json").write_text(
+        json.dumps({"global_step": 10}),
+        encoding="utf-8",
+    )
+    saved = tmp_path / "checkpoint-11"
+    saved.mkdir()
+    (saved / "optimizer.pt").write_bytes(b"optimizer")
+    (saved / "scheduler.pt").write_bytes(b"scheduler")
+    (saved / "rng_state_0.pth").write_bytes(b"rng")
+    (saved / "trainer_state.json").write_text(
+        json.dumps({"global_step": 11}),
+        encoding="utf-8",
+    )
+    train_log = tmp_path / "train.log"
+    train_log.write_text(
+        "\n".join(
+            [
+                "Executing: swift sft --cached_dataset /cache/train "
+                "--cached_val_dataset /cache/val --max_steps 11 "
+                "--per_device_train_batch_size 1 "
+                "--gradient_accumulation_steps 2 "
+                "--eval_strategy steps --eval_steps 11 "
+                "--save_strategy steps --save_steps 11 "
+                f"--resume_from_checkpoint {resume.as_posix()}",
+                "[INFO:swift] rank: 0, local_rank: 0, world_size: 4",
+                "{'loss': '1.20', 'global_step/max_steps': '11/11', "
+                "'memory(GiB)': '12.7', 'train_speed(s/it)': '37.5'}",
+                "{'eval_loss': '0.52', 'eval_runtime': '20.0', "
+                "'global_step/max_steps': '11/11'}",
+                f"[INFO:swift] Saving model checkpoint to {saved.as_posix()}",
+                "{'train_runtime': '93.0', 'global_step/max_steps': '11/11'}",
+                f"[INFO:swift] last_model_checkpoint: {saved.as_posix()}",
+                "[INFO:swift] End time of running main: 2026-08-03 12:00:00",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    resource_summary = tmp_path / "resource-summary.json"
+    resource_summary.write_text(
+        json.dumps(
+            {
+                "schema_version": "ifv-training-resource-summary-v1",
+                "exit_code": 0,
+                "process_tree_peak_rss_mib": 12345.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    cache_verification = tmp_path / "cache-verification.json"
+    cache_verification.write_text(
+        json.dumps(
+            {
+                "schema_version": "ifv-cached-dataset-gate-v1",
+                "passed": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = summarize_training_log(
+        train_log,
+        resource_summary=resource_summary,
+        cache_verification=cache_verification,
+        train_exit_code=0,
+    )
+
+    assert result["passed_production_gate"] is True
+    assert result["steps"]["complete"] is True
+    assert result["validation"]["observed"] is True
+    assert result["checkpoint_save"]["states"][0]["global_step"] == 11
+    assert result["checkpoint_save"]["states"][0]["optimizer_state_available"] is True
+    assert result["resume"]["source"]["global_step"] == 10
+    assert result["resume"]["advanced"] is True
+    assert result["resources"]["summary"]["process_tree_peak_rss_mib"] == 12345.0
+    assert result["cached_dataset_gate"]["passed"] is True

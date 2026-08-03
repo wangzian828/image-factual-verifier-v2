@@ -11,7 +11,11 @@ from .checkpoints import (
     build_serving_profile,
 )
 from .io import load_json, load_jsonl, write_json, write_jsonl
-from .manifests import cached_dataset_manifest, write_environment_manifest
+from .manifests import (
+    cached_dataset_manifest,
+    write_cached_dataset_verification,
+    write_environment_manifest,
+)
 from .perception import (
     convert_accepted_perception_dataset,
     convert_perception_runs,
@@ -83,6 +87,22 @@ def _parser() -> argparse.ArgumentParser:
     cached_manifest.add_argument("--cache-dir", type=Path, required=True)
     cached_manifest.add_argument("--output", type=Path, required=True)
 
+    cached_verify = subparsers.add_parser("verify-cached-dataset")
+    cached_verify.add_argument(
+        "--train-dir",
+        action="append",
+        type=Path,
+        required=True,
+    )
+    cached_verify.add_argument(
+        "--validation-dir",
+        action="append",
+        type=Path,
+        required=True,
+    )
+    cached_verify.add_argument("--manifest", action="append", type=Path)
+    cached_verify.add_argument("--output", type=Path, required=True)
+
     serving = subparsers.add_parser("serving-profile")
     serving.add_argument("--output", type=Path, required=True)
     serving.add_argument("--profile-id", required=True)
@@ -147,6 +167,9 @@ def _parser() -> argparse.ArgumentParser:
     training_profile.add_argument("--steady-window", type=int, default=5)
     training_profile.add_argument("--experiment-id", default="")
     training_profile.add_argument("--profile-id", default="")
+    training_profile.add_argument("--resource-summary", type=Path)
+    training_profile.add_argument("--cache-verification", type=Path)
+    training_profile.add_argument("--train-exit-code", type=int)
     return parser
 
 
@@ -195,6 +218,16 @@ def main() -> None:
     elif args.command == "cached-dataset-manifest":
         result = cached_dataset_manifest(args.cache_dir)
         write_json(args.output, result)
+    elif args.command == "verify-cached-dataset":
+        result = write_cached_dataset_verification(
+            train_dirs=args.train_dir,
+            validation_dirs=args.validation_dir,
+            manifest_paths=args.manifest,
+            output=args.output,
+        )
+        if not result["passed"]:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            raise SystemExit(1)
     elif args.command == "serving-profile":
         result = build_serving_profile(
             output_path=args.output,
@@ -274,6 +307,9 @@ def main() -> None:
             steady_window=args.steady_window,
             experiment_id=args.experiment_id,
             profile_id=args.profile_id,
+            resource_summary=args.resource_summary,
+            cache_verification=args.cache_verification,
+            train_exit_code=args.train_exit_code,
         )
     else:
         raise AssertionError(args.command)

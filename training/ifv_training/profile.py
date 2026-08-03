@@ -124,12 +124,80 @@ def _int_value(value: str | None, default: int | None = None) -> int | None:
         return default
 
 
+def _checkpoint_step(path: str | None) -> int | None:
+    if not path:
+        return None
+    match = re.search(r"(?:^|[/\\])checkpoint-(\d+)(?:[/\\]?$)", path)
+    return int(match.group(1)) if match else None
+
+
+def _checkpoint_state(path_value: str | None) -> dict[str, Any]:
+    if not path_value:
+        return {
+            "path": "",
+            "exists": False,
+            "global_step": None,
+            "optimizer_state_available": False,
+            "scheduler_state_available": False,
+            "rng_state_available": False,
+            "file_count": 0,
+            "bytes": 0,
+        }
+    path = Path(path_value)
+    exists = path.is_dir()
+    files = list(path.rglob("*")) if exists else []
+    files = [item for item in files if item.is_file()]
+    relative_names = [str(item.relative_to(path)) for item in files]
+    global_step = _checkpoint_step(path_value)
+    trainer_state = path / "trainer_state.json"
+    if trainer_state.is_file():
+        try:
+            payload = json.loads(trainer_state.read_text(encoding="utf-8"))
+            if isinstance(payload, dict) and isinstance(
+                payload.get("global_step"), int
+            ):
+                global_step = payload["global_step"]
+        except (OSError, json.JSONDecodeError):
+            pass
+    return {
+        "path": str(path),
+        "exists": exists,
+        "global_step": global_step,
+        "optimizer_state_available": any(
+            "optim" in name.lower()
+            or name.startswith("optimizer_")
+            for name in relative_names
+        ),
+        "scheduler_state_available": any(
+            Path(name).name == "scheduler.pt" for name in relative_names
+        ),
+        "rng_state_available": any(
+            Path(name).name.startswith("rng_state")
+            for name in relative_names
+        ),
+        "file_count": len(files),
+        "bytes": sum(item.stat().st_size for item in files),
+    }
+
+
+def _load_sidecar(path: Path | None) -> dict[str, Any] | None:
+    if path is None or not path.is_file():
+        return None
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError(f"sidecar must contain a JSON object: {path}")
+    return value
+
+
 def summarize_training_log(
     train_log: Path,
     *,
     steady_window: int = 5,
     experiment_id: str = "",
     profile_id: str = "",
+    resource_summary: Path | None = None,
+    cache_verification: Path | None = None,
+    train_exit_code: int | None = None,
 ) -> dict[str, Any]:
     metrics: list[dict[str, Any]] = []
     errors: dict[str, list[int]] = {name: [] for name in ERROR_PATTERNS}
@@ -137,6 +205,10 @@ def summarize_training_log(
     launch_command = ""
     world_size: int | None = None
     train_dataset_size: int | None = None
+    checkpoint_save_paths: list[str] = []
+    last_model_checkpoint = ""
+    best_model_checkpoint = ""
+    end_time_observed = False
 
     with train_log.open(encoding="utf-8", errors="replace") as handle:
         for line_number, line in enumerate(handle, start=1):
@@ -153,6 +225,26 @@ def summarize_training_log(
                 match = re.search(r"\bsize=(\d+)", line)
                 if match:
                     train_dataset_size = int(match.group(1))
+            checkpoint_match = re.search(
+                r"Saving model checkpoint to\s+(\S+)",
+                line,
+            )
+            if checkpoint_match:
+                checkpoint_save_paths.append(checkpoint_match.group(1))
+            last_checkpoint_match = re.search(
+                r"last_model_checkpoint:\s*(\S+)",
+                line,
+            )
+            if last_checkpoint_match:
+                last_model_checkpoint = last_checkpoint_match.group(1)
+            best_checkpoint_match = re.search(
+                r"best_model_checkpoint:\s*(\S+)",
+                line,
+            )
+            if best_checkpoint_match:
+                best_model_checkpoint = best_checkpoint_match.group(1)
+            if "End time of running main:" in line:
+                end_time_observed = True
             for name, pattern in ERROR_PATTERNS.items():
                 if pattern.search(line):
                     errors[name].append(line_number)
@@ -260,7 +352,113 @@ def summarize_training_log(
         else None
     )
 
+    max_steps = _int_value(_command_value(launch_command, "max_steps"))
+    eval_strategy = _command_value(launch_command, "eval_strategy") or ""
+    save_strategy = _command_value(launch_command, "save_strategy") or ""
+    validation_required = bool(eval_strategy and eval_strategy.lower() != "no")
+    checkpoint_required = bool(save_strategy and save_strategy.lower() != "no")
+    save_only_model = (
+        (_command_value(launch_command, "save_only_model") or "false").lower()
+        == "true"
+    )
+    resume_checkpoint = _command_value(
+        launch_command,
+        "resume_from_checkpoint",
+    )
+    resume_state = _checkpoint_state(resume_checkpoint)
+    unique_checkpoint_paths = list(dict.fromkeys(checkpoint_save_paths))
+    if last_model_checkpoint and last_model_checkpoint not in unique_checkpoint_paths:
+        unique_checkpoint_paths.append(last_model_checkpoint)
+    saved_checkpoint_states = [
+        _checkpoint_state(path) for path in unique_checkpoint_paths
+    ]
+    last_step = max(steps) if steps else None
+    training_steps_complete = (
+        last_step is not None
+        and max_steps is not None
+        and last_step >= max_steps
+    )
+    resume_requested = bool(resume_checkpoint)
+    resume_advanced = (
+        resume_requested
+        and isinstance(resume_state.get("global_step"), int)
+        and last_step is not None
+        and last_step > int(resume_state["global_step"])
+    )
+    resource_payload = _load_sidecar(resource_summary)
+    cache_payload = _load_sidecar(cache_verification)
+    clean_exit = (
+        train_exit_code == 0
+        if train_exit_code is not None
+        else end_time_observed
+    )
+    validation_passed = bool(eval_metrics)
+    checkpoint_training_state_required = checkpoint_required and not save_only_model
+    checkpoint_passed = any(
+        item.get("exists") is True
+        and (
+            not checkpoint_training_state_required
+            or (
+                item.get("optimizer_state_available") is True
+                and item.get("scheduler_state_available") is True
+                and item.get("rng_state_available") is True
+            )
+        )
+        for item in saved_checkpoint_states
+    )
+    resource_exit_code = (
+        resource_payload.get("exit_code")
+        if isinstance(resource_payload, dict)
+        else None
+    )
+    resource_exit_matches = (
+        train_exit_code is None
+        or resource_exit_code is None
+        or resource_exit_code == train_exit_code
+    )
+    resource_required = resource_summary is not None
+    resource_passed = (
+        isinstance(resource_payload, dict) and resource_exit_matches
+        if resource_required
+        else True
+    )
     detected_errors = {name: lines for name, lines in errors.items() if lines}
+    cache_required = "--cached_dataset" in launch_command
+    cache_passed = (
+        cache_payload.get("passed") is True
+        if isinstance(cache_payload, dict)
+        else not cache_required
+    )
+    passed_production_gate = all(
+        (
+            not detected_errors,
+            clean_exit,
+            training_steps_complete,
+            validation_passed or not validation_required,
+            checkpoint_passed or not checkpoint_required,
+            resume_advanced or not resume_requested,
+            resource_passed,
+            cache_passed,
+        )
+    )
+    train_runtime = (
+        _metric_value(summary_metrics[-1], "train_runtime")
+        if summary_metrics
+        else None
+    )
+    eval_runtime = (
+        _metric_value(eval_metrics[-1], "eval_runtime") if eval_metrics else None
+    )
+    post_train_eval_finalize_seconds = None
+    if train_runtime is not None and train_elapsed is not None:
+        post_train_eval_finalize_seconds = round(
+            max(
+                0.0,
+                train_runtime - train_elapsed - (eval_runtime or 0.0),
+            ),
+            6,
+        )
+
     return {
         "schema_version": "ifv-training-profile-v1",
         "experiment_id": experiment_id,
@@ -273,9 +471,12 @@ def summarize_training_log(
         "summary_metric_rows": len(summary_metrics),
         "detected_errors": detected_errors,
         "passed_basic_log_gate": not detected_errors,
+        "passed_production_gate": passed_production_gate,
         "steps": {
             "observed": steps,
-            "last": max(steps) if steps else None,
+            "last": last_step,
+            "configured_max_steps": max_steps,
+            "complete": training_steps_complete,
         },
         "speed_seconds_per_step": {
             "count": len(speed_values),
@@ -324,14 +525,53 @@ def summarize_training_log(
             "last": eval_loss_values[-1] if eval_loss_values else None,
         },
         "runtime_seconds": {
-            "train_runtime": (
-                _metric_value(summary_metrics[-1], "train_runtime")
-                if summary_metrics
-                else None
+            "train_runtime": train_runtime,
+            "eval_runtime_last": eval_runtime,
+            "post_train_eval_finalize": post_train_eval_finalize_seconds,
+        },
+        "validation": {
+            "required": validation_required,
+            "observed": validation_passed,
+            "metric_rows": len(eval_metrics),
+            "loss": eval_loss_values[-1] if eval_loss_values else None,
+        },
+        "checkpoint_save": {
+            "required": checkpoint_required,
+            "save_only_model": save_only_model,
+            "training_state_required": checkpoint_training_state_required,
+            "passed": checkpoint_passed,
+            "observed": bool(unique_checkpoint_paths),
+            "paths": unique_checkpoint_paths,
+            "states": saved_checkpoint_states,
+            "last_model_checkpoint": last_model_checkpoint,
+            "best_model_checkpoint": best_model_checkpoint,
+        },
+        "resume": {
+            "requested": resume_requested,
+            "source": resume_state,
+            "advanced": resume_advanced,
+            "first_observed_step": steps[0] if steps else None,
+            "last_observed_step": last_step,
+        },
+        "process": {
+            "train_exit_code": train_exit_code,
+            "clean_exit": clean_exit,
+            "end_time_observed": end_time_observed,
+            "resource_exit_matches": resource_exit_matches,
+        },
+        "resources": {
+            "required": resource_required,
+            "passed": resource_passed,
+            "summary_path": str(resource_summary) if resource_summary else "",
+            "summary": resource_payload,
+        },
+        "cached_dataset_gate": {
+            "required": cache_required,
+            "verification_path": (
+                str(cache_verification) if cache_verification else ""
             ),
-            "eval_runtime_last": (
-                _metric_value(eval_metrics[-1], "eval_runtime") if eval_metrics else None
-            ),
+            "passed": cache_passed,
+            "verification": cache_payload,
         },
     }
 
@@ -343,12 +583,18 @@ def write_training_profile(
     steady_window: int = 5,
     experiment_id: str = "",
     profile_id: str = "",
+    resource_summary: Path | None = None,
+    cache_verification: Path | None = None,
+    train_exit_code: int | None = None,
 ) -> dict[str, Any]:
     result = summarize_training_log(
         train_log,
         steady_window=steady_window,
         experiment_id=experiment_id,
         profile_id=profile_id,
+        resource_summary=resource_summary,
+        cache_verification=cache_verification,
+        train_exit_code=train_exit_code,
     )
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(

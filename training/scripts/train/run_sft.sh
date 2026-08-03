@@ -36,7 +36,13 @@ if [[ -n "${IFV_FSDP:-}" ]]; then
 fi
 
 dataset_args=()
-if [[ -n "${IFV_CACHED_DATASET:-}" ]]; then
+cached_train_datasets=()
+cached_val_datasets=()
+if [[ -n "${IFV_CACHED_DATASET:-}" || -n "${IFV_CACHED_VAL_DATASET:-}" ]]; then
+  if [[ -z "${IFV_CACHED_DATASET:-}" || -z "${IFV_CACHED_VAL_DATASET:-}" ]]; then
+    echo "cached training requires both IFV_CACHED_DATASET and IFV_CACHED_VAL_DATASET" >&2
+    exit 2
+  fi
   read -r -a cached_train_datasets <<<"$IFV_CACHED_DATASET"
   for cached_dataset in "${cached_train_datasets[@]}"; do
     if [[ ! -d "$cached_dataset" ]]; then
@@ -44,13 +50,6 @@ if [[ -n "${IFV_CACHED_DATASET:-}" ]]; then
       exit 2
     fi
   done
-  dataset_args+=(--cached_dataset "${cached_train_datasets[@]}")
-else
-  require_dataset "$TRAIN_DATASET"
-  dataset_args+=(--dataset "$TRAIN_DATASET")
-fi
-
-if [[ -n "${IFV_CACHED_VAL_DATASET:-}" ]]; then
   read -r -a cached_val_datasets <<<"$IFV_CACHED_VAL_DATASET"
   for cached_dataset in "${cached_val_datasets[@]}"; do
     if [[ ! -d "$cached_dataset" ]]; then
@@ -58,9 +57,16 @@ if [[ -n "${IFV_CACHED_VAL_DATASET:-}" ]]; then
       exit 2
     fi
   done
+  if [[ "${#cached_train_datasets[@]}" -ne "${#cached_val_datasets[@]}" ]]; then
+    echo "cached train/validation dataset counts must match" >&2
+    exit 2
+  fi
+  dataset_args+=(--cached_dataset "${cached_train_datasets[@]}")
   dataset_args+=(--cached_val_dataset "${cached_val_datasets[@]}")
 else
+  require_dataset "$TRAIN_DATASET"
   require_dataset "$VAL_DATASET"
+  dataset_args+=(--dataset "$TRAIN_DATASET")
   dataset_args+=(--val_dataset "$VAL_DATASET")
 fi
 
@@ -70,6 +76,14 @@ LOG_DIR="$EXPERIMENT_DIR"
 new_output_dir "$OUTPUT_DIR"
 new_output_dir "$EXPERIMENT_DIR"
 record_environment "$EXPERIMENT_DIR"
+CACHE_VERIFICATION=""
+if [[ "${#cached_train_datasets[@]}" -gt 0 ]]; then
+  CACHE_VERIFICATION="$EXPERIMENT_DIR/cached-dataset-gate.json"
+  verify_cached_dataset_gate \
+    "$CACHE_VERIFICATION" \
+    cached_train_datasets \
+    cached_val_datasets
+fi
 
 args=(
   swift sft
@@ -162,16 +176,31 @@ fi
 
 export IMAGE_MAX_TOKEN_NUM="$IFV_IMAGE_MAX_TOKEN_NUM"
 print_command "${args[@]}"
+RESOURCE_SUMMARY="$LOG_DIR/resource-summary.json"
+RESOURCE_SAMPLES="$LOG_DIR/resource-samples.jsonl"
 set +e
-"${args[@]}" 2>&1 | tee "$LOG_DIR/train.log"
+python "$SCRIPT_DIR/run_with_resource_monitor.py" \
+  --summary-output "$RESOURCE_SUMMARY" \
+  --samples-output "$RESOURCE_SAMPLES" \
+  --gpu-ids "$CUDA_VISIBLE_DEVICES" \
+  --sample-interval "${IFV_RESOURCE_SAMPLE_INTERVAL:-2}" \
+  -- "${args[@]}" 2>&1 | tee "$LOG_DIR/train.log"
 train_status="${PIPESTATUS[0]}"
 set -e
 profile_status=0
-python -m ifv_training training-profile \
-  --train-log "$LOG_DIR/train.log" \
-  --output "$LOG_DIR/profile.json" \
-  --experiment-id "$EXPERIMENT_ID" \
-  --profile-id "$(basename "$SFT_PROFILE")" || profile_status="$?"
+profile_args=(
+  python -m ifv_training training-profile
+  --train-log "$LOG_DIR/train.log"
+  --output "$LOG_DIR/profile.json"
+  --experiment-id "$EXPERIMENT_ID"
+  --profile-id "$(basename "$SFT_PROFILE")"
+  --resource-summary "$RESOURCE_SUMMARY"
+  --train-exit-code "$train_status"
+)
+if [[ -n "$CACHE_VERIFICATION" ]]; then
+  profile_args+=(--cache-verification "$CACHE_VERIFICATION")
+fi
+"${profile_args[@]}" || profile_status="$?"
 if [[ "$train_status" -eq 0 && "$profile_status" -ne 0 ]]; then
   exit "$profile_status"
 fi

@@ -273,6 +273,63 @@ require_dataset() {
   fi
 }
 
+verify_cached_dataset_gate() {
+  if [[ "$#" -ne 3 ]]; then
+    echo "usage: verify_cached_dataset_gate OUTPUT TRAIN_ARRAY_NAME VAL_ARRAY_NAME" >&2
+    return 2
+  fi
+  local output="$1"
+  local train_array_name="$2"
+  local validation_array_name="$3"
+  local -n cached_train_ref="$train_array_name"
+  local -n cached_validation_ref="$validation_array_name"
+  if [[ "${#cached_train_ref[@]}" -ne "${#cached_validation_ref[@]}" ]]; then
+    echo "cached train/validation dataset counts must match" >&2
+    return 2
+  fi
+  if [[ "${#cached_train_ref[@]}" -lt 1 ]]; then
+    echo "cached dataset gate requires at least one train/validation pair" >&2
+    return 2
+  fi
+
+  local manifests=()
+  if [[ -n "${IFV_CACHED_DATASET_MANIFEST:-}" ]]; then
+    read -r -a manifests <<<"$IFV_CACHED_DATASET_MANIFEST"
+    if [[ "${#manifests[@]}" -ne "${#cached_train_ref[@]}" ]]; then
+      echo "IFV_CACHED_DATASET_MANIFEST count must match cached dataset pairs" >&2
+      return 2
+    fi
+  else
+    local index train_parent validation_parent
+    for index in "${!cached_train_ref[@]}"; do
+      train_parent="$(cd "${cached_train_ref[$index]}/.." && pwd)"
+      validation_parent="$(cd "${cached_validation_ref[$index]}/.." && pwd)"
+      if [[ "$train_parent" != "$validation_parent" ]]; then
+        echo "cached train/validation directories must share one cache root" >&2
+        return 2
+      fi
+      manifests+=("$train_parent/dataset-manifest.json")
+    done
+  fi
+
+  local args=(python -m ifv_training verify-cached-dataset --output "$output")
+  local path
+  for path in "${cached_train_ref[@]}"; do
+    args+=(--train-dir "$path")
+  done
+  for path in "${cached_validation_ref[@]}"; do
+    args+=(--validation-dir "$path")
+  done
+  for path in "${manifests[@]}"; do
+    if [[ ! -s "$path" ]]; then
+      echo "cached dataset manifest does not exist or is empty: $path" >&2
+      return 2
+    fi
+    args+=(--manifest "$path")
+  done
+  "${args[@]}"
+}
+
 new_output_dir() {
   local path="$1"
   if [[ -e "$path" ]]; then

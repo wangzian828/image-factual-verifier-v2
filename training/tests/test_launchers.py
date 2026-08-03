@@ -155,10 +155,13 @@ def test_launchers_enforce_physical_gpu_allowlist() -> None:
     assert "outside the allowed physical GPU set" in common
     assert "$1 + 0 >= 4 && $1 + 0 <= 7" in selector
     assert "measure_gpu_io.py" in diagnose
+    assert "gpu-io.tsv" in diagnose
     assert 'GPU_LIST="${2:-visible}"' in diagnose
     assert "nvidia-smi topo -m" in diagnose
     assert "cpu-affinity.txt" in diagnose
     assert "ifv-gpu-io-diagnostic-v1" in measure
+    assert "physical_gpu" in measure
+    assert "--tsv-output" in measure
     assert "pin_memory=True" in measure
 
 
@@ -274,8 +277,15 @@ def test_sft_launchers_support_cached_datasets_and_tunable_dataloaders() -> None
     for source in (single, curriculum):
         assert "configure_training_runtime" in source
         assert "IFV_CACHED_DATASET" in source
-        assert "--cached_dataset" in source
         assert "IFV_CACHED_VAL_DATASET" in source
+        assert "verify_cached_dataset_gate" in source
+        assert "cached-dataset-gate.json" in source
+        assert "run_with_resource_monitor.py" in source
+        assert "resource-summary.json" in source
+        assert "resource-samples.jsonl" in source
+        assert "--train-exit-code" in source
+        assert "--resource-summary" in source
+        assert "--cached_dataset" in source
         assert "--cached_val_dataset" in source
         assert 'IFV_DATASET_NUM_PROC:-2' in source
         assert 'IFV_DATALOADER_NUM_WORKERS:-2' in source
@@ -323,10 +333,26 @@ def test_curriculum_cache_exporter_uses_ms_swift_cached_dataset_contract() -> No
     assert "--stopping_strategy all_exhausted" in source
     assert "cache.env" in source
     assert "source-dataset-fingerprints.tsv" in source
+    assert "mtime_ns" in source
+    assert "cache-profile.json" in source
     assert "sha256sum" in source
     assert "IFV_CACHED_DATASET" in source
     assert "IFV_CACHED_VAL_DATASET" in source
+    assert "IFV_CACHED_DATASET_MANIFEST" in source
+    assert "IFV_CACHED_DATASET_VERSION" in source
     assert "cached-dataset-manifest" in source
+
+
+def test_existing_cached_dataset_registrar_is_fail_closed_and_audited() -> None:
+    source = _source("scripts/train/register_cached_dataset.sh")
+
+    assert "refusing to replace existing cached dataset manifest" in source
+    assert "source-dataset-fingerprints.tsv" in source
+    assert "mtime_ns" in source
+    assert "cache-profile.json" in source
+    assert "cached-dataset-manifest" in source
+    assert "verify-cached-dataset" in source
+    assert "cache-registration" in source
 
 
 def test_fsdp2_exporter_merges_audits_and_reload_smokes() -> None:
@@ -603,6 +629,33 @@ def test_qwen35_zero3_workers0_production_profiles_are_bounded() -> None:
     assert "IFV_MAX_STEPS=11" in resume
     assert "IFV_SAVE_STEPS=11" in resume
     assert "IFV_EVAL_STEPS=11" in resume
+
+
+def test_qwen35_two_gpu_instrumentation_and_resume_profiles_are_bounded() -> None:
+    one_step = _source(
+        "configs/sft/"
+        "qwen3.5-full-1step-2gpu-zero3-offload-cached-workers0-omp8.env"
+    )
+    resume = _source(
+        "configs/sft/"
+        "qwen3.5-full-2step-resume-2gpu-zero3-offload-cached-workers0-omp8.env"
+    )
+
+    for source in (one_step, resume):
+        assert "IFV_DEEPSPEED=training/configs/deepspeed/zero3-optimizer-offload.json" in source
+        assert "IFV_FSDP" not in source
+        assert "IFV_GRADIENT_ACCUMULATION_STEPS=4" in source
+        assert "IFV_GRADIENT_CHECKPOINTING=true" in source
+        assert "IFV_DATALOADER_NUM_WORKERS=0" in source
+        assert "IFV_OMP_NUM_THREADS=8" in source
+        assert "IFV_MAX_LENGTH=32768" in source
+
+    assert "IFV_MAX_STEPS=1" in one_step
+    assert "IFV_SAVE_STEPS=1" in one_step
+    assert "IFV_EVAL_STEPS=1" in one_step
+    assert "IFV_MAX_STEPS=2" in resume
+    assert "IFV_SAVE_STEPS=2" in resume
+    assert "IFV_EVAL_STEPS=2" in resume
 
 
 def test_qwen35_zero3_speed_probe_is_full_parameter_and_32k() -> None:

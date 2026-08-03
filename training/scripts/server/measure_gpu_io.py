@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from pathlib import Path
 from typing import Any
 
 import torch
@@ -39,6 +40,20 @@ def _parse_gpus(value: str) -> list[int]:
         if item:
             result.append(int(item))
     return result
+
+
+def _physical_gpu_id(logical_gpu: int) -> int | None:
+    visible = [
+        item.strip()
+        for item in os.environ.get("CUDA_VISIBLE_DEVICES", "").split(",")
+        if item.strip()
+    ]
+    if logical_gpu >= len(visible):
+        return None
+    try:
+        return int(visible[logical_gpu])
+    except ValueError:
+        return None
 
 
 def measure_gpu(gpu: int, *, size_mib: int, warmup: int, iters: int) -> dict[str, Any]:
@@ -84,6 +99,7 @@ def measure_gpu(gpu: int, *, size_mib: int, warmup: int, iters: int) -> dict[str
 
     return {
         "logical_gpu": gpu,
+        "physical_gpu": _physical_gpu_id(gpu),
         "name": torch.cuda.get_device_name(gpu),
         "size_mib": size_mib,
         "h2d_payload_gbps": round(h2d_gbps, 3),
@@ -94,12 +110,33 @@ def measure_gpu(gpu: int, *, size_mib: int, warmup: int, iters: int) -> dict[str
     }
 
 
+def _render_tsv(result: dict[str, Any]) -> str:
+    columns = [
+        "logical_gpu",
+        "physical_gpu",
+        "name",
+        "size_mib",
+        "h2d_payload_gbps",
+        "d2h_payload_gbps",
+        "local_copy_payload_gbps",
+        "local_copy_hbm_read_write_gbps",
+        "stream_add_hbm_gbps",
+    ]
+    lines = ["\t".join(columns)]
+    for row in result["measurements"]:
+        lines.append("\t".join(str(row.get(column, "")) for column in columns))
+    return "\n".join(lines) + "\n"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--gpus", default="visible", help="'visible' or comma-separated logical GPU ids")
     parser.add_argument("--size-mib", type=int, default=256)
     parser.add_argument("--warmup", type=int, default=5)
     parser.add_argument("--iters", type=int, default=30)
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--tsv-output", type=Path)
+    parser.add_argument("--quiet", action="store_true")
     args = parser.parse_args()
 
     if not torch.cuda.is_available():
@@ -114,7 +151,15 @@ def main() -> None:
             for gpu in _parse_gpus(args.gpus)
         ],
     }
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    rendered = json.dumps(result, ensure_ascii=False, indent=2) + "\n"
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(rendered, encoding="utf-8")
+    if args.tsv_output:
+        args.tsv_output.parent.mkdir(parents=True, exist_ok=True)
+        args.tsv_output.write_text(_render_tsv(result), encoding="utf-8")
+    if not args.quiet:
+        print(rendered, end="")
 
 
 if __name__ == "__main__":

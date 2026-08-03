@@ -85,22 +85,71 @@ new_output_dir "$CACHE_DIR"
 } >"$CACHE_DIR/curriculum-selection.tsv"
 
 {
-  printf 'channel\tsplit\tpath\tbytes\tsha256\n'
+  printf 'channel\tsplit\tpath\tbytes\tmtime_ns\tsha256\n'
   for index in "${!active_channels[@]}"; do
     train_dataset="${train_datasets[$index]}"
     validation_dataset="${validation_datasets[$index]}"
-    printf '%s\ttrain\t%s\t%s\t%s\n' \
+    printf '%s\ttrain\t%s\t%s\t%s\t%s\n' \
       "${active_channels[$index]}" \
       "$train_dataset" \
       "$(wc -c <"$train_dataset" | tr -d '[:space:]')" \
+      "$(python -c 'import os, sys; print(os.stat(sys.argv[1]).st_mtime_ns)' "$train_dataset")" \
       "$(sha256sum "$train_dataset" | awk '{print $1}')"
-    printf '%s\tvalidation\t%s\t%s\t%s\n' \
+    printf '%s\tvalidation\t%s\t%s\t%s\t%s\n' \
       "${active_channels[$index]}" \
       "$validation_dataset" \
       "$(wc -c <"$validation_dataset" | tr -d '[:space:]')" \
+      "$(python -c 'import os, sys; print(os.stat(sys.argv[1]).st_mtime_ns)' "$validation_dataset")" \
       "$(sha256sum "$validation_dataset" | awk '{print $1}')"
   done
 } >"$CACHE_DIR/source-dataset-fingerprints.tsv"
+
+python - "$MODEL_PROFILE" "$SFT_PROFILE" "$CACHE_ID" "$CACHE_DIR/cache-profile.json" <<'PY'
+import hashlib
+import json
+import os
+import sys
+from pathlib import Path
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+model_profile = Path(sys.argv[1]).resolve()
+sft_profile = Path(sys.argv[2]).resolve()
+cache_id = sys.argv[3]
+output = Path(sys.argv[4])
+payload = {
+    "schema_version": "ifv-cached-dataset-profile-v1",
+    "cache_id": cache_id,
+    "model_profile": {
+        "id": model_profile.name,
+        "path": str(model_profile),
+        "sha256": sha256(model_profile),
+    },
+    "sft_profile": {
+        "id": sft_profile.name,
+        "path": str(sft_profile),
+        "sha256": sha256(sft_profile),
+    },
+    "model_id": os.environ["IFV_MODEL_ID"],
+    "max_length": int(os.environ["IFV_MAX_LENGTH"]),
+    "image_max_token_num": int(os.environ["IFV_IMAGE_MAX_TOKEN_NUM"]),
+    "attention_implementation": os.environ["IFV_ATTN_IMPL"],
+    "add_non_thinking_prefix": (
+        os.environ.get("IFV_ADD_NON_THINKING_PREFIX", "false").lower() == "true"
+    ),
+}
+output.write_text(
+    json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+    encoding="utf-8",
+)
+PY
 
 args=(
   swift export
@@ -132,6 +181,8 @@ print_command "${args[@]}"
 cat >"$CACHE_DIR/cache.env" <<EOF
 IFV_CACHED_DATASET=$CACHE_DIR/train
 IFV_CACHED_VAL_DATASET=$CACHE_DIR/val
+IFV_CACHED_DATASET_MANIFEST=$CACHE_DIR/dataset-manifest.json
+IFV_CACHED_DATASET_VERSION=$CACHE_ID
 IFV_LOAD_FROM_CACHE_FILE=true
 EOF
 
