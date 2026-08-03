@@ -397,6 +397,36 @@ def verify_cached_dataset(
             errors.append(f"source_dataset_sha256_mismatch:{identity}")
         source_results.append(result)
 
+    provenance_results: list[dict[str, Any]] = []
+    cache_profile = metadata.get("cache_profile")
+    cache_profile = cache_profile if isinstance(cache_profile, dict) else {}
+    historical_manifest = cache_profile.get("historical_manifest")
+    if isinstance(historical_manifest, dict):
+        historical_path = Path(
+            str(historical_manifest.get("path") or "")
+        ).expanduser()
+        provenance_result = {
+            "kind": "historical_manifest",
+            "path": str(historical_path),
+            "exists": historical_path.is_file(),
+            "sha256_match": False,
+        }
+        if historical_path.is_file():
+            actual_sha256 = sha256_file(historical_path)
+            provenance_result.update(
+                {
+                    "actual_sha256": actual_sha256,
+                    "sha256_match": (
+                        actual_sha256 == historical_manifest.get("sha256")
+                    ),
+                }
+            )
+        if not provenance_result["exists"]:
+            errors.append("historical_manifest_missing")
+        elif not provenance_result["sha256_match"]:
+            errors.append("historical_manifest_sha256_mismatch")
+        provenance_results.append(provenance_result)
+
     shape_results: dict[str, Any] = {}
     for split, path, row_key, column_key in (
         ("train", train_dir, "train_rows", "train_columns"),
@@ -435,6 +465,7 @@ def verify_cached_dataset(
         "cache_profile": metadata.get("cache_profile"),
         "artifact_results": artifact_results,
         "source_results": source_results,
+        "provenance_results": provenance_results,
         "shape_results": shape_results,
         "errors": errors,
     }

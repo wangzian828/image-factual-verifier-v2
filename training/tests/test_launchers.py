@@ -345,14 +345,24 @@ def test_curriculum_cache_exporter_uses_ms_swift_cached_dataset_contract() -> No
 
 def test_existing_cached_dataset_registrar_is_fail_closed_and_audited() -> None:
     source = _source("scripts/train/register_cached_dataset.sh")
+    cache_profile = _source(
+        "configs/cache/qwen3.5-pilot30-v3-img512-sdpa.env"
+    )
 
     assert "refusing to replace existing cached dataset manifest" in source
+    assert "ifv-historical-cache-preflight-v1" in source
+    assert "existing-cache-recovered-from-verified-cache" in source
+    assert "source-snapshot" in source
     assert "source-dataset-fingerprints.tsv" in source
     assert "mtime_ns" in source
     assert "cache-profile.json" in source
     assert "cached-dataset-manifest" in source
     assert "verify-cached-dataset" in source
     assert "cache-registration" in source
+    assert "cache build profile does not match cache.log" in source
+    assert "IFV_MAX_LENGTH=32768" in cache_profile
+    assert "IFV_IMAGE_MAX_TOKEN_NUM=512" in cache_profile
+    assert "IFV_ATTN_IMPL=sdpa" in cache_profile
 
 
 def test_fsdp2_exporter_merges_audits_and_reload_smokes() -> None:

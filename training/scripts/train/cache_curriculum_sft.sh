@@ -89,6 +89,8 @@ new_output_dir "$CACHE_DIR"
   for index in "${!active_channels[@]}"; do
     train_dataset="${train_datasets[$index]}"
     validation_dataset="${validation_datasets[$index]}"
+    train_dataset="$(realpath "$train_dataset")"
+    validation_dataset="$(realpath "$validation_dataset")"
     printf '%s\ttrain\t%s\t%s\t%s\t%s\n' \
       "${active_channels[$index]}" \
       "$train_dataset" \
