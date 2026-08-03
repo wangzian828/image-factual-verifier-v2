@@ -704,3 +704,21 @@ baseline, the thread matrix also requires a contemporaneous `OMP_NUM_THREADS=1`
 two-step control. The final thread decision compares the same-load-window
 `1/4/8/16` runs; the older ten-step baseline remains useful for production
 throughput but is not sufficient by itself to attribute a small OpenMP delta.
+
+### 15.4 CPUAdam thread screening result
+
+All four bounded profiles completed two optimizer steps, validation, checkpoint
+save, and clean process exit with a reported 18.62 GiB peak:
+
+| Threads per rank | Two-step train wall | Unique samples/s | Eval loss | Decision |
+|---:|---:|---:|---:|---|
+| 1 | 76.78 s | 0.208388 | 0.5911 | same-window control |
+| 4 | 79.48 s | 0.201309 | 0.5911 | reject |
+| 8 | 69.40 s | 0.230548 | 0.5914 | advance provisionally |
+| 16 | 71.50 s | 0.223776 | 0.5908 | reject; smaller setting is faster |
+
+The eight-thread profile was about 10.6% faster than the contemporaneous
+one-thread control on observed useful-row throughput. It therefore advances to
+the dataloader matrix as an explicit training-only override. The generic
+operations baseline remains `OMP_NUM_THREADS=1`, and the later ten-step
+production gate must still confirm that the short-run gain persists.
