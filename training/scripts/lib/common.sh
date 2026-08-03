@@ -92,6 +92,31 @@ configure_training_caches() {
   fi
 }
 
+configure_encode_cache() {
+  if [[ "$#" -ne 1 ]]; then
+    echo "usage: configure_encode_cache EXPERIMENT_DIR" >&2
+    return 2
+  fi
+  local experiment_dir="$1"
+  local enabled="${IFV_ENCODE_CACHE_ENABLED:-false}"
+  if [[ "${enabled,,}" != "true" ]]; then
+    unset IFV_ENCODE_CACHE_DIR
+    unset IFV_ENCODE_CACHE_METRICS_DIR
+    return 0
+  fi
+  local cache_root="${IFV_TRAINING_CACHE_ROOT:-$DATA_ROOT/cache}"
+  local namespace="${IFV_ENCODE_CACHE_NAMESPACE:-qwen35-sft-v1}"
+  if [[ ! "$namespace" =~ ^[A-Za-z0-9._-]+$ ]]; then
+    echo "IFV_ENCODE_CACHE_NAMESPACE must be filesystem-safe: $namespace" >&2
+    return 2
+  fi
+  export IFV_ENCODE_CACHE_DIR="${IFV_ENCODE_CACHE_DIR:-$cache_root/ms-swift-encode/$namespace}"
+  export IFV_ENCODE_CACHE_METRICS_DIR="$experiment_dir/encode-cache-metrics"
+  export IFV_ENCODE_CACHE_MODE="${IFV_ENCODE_CACHE_MODE:-readwrite}"
+  export PYTHONPATH="$REPO_ROOT/training/ifv_training_bootstrap:$REPO_ROOT/training${PYTHONPATH:+:$PYTHONPATH}"
+  mkdir -p "$IFV_ENCODE_CACHE_DIR" "$IFV_ENCODE_CACHE_METRICS_DIR"
+}
+
 configure_training_runtime() {
   configure_cuda_toolkit
   configure_conda_compilers

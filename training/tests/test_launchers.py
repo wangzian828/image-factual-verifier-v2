@@ -289,6 +289,9 @@ def test_sft_launchers_support_cached_datasets_and_tunable_dataloaders() -> None
         assert "--resource-summary" in source
         assert "--cached_dataset" in source
         assert "--cached_val_dataset" in source
+        assert "configure_encode_cache" in source
+        assert "encode-cache-report.json" in source
+        assert "--encode-cache-report" in source
         assert 'IFV_DATASET_NUM_PROC:-2' in source
         assert 'IFV_DATALOADER_NUM_WORKERS:-2' in source
         assert "IFV_DATALOADER_PERSISTENT_WORKERS" in source
@@ -302,8 +305,22 @@ def test_sft_launchers_support_cached_datasets_and_tunable_dataloaders() -> None
         assert "python -m ifv_training training-profile" in source
         assert '--output "$LOG_DIR/profile.json"' in source
         assert 'train_status="${PIPESTATUS[0]}"' in source
+
     assert "cached_mode=true" in curriculum
     assert "cache_index" in curriculum
+
+
+def test_ms_swift_encode_cache_is_content_addressed_and_fail_closed() -> None:
+    source = _source("ifv_training/encode_cache.py")
+    bootstrap = _source("ifv_training_bootstrap/sitecustomize.py")
+    prewarm = _source("scripts/train/prewarm_encode_cache.py")
+
+    assert "SCHEMA_VERSION = \"ifv-ms-swift-encode-cache-v1\"" in source
+    assert "contract_digest" in source
+    assert "_file_fingerprint" in source
+    assert "torch.equal" in prewarm
+    assert "install_ms_swift_encode_cache" in bootstrap
+    assert "os._exit(70)" in bootstrap
 
 
 def test_sft_launchers_support_fsdp2_gradient_checkpointing_and_sequence_parallel() -> None:

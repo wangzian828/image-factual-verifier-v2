@@ -197,6 +197,7 @@ def summarize_training_log(
     profile_id: str = "",
     resource_summary: Path | None = None,
     cache_verification: Path | None = None,
+    encode_cache_report: Path | None = None,
     train_exit_code: int | None = None,
 ) -> dict[str, Any]:
     metrics: list[dict[str, Any]] = []
@@ -387,6 +388,7 @@ def summarize_training_log(
     )
     resource_payload = _load_sidecar(resource_summary)
     cache_payload = _load_sidecar(cache_verification)
+    encode_cache_payload = _load_sidecar(encode_cache_report)
     clean_exit = (
         train_exit_code == 0
         if train_exit_code is not None
@@ -429,6 +431,12 @@ def summarize_training_log(
         if isinstance(cache_payload, dict)
         else not cache_required
     )
+    encode_cache_required = encode_cache_report is not None
+    encode_cache_passed = (
+        encode_cache_payload.get("passed") is True
+        if isinstance(encode_cache_payload, dict)
+        else not encode_cache_required
+    )
     passed_production_gate = all(
         (
             not detected_errors,
@@ -439,6 +447,7 @@ def summarize_training_log(
             resume_advanced or not resume_requested,
             resource_passed,
             cache_passed,
+            encode_cache_passed,
         )
     )
     train_runtime = (
@@ -573,6 +582,14 @@ def summarize_training_log(
             "passed": cache_passed,
             "verification": cache_payload,
         },
+        "encoded_processor_cache": {
+            "required": encode_cache_required,
+            "report_path": (
+                str(encode_cache_report) if encode_cache_report else ""
+            ),
+            "passed": encode_cache_passed,
+            "report": encode_cache_payload,
+        },
     }
 
 
@@ -585,6 +602,7 @@ def write_training_profile(
     profile_id: str = "",
     resource_summary: Path | None = None,
     cache_verification: Path | None = None,
+    encode_cache_report: Path | None = None,
     train_exit_code: int | None = None,
 ) -> dict[str, Any]:
     result = summarize_training_log(
@@ -594,6 +612,7 @@ def write_training_profile(
         profile_id=profile_id,
         resource_summary=resource_summary,
         cache_verification=cache_verification,
+        encode_cache_report=encode_cache_report,
         train_exit_code=train_exit_code,
     )
     output.parent.mkdir(parents=True, exist_ok=True)

@@ -84,6 +84,11 @@ if [[ "${#cached_train_datasets[@]}" -gt 0 ]]; then
     cached_train_datasets \
     cached_val_datasets
 fi
+ENCODE_CACHE_REPORT=""
+if [[ "${IFV_ENCODE_CACHE_ENABLED:-false}" == "true" ]]; then
+  configure_encode_cache "$EXPERIMENT_DIR"
+  ENCODE_CACHE_REPORT="$EXPERIMENT_DIR/encode-cache-report.json"
+fi
 
 args=(
   swift sft
@@ -187,6 +192,12 @@ python "$SCRIPT_DIR/run_with_resource_monitor.py" \
   -- "${args[@]}" 2>&1 | tee "$LOG_DIR/train.log"
 train_status="${PIPESTATUS[0]}"
 set -e
+encode_cache_status=0
+if [[ -n "$ENCODE_CACHE_REPORT" ]]; then
+  IFV_ENCODE_CACHE_ENABLED=false python -m ifv_training encode-cache-report \
+    --metrics-dir "$IFV_ENCODE_CACHE_METRICS_DIR" \
+    --output "$ENCODE_CACHE_REPORT" || encode_cache_status="$?"
+fi
 profile_status=0
 profile_args=(
   python -m ifv_training training-profile
@@ -200,7 +211,13 @@ profile_args=(
 if [[ -n "$CACHE_VERIFICATION" ]]; then
   profile_args+=(--cache-verification "$CACHE_VERIFICATION")
 fi
+if [[ -n "$ENCODE_CACHE_REPORT" ]]; then
+  profile_args+=(--encode-cache-report "$ENCODE_CACHE_REPORT")
+fi
 "${profile_args[@]}" || profile_status="$?"
+if [[ "$train_status" -eq 0 && "$encode_cache_status" -ne 0 ]]; then
+  exit "$encode_cache_status"
+fi
 if [[ "$train_status" -eq 0 && "$profile_status" -ne 0 ]]; then
   exit "$profile_status"
 fi

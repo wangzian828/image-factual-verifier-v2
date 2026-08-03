@@ -10,6 +10,7 @@ from .checkpoints import (
     build_checkpoint_manifest,
     build_serving_profile,
 )
+from .encode_cache import aggregate_encode_cache_metrics
 from .io import load_json, load_jsonl, write_json, write_jsonl
 from .manifests import (
     cached_dataset_manifest,
@@ -169,7 +170,12 @@ def _parser() -> argparse.ArgumentParser:
     training_profile.add_argument("--profile-id", default="")
     training_profile.add_argument("--resource-summary", type=Path)
     training_profile.add_argument("--cache-verification", type=Path)
+    training_profile.add_argument("--encode-cache-report", type=Path)
     training_profile.add_argument("--train-exit-code", type=int)
+
+    encode_cache_report = subparsers.add_parser("encode-cache-report")
+    encode_cache_report.add_argument("--metrics-dir", type=Path, required=True)
+    encode_cache_report.add_argument("--output", type=Path, required=True)
     return parser
 
 
@@ -309,8 +315,17 @@ def main() -> None:
             profile_id=args.profile_id,
             resource_summary=args.resource_summary,
             cache_verification=args.cache_verification,
+            encode_cache_report=args.encode_cache_report,
             train_exit_code=args.train_exit_code,
         )
+    elif args.command == "encode-cache-report":
+        result = aggregate_encode_cache_metrics(
+            args.metrics_dir,
+            output=args.output,
+        )
+        if not result["passed"]:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            raise SystemExit(1)
     else:
         raise AssertionError(args.command)
     print(json.dumps(result, ensure_ascii=False, indent=2))
