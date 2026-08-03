@@ -561,3 +561,24 @@ Bounded two-step probes must run before any new 10-step attempt:
 The single-dataset launcher now forwards `IFV_GROUP_BY_LENGTH`; however, ms-swift's
 sequence-parallel dataloader uses its own sampler. Therefore SP4 runs still need
 real multi-step gates rather than relying on a "longest row first" assumption.
+
+## 15. FSDP2 resume and export protocol
+
+The FSDP2 candidate uses `SHARDED_STATE_DICT`, so the existing ordinary full-checkpoint
+registrar cannot consume it directly. The locked production gate is:
+
+1. resume `checkpoint-10` with an explicit `max_steps=11` profile;
+2. require log evidence that model, optimizer, scheduler, and RNG state are loaded;
+3. require global step 11, validation, a new `checkpoint-11`, and clean exit;
+4. merge only `pytorch_model_fsdp_0` with Accelerate's
+   `merge_fsdp_weights`; retain `optimizer_0`, scheduler, RNG, and trainer state as
+   separate training-state artifacts;
+5. copy tokenizer, processor, chat-template, and config assets from the frozen base
+   model into the serving model directory;
+6. audit language, vision, and aligner deltas against the base model;
+7. load the merged model plus processor on CPU and require the expected Qwen3.5
+   class and parameter count;
+8. only after the CPU reload passes, test the exported directory through the frozen
+   vLLM serving environment.
+
+The source FSDP shards are never deleted by the exporter.

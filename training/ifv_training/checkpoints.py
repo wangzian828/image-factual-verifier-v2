@@ -18,6 +18,19 @@ BASE_CHECKPOINT_FILES = (
     "scheduler.pt",
     "rng_state.pth",
 )
+SERVING_ASSET_FILES = (
+    "chat_template.jinja",
+    "config.json",
+    "configuration.json",
+    "generation_config.json",
+    "merges.txt",
+    "preprocessor_config.json",
+    "processor_config.json",
+    "tokenizer.json",
+    "tokenizer_config.json",
+    "video_preprocessor_config.json",
+    "vocab.json",
+)
 FULL_WEIGHT_PATTERNS = (
     "model*.safetensors",
     "pytorch_model*.bin",
@@ -65,7 +78,11 @@ def _state_files(checkpoint_dir: Path, patterns: tuple[str, ...]) -> list[Path]:
 
 
 def _optimizer_state_files(checkpoint_dir: Path) -> list[Path]:
-    return _state_files(checkpoint_dir, OPTIMIZER_PATTERNS)
+    files = _state_files(checkpoint_dir, OPTIMIZER_PATTERNS)
+    for directory in checkpoint_dir.glob("optimizer_*"):
+        if directory.is_dir():
+            files.extend(path for path in directory.rglob("*") if path.is_file())
+    return sorted(set(files))
 
 
 def _scheduler_state_files(checkpoint_dir: Path) -> list[Path]:
@@ -214,14 +231,22 @@ def audit_full_parameter_checkpoint(
     *,
     checkpoint_dir: Path,
     base_model_dir: Path,
+    state_checkpoint_dir: Path | None = None,
     output_path: Path | None = None,
 ) -> dict[str, Any]:
     checkpoint_dir = checkpoint_dir.expanduser().resolve()
     base_model_dir = base_model_dir.expanduser().resolve()
+    state_checkpoint_dir = (
+        state_checkpoint_dir.expanduser().resolve()
+        if state_checkpoint_dir is not None
+        else checkpoint_dir
+    )
     if not checkpoint_dir.is_dir():
         raise FileNotFoundError(checkpoint_dir)
     if not base_model_dir.is_dir():
         raise FileNotFoundError(base_model_dir)
+    if not state_checkpoint_dir.is_dir():
+        raise FileNotFoundError(state_checkpoint_dir)
 
     args_path = checkpoint_dir / "args.json"
     args = load_json(args_path) if args_path.is_file() else {}
@@ -231,9 +256,9 @@ def audit_full_parameter_checkpoint(
         for name in ("freeze_llm", "freeze_vit", "freeze_aligner")
     }
     weight_files = _full_weight_files(checkpoint_dir)
-    optimizer_files = _optimizer_state_files(checkpoint_dir)
-    scheduler_files = _scheduler_state_files(checkpoint_dir)
-    rng_files = _rng_state_files(checkpoint_dir)
+    optimizer_files = _optimizer_state_files(state_checkpoint_dir)
+    scheduler_files = _scheduler_state_files(state_checkpoint_dir)
+    rng_files = _rng_state_files(state_checkpoint_dir)
     adapter_files = [
         path
         for name in ("adapter_config.json", "adapter_model.safetensors")
@@ -273,6 +298,7 @@ def audit_full_parameter_checkpoint(
     result = {
         "schema_version": "ifv-full-parameter-checkpoint-audit-v1",
         "checkpoint_dir": str(checkpoint_dir),
+        "state_checkpoint_dir": str(state_checkpoint_dir),
         "base_model_dir": str(base_model_dir),
         "passed": all(checks.values()),
         "checks": checks,
@@ -281,13 +307,13 @@ def audit_full_parameter_checkpoint(
             str(path.relative_to(checkpoint_dir)) for path in weight_files
         ],
         "optimizer_state_files": [
-            str(path.relative_to(checkpoint_dir)) for path in optimizer_files
+            str(path.relative_to(state_checkpoint_dir)) for path in optimizer_files
         ],
         "scheduler_state_files": [
-            str(path.relative_to(checkpoint_dir)) for path in scheduler_files
+            str(path.relative_to(state_checkpoint_dir)) for path in scheduler_files
         ],
         "rng_state_files": [
-            str(path.relative_to(checkpoint_dir)) for path in rng_files
+            str(path.relative_to(state_checkpoint_dir)) for path in rng_files
         ],
         "adapter_files": [
             str(path.relative_to(checkpoint_dir)) for path in adapter_files
@@ -310,33 +336,49 @@ def build_checkpoint_manifest(
     processor_revision: str,
     method: str,
     framework_version: str = "4.4.2",
+    state_checkpoint_dir: Path | None = None,
 ) -> dict[str, Any]:
     checkpoint_dir = checkpoint_dir.expanduser().resolve()
+    state_checkpoint_dir = (
+        state_checkpoint_dir.expanduser().resolve()
+        if state_checkpoint_dir is not None
+        else checkpoint_dir
+    )
     dataset_manifest_path = dataset_manifest_path.expanduser().resolve()
     if not checkpoint_dir.is_dir():
         raise FileNotFoundError(checkpoint_dir)
+    if not state_checkpoint_dir.is_dir():
+        raise FileNotFoundError(state_checkpoint_dir)
     dataset_manifest = load_json(dataset_manifest_path)
     artifacts: list[dict[str, Any]] = []
-    candidate_paths: list[Path] = []
-    for name in BASE_CHECKPOINT_FILES:
+    model_paths: list[Path] = []
+    for name in (*BASE_CHECKPOINT_FILES, *SERVING_ASSET_FILES):
         path = checkpoint_dir / name
         if path.is_file():
-            candidate_paths.append(path)
-    candidate_paths.extend(_full_weight_files(checkpoint_dir))
-    candidate_paths.extend(_optimizer_state_files(checkpoint_dir))
-    candidate_paths.extend(_scheduler_state_files(checkpoint_dir))
-    candidate_paths.extend(_rng_state_files(checkpoint_dir))
-    for path in sorted(set(candidate_paths)):
-        artifacts.append(
-            {
-                "path": str(path.relative_to(checkpoint_dir)),
-                "bytes": path.stat().st_size,
-                "sha256": sha256_file(path),
-            }
-        )
+            model_paths.append(path)
+    model_paths.extend(_full_weight_files(checkpoint_dir))
+    state_paths: list[Path] = []
+    state_paths.extend(_optimizer_state_files(state_checkpoint_dir))
+    state_paths.extend(_scheduler_state_files(state_checkpoint_dir))
+    state_paths.extend(_rng_state_files(state_checkpoint_dir))
+    trainer_state_path = state_checkpoint_dir / "trainer_state.json"
+    if trainer_state_path.is_file():
+        state_paths.append(trainer_state_path)
+    for scope, root, paths in (
+        ("model", checkpoint_dir, model_paths),
+        ("training_state", state_checkpoint_dir, state_paths),
+    ):
+        for path in sorted(set(paths)):
+            artifacts.append(
+                {
+                    "scope": scope,
+                    "path": str(path.relative_to(root)),
+                    "bytes": path.stat().st_size,
+                    "sha256": sha256_file(path),
+                }
+            )
     if not artifacts:
         raise ValueError(f"no checkpoint artifacts found in {checkpoint_dir}")
-    trainer_state_path = checkpoint_dir / "trainer_state.json"
     trainer_state = (
         load_json(trainer_state_path) if trainer_state_path.is_file() else {}
     )
@@ -359,14 +401,15 @@ def build_checkpoint_manifest(
         },
         "checkpoint": {
             "path": str(checkpoint_dir),
+            "training_state_path": str(state_checkpoint_dir),
             "global_step": trainer_state.get("global_step"),
             "optimizer_state_available": bool(
-                _optimizer_state_files(checkpoint_dir)
+                _optimizer_state_files(state_checkpoint_dir)
             ),
             "scheduler_state_available": bool(
-                _scheduler_state_files(checkpoint_dir)
+                _scheduler_state_files(state_checkpoint_dir)
             ),
-            "rng_state_available": bool(_rng_state_files(checkpoint_dir)),
+            "rng_state_available": bool(_rng_state_files(state_checkpoint_dir)),
         },
         "adapter_config": adapter_config,
         "artifacts": artifacts,

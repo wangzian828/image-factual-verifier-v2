@@ -154,3 +154,40 @@ def write_environment_manifest(output: Path, repo_root: Path) -> dict[str, Any]:
     value = environment_manifest(repo_root)
     write_json(output, value)
     return value
+
+
+def cached_dataset_manifest(cache_dir: Path) -> dict[str, Any]:
+    cache_dir = cache_dir.expanduser().resolve()
+    train_dir = cache_dir / "train"
+    val_dir = cache_dir / "val"
+    if not train_dir.is_dir() or not val_dir.is_dir():
+        raise FileNotFoundError(
+            f"cached dataset must contain train/ and val/: {cache_dir}"
+        )
+
+    try:
+        from datasets import load_from_disk
+    except ImportError as exc:
+        raise RuntimeError("datasets is required to inspect cached datasets") from exc
+
+    train = load_from_disk(str(train_dir))
+    validation = load_from_disk(str(val_dir))
+    artifact_paths = sorted(
+        path
+        for path in cache_dir.rglob("*")
+        if path.is_file() and path.name != "dataset-manifest.json"
+    )
+    manifest = artifact_manifest(
+        kind="ms-swift-cached-dataset",
+        root=cache_dir,
+        files=artifact_paths,
+        metadata={
+            "dataset_version": cache_dir.name,
+            "train_rows": len(train),
+            "validation_rows": len(validation),
+            "train_columns": list(train.column_names),
+            "validation_columns": list(validation.column_names),
+        },
+    )
+    manifest["dataset_version"] = cache_dir.name
+    return manifest

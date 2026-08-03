@@ -5,6 +5,7 @@ from pathlib import Path
 
 from ifv_training.checkpoints import (
     _component_candidates,
+    _optimizer_state_files,
     build_checkpoint_manifest,
     build_serving_profile,
 )
@@ -90,3 +91,15 @@ def test_full_checkpoint_component_candidates_include_merger_bias_and_projection
 
     assert "model.visual.merger.linear_fc1.bias" in candidates
     assert "model.visual.merger.linear_fc1.weight" in candidates
+
+
+def test_fsdp_optimizer_shards_are_recognized(tmp_path: Path) -> None:
+    checkpoint = tmp_path / "checkpoint-10"
+    optimizer = checkpoint / "optimizer_0"
+    optimizer.mkdir(parents=True)
+    (optimizer / ".metadata").write_bytes(b"metadata")
+    (optimizer / "__0_0.distcp").write_bytes(b"state")
+
+    files = _optimizer_state_files(checkpoint)
+
+    assert [path.name for path in files] == [".metadata", "__0_0.distcp"]

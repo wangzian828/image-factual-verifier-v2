@@ -325,6 +325,19 @@ def test_curriculum_cache_exporter_uses_ms_swift_cached_dataset_contract() -> No
     assert "sha256sum" in source
     assert "IFV_CACHED_DATASET" in source
     assert "IFV_CACHED_VAL_DATASET" in source
+    assert "cached-dataset-manifest" in source
+
+
+def test_fsdp2_exporter_merges_audits_and_reload_smokes() -> None:
+    source = _source("scripts/export/register_fsdp2_checkpoint.sh")
+    probe = _source("scripts/probe/load_qwen35_checkpoint.py")
+
+    assert "merge_fsdp_weights" in source
+    assert "--state-checkpoint-dir" in source
+    assert "cached-dataset-manifest" in source
+    assert "load_qwen35_checkpoint.py" in source
+    assert "AutoModelForImageTextToText" in probe
+    assert "parameter_count > 9_000_000_000" in probe
 
 
 def test_qwen35_flash_cached_and_no_offload_profiles_exist() -> None:
@@ -373,6 +386,9 @@ def test_qwen35_fsdp2_candidate_profiles_are_backend_exclusive() -> None:
     sp4_logits_probe = _source(
         "configs/sft/qwen3.5-full-2step-4gpu-fsdp2-sp4-padding-free-accum1-logits-to-keep-probe.env"
     )
+    sp4_resume = _source(
+        "configs/sft/qwen3.5-full-11step-resume-4gpu-fsdp2-sp4-padding-free-accum1-bf16params.env"
+    )
     zero3_cached = _source("configs/sft/qwen3.5-full-10step-4gpu-zero3-offload-cached.env")
 
     for source in (
@@ -385,6 +401,7 @@ def test_qwen35_fsdp2_candidate_profiles_are_backend_exclusive() -> None:
         sp4_bf16_gate,
         sp4_adafactor_gate,
         sp4_logits_probe,
+        sp4_resume,
     ):
         assert "IFV_FSDP=fsdp2" in source
         assert "IFV_DEEPSPEED" not in source
@@ -412,6 +429,10 @@ def test_qwen35_fsdp2_candidate_profiles_are_backend_exclusive() -> None:
     assert "IFV_OPTIM=adafactor" in sp4_adafactor_gate
     assert "IFV_MAX_STEPS=2" in sp4_logits_probe
     assert "IFV_USE_LOGITS_TO_KEEP=true" in sp4_logits_probe
+    assert "IFV_MAX_STEPS=11" in sp4_resume
+    assert "IFV_SAVE_STEPS=11" in sp4_resume
+    assert "IFV_EVAL_STEPS=11" in sp4_resume
+    assert "IFV_BF16=false" in sp4_resume
     assert "IFV_DEEPSPEED=training/configs/deepspeed/zero3-optimizer-offload.json" in zero3_cached
     assert "IFV_FSDP" not in zero3_cached
     assert "IFV_GRADIENT_CHECKPOINTING=true" in zero3_cached

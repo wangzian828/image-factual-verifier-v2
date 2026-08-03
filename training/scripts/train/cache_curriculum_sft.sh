@@ -135,4 +135,8 @@ IFV_CACHED_VAL_DATASET=$CACHE_DIR/val
 IFV_LOAD_FROM_CACHE_FILE=true
 EOF
 
+python -m ifv_training cached-dataset-manifest \
+  --cache-dir "$CACHE_DIR" \
+  --output "$CACHE_DIR/dataset-manifest.json"
+
 echo "cached dataset profile: $CACHE_DIR/cache.env"
