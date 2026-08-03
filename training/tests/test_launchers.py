@@ -342,6 +342,7 @@ def test_curriculum_cache_exporter_uses_ms_swift_cached_dataset_contract() -> No
     assert "IFV_CACHED_VAL_DATASET" in source
     assert "IFV_CACHED_DATASET_MANIFEST" in source
     assert "IFV_CACHED_DATASET_VERSION" in source
+    assert "export IFV_CACHED_DATASET=" in source
     assert "cached-dataset-manifest" in source
 
 
@@ -362,6 +363,9 @@ def test_existing_cached_dataset_registrar_is_fail_closed_and_audited() -> None:
     assert "verify-cached-dataset" in source
     assert "cache-registration" in source
     assert "cache build profile does not match cache.log" in source
+    assert 'REGISTERED_ENV="$CACHE_DIR/registered-cache.env"' in source
+    assert "export IFV_CACHED_DATASET=" in source
+    assert '>>"$CACHE_DIR/cache.env"' not in source
     assert "IFV_MAX_LENGTH=32768" in cache_profile
     assert "IFV_IMAGE_MAX_TOKEN_NUM=512" in cache_profile
     assert "IFV_ATTN_IMPL=sdpa" in cache_profile

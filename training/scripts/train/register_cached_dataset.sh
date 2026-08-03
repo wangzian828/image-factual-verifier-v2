@@ -292,22 +292,14 @@ output.write_text(
 )
 PY
 
-if [[ -f "$CACHE_DIR/cache.env" ]]; then
-  if ! grep -q '^IFV_CACHED_DATASET_MANIFEST=' "$CACHE_DIR/cache.env"; then
-    printf 'IFV_CACHED_DATASET_MANIFEST=%s\n' "$MANIFEST" >>"$CACHE_DIR/cache.env"
-  fi
-  if ! grep -q '^IFV_CACHED_DATASET_VERSION=' "$CACHE_DIR/cache.env"; then
-    printf 'IFV_CACHED_DATASET_VERSION=%s\n' "$(basename "$CACHE_DIR")" >>"$CACHE_DIR/cache.env"
-  fi
-else
-  cat >"$CACHE_DIR/cache.env" <<EOF
-IFV_CACHED_DATASET=$CACHE_DIR/train
-IFV_CACHED_VAL_DATASET=$CACHE_DIR/val
-IFV_CACHED_DATASET_MANIFEST=$MANIFEST
-IFV_CACHED_DATASET_VERSION=$(basename "$CACHE_DIR")
-IFV_LOAD_FROM_CACHE_FILE=true
+REGISTERED_ENV="$CACHE_DIR/registered-cache.env"
+cat >"$REGISTERED_ENV" <<EOF
+export IFV_CACHED_DATASET=$CACHE_DIR/train
+export IFV_CACHED_VAL_DATASET=$CACHE_DIR/val
+export IFV_CACHED_DATASET_MANIFEST=$MANIFEST
+export IFV_CACHED_DATASET_VERSION=$(basename "$CACHE_DIR")
+export IFV_LOAD_FROM_CACHE_FILE=true
 EOF
-fi
 
 python -m ifv_training cached-dataset-manifest \
   --cache-dir "$CACHE_DIR" \
@@ -320,3 +312,4 @@ python -m ifv_training verify-cached-dataset \
   --output "$VERIFICATION_DIR/$(basename "$CACHE_DIR").json"
 
 printf 'registered cached dataset: %s\n' "$CACHE_DIR"
+printf 'sourceable cached dataset environment: %s\n' "$REGISTERED_ENV"

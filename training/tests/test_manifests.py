@@ -242,3 +242,101 @@ def test_cached_dataset_verifier_fails_closed_on_source_or_artifact_drift(
         error.startswith("cache_artifact_")
         for error in rejected_cache["errors"]
     )
+
+
+def test_cached_dataset_verifier_rejects_historical_artifact_drift(
+    tmp_path: Path,
+    monkeypatch: object,
+) -> None:
+    cache = tmp_path / "registered-cache"
+    train = cache / "train"
+    validation = cache / "val"
+    train.mkdir(parents=True)
+    validation.mkdir()
+    (train / "data.arrow").write_bytes(b"train")
+    (validation / "data.arrow").write_bytes(b"validation")
+    cache_env = cache / "cache.env"
+    cache_env.write_text("IFV_LOAD_FROM_CACHE_FILE=true\n", encoding="utf-8")
+    historical_manifest = tmp_path / "historical-manifest.json"
+    write_json(
+        historical_manifest,
+        {
+            "artifacts": [
+                {
+                    "path": "cache.env",
+                    "bytes": cache_env.stat().st_size,
+                    "sha256": manifests_module.sha256_file(cache_env),
+                }
+            ]
+        },
+    )
+    cache_env.write_text(
+        "IFV_LOAD_FROM_CACHE_FILE=true\n"
+        "IFV_CACHED_DATASET_MANIFEST=dataset-manifest.json\n",
+        encoding="utf-8",
+    )
+    source = tmp_path / "source.jsonl"
+    source.write_text('{"row": 1}\n', encoding="utf-8")
+    artifacts = [
+        {
+            "path": str(path.relative_to(cache)),
+            "bytes": path.stat().st_size,
+            "sha256": manifests_module.sha256_file(path),
+        }
+        for path in sorted(cache.rglob("*"))
+        if path.is_file()
+    ]
+    write_json(
+        cache / "dataset-manifest.json",
+        {
+            "schema_version": "ifv-cached-dataset-manifest-v2",
+            "kind": "ms-swift-cached-dataset",
+            "dataset_version": cache.name,
+            "metadata": {
+                "cache_layout": {"train": "train", "validation": "val"},
+                "train_rows": 1,
+                "validation_rows": 1,
+                "train_columns": ["messages"],
+                "validation_columns": ["messages"],
+                "source_dataset_fingerprints": [
+                    {
+                        "channel": "registered_cache",
+                        "split": "train",
+                        "path": str(source),
+                        "bytes": source.stat().st_size,
+                        "mtime_ns": source.stat().st_mtime_ns,
+                        "sha256": manifests_module.sha256_file(source),
+                    }
+                ],
+                "cache_profile": {
+                    "historical_manifest": {
+                        "path": str(historical_manifest),
+                        "sha256": manifests_module.sha256_file(
+                            historical_manifest
+                        ),
+                    }
+                },
+            },
+            "artifacts": artifacts,
+        },
+    )
+    monkeypatch.setattr(  # type: ignore[attr-defined]
+        manifests_module,
+        "_dataset_shape",
+        lambda path: {
+            "rows": 1,
+            "columns": ["messages"],
+        },
+    )
+
+    result = verify_cached_dataset(
+        cache_dir=cache,
+        train_dir=train,
+        validation_dir=validation,
+    )
+
+    assert result["passed"] is False
+    assert "historical_artifact_size_mismatch:cache.env" in result["errors"]
+    provenance = result["provenance_results"][0]
+    assert provenance["sha256_match"] is True
+    assert provenance["artifact_results"][0]["bytes_match"] is False

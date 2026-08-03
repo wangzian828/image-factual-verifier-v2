@@ -181,11 +181,11 @@ print_command "${args[@]}"
 "${args[@]}" 2>&1 | tee "$CACHE_DIR/cache.log"
 
 cat >"$CACHE_DIR/cache.env" <<EOF
-IFV_CACHED_DATASET=$CACHE_DIR/train
-IFV_CACHED_VAL_DATASET=$CACHE_DIR/val
-IFV_CACHED_DATASET_MANIFEST=$CACHE_DIR/dataset-manifest.json
-IFV_CACHED_DATASET_VERSION=$CACHE_ID
-IFV_LOAD_FROM_CACHE_FILE=true
+export IFV_CACHED_DATASET=$CACHE_DIR/train
+export IFV_CACHED_VAL_DATASET=$CACHE_DIR/val
+export IFV_CACHED_DATASET_MANIFEST=$CACHE_DIR/dataset-manifest.json
+export IFV_CACHED_DATASET_VERSION=$CACHE_ID
+export IFV_LOAD_FROM_CACHE_FILE=true
 EOF
 
 python -m ifv_training cached-dataset-manifest \

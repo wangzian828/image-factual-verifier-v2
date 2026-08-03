@@ -410,6 +410,7 @@ def verify_cached_dataset(
             "path": str(historical_path),
             "exists": historical_path.is_file(),
             "sha256_match": False,
+            "artifact_results": [],
         }
         if historical_path.is_file():
             actual_sha256 = sha256_file(historical_path)
@@ -421,6 +422,63 @@ def verify_cached_dataset(
                     ),
                 }
             )
+            historical_payload = load_json(historical_path)
+            historical_artifacts = historical_payload.get("artifacts")
+            if not isinstance(historical_artifacts, list):
+                errors.append("historical_manifest_artifacts_missing")
+            else:
+                for raw_artifact in historical_artifacts:
+                    if not isinstance(raw_artifact, dict):
+                        errors.append("historical_manifest_artifact_not_object")
+                        continue
+                    relative = str(raw_artifact.get("path") or "")
+                    if (
+                        not relative
+                        or Path(relative).is_absolute()
+                        or ".." in Path(relative).parts
+                    ):
+                        errors.append(
+                            f"historical_manifest_artifact_invalid_path:{relative}"
+                        )
+                        continue
+                    artifact_path = cache_dir / relative
+                    artifact_result = {
+                        "path": relative,
+                        "exists": artifact_path.is_file(),
+                        "bytes_match": False,
+                        "sha256_match": False,
+                    }
+                    if artifact_path.is_file():
+                        actual_bytes = artifact_path.stat().st_size
+                        actual_artifact_sha256 = sha256_file(artifact_path)
+                        artifact_result.update(
+                            {
+                                "actual_bytes": actual_bytes,
+                                "actual_sha256": actual_artifact_sha256,
+                                "bytes_match": (
+                                    actual_bytes == raw_artifact.get("bytes")
+                                ),
+                                "sha256_match": (
+                                    actual_artifact_sha256
+                                    == raw_artifact.get("sha256")
+                                ),
+                            }
+                        )
+                    if not artifact_result["exists"]:
+                        errors.append(
+                            f"historical_artifact_missing:{relative}"
+                        )
+                    elif not artifact_result["bytes_match"]:
+                        errors.append(
+                            f"historical_artifact_size_mismatch:{relative}"
+                        )
+                    elif not artifact_result["sha256_match"]:
+                        errors.append(
+                            f"historical_artifact_sha256_mismatch:{relative}"
+                        )
+                    provenance_result["artifact_results"].append(
+                        artifact_result
+                    )
         if not provenance_result["exists"]:
             errors.append("historical_manifest_missing")
         elif not provenance_result["sha256_match"]:
