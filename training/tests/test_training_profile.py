@@ -16,6 +16,8 @@ def test_training_profile_summarizes_ms_swift_metric_lines(tmp_path: Path) -> No
                 "{'loss': '1.20', 'global_step/max_steps': '2/10', "
                 "'memory(GiB)': '22.0', 'train_speed(s/it)': '28.8'}",
                 "{'eval_loss': '0.52', 'global_step/max_steps': '2/10'}",
+                "{'train_runtime': '88.0', 'global_step/max_steps': '2/10', "
+                "'train_speed(s/it)': '44.0'}",
                 "{'model_type': 'qwen3_5', 'hidden_size': 4096}",
             ]
         )
@@ -34,9 +36,14 @@ def test_training_profile_summarizes_ms_swift_metric_lines(tmp_path: Path) -> No
     assert result["experiment_id"] == "exp-a"
     assert result["profile_id"] == "profile-a"
     assert result["passed_basic_log_gate"] is True
-    assert result["metric_rows"] == 3
+    assert result["metric_rows"] == 4
+    assert result["train_step_metric_rows"] == 2
+    assert result["eval_metric_rows"] == 1
+    assert result["summary_metric_rows"] == 1
     assert result["steps"]["last"] == 2
     assert result["speed_seconds_per_step"]["steady_mean"] == 30.0
+    assert result["speed_seconds_per_step"]["last"] == 28.8
+    assert result["runtime_seconds"]["train_runtime"] == 88.0
     assert result["memory_gib"]["max"] == 22.0
     assert result["loss"]["last"] == 1.2
     assert result["eval_loss"]["last"] == 0.52

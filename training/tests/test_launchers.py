@@ -280,6 +280,12 @@ def test_sft_launchers_support_cached_datasets_and_tunable_dataloaders() -> None
         assert 'IFV_DATALOADER_NUM_WORKERS:-2' in source
         assert "IFV_DATALOADER_PERSISTENT_WORKERS" in source
         assert "IFV_DATALOADER_PREFETCH_FACTOR" in source
+        assert 'args+=(--group_by_length "$IFV_GROUP_BY_LENGTH")' in source
+        assert 'args+=(--bf16 "$IFV_BF16")' in source
+        assert 'args+=(--optim "$IFV_OPTIM")' in source
+        assert 'args+=(--use_liger_kernel "$IFV_USE_LIGER_KERNEL")' in source
+        assert 'args+=(--use_logits_to_keep "$IFV_USE_LOGITS_TO_KEEP")' in source
+        assert 'args+=(--torch_empty_cache_steps "$IFV_TORCH_EMPTY_CACHE_STEPS")' in source
         assert "python -m ifv_training training-profile" in source
         assert '--output "$LOG_DIR/profile.json"' in source
         assert 'train_status="${PIPESTATUS[0]}"' in source
@@ -358,6 +364,15 @@ def test_qwen35_fsdp2_candidate_profiles_are_backend_exclusive() -> None:
     sp4_ten_step = _source(
         "configs/sft/qwen3.5-full-10step-4gpu-fsdp2-sp4-padding-free-accum1.env"
     )
+    sp4_bf16_gate = _source(
+        "configs/sft/qwen3.5-full-2step-4gpu-fsdp2-sp4-padding-free-accum1-bf16params.env"
+    )
+    sp4_adafactor_gate = _source(
+        "configs/sft/qwen3.5-full-2step-4gpu-fsdp2-sp4-padding-free-accum1-adafactor.env"
+    )
+    sp4_logits_probe = _source(
+        "configs/sft/qwen3.5-full-2step-4gpu-fsdp2-sp4-padding-free-accum1-logits-to-keep-probe.env"
+    )
     zero3_cached = _source("configs/sft/qwen3.5-full-10step-4gpu-zero3-offload-cached.env")
 
     for source in (
@@ -367,6 +382,9 @@ def test_qwen35_fsdp2_candidate_profiles_are_backend_exclusive() -> None:
         sp4_negative,
         sp4_one_step,
         sp4_ten_step,
+        sp4_bf16_gate,
+        sp4_adafactor_gate,
+        sp4_logits_probe,
     ):
         assert "IFV_FSDP=fsdp2" in source
         assert "IFV_DEEPSPEED" not in source
@@ -387,6 +405,13 @@ def test_qwen35_fsdp2_candidate_profiles_are_backend_exclusive() -> None:
     assert "IFV_GRADIENT_ACCUMULATION_STEPS=1" in sp4_one_step
     assert "IFV_MAX_STEPS=10" in sp4_ten_step
     assert "IFV_GRADIENT_ACCUMULATION_STEPS=1" in sp4_ten_step
+    assert "IFV_MAX_STEPS=2" in sp4_bf16_gate
+    assert "IFV_BF16=false" in sp4_bf16_gate
+    assert "IFV_FP16=false" in sp4_bf16_gate
+    assert "IFV_MAX_STEPS=2" in sp4_adafactor_gate
+    assert "IFV_OPTIM=adafactor" in sp4_adafactor_gate
+    assert "IFV_MAX_STEPS=2" in sp4_logits_probe
+    assert "IFV_USE_LOGITS_TO_KEEP=true" in sp4_logits_probe
     assert "IFV_DEEPSPEED=training/configs/deepspeed/zero3-optimizer-offload.json" in zero3_cached
     assert "IFV_FSDP" not in zero3_cached
     assert "IFV_GRADIENT_CHECKPOINTING=true" in zero3_cached

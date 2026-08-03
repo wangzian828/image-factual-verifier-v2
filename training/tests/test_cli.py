@@ -119,3 +119,4 @@ def test_training_profile_cli_executes_real_branch(
     assert result["experiment_id"] == "exp-cli"
     assert result["profile_id"] == "profile-cli"
     assert result["speed_seconds_per_step"]["last"] == 12.5
+    assert result["train_step_metric_rows"] == 0

@@ -117,9 +117,17 @@ def summarize_training_log(
                 metric["max_steps"] = max_steps
             metrics.append(metric)
 
+    train_step_metrics = [
+        row
+        for row in metrics
+        if "loss" in row and "eval_loss" not in row and "train_loss" not in row
+    ]
+    eval_metrics = [row for row in metrics if "eval_loss" in row]
+    summary_metrics = [row for row in metrics if "train_runtime" in row]
+    speed_source = train_step_metrics if train_step_metrics else metrics
     speed_values = [
         value
-        for row in metrics
+        for row in speed_source
         if (value := _metric_value(row, "train_speed(s/it)", "train_runtime_seconds_per_step"))
         is not None
     ]
@@ -141,6 +149,9 @@ def summarize_training_log(
         "train_log": str(train_log),
         "line_count": line_count,
         "metric_rows": len(metrics),
+        "train_step_metric_rows": len(train_step_metrics),
+        "eval_metric_rows": len(eval_metrics),
+        "summary_metric_rows": len(summary_metrics),
         "detected_errors": detected_errors,
         "passed_basic_log_gate": not detected_errors,
         "steps": {
@@ -167,6 +178,16 @@ def summarize_training_log(
         "eval_loss": {
             "count": len(eval_loss_values),
             "last": eval_loss_values[-1] if eval_loss_values else None,
+        },
+        "runtime_seconds": {
+            "train_runtime": (
+                _metric_value(summary_metrics[-1], "train_runtime")
+                if summary_metrics
+                else None
+            ),
+            "eval_runtime_last": (
+                _metric_value(eval_metrics[-1], "eval_runtime") if eval_metrics else None
+            ),
         },
     }
 

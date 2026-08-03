@@ -125,6 +125,30 @@ fi
 if [[ "${IFV_ADD_NON_THINKING_PREFIX:-false}" == "true" ]]; then
   args+=(--add_non_thinking_prefix true)
 fi
+if [[ -n "${IFV_GROUP_BY_LENGTH:-}" ]]; then
+  args+=(--group_by_length "$IFV_GROUP_BY_LENGTH")
+fi
+if [[ -n "${IFV_BF16:-}" ]]; then
+  args+=(--bf16 "$IFV_BF16")
+fi
+if [[ -n "${IFV_FP16:-}" ]]; then
+  args+=(--fp16 "$IFV_FP16")
+fi
+if [[ -n "${IFV_OPTIM:-}" ]]; then
+  args+=(--optim "$IFV_OPTIM")
+fi
+if [[ -n "${IFV_OPTIM_ARGS:-}" ]]; then
+  args+=(--optim_args "$IFV_OPTIM_ARGS")
+fi
+if [[ -n "${IFV_USE_LIGER_KERNEL:-}" ]]; then
+  args+=(--use_liger_kernel "$IFV_USE_LIGER_KERNEL")
+fi
+if [[ -n "${IFV_USE_LOGITS_TO_KEEP:-}" ]]; then
+  args+=(--use_logits_to_keep "$IFV_USE_LOGITS_TO_KEEP")
+fi
+if [[ -n "${IFV_TORCH_EMPTY_CACHE_STEPS:-}" ]]; then
+  args+=(--torch_empty_cache_steps "$IFV_TORCH_EMPTY_CACHE_STEPS")
+fi
 if [[ -n "${IFV_EXPERTS_IMPL:-}" ]]; then
   args+=(--experts_impl "$IFV_EXPERTS_IMPL")
 fi

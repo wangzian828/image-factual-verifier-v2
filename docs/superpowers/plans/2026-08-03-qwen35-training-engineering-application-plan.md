@@ -537,3 +537,27 @@ The following sequence is pre-registered before the remaining multi-step runs:
    configuration when differences are within run variance.
 
 No profile is promoted from a one-step result alone.
+
+## 14. Steady-state recovery probes after AdamW OOM
+
+The explicit accumulation-1 FSDP2 + SP4 + padding-free 10-step run failed on the
+second training batch after the first optimizer step. The first step created full
+AdamW moment state; the next backward all-gather then requested about 1.89 GiB while
+less than 0.9 GiB remained free per GPU. This rules out the one-step result as a
+production candidate.
+
+Bounded two-step probes must run before any new 10-step attempt:
+
+1. `bf16params`: set `--bf16 false --fp16 false` while keeping
+   `--torch_dtype bfloat16`. This tests whether avoiding Accelerate FSDP2's FP32
+   trainable-parameter upcast leaves enough memory for AdamW steady state.
+2. `adafactor`: keep FSDP2/SP4/padding-free but replace AdamW with the factorized
+   Adafactor optimizer. This is not AdamW-equivalent and can only become a speed /
+   capacity candidate after loss, save, and resume gates pass.
+3. `logits-to-keep-probe`: force `use_logits_to_keep=true` only as a compatibility
+   probe. It is not eligible for promotion unless the step-1 loss matches the
+   frozen reference and sequence-parallel label handling is explicitly verified.
+
+The single-dataset launcher now forwards `IFV_GROUP_BY_LENGTH`; however, ms-swift's
+sequence-parallel dataloader uses its own sampler. Therefore SP4 runs still need
+real multi-step gates rather than relying on a "longest row first" assumption.
