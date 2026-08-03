@@ -136,6 +136,10 @@ def _collect_records(investigation: ImageOnlyInvestigationState) -> dict[str, An
         "material_discrepancies": [
             item.model_dump(mode="json") for item in investigation.material_discrepancies
         ],
+        "discrepancy_decisions": [
+            item.model_dump(mode="json")
+            for item in investigation.discrepancy_decisions
+        ],
         "discrepancy_coverage_audits": [
             item.model_dump(mode="json")
             for item in investigation.discrepancy_coverage_audits

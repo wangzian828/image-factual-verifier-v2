@@ -353,6 +353,46 @@ def extract_source_visible_property(source_text: str) -> str:
             continue
         if score < 4:
             continue
+        sky_color_match = re.search(
+            r"\b(?:the\s+)?sky\s+"
+            r"(?:was|is|appears?|looked|looks)\s+"
+            r"(?:just\s+)?(?:painted\s+in|colored|coloured)\s+"
+            r"(?:red\s*,\s*white\s*(?:,\s*and)?\s*blue|"
+            r"blue\s*,\s*white\s*(?:,\s*and)?\s*red)\b",
+            sentence,
+            flags=re.IGNORECASE,
+        )
+        if sky_color_match:
+            sky_hint = re.sub(
+                r"^(?:the\s+)",
+                "",
+                _one_line(sky_color_match.group(0)),
+                flags=re.IGNORECASE,
+            )
+            ranked.append(
+                (score + 8, sky_hint[:160])
+            )
+            continue
+        clothing_match = re.search(
+            r"\bwearing\s+(?:a\s+|an\s+|the\s+)?"
+            r"(?P<clothing>[^.;]{3,160}?)"
+            r"(?=\s*,\s*(?:holding|placing|standing|sitting|lying)\b|[.;]|$)",
+            sentence,
+            flags=re.IGNORECASE,
+        )
+        if clothing_match and "without wearing" not in lowered:
+            clothing = _one_line(clothing_match.group("clothing"))
+            held_match = re.search(
+                r"\bholding\s+(?:a\s+|an\s+|the\s+)?"
+                r"(?P<held>[^.;]{3,100})",
+                sentence,
+                flags=re.IGNORECASE,
+            )
+            if held_match:
+                held = _one_line(held_match.group("held"))
+                clothing = f"{clothing}; holding {held}"
+            ranked.append((score + 8, clothing[:220]))
+            continue
         version_match = re.search(
             r"\bversion\s+of\s+(?:a\s+|an\s+|the\s+)?([^.;]{3,100})",
             sentence,

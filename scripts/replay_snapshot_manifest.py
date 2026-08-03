@@ -26,6 +26,94 @@ def _summary(result: Mapping[str, Any]) -> dict[str, Any]:
     records = records if isinstance(records, Mapping) else {}
     visual_records = records.get("visual_reinspections")
     visual_records = visual_records if isinstance(visual_records, list) else []
+    evidence_records = records.get("evidence")
+    evidence_records = (
+        evidence_records if isinstance(evidence_records, list) else []
+    )
+    assessment_records = records.get("claim_assessments")
+    assessment_records = (
+        assessment_records if isinstance(assessment_records, list) else []
+    )
+    discrepancy_records = records.get("material_discrepancies")
+    discrepancy_records = (
+        discrepancy_records if isinstance(discrepancy_records, list) else []
+    )
+    decision_records = records.get("discrepancy_decisions")
+    decision_records = (
+        decision_records if isinstance(decision_records, list) else []
+    )
+    decision_2 = result.get("decision_2_update")
+    decision_2 = decision_2 if isinstance(decision_2, Mapping) else {}
+    accepted_assessment_ids = {
+        str(item)
+        for item in decision_2.get("accepted_assessment_ids", []) or []
+    }
+    accepted_discrepancy_id = str(
+        decision_2.get("accepted_discrepancy_id") or ""
+    )
+    resolved_visual_evidence_ids = {
+        str(evidence_id)
+        for record in visual_records
+        if isinstance(record, Mapping) and record.get("status") == "resolved"
+        for evidence_id in record.get("evidence_ids", []) or []
+        if any(
+            isinstance(evidence, Mapping)
+            and str(evidence.get("evidence_id")) == str(evidence_id)
+            and evidence.get("evidence_kind") == "image_region"
+            and evidence.get("tool_name") == "focused_visual_inspection"
+            for evidence in evidence_records
+        )
+    }
+    consumed_evidence_ids = {
+        str(evidence_id)
+        for assessment in assessment_records
+        if isinstance(assessment, Mapping)
+        and str(assessment.get("assessment_id")) in accepted_assessment_ids
+        for evidence_id in assessment.get("evidence_ids", []) or []
+    }
+    consumed_evidence_ids.update(
+        str(evidence_id)
+        for discrepancy in discrepancy_records
+        if isinstance(discrepancy, Mapping)
+        and str(discrepancy.get("discrepancy_id"))
+        == accepted_discrepancy_id
+        for evidence_id in discrepancy.get("evidence_ids", []) or []
+    )
+    decision_record = next(
+        (
+            record
+            for record in reversed(decision_records)
+            if isinstance(record, Mapping)
+            and str(record.get("decision_id"))
+            == str(decision_2.get("decision_id") or "")
+        ),
+        {},
+    )
+    output = (
+        decision_record.get("output")
+        if isinstance(decision_record, Mapping)
+        else {}
+    )
+    output = output if isinstance(output, Mapping) else {}
+    disposition = output.get("visual_evidence_disposition")
+    disposition = disposition if isinstance(disposition, Mapping) else {}
+    disposition_value = str(disposition.get("disposition") or "")
+    consumed_visual_ids = sorted(
+        resolved_visual_evidence_ids & consumed_evidence_ids
+    )
+    if not decision_2:
+        consumption_mode = "not_run"
+    elif not resolved_visual_evidence_ids:
+        consumption_mode = "not_required"
+    elif consumed_visual_ids:
+        consumption_mode = "consumed"
+    elif (
+        disposition_value
+        == "irrelevant_to_current_claim_or_discrepancy"
+    ):
+        consumption_mode = "explicitly_irrelevant"
+    else:
+        consumption_mode = "missing"
     basis = result.get("compiled_basis")
     basis = basis if isinstance(basis, Mapping) else {}
     return {
@@ -39,6 +127,20 @@ def _summary(result: Mapping[str, Any]) -> dict[str, Any]:
         "visual_inspection_ran": result.get("visual_inspection_update")
         is not None,
         "decision_2_ran": result.get("decision_2_update") is not None,
+        "resolved_visual_evidence_ids": sorted(
+            resolved_visual_evidence_ids
+        ),
+        "decision_2_consumed_visual_evidence_ids": consumed_visual_ids,
+        "decision_2_visual_evidence_disposition": disposition_value,
+        "decision_2_visual_consumption_mode": consumption_mode,
+        "decision_2_visual_compliant": consumption_mode
+        in {"consumed", "explicitly_irrelevant", "not_required"},
+        "decision_2_deterministic_visual_consumption_fallback": bool(
+            decision_2.get("deterministic_visual_consumption_fallback")
+        ),
+        "decision_2_deterministic_exhaustion_fallback": bool(
+            decision_2.get("deterministic_decision_exhaustion_fallback")
+        ),
         "composite_success": bool(result.get("composite_success")),
         "compiled_verdict": result.get("compiled_verdict", ""),
         "decision_mode": basis.get("decision_mode", ""),
@@ -162,6 +264,38 @@ def main() -> int:
         ),
         "visual_inspection_ran_count": sum(
             bool(item["visual_inspection_ran"]) for item in summaries
+        ),
+        "resolved_visual_evidence_case_count": sum(
+            bool(item["resolved_visual_evidence_ids"])
+            for item in summaries
+        ),
+        "decision_2_visual_compliant_count": sum(
+            bool(item["decision_2_visual_compliant"])
+            for item in summaries
+        ),
+        "decision_2_visual_consumed_count": sum(
+            item["decision_2_visual_consumption_mode"] == "consumed"
+            for item in summaries
+        ),
+        "decision_2_visual_explicitly_irrelevant_count": sum(
+            item["decision_2_visual_consumption_mode"]
+            == "explicitly_irrelevant"
+            for item in summaries
+        ),
+        "decision_2_visual_missing_count": sum(
+            item["decision_2_visual_consumption_mode"] == "missing"
+            for item in summaries
+        ),
+        "decision_2_deterministic_fallback_count": sum(
+            bool(
+                item[
+                    "decision_2_deterministic_visual_consumption_fallback"
+                ]
+                or item[
+                    "decision_2_deterministic_exhaustion_fallback"
+                ]
+            )
+            for item in summaries
         ),
         "composite_success_count": sum(
             bool(item["composite_success"]) for item in summaries

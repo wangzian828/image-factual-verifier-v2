@@ -1884,6 +1884,30 @@ def test_source_visible_property_extraction_is_short_and_rejects_scene_support()
         )
         == "orange-colored patch around its nose and mouth"
     )
+    assert (
+        extract_source_visible_property(
+            "A hyper-realistic shot shows a woman wearing a simple brown "
+            "long-sleeved top and a yellow cloth covering her lower half, "
+            "holding a silver rosary with a cross in her hands."
+        )
+        == (
+            "simple brown long-sleeved top and a yellow cloth covering her "
+            "lower half; holding silver rosary with a cross in her hands"
+        )
+    )
+    assert (
+        extract_source_visible_property(
+            "The president is wearing a white robe and red sash, placing a "
+            "hand radiating golden light on a patient."
+        )
+        == "white robe and red sash"
+    )
+    assert (
+        extract_source_visible_property(
+            "The sky was just painted in red, white, and blue by the aerial review."
+        )
+        == "sky was just painted in red, white, and blue"
+    )
 
 
 def test_runtime_binding_requires_a_concrete_source_visible_property() -> None:
