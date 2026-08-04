@@ -92,7 +92,7 @@ def test_same_reference_for_a_different_task_is_still_deduplicated() -> None:
     )
 
 
-def test_reverse_image_search_branches_are_distinct_routes() -> None:
+def test_reverse_image_search_branches_share_one_image_target_route() -> None:
     lens = {
         "__question_id": "task-1",
         "image_input": "input.png",
@@ -104,7 +104,7 @@ def test_reverse_image_search_branches_are_distinct_routes() -> None:
         "branch": "semantic",
     }
 
-    assert not routes_semantically_equivalent(
+    assert routes_semantically_equivalent(
         "reverse_image_search",
         lens,
         "reverse_image_search",
@@ -118,7 +118,7 @@ def test_reverse_image_search_branches_are_distinct_routes() -> None:
     )
 
 
-def test_same_reverse_image_branch_is_available_to_a_different_task() -> None:
+def test_same_reverse_image_target_is_deduplicated_across_tasks() -> None:
     left = {
         "__question_id": "task-1",
         "image_input": "input.png",
@@ -127,6 +127,26 @@ def test_same_reverse_image_branch_is_available_to_a_different_task() -> None:
     right = {
         "__question_id": "task-2",
         "image_input": "input.png",
+        "branch": "lens",
+    }
+
+    assert routes_semantically_equivalent(
+        "reverse_image_search",
+        left,
+        "reverse_image_search",
+        right,
+    )
+
+
+def test_different_reverse_image_targets_remain_distinct_routes() -> None:
+    left = {
+        "__question_id": "task-1",
+        "image_input": "input.png",
+        "branch": "lens",
+    }
+    right = {
+        "__question_id": "task-1",
+        "image_input": "crop.png",
         "branch": "lens",
     }
 

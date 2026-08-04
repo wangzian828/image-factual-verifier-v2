@@ -1427,7 +1427,7 @@ def test_task_tool_contract_rejects_unsuggested_ocr() -> None:
     assert task.task_id in error
 
 
-def test_failed_lens_keeps_semantic_and_text_routes_executable() -> None:
+def test_failed_root_image_search_moves_to_text_routes() -> None:
     case, state = _runtime_state()
     task = next(
         item
@@ -1462,7 +1462,10 @@ def test_failed_lens_keeps_semantic_and_text_routes_executable() -> None:
     )
 
     assert coverage.stop_reason == "continue"
-    assert any(route.startswith("reverse_image_search:semantic:") for route in routes)
+    assert not any(
+        route.startswith("reverse_image_search:")
+        for route in routes
+    )
     assert any(route.startswith("text_search:") for route in routes)
 
 
@@ -1551,10 +1554,7 @@ def test_empty_batch_inspection_exposes_one_bounded_sibling_fallback() -> None:
         fact_id=state.core_verdict_fact_id or "",
     )
 
-    assert set(released_routes) == {
-        f"reverse_image_search:semantic:{task.task_id}",
-        f"text_search:{task.task_id}",
-    }
+    assert released_routes == [f"text_search:{task.task_id}"]
 
 
 def test_failed_comparison_skips_same_direction_sibling_but_keeps_distinct_lead() -> None:
@@ -2059,14 +2059,9 @@ def test_two_mixed_inspections_release_new_retrieval_routes() -> None:
         task_ids={task.task_id},
     )
 
-    assert set(routes) == {
-        f"reverse_image_search:semantic:{task.task_id}",
-        f"text_search:{task.task_id}",
-    }
-    assert executable == {"reverse_image_search", "text_search"}
-    assert constraints == {
-        "reverse_image_search": {"branch": ["semantic"]}
-    }
+    assert routes == [f"text_search:{task.task_id}"]
+    assert executable == {"text_search"}
+    assert constraints == {}
 
 
 def test_empty_inspection_batch_does_not_exhaust_unused_text_search_route() -> None:

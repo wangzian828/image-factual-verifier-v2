@@ -88,6 +88,8 @@ def route_signature(tool_name: str, tool_args: Mapping[str, Any]) -> dict[str, A
         "count_objects",
         "ocr_with_position",
     }:
+        if tool == "crop_and_search":
+            signature["image_target"] = _image_target_identity(args)
         if tool == "focused_visual_inspection":
             signature["scope"] = str(args.get("scope", "")).strip().lower()
             signature["regions"] = [
@@ -110,6 +112,7 @@ def route_signature(tool_name: str, tool_args: Mapping[str, Any]) -> dict[str, A
         )
     elif tool == "reverse_image_search":
         signature["image_input"] = str(args.get("image_input", "")).strip()
+        signature["image_target"] = _image_target_identity(args)
         signature["branch"] = str(args.get("branch", "lens")).strip().lower()
     elif tool in {"check_consistency", "analyze_visual_anomalies"}:
         signature["focus"] = " ".join(
@@ -147,6 +150,7 @@ def routes_semantically_equivalent(
             "compare_with_reference",
             "current_time",
             "text_search",
+            "reverse_image_search",
         }
         and
         left.get("task_id")
@@ -218,11 +222,17 @@ def routes_semantically_equivalent(
                 str(right.get("focus", "")),
             )
             >= 0.75
+            and (
+                tool != "crop_and_search"
+                or (
+                    left.get("image_target")
+                    and left.get("image_target") == right.get("image_target")
+                )
+            )
         )
     if tool == "reverse_image_search":
-        return (
-            left.get("image_input") == right.get("image_input")
-            and left.get("branch") == right.get("branch")
+        return bool(left.get("image_target")) and (
+            left.get("image_target") == right.get("image_target")
         )
     if tool in {
         "current_time",
@@ -327,3 +337,14 @@ def _bbox_overlap(left: Any, right: Any) -> float:
     right_area = max(0.0, rx2 - rx1) * max(0.0, ry2 - ry1)
     union = left_area + right_area - intersection
     return intersection / union if union > 0 else 0.0
+
+
+def _image_target_identity(tool_args: Mapping[str, Any]) -> str:
+    """Return the concrete image target, independent of task or branch."""
+
+    args = dict(tool_args or {})
+    return str(
+        args.get("image_target_id")
+        or args.get("image_input")
+        or ""
+    ).strip()

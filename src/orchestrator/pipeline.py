@@ -2787,7 +2787,7 @@ class Orchestrator:
                 continue
             if parts[0] == "reverse_image_search" and len(parts) == 3:
                 if parts[2] in task_ids:
-                    branches.append(parts[1])
+                    branches.extend(["lens", "semantic"])
             elif parts[0] == "visit" and len(parts) == 3:
                 if parts[1] in task_ids:
                     pages.append(parts[2])
@@ -2895,7 +2895,7 @@ class Orchestrator:
                 continue
             if parts[0] == "reverse_image_search" and len(parts) == 3:
                 if parts[2] in task_ids:
-                    branches.append(parts[1])
+                    branches.extend(["lens", "semantic"])
             elif parts[0] == "visit" and len(parts) == 3:
                 if parts[1] in task_ids:
                     pages.append(parts[2])

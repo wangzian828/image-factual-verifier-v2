@@ -908,7 +908,9 @@ def test_discrepancy_action_skips_exhausted_active_task(
     ] == [executable.task_id]
 
 
-def test_reverse_image_branches_are_consumed_per_task(tmp_path: Path) -> None:
+def test_root_image_reverse_search_is_consumed_across_tasks(
+    tmp_path: Path,
+) -> None:
     image_path = tmp_path / "per-task-reverse-routes.jpg"
     image_path.write_bytes(b"per-task-reverse-routes")
     state, investigation = _state(image_path)
@@ -943,6 +945,14 @@ def test_reverse_image_branches_are_consumed_per_task(tmp_path: Path) -> None:
         deep=True,
     )
     investigation.search_hypotheses.append(second_hypothesis)
+
+    initial_reverse_routes = [
+        route
+        for route in remaining_claim_hypothesis_routes(investigation)
+        if route.startswith("reverse_image_search:")
+    ]
+    assert len(initial_reverse_routes) == 1
+
     investigation.attempted_routes.append(
         json.dumps(
             {
@@ -964,10 +974,27 @@ def test_reverse_image_branches_are_consumed_per_task(tmp_path: Path) -> None:
         task_ids={second.task_id},
     )
 
-    assert f"reverse_image_search:lens:{first.task_id}" not in first_routes
-    assert f"reverse_image_search:semantic:{first.task_id}" in first_routes
-    assert f"reverse_image_search:lens:{second.task_id}" in second_routes
-    assert f"reverse_image_search:semantic:{second.task_id}" in second_routes
+    assert not any(
+        route.startswith("reverse_image_search:")
+        for route in first_routes
+    )
+    assert not any(
+        route.startswith("reverse_image_search:")
+        for route in second_routes
+    )
+    task_ids = {first.task_id, second.task_id}
+    assert "reverse_image_search" not in (
+        orchestrator._discrepancy_executable_tool_names(
+            investigation,
+            task_ids=task_ids,
+        )
+    )
+    assert "reverse_image_search" not in (
+        orchestrator._discrepancy_tool_argument_constraints(
+            investigation,
+            task_ids=task_ids,
+        )
+    )
 
 
 def test_discrepancy_decision_consumes_pending_result_on_same_chain(

@@ -74,6 +74,7 @@ MAX_IMAGE_CLAIMS = 3
 MAX_SEARCH_HYPOTHESES = 12
 MAX_NEW_HYPOTHESES_PER_DECISION = 3
 MAX_V4_VISUAL_REINSPECTIONS = 1
+ROOT_IMAGE_TARGET = "root_image"
 COMPOSITE_SOURCE_VISUAL_DISCREPANCY_FAMILY = (
     "composite:source_visual_discrepancy"
 )
@@ -7037,7 +7038,7 @@ def remaining_material_routes(
                 attempted.get(task.task_id, []),
             )
         )
-    return list(dict.fromkeys(routes))
+    return _deduplicate_shared_image_routes(routes)
 
 
 def remaining_claim_hypothesis_routes(
@@ -7077,7 +7078,7 @@ def remaining_claim_hypothesis_routes(
                 attempted.get(task.task_id, []),
             )
         )
-    return list(dict.fromkeys(routes))
+    return _deduplicate_shared_image_routes(routes)
 
 
 def archive_recall_available(
@@ -7333,15 +7334,13 @@ def _remaining_task_material_routes(
 
     text_search_count = 0
     one_shot_tools: set[str] = set()
-    attempted_reverse_branches: set[str] = set()
+    attempted_root_image_reverse_search = _attempted_root_image_reverse_search(
+        state
+    )
     for route in attempts:
         tool_name = str(route.get("tool", "")).strip()
         if tool_name == "text_search":
             text_search_count += 1
-        elif tool_name == "reverse_image_search":
-            attempted_reverse_branches.add(
-                str(route.get("branch", "lens")).strip().lower() or "lens"
-            )
         elif tool_name not in {"visit", "compare_with_reference"}:
             one_shot_tools.add(tool_name)
 
@@ -7390,12 +7389,10 @@ def _remaining_task_material_routes(
         # more optional branch from the stale plan. Once attempted, the normal
         # route inventory resumes.
         return [f"text_search:{task.task_id}"]
-    if "reverse_image_search" in allowed:
-        for branch in ("lens", "semantic"):
-            if branch not in attempted_reverse_branches:
-                routes.append(
-                    f"reverse_image_search:{branch}:{task.task_id}"
-                )
+    if "reverse_image_search" in allowed and not attempted_root_image_reverse_search:
+        routes.append(
+            f"reverse_image_search:{ROOT_IMAGE_TARGET}:{task.task_id}"
+        )
     if (
         "text_search" in allowed
         and not task.query_replan_count
@@ -7412,6 +7409,34 @@ def _remaining_task_material_routes(
         if tool_name in allowed and tool_name not in one_shot_tools:
             routes.append(f"{tool_name}:{task.task_id}")
     return routes
+
+
+def _attempted_root_image_reverse_search(
+    state: ImageOnlyInvestigationState,
+) -> bool:
+    """Current v4 reverse-image calls all target the injected root image."""
+
+    return any(
+        str(route.get("tool", "")).strip() == "reverse_image_search"
+        for route in _iter_attempted_routes(state)
+    )
+
+
+def _deduplicate_shared_image_routes(routes: Sequence[str]) -> List[str]:
+    """Keep one route per shared image target while retaining task ownership."""
+
+    seen_targets: set[str] = set()
+    deduplicated: List[str] = []
+    for route in routes:
+        parts = route.split(":", 2)
+        if parts[0] == "reverse_image_search" and len(parts) == 3:
+            target = parts[1]
+            if target in seen_targets:
+                continue
+            seen_targets.add(target)
+        if route not in deduplicated:
+            deduplicated.append(route)
+    return deduplicated
 
 
 def _current_replan_query_is_pending(
