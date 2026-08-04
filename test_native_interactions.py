@@ -535,6 +535,64 @@ def test_native_structured_output_correction_receives_exact_validator_error() ->
         "visual reinspection proposal must be the only state transition"
         in correction
     )
+    assert "claim_assessments=[]" in correction
+
+
+def test_native_structured_output_returns_opt_in_exhaustion_boundary(
+    tmp_path,
+) -> None:
+    invalid = {
+        "id": "structured-invalid",
+        "status": "completed",
+        "steps": [
+            {
+                "type": "model_output",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": json.dumps({"wrong": "value"}),
+                    }
+                ],
+            }
+        ],
+    }
+    backend = NativeFakeBackend(
+        [
+            invalid,
+            {**invalid, "id": "structured-invalid-again"},
+        ]
+    )
+    runner = StageRunner(
+        llm=backend,
+        system_prompt="Return structured output.",
+        tools=[],
+        output_schema=NativeStructuredOutput,
+        max_rounds=1,
+        stage_name="image_only_discrepancy_decision",
+        attach_image=False,
+        protocol_exhaustion_boundary=True,
+        runtime_store=CaseRuntimeStore(
+            tmp_path,
+            case_id="bounded-native-structured",
+            attempt_id="attempt",
+        ),
+        stop_output_factory=lambda: NativeStructuredOutput(value="boundary"),
+    )
+
+    parsed, steps = asyncio.run(runner.run("Review the current evidence."))
+
+    assert parsed is not None
+    assert parsed.value == "boundary"
+    assert len(backend.requests) == 2
+    assert [step.action_type for step in steps] == [
+        "output_rejected",
+        "output_rejected",
+        "output",
+    ]
+    assert steps[-1].metadata[
+        "protocol_correction_exhaustion_boundary"
+    ] is True
+    assert steps[-1].metadata["resolved_rejection_request_ids"]
 
 
 def test_native_output_before_tools_is_rejected() -> None:

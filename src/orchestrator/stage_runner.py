@@ -1042,6 +1042,14 @@ class StageRunner:
                         "schema."
                     )
             previous_interaction_id = interaction_id
+        if steps and self.protocol_exhaustion_boundary:
+            steps[-1].metadata["correction_budget_exhausted"] = True
+            steps[-1].metadata["termination_reason"] = (
+                "protocol_correction_budget_exhausted"
+            )
+            boundary = self._protocol_exhaustion_stage_boundary(steps)
+            if boundary is not None:
+                return boundary
         return None, steps
 
     async def _run_native_interactions(
@@ -3843,7 +3851,12 @@ class StageRunner:
                 "real or fake merely because this is a retry. Omit any Claim "
                 "assessment that has no reviewed owned Evidence or listed "
                 "directional Finding chain. Address every independent error in "
-                "the validator feedback. "
+                "the validator feedback. If the feedback requires "
+                "visual_reinspection, that request is the sole state transition: "
+                "set claim_assessments=[], material_discrepancy=null, "
+                "retire_hypothesis_ids=[], new_hypotheses=[], "
+                "visual_evidence_disposition=null, and verdict_proposal="
+                "'continue'. "
             )
             if "resolved focused visual Evidence" in reason:
                 message += (
