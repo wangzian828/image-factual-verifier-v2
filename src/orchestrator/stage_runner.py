@@ -1012,7 +1012,12 @@ class StageRunner:
                 },
             )
             steps.append(step)
-            parsed = self._validate_output(output_json) if output_json is not None else None
+            parsed: Optional[BaseModel] = None
+            schema_error = ""
+            if output_json is not None:
+                parsed, schema_error = self._validate_output_with_error(
+                    output_json
+                )
             if parsed is not None:
                 accepted, reason = self._accept_output(parsed, steps)
                 if accepted:
@@ -1023,10 +1028,19 @@ class StageRunner:
             else:
                 if output_json is not None:
                     step.action_type = "output_rejected"
-                    step.metadata["rejection_reason"] = (
-                        "output schema was invalid or incomplete"
+                    rejection_reason = (
+                        schema_error
+                        or "output schema was invalid or incomplete"
                     )
-                next_input = "Return one JSON object that exactly matches the required schema."
+                    step.metadata["rejection_reason"] = rejection_reason
+                    next_input = self._structured_output_correction_prompt(
+                        rejection_reason
+                    )
+                else:
+                    next_input = (
+                        "Return one JSON object that exactly matches the required "
+                        "schema."
+                    )
             previous_interaction_id = interaction_id
         return None, steps
 

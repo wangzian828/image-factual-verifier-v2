@@ -17,6 +17,13 @@ DEFAULT_INTERACTIONS_URL = (
     "https://generativelanguage.googleapis.com/v1beta/interactions"
 )
 RETRYABLE_HTTP_STATUSES = frozenset({429, 500, 502, 503, 504})
+_RETRYABLE_BAD_REQUEST_CODES = frozenset(
+    {
+        "invalid_request",
+        "malformed_tool_call",
+    }
+)
+_MAX_RETRYABLE_BAD_REQUEST_RETRIES = 1
 PENDING_INTERACTION_STATUSES = frozenset({"queued", "in_progress"})
 FAILED_INTERACTION_STATUSES = frozenset(
     {"failed", "cancelled", "canceled", "expired", "incomplete"}
@@ -291,8 +298,25 @@ class GeminiInteractionsClient:
                     retry_delays=retry_delays,
                 )
 
+            bad_request_retry_limit = min(
+                self.max_retries,
+                _MAX_RETRYABLE_BAD_REQUEST_RETRIES,
+            )
+            if (
+                _is_retryable_bad_request(response)
+                and attempt < bad_request_retry_limit
+            ):
+                retry_delays.append(
+                    await self._wait_before_retry(attempt, response=response)
+                )
+                continue
+
             if not response.is_success:
-                raise _http_error(response)
+                raise _http_error(
+                    response,
+                    retry_attempts=attempt if retry_delays else 0,
+                    retry_delays=retry_delays,
+                )
 
             try:
                 data = response.json()
@@ -554,6 +578,35 @@ def _response_retry_delay(response: httpx.Response) -> Optional[float]:
         if value is not None
     ]
     return max(delays) if delays else None
+
+
+def _is_retryable_bad_request(response: httpx.Response) -> bool:
+    """Return whether Gemini marked an HTTP 400 as safe to replay once.
+
+    Interactions can surface provider-side function-generation failures as
+    HTTP 400. These are distinct from a deterministic client contract error:
+    replaying the identical request may succeed. Keep the exception narrow and
+    bounded so unsupported request fields still fail immediately.
+    """
+
+    if response.status_code != 400:
+        return False
+    try:
+        payload = response.json()
+    except ValueError:
+        return False
+    if not isinstance(payload, Mapping):
+        return False
+    error = payload.get("error")
+    if not isinstance(error, Mapping):
+        return False
+    code = str(error.get("code", "")).strip().lower()
+    if code not in _RETRYABLE_BAD_REQUEST_CODES:
+        return False
+    if code == "invalid_request":
+        message = str(error.get("message", "")).strip().lower()
+        return message == "request contains an invalid argument."
+    return True
 
 
 def _parse_retry_after(value: str) -> Optional[float]:

@@ -7,6 +7,9 @@ from typing import Any, Dict, List
 import pytest
 from pydantic import BaseModel, Field
 
+from src.orchestrator.investigation_models import (
+    DiscrepancyDecisionProposalOutput,
+)
 from src.orchestrator.source_access import SourceAccessPolicy
 from src.orchestrator.runtime_events import (
     CaseRuntimeStore,
@@ -463,6 +466,75 @@ def test_native_structured_output_steps_record_request_parent_and_response_id() 
     assert steps[1].metadata["previous_interaction_id"] == "structured-root"
     assert steps[1].metadata["interaction_id"] == "structured-child"
     assert backend.requests[1]["previous_interaction_id"] == steps[1].metadata["previous_interaction_id"]
+
+
+def test_native_structured_output_correction_receives_exact_validator_error() -> None:
+    def decision_response(
+        interaction_id: str,
+        retire_hypothesis_ids: List[str],
+    ) -> Dict[str, Any]:
+        output = {
+            "claim_assessments": [],
+            "material_discrepancy": None,
+            "retire_hypothesis_ids": retire_hypothesis_ids,
+            "new_hypotheses": [],
+            "visual_reinspection": {
+                "claim_id": "claim-1",
+                "reason": "relation",
+                "scope": "relation",
+                "question": "Does the image show the source-grounded relation?",
+                "expected_property": "the source-grounded relation",
+            },
+            "visual_evidence_disposition": None,
+            "verdict_proposal": "continue",
+            "rationale": "Inspect the pixels before changing other state.",
+        }
+        return {
+            "id": interaction_id,
+            "status": "completed",
+            "steps": [
+                {
+                    "type": "model_output",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps(output),
+                        }
+                    ],
+                }
+            ],
+        }
+
+    backend = NativeFakeBackend(
+        [
+            decision_response("decision-invalid", ["hypothesis-1"]),
+            decision_response("decision-corrected", []),
+        ]
+    )
+    runner = StageRunner(
+        llm=backend,
+        system_prompt="Return one atomic discrepancy decision.",
+        tools=[],
+        output_schema=DiscrepancyDecisionProposalOutput,
+        max_rounds=1,
+        stage_name="image_only_discrepancy_decision",
+        attach_image=False,
+    )
+
+    parsed, steps = asyncio.run(runner.run("Review the current evidence."))
+
+    assert parsed is not None
+    assert parsed.visual_reinspection is not None
+    assert steps[0].action_type == "output_rejected"
+    assert (
+        "visual reinspection proposal must be the only state transition"
+        in steps[0].metadata["rejection_reason"]
+    )
+    correction = backend.requests[1]["input_payload"]
+    assert (
+        "visual reinspection proposal must be the only state transition"
+        in correction
+    )
 
 
 def test_native_output_before_tools_is_rejected() -> None:

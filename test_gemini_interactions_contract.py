@@ -334,6 +334,108 @@ def test_does_not_retry_other_http_statuses(
     assert "request rejected" in str(error.value)
 
 
+@pytest.mark.parametrize(
+    "error_code",
+    ["invalid_request", "malformed_tool_call"],
+)
+def test_retries_provider_replayable_bad_request_once(
+    monkeypatch: pytest.MonkeyPatch,
+    error_code: str,
+) -> None:
+    set_test_key(monkeypatch)
+    attempts = 0
+    delays: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        delays.append(delay)
+
+    async def scenario() -> dict[str, Any]:
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                message = (
+                    "Request contains an invalid argument."
+                    if error_code == "invalid_request"
+                    else "Model generated invalid JSON syntax."
+                )
+                return httpx.Response(
+                    400,
+                    request=request,
+                    json={
+                        "error": {
+                            "message": message,
+                            "code": error_code,
+                        }
+                    },
+                )
+            return httpx.Response(
+                200,
+                request=request,
+                json={
+                    "id": "interaction-replayed",
+                    "status": "completed",
+                },
+            )
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            client = GeminiInteractionsClient(
+                client=http,
+                max_retries=8,
+                retry_delay=1.0,
+                retry_jitter=0.0,
+                sleep=fake_sleep,
+            )
+            return await client.create(model="model", input="prompt")
+
+    assert run(scenario())["id"] == "interaction-replayed"
+    assert attempts == 2
+    assert delays == [1.0]
+
+
+def test_persistent_replayable_bad_request_is_retried_only_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    set_test_key(monkeypatch)
+    attempts = 0
+    delays: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        delays.append(delay)
+
+    async def scenario() -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal attempts
+            attempts += 1
+            return httpx.Response(
+                400,
+                request=request,
+                json={
+                    "error": {
+                        "message": "Request contains an invalid argument.",
+                        "code": "invalid_request",
+                    }
+                },
+            )
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            client = GeminiInteractionsClient(
+                client=http,
+                max_retries=8,
+                retry_delay=1.0,
+                retry_jitter=0.0,
+                sleep=fake_sleep,
+            )
+            await client.create(model="model", input="prompt")
+
+    with pytest.raises(GeminiInteractionsHTTPError) as error:
+        run(scenario())
+
+    assert attempts == 2
+    assert delays == [1.0]
+    assert error.value.retry_attempts == 1
+
+
 def test_retries_transport_errors(monkeypatch: pytest.MonkeyPatch) -> None:
     set_test_key(monkeypatch)
     attempts = 0
