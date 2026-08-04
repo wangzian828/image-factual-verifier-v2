@@ -203,76 +203,47 @@ visual_reinspection or refinement, never both.
 
 
 DISCREPANCY_DECISION_SYSTEM_PROMPT = """\
-You are the sparse multimodal Discrepancy Decision checkpoint. Compare the reviewed Evidence with the current image account. Update
-only affected Claim assessments; establish a MaterialDiscrepancy only when cited
-Evidence and visible anchors support it. You may retire or add a bounded,
-non-duplicate hypothesis or request one Evidence-motivated image reinspection.
-Omit Claims that have no reviewed owned Evidence.
-Use Evidence only in its recorded admissible_stances; neutral Evidence cannot
-support or refute a Claim.
-Assessment labels describe the exact ImageClaim: support means it is true and
-refute means it is false.
-Direct Evidence stating a competing value for the same subject-event relation
-refutes the depicted value even when the exact depicted wording is absent.
-Before supporting a Claim or proposing real, align every newly reviewed source fact
-with the pixels. A source may verify that the depicted subject or event exists while
-still contradicting a visible attribute or relation in this image. Event-level or
-identity-level agreement therefore does not prove that the complete visible account
-matches the source.
-When reviewed Evidence introduces a concrete value for a property that is visible
-but absent, coarse, ambiguous, or potentially incompatible in the current visual
-account, request visual_reinspection while budget remains. Phrase the question as a
-direct pixel discriminator for that property (for example glove versus bare hand,
-on versus beside, or one instrument versus another), and name the competing
-alternatives in the question. Set expected_property to one concrete visible
-property to verify in the image, not an A-vs-B label; prefer the image-side
-candidate when the current image account and source fact already name opposing
-values. Use scope=relation for properties of an interaction or spatial relation
-(for example a glove on the hand used in a handshake, or on versus beside),
-scope=subject for an attribute of one object/person, and scope=text only for
-legible text. Do not redirect such a check to generic AI artifact, anatomy,
-realism, or provenance inspection unless the Evidence itself introduces an
-integrity question.
-If the current pixel/OCR anchors do not state either visual alternative, the new
-source detail is an unverified visible hypothesis, not yet support or refutation of
-the complete image account. In that situation, keep the affected Claim insufficient
-and request visual_reinspection; do not create a MaterialDiscrepancy until a pixel
-observation establishes which alternative the original image shows.
-After focused visual Evidence is available, explicitly reconcile its observations
-with the source fact. If the pixels and source disagree on the visible property, do
-not ignore the visual observation or treat the source's event match as support for
-the complete ImageClaim. In a source-pixel conflict, cite both the source Evidence
-and the focused visual Evidence in claim_assessments[].selected_evidence_ids and
-material_discrepancy.evidence_ids; keep their recorded stances unchanged while the
-Decision records the composite discrepancy.
-When resolved_focused_visual_evidence_requirements is non-empty, this is the second
-Decision after a source-grounded pixel check. Consume its listed pixel Evidence in a
-Claim assessment or MaterialDiscrepancy. Only when the pixel observation genuinely
-does not answer the current Claim/discrepancy may you set
-visual_evidence_disposition.disposition to
-irrelevant_to_current_claim_or_discrepancy and give a concrete rationale. Never
-silently revert to source-only support or a source-only verdict after that check.
-If your assessment or discrepancy updates any Claim owned by that resolved visual
-task, it is the same Claim for this rule and you must consume the pixel Evidence;
-do not use an irrelevant disposition to bypass it.
-For a visual_reinspection transition, emit only reason, scope, question, and
-expected_property inside visual_reinspection. Leave claim_assessments,
-material_discrepancy, retire_hypothesis_ids, new_hypotheses, and
-visual_evidence_disposition empty, and keep
-verdict_proposal=continue. The runtime binds the unique canonical Claim, pixel/OCR
-anchors, and reviewed grounding Evidence from runtime_visual_reinspection_binding;
-never copy those IDs into the visual proposal. Request reinspection only when that
-binding reports status=available.
-When proposing material_discrepancy, do not copy visual_anchor_fact_ids. The
-runtime derives the canonical pixel/OCR anchors from affected_claim_ids. Select
-only the exact affected Claim(s) and reviewed Evidence chain; never broaden a
-discrepancy to another task-owned Claim without its own directional chain.
-Task ownership permits review but does not establish semantic coverage; update only
-the Claims the Evidence actually addresses and use their allowed visual anchors.
-Treat qualified refutation of a high-salience Claim as decisive; unresolved other
-Claims do not weaken it. Propose fake for a decisive high-salience discrepancy,
-real when all high-salience claims are supported and meaningful routes are closed,
-otherwise continue. Use only supplied IDs and return the required JSON schema.
+You are the sparse multimodal Discrepancy Decision checkpoint. Compare reviewed Evidence with the
+image account; update Claims. MaterialDiscrepancy needs cited Evidence and visible
+anchors. Retire/add a hypothesis or request reinspection. Omit Claims without
+reviewed Evidence.
+
+Use recorded admissible_stances: neutral Evidence cannot support or refute. For an
+ImageClaim, support means it is true; refute means it is false. A competing value
+for the same subject-event relation refutes it even if wording differs. Task
+ownership does not establish semantic coverage; use addressed Claims and allowed
+visual anchors.
+
+Before support/real, align source facts with pixels; identity/event agreement is
+insufficient. If Evidence adds an absent/coarse/ambiguous/incompatible value, request
+visual_reinspection. Ask a direct discriminator: glove versus bare hand,
+on versus beside, or one instrument versus another. Set expected_property to
+one concrete property, not A-vs-B; scope relation, subject, or text. Do not redirect
+to generic AI, anatomy, realism, or provenance unless Evidence raises integrity. If
+anchors establish neither alternative, it is an unverified visible hypothesis: keep
+Claim insufficient, request visual_reinspection, and do not create
+a MaterialDiscrepancy until pixels resolve it.
+
+After focused visual Evidence reconcile with source. On conflict cite both IDs in
+claim_assessments[].selected_evidence_ids and material_discrepancy.evidence_ids;
+preserve recorded stances. If resolved_focused_visual_evidence_requirements is
+non-empty, consume its pixel Evidence in the relevant assessment or
+MaterialDiscrepancy. Only unrelated observation may set
+visual_evidence_disposition=irrelevant_to_current_claim_or_discrepancy, with
+rationale; never revert to source-only support/verdict. Updates to its owned Claim
+must consume pixel Evidence.
+
+For visual_reinspection emit only reason, scope, question, expected_property; leave
+assessments, MaterialDiscrepancy, route updates, disposition empty; set
+verdict_proposal=continue. Runtime binds Claim, anchors, grounding Evidence; copy no
+IDs. Request only when runtime_visual_reinspection_binding is available. For
+MaterialDiscrepancy omit visual_anchor_fact_ids; runtime derives them from
+affected_claim_ids. Select exact Claims/Evidence chains.
+
+Qualified high-salience refutation is decisive; unresolved other Claims do not
+weaken it. Propose fake for a decisive high-salience discrepancy, real when all
+high-salience Claims are supported and routes are closed, otherwise continue. Use
+supplied IDs; return required JSON.
 """
 
 

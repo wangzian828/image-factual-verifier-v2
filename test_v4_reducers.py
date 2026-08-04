@@ -2229,6 +2229,283 @@ def test_source_assertion_visible_property_requires_visual_before_discrepancy() 
     assert visual_request["accepted_visual_question_id"]
 
 
+def test_source_visual_gate_rejects_source_only_follow_up_after_failed_visual() -> None:
+    state = _planned_state()
+    claim = state.image_claims[0]
+    task = next(
+        item for item in state.tasks if claim.claim_id in item.claim_ids
+    )
+    source = InvestigationEvidence(
+        evidence_id="evidence-source-after-failed-visual",
+        task_id=task.task_id,
+        fact_ids=[claim.fact_id],
+        function_call_id="call-source-after-failed-visual",
+        tool_name="visit",
+        evidence_kind="web_span",
+        source_url="https://example.org/source",
+        source_family="domain:example.org",
+        exact_text=(
+            "The source says the presenter is holding a silver microphone."
+        ),
+        span_start=0,
+        span_end=60,
+        artifact_sha256="e" * 64,
+        retrieved_at=datetime.now(timezone.utc).isoformat(),
+        stance="refute",
+        quality="strong",
+        directness="direct",
+        claim_binding="source_assertion",
+        relation_scope="same_relation",
+        relation_stance="contradicts",
+    )
+    state.evidence.append(source)
+    state.findings.append(
+        Finding(
+            finding_id="finding-source-after-failed-visual",
+            task_id=task.task_id,
+            fact_ids=[claim.fact_id],
+            statement="The source refutes the visible held-object relation.",
+            stance="refute",
+            evidence_ids=[source.evidence_id],
+            source_family_ids=[source.source_family],
+            quality="decisive",
+        )
+    )
+    request = apply_discrepancy_decision(
+        state,
+        DiscrepancyDecisionOutput(
+            visual_reinspection=VisualReinspectionRequest(
+                reason="relation",
+                scope="relation",
+                question=(
+                    "Is the presenter visibly holding a silver microphone?"
+                ),
+                expected_property="holding a silver microphone",
+                anchor_fact_ids=claim.anchor_fact_ids,
+                grounding_evidence_ids=[source.evidence_id],
+            ),
+            verdict_proposal="continue",
+            rationale="Request the required pixel check.",
+        ),
+        reviewed_evidence_ids=[source.evidence_id],
+        trigger="qualified_evidence",
+    )
+    assert request["accepted"] is True, request
+    record = state.visual_reinspections[-1]
+    record.status = "failed"
+    record.evidence_ids = []
+
+    before = state.model_dump(mode="json")
+    source_only = apply_discrepancy_decision(
+        state,
+        DiscrepancyDecisionOutput(
+            claim_assessments=[
+                ClaimAssessmentProposal(
+                    claim_id=claim.claim_id,
+                    assessment="refuted",
+                    selected_evidence_ids=[source.evidence_id],
+                    rationale="Improper source-only follow-up after visual failure.",
+                )
+            ],
+            material_discrepancy=MaterialDiscrepancyProposal(
+                statement="The source contradicts the visible held-object relation.",
+                affected_claim_ids=[claim.claim_id],
+                visual_anchor_fact_ids=claim.anchor_fact_ids,
+                evidence_ids=[source.evidence_id],
+                materiality="decisive",
+                status="established",
+                rationale="A failed visual check cannot establish this discrepancy.",
+            ),
+            verdict_proposal="fake",
+            rationale="This must remain fail-closed after visual failure.",
+        ),
+        reviewed_evidence_ids=[source.evidence_id],
+        trigger="qualified_evidence",
+    )
+
+    assert source_only["accepted"] is False
+    assert "must request targeted visual_reinspection" in source_only[
+        "rejected_reason"
+    ]
+    assert state.model_dump(mode="json") == before
+
+
+def test_source_visual_gate_is_scoped_to_the_pending_claim() -> None:
+    state = _state()
+    planning = ImageAccountPlanningOutput(
+        account_summary="The image presents a person and a visible label.",
+        image_claims=[
+            ImageClaimProposal(
+                claim_key="person-product",
+                statement="The presenter is holding the shown product.",
+                kind="relation",
+                predicate="depicts_relation",
+                anchor_fact_ids=["fact-visible-person"],
+                salience="high",
+            ),
+            ImageClaimProposal(
+                claim_key="visible-label",
+                statement="A visible label appears on the product.",
+                kind="text_claim",
+                predicate="reads",
+                anchor_fact_ids=["fact-visible-person"],
+                salience="medium",
+            ),
+        ],
+        search_hypotheses=[
+            SearchHypothesisProposal(
+                hypothesis_key="source-check",
+                statement="A source may clarify the visible properties.",
+                queries=["source visible properties"],
+                expected_information="A direct source.",
+                suggested_tools=["text_search"],
+            )
+        ],
+    )
+    assert apply_image_account_planning(state, planning)["accepted"] is True
+    claim_a, claim_b = state.image_claims
+    task = state.tasks[0]
+    source_a = InvestigationEvidence(
+        evidence_id="evidence-pending-claim-a",
+        task_id=task.task_id,
+        fact_ids=[claim_a.fact_id],
+        function_call_id="call-pending-claim-a",
+        tool_name="visit",
+        evidence_kind="web_span",
+        source_url="https://example.org/a",
+        source_family="domain:example.org",
+        exact_text="The source says the presenter is holding a silver microphone.",
+        span_start=0,
+        span_end=60,
+        artifact_sha256="f" * 64,
+        retrieved_at=datetime.now(timezone.utc).isoformat(),
+        stance="refute",
+        quality="strong",
+        directness="direct",
+        claim_binding="source_assertion",
+        relation_scope="same_relation",
+        relation_stance="contradicts",
+    )
+    source_b = InvestigationEvidence(
+        evidence_id="evidence-resolved-claim-b",
+        task_id=task.task_id,
+        fact_ids=[claim_b.fact_id],
+        function_call_id="call-resolved-claim-b",
+        tool_name="visit",
+        evidence_kind="web_span",
+        source_url="https://example.org/b",
+        source_family="domain:example.org",
+        exact_text="The source says the product has a red label.",
+        span_start=0,
+        span_end=48,
+        artifact_sha256="9" * 64,
+        retrieved_at=datetime.now(timezone.utc).isoformat(),
+        stance="support",
+        quality="strong",
+        directness="direct",
+        claim_binding="source_assertion",
+        relation_scope="same_relation",
+        relation_stance="supports",
+    )
+    state.evidence.extend([source_a, source_b])
+    request = apply_discrepancy_decision(
+        state,
+        DiscrepancyDecisionOutput(
+            visual_reinspection=VisualReinspectionRequest(
+                reason="text",
+                scope="text",
+                question="Is a red label visibly present on the product?",
+                expected_property="a red label on the product",
+                anchor_fact_ids=claim_b.anchor_fact_ids,
+                grounding_evidence_ids=[source_b.evidence_id],
+            ),
+            verdict_proposal="continue",
+            rationale="Inspect Claim B pixels.",
+        ),
+        reviewed_evidence_ids=[source_b.evidence_id],
+        trigger="qualified_evidence",
+    )
+    assert request["accepted"] is True, request
+    record = state.visual_reinspections[-1]
+    visual_b = InvestigationEvidence(
+        evidence_id="evidence-pixel-claim-b",
+        task_id=record.task_id,
+        fact_ids=[claim_b.fact_id],
+        function_call_id="call-pixel-claim-b",
+        tool_name="focused_visual_inspection",
+        evidence_kind="image_region",
+        source_family="visual:focused_visual_inspection",
+        exact_text="The focused inspection observed the label.",
+        image_region=[0.1, 0.1, 0.5, 0.5],
+        artifact_sha256="8" * 64,
+        retrieved_at=datetime.now(timezone.utc).isoformat(),
+        stance="neutral",
+        quality="strong",
+        directness="direct",
+        claim_binding="pixel_observation",
+        visual_question_id=record.visual_question_id,
+        visual_scope="text",
+        visual_answer_status="observed",
+    )
+    state.evidence.append(visual_b)
+    record.status = "resolved"
+    record.evidence_ids = [visual_b.evidence_id]
+    state.findings.append(
+        Finding(
+            finding_id="finding-pending-claim-a",
+            task_id=task.task_id,
+            fact_ids=[claim_a.fact_id],
+            statement="The source refutes Claim A.",
+            stance="refute",
+            evidence_ids=[source_a.evidence_id],
+            source_family_ids=[source_a.source_family],
+            quality="decisive",
+        )
+    )
+
+    mixed = apply_discrepancy_decision(
+        state,
+        DiscrepancyDecisionOutput(
+            claim_assessments=[
+                ClaimAssessmentProposal(
+                    claim_id=claim_a.claim_id,
+                    assessment="refuted",
+                    selected_evidence_ids=[source_a.evidence_id],
+                    rationale="Improper source-only decision for Claim A.",
+                ),
+                ClaimAssessmentProposal(
+                    claim_id=claim_b.claim_id,
+                    assessment="insufficient",
+                    selected_evidence_ids=[visual_b.evidence_id],
+                    rationale="Consume Claim B's unrelated visual Evidence.",
+                ),
+            ],
+            material_discrepancy=MaterialDiscrepancyProposal(
+                statement="The source contradicts Claim A.",
+                affected_claim_ids=[claim_a.claim_id],
+                visual_anchor_fact_ids=claim_a.anchor_fact_ids,
+                evidence_ids=[source_a.evidence_id],
+                materiality="decisive",
+                status="established",
+                rationale="Claim A still needs its own pixel check.",
+            ),
+            verdict_proposal="fake",
+            rationale="This must not bypass Claim A's source-to-pixel gate.",
+        ),
+        reviewed_evidence_ids=[
+            source_a.evidence_id,
+            source_b.evidence_id,
+            visual_b.evidence_id,
+        ],
+        trigger="qualified_evidence",
+    )
+
+    assert mixed["accepted"] is False
+    assert "must request targeted visual_reinspection" in mixed[
+        "rejected_reason"
+    ]
+
+
 def test_source_visual_gate_cannot_use_generic_decision_exhaustion_fallback() -> None:
     state = _planned_state()
     evidence = _append_evidence(state)

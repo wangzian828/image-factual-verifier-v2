@@ -106,7 +106,7 @@ class VisitToolFixture(BaseTool):
 
     def call(self, params: dict[str, Any]) -> dict[str, Any]:
         self.calls.append(dict(params))
-        text = "The source photograph shows the person holding a microphone."
+        text = "The direct source contradicts the depicted held-object relation."
         return {
             "status": "success",
             "url": params["url"],
@@ -232,6 +232,7 @@ class PlanningThenReactBackend(ImageAccountPlanningBackend):
         super().__init__()
         self.react_task_id = ""
         self.react_count = 0
+        self.last_discrepancy_context: dict[str, Any] | None = None
 
     async def create_interaction(self, **kwargs: Any) -> dict[str, Any]:
         system = str(kwargs.get("system_instruction", ""))
@@ -240,13 +241,72 @@ class PlanningThenReactBackend(ImageAccountPlanningBackend):
         self.requests.append(kwargs)
         if "sparse multimodal Discrepancy Decision checkpoint" in system:
             payload = kwargs["input_payload"]
+            correction_text = ""
             if isinstance(payload, list):
                 user_input = payload[-1]
-                context = json.loads(user_input["content"][0]["text"])
+                correction_text = str(user_input["content"][0]["text"])
+                try:
+                    context = json.loads(correction_text)
+                except json.JSONDecodeError:
+                    context = self.last_discrepancy_context
             else:
                 context = json.loads(payload)
+            if context is None:
+                raise AssertionError("missing discrepancy Decision context")
+            self.last_discrepancy_context = context
             claim = context["image_claims"][0]
             evidence = context["reviewed_evidence"][0]
+            if (
+                correction_text
+                and "must request targeted visual_reinspection"
+                in correction_text
+            ):
+                return {
+                    "id": "discrepancy-decision-visual-correction",
+                    "status": "completed",
+                    "usage": {
+                        "total_input_tokens": 1,
+                        "total_output_tokens": 1,
+                        "total_thought_tokens": 0,
+                    },
+                    "steps": [
+                        {
+                            "type": "model_output",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": json.dumps(
+                                        {
+                                            "claim_assessments": [],
+                                            "material_discrepancy": None,
+                                            "retire_hypothesis_ids": [],
+                                            "new_hypotheses": [],
+                                            "visual_reinspection": {
+                                                "reason": "relation",
+                                                "scope": "relation",
+                                                "question": (
+                                                    "Does the original image show "
+                                                    "the source-grounded visible "
+                                                    "property?"
+                                                ),
+                                                "expected_property": (
+                                                    "the source-grounded visible "
+                                                    "property"
+                                                ),
+                                            },
+                                            "visual_evidence_disposition": None,
+                                            "verdict_proposal": "continue",
+                                            "rationale": (
+                                                "Request the required pixel check "
+                                                "before semantic source use."
+                                            ),
+                                        }
+                                    ),
+                                }
+                            ],
+                        }
+                    ],
+                }
             return {
                 "id": "discrepancy-decision-1",
                 "status": "completed",
@@ -884,9 +944,9 @@ def test_discrepancy_decision_consumes_pending_result_on_same_chain(
         evidence_kind="web_span",
         source_url="https://example.org/source",
         source_family="domain:example.org",
-        exact_text="The source photograph shows the person holding a microphone.",
+        exact_text="The direct source contradicts the depicted held-object relation.",
         span_start=0,
-        span_end=61,
+        span_end=64,
         artifact_sha256="a" * 64,
         retrieved_at=datetime.now(timezone.utc).isoformat(),
         stance="refute",
