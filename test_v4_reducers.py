@@ -811,6 +811,157 @@ def test_visual_evidence_is_scoped_to_the_selected_claim() -> None:
     assert evidence.fact_ids == [selected_claim.fact_id]
 
 
+def _record_same_capture_reference(
+    state: ImageOnlyInvestigationState,
+) -> tuple[InvestigationEvidence, Finding | None, dict[str, object]]:
+    claim = state.image_claims[0]
+    task = state.tasks[0]
+    step = StageStep(
+        action_type="tool_call",
+        tool_name="compare_with_reference",
+        tool_args={
+            "__question_id": task.task_id,
+            "__claim_id": claim.claim_id,
+            "reference_url": (
+                "https://www.noaa.gov/sites/default/files/styles/"
+                "landscape_width_1275/public/2026-06/"
+                "NOAA-Ship-Henry-B-Bigelow-in-waters-near-Newport-RI-"
+                "homeport.jpg"
+            ),
+        },
+        tool_result=json.dumps(
+            {
+                "status": "success",
+                "overall_observation": (
+                    "Both images are identical captures showing the NOAA "
+                    "vessel HENRY B. BIGELOW on the water against a distant "
+                    "shoreline."
+                ),
+                "resolved_reference_url": (
+                    "https://www.noaa.gov/sites/default/files/styles/"
+                    "landscape_width_1275/public/2026-06/"
+                    "NOAA-Ship-Henry-B-Bigelow-in-waters-near-Newport-RI-"
+                    "homeport.jpg"
+                ),
+                "same_subject_or_scene": True,
+                "same_capture_or_near_duplicate": True,
+                "likely_different_original_capture": False,
+                "edit_evidence_present": False,
+                "confidence": 0.98,
+            }
+        ),
+        metadata={"function_call_id": "call-noaa-same-capture-reference"},
+    )
+    observation = record_tool_observation(
+        state,
+        step,
+        image_sha256="b" * 64,
+    )
+    evidence = next(
+        item
+        for item in state.evidence
+        if item.evidence_id in observation["created_evidence_ids"]
+    )
+    finding = next(
+        (
+            item
+            for item in state.findings
+            if item.finding_id in observation["created_finding_ids"]
+        ),
+        None,
+    )
+    return evidence, finding, observation
+
+
+@pytest.mark.parametrize(
+    "predicate",
+    [
+        "depicts_vessel",
+        "shows_ship",
+        "vessel_identity",
+        "visible_hull_markings",
+    ],
+)
+def test_same_capture_reference_supports_free_visual_predicate_and_verdict_chain(
+    predicate: str,
+) -> None:
+    state = _planned_state()
+    claim = state.image_claims[0]
+    fact = next(item for item in state.facts if item.fact_id == claim.fact_id)
+    fact.statement = (
+        "The image depicts the NOAA fisheries research ship Henry B. Bigelow "
+        "(hull number R 225) navigating on coastal waters."
+    )
+    fact.predicate = predicate
+    claim.statement = fact.statement
+
+    evidence, finding, _observation = _record_same_capture_reference(state)
+
+    assert evidence.stance == "support"
+    assert evidence.claim_binding == "same_capture"
+    assert evidence.source_class == "official"
+    assert finding is not None
+    assert finding.stance == "support"
+    assert finding.evidence_ids == [evidence.evidence_id]
+
+    update = apply_discrepancy_decision(
+        state,
+        DiscrepancyDecisionOutput(
+            claim_assessments=[
+                ClaimAssessmentProposal(
+                    claim_id=claim.claim_id,
+                    assessment="supported",
+                    selected_evidence_ids=[evidence.evidence_id],
+                    rationale=(
+                        "The official same-capture reference directly supports "
+                        "the image-grounded vessel identity claim."
+                    ),
+                )
+            ],
+            retire_hypothesis_ids=[state.search_hypotheses[0].hypothesis_id],
+            verdict_proposal="real",
+            rationale="The single high-salience visual claim is supported.",
+        ),
+        reviewed_evidence_ids=[evidence.evidence_id],
+        trigger="qualified_evidence",
+    )
+
+    assert update["accepted"] is True, update
+    coverage = audit_discrepancy_coverage(state, decision_checkpoint=True)
+    verdict, basis = compile_discrepancy_verdict_basis(state)
+    assert coverage.stop_reason == "verdict_determined"
+    assert verdict == "real"
+    assert basis.evidence_ids == [evidence.evidence_id]
+    assert basis.finding_ids == [finding.finding_id]
+
+
+@pytest.mark.parametrize(
+    "predicate",
+    [
+        "located_at",
+        "depicts_event",
+        "dated_as",
+        "provenance_matches",
+    ],
+)
+def test_same_capture_reference_does_not_support_world_context_predicate(
+    predicate: str,
+) -> None:
+    state = _planned_state()
+    claim = state.image_claims[0]
+    fact = next(item for item in state.facts if item.fact_id == claim.fact_id)
+    fact.statement = "The image was captured near Newport, Rhode Island."
+    fact.predicate = predicate
+    claim.statement = fact.statement
+
+    evidence, finding, observation = _record_same_capture_reference(state)
+
+    assert evidence.stance == "neutral"
+    assert evidence.claim_binding == "same_capture"
+    assert finding is None
+    assert observation["created_finding_ids"] == []
+
+
 def test_image_account_planning_creates_stable_owned_graph() -> None:
     first = _state()
     second = _state()
@@ -3293,6 +3444,46 @@ def test_discrepancy_coverage_preserves_gap_for_binary_judgment_after_routes_clo
     assert basis.unresolved_gaps == [
         "No source binds the depicted held object."
     ]
+
+
+def test_bounded_basis_does_not_select_evidence_without_a_finding_chain() -> None:
+    state = _planned_state()
+    evidence = _append_evidence(state)
+    state.findings.clear()
+    state.tasks[0].finding_ids.clear()
+    claim = state.image_claims[0]
+    hypothesis_id = state.search_hypotheses[0].hypothesis_id
+
+    update = apply_discrepancy_decision(
+        state,
+        DiscrepancyDecisionOutput(
+            claim_assessments=[
+                ClaimAssessmentProposal(
+                    claim_id=claim.claim_id,
+                    assessment="insufficient",
+                    selected_evidence_ids=[evidence.evidence_id],
+                    remaining_gap="The reviewed material has no Finding chain.",
+                    rationale=(
+                        "Neutral or otherwise non-directional material may remain "
+                        "context, but cannot enter the selected verdict basis."
+                    ),
+                )
+            ],
+            retire_hypothesis_ids=[hypothesis_id],
+            verdict_proposal="continue",
+            rationale="Close the exhausted route without inventing a Finding.",
+        ),
+        reviewed_evidence_ids=[evidence.evidence_id],
+        trigger="before_unresolved",
+    )
+
+    assert update["accepted"] is True
+    audit_discrepancy_coverage(state, decision_checkpoint=True)
+    verdict, basis = compile_discrepancy_verdict_basis(state)
+    assert verdict == ""
+    assert basis.decision_mode == "bounded_binary_judgment"
+    assert basis.finding_ids == []
+    assert basis.evidence_ids == []
 
 
 def test_bounded_basis_keeps_supported_high_and_unresolved_medium_claims() -> None:

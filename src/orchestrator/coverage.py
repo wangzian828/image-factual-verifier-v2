@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from typing import Dict, List
 
+from src.orchestrator.evidence_semantics import (
+    same_capture_can_support_visual_claim,
+)
 from src.orchestrator.evidence_adjudication import assess_fact
 from src.orchestrator.investigation_models import (
     FactCoverage,
@@ -56,7 +59,7 @@ def activate_initial_decisive_facts(
     ]
     candidates.sort(
         key=lambda fact: (
-            fact.predicate != "appears_to_depict",
+            not same_capture_can_support_visual_claim(fact),
             task_priority[fact.fact_id],
             fact.kind == "relation",
             fact.fact_id,

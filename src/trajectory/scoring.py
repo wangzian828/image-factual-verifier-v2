@@ -10,6 +10,7 @@ from urllib.parse import urlsplit, urlunsplit
 from src.orchestrator.evidence_semantics import (
     evidence_is_qualified_for_stance,
     required_assessment_stances,
+    same_capture_can_support_visual_claim,
 )
 from src.orchestrator.route_policy import semantic_duplicate_count
 from src.orchestrator.tool_result import parse_tool_result
@@ -440,16 +441,13 @@ def _has_actual_visual_bridge(
     *,
     semantic_decision: Mapping[str, Any] | None = None,
 ) -> bool:
-    predicate = str(fact.get("predicate", ""))
     status = str(fact.get("status", ""))
     bindings = {
         str(item.get("claim_binding", ""))
         for item in related_evidence
         if not item.get("risk_flags")
     }
-    if status == "supported" and predicate == "appears_to_depict":
-        return "same_capture" in bindings
-    if status == "supported" and predicate in {"visible_in", "reads"}:
+    if status == "supported" and same_capture_can_support_visual_claim(fact):
         return bool(bindings & {"pixel_observation", "same_capture"})
     if status == "refuted":
         decision_output = _mapping(

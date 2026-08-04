@@ -45,6 +45,7 @@ from src.orchestrator.evidence_adjudication import assess_fact
 from src.orchestrator.evidence_semantics import (
     evidence_is_qualified_for_stance,
     required_assessment_stances,
+    same_capture_can_support_visual_claim,
 )
 from src.orchestrator.route_policy import (
     route_signature,
@@ -6489,12 +6490,13 @@ def _visual_evidence_record(
         if edit_present and same_capture and not different_capture:
             stance = "refute"
         else:
-            # A visual match binds source context to the input pixels. It does
-            # not itself support a location, event, identity, or other world
-            # assertion printed on the surrounding page.
+            # A visual match binds source context to the input pixels. It can
+            # support image-grounded visual content/identity claims, but not
+            # world-context claims such as location, event, date, authorship, or
+            # provenance.
             if (
                 claim_binding == "same_capture"
-                and _task_owns_scene_fact(state, task)
+                and _task_owns_same_capture_supportable_fact(state, task)
             ):
                 stance = "support"
     elif tool_name == "crop_and_inspect":
@@ -6950,14 +6952,14 @@ def _task_has_unresolved_decisive_fact(
     )
 
 
-def _task_owns_scene_fact(
+def _task_owns_same_capture_supportable_fact(
     state: ImageOnlyInvestigationState,
     task: ResearchTask,
 ) -> bool:
     facts = {fact.fact_id: fact for fact in state.facts}
     return any(
         facts.get(fact_id) is not None
-        and facts[fact_id].predicate == "appears_to_depict"
+        and same_capture_can_support_visual_claim(facts[fact_id])
         for fact_id in task.fact_ids
     )
 

@@ -256,14 +256,28 @@ def compile_discrepancy_verdict_basis(
         verdict_target = state.image_account_summary
 
     if state.proposed_verdict not in {"fake", "real"}:
-        finding_ids = [
-            item.finding_id
+        selected_findings = [
+            item
             for item in state.findings
             if set(item.evidence_ids) & set(evidence_ids)
             and (
                 not claim_ids
                 or _finding_serves_claims(state, item.task_id, claim_ids)
             )
+        ]
+        finding_ids = [
+            item.finding_id
+            for item in selected_findings
+        ]
+        linked_evidence_ids = {
+            evidence_id
+            for item in selected_findings
+            for evidence_id in item.evidence_ids
+        }
+        evidence_ids = [
+            evidence_id
+            for evidence_id in evidence_ids
+            if evidence_id in linked_evidence_ids
         ]
     basis = DiscrepancyVerdictBasis(
         decision_mode=(

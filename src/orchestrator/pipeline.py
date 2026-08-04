@@ -22,6 +22,9 @@ from src.orchestrator.discrepancy_coverage import (
     compile_discrepancy_verdict_basis,
 )
 from src.orchestrator.evidence_policy import query_targets_fact_check_answer
+from src.orchestrator.evidence_semantics import (
+    same_capture_can_support_visual_claim,
+)
 from src.orchestrator.runtime_case import verify_case_image
 from src.orchestrator.runtime_events import CaseRuntimeStore, current_case_runtime_store
 from src.orchestrator.progress_control import (
@@ -2577,20 +2580,19 @@ class Orchestrator:
                 if fact_id in facts
                 and (
                     facts[fact_id].origin.type == "web_discovery"
-                    or facts[fact_id].predicate
-                    not in {
-                        "appears_to_depict",
-                        "visible_in",
-                        "reads",
-                        "context_suggested_by_text",
-                    }
+                    or (
+                        facts[fact_id].predicate != "context_suggested_by_text"
+                        and not same_capture_can_support_visual_claim(
+                            facts[fact_id]
+                        )
+                    )
                 )
             ]
             scene_claims = [
                 facts[fact_id].statement
                 for fact_id in task.fact_ids
                 if fact_id in facts
-                and facts[fact_id].predicate == "appears_to_depict"
+                and same_capture_can_support_visual_claim(facts[fact_id])
             ]
             claims[task.task_id] = (
                 " | ".join(specific_claims or scene_claims)

@@ -2,11 +2,107 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any, Mapping
 
 
 QUALIFIED_EVIDENCE_QUALITIES = frozenset({"strong", "moderate"})
 _NON_BLOCKING_RISK_FLAGS = frozenset({"user_generated_content"})
+_SAME_CAPTURE_WORLD_CONTEXT_HINTS = frozenset(
+    {
+        "attributed",
+        "attribution",
+        "author",
+        "caption",
+        "created",
+        "creator",
+        "date",
+        "dated",
+        "event",
+        "location",
+        "located",
+        "occurred",
+        "place",
+        "provenance",
+        "published",
+        "record",
+        "source",
+        "time",
+        "venue",
+        "where",
+        "when",
+    }
+)
+_SAME_CAPTURE_VISUAL_CONTENT_HINTS = frozenset(
+    {
+        "appear",
+        "appears",
+        "contain",
+        "contains",
+        "depict",
+        "depicts",
+        "hull",
+        "identify",
+        "identified",
+        "identity",
+        "label",
+        "logo",
+        "marking",
+        "markings",
+        "object",
+        "read",
+        "reads",
+        "relation",
+        "scene",
+        "ship",
+        "show",
+        "shows",
+        "text",
+        "vehicle",
+        "vessel",
+        "visible",
+    }
+)
+
+
+def _origin_type(fact: Any) -> str:
+    origin = evidence_value(fact, "origin", None)
+    if isinstance(origin, Mapping):
+        return str(origin.get("type", "")).strip()
+    return str(getattr(origin, "type", "")).strip()
+
+
+def _semantic_tokens(value: str) -> set[str]:
+    return {
+        token
+        for token in re.split(r"[^a-z0-9]+", str(value or "").casefold())
+        if token
+    }
+
+
+def same_capture_can_support_visual_claim(fact: Any) -> bool:
+    """Return whether a same-capture reference can support this visual claim.
+
+    The Agent may author free-form predicate labels such as ``depicts_vessel`` or
+    ``shows_ship``.  Runtime must not depend on one exact label such as
+    ``appears_to_depict``.  This gate instead asks whether the claim is
+    image-grounded and visually inspectable.  Same-capture Evidence is still not
+    enough for world-context claims such as location, event, date, authorship, or
+    provenance; those require a source assertion or a paired chain.
+    """
+
+    if _origin_type(fact) not in {"input_image", "ocr"}:
+        return False
+    kind = str(evidence_value(fact, "kind", "")).strip()
+    if kind not in {"attribute", "relation", "text_claim"}:
+        return False
+    predicate = str(evidence_value(fact, "predicate", "")).strip()
+    tokens = _semantic_tokens(predicate)
+    if tokens & _SAME_CAPTURE_WORLD_CONTEXT_HINTS:
+        return False
+    if kind in {"attribute", "text_claim"}:
+        return True
+    return bool(tokens & _SAME_CAPTURE_VISUAL_CONTENT_HINTS)
 
 
 def evidence_value(evidence: Any, field: str, default: Any = None) -> Any:

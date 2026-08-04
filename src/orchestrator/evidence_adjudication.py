@@ -12,6 +12,9 @@ from src.orchestrator.investigation_models import (
     InvestigationEvidence,
     VisualFact,
 )
+from src.orchestrator.evidence_semantics import (
+    same_capture_can_support_visual_claim,
+)
 
 
 DECISIVE_SINGLE_EVIDENCE_SCORE = 70.0
@@ -223,9 +226,15 @@ def _assess_direction(
         )
 
     selected: list[tuple[float, InvestigationEvidence, str]] = []
+    same_capture_supportable = same_capture_can_support_visual_claim(fact)
+    strongest_is_same_capture = bool(
+        stance == "support"
+        and same_capture_supportable
+        and rows[0][1].claim_binding == "same_capture"
+    )
     scene_support_pair = (
         _scene_support_pair(rows)
-        if stance == "support" and fact.predicate == "appears_to_depict"
+        if strongest_is_same_capture
         else []
     )
     attribution_support_pair = (
@@ -249,7 +258,7 @@ def _assess_direction(
         rows[0]
         if (
             stance == "support"
-            and fact.predicate == "appears_to_depict"
+            and same_capture_supportable
             and rows[0][1].claim_binding == "same_capture"
             and rows[0][1].source_class == "official"
             and rows[0][0] >= 90.0
@@ -257,7 +266,7 @@ def _assess_direction(
         else None
     )
     scene_support_requires_pair = (
-        stance == "support" and fact.predicate == "appears_to_depict"
+        strongest_is_same_capture
     )
     attribution_support_requires_pair = (
         stance == "support" and _requires_attribution_support_pair(fact)
@@ -401,13 +410,8 @@ def _evidence_score(
         return 0.0
     if (
         evidence.claim_binding == "pixel_observation"
-        and fact.predicate
-        not in {
-            "visual_integrity",
-            "appears_to_depict",
-            "visible_in",
-            "reads",
-        }
+        and fact.predicate != "visual_integrity"
+        and not same_capture_can_support_visual_claim(fact)
     ):
         return 0.0
     if (
@@ -500,11 +504,8 @@ def _evidence_score(
     ):
         score = min(score, CORROBORATING_EVIDENCE_SCORE - 1.0)
 
-    if stance == "support" and fact.predicate == "appears_to_depict":
-        if evidence.claim_binding != "same_capture":
-            score = min(score, CORROBORATING_EVIDENCE_SCORE - 1.0)
-    elif stance == "support" and fact.predicate in {"visible_in", "reads"}:
-        has_pixel_bridge = any(
+    if stance == "support" and same_capture_can_support_visual_claim(fact):
+        has_visual_bridge = any(
             item.claim_binding in {"pixel_observation", "same_capture"}
             and not item.risk_flags
             for item in fact_evidence
@@ -513,7 +514,7 @@ def _evidence_score(
             "pixel_observation",
             "same_capture",
         }:
-            if has_pixel_bridge:
+            if has_visual_bridge:
                 score += 15.0
             else:
                 score = min(score, CORROBORATING_EVIDENCE_SCORE - 1.0)
