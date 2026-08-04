@@ -306,6 +306,37 @@ def discrepancy_visual_reinspection_binding(
     }
 
 
+def evidence_serves_claim(
+    state: ImageOnlyInvestigationState,
+    evidence: InvestigationEvidence,
+    *,
+    claim_id: str,
+    claim_fact_id: str,
+    task_by_id: Mapping[str, ResearchTask] | None = None,
+) -> bool:
+    """Return whether Evidence is fact-bound or reinspection-bound to one Claim."""
+
+    tasks = task_by_id or {item.task_id: item for item in state.tasks}
+    task = tasks.get(evidence.task_id)
+    if task is None or claim_id not in task.claim_ids:
+        return False
+    if claim_fact_id in evidence.fact_ids:
+        return True
+    if (
+        evidence.tool_name != "focused_visual_inspection"
+        or evidence.evidence_kind != "image_region"
+        or not evidence.visual_question_id
+    ):
+        return False
+    return any(
+        record.status == "resolved"
+        and record.task_id == evidence.task_id
+        and record.visual_question_id == evidence.visual_question_id
+        and evidence.evidence_id in record.evidence_ids
+        for record in state.visual_reinspections
+    )
+
+
 def _one_line(value: str) -> str:
     return " ".join(str(value).split())
 
@@ -676,12 +707,30 @@ def bind_discrepancy_decision_runtime_ids(
         state,
         reviewed_evidence_ids=reviewed_evidence_ids,
     )
-    binding = resolved.get("binding")
+    candidates = resolved.get("candidates", [])
+    binding = next(
+        (
+            candidate
+            for candidate in candidates
+            if isinstance(candidate, Mapping)
+            and str(candidate.get("claim_id", "")) == proposal.claim_id
+        ),
+        None,
+    )
     if not isinstance(binding, Mapping):
+        eligible_claim_ids = [
+            str(candidate.get("claim_id"))
+            for candidate in candidates
+            if isinstance(candidate, Mapping) and candidate.get("claim_id")
+        ]
         return None, (
-            "runtime visual reinspection binding is "
-            f"{resolved['status']}; exactly one unresolved ImageClaim must have "
-            "reviewed non-visual Evidence bound to its atomic fact"
+            f"visual_reinspection claim_id {proposal.claim_id!r} is not an eligible "
+            "runtime visual reinspection candidate"
+            + (
+                "; choose one of " + ", ".join(eligible_claim_ids)
+                if eligible_claim_ids
+                else ""
+            )
         )
     evidence_by_id = {item.evidence_id: item for item in state.evidence}
     claim_by_id = {claim.claim_id: claim for claim in state.image_claims}
@@ -697,6 +746,7 @@ def bind_discrepancy_decision_runtime_ids(
         claim=claim,
         source_text=source_text,
     )
+    request_payload.pop("claim_id", None)
     payload["visual_reinspection"] = {
         **request_payload,
         "anchor_fact_ids": list(binding["anchor_fact_ids"]),
@@ -2010,9 +2060,13 @@ def _discrepancy_contract_errors(
         outside_ids = [
             evidence_id
             for evidence_id in known_ids
-            if evidence_by_id[evidence_id].task_id not in task_by_id
-            or proposal.claim_id
-            not in task_by_id[evidence_by_id[evidence_id].task_id].claim_ids
+            if not evidence_serves_claim(
+                state,
+                evidence_by_id[evidence_id],
+                claim_id=proposal.claim_id,
+                claim_fact_id=claim.fact_id,
+                task_by_id=task_by_id,
+            )
         ]
         if outside_ids:
             errors.append(
@@ -2389,7 +2443,12 @@ def apply_discrepancy_decision(
     reviewed_ids = list(dict.fromkeys(reviewed_evidence_ids))
     if any(evidence_id not in evidence_by_id for evidence_id in reviewed_ids):
         return {"accepted": False, "rejected_reason": "checkpoint cites unknown Evidence"}
-    if trigger not in {"qualified_evidence", "scheduled_boundary", "before_unresolved"}:
+    if trigger not in {
+        "qualified_evidence",
+        "scheduled_boundary",
+        "strategy_boundary",
+        "before_unresolved",
+    }:
         return {"accepted": False, "rejected_reason": "unknown discrepancy trigger"}
     if trigger == "qualified_evidence" and not reviewed_ids:
         return {
@@ -2473,8 +2532,13 @@ def apply_discrepancy_decision(
         claim = claim_by_id[proposal.claim_id]
         for evidence_id in evidence_ids:
             evidence = evidence_by_id[evidence_id]
-            task = task_by_id.get(evidence.task_id)
-            if task is None or claim.claim_id not in task.claim_ids:
+            if not evidence_serves_claim(
+                candidate,
+                evidence,
+                claim_id=claim.claim_id,
+                claim_fact_id=claim.fact_id,
+                task_by_id=task_by_id,
+            ):
                 return {
                     "accepted": False,
                     "rejected_reason": (
@@ -6205,7 +6269,6 @@ def _record_evidence_and_findings(
     owned_fact_ids = (
         [claim_fact_by_id[selected_claim_id]]
         if selected_claim_id in claim_fact_by_id
-        and tool_name in {"visit", "crop_and_search"}
         else list(task.fact_ids)
     )
 
@@ -6934,7 +6997,6 @@ def _task_has_remaining_material_route(
             state,
             task,
             attempts,
-            global_reverse_branches=_attempted_reverse_branches(state),
         )
     )
 
@@ -6964,7 +7026,6 @@ def remaining_material_routes(
     if not tasks:
         return []
     attempted = _attempted_routes_by_task(state)
-    global_reverse_branches = _attempted_reverse_branches(state)
     routes: List[str] = []
     for task in tasks:
         routes.extend(
@@ -6972,7 +7033,6 @@ def remaining_material_routes(
                 state,
                 task,
                 attempted.get(task.task_id, []),
-                global_reverse_branches=global_reverse_branches,
             )
         )
     return list(dict.fromkeys(routes))
@@ -7006,7 +7066,6 @@ def remaining_claim_hypothesis_routes(
         and (task_ids is None or task.task_id in task_ids)
     ]
     attempted = _attempted_routes_by_task(state)
-    global_reverse_branches = _attempted_reverse_branches(state)
     routes: List[str] = []
     for task in tasks:
         routes.extend(
@@ -7014,7 +7073,6 @@ def remaining_claim_hypothesis_routes(
                 state,
                 task,
                 attempted.get(task.task_id, []),
-                global_reverse_branches=global_reverse_branches,
             )
         )
     return list(dict.fromkeys(routes))
@@ -7108,28 +7166,51 @@ def discrepancy_decision_checkpoint_reason(
         for item in (update or {}).get("created_evidence_ids", []) or []
         if str(item) in pending_ids
     }
-    if not created_ids:
-        return ""
     evidence_by_id = {item.evidence_id: item for item in state.evidence}
-    rows = [evidence_by_id[item] for item in created_ids]
-    if any(
-        item.directness == "direct"
-        and item.quality in {"strong", "moderate"}
+    if created_ids:
+        rows = [evidence_by_id[item] for item in created_ids]
+        if any(
+            item.directness == "direct"
+            and item.quality in {"strong", "moderate"}
+            and (
+                item.stance in {"support", "refute"}
+                or item.evidence_kind == "reference_comparison"
+            )
+            for item in rows
+        ):
+            return "qualified_evidence"
+        qualified_since_prior = [
+            evidence_by_id[item]
+            for item in pending_ids
+            if evidence_by_id[item].directness == "direct"
+            and evidence_by_id[item].quality in {"strong", "moderate"}
+        ]
+        if len(qualified_since_prior) >= 2:
+            return "scheduled_boundary"
+
+    # Two consecutive no-gain actions are enough to ask whether the current
+    # hypothesis should be retired or replaced. This checkpoint does not settle
+    # the case or relax any verdict precondition.
+    latest_progress = state.progress_events[-1] if state.progress_events else None
+    latest_strategy_action = max(
+        (
+            decision.action_count
+            for decision in state.discrepancy_decisions
+            if decision.trigger == "strategy_boundary"
+        ),
+        default=-1,
+    )
+    if (
+        not state.pending_archive_read_ids
+        and latest_progress is not None
+        and latest_progress.gain == "no_gain"
+        and state.no_substantive_gain_streak >= 2
         and (
-            item.stance in {"support", "refute"}
-            or item.evidence_kind == "reference_comparison"
+            latest_strategy_action < 0
+            or state.action_count - latest_strategy_action >= 2
         )
-        for item in rows
     ):
-        return "qualified_evidence"
-    qualified_since_prior = [
-        evidence_by_id[item]
-        for item in pending_ids
-        if evidence_by_id[item].directness == "direct"
-        and evidence_by_id[item].quality in {"strong", "moderate"}
-    ]
-    if len(qualified_since_prior) >= 2:
-        return "scheduled_boundary"
+        return "strategy_boundary"
     return ""
 
 
@@ -7239,22 +7320,10 @@ def _iter_attempted_routes(
             yield route
 
 
-def _attempted_reverse_branches(
-    state: ImageOnlyInvestigationState,
-) -> set[str]:
-    return {
-        str(route.get("branch", "lens")).strip().lower() or "lens"
-        for route in _iter_attempted_routes(state)
-        if str(route.get("tool", "")).strip() == "reverse_image_search"
-    }
-
-
 def _remaining_task_material_routes(
     state: ImageOnlyInvestigationState,
     task: ResearchTask,
     attempts: Sequence[Mapping[str, Any]],
-    *,
-    global_reverse_branches: set[str],
 ) -> List[str]:
     allowed = runtime_task_tool_names(state, task)
     if not allowed:
@@ -7262,10 +7331,15 @@ def _remaining_task_material_routes(
 
     text_search_count = 0
     one_shot_tools: set[str] = set()
+    attempted_reverse_branches: set[str] = set()
     for route in attempts:
         tool_name = str(route.get("tool", "")).strip()
         if tool_name == "text_search":
             text_search_count += 1
+        elif tool_name == "reverse_image_search":
+            attempted_reverse_branches.add(
+                str(route.get("branch", "lens")).strip().lower() or "lens"
+            )
         elif tool_name not in {"visit", "compare_with_reference"}:
             one_shot_tools.add(tool_name)
 
@@ -7316,7 +7390,7 @@ def _remaining_task_material_routes(
         return [f"text_search:{task.task_id}"]
     if "reverse_image_search" in allowed:
         for branch in ("lens", "semantic"):
-            if branch not in global_reverse_branches:
+            if branch not in attempted_reverse_branches:
                 routes.append(
                     f"reverse_image_search:{branch}:{task.task_id}"
                 )

@@ -136,7 +136,7 @@ def test_search_runtime_payload_is_the_same_payload_shown_to_model() -> None:
                         "url": f"https://example.test/{index}",
                         "snippet": "candidate",
                     }
-                    for index in range(8)
+                    for index in range(10)
                 ],
             }
         ],
@@ -149,7 +149,10 @@ def test_search_runtime_payload_is_the_same_payload_shown_to_model() -> None:
         "text_search",
         serialized,
     ) == canonical
-    assert canonical["queries"][0]["results"]
+    assert len(canonical["queries"][0]["results"]) == 10
+    assert canonical["queries"][0]["results"][-1]["url"] == (
+        "https://example.test/9"
+    )
     assert "top_results" not in canonical["queries"][0]
 
 

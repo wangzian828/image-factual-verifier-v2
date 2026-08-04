@@ -951,6 +951,50 @@ def test_visit_selects_one_runtime_owned_claim_for_stance() -> None:
     assert prepared["__claim_id"] == "claim-text"
 
 
+def test_visual_evidence_tool_requires_claim_selection_for_multi_claim_task() -> None:
+    runner = StageRunner(
+        llm=NativeFakeBackend([]),
+        system_prompt="Inspect one Claim-scoped visual property.",
+        tools=[VisualInspectTool()],
+        stage_name="verification",
+        question_claim_options={
+            "task-1": {
+                "claim-relation": "The person is holding the shown product.",
+                "claim-text": "The product label contains the shown text.",
+            }
+        },
+        tool_argument_constraints={
+            "crop_and_inspect": {
+                "question_id": ["task-1"],
+            }
+        },
+    )
+    runner.active_question_ids = ["task-1"]
+    schema = runner._build_native_tool_schemas()[0]["parameters"]
+
+    assert schema["properties"]["claim_id"]["enum"] == [
+        "claim-relation",
+        "claim-text",
+    ]
+    assert "claim_id" in schema["required"]
+    prepared = runner._prepare_tool_args(
+        "crop_and_inspect",
+        {
+            "question_id": "task-1",
+            "claim_id": "claim-text",
+        },
+        "",
+    )
+    assert prepared["__claim_id"] == "claim-text"
+    assert (
+        "claim_id is required"
+        in runner._claim_id_error(
+            "crop_and_inspect",
+            {"__question_id": "task-1"},
+        )
+    )
+
+
 def test_visit_route_signature_distinguishes_atomic_claim_targets() -> None:
     from src.orchestrator.route_policy import route_signature
 
@@ -1005,6 +1049,35 @@ def test_canonical_reverse_image_result_preserves_validated_references() -> None
 
     assert result["reference_image_candidates"] == [reference_url]
     assert result["lens_results"][0]["image_url"] == reference_url
+
+
+def test_canonical_reverse_image_result_exposes_three_candidates() -> None:
+    result = StageRunner._canonical_reverse_image_result(
+        {
+            "status": "success",
+            "branch": "lens",
+            "candidate_page_urls": [
+                f"https://example.org/page-{index}"
+                for index in range(5)
+            ],
+            "reference_image_candidates": [
+                f"https://example.org/reference-{index}.jpg"
+                for index in range(5)
+            ],
+            "lens_results": [
+                {
+                    "title": f"Reference {index}",
+                    "url": f"https://example.org/page-{index}",
+                    "image_url": f"https://example.org/reference-{index}.jpg",
+                }
+                for index in range(5)
+            ],
+        }
+    )
+
+    assert len(result["candidate_page_urls"]) == 3
+    assert len(result["reference_image_candidates"]) == 3
+    assert len(result["lens_results"]) == 3
 
 
 def test_tool_internal_llm_usage_is_private_and_attached_to_step_metadata() -> None:

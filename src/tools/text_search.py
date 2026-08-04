@@ -198,6 +198,8 @@ class TextSearchTool(BaseTool):
             response["knowledge_graph"] = None
             if blocked_count:
                 response["policy_filtered_count"] = blocked_count
+        response = dict(response)
+        response["results"] = list(response.get("results", []) or [])[: self.top_k]
         search_duration_ms = round((time.perf_counter() - search_t0) * 1000, 2)
         result = dict(response)
         result["goal"] = str(goal or query)

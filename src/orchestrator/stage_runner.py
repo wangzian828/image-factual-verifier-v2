@@ -45,6 +45,15 @@ from src.tools.base import BaseTool
 from src.tools.vision_utils import controlled_image_to_data_url
 
 
+_CLAIM_SCOPED_EVIDENCE_TOOLS = {
+    "visit",
+    "crop_and_search",
+    "compare_with_reference",
+    "crop_and_inspect",
+    "ocr_with_position",
+}
+
+
 def _bounded_timeout(
     value: Optional[float],
     *,
@@ -521,21 +530,24 @@ class StageRunner:
                     ).strip()
                 step.tool_args = self._bind_pending_visual_args(tool_name, step.tool_args)
                 question_error = self._question_id_error(step.tool_args)
-                if question_error:
+                claim_error = self._claim_id_error(tool_name, step.tool_args)
+                scope_error = question_error or claim_error
+                if scope_error:
                     step.action_type = "format_error"
                     step.metadata["error_class"] = "protocol_error"
-                    step.metadata["invalid_question_id"] = True
+                    if question_error:
+                        step.metadata["invalid_question_id"] = True
+                    if claim_error:
+                        step.metadata["invalid_claim_id"] = True
                     steps.append(step)
                     history.append({"role": "assistant", "content": content})
                     history.append(
                         {
                             "role": "user",
-                            "content": (
-                                question_error
-                            ),
+                            "content": scope_error,
                         }
                     )
-                    if request_chat_protocol_correction(step, question_error):
+                    if request_chat_protocol_correction(step, scope_error):
                         continue
                     break
                 if self._has_duplicate_tool_call(steps, tool_name, step.tool_args):
@@ -1242,14 +1254,19 @@ class StageRunner:
                     else:
                         step.tool_args = prepared_args
                         question_error = self._question_id_error(prepared_args)
-                        if question_error:
+                        claim_error = self._claim_id_error(tool_name, prepared_args)
+                        scope_error = question_error or claim_error
+                        if scope_error:
                             step.action_type = "format_error"
                             step.metadata["error_class"] = "protocol_error"
-                            step.metadata["invalid_question_id"] = True
+                            if question_error:
+                                step.metadata["invalid_question_id"] = True
+                            if claim_error:
+                                step.metadata["invalid_claim_id"] = True
                             step.tool_result = json.dumps(
                                 {
                                     "status": "error",
-                                    "error": question_error,
+                                    "error": scope_error,
                                 },
                                 ensure_ascii=False,
                             )
@@ -1640,7 +1657,7 @@ class StageRunner:
                         )
                     )
                 )
-                if tool.name in {"visit", "crop_and_search"} and claim_ids:
+                if tool.name in _CLAIM_SCOPED_EVIDENCE_TOOLS and claim_ids:
                     properties["claim_id"] = {
                         "type": "string",
                         "enum": claim_ids,
@@ -1649,7 +1666,13 @@ class StageRunner:
                             "inspection should evaluate."
                         ),
                     }
-                    if "claim_id" not in required:
+                    requires_claim_selection = any(
+                        len(self.question_claim_options.get(question_id, {})) > 1
+                        for question_id in (
+                            constrained_question_ids or self.active_question_ids
+                        )
+                    )
+                    if requires_claim_selection and "claim_id" not in required:
                         required.append("claim_id")
                 constrained_fields = self.tool_argument_constraints.get(
                     tool.name,
@@ -2260,6 +2283,8 @@ class StageRunner:
             tool_args["__question_id"] = question_id
             selected_claim_id = str(tool_args.pop("claim_id", "")).strip()
             claim_options = self.question_claim_options.get(question_id, {})
+            if not selected_claim_id and len(claim_options) == 1:
+                selected_claim_id = next(iter(claim_options))
             claim_text = str(
                 claim_options.get(selected_claim_id)
                 or self.question_claims.get(question_id, "")
@@ -2388,6 +2413,35 @@ class StageRunner:
             return (
                 f"Task '{question_id}' is already resolved, blocked, or exhausted. "
                 "Choose a currently active task."
+            )
+        return ""
+
+    def _claim_id_error(
+        self,
+        tool_name: str,
+        tool_args: Dict[str, Any],
+    ) -> str:
+        if (
+            self.stage_name != "verification"
+            or tool_name not in _CLAIM_SCOPED_EVIDENCE_TOOLS
+        ):
+            return ""
+        question_id = str(tool_args.get("__question_id", "")).strip()
+        claim_options = self.question_claim_options.get(question_id, {})
+        if not claim_options:
+            return ""
+        claim_id = str(tool_args.get("__claim_id", "")).strip()
+        if not claim_id and len(claim_options) > 1:
+            return (
+                f"claim_id is required for tool {tool_name!r} on multi-Claim "
+                f"task {question_id!r}. Valid ids: "
+                + ", ".join(claim_options)
+            )
+        if claim_id and claim_id not in claim_options:
+            return (
+                f"Unknown claim_id {claim_id!r} for task {question_id!r}. "
+                "Valid ids: "
+                + ", ".join(claim_options)
             )
         return ""
 
@@ -3314,7 +3368,7 @@ class StageRunner:
             if not isinstance(item, dict):
                 continue
             rows = []
-            for row in (item.get("results", []) or [])[:5]:
+            for row in (item.get("results", []) or [])[:10]:
                 if isinstance(row, dict):
                     rows.append(
                         {
@@ -3378,61 +3432,6 @@ class StageRunner:
         return {
             "status": "success",
             **StageRunner._compact_crop_and_search_result(data),
-        }
-
-    def _compact_search_result(self, data: Any) -> Any:
-        if isinstance(data, dict) and isinstance(data.get("queries"), list):
-            responses = data["queries"]
-        else:
-            responses = data if isinstance(data, list) else [data]
-        compacted = []
-        for item in responses[:2]:
-            if not isinstance(item, dict):
-                continue
-            results = item.get("results", [])
-            top_results = []
-            if isinstance(results, list):
-                for row in results[:3]:
-                    if isinstance(row, dict):
-                        top_results.append(
-                            {
-                                "title": row.get("title", ""),
-                                "url": row.get("url", ""),
-                                "snippet": str(row.get("snippet", ""))[:220],
-                            }
-                        )
-            compacted.append(
-                {
-                    "query": item.get("query", ""),
-                    "top_results": top_results,
-                    "summary": (
-                        ""
-                        if item.get("injection_flags")
-                        else str(item.get("summary", ""))[:320]
-                    ),
-                    "evidence": (
-                        ""
-                        if item.get("injection_flags")
-                        else str(item.get("evidence", ""))[:320]
-                    ),
-                    "selected_url": item.get("selected_url", ""),
-                    "stance": item.get("stance", "unclear"),
-                    "directness": item.get("directness", "none"),
-                    "temporal_alignment": item.get(
-                        "temporal_alignment",
-                        "not_applicable",
-                    ),
-                    "relevance": item.get("relevance", "low"),
-                    "artifact_sha256": item.get("artifact_sha256", ""),
-                    "evidence_span": item.get("evidence_span", {}),
-                    "retrieved_at": item.get("retrieved_at", ""),
-                    "injection_flags": item.get("injection_flags", []),
-                    "evidence_eligible": bool(item.get("evidence_eligible", False)),
-                }
-            )
-        return {
-            "queries": compacted,
-            "validated_claim_state": self._claim_control_states(),
         }
 
     def _compact_visit_result(self, data: Any) -> Any:
@@ -3552,10 +3551,10 @@ class StageRunner:
             "vlm_query": data.get("vlm_query", ""),
             "vlm_error": data.get("vlm_error", ""),
             "lens_error": data.get("lens_error", ""),
-            "candidate_page_urls": (data.get("candidate_page_urls", []) or [])[:5],
+            "candidate_page_urls": (data.get("candidate_page_urls", []) or [])[:3],
             "reference_image_candidates": (
                 data.get("reference_image_candidates", []) or []
-            )[:5],
+            )[:3],
             "reference_image_url": data.get("reference_image_url", ""),
             "lens_results": _rows(data.get("lens_results", [])),
             "semantic_results": _rows(data.get("semantic_results", [])),

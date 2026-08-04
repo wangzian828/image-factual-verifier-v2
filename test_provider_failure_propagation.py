@@ -459,6 +459,66 @@ def test_retrieval_goal_selects_passage_but_stance_targets_image_claim(
     assert result["evidence_records"][0]["retrieval_goal"] == retrieval_goal
 
 
+def test_narrow_image_lookup_goal_does_not_hide_claim_relation_passage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = JinaReaderClient(extract_max_chars=360)
+    image_claim = "The Moon Tree ceremony shown in the image was held in Florida."
+    retrieval_goal = (
+        "Find a source page that identifies the exact same photograph and image."
+    )
+    target = (
+        "The Moon Tree ceremony was held at Johnson Space Center in Houston, "
+        "not in Florida."
+    )
+    page = "\n\n".join(
+        [
+            *[
+                (
+                    "Image archive source page seeks to identify the exact same "
+                    f"photograph and image, catalog entry {index}."
+                )
+                for index in range(40)
+            ],
+            target,
+        ]
+    )
+
+    def extract(formatted: str, **kwargs) -> dict:
+        assert target in formatted
+        assert kwargs == {
+            "image_claim": image_claim,
+            "retrieval_goal": retrieval_goal,
+        }
+        match = re.search(
+            r"\[PASSAGE (\d+)\] (The Moon Tree ceremony[^\n]+)",
+            formatted,
+        )
+        assert match is not None
+        return {
+            "rationale": "The page gives a conflicting location for the event.",
+            "passage_id": int(match.group(1)),
+            "supporting_passage_ids": [],
+            "summary": target,
+            "relevance": "high",
+            "stance": "refute",
+            "relation_scope": "same_relation",
+            "relation_stance": "contradicts",
+            "directness": "direct",
+            "temporal_alignment": "not_applicable",
+        }
+
+    monkeypatch.setattr(client, "_extract_with_llm", extract)
+    result = client.extract_goal_evidence(
+        page,
+        image_claim=image_claim,
+        retrieval_goal=retrieval_goal,
+    )
+
+    assert result["evidence"] == target
+    assert result["stance"] == "refute"
+
+
 def test_extractor_preserves_related_context_when_no_passage_directly_resolves_goal(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

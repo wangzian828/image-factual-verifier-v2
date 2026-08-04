@@ -47,7 +47,7 @@ class ReverseImageSearchTool(BaseTool):
     provider: str = "gemini"
     model_name: str = "gemini-3.6-flash"
     qwen_model_name: str = "qwen3.6-plus"
-    top_k: int = 5
+    top_k: int = 3
     use_lens: bool = True
     use_vlm_query: bool = True
     source_access_policy: Optional[SourceAccessPolicy] = None
@@ -135,8 +135,10 @@ class ReverseImageSearchTool(BaseTool):
             self._merge_semantic_payload(results, timings, payload)
             results["subcalls"] = list(payload.get("subcalls", []))
 
-        lens_results = results.get("lens_results", []) or []
-        semantic_results = results.get("semantic_results", []) or []
+        lens_results = list(results.get("lens_results", []) or [])[: self.top_k]
+        semantic_results = list(results.get("semantic_results", []) or [])[: self.top_k]
+        results["lens_results"] = lens_results
+        results["semantic_results"] = semantic_results
         policy = self.source_access_policy
         if policy is not None:
             lens_results, lens_blocked = policy.filter_rows(lens_results)

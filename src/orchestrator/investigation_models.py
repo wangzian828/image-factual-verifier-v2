@@ -437,7 +437,14 @@ class SearchHypothesisProposal(StrictModel):
         pattern=r"^[a-z0-9][a-z0-9_-]*$",
     )
     statement: str = Field(min_length=1, max_length=1200)
-    queries: List[str] = Field(default_factory=list, max_length=3)
+    queries: List[str] = Field(
+        default_factory=list,
+        max_length=3,
+        description=(
+            "Alternative candidate query formulations, not a guaranteed "
+            "execution queue."
+        ),
+    )
     expected_information: str = Field(min_length=1, max_length=800)
     suggested_tools: List[
         Literal[
@@ -592,8 +599,9 @@ class VisualReinspectionRequest(StrictModel):
 
 
 class VisualReinspectionProposal(StrictModel):
-    """Model-authored visual question before runtime-owned ID binding."""
+    """Model-selected Claim and visual question before runtime-owned evidence binding."""
 
+    claim_id: str = Field(min_length=1, max_length=100)
     reason: Literal[
         "identity",
         "relation",
@@ -650,7 +658,14 @@ class MaterialDiscrepancyDraft(StrictModel):
 class NewSearchHypothesis(StrictModel):
     claim_ids: List[str] = Field(min_length=1, max_length=3)
     statement: str = Field(min_length=1, max_length=1200)
-    queries: List[str] = Field(default_factory=list, max_length=3)
+    queries: List[str] = Field(
+        default_factory=list,
+        max_length=3,
+        description=(
+            "Alternative candidate query formulations, not a guaranteed "
+            "execution queue."
+        ),
+    )
     expected_information: str = Field(min_length=1, max_length=800)
     suggested_tools: List[
         Literal[
@@ -727,37 +742,6 @@ class DiscrepancyDecisionProposalOutput(DiscrepancyDecisionOutput):
     material_discrepancy: Optional[MaterialDiscrepancyDraft] = None
     visual_reinspection: Optional[VisualReinspectionProposal] = None
 
-    @model_validator(mode="before")
-    @classmethod
-    def project_mixed_visual_transition(cls, value: object) -> object:
-        """Keep a visual request from smuggling a semantic Decision with it."""
-
-        if not isinstance(value, dict) or value.get("visual_reinspection") is None:
-            return value
-        if not any(
-            (
-                value.get("claim_assessments"),
-                value.get("material_discrepancy") is not None,
-                value.get("retire_hypothesis_ids"),
-                value.get("new_hypotheses"),
-                value.get("visual_evidence_disposition") is not None,
-                value.get("verdict_proposal", "continue") != "continue",
-            )
-        ):
-            return value
-        projected = dict(value)
-        projected.update(
-            {
-                "claim_assessments": [],
-                "material_discrepancy": None,
-                "retire_hypothesis_ids": [],
-                "new_hypotheses": [],
-                "visual_evidence_disposition": None,
-                "verdict_proposal": "continue",
-            }
-        )
-        return projected
-
     @model_validator(mode="after")
     def validate_sparse_visual_transition(
         self,
@@ -769,6 +753,10 @@ class DiscrepancyDecisionProposalOutput(DiscrepancyDecisionOutput):
                 "visual reinspection proposal must not copy claim or discrepancy IDs"
             )
         if self.retire_hypothesis_ids or self.new_hypotheses:
+            raise ValueError(
+                "visual reinspection proposal must be the only state transition"
+            )
+        if self.visual_evidence_disposition is not None:
             raise ValueError(
                 "visual reinspection proposal must be the only state transition"
             )
@@ -812,6 +800,7 @@ class DiscrepancyDecisionRecord(StrictModel):
     trigger: Literal[
         "qualified_evidence",
         "scheduled_boundary",
+        "strategy_boundary",
         "before_unresolved",
     ]
     reviewed_evidence_ids: List[str] = Field(default_factory=list, max_length=40)

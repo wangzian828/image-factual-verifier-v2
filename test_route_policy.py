@@ -118,6 +118,26 @@ def test_reverse_image_search_branches_are_distinct_routes() -> None:
     )
 
 
+def test_same_reverse_image_branch_is_available_to_a_different_task() -> None:
+    left = {
+        "__question_id": "task-1",
+        "image_input": "input.png",
+        "branch": "lens",
+    }
+    right = {
+        "__question_id": "task-2",
+        "image_input": "input.png",
+        "branch": "lens",
+    }
+
+    assert not routes_semantically_equivalent(
+        "reverse_image_search",
+        left,
+        "reverse_image_search",
+        right,
+    )
+
+
 def test_same_search_goal_is_deduplicated_across_tasks() -> None:
     left = {
         "__question_id": "task-1",

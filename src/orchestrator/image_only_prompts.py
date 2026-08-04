@@ -13,6 +13,7 @@ from src.orchestrator.investigation_models import (
 )
 from src.orchestrator.task_store import (
     discrepancy_visual_reinspection_binding,
+    evidence_serves_claim,
     remaining_claim_hypothesis_routes,
     remaining_material_routes,
 )
@@ -119,6 +120,10 @@ observation with recorded provenance. Use only supplied observations, do not dec
 a verdict, and do not introduce external identities or metadata as new
 ImageClaims. The runtime owns IDs, claim/hypothesis ownership, route duplication,
 budgets, Evidence eligibility, state transitions, and stopping.
+
+The runtime may expose a small set of active Tasks. Choose the Task and tool with
+the highest expected information gain; priority is guidance, not a mandatory
+execution order. You may switch to another Task when the current route is weak.
 """
 
 
@@ -137,7 +142,9 @@ world relation, but do not turn an obvious visual style into a claim that proves
 itself. SearchHypotheses ask what actually happened and what the slot's verified
 value is. Image clues guide retrieval but do not restrict it.
 Prior knowledge is a lead; only tool Evidence establishes a fact. Hypotheses do not
-own the verdict.
+own the verdict. The queries field contains up to three alternative starting
+formulations, not three scheduled actions. Runtime may execute at most two initial
+text_search actions for a Task and chooses adaptively among the alternatives.
 
 Output: account_summary; image_claims[{claim_key, statement, kind, predicate,
 anchor_fact_ids, salience}]; search_hypotheses[{hypothesis_key, statement, queries,
@@ -233,12 +240,11 @@ visual_evidence_disposition=irrelevant_to_current_claim_or_discrepancy, with
 rationale; never revert to source-only support/verdict. Updates to its owned Claim
 must consume pixel Evidence.
 
-For visual_reinspection emit only reason, scope, question, expected_property; leave
-assessments, MaterialDiscrepancy, route updates, disposition empty; set
-verdict_proposal=continue. Runtime binds Claim, anchors, grounding Evidence; copy no
-IDs. Request only when runtime_visual_reinspection_binding is available. For
-MaterialDiscrepancy omit visual_anchor_fact_ids; runtime derives them from
-affected_claim_ids. Select exact Claims/Evidence chains.
+For visual_reinspection choose claim_id from runtime_visual_reinspection_binding
+candidates. Emit only claim_id, reason, scope, question, expected_property and
+verdict_proposal=continue; runtime binds anchors/Evidence. For MaterialDiscrepancy
+omit visual_anchor_fact_ids; runtime derives them from affected_claim_ids. Select
+exact Claims/Evidence chains.
 
 Qualified high-salience refutation is decisive; unresolved other Claims do not
 weaken it. Propose fake for a decisive high-salience discrepancy, real when all
@@ -881,7 +887,8 @@ def render_image_account_planning_context(
                 "image_claims": 3,
                 "high_salience_image_claims": 1,
                 "search_hypotheses": 6,
-                "queries_per_hypothesis": 3,
+                "candidate_queries_per_hypothesis": 3,
+                "initial_text_search_actions_per_task": 2,
             },
         },
         ensure_ascii=False,
@@ -900,6 +907,7 @@ def render_discrepancy_decision_context(
     reviewed = list(dict.fromkeys(str(item) for item in reviewed_evidence_ids))
     evidence_by_id = {item.evidence_id: item for item in state.evidence}
     task_by_id = {item.task_id: item for item in state.tasks}
+    claims_by_id = {item.claim_id: item for item in state.image_claims}
     reviewed_set = set(reviewed)
     reviewed_evidence_ownership = []
     reviewable_claim_ids: List[str] = []
@@ -908,7 +916,22 @@ def render_discrepancy_decision_context(
         if evidence is None:
             continue
         task = task_by_id.get(evidence.task_id)
-        claim_ids = list(task.claim_ids) if task is not None else []
+        claim_ids = (
+            [
+                claim_id
+                for claim_id in task.claim_ids
+                if claim_id in claims_by_id
+                and evidence_serves_claim(
+                    state,
+                    evidence,
+                    claim_id=claim_id,
+                    claim_fact_id=claims_by_id[claim_id].fact_id,
+                    task_by_id=task_by_id,
+                )
+            ]
+            if task is not None
+            else []
+        )
         reviewable_claim_ids.extend(claim_ids)
         reviewed_evidence_ownership.append(
             {
@@ -968,7 +991,6 @@ def render_discrepancy_decision_context(
     visual_alignment_candidates = []
     if len(state.visual_reinspections) < 1:
         facts_by_id = {item.fact_id: item for item in state.facts}
-        claims_by_id = {item.claim_id: item for item in state.image_claims}
         for ownership in reviewed_evidence_ownership:
             evidence_id = ownership["evidence_id"]
             evidence = evidence_by_id.get(evidence_id)
@@ -1136,6 +1158,19 @@ def render_discrepancy_decision_context(
             "remaining_routes": remaining_claim_hypothesis_routes(state)[:16],
             "action_count": state.action_count,
             "remaining_action_budget": max(0, 24 - state.action_count),
+            "strategy_state": {
+                "no_substantive_gain_streak": state.no_substantive_gain_streak,
+                "recent_progress": [
+                    item.model_dump(mode="json")
+                    for item in state.progress_events[-4:]
+                ],
+                "strategy_boundary_instruction": (
+                    "No-gain is not a verdict. Retire or replace a stalled "
+                    "hypothesis, or continue only for a concrete remaining route."
+                    if trigger == "strategy_boundary"
+                    else ""
+                ),
+            },
             "remaining_hypothesis_budget": max(
                 0,
                 12 - len(state.search_hypotheses),

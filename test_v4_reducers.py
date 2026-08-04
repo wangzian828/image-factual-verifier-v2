@@ -44,6 +44,7 @@ from src.orchestrator.task_store import (
     apply_image_account_planning,
     archive_recall_available,
     bind_discrepancy_decision_runtime_ids,
+    discrepancy_decision_checkpoint_reason,
     discrepancy_visual_reinspection_binding,
     extract_source_visible_property,
     record_route_selection_exhaustion,
@@ -52,6 +53,7 @@ from src.orchestrator.task_store import (
     runtime_task_tool_names,
 )
 from src.orchestrator.pipeline import Orchestrator
+from src.orchestrator.progress_control import record_action_progress
 from src.orchestrator.stage_runner import StageStep
 from src.orchestrator.state import ImageOnlyRuntimeCase, VerificationState
 
@@ -257,6 +259,101 @@ def test_decision_exhaustion_fallback_records_reviewed_evidence_only() -> None:
     assert state.claim_assessments[-1].assessment == "insufficient"
     assert state.claim_assessments[-1].evidence_ids == [evidence.evidence_id]
     assert "without inferring support" in state.claim_assessments[-1].rationale
+
+
+def test_decision_exhaustion_fallback_does_not_spread_evidence_across_task_claims() -> None:
+    state = _planned_state()
+    evidence = _append_evidence(state)
+    claim = state.image_claims[0]
+    fact = next(item for item in state.facts if item.fact_id == claim.fact_id)
+    sibling_fact = fact.model_copy(
+        update={
+            "fact_id": "fact-unrelated-sibling",
+            "statement": "An unrelated visible label appears in the image.",
+        }
+    )
+    sibling_claim = claim.model_copy(
+        update={
+            "claim_id": "claim-unrelated-sibling",
+            "fact_id": sibling_fact.fact_id,
+            "statement": sibling_fact.statement,
+            "salience": "medium",
+        }
+    )
+    state.facts.append(sibling_fact)
+    state.image_claims.append(sibling_claim)
+    state.tasks[0].fact_ids.append(sibling_fact.fact_id)
+    state.tasks[0].claim_ids.append(sibling_claim.claim_id)
+
+    fallback = Orchestrator._decision_correction_exhaustion_fallback(
+        state,
+        reviewed_evidence_ids=[evidence.evidence_id],
+        rejected_reason="Decision correction budget exhausted.",
+    )
+
+    assert fallback is not None
+    assert [item.claim_id for item in fallback.claim_assessments] == [
+        claim.claim_id
+    ]
+
+
+def test_decision_context_and_reducer_reject_task_only_claim_ownership() -> None:
+    state = _planned_state()
+    evidence = _append_evidence(state)
+    claim = state.image_claims[0]
+    fact = next(item for item in state.facts if item.fact_id == claim.fact_id)
+    sibling_fact = fact.model_copy(
+        update={
+            "fact_id": "fact-context-sibling",
+            "statement": "A separate visible label appears in the image.",
+        }
+    )
+    sibling_claim = claim.model_copy(
+        update={
+            "claim_id": "claim-context-sibling",
+            "fact_id": sibling_fact.fact_id,
+            "statement": sibling_fact.statement,
+            "salience": "medium",
+        }
+    )
+    state.facts.append(sibling_fact)
+    state.image_claims.append(sibling_claim)
+    state.tasks[0].fact_ids.append(sibling_fact.fact_id)
+    state.tasks[0].claim_ids.append(sibling_claim.claim_id)
+    context = json.loads(
+        render_discrepancy_decision_context(
+            state,
+            reviewed_evidence_ids=[evidence.evidence_id],
+            trigger="qualified_evidence",
+        )
+    )
+
+    assert context["reviewable_claim_ids"] == [claim.claim_id]
+    assert context["reviewed_evidence_ownership"][0]["claim_ids"] == [
+        claim.claim_id
+    ]
+    before = state.model_dump(mode="json")
+    update = apply_discrepancy_decision(
+        state,
+        DiscrepancyDecisionOutput(
+            claim_assessments=[
+                ClaimAssessmentProposal(
+                    claim_id=sibling_claim.claim_id,
+                    assessment="insufficient",
+                    selected_evidence_ids=[evidence.evidence_id],
+                    rationale="Task ownership alone must not bind this Evidence.",
+                )
+            ],
+            verdict_proposal="continue",
+            rationale="Reject the fact-mismatched Evidence assignment.",
+        ),
+        reviewed_evidence_ids=[evidence.evidence_id],
+        trigger="qualified_evidence",
+    )
+
+    assert update["accepted"] is False
+    assert "outside its owned tasks" in update["rejected_reason"]
+    assert state.model_dump(mode="json") == before
 
 
 def test_protocol_exhaustion_reason_uses_last_validator_feedback() -> None:
@@ -656,6 +753,62 @@ def test_web_evidence_keeps_mixed_text_and_relation_claims_reviewable() -> None:
     )
     assert evidence.fact_ids == [text_claim_fact_id]
     assert finding.fact_ids == [text_claim_fact_id]
+
+
+def test_visual_evidence_is_scoped_to_the_selected_claim() -> None:
+    state = _state()
+    output = _planning_output()
+    output.image_claims.append(
+        ImageClaimProposal(
+            claim_key="visible-label",
+            statement="A visible label appears on the shown product.",
+            kind="text_claim",
+            predicate="reads",
+            anchor_fact_ids=["fact-visible-person"],
+            salience="medium",
+        )
+    )
+    assert apply_image_account_planning(state, output)["accepted"] is True
+    task = state.tasks[0]
+    selected_claim = next(
+        claim
+        for claim in state.image_claims
+        if next(
+            fact for fact in state.facts if fact.fact_id == claim.fact_id
+        ).kind
+        == "text_claim"
+    )
+    step = StageStep(
+        action_type="tool_call",
+        tool_name="crop_and_inspect",
+        tool_args={
+            "__question_id": task.task_id,
+            "__claim_id": selected_claim.claim_id,
+            "bbox": [0.1, 0.1, 0.8, 0.8],
+            "focus_question": "Is the visible label present?",
+        },
+        tool_result=json.dumps(
+            {
+                "status": "success",
+                "answer": "A visible label is present on the product.",
+                "bbox": [0.1, 0.1, 0.8, 0.8],
+            }
+        ),
+        metadata={"function_call_id": "call-claim-scoped-visual-evidence"},
+    )
+
+    observation = record_tool_observation(
+        state,
+        step,
+        image_sha256="a" * 64,
+    )
+
+    evidence = next(
+        item
+        for item in state.evidence
+        if item.evidence_id in observation["created_evidence_ids"]
+    )
+    assert evidence.fact_ids == [selected_claim.fact_id]
 
 
 def test_image_account_planning_creates_stable_owned_graph() -> None:
@@ -1514,14 +1667,14 @@ def test_runtime_binds_visual_proposal_to_atomic_evidence_fact() -> None:
     claim_fact = next(item for item in state.facts if item.fact_id == claim.fact_id)
     medium_fact = claim_fact.model_copy(
         update={
-            "fact_id": "fact-background-location",
-            "statement": "The background building is a particular office complex.",
+            "fact_id": "fact-visible-hand-covering",
+            "statement": "The visible person is wearing gloves.",
             "status": "active",
         }
     )
     medium_claim = claim.model_copy(
         update={
-            "claim_id": "claim-background-location",
+            "claim_id": "claim-visible-hand-covering",
             "fact_id": medium_fact.fact_id,
             "statement": medium_fact.statement,
             "salience": "medium",
@@ -1534,9 +1687,26 @@ def test_runtime_binds_visual_proposal_to_atomic_evidence_fact() -> None:
     task.fact_ids.append(medium_fact.fact_id)
     task.claim_ids.append(medium_claim.claim_id)
     state.search_hypotheses[0].claim_ids.append(medium_claim.claim_id)
+    medium_evidence = evidence.model_copy(
+        update={
+            "evidence_id": "evidence-visible-hand-covering",
+            "fact_ids": [medium_claim.fact_id],
+            "function_call_id": "call-visible-hand-covering",
+            "exact_text": (
+                "The source says the visible person is without wearing gloves."
+            ),
+        }
+    )
+    state.evidence.append(medium_evidence)
+    binding = discrepancy_visual_reinspection_binding(
+        state,
+        reviewed_evidence_ids=[evidence.evidence_id, medium_evidence.evidence_id],
+    )
+    assert binding["status"] == "ambiguous"
 
     proposal = DiscrepancyDecisionProposalOutput(
         visual_reinspection=VisualReinspectionProposal(
+            claim_id=claim.claim_id,
             reason="relation",
             scope="relation",
             question="Is the visible object on the support or beside it?",
@@ -1548,7 +1718,7 @@ def test_runtime_binds_visual_proposal_to_atomic_evidence_fact() -> None:
     bound, reason = bind_discrepancy_decision_runtime_ids(
         state,
         proposal,
-        reviewed_evidence_ids=[evidence.evidence_id],
+        reviewed_evidence_ids=[evidence.evidence_id, medium_evidence.evidence_id],
     )
 
     assert reason == ""
@@ -1726,6 +1896,7 @@ def test_runtime_binding_rewrites_generic_visual_reinspection_text() -> None:
         state,
         DiscrepancyDecisionProposalOutput(
             visual_reinspection=VisualReinspectionProposal(
+                claim_id=state.image_claims[0].claim_id,
                 reason="text",
                 scope="relation",
                 question="text",
@@ -1757,6 +1928,7 @@ def test_runtime_binding_rewrites_misdirected_integrity_visual_question() -> Non
         state,
         DiscrepancyDecisionProposalOutput(
             visual_reinspection=VisualReinspectionProposal(
+                claim_id=state.image_claims[0].claim_id,
                 reason="integrity",
                 scope="integrity",
                 question="Does the image show generic AI artifacts?",
@@ -1781,7 +1953,7 @@ def test_runtime_binding_rewrites_misdirected_integrity_visual_question() -> Non
     assert "microphone" in request.question
 
 
-def test_mixed_visual_decision_projects_to_only_visual_transition() -> None:
+def test_mixed_visual_decision_is_rejected_instead_of_silently_projected() -> None:
     payload = {
         "claim_assessments": [
             {
@@ -1807,6 +1979,7 @@ def test_mixed_visual_decision_projects_to_only_visual_transition() -> None:
             }
         ],
         "visual_reinspection": {
+            "claim_id": "claim-guess",
             "reason": "identity",
             "scope": "subject",
             "question": "Does the animal have an orange patch around its mouth?",
@@ -1816,14 +1989,8 @@ def test_mixed_visual_decision_projects_to_only_visual_transition() -> None:
         "rationale": "The visual check must be isolated first.",
     }
 
-    parsed = DiscrepancyDecisionProposalOutput.model_validate(payload)
-
-    assert parsed.visual_reinspection is not None
-    assert parsed.claim_assessments == []
-    assert parsed.material_discrepancy is None
-    assert parsed.new_hypotheses == []
-    assert parsed.retire_hypothesis_ids == []
-    assert parsed.verdict_proposal == "continue"
+    with pytest.raises(ValueError, match="visual reinspection proposal"):
+        DiscrepancyDecisionProposalOutput.model_validate(payload)
 
 
 def test_source_visible_property_extraction_is_short_and_rejects_scene_support() -> None:
@@ -1931,6 +2098,7 @@ def test_runtime_binding_requires_a_concrete_source_visible_property() -> None:
         state,
         DiscrepancyDecisionProposalOutput(
             visual_reinspection=VisualReinspectionProposal(
+                claim_id=state.image_claims[0].claim_id,
                 reason="identity",
                 scope="subject",
                 question="Does the foreground show a specimen or an instrument?",
@@ -1943,7 +2111,7 @@ def test_runtime_binding_requires_a_concrete_source_visible_property() -> None:
 
     assert binding["status"] == "unavailable"
     assert bound is None
-    assert "binding is unavailable" in error
+    assert "not an eligible runtime visual reinspection candidate" in error
 
 
 def test_runtime_binding_rewrites_long_source_text_to_visible_property() -> None:
@@ -1965,6 +2133,7 @@ def test_runtime_binding_rewrites_long_source_text_to_visible_property() -> None
         state,
         DiscrepancyDecisionProposalOutput(
             visual_reinspection=VisualReinspectionProposal(
+                claim_id=state.image_claims[0].claim_id,
                 reason="integrity",
                 scope="integrity",
                 question="Does the original image show generic AI artifacts?",
@@ -3227,3 +3396,34 @@ def test_discrepancy_coverage_does_not_settle_from_no_gain_streak() -> None:
     assert audit.stop_reason == "continue"
     assert state.stop_reason == ""
     assert state.discrepancy_coverage_audits[-1].action_count == 4
+
+
+def test_two_no_gain_actions_open_a_strategy_boundary_without_settling() -> None:
+    state = _planned_state()
+    state.action_count = 1
+    record_action_progress(state, {})
+    assert discrepancy_decision_checkpoint_reason(state, update={}) == ""
+
+    state.action_count = 2
+    record_action_progress(state, {})
+    assert (
+        discrepancy_decision_checkpoint_reason(state, update={})
+        == "strategy_boundary"
+    )
+
+    update = apply_discrepancy_decision(
+        state,
+        DiscrepancyDecisionOutput(
+            verdict_proposal="continue",
+            rationale=(
+                "No-gain actions do not settle the Claim; a remaining route "
+                "may still be attempted."
+            ),
+        ),
+        reviewed_evidence_ids=[],
+        trigger="strategy_boundary",
+    )
+
+    assert update["accepted"] is True
+    assert state.proposed_verdict == "continue"
+    assert state.stop_reason == ""

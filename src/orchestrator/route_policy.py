@@ -145,7 +145,6 @@ def routes_semantically_equivalent(
         left["tool"]
         not in {
             "compare_with_reference",
-            "reverse_image_search",
             "current_time",
             "text_search",
         }

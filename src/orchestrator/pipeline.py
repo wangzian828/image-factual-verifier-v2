@@ -128,6 +128,9 @@ from src.orchestrator.task_store import (
 from src.storage import default_tool_cache_dir
 
 
+MAX_MODEL_TASK_CHOICES_PER_ACTION = 3
+
+
 class Orchestrator:
     """VisualFact-driven image-only v3 orchestrator."""
 
@@ -1150,10 +1153,10 @@ class Orchestrator:
         if investigation.proposed_verdict in {"fake", "real"}:
             raise RuntimeError("no ReAct action is allowed after a v4 verdict")
         react_tasks = select_image_only_discrepancy_react_tasks(investigation)
-        # A native tool schema cannot express dependencies between independent
-        # task, URL, reference, and Claim enums. Expose one scheduled task per
-        # action so every advertised combination remains executable.
-        react_tasks = react_tasks[:1]
+        # Give the model a small scheduling window instead of deterministically
+        # forcing the first Task. Runtime validation still rejects a tool, URL, or
+        # Claim that does not belong to the selected Task.
+        react_tasks = react_tasks[:MAX_MODEL_TASK_CHOICES_PER_ACTION]
         task_ids = {task.task_id for task in react_tasks}
         if not task_ids:
             raise RuntimeError("no executable claim/hypothesis task remains")
@@ -1654,17 +1657,17 @@ class Orchestrator:
         evidence_by_id = {
             item.evidence_id: item for item in investigation.evidence
         }
-        task_by_id = {item.task_id: item for item in investigation.tasks}
+        claim_ids_by_fact: Dict[str, List[str]] = {}
+        for claim in investigation.image_claims:
+            claim_ids_by_fact.setdefault(claim.fact_id, []).append(claim.claim_id)
         claim_evidence_ids: Dict[str, List[str]] = {}
         for evidence_id in reviewed:
             evidence = evidence_by_id.get(evidence_id)
             if evidence is None:
                 continue
-            task = task_by_id.get(evidence.task_id)
-            if task is None:
-                continue
-            for claim_id in task.claim_ids:
-                claim_evidence_ids.setdefault(claim_id, []).append(evidence_id)
+            for fact_id in evidence.fact_ids:
+                for claim_id in claim_ids_by_fact.get(fact_id, []):
+                    claim_evidence_ids.setdefault(claim_id, []).append(evidence_id)
 
         reason = " ".join(str(rejected_reason).split())
         if len(reason) > 420:

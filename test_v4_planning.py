@@ -18,7 +18,10 @@ from src.orchestrator.investigation_models import (
     VisualEntity,
     VisualFact,
 )
-from src.orchestrator.pipeline import Orchestrator
+from src.orchestrator.pipeline import (
+    MAX_MODEL_TASK_CHOICES_PER_ACTION,
+    Orchestrator,
+)
 from src.orchestrator.image_only_prompts import (
     render_image_account_planning_context,
     render_discrepancy_decision_context,
@@ -601,6 +604,9 @@ def test_image_account_planning_context_excludes_judgment_controls(
     assert context["context_role"] == "observations_only"
     assert "bootstrap_tasks" not in context
     assert "visual_entities" not in context
+    assert context["planning_limits"]["candidate_queries_per_hypothesis"] == 3
+    assert context["planning_limits"]["initial_text_search_actions_per_task"] == 2
+    assert "queries_per_hypothesis" not in context["planning_limits"]
     assert "pixel_ocr_visual_facts" not in context
     assert "visual_fact_anchors" in context
 
@@ -779,7 +785,7 @@ def test_planning_to_react_keeps_one_image_chain_and_claim_ownership(
     assert len(session.pending_input) == 1
 
 
-def test_discrepancy_action_selects_one_task_scoped_claim_set(
+def test_discrepancy_action_exposes_a_bounded_task_choice_window(
     tmp_path: Path,
 ) -> None:
     image_path = tmp_path / "one-task-routes.jpg"
@@ -807,22 +813,29 @@ def test_discrepancy_action_selects_one_task_scoped_claim_set(
     second_hypothesis.statement = "A second independent route."
     investigation.search_hypotheses.append(second_hypothesis)
 
-    selected = select_discrepancy_react_tasks(investigation)[:1]
-    assert [task.task_id for task in selected] == [first.task_id]
+    selected = select_discrepancy_react_tasks(
+        investigation
+    )[:MAX_MODEL_TASK_CHOICES_PER_ACTION]
+    assert [task.task_id for task in selected] == [
+        first.task_id,
+        second.task_id,
+    ]
+    selected_ids = {task.task_id for task in selected}
     claim_options = orchestrator._discrepancy_task_claim_options(
         investigation,
-        task_ids={first.task_id},
+        task_ids=selected_ids,
     )
-    assert list(claim_options) == [first.task_id]
+    assert list(claim_options) == [first.task_id, second.task_id]
     assert set(claim_options[first.task_id]) == set(first.claim_ids)
     react_context = json.loads(
         render_discrepancy_react_context(
             investigation,
-            task_ids={first.task_id},
+            task_ids=selected_ids,
         )
     )
     assert [item["task_id"] for item in react_context["active_tasks"]] == [
-        first.task_id
+        first.task_id,
+        second.task_id,
     ]
 
 
@@ -893,6 +906,68 @@ def test_discrepancy_action_skips_exhausted_active_task(
     assert [
         task.task_id for task in select_discrepancy_react_tasks(investigation)
     ] == [executable.task_id]
+
+
+def test_reverse_image_branches_are_consumed_per_task(tmp_path: Path) -> None:
+    image_path = tmp_path / "per-task-reverse-routes.jpg"
+    image_path.write_bytes(b"per-task-reverse-routes")
+    state, investigation = _state(image_path)
+    backend = ImageAccountPlanningBackend()
+    orchestrator = Orchestrator(validate_startup=False)
+    orchestrator.llm = backend
+    asyncio.run(
+        orchestrator._run_image_account_planning(
+            state,
+            investigation,
+            interaction_session=None,
+        )
+    )
+    first = investigation.tasks[0]
+    first.suggested_tools = ["reverse_image_search"]
+    investigation.search_hypotheses[0].suggested_tools = ["reverse_image_search"]
+    second = first.model_copy(
+        update={
+            "task_id": "task-second-reverse-route",
+            "hypothesis_id": "hypothesis-second-reverse-route",
+            "priority": 2,
+        },
+        deep=True,
+    )
+    investigation.tasks.append(second)
+    second_hypothesis = investigation.search_hypotheses[0].model_copy(
+        update={
+            "hypothesis_id": second.hypothesis_id,
+            "task_id": second.task_id,
+            "statement": "A second independent reverse-image route.",
+        },
+        deep=True,
+    )
+    investigation.search_hypotheses.append(second_hypothesis)
+    investigation.attempted_routes.append(
+        json.dumps(
+            {
+                "tool": "reverse_image_search",
+                "task_id": first.task_id,
+                "branch": "lens",
+                "image_input": str(image_path),
+                "outcome": "empty",
+            }
+        )
+    )
+
+    first_routes = remaining_claim_hypothesis_routes(
+        investigation,
+        task_ids={first.task_id},
+    )
+    second_routes = remaining_claim_hypothesis_routes(
+        investigation,
+        task_ids={second.task_id},
+    )
+
+    assert f"reverse_image_search:lens:{first.task_id}" not in first_routes
+    assert f"reverse_image_search:semantic:{first.task_id}" in first_routes
+    assert f"reverse_image_search:lens:{second.task_id}" in second_routes
+    assert f"reverse_image_search:semantic:{second.task_id}" in second_routes
 
 
 def test_discrepancy_decision_consumes_pending_result_on_same_chain(
