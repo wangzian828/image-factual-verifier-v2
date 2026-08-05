@@ -144,7 +144,7 @@ Required—prefer explicit absolute paths:
 
 ```powershell
 python scripts/server/jupyter_remote.py --kernel-name ifv-agent --shell `
-  'cd /gs/home/wza/projects/image-factual-verifier-v2-worktrees/visual-fact-search-agent && scripts/server/run_gpu13.sh command --input /absolute/remote/input --output /absolute/remote/output'
+  'cd /gs/home/wza/projects/image-factual-verifier-v2-worktrees/gpu13-canary-20260804-plan-relaxation-01 && scripts/server/run_gpu13.sh command --input /absolute/remote/input --output /absolute/remote/output'
 ```
 
 If remote Bash variables are genuinely useful, the outer PowerShell argument must
@@ -278,23 +278,30 @@ export https_proxy=http://100.10.1.210:47899
 export OMP_NUM_THREADS=1
 
 mkdir -p /gs/home/wza/projects/image-factual-verifier-v2-worktrees
-cd /gs/home/wza/projects/image-factual-verifier-v2-worktrees
-git clone --branch codex/image-factual-verifier-v3 \
+checkout=/gs/home/wza/projects/image-factual-verifier-v2-worktrees/gpu13-canary-20260804-plan-relaxation-01
+git clone --branch codex/gpu13-canary-20260804-plan-relaxation-01 \
   https://github.com/wangzian828/image-factual-verifier-v2.git \
-  visual-fact-search-agent
-cd visual-fact-search-agent
+  "$checkout"
+cd "$checkout"
 bash scripts/server/bootstrap_gpu13.sh
 ```
 
-The active checkout verified on 2026-07-16 is:
+The active canary checkout verified on 2026-08-05 is:
 
 ```text
-/gs/home/wza/projects/image-factual-verifier-v2-worktrees/visual-fact-search-agent
+/gs/home/wza/projects/image-factual-verifier-v2-worktrees/gpu13-canary-20260804-plan-relaxation-01
 ```
 
 Do not run `/gs/home/wza/projects/image-factual-verifier-v2`: it is a legacy
 `feature/visual-fact-search-agent` checkout with an unrelated staged migration.
-Its source tree does not represent its HEAD and must not be reset or reused as v3.
+Do not assume older worktree names such as `visual-fact-search-agent` are current:
+first list `/gs/home/wza/projects/image-factual-verifier-v2-worktrees`, then verify
+`git status --short --branch` and `git rev-parse HEAD` in the selected checkout.
+The currently verified canary branch is
+`codex/gpu13-canary-20260804-plan-relaxation-01`; its exact HEAD is intentionally
+not recorded here because it changes after every deployment. The server source tree
+must not be reset or reused when it is dirty or on a different branch than the
+committed local work.
 
 The deployment uses the isolated `ifv-agent` environment with Python 3.11. The
 bootstrap script is idempotent and stores `OMP_NUM_THREADS=1` in that Conda
@@ -310,8 +317,8 @@ server's base Conda Python.
 After each local commit and push:
 
 ```bash
-cd /gs/home/wza/projects/image-factual-verifier-v2-worktrees/visual-fact-search-agent
-bash scripts/server/update_gpu13_checkout.sh codex/image-factual-verifier-v3
+cd /gs/home/wza/projects/image-factual-verifier-v2-worktrees/gpu13-canary-20260804-plan-relaxation-01
+bash scripts/server/update_gpu13_checkout.sh codex/gpu13-canary-20260804-plan-relaxation-01
 bash scripts/server/bootstrap_gpu13.sh
 ```
 
@@ -323,7 +330,7 @@ server worktree. Do not bypass that guard by editing or resetting server files.
 Run the full deterministic suite without credentials first:
 
 ```bash
-cd /gs/home/wza/projects/image-factual-verifier-v2-worktrees/visual-fact-search-agent
+cd /gs/home/wza/projects/image-factual-verifier-v2-worktrees/gpu13-canary-20260804-plan-relaxation-01
 scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
   python -m pytest -q
 ```
@@ -452,7 +459,7 @@ D:\image-factual-verifier-data-pipeline
 Foreground canary:
 
 ```bash
-cd /gs/home/wza/projects/image-factual-verifier-v2-worktrees/visual-fact-search-agent
+cd /gs/home/wza/projects/image-factual-verifier-v2-worktrees/gpu13-canary-20260804-plan-relaxation-01
 release="$IFV_DATA_ROOT/releases/automatic-diverse-20-development-preview-v4-20260715"
 run_id="automatic-diverse-20-v4-canary-$(date -u +%Y%m%dT%H%M%SZ)"
 scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
@@ -508,7 +515,7 @@ the real evaluator, requires successful search/visit/visual tool classes, and ru
 strict trace audit:
 
 ```bash
-cd /gs/home/wza/projects/image-factual-verifier-v2-worktrees/visual-fact-search-agent
+cd /gs/home/wza/projects/image-factual-verifier-v2-worktrees/gpu13-canary-20260804-plan-relaxation-01
 run_id="runtime-canary-$(date -u +%Y%m%dT%H%M%SZ)"
 scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
   python scripts/run_real_canary.py \

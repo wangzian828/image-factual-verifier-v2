@@ -1367,7 +1367,7 @@ def _claim_directional_chain_ids(
     evidence_by_id: Mapping[str, InvestigationEvidence],
     task_by_id: Mapping[str, ResearchTask],
 ) -> tuple[set[str], set[str]]:
-    qualified_evidence_ids = {
+    baseline_evidence_ids = {
         evidence_id
         for evidence_id in evidence_ids
         if evidence_id in evidence_by_id
@@ -1375,6 +1375,10 @@ def _claim_directional_chain_ids(
         and evidence_by_id[evidence_id].task_id in task_by_id
         and claim_id in task_by_id[evidence_by_id[evidence_id].task_id].claim_ids
     }
+    qualified_evidence_ids = _claim_decision_evidence_ids(
+        baseline_evidence_ids,
+        evidence_by_id=evidence_by_id,
+    )
     finding_ids = {
         finding.finding_id
         for finding in state.findings
@@ -1402,6 +1406,55 @@ def _claim_directional_chain_ids(
         qualified_evidence_ids.update(composite_evidence_ids)
         finding_ids.update(composite_finding_ids)
     return qualified_evidence_ids, finding_ids
+
+
+def _claim_decision_evidence_ids(
+    evidence_ids: Iterable[str],
+    *,
+    evidence_by_id: Mapping[str, InvestigationEvidence],
+) -> set[str]:
+    """Return Evidence strong enough to carry an ImageClaim decision.
+
+    Exact spans from unknown or user-generated web sources are useful leads, but
+    one such page must not by itself close a high-salience ImageClaim. It needs
+    an independent second source, a trusted official/news source, or a non-web
+    visual/reference chain.
+    """
+
+    ordered_ids = list(dict.fromkeys(evidence_ids))
+    trusted_ids: set[str] = set()
+    weak_web_ids: list[str] = []
+    for evidence_id in ordered_ids:
+        evidence = evidence_by_id[evidence_id]
+        if evidence.evidence_kind != "web_span":
+            trusted_ids.add(evidence_id)
+        elif evidence.source_class in {"official", "news", "visual"}:
+            trusted_ids.add(evidence_id)
+        elif evidence.source_class in {"unknown", "ugc"}:
+            weak_web_ids.append(evidence_id)
+        else:
+            trusted_ids.add(evidence_id)
+    if trusted_ids:
+        return trusted_ids
+
+    independent_ids: list[str] = []
+    seen_domains: set[str] = set()
+    seen_families: set[str] = set()
+    for evidence_id in weak_web_ids:
+        evidence = evidence_by_id[evidence_id]
+        family = evidence.source_family
+        domain = (
+            classify_source(evidence.source_url).registered_domain
+            or family
+        )
+        if domain in seen_domains or family in seen_families:
+            continue
+        seen_domains.add(domain)
+        seen_families.add(family)
+        independent_ids.append(evidence_id)
+        if len(independent_ids) == 2:
+            return set(independent_ids)
+    return set()
 
 
 def _is_composite_source_visual_discrepancy_finding(

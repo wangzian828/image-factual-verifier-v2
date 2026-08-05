@@ -95,6 +95,10 @@ def text_targets_verdict_or_media_origin(value: str) -> bool:
             r"\b(?:real\s+or\s+fake|fake\s+or\s+real|authenticity|creation\s+method|generation\s+source)\b",
             text,
         )
+        or re.search(
+            r"\b(?:original\s+creator|publication\s+context|platform\s+of\s+publication|media\s+background|generation\s+context)\b",
+            text,
+        )
     )
 
 

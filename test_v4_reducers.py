@@ -499,6 +499,53 @@ def _append_evidence(state: ImageOnlyInvestigationState) -> InvestigationEvidenc
     return evidence
 
 
+def _append_web_refute_evidence(
+    state: ImageOnlyInvestigationState,
+    *,
+    suffix: str,
+    source_class: str,
+    source_family: str,
+) -> InvestigationEvidence:
+    claim = state.image_claims[0]
+    task = next(task for task in state.tasks if claim.claim_id in task.claim_ids)
+    evidence = InvestigationEvidence(
+        evidence_id=f"evidence-web-refute-{suffix}",
+        task_id=task.task_id,
+        fact_ids=[claim.fact_id],
+        function_call_id=f"call-web-refute-{suffix}",
+        tool_name="visit",
+        evidence_kind="web_span",
+        source_url=f"https://{suffix}.example/source",
+        source_family=source_family,
+        source_class=source_class,
+        exact_text="The source directly contradicts the depicted relationship.",
+        span_start=0,
+        span_end=60,
+        artifact_sha256=("b" if suffix == "one" else "c") * 64,
+        retrieved_at=datetime.now(timezone.utc).isoformat(),
+        stance="refute",
+        quality="moderate",
+        directness="direct",
+        claim_binding="source_assertion",
+        relation_scope="same_relation",
+        relation_stance="contradicts",
+    )
+    state.evidence.append(evidence)
+    finding = Finding(
+        finding_id=f"finding-web-refute-{suffix}",
+        task_id=task.task_id,
+        fact_ids=[claim.fact_id],
+        statement="The reviewed source contradicts the depicted relationship.",
+        stance="refute",
+        evidence_ids=[evidence.evidence_id],
+        source_family_ids=[evidence.source_family],
+        quality="decisive",
+    )
+    state.findings.append(finding)
+    task.finding_ids.append(finding.finding_id)
+    return evidence
+
+
 def _microphone_discriminators() -> list[VisualDiscriminatorCandidate]:
     return [
         VisualDiscriminatorCandidate(
@@ -1173,6 +1220,98 @@ def test_discrepancy_decision_establishes_fake_atomically() -> None:
     assert basis.evidence_ids == [evidence.evidence_id]
     assert basis.visual_anchor_fact_ids == claim.anchor_fact_ids
     assert state.stop_reason == "verdict_determined"
+
+
+def test_single_unknown_web_span_cannot_close_high_salience_claim() -> None:
+    state = _planned_state()
+    evidence = _append_web_refute_evidence(
+        state,
+        suffix="one",
+        source_class="unknown",
+        source_family="domain:unknown-one.example",
+    )
+    claim = state.image_claims[0]
+    before = state.model_dump(mode="json")
+
+    update = apply_discrepancy_decision(
+        state,
+        DiscrepancyDecisionOutput(
+            claim_assessments=[
+                ClaimAssessmentProposal(
+                    claim_id=claim.claim_id,
+                    assessment="refuted",
+                    selected_evidence_ids=[evidence.evidence_id],
+                    rationale="The reviewed span contradicts the relation.",
+                )
+            ],
+            material_discrepancy=MaterialDiscrepancyProposal(
+                statement="The reviewed span contradicts the depicted relation.",
+                affected_claim_ids=[claim.claim_id],
+                visual_anchor_fact_ids=claim.anchor_fact_ids,
+                evidence_ids=[evidence.evidence_id],
+                materiality="decisive",
+                status="established",
+                rationale="The contradiction would be decisive if the source chain were sufficient.",
+            ),
+            verdict_proposal="fake",
+            rationale="Close the case from the reviewed span.",
+        ),
+        reviewed_evidence_ids=[evidence.evidence_id],
+        trigger="qualified_evidence",
+    )
+
+    assert update["accepted"] is False
+    assert "requires owned qualified refute Evidence" in update["rejected_reason"]
+    assert state.model_dump(mode="json") == before
+
+
+def test_two_independent_unknown_web_spans_can_close_high_salience_claim() -> None:
+    state = _planned_state()
+    first = _append_web_refute_evidence(
+        state,
+        suffix="one",
+        source_class="unknown",
+        source_family="domain:unknown-one.example",
+    )
+    second = _append_web_refute_evidence(
+        state,
+        suffix="two",
+        source_class="unknown",
+        source_family="domain:unknown-two.example",
+    )
+    claim = state.image_claims[0]
+    evidence_ids = [first.evidence_id, second.evidence_id]
+
+    update = apply_discrepancy_decision(
+        state,
+        DiscrepancyDecisionOutput(
+            claim_assessments=[
+                ClaimAssessmentProposal(
+                    claim_id=claim.claim_id,
+                    assessment="refuted",
+                    selected_evidence_ids=evidence_ids,
+                    rationale="Two independent reviewed sources contradict the relation.",
+                )
+            ],
+            material_discrepancy=MaterialDiscrepancyProposal(
+                statement="Independent reviewed sources contradict the depicted relation.",
+                affected_claim_ids=[claim.claim_id],
+                visual_anchor_fact_ids=claim.anchor_fact_ids,
+                evidence_ids=evidence_ids,
+                materiality="decisive",
+                status="established",
+                rationale="The independent source chain is sufficient.",
+            ),
+            verdict_proposal="fake",
+            rationale="Close the case from independent reviewed sources.",
+        ),
+        reviewed_evidence_ids=evidence_ids,
+        trigger="qualified_evidence",
+    )
+
+    assert update["accepted"] is True, update
+    assert state.proposed_verdict == "fake"
+    assert state.material_discrepancies[0].evidence_ids == evidence_ids
 
 
 def test_refuted_high_salience_claim_cannot_be_downgraded_to_supporting() -> None:
@@ -2565,6 +2704,7 @@ def test_source_assertion_can_be_decided_without_runtime_selected_reinspection()
         evidence_kind="web_span",
         source_url="https://example.org/source",
         source_family="domain:example.org",
+        source_class="news",
         exact_text=(
             "The source says the presenter is holding a silver microphone."
         ),
@@ -2638,6 +2778,7 @@ def test_failed_optional_visual_does_not_create_a_source_gate() -> None:
         evidence_kind="web_span",
         source_url="https://example.org/source",
         source_family="domain:example.org",
+        source_class="news",
         exact_text=(
             "The source says the presenter is holding a silver microphone."
         ),
@@ -2764,6 +2905,7 @@ def test_selected_visual_evidence_remains_scoped_to_the_pending_claim() -> None:
         evidence_kind="web_span",
         source_url="https://example.org/a",
         source_family="domain:example.org",
+        source_class="news",
         exact_text="The source says the presenter is holding a silver microphone.",
         span_start=0,
         span_end=60,
@@ -2785,6 +2927,7 @@ def test_selected_visual_evidence_remains_scoped_to_the_pending_claim() -> None:
         evidence_kind="web_span",
         source_url="https://example.org/b",
         source_family="domain:example.org",
+        source_class="news",
         exact_text="The source says the product has a red label.",
         span_start=0,
         span_end=48,

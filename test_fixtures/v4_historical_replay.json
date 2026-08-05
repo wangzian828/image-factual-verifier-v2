@@ -34,6 +34,8 @@
     "case_id": "case_5cb541d78661ad17",
     "name": "queen-coronation-bus-context",
     "expected_verdict": "fake",
+    "expected_decision": "rejected",
+    "expected_rejection_contains": "qualified refute Evidence",
     "anchor": {
       "entity_name": "queen figure on decorated double-decker bus",
       "entity_type": "event_relation",
@@ -89,6 +91,8 @@
     "case_id": "case_21ea1e62758d3d7c",
     "name": "monarch-antarctica-ecology",
     "expected_verdict": "fake",
+    "expected_decision": "rejected",
+    "expected_rejection_contains": "qualified refute Evidence",
     "anchor": {
       "entity_name": "monarch butterflies in Antarctic scene",
       "entity_type": "ecological_relation",
