@@ -27,6 +27,7 @@ from src.orchestrator.investigation_models import (
     SearchHypothesisProposal,
     VisualEntity,
     VisualEvidenceDisposition,
+    VisualDiscriminatorCandidate,
     VisualFact,
     VisualReinspectionProposal,
     VisualReinspectionRequest,
@@ -47,7 +48,6 @@ from src.orchestrator.task_store import (
     bind_discrepancy_decision_runtime_ids,
     discrepancy_decision_checkpoint_reason,
     discrepancy_visual_reinspection_binding,
-    extract_source_visible_property,
     record_route_selection_exhaustion,
     record_tool_observation,
     remaining_claim_hypothesis_routes,
@@ -497,6 +497,39 @@ def _append_evidence(state: ImageOnlyInvestigationState) -> InvestigationEvidenc
     state.findings.append(finding)
     task.finding_ids.append(finding.finding_id)
     return evidence
+
+
+def _microphone_discriminators() -> list[VisualDiscriminatorCandidate]:
+    return [
+        VisualDiscriminatorCandidate(
+            source_phrase=(
+                "The source capture shows the presenter holding a microphone."
+            ),
+            visible_property="presenter holding a microphone",
+            why_discriminative=(
+                "The held object distinguishes the source relation from a "
+                "generic presenter scene."
+            ),
+            already_in_claim=False,
+            expected_if_source_matches=(
+                "The presenter visibly grips a microphone."
+            ),
+        ),
+        VisualDiscriminatorCandidate(
+            source_phrase=(
+                "The source capture shows the presenter holding a microphone."
+            ),
+            visible_property="microphone visible in the presenter's hands",
+            why_discriminative=(
+                "The object should be attached to the visible hand relation, "
+                "not merely present elsewhere in the frame."
+            ),
+            already_in_claim=False,
+            expected_if_source_matches=(
+                "A microphone is visibly in the presenter’s hands."
+            ),
+        ),
+    ]
 
 
 def _append_source_visual_conflict_pair(
@@ -1905,6 +1938,7 @@ def test_runtime_binds_visual_proposal_to_atomic_evidence_fact() -> None:
             scope="relation",
             question="Is the visible object on the support or beside it?",
             expected_property="on versus beside",
+            candidate_discriminators=_microphone_discriminators(),
         ),
         verdict_proposal="continue",
         rationale="Reinspect the one fact-bound high-salience relation.",
@@ -1938,6 +1972,8 @@ def test_runtime_binds_visual_proposal_to_atomic_evidence_fact() -> None:
     proposal_schema = VisualReinspectionProposal.model_json_schema()["properties"]
     assert "anchor_fact_ids" not in proposal_schema
     assert "grounding_evidence_ids" not in proposal_schema
+    assert "candidate_discriminators" in proposal_schema
+    assert "selected_discriminator_index" in proposal_schema
 
 
 def test_runtime_binds_material_discrepancy_visual_anchors() -> None:
@@ -2044,8 +2080,8 @@ def test_discrepancy_context_flags_evidence_to_visual_alignment_candidate() -> N
             "claim_id": claim.claim_id,
             "claim_statement": claim.statement,
             "claim_status": "open",
-            "source_visible_property_hint": candidates[0][
-                "source_visible_property_hint"
+            "source_evidence_excerpt": candidates[0][
+                "source_evidence_excerpt"
             ],
             "current_image_account": state.image_account_summary,
             "allowed_visual_anchors": [
@@ -2057,8 +2093,7 @@ def test_discrepancy_context_flags_evidence_to_visual_alignment_candidate() -> N
             "required_review": candidates[0]["required_review"],
         }
     ]
-    assert "targeted visual_reinspection" in candidates[0]["required_review"]
-    assert "glove versus bare hand" in DISCREPANCY_DECISION_SYSTEM_PROMPT
+    assert "candidate discriminators" in candidates[0]["required_review"]
     assert "absolute size or weight" in DISCREPANCY_DECISION_SYSTEM_PROMPT
     assert "media origin from style" in DISCREPANCY_DECISION_SYSTEM_PROMPT
     assert context["runtime_visual_reinspection_binding"] == {
@@ -2070,7 +2105,7 @@ def test_discrepancy_context_flags_evidence_to_visual_alignment_candidate() -> N
                     "source_task_id": task.task_id,
                     "anchor_fact_ids": claim.anchor_fact_ids,
                     "grounding_evidence_ids": [evidence.evidence_id],
-                    "source_visible_property_hint": "without wearing gloves",
+                    "source_evidence_excerpt": evidence.exact_text,
             }
         ],
         "binding": {
@@ -2079,7 +2114,7 @@ def test_discrepancy_context_flags_evidence_to_visual_alignment_candidate() -> N
             "source_task_id": task.task_id,
             "anchor_fact_ids": claim.anchor_fact_ids,
             "grounding_evidence_ids": [evidence.evidence_id],
-            "source_visible_property_hint": "without wearing gloves",
+            "source_evidence_excerpt": evidence.exact_text,
         },
     }
 
@@ -2097,6 +2132,7 @@ def test_runtime_binding_rewrites_generic_visual_reinspection_text() -> None:
                 scope="relation",
                 question="text",
                 expected_property="text",
+                candidate_discriminators=_microphone_discriminators(),
             ),
             verdict_proposal="continue",
             rationale="The source-introduced visible property needs a pixel check.",
@@ -2108,10 +2144,8 @@ def test_runtime_binding_rewrites_generic_visual_reinspection_text() -> None:
     assert bound is not None
     request = bound.visual_reinspection
     assert request is not None
-    assert request.question != "text"
-    assert request.expected_property != "text"
-    assert "microphone" in request.question
-    assert "microphone" in request.expected_property
+    assert request.question == "text"
+    assert request.expected_property == "presenter holding a microphone"
     assert request.anchor_fact_ids == state.image_claims[0].anchor_fact_ids
     assert request.grounding_evidence_ids == [evidence.evidence_id]
 
@@ -2129,6 +2163,7 @@ def test_runtime_binding_rewrites_misdirected_integrity_visual_question() -> Non
                 scope="integrity",
                 question="Does the image show generic AI artifacts?",
                 expected_property="generic AI artifact inspection",
+                candidate_discriminators=_microphone_discriminators(),
             ),
             verdict_proposal="continue",
             rationale=(
@@ -2139,14 +2174,8 @@ def test_runtime_binding_rewrites_misdirected_integrity_visual_question() -> Non
         reviewed_evidence_ids=[evidence.evidence_id],
     )
 
-    assert error == ""
-    assert bound is not None
-    request = bound.visual_reinspection
-    assert request is not None
-    assert request.reason != "integrity"
-    assert request.scope != "integrity"
-    assert "generic AI" not in request.question
-    assert "microphone" in request.question
+    assert bound is None
+    assert "unsupported integrity" in error
 
 
 def test_mixed_visual_decision_is_rejected_instead_of_silently_projected() -> None:
@@ -2189,91 +2218,7 @@ def test_mixed_visual_decision_is_rejected_instead_of_silently_projected() -> No
         DiscrepancyDecisionProposalOutput.model_validate(payload)
 
 
-def test_source_visible_property_extraction_is_short_and_rejects_scene_support() -> None:
-    source = (
-        "A New York Times article quoted a Facebook post before describing a "
-        "newly identified Congo monkey with an orange patch around its nose and "
-        "mouth. The social post included publication metadata and a long URL."
-    )
-    property_hint = extract_source_visible_property(source)
-
-    assert "orange" in property_hint.casefold()
-    assert "mouth" in property_hint.casefold()
-    assert "facebook" not in property_hint.casefold()
-    assert len(property_hint) <= 240
-    assert extract_source_visible_property(
-        "The source describes a surgical team working in an operating room."
-    ) == ""
-    assert (
-        extract_source_visible_property(
-            "A famous photograph shows her shaking a patient's hand without "
-            "wearing gloves."
-        )
-        == "without wearing gloves"
-    )
-    assert (
-        extract_source_visible_property(
-            "Inside a Roman-era tomb in Egypt's Minya Governorate, archaeologists "
-            "found something tucked inside the mouth of a mummy."
-        )
-        == "something tucked inside the mouth of a mummy"
-    )
-    assert (
-        extract_source_visible_property(
-            "A pink granite plaza with pools and greenery lies on the western "
-            "side of the Seagram Building."
-        )
-        == "pink granite plaza with pools and greenery"
-    )
-    assert (
-        extract_source_visible_property(
-            "It's a terrible taxidermy version of a female White-Faced Saki."
-        )
-        == ""
-    )
-    assert (
-        extract_source_visible_property(
-            "Netanyahu With 'Six Fingers'?"
-        )
-        == "Six Fingers"
-    )
-    assert (
-        extract_source_visible_property(
-            "31K views · 268 reactions | The medium-sized monkey with an "
-            "orange-colored patch around its nose and mouth, known locally as "
-            "Likweli, joins a very short list of newly identified African "
-            "monkey species. Read more: https://nyti.ms/4bJd2wn | The New "
-            "York Times"
-        )
-        == "orange-colored patch around its nose and mouth"
-    )
-    assert (
-        extract_source_visible_property(
-            "A hyper-realistic shot shows a woman wearing a simple brown "
-            "long-sleeved top and a yellow cloth covering her lower half, "
-            "holding a silver rosary with a cross in her hands."
-        )
-        == (
-            "simple brown long-sleeved top and a yellow cloth covering her "
-            "lower half; holding silver rosary with a cross in her hands"
-        )
-    )
-    assert (
-        extract_source_visible_property(
-            "The president is wearing a white robe and red sash, placing a "
-            "hand radiating golden light on a patient."
-        )
-        == "white robe and red sash"
-    )
-    assert (
-        extract_source_visible_property(
-            "The sky was just painted in red, white, and blue by the aerial review."
-        )
-        == "sky was just painted in red, white, and blue"
-    )
-
-
-def test_runtime_binding_requires_a_concrete_source_visible_property() -> None:
+def test_runtime_binding_requires_model_selected_visual_discriminators() -> None:
     state = _planned_state()
     evidence = _append_evidence(state)
     evidence.evidence_kind = "web_span"
@@ -2305,9 +2250,43 @@ def test_runtime_binding_requires_a_concrete_source_visible_property() -> None:
         reviewed_evidence_ids=[evidence.evidence_id],
     )
 
-    assert binding["status"] == "unavailable"
+    assert binding["status"] == "available"
     assert bound is None
-    assert "not an eligible runtime visual reinspection candidate" in error
+    assert "at least two source-grounded" in error
+
+
+def test_runtime_binding_rejects_unanchored_visual_discriminator_phrase() -> None:
+    state = _planned_state()
+    evidence = _append_evidence(state)
+    evidence.evidence_kind = "web_span"
+    evidence.span_start = 0
+    evidence.span_end = len(evidence.exact_text)
+    evidence.claim_binding = "source_assertion"
+    evidence.relation_scope = "same_relation"
+    evidence.relation_stance = "supports"
+    candidates = _microphone_discriminators()
+    candidates[0] = candidates[0].model_copy(
+        update={"source_phrase": "A phrase absent from the reviewed source."}
+    )
+
+    bound, error = bind_discrepancy_decision_runtime_ids(
+        state,
+        DiscrepancyDecisionProposalOutput(
+            visual_reinspection=VisualReinspectionProposal(
+                claim_id=state.image_claims[0].claim_id,
+                reason="relation",
+                scope="relation",
+                question="Does the source-grounded relation appear in the image?",
+                expected_property="presenter holding a microphone",
+                candidate_discriminators=candidates,
+            ),
+            rationale="The selected pixel check must retain source provenance.",
+        ),
+        reviewed_evidence_ids=[evidence.evidence_id],
+    )
+
+    assert bound is None
+    assert "copied verbatim" in error
 
 
 def test_visual_reinspection_binding_ignores_neutral_indirect_source_titles() -> None:
@@ -2369,14 +2348,55 @@ def test_runtime_binding_rewrites_long_source_text_to_visible_property() -> None
         DiscrepancyDecisionProposalOutput(
             visual_reinspection=VisualReinspectionProposal(
                 claim_id=state.image_claims[0].claim_id,
-                reason="integrity",
-                scope="integrity",
-                question="Does the original image show generic AI artifacts?",
+                    reason="identity",
+                    scope="subject",
+                    question=(
+                        "Does the original image visibly show the source-described "
+                        "orange patch around the nose and mouth?"
+                    ),
                 expected_property=(
                     "distribution_of_orange_pigmentation_on_cheeks_vs_nose_bridge"
                 ),
+                candidate_discriminators=[
+                    VisualDiscriminatorCandidate(
+                        source_phrase=(
+                            "Facebook metadata and a New York Times excerpt "
+                            "describe Likweli as a new monkey with an orange "
+                            "patch around its nose and mouth"
+                        ),
+                        visible_property=(
+                            "orange patch around the nose and mouth"
+                        ),
+                        why_discriminative=(
+                            "The patch location distinguishes the described "
+                            "animal relation from other facial markings."
+                        ),
+                        already_in_claim=False,
+                        expected_if_source_matches=(
+                            "An orange patch is visible around the nose and mouth."
+                        ),
+                    ),
+                    VisualDiscriminatorCandidate(
+                        source_phrase=(
+                            "Facebook metadata and a New York Times excerpt "
+                            "describe Likweli as a new monkey with an orange "
+                            "patch around its nose and mouth"
+                        ),
+                        visible_property=(
+                            "orange facial marking around the mouth"
+                        ),
+                        why_discriminative=(
+                            "The location of the marking is more informative "
+                            "than simply checking whether an animal is present."
+                        ),
+                        already_in_claim=False,
+                        expected_if_source_matches=(
+                            "The facial marking is visible around the mouth."
+                        ),
+                    ),
+                ],
             ),
-            rationale="Rewrite the source binding to a concrete pixel property.",
+            rationale="Inspect the source-grounded animal property.",
         ),
         reviewed_evidence_ids=[evidence.evidence_id],
     )
@@ -2385,14 +2405,12 @@ def test_runtime_binding_rewrites_long_source_text_to_visible_property() -> None
     assert bound is not None
     request = bound.visual_reinspection
     assert request is not None
-    assert request.expected_property == extract_source_visible_property(
-        evidence.exact_text
-    )
+    assert request.expected_property == "orange patch around the nose and mouth"
     assert "cheeks" not in request.expected_property.casefold()
     assert "bridge" not in request.expected_property.casefold()
     assert len(request.expected_property) <= 240
-    assert request.reason != "integrity"
-    assert request.scope != "integrity"
+    assert request.reason == "identity"
+    assert request.scope == "subject"
 
 
 def test_second_decision_must_consume_resolved_visual_evidence_or_explain_irrelevance() -> None:
@@ -2532,7 +2550,7 @@ def test_runtime_binding_prefers_selected_visual_evidence_over_conflicting_irrel
     assert visual.evidence_id in bound.claim_assessments[0].selected_evidence_ids
 
 
-def test_source_assertion_visible_property_requires_visual_before_discrepancy() -> None:
+def test_source_assertion_can_be_decided_without_runtime_selected_reinspection() -> None:
     state = _planned_state()
     claim = state.image_claims[0]
     task = next(
@@ -2574,8 +2592,6 @@ def test_source_assertion_visible_property_requires_visual_before_discrepancy() 
             quality="decisive",
         )
     )
-    before = state.model_dump(mode="json")
-
     source_only = apply_discrepancy_decision(
         state,
         DiscrepancyDecisionOutput(
@@ -2584,7 +2600,7 @@ def test_source_assertion_visible_property_requires_visual_before_discrepancy() 
                     claim_id=claim.claim_id,
                     assessment="refuted",
                     selected_evidence_ids=[source.evidence_id],
-                    rationale="Improper source-only semantic conclusion.",
+                    rationale="The reviewed source directly refutes the relation.",
                 )
             ],
             material_discrepancy=MaterialDiscrepancyProposal(
@@ -2594,46 +2610,20 @@ def test_source_assertion_visible_property_requires_visual_before_discrepancy() 
                 evidence_ids=[source.evidence_id],
                 materiality="decisive",
                 status="established",
-                rationale="This must wait for a pixel check.",
+                rationale="The source evidence is sufficient for this relation.",
             ),
             verdict_proposal="fake",
-            rationale="Improperly skip the required focused visual check.",
+            rationale="Accept the qualified source-based discrepancy.",
         ),
         reviewed_evidence_ids=[source.evidence_id],
         trigger="qualified_evidence",
     )
 
-    assert source_only["accepted"] is False
-    assert "must request targeted visual_reinspection" in source_only[
-        "rejected_reason"
-    ]
-    assert state.model_dump(mode="json") == before
-
-    visual_request = apply_discrepancy_decision(
-        state,
-        DiscrepancyDecisionOutput(
-            visual_reinspection=VisualReinspectionRequest(
-                reason="relation",
-                scope="relation",
-                question=(
-                    "Is the presenter visibly holding a silver microphone?"
-                ),
-                expected_property="holding a silver microphone",
-                anchor_fact_ids=claim.anchor_fact_ids,
-                grounding_evidence_ids=[source.evidence_id],
-            ),
-            verdict_proposal="continue",
-            rationale="Inspect the source-grounded visible property first.",
-        ),
-        reviewed_evidence_ids=[source.evidence_id],
-        trigger="qualified_evidence",
-    )
-
-    assert visual_request["accepted"] is True, visual_request
-    assert visual_request["accepted_visual_question_id"]
+    assert source_only["accepted"] is True, source_only
+    assert state.proposed_verdict == "fake"
 
 
-def test_source_visual_gate_rejects_source_only_follow_up_after_failed_visual() -> None:
+def test_failed_optional_visual_does_not_create_a_source_gate() -> None:
     state = _planned_state()
     claim = state.image_claims[0]
     task = next(
@@ -2699,7 +2689,6 @@ def test_source_visual_gate_rejects_source_only_follow_up_after_failed_visual() 
     record.status = "failed"
     record.evidence_ids = []
 
-    before = state.model_dump(mode="json")
     source_only = apply_discrepancy_decision(
         state,
         DiscrepancyDecisionOutput(
@@ -2708,7 +2697,7 @@ def test_source_visual_gate_rejects_source_only_follow_up_after_failed_visual() 
                     claim_id=claim.claim_id,
                     assessment="refuted",
                     selected_evidence_ids=[source.evidence_id],
-                    rationale="Improper source-only follow-up after visual failure.",
+                    rationale="The source evidence independently refutes the relation.",
                 )
             ],
             material_discrepancy=MaterialDiscrepancyProposal(
@@ -2718,23 +2707,20 @@ def test_source_visual_gate_rejects_source_only_follow_up_after_failed_visual() 
                 evidence_ids=[source.evidence_id],
                 materiality="decisive",
                 status="established",
-                rationale="A failed visual check cannot establish this discrepancy.",
+                rationale="The failed optional visual check does not erase the "
+                "qualified source direction.",
             ),
             verdict_proposal="fake",
-            rationale="This must remain fail-closed after visual failure.",
+            rationale="Accept the qualified source discrepancy.",
         ),
         reviewed_evidence_ids=[source.evidence_id],
         trigger="qualified_evidence",
     )
 
-    assert source_only["accepted"] is False
-    assert "must request targeted visual_reinspection" in source_only[
-        "rejected_reason"
-    ]
-    assert state.model_dump(mode="json") == before
+    assert source_only["accepted"] is True, source_only
 
 
-def test_source_visual_gate_is_scoped_to_the_pending_claim() -> None:
+def test_selected_visual_evidence_remains_scoped_to_the_pending_claim() -> None:
     state = _state()
     planning = ImageAccountPlanningOutput(
         account_summary="The image presents a person and a visible label.",
@@ -2875,7 +2861,7 @@ def test_source_visual_gate_is_scoped_to_the_pending_claim() -> None:
                     claim_id=claim_a.claim_id,
                     assessment="refuted",
                     selected_evidence_ids=[source_a.evidence_id],
-                    rationale="Improper source-only decision for Claim A.",
+                    rationale="The source directly refutes Claim A.",
                 ),
                 ClaimAssessmentProposal(
                     claim_id=claim_b.claim_id,
@@ -2891,10 +2877,10 @@ def test_source_visual_gate_is_scoped_to_the_pending_claim() -> None:
                 evidence_ids=[source_a.evidence_id],
                 materiality="decisive",
                 status="established",
-                rationale="Claim A still needs its own pixel check.",
+                rationale="Claim A is refuted by its owned source evidence.",
             ),
             verdict_proposal="fake",
-            rationale="This must not bypass Claim A's source-to-pixel gate.",
+            rationale="Claim A's source evidence is owned and qualified.",
         ),
         reviewed_evidence_ids=[
             source_a.evidence_id,
@@ -2904,10 +2890,7 @@ def test_source_visual_gate_is_scoped_to_the_pending_claim() -> None:
         trigger="qualified_evidence",
     )
 
-    assert mixed["accepted"] is False
-    assert "must request targeted visual_reinspection" in mixed[
-        "rejected_reason"
-    ]
+    assert mixed["accepted"] is True, mixed
 
 
 def test_source_visual_gate_cannot_use_generic_decision_exhaustion_fallback() -> None:

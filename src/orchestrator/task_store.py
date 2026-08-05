@@ -127,90 +127,7 @@ _INTEGRITY_EVIDENCE_TOKENS = {
     "photoshop",
     "synthetic",
 }
-_SOURCE_PROPERTY_COLOR_TOKENS = {
-    "amber",
-    "black",
-    "blue",
-    "brown",
-    "gray",
-    "green",
-    "grey",
-    "orange",
-    "pink",
-    "purple",
-    "red",
-    "white",
-    "yellow",
-}
-_SOURCE_PROPERTY_MATERIAL_TOKENS = {
-    "aluminum",
-    "bronze",
-    "concrete",
-    "foil",
-    "glass",
-    "gold",
-    "granite",
-    "marble",
-    "metal",
-    "papyrus",
-    "plastic",
-    "silver",
-    "steel",
-    "stone",
-    "wood",
-}
-_SOURCE_PROPERTY_BODY_TOKENS = {
-    "beak",
-    "chin",
-    "eye",
-    "eyes",
-    "face",
-    "facial",
-    "finger",
-    "fingers",
-    "hand",
-    "hands",
-    "lips",
-    "mouth",
-    "nose",
-    "tail",
-}
-_SOURCE_PROPERTY_OBJECT_TOKENS = {
-    "banner",
-    "boulder",
-    "glove",
-    "gloves",
-    "greenery",
-    "instrument",
-    "microphone",
-    "mummy",
-    "plaza",
-    "pools",
-    "rosary",
-    "ribbon",
-    "ribbons",
-    "scroll",
-    "skull",
-    "statue",
-    "tray",
-    "wall",
-    "walls",
-}
-_SOURCE_PROPERTY_RELATION_PHRASES = (
-    "around",
-    "beside",
-    "between",
-    "covered by",
-    "holding",
-    "inside",
-    "next to",
-    "on top of",
-    "on the",
-    "under",
-    "wearing",
-    "without wearing",
-)
-_SOURCE_PROPERTY_STOP_TOKENS = {
+_VISUAL_DISCRIMINATOR_STOP_TOKENS = {
     "about",
     "after",
     "and",
@@ -291,10 +208,7 @@ def discrepancy_visual_reinspection_binding(
             continue
         for source_task_id, bucket in grounding_by_task.items():
             grounding_evidence_ids = bucket["evidence_ids"]
-            source_visible_property_hint = extract_source_visible_property(
-                " ".join(bucket["source_fragments"]),
-            )
-            if not grounding_evidence_ids or not source_visible_property_hint:
+            if not grounding_evidence_ids:
                 continue
             candidates.append(
                 {
@@ -303,7 +217,10 @@ def discrepancy_visual_reinspection_binding(
                     "source_task_id": source_task_id,
                     "anchor_fact_ids": anchor_fact_ids,
                     "grounding_evidence_ids": grounding_evidence_ids[:8],
-                    "source_visible_property_hint": source_visible_property_hint,
+                    "source_evidence_excerpt": _clip_text(
+                        " ".join(bucket["source_fragments"]),
+                        1200,
+                    ),
                 }
             )
     status = (
@@ -355,161 +272,6 @@ def _one_line(value: str) -> str:
     return " ".join(str(value).split())
 
 
-def extract_source_visible_property(source_text: str) -> str:
-    """Return one short, source-grounded property that pixels can inspect."""
-
-    text = _one_line(source_text)
-    if not text:
-        return ""
-    sentences = [
-        _one_line(item)
-        for item in re.split(r"(?<=[.!?;])\s+", text)
-        if _one_line(item)
-    ]
-    ranked: List[tuple[int, str]] = []
-    for sentence in sentences:
-        lowered = sentence.casefold()
-        if re.search(
-            r"\b(?:taxidermy|stuffed|model|replica)\s+version\s+of\b",
-            lowered,
-        ):
-            # A taxonomic/common-name label is an identity hypothesis, not a
-            # concrete visible property. It may motivate source research, but
-            # it cannot by itself authorize a focused pixel comparison.
-            continue
-        tokens = _semantic_request_tokens(sentence)
-        colors = tokens & _SOURCE_PROPERTY_COLOR_TOKENS
-        materials = tokens & _SOURCE_PROPERTY_MATERIAL_TOKENS
-        body = tokens & _SOURCE_PROPERTY_BODY_TOKENS
-        objects = tokens & _SOURCE_PROPERTY_OBJECT_TOKENS
-        relations = sum(
-            phrase in lowered
-            for phrase in _SOURCE_PROPERTY_RELATION_PHRASES
-        )
-        score = (
-            4 * len(colors)
-            + 3 * len(materials)
-            + 2 * len(body)
-            + 2 * len(objects)
-            + 2 * relations
-        )
-        count_body_match = re.search(
-            r"\b(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|\d+)"
-            r"\s+(?:finger|fingers|hand|hands|eye|eyes|tail|tails)\b",
-            sentence,
-            flags=re.IGNORECASE,
-        )
-        if count_body_match:
-            ranked.append(
-                (score + 6, _one_line(count_body_match.group(0))[:120])
-            )
-            continue
-        if score < 4:
-            continue
-        sky_color_match = re.search(
-            r"\b(?:the\s+)?sky\s+"
-            r"(?:was|is|appears?|looked|looks)\s+"
-            r"(?:just\s+)?(?:painted\s+in|colored|coloured)\s+"
-            r"(?:red\s*,\s*white\s*(?:,\s*and)?\s*blue|"
-            r"blue\s*,\s*white\s*(?:,\s*and)?\s*red)\b",
-            sentence,
-            flags=re.IGNORECASE,
-        )
-        if sky_color_match:
-            sky_hint = re.sub(
-                r"^(?:the\s+)",
-                "",
-                _one_line(sky_color_match.group(0)),
-                flags=re.IGNORECASE,
-            )
-            ranked.append(
-                (score + 8, sky_hint[:160])
-            )
-            continue
-        clothing_match = re.search(
-            r"\bwearing\s+(?:a\s+|an\s+|the\s+)?"
-            r"(?P<clothing>[^.;]{3,160}?)"
-            r"(?=\s*,\s*(?:holding|placing|standing|sitting|lying)\b|[.;]|$)",
-            sentence,
-            flags=re.IGNORECASE,
-        )
-        if clothing_match and "without wearing" not in lowered:
-            clothing = _one_line(clothing_match.group("clothing"))
-            held_match = re.search(
-                r"\bholding\s+(?:a\s+|an\s+|the\s+)?"
-                r"(?P<held>[^.;]{3,100})",
-                sentence,
-                flags=re.IGNORECASE,
-            )
-            if held_match:
-                held = _one_line(held_match.group("held"))
-                clothing = f"{clothing}; holding {held}"
-            ranked.append((score + 8, clothing[:220]))
-            continue
-        if colors and body:
-            pattern = (
-                r"\b(?:"
-                + "|".join(sorted(_SOURCE_PROPERTY_COLOR_TOKENS))
-                + r")\b[^.;]{0,120}\b(?:"
-                + "|".join(sorted(_SOURCE_PROPERTY_BODY_TOKENS))
-                + r")\b"
-            )
-            match = re.search(pattern, sentence, flags=re.IGNORECASE)
-            if match:
-                ranked.append((score + 4, _one_line(match.group(0))[:240]))
-                continue
-        if colors and (materials or objects):
-            descriptor_tokens = (
-                _SOURCE_PROPERTY_COLOR_TOKENS
-                | _SOURCE_PROPERTY_MATERIAL_TOKENS
-                | _SOURCE_PROPERTY_OBJECT_TOKENS
-            )
-            pattern = (
-                r"\b(?:"
-                + "|".join(sorted(_SOURCE_PROPERTY_COLOR_TOKENS))
-                + r")\b[^.;]{0,100}\b(?:"
-                + "|".join(sorted(descriptor_tokens))
-                + r")\b"
-            )
-            match = re.search(pattern, sentence, flags=re.IGNORECASE)
-            if match:
-                ranked.append((score + 4, _one_line(match.group(0))[:240]))
-                continue
-        if "tucked inside" in lowered and "mouth" in lowered:
-            match = re.search(
-                r"\b(?:something|object|item|foil|gold foil)?\s*tucked\s+inside\s+"
-                r"(?:the\s+)?mouth\s+of\s+(?:a\s+|the\s+)?(?:mummy|skull)\b",
-                sentence,
-                flags=re.IGNORECASE,
-            )
-            if match:
-                ranked.append((score + 5, _one_line(match.group(0))[:240]))
-                continue
-        if objects and relations:
-            object_pattern = "|".join(
-                re.escape(item) for item in sorted(_SOURCE_PROPERTY_OBJECT_TOKENS)
-            )
-            relation_patterns = (
-                rf"\bwithout\s+wearing\s+(?:a\s+|the\s+)?(?:{object_pattern})\b",
-                rf"\bwearing\s+(?:a\s+|the\s+)?[^.;]{{0,40}}\b(?:{object_pattern})\b",
-                rf"\b(?:bare|gloved)\s+(?:hand|hands)\b",
-                rf"\b(?:hand|hands)\s+[^.;]{{0,60}}\b(?:bare|gloved|glove|gloves)\b",
-            )
-            for pattern in relation_patterns:
-                match = re.search(pattern, sentence, flags=re.IGNORECASE)
-                if match:
-                    ranked.append((score + 4, _one_line(match.group(0))[:240]))
-                    break
-            else:
-                ranked.append((score, sentence[:240]))
-            continue
-        ranked.append((score, sentence[:240]))
-    if not ranked:
-        return ""
-    ranked.sort(key=lambda item: (-item[0], len(item[1]), item[1].casefold()))
-    return ranked[0][1]
-
-
 def _clip_text(value: str, limit: int) -> str:
     text = _one_line(value)
     if len(text) <= limit:
@@ -535,106 +297,94 @@ def _evidence_introduces_integrity_question(source_text: str) -> bool:
     )
 
 
-def _visual_request_needs_runtime_detail(
+def _visual_discriminator_error(
     proposal: Any,
     *,
+    claim: ImageClaim,
+    image_account_summary: str,
     source_text: str,
-    source_visible_property: str,
-) -> bool:
-    request_text = _one_line(
-        f"{proposal.question} {proposal.expected_property}"
+) -> str:
+    candidates = list(proposal.candidate_discriminators)
+    if len(candidates) < 2:
+        return (
+            "visual_reinspection must compare at least two source-grounded "
+            "candidate discriminators before selecting one"
+        )
+    if proposal.selected_discriminator_index >= len(candidates):
+        return "selected visual discriminator is outside the supplied candidates"
+
+    normalized_source = _one_line(source_text).casefold()
+    for index, candidate in enumerate(candidates):
+        source_phrase = _one_line(candidate.source_phrase)
+        if not source_phrase or source_phrase.casefold() not in normalized_source:
+            return (
+                f"visual discriminator {index} source_phrase must be copied "
+                "verbatim from reviewed Evidence"
+            )
+        informative_tokens = (
+            _semantic_request_tokens(candidate.visible_property)
+            - _GENERIC_VISUAL_REQUEST_TOKENS
+            - _VISUAL_DISCRIMINATOR_STOP_TOKENS
+        )
+        if len(informative_tokens) < 2:
+            return (
+                f"visual discriminator {index} visible_property is too generic "
+                "for a focused pixel check"
+            )
+
+    selected = candidates[proposal.selected_discriminator_index]
+    if selected.already_in_claim:
+        return (
+            "selected visual discriminator is already asserted by the current "
+            "ImageClaim or visual account; choose a higher-information candidate"
+        )
+    selected_property = _one_line(selected.visible_property)
+    existing_account = _one_line(
+        f"{claim.statement} {image_account_summary}"
+    ).casefold()
+    if selected_property.casefold() in existing_account:
+        return (
+            "selected visual discriminator merely repeats the current ImageClaim "
+            "or visual account"
+        )
+    request_tokens = _semantic_request_tokens(
+        f"{proposal.question} {selected_property}"
     )
-    tokens = _semantic_request_tokens(request_text)
-    informative_tokens = tokens - _GENERIC_VISUAL_REQUEST_TOKENS
-    if len(informative_tokens) < 2:
-        return True
-    source_normalized = _one_line(source_text)
     if (
-        len(source_normalized) >= 80
-        and source_normalized.casefold() in request_text.casefold()
-    ):
-        return True
-    if len(_one_line(proposal.expected_property)) > 240:
-        return True
-    property_tokens = (
-        _semantic_request_tokens(source_visible_property)
-        - _SOURCE_PROPERTY_STOP_TOKENS
-    )
-    request_tokens = tokens - _SOURCE_PROPERTY_STOP_TOKENS
-    if property_tokens and not (property_tokens & request_tokens):
-        return True
-    if (
-        tokens & _INTEGRITY_REQUEST_TOKENS
+        request_tokens & _INTEGRITY_REQUEST_TOKENS
         and not _evidence_introduces_integrity_question(source_text)
     ):
-        return True
-    return False
-
-
-def _non_integrity_visual_scope(claim_statement: str, fallback: str) -> str:
-    if fallback != "integrity":
-        return fallback
-    tokens = _semantic_request_tokens(claim_statement)
-    if tokens & {"beside", "between", "holding", "inside", "next", "on", "under"}:
-        return "relation"
-    if tokens & {"lobby", "plaza", "street", "building", "room", "scene"}:
-        return "scene"
-    return "subject"
-
-
-def _non_integrity_visual_reason(scope: str, fallback: str) -> str:
-    if fallback != "integrity":
-        return fallback
-    if scope == "relation":
-        return "relation"
-    if scope == "scene":
-        return "location"
-    if scope == "text":
-        return "text"
-    return "identity"
+        return (
+            "visual discriminator introduces an unsupported integrity or "
+            "media-origin question"
+        )
+    return ""
 
 
 def _runtime_specific_visual_request_payload(
     proposal: Any,
     *,
     claim: ImageClaim,
+    image_account_summary: str,
     source_text: str,
-) -> Dict[str, Any]:
+) -> tuple[Dict[str, Any], str]:
     payload = proposal.model_dump(mode="json")
-    source_visible_property = extract_source_visible_property(source_text)
-    # Keep the pixel target literal and source-grounded. The model may add a
-    # useful discriminator in the question, but it must not invent an
-    # unmentioned contrast such as "cheeks versus nose bridge" as the property
-    # the focused inspection is expected to verify.
-    if source_visible_property:
-        payload["expected_property"] = source_visible_property[:240]
-    if not _visual_request_needs_runtime_detail(
+    discriminator_error = _visual_discriminator_error(
         proposal,
+        claim=claim,
+        image_account_summary=image_account_summary,
         source_text=source_text,
-        source_visible_property=source_visible_property,
-    ):
-        return payload
-
-    source_fragment = source_visible_property
-    claim_fragment = _clip_text(claim.statement, 260)
-    if not source_fragment:
-        source_fragment = claim_fragment
-    scope = _non_integrity_visual_scope(claim.statement, payload["scope"])
-    reason = _non_integrity_visual_reason(scope, payload["reason"])
-    payload.update(
-        {
-            "reason": reason,
-            "scope": scope,
-            "question": _clip_text(
-                "Does the original image visibly show this source-grounded "
-                f"property: {source_fragment}? Compare against the current "
-                f"ImageClaim: {claim_fragment}",
-                800,
-            ),
-            "expected_property": source_fragment[:240],
-        }
     )
-    return payload
+    if discriminator_error:
+        return {}, discriminator_error
+
+    selected = proposal.candidate_discriminators[
+        proposal.selected_discriminator_index
+    ]
+    payload["expected_property"] = _one_line(selected.visible_property)[:240]
+    payload.pop("candidate_discriminators", None)
+    payload.pop("selected_discriminator_index", None)
+    return payload, ""
 
 
 def bind_discrepancy_decision_runtime_ids(
@@ -755,11 +505,14 @@ def bind_discrepancy_decision_runtime_ids(
         evidence_by_id,
         list(binding["grounding_evidence_ids"]),
     )
-    request_payload = _runtime_specific_visual_request_payload(
+    request_payload, request_error = _runtime_specific_visual_request_payload(
         proposal,
         claim=claim,
+        image_account_summary=state.image_account_summary,
         source_text=source_text,
     )
+    if request_error:
+        return None, request_error
     request_payload.pop("claim_id", None)
     payload["visual_reinspection"] = {
         **request_payload,
@@ -1968,48 +1721,6 @@ def _discrepancy_contract_errors(
     }
     if output.material_discrepancy is not None:
         decision_claim_ids.update(output.material_discrepancy.affected_claim_ids)
-    pending_source_visual_binding = discrepancy_visual_reinspection_binding(
-        state,
-        reviewed_evidence_ids=reviewed_evidence_ids,
-    )
-    pending_candidates = pending_source_visual_binding.get("candidates", [])
-    if isinstance(pending_candidates, Sequence):
-        resolved_visual_claim_ids = {
-            str(claim_id)
-            for requirement in required_visual_evidence_requirements
-            for claim_id in requirement.get("claim_ids", []) or []
-        }
-        pending_source_claim_ids: list[str] = []
-        for candidate in pending_candidates:
-            if not isinstance(candidate, Mapping):
-                continue
-            candidate_claim_id = str(candidate.get("claim_id") or "")
-            candidate_grounding_ids = {
-                str(item)
-                for item in candidate.get("grounding_evidence_ids", []) or []
-                if str(item) in evidence_by_id
-                and evidence_by_id[str(item)].claim_binding == "source_assertion"
-            }
-            if (
-                not candidate_claim_id
-                or not candidate_grounding_ids
-                or candidate_claim_id in resolved_visual_claim_ids
-            ):
-                continue
-            if (
-                candidate_grounding_ids & selected_visual_evidence_ids
-                or candidate_claim_id in decision_claim_ids
-            ):
-                pending_source_claim_ids.append(candidate_claim_id)
-        if pending_source_claim_ids and output.visual_reinspection is None:
-            errors.append(
-                "Decision must request targeted visual_reinspection before "
-                "semantically using source Evidence with a concrete visible "
-                "property for ImageClaim(s) "
-                + ", ".join(dict.fromkeys(pending_source_claim_ids))
-                + "; keep the Claim insufficient and emit only the "
-                "visual_reinspection transition"
-            )
     if required_visual_evidence_ids and not consumed_visual_evidence_ids:
         if output.visual_evidence_disposition is None:
             claim_map = _format_visual_requirement_claim_map(

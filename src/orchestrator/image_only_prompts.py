@@ -227,14 +227,15 @@ for the same subject-event relation refutes it even if wording differs. Task
 ownership does not establish semantic coverage; use addressed Claims and allowed
 visual anchors.
 
-Before support/real, align source facts with pixels; identity/event agreement is
-insufficient. If Evidence adds an absent/coarse/ambiguous/incompatible value, request
-visual_reinspection. Ask a direct discriminator: glove versus bare hand,
-on versus beside, or one instrument versus another. Set expected_property to
-one concise visible phrase from reviewed Evidence, not A-vs-B. Pixels cannot infer
-absolute size or weight without calibrated scale, or settle media origin from style;
-ask only the observable property and preserve ambiguity. If anchors establish
-neither alternative, keep Claim insufficient and do not create a discrepancy.
+Before support/real, align source facts with pixels; identity/event agreement alone
+is insufficient. If source Evidence adds a visible value needing alignment, request
+visual_reinspection. Supply two or three candidate_discriminators with
+source_phrase, visible_property, why_discriminative, already_in_claim, and
+expected_if_source_matches; select the highest-information candidate. Never select
+a property already in the Claim/account or a generic confirmation. expected_property
+copies the selected visible_property. Pixels cannot infer absolute size or weight
+without scale, or media origin from style. If anchors establish neither alternative,
+keep Claim insufficient and do not create a discrepancy.
 
 After focused visual Evidence reconcile with source. On conflict cite both IDs in
 claim_assessments[].selected_evidence_ids and material_discrepancy.evidence_ids;
@@ -988,7 +989,7 @@ def render_discrepancy_decision_context(
     )
     binding_hint_by_claim_id = {
         str(item.get("claim_id")): str(
-            item.get("source_visible_property_hint", "")
+            item.get("source_evidence_excerpt", "")
         )
         for item in runtime_visual_binding.get("candidates", [])
         if isinstance(item, dict)
@@ -1023,7 +1024,7 @@ def render_discrepancy_decision_context(
                         "claim_id": claim_id,
                         "claim_statement": claim.statement,
                         "claim_status": claim.status,
-                        "source_visible_property_hint": (
+                        "source_evidence_excerpt": (
                             binding_hint_by_claim_id.get(claim_id, "")
                         ),
                         "current_image_account": state.image_account_summary,
@@ -1036,12 +1037,14 @@ def render_discrepancy_decision_context(
                             if fact_id in facts_by_id
                         ],
                         "required_review": (
-                            "Check whether this Evidence introduces a concrete "
-                            "visible attribute or relation that is absent, coarse, "
-                            "ambiguous, or potentially incompatible in the current "
-                            "visual account. If so, request one targeted "
-                            "visual_reinspection before supporting the Claim or "
-                            "proposing real."
+                            "If this Evidence introduces a concrete visible "
+                            "attribute or relation that needs pixel alignment, "
+                            "propose two or three candidate discriminators from "
+                            "the exact Evidence, mark whether each is already in "
+                            "the Claim/account, then select the highest-information "
+                            "one for visual_reinspection before supporting the "
+                            "Claim or proposing real. Do not use a generic "
+                            "confirmation property."
                         ),
                     }
                 )

@@ -612,6 +612,38 @@ class VisualReinspectionRequest(StrictModel):
     grounding_evidence_ids: List[str] = Field(min_length=1, max_length=8)
 
 
+class VisualDiscriminatorCandidate(StrictModel):
+    source_phrase: str = Field(
+        min_length=1,
+        max_length=500,
+        description="Exact source Evidence phrase that motivates this pixel check.",
+    )
+    visible_property: str = Field(
+        min_length=1,
+        max_length=240,
+        description="Directly visible property to inspect in the original pixels.",
+    )
+    why_discriminative: str = Field(
+        min_length=12,
+        max_length=800,
+        description=(
+            "Why this property has information gain beyond generically "
+            "confirming the current ImageClaim."
+        ),
+    )
+    already_in_claim: bool = Field(
+        description=(
+            "Whether the current ImageClaim or visual account already asserts "
+            "this property."
+        )
+    )
+    expected_if_source_matches: str = Field(
+        min_length=1,
+        max_length=300,
+        description="What should be visible if the source description matches.",
+    )
+
+
 class VisualReinspectionProposal(StrictModel):
     """Model-selected Claim and visual question before runtime-owned evidence binding."""
 
@@ -640,10 +672,30 @@ class VisualReinspectionProposal(StrictModel):
         min_length=1,
         max_length=240,
         description=(
-            "One concise directly visible phrase copied from reviewed Evidence; "
-            "not an inferred measurement or broad authenticity classification."
+            "The selected candidate's concise visible property; not an inferred "
+            "measurement or broad authenticity classification."
         ),
     )
+    candidate_discriminators: List[VisualDiscriminatorCandidate] = Field(
+        default_factory=list,
+        max_length=3,
+        description=(
+            "Two or three source-grounded visible candidates considered before "
+            "choosing the focused reinspection target."
+        ),
+    )
+    selected_discriminator_index: int = Field(default=0, ge=0, le=2)
+
+    @model_validator(mode="after")
+    def validate_selected_discriminator_index(self) -> "VisualReinspectionProposal":
+        if (
+            self.candidate_discriminators
+            and self.selected_discriminator_index >= len(self.candidate_discriminators)
+        ):
+            raise ValueError(
+                "selected_discriminator_index must refer to a supplied candidate"
+            )
+        return self
 
 
 class ClaimAssessmentProposal(StrictModel):
