@@ -80,6 +80,8 @@ The query must remain about the active proposition while changing the stalled
 direction represented by the attempted queries. This is a retrieval hypothesis, not
 a verdict. Select exactly one candidate concept, translate or condense it into one
 concise concept_term, and include that exact concept_term in the replacement query.
+Do not introduce image-generation or authenticity labels that are absent from the
+supplied Evidence.
 """
 
 
@@ -110,6 +112,9 @@ happened, not merely whether the image's proposed value or an identical image ca
 found. When direct queries repeat the proposed value without useful evidence, omit
 that value and retrieve the actual value of the same relation slot. Prior knowledge
 may supply leads, but only tool Evidence establishes a fact.
+Do not add image-generation, fake, or authenticity terms merely because the pixels
+look unusual. Use such a lead only when supplied Discovery or Evidence explicitly
+raises it for this input image.
 Do not change the ImageClaim.
 
 Inspect a promising page or reference image before repeating retrieval for that
@@ -137,10 +142,11 @@ scene detail. Do not inventory details.
 
 Write each claim as the positive world proposition the image asks the viewer to
 accept. Prefer unusual or discriminative visible relations over generic presence or
-scene descriptions. Image integrity may be a hypothesis that refutes the purported
-world relation, but do not turn an obvious visual style into a claim that proves
-itself. SearchHypotheses ask what actually happened and what the slot's verified
-value is. Image clues guide retrieval but do not restrict it.
+scene descriptions. SearchHypotheses ask what actually happened, which source or
+event the image belongs to, and what the relation slot's verified value is. Keep
+initial retrieval neutral: do not hypothesize image generation, manipulation,
+authenticity, or fakery from visual appearance. An exact-source discovery may raise
+an integrity question later. Image clues guide retrieval but do not restrict it.
 Prior knowledge is a lead; only tool Evidence establishes a fact. Hypotheses do not
 own the verdict. The queries field contains up to three alternative starting
 formulations, not three scheduled actions. Runtime may execute at most two initial
