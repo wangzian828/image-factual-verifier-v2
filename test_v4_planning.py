@@ -230,6 +230,25 @@ class PolicyRevisionPlanningBackend(ImageAccountPlanningBackend):
         return response
 
 
+class MediaOriginRevisionPlanningBackend(ImageAccountPlanningBackend):
+    async def create_interaction(self, **kwargs: Any) -> dict[str, Any]:
+        response = await super().create_interaction(**kwargs)
+        if len(self.requests) == 1:
+            content = response["steps"][0]["content"][0]
+            payload = json.loads(content["text"])
+            payload["search_hypotheses"][0]["statement"] = (
+                "Determine whether the image is real or fake AI-generated media."
+            )
+            payload["search_hypotheses"][0]["queries"] = [
+                "person product source context"
+            ]
+            payload["search_hypotheses"][0]["expected_information"] = (
+                "The creation method or generation source of the image."
+            )
+            content["text"] = json.dumps(payload)
+        return response
+
+
 class PlanningThenReactBackend(ImageAccountPlanningBackend):
     def __init__(self) -> None:
         super().__init__()
@@ -575,6 +594,35 @@ def test_image_account_planning_rejects_policy_query_before_atomic_commit(
         "person source capture held object"
     ]
     assert investigation.tasks[-1].suggested_queries == [
+        "person source capture held object"
+    ]
+
+
+def test_image_account_planning_rejects_media_origin_route_before_commit(
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "planning-media-origin.jpg"
+    image_path.write_bytes(b"v4-planning-media-origin")
+    state, investigation = _state(image_path)
+    backend = MediaOriginRevisionPlanningBackend()
+    orchestrator = Orchestrator(validate_startup=False)
+    orchestrator.llm = backend
+
+    asyncio.run(
+        orchestrator._run_image_account_planning(
+            state,
+            investigation,
+            interaction_session=InteractionSession(),
+        )
+    )
+
+    assert len(backend.requests) == 2
+    assert state.all_steps[0].action_type == "planning_revision"
+    assert "media-origin classification" in state.all_steps[0].metadata[
+        "planning_revision_reason"
+    ]
+    assert state.all_steps[1].action_type != "planning_revision"
+    assert investigation.search_hypotheses[0].queries == [
         "person source capture held object"
     ]
 

@@ -21,7 +21,10 @@ from src.orchestrator.discrepancy_coverage import (
     audit_discrepancy_coverage,
     compile_discrepancy_verdict_basis,
 )
-from src.orchestrator.evidence_policy import query_targets_fact_check_answer
+from src.orchestrator.evidence_policy import (
+    query_targets_fact_check_answer,
+    text_targets_verdict_or_media_origin,
+)
 from src.orchestrator.evidence_semantics import (
     same_capture_can_support_visual_claim,
 )
@@ -2398,11 +2401,28 @@ class Orchestrator:
             if query_targets_fact_check_answer(query)
             or policy.blocked_query_reference(query)
         ]
+        blocked_route_text = [
+            value
+            for hypothesis in parsed.search_hypotheses
+            for value in (
+                hypothesis.statement,
+                hypothesis.expected_information,
+                *hypothesis.queries,
+            )
+            if text_targets_verdict_or_media_origin(value)
+        ]
         if blocked_queries:
             return False, (
                 "SearchHypothesis queries must seek underlying facts or sources, "
                 "not a ready-made fact-check verdict or an excluded source. "
                 "Rewrite the blocked queries without changing the ImageClaims."
+            )
+        if blocked_route_text:
+            return False, (
+                "SearchHypotheses must stay neutral: recover source context, "
+                "entity identity, event context, or relation values instead of "
+                "presupposing a verdict or media-origin classification. Rewrite "
+                "the blocked route text without changing the ImageClaims."
             )
         candidate = investigation.model_copy(deep=True)
         update = apply_image_account_planning(candidate, parsed)

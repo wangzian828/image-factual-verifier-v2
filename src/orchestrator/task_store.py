@@ -268,6 +268,13 @@ def discrepancy_visual_reinspection_binding(
             evidence = evidence_by_id.get(evidence_id)
             if evidence is None or evidence.evidence_kind == "image_region":
                 continue
+            if evidence.evidence_kind == "web_span" and (
+                evidence.directness != "direct"
+                or evidence.claim_binding != "source_assertion"
+                or evidence.relation_scope != "same_relation"
+                or evidence.relation_stance not in {"supports", "contradicts"}
+            ):
+                continue
             task = task_by_id.get(evidence.task_id)
             if (
                 claim.fact_id in evidence.fact_ids

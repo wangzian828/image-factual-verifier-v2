@@ -2269,6 +2269,45 @@ def test_runtime_binding_requires_a_concrete_source_visible_property() -> None:
     assert "not an eligible runtime visual reinspection candidate" in error
 
 
+def test_visual_reinspection_binding_ignores_neutral_indirect_source_titles() -> None:
+    state = _planned_state()
+    claim = state.image_claims[0]
+    task = next(item for item in state.tasks if claim.claim_id in item.claim_ids)
+    evidence = InvestigationEvidence(
+        evidence_id="evidence-neutral-title",
+        task_id=task.task_id,
+        fact_ids=[claim.fact_id],
+        function_call_id="call-neutral-title",
+        tool_name="visit",
+        evidence_kind="web_span",
+        source_url="https://x.com/example/status/1",
+        source_family="domain:x.com",
+        exact_text='Derren Brown on X: "Quick sloth baby before bed if you need one."',
+        span_start=0,
+        span_end=72,
+        artifact_sha256="7" * 64,
+        retrieved_at=datetime.now(timezone.utc).isoformat(),
+        stance="neutral",
+        quality="weak",
+        directness="indirect",
+        claim_binding="source_assertion",
+        relation_scope="unclear",
+        relation_stance="unclear",
+    )
+    state.evidence.append(evidence)
+
+    binding = discrepancy_visual_reinspection_binding(
+        state,
+        reviewed_evidence_ids=[evidence.evidence_id],
+    )
+
+    assert binding == {
+        "status": "unavailable",
+        "candidates": [],
+        "binding": None,
+    }
+
+
 def test_runtime_binding_rewrites_long_source_text_to_visible_property() -> None:
     state = _planned_state()
     evidence = _append_evidence(state)

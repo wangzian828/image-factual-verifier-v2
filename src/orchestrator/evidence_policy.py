@@ -80,6 +80,24 @@ def query_targets_fact_check_answer(value: str) -> bool:
     )
 
 
+def text_targets_verdict_or_media_origin(value: str) -> bool:
+    """Detect route text that presupposes verdict/media-origin classification."""
+
+    text = re.sub(r"[-_]+", " ", str(value or "").casefold())
+    return bool(
+        query_targets_fact_check_answer(text)
+        or re.search(r"\b(?:ai|a i|midjourney|dall\s*e|stable\s+diffusion)\b", text)
+        or re.search(
+            r"\b(?:ai\s+generated|generated\s+by\s+ai|synthetic|computer\s+generated|digitally\s+generated)\b",
+            text,
+        )
+        or re.search(
+            r"\b(?:real\s+or\s+fake|fake\s+or\s+real|authenticity|creation\s+method|generation\s+source)\b",
+            text,
+        )
+    )
+
+
 def goal_has_as_of_constraint(goal: str) -> bool:
     """Return whether a browse goal carries an explicit historical cutoff."""
 
