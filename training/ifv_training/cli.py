@@ -133,8 +133,8 @@ def _parser() -> argparse.ArgumentParser:
     semantic_audit.add_argument("--strict", action="store_true")
 
     reward_ledger = subparsers.add_parser("reward-ledger")
-    reward_ledger.add_argument("--semantic-artifact", type=Path, required=True)
-    reward_ledger.add_argument("--deterministic", type=Path)
+    reward_ledger.add_argument("--deterministic", type=Path, required=True)
+    reward_ledger.add_argument("--semantic-artifact", type=Path)
     reward_ledger.add_argument("--profile", type=Path)
     reward_ledger.add_argument("--output", type=Path, required=True)
 
@@ -159,9 +159,9 @@ def _parser() -> argparse.ArgumentParser:
     grpo_groups.add_argument("--minimum-valid-members", type=int, default=2)
 
     run_rewards = subparsers.add_parser("build-run-rewards")
-    run_rewards.add_argument("--semantic-artifacts", type=Path, required=True)
     run_rewards.add_argument("--deterministic", type=Path, required=True)
     run_rewards.add_argument("--rollout-members", type=Path, required=True)
+    run_rewards.add_argument("--semantic-artifacts", type=Path)
     run_rewards.add_argument("--profile", type=Path)
     run_rewards.add_argument("--ledger-output", type=Path, required=True)
     run_rewards.add_argument("--group-output", type=Path, required=True)
@@ -284,9 +284,9 @@ def main() -> None:
             raise SystemExit(1)
     elif args.command == "reward-ledger":
         result = build_and_write_ledger(
-            semantic_artifact_path=args.semantic_artifact,
             deterministic_path=args.deterministic,
             profile_path=args.profile,
+            semantic_artifact_path=args.semantic_artifact,
             output_path=args.output,
         )
     elif args.command == "audit-reward-ledger":
@@ -310,12 +310,14 @@ def main() -> None:
         )
         write_jsonl(args.output, result)
     elif args.command == "build-run-rewards":
-        semantic_paths = sorted(args.semantic_artifacts.glob("*.semantic_reward.json"))
-        semantic_artifacts = [load_json(path) for path in semantic_paths]
+        semantic_artifacts = []
+        if args.semantic_artifacts:
+            semantic_paths = sorted(args.semantic_artifacts.glob("*.semantic_reward.json"))
+            semantic_artifacts = [load_json(path) for path in semantic_paths]
         profile = load_reward_profile(args.profile)
         ledgers = build_ledgers_from_run_artifacts(
-            semantic_artifacts=semantic_artifacts,
             deterministic_rows=load_jsonl(args.deterministic),
+            semantic_artifacts=semantic_artifacts,
             profile=profile,
         )
         groups = build_standard_grpo_groups(

@@ -739,6 +739,7 @@ async def score_reference_chain_trace(
     )
     return {
         "schema_version": REFERENCE_CHAIN_SCHEMA_VERSION,
+        "diagnostic_role": "canonical_reference_chain_recovery_only",
         "case_id": str(gold.get("case_id") or trace.get("image_id") or ""),
         "score_metadata": dict(score_metadata or {}),
         "metrics": {

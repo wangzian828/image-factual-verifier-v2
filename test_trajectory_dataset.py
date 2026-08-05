@@ -190,7 +190,7 @@ def test_dataset_export_excludes_quality_gate_failures(
     assert report["excluded_episode_count"] == 1
 
 
-def test_frozen_sft_export_requires_all_three_gate_artifacts(
+def test_frozen_sft_export_uses_structured_gate_without_semantic_reward(
     tmp_path: Path,
 ) -> None:
     run_dir = _run_dir(tmp_path)
@@ -229,37 +229,17 @@ def test_frozen_sft_export_requires_all_three_gate_artifacts(
         ),
         encoding="utf-8",
     )
-    semantic = tmp_path / "semantic"
-    semantic.mkdir()
-    (semantic / "episode.semantic_reward.json").write_text(
-        json.dumps(
-            {
-                "case_id": "case_scripted_v3",
-                "artifact_id": "sha256:semantic",
-                "source_trace": {"sha256": trace_sha},
-                "rollout": {"episode_id": "case_scripted_v3"},
-                "metrics": {"overall_process_quality": 0.9},
-                "gates": {
-                    "strict_trace_audit_pass": True,
-                    "engineering_valid": True,
-                    "semantic_audit_pass": True,
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-
     output = tmp_path / "frozen-dataset"
     manifest = export_dataset(
         [run_dir],
         output,
         case_split_path=split,
         eligibility_dir=eligibility,
-        semantic_reward_dir=semantic,
         minimum_accepted_cases=1,
     )
 
     assert manifest["split_mode"] == "frozen_teacher_sft"
+    assert manifest["frozen_inputs"]["semantic_reward_dir"] is None
     assert manifest["accepted_case_count"] == 1
     assert manifest["example_counts"]["validation"] == 7
     assert manifest["example_counts"]["train"] == 0
@@ -287,5 +267,4 @@ def test_frozen_sft_export_rejects_missing_validation_gate(
             [run_dir],
             tmp_path / "frozen-dataset",
             case_split_path=split,
-            semantic_reward_dir=tmp_path,
         )

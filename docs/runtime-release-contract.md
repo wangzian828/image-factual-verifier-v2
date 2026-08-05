@@ -165,8 +165,10 @@ evidence recovery recall, complete chain recovery recall, and final-basis refere
 precision. It only evaluates the decisive facts and acceptable evidence retained in
 evaluator-private gold. URL, span, snapshot, and SHA identity are data-audit
 properties, not Agent capability metrics. Off-chain material is neutral unless it
-enters the final verdict basis. These scores do not override classification or teacher
-eligibility.
+enters the final verdict basis. These scores are canonical-reference diagnostics only:
+failing to recover the pre-registered chain does not mean the trajectory used
+unreasonable evidence, and the scores do not override classification, reward, or
+teacher eligibility.
 
 ### Grouped rollout outputs
 
@@ -181,10 +183,11 @@ post_rollout_rewards.jsonl
 The first file has one member record per episode with `prompt_group_id`, original
 `case_id`, `episode_id`, `rollout_index`, group size, seed and trace path. The second
 file is written only after all rollout completion and carries deterministic private-gold
-alignment (`classification_correct` and engineering/audit gates). Gemini never reads
-that second file. A later training-only step joins it with one semantic artifact per
-episode and writes `grpo_groups.jsonl`, whose members retain raw scalar rewards for
-the framework's standard within-group normalization.
+alignment (`classification_correct`), engineering/audit gates, policy step IDs, and
+deterministic process components. A later training-only step consumes it directly and
+writes `grpo_groups.jsonl`, whose members retain raw scalar rewards for the framework's
+standard within-group normalization. Optional semantic reward artifacts may be joined
+as diagnostics, but they do not change reward, trainability, or SFT eligibility.
 
 ### Other outputs
 

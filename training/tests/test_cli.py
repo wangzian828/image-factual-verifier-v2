@@ -6,8 +6,6 @@ from pathlib import Path
 
 from ifv_training import cli
 
-from test_rewards import _semantic_artifact
-
 
 def _write_json(path: Path, value: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -26,19 +24,21 @@ def test_build_run_rewards_cli_executes_real_branch(
     tmp_path: Path,
     monkeypatch: object,
 ) -> None:
-    semantic_dir = tmp_path / "semantic"
-    _write_json(
-        semantic_dir / "episode-0.semantic_reward.json",
-        _semantic_artifact("episode-0"),
-    )
     _write_jsonl(
         tmp_path / "deterministic.jsonl",
         [
             {
                 "episode_id": "episode-0",
+                "case_id": "case-reward-1",
                 "classification_correct": True,
                 "strict_trace_audit_pass": True,
                 "fatal_engineering_error": False,
+                "step_ids": ["episode-0:judgment:1"],
+                "process_components": {
+                    "evidence_chain_reward": 1.0,
+                    "discrepancy_alignment_reward": 1.0,
+                    "stop_quality_reward": 1.0,
+                },
             }
         ],
     )
@@ -62,14 +62,12 @@ def test_build_run_rewards_cli_executes_real_branch(
     argv = [
         "ifv-training",
         "build-run-rewards",
-        "--semantic-artifacts",
-        str(semantic_dir),
         "--deterministic",
         str(tmp_path / "deterministic.jsonl"),
         "--rollout-members",
         str(tmp_path / "members.jsonl"),
         "--profile",
-        str(root / "configs" / "rl" / "semantic-reward-v5.json"),
+        str(root / "configs" / "rl" / "deterministic-process-v1.json"),
         "--ledger-output",
         str(tmp_path / "ledgers.jsonl"),
         "--group-output",

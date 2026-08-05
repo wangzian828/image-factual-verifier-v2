@@ -3,8 +3,10 @@
 
 Teacher retries historically used one rollout per invocation, so their public
 episode IDs equal case IDs and collide across run directories.  This tool selects
-the best strict/structured/semantic-passing candidate per case and stages only that
-candidate into one canonical run directory.  It never reads evaluator-private gold.
+the best strict/structured candidate per case and stages only that candidate into
+one canonical run directory.  Semantic reward artifacts may be copied as optional
+diagnostics, but they are never an eligibility gate.  It never reads
+evaluator-private gold.
 """
 
 from __future__ import annotations
@@ -90,35 +92,62 @@ def _gate_index(root: Path, suffix: str) -> Dict[str, Dict[str, Any]]:
     return result
 
 
+def _score_index(run_dir: Path) -> Dict[str, Dict[str, Any]]:
+    result: Dict[str, Dict[str, Any]] = {}
+    for row in _load_jsonl(run_dir / "trajectory_scores.jsonl"):
+        episode_id = str(row.get("episode_id") or row.get("case_id", "")).strip()
+        if episode_id:
+            result[episode_id] = row
+    return result
+
+
 def _eligible(
     trace: Mapping[str, Any],
     trace_sha256: str,
     eligibility: Mapping[str, Any],
-    semantic: Mapping[str, Any],
 ) -> bool:
     eligibility_gates = eligibility.get("gates") or {}
-    semantic_gates = semantic.get("gates") or {}
-    semantic_rollout = semantic.get("rollout") or {}
     return bool(
         str(trace.get("termination", "")) == "success"
         and str(trace.get("verdict", "")) in {"real", "fake"}
         and eligibility_gates.get("strict_trace_audit_pass") is True
         and eligibility_gates.get("engineering_valid") is True
         and eligibility_gates.get("sft_eligibility_pass") is True
-        and semantic_gates.get("strict_trace_audit_pass") is True
-        and semantic_gates.get("engineering_valid") is True
-        and semantic_gates.get("semantic_audit_pass") is True
         and str((eligibility.get("source_trace") or {}).get("sha256", ""))
         == trace_sha256
-        and str((semantic.get("source_trace") or {}).get("sha256", ""))
-        == trace_sha256
-        and str(semantic_rollout.get("episode_id", ""))
-        == str(trace.get("image_id", ""))
     )
 
 
+def _matching_semantic_row(
+    *,
+    semantic_index: Mapping[str, Mapping[str, Any]],
+    episode_id: str,
+    case_id: str,
+    trace_sha256: str,
+) -> Mapping[str, Any] | None:
+    row = semantic_index.get(episode_id)
+    if row is None:
+        return None
+    payload = row["payload"]
+    semantic_episode_id = str(
+        (payload.get("rollout") or {}).get("episode_id")
+        or payload.get("episode_id", "")
+    )
+    if (
+        str(payload.get("case_id", "")) != case_id
+        or semantic_episode_id != episode_id
+        or str((payload.get("source_trace") or {}).get("sha256", ""))
+        != trace_sha256
+    ):
+        raise ValueError(
+            "semantic diagnostic artifact does not match trace: "
+            f"{episode_id}"
+        )
+    return row
+
+
 def stage_release(
-    sources: list[tuple[Path, Path, Path]],
+    sources: list[tuple[Path, Path, Path | None]],
     output_dir: Path,
     *,
     minimum_accepted_cases: int,
@@ -138,12 +167,17 @@ def stage_release(
                 "run_id": manifest.get("run_id"),
                 "run_dir": str(run_dir),
                 "eligibility_dir": str(eligibility_dir),
-                "semantic_dir": str(semantic_dir),
+                "semantic_dir": str(semantic_dir) if semantic_dir else None,
                 "git_commit": manifest.get("git_commit"),
             }
         )
         eligibility_index = _gate_index(eligibility_dir, ".sft_eligibility.json")
-        semantic_index = _gate_index(semantic_dir, ".semantic_reward.json")
+        semantic_index = (
+            _gate_index(semantic_dir, ".semantic_reward.json")
+            if semantic_dir is not None
+            else {}
+        )
+        score_index = _score_index(run_dir)
         for trace_path in sorted((run_dir / "traces").glob("*.json")):
             trace = _load_json(trace_path)
             state = trace.get("state") if isinstance(trace.get("state"), Mapping) else {}
@@ -153,15 +187,25 @@ def stage_release(
             if not case_id or not episode_id:
                 raise ValueError(f"trace has no case/episode ID: {trace_path}")
             eligibility_row = eligibility_index.get(episode_id)
-            semantic_row = semantic_index.get(episode_id)
-            if not eligibility_row or not semantic_row:
+            if not eligibility_row:
                 continue
             trace_sha256 = _sha256(trace_path)
             eligibility = eligibility_row["payload"]
-            semantic = semantic_row["payload"]
-            if not _eligible(trace, trace_sha256, eligibility, semantic):
+            if not _eligible(trace, trace_sha256, eligibility):
                 continue
-            score = float((semantic.get("metrics") or {}).get("overall_process_quality", 0.0))
+            semantic_row = _matching_semantic_row(
+                semantic_index=semantic_index,
+                episode_id=episode_id,
+                case_id=case_id,
+                trace_sha256=trace_sha256,
+            )
+            score = float(
+                (score_index.get(episode_id) or score_index.get(case_id) or {}).get(
+                    "total",
+                    0.0,
+                )
+                or 0.0
+            )
             candidate = {
                 "case_id": case_id,
                 "episode_id": episode_id,
@@ -172,8 +216,12 @@ def stage_release(
                 "run_id": str(manifest.get("run_id", run_dir.name)),
                 "eligibility_path": eligibility_row["path"],
                 "eligibility": eligibility,
-                "semantic_path": semantic_row["path"],
-                "semantic": semantic,
+                "semantic_path": (
+                    semantic_row["path"] if semantic_row is not None else None
+                ),
+                "semantic": (
+                    semantic_row["payload"] if semantic_row is not None else {}
+                ),
                 "source_metadata": {
                     "source_run_id": str(manifest.get("run_id", run_dir.name)),
                     "runtime_commit": str(manifest.get("git_commit", "")),
@@ -202,7 +250,12 @@ def stage_release(
     selected_cases_by_run: Dict[Path, set[str]] = {}
     policy_rows: list[Dict[str, Any]] = []
     (output_dir / "eligibility").mkdir(parents=True, exist_ok=True)
-    (output_dir / "semantic_rewards").mkdir(parents=True, exist_ok=True)
+    has_semantic_diagnostics = any(
+        candidate.get("semantic_path") is not None
+        for candidate in selected.values()
+    )
+    if has_semantic_diagnostics:
+        (output_dir / "semantic_rewards").mkdir(parents=True, exist_ok=True)
     for case_id, candidate in sorted(selected.items()):
         selected_by_run.setdefault(candidate["run_dir"], set()).add(candidate["episode_id"])
         selected_cases_by_run.setdefault(candidate["run_dir"], set()).add(case_id)
@@ -213,10 +266,11 @@ def stage_release(
             candidate["eligibility_path"],
             output_dir / "eligibility" / candidate["eligibility_path"].name,
         )
-        shutil.copy2(
-            candidate["semantic_path"],
-            output_dir / "semantic_rewards" / candidate["semantic_path"].name,
-        )
+        if candidate["semantic_path"] is not None:
+            shutil.copy2(
+                candidate["semantic_path"],
+                output_dir / "semantic_rewards" / candidate["semantic_path"].name,
+            )
         trace = _load_json(candidate["trace_path"])
         exported_policy = export_policy_examples(
             trace,
@@ -259,7 +313,7 @@ def stage_release(
             "accepted_case_count": len(selected_rows),
             "accepted_sources": source_manifests,
             "selected_episodes": "selected_episodes.jsonl",
-            "source_run_kind": "strict-structured-semantic-selected",
+            "source_run_kind": "strict-structured-selected",
         }
     )
     _write_json(output_dir / "run_manifest.json", first_manifest)
@@ -272,7 +326,9 @@ def stage_release(
             "run_dir": str(output_dir),
             "selected_episodes": "selected_episodes.jsonl",
             "eligibility_dir": "eligibility",
-            "semantic_rewards_dir": "semantic_rewards",
+            "semantic_rewards_dir": (
+                "semantic_rewards" if has_semantic_diagnostics else None
+            ),
         },
     }
     _write_json(output_dir / "accepted_release_manifest.json", manifest)
@@ -284,14 +340,21 @@ def main() -> None:
     parser.add_argument(
         "--source",
         action="append",
-        nargs=3,
-        metavar=("RUN_DIR", "ELIGIBILITY_DIR", "SEMANTIC_DIR"),
+        nargs="+",
+        metavar="PATH",
         required=True,
     )
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--minimum-accepted-cases", type=int, default=1)
     args = parser.parse_args()
-    sources = [tuple(Path(item).expanduser().resolve() for item in source) for source in args.source]
+    sources = []
+    for source in args.source:
+        if len(source) not in {2, 3}:
+            raise SystemExit("--source requires RUN_DIR ELIGIBILITY_DIR [SEMANTIC_DIR]")
+        run_dir = Path(source[0]).expanduser().resolve()
+        eligibility_dir = Path(source[1]).expanduser().resolve()
+        semantic_dir = Path(source[2]).expanduser().resolve() if len(source) == 3 else None
+        sources.append((run_dir, eligibility_dir, semantic_dir))
     result = stage_release(
         sources, args.output_dir.expanduser().resolve(), minimum_accepted_cases=args.minimum_accepted_cases
     )

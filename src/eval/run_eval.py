@@ -918,6 +918,12 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
                             strict_trace_audit_pass
                         ),
                         "training_prohibited": member["training_prohibited"],
+                        "step_ids": [
+                            item.step_id for item in exported_policy
+                        ],
+                        "process_components": dict(
+                            teacher_score.get("components") or {}
+                        ),
                     }
                 )
             else:
@@ -974,6 +980,8 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
                         "fatal_engineering_error": True,
                         "strict_trace_audit_pass": False,
                         "training_prohibited": member["training_prohibited"],
+                        "step_ids": [],
+                        "process_components": {},
                     }
                 )
             run_results.append(record)

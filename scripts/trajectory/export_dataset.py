@@ -238,8 +238,6 @@ def export_dataset(
         raise ValueError("frozen SFT export requires --case-split")
     if require_frozen_gates and eligibility_dir is None:
         raise ValueError("frozen SFT export requires --eligibility-dir")
-    if require_frozen_gates and semantic_reward_dir is None:
-        raise ValueError("frozen SFT export requires --semantic-reward-dir")
     if minimum_accepted_cases is not None and minimum_accepted_cases < 1:
         raise ValueError("minimum_accepted_cases must be at least 1")
     if require_frozen_gates and minimum_accepted_cases is None:
@@ -314,9 +312,29 @@ def export_dataset(
             training_eligible = bool(score.get("training_eligible", False))
             eligibility = eligibility_by_episode.get(episode_id, {})
             semantic = semantic_by_episode.get(episode_id, {})
+            if semantic:
+                semantic_episode_id = str(
+                    _mapping(semantic.get("rollout")).get(
+                        "episode_id",
+                        semantic.get("episode_id", ""),
+                    )
+                )
+                if (
+                    str(semantic.get("case_id", "")) != case_id
+                    or semantic_episode_id != episode_id
+                    or str(
+                        _mapping(semantic.get("source_trace")).get(
+                            "sha256", ""
+                        )
+                    )
+                    != trace_sha256
+                ):
+                    raise ValueError(
+                        "semantic diagnostic artifact does not match trace: "
+                        f"{episode_id}"
+                    )
             if require_frozen_gates:
                 eligibility_gates = _mapping(eligibility.get("gates"))
-                semantic_gates = _mapping(semantic.get("gates"))
                 split_row = (fixed_split or {}).get(case_id, {})
                 runtime_case = _mapping(
                     _mapping(trace.get("state")).get("runtime_case")
@@ -324,25 +342,11 @@ def export_dataset(
                 training_eligible = bool(
                     str(eligibility.get("case_id", "")) == case_id
                     and str(eligibility.get("episode_id", "")) == episode_id
-                    and str(semantic.get("case_id", "")) == case_id
-                    and str(
-                        _mapping(semantic.get("rollout")).get("episode_id", "")
-                    )
-                    == episode_id
                     and eligibility_gates.get("strict_trace_audit_pass") is True
                     and eligibility_gates.get("engineering_valid") is True
                     and eligibility_gates.get("sft_eligibility_pass") is True
-                    and semantic_gates.get("strict_trace_audit_pass") is True
-                    and semantic_gates.get("engineering_valid") is True
-                    and semantic_gates.get("semantic_audit_pass") is True
                     and str(
                         _mapping(eligibility.get("source_trace")).get(
-                            "sha256", ""
-                        )
-                    )
-                    == trace_sha256
-                    and str(
-                        _mapping(semantic.get("source_trace")).get(
                             "sha256", ""
                         )
                     )
@@ -375,10 +379,7 @@ def export_dataset(
                 "source_family_keys": _cross_case_source_families(trace),
                 "runtime_ids": sorted(_collect_runtime_ids(trace)),
                 "teacher_score": float(
-                    _mapping(semantic.get("metrics")).get(
-                        "overall_process_quality",
-                        score.get("total", 0.0),
-                    )
+                    score.get("total", 0.0)
                     or 0.0
                 ),
                 "training_eligible": training_eligible,
@@ -662,7 +663,9 @@ def export_dataset(
                 "eligibility_dir": str(eligibility_dir.expanduser().resolve()),
                 "semantic_reward_dir": str(
                     semantic_reward_dir.expanduser().resolve()
-                ),
+                )
+                if semantic_reward_dir is not None
+                else None,
             }
             if require_frozen_gates
             else None

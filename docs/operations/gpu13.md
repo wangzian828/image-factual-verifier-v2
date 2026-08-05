@@ -557,7 +557,7 @@ D:\image-factual-verifier-runs\group-001-v3-canary-20260715-19
 gpu-13 commit:
 abb7db553cd4d3e8046faed3c43dac3dce67e328
 
-gpu-13 checkout:
+gpu-13 checkout (historical; no longer current):
 /gs/home/wza/projects/image-factual-verifier-v2-worktrees/visual-fact-search-agent
 
 gpu-13 run:

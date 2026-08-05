@@ -89,22 +89,20 @@ def _semantic_artifact(episode_id: str = "episode-1") -> dict:
 
 
 def _ledger(episode_id: str, *, correct: bool, quality: float = 0.85) -> dict:
-    artifact = _semantic_artifact(episode_id)
-    artifact["metrics"]["evidence_quality"] = quality
-    artifact["metrics"]["overall_process_quality"] = quality
-    core = {
-        key: value
-        for key, value in artifact.items()
-        if key not in {"artifact_id", "created_at"}
-    }
-    artifact["artifact_id"] = "sha256:" + hashlib.sha256(
-        canonical_json(core).encode("utf-8")
-    ).hexdigest()
     return compose_reward_ledger(
-        artifact,
-        deterministic={
+        {
+            "schema_version": "ifv-post-rollout-deterministic-v1",
+            "case_id": "case-reward-1",
+            "episode_id": episode_id,
             "classification_correct": correct,
             "strict_trace_audit_pass": True,
+            "fatal_engineering_error": False,
+            "step_ids": [f"{episode_id}:judgment:1"],
+            "process_components": {
+                "evidence_chain_reward": quality,
+                "discrepancy_alignment_reward": quality,
+                "stop_quality_reward": quality,
+            },
         },
     )
 
@@ -112,9 +110,25 @@ def _ledger(episode_id: str, *, correct: bool, quality: float = 0.85) -> dict:
 def test_one_call_artifact_validates_and_teacher_usage_is_recorded() -> None:
     artifact = _semantic_artifact()
     assert validate_semantic_reward_artifact(artifact)["passed"] is True
-    ledger = _ledger("episode-1", correct=True)
+    ledger = compose_reward_ledger(
+        {
+            "case_id": "case-reward-1",
+            "episode_id": "episode-1",
+            "classification_correct": True,
+            "strict_trace_audit_pass": True,
+            "fatal_engineering_error": False,
+            "step_ids": ["episode-1:judgment:1"],
+            "process_components": {
+                "evidence_chain_reward": 0.85,
+                "discrepancy_alignment_reward": 0.85,
+                "stop_quality_reward": 0.85,
+            },
+        },
+        semantic_artifact=artifact,
+    )
     assert ledger["schema_version"] == REWARD_LEDGER_SCHEMA_VERSION
     assert ledger["teacher_usage"]["call_count"] == 1
+    assert ledger["diagnostics"]["semantic_reward"]["role"] == "diagnostic_only"
     assert validate_reward_ledger(ledger)["passed"] is True
 
 
@@ -127,18 +141,32 @@ def test_correctness_dominates_process_quality() -> None:
 
 
 def test_missing_correctness_or_failed_audit_is_masked() -> None:
-    artifact = _semantic_artifact()
-    missing = compose_reward_ledger(artifact)
+    missing = compose_reward_ledger(
+        {
+            "case_id": "case-reward-1",
+            "episode_id": "episode-1",
+            "strict_trace_audit_pass": True,
+            "fatal_engineering_error": False,
+            "step_ids": ["episode-1:judgment:1"],
+        }
+    )
     assert missing["scalar_reward"] is None
     assert missing["fatal_mask"]["masked"] is True
     failed = compose_reward_ledger(
-        artifact,
-        deterministic={
+        {
+            "case_id": "case-reward-1",
+            "episode_id": "episode-1",
             "classification_correct": True,
             "strict_trace_audit_pass": False,
+            "fatal_engineering_error": False,
+            "step_ids": ["episode-1:judgment:1"],
         },
     )
     assert failed["scalar_reward"] is None
+
+
+def test_invalid_semantic_diagnostic_is_rejected_but_never_masks_reward() -> None:
+    artifact = _semantic_artifact()
     artifact["metrics"]["invalid_judge_evidence_ids"] = ["invented"]
     core = {
         key: value
@@ -148,14 +176,30 @@ def test_missing_correctness_or_failed_audit_is_masked() -> None:
     artifact["artifact_id"] = "sha256:" + hashlib.sha256(
         canonical_json(core).encode("utf-8")
     ).hexdigest()
-    invalid_reference = compose_reward_ledger(
-        artifact,
-        deterministic={"classification_correct": True},
+    deterministic = {
+        "case_id": "case-reward-1",
+        "episode_id": "episode-1",
+        "classification_correct": True,
+        "strict_trace_audit_pass": True,
+        "fatal_engineering_error": False,
+        "step_ids": ["episode-1:judgment:1"],
+    }
+    with_diagnostic = compose_reward_ledger(
+        deterministic,
+        semantic_artifact=artifact,
     )
-    assert invalid_reference["scalar_reward"] is None
-    assert invalid_reference["fatal_mask"]["reason"] == (
-        "invalid_teacher_evidence_or_turn_reference"
+    assert with_diagnostic["scalar_reward"] == 1.0
+    assert with_diagnostic["teacher_usage"]["call_count"] == 1
+    assert with_diagnostic["diagnostics"]["semantic_reward"]["role"] == (
+        "diagnostic_only"
     )
+    artifact["artifact_id"] = "sha256:bad"
+    try:
+        compose_reward_ledger(deterministic, semantic_artifact=artifact)
+    except ValueError as exc:
+        assert "invalid semantic reward artifact" in str(exc)
+    else:
+        raise AssertionError("corrupt semantic diagnostic should be rejected")
 
 
 def test_framework_exports_remain_standard_terminal_episode_rewards() -> None:
@@ -225,23 +269,35 @@ def test_development_group_is_explicitly_prohibited_from_training() -> None:
 
 
 def test_run_artifact_join_keeps_incorrect_episode_trainable() -> None:
-    artifacts = [_semantic_artifact("episode-0"), _semantic_artifact("episode-1")]
     rows = [
         {
             "episode_id": "episode-0",
+            "case_id": "case-reward-1",
             "classification_correct": True,
             "strict_trace_audit_pass": True,
             "fatal_engineering_error": False,
+            "step_ids": ["episode-0:judgment:1"],
+            "process_components": {
+                "evidence_chain_reward": 0.875,
+                "discrepancy_alignment_reward": 0.875,
+                "stop_quality_reward": 0.875,
+            },
         },
         {
             "episode_id": "episode-1",
+            "case_id": "case-reward-1",
             "classification_correct": False,
             "strict_trace_audit_pass": True,
             "fatal_engineering_error": False,
+            "step_ids": ["episode-1:judgment:1"],
+            "process_components": {
+                "evidence_chain_reward": 1.0,
+                "discrepancy_alignment_reward": 1.0,
+                "stop_quality_reward": 1.0,
+            },
         },
     ]
     ledgers = build_ledgers_from_run_artifacts(
-        semantic_artifacts=artifacts,
         deterministic_rows=rows,
     )
     assert [item["scalar_reward"] for item in ledgers] == [0.9375, 0.0]
@@ -250,9 +306,9 @@ def test_run_artifact_join_keeps_incorrect_episode_trainable() -> None:
 
 def test_v5_profile_is_the_default_trajectory_profile() -> None:
     root = Path(__file__).resolve().parents[1]
-    profile = load_reward_profile(root / "configs" / "rl" / "semantic-reward-v5.json")
-    assert profile["profile_id"] == "ifv-trajectory-quality-v1"
-    assert profile["weights"] == {
-        "evidence_quality": 0.5,
-        "overall_process_quality": 0.5,
-    }
+    profile = load_reward_profile(root / "configs" / "rl" / "deterministic-process-v1.json")
+    assert profile["profile_id"] == "ifv-deterministic-process-v1"
+    assert profile["correct_reward_floor"] == 0.5
+    assert profile["weights"]["evidence_chain_reward"] == 0.4
+    assert profile["weights"]["discrepancy_alignment_reward"] == 0.4
+    assert profile["weights"]["stop_quality_reward"] == 0.2

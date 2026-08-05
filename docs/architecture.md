@@ -216,17 +216,14 @@ these gates and rejects a trace even if upstream score metadata is wrong. RL kee
 separate, auditable rule: an engineering-valid but incorrect complete episode remains
 in its same-prompt group with reward zero, rather than being silently removed.
 
-Completed Qwen rollouts may additionally enter the gold-free semantic reward audit
-described in `docs/rl-semantic-reward.md`. A same-prompt group contains fully
-isolated episodes, each with a stable sampling seed and distinct canonical trace.
-The frozen Gemini judge receives one bounded image/Evidence/action-observation packet
-per episode and returns an independent verdict plus overall investigation quality. It
-does not see the policy verdict, Claim status, Evidence stance, Finding summaries,
-hidden reasoning, or private gold. The resulting `ifv-semantic-reward-v2` artifact
-is content-addressed, records one request's model/prompt/token/hash metadata, never
-mutates runtime state, and is not model-visible. After all episodes finish,
-deterministic post-rollout code joins private gold and emits one scalar per episode for
-standard GRPO; it does not implement a custom per-turn advantage.
+After all episodes finish, deterministic post-rollout code joins private gold and
+emits one scalar per episode for standard GRPO; it does not implement a custom
+per-turn advantage. A same-prompt group contains fully isolated episodes, each with a
+stable sampling seed and distinct canonical trace. Completed Qwen rollouts may also
+enter the gold-free semantic reward audit described in `docs/rl-semantic-reward.md`,
+but the resulting `ifv-semantic-reward-v2` artifact is diagnostic-only: it records one
+bounded frozen-judge request and may support manual analysis, but it never changes RL
+reward, trainability, SFT eligibility, runtime state, or model-visible inputs.
 
 ## Acceptance status
 

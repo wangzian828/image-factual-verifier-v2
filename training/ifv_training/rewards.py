@@ -1,7 +1,8 @@
-"""Validated reward composition for IFV Agent RL.
+"""Deterministic reward composition for IFV Agent RL.
 
-The module consumes immutable semantic artifacts produced after a rollout.  It
-does not call a teacher, execute tools, read gold, or implement an Agent loop.
+The default path consumes post-rollout correctness, audit gates, policy step IDs,
+and optional deterministic process components.  A frozen semantic artifact may be
+attached for offline diagnostics, but it never changes reward or trainability.
 """
 
 from __future__ import annotations
@@ -17,24 +18,24 @@ from .io import canonical_json, load_json, write_json
 
 
 SEMANTIC_REWARD_SCHEMA_VERSION = "ifv-semantic-reward-v2"
-REWARD_LEDGER_SCHEMA_VERSION = "ifv-rl-reward-ledger-v2"
+REWARD_LEDGER_SCHEMA_VERSION = "ifv-rl-reward-ledger-v3"
+LEGACY_REWARD_LEDGER_SCHEMA_VERSION = "ifv-rl-reward-ledger-v2"
 REWARD_PROFILE_SCHEMA_VERSION = "ifv-rl-reward-profile-v1"
 GRPO_GROUP_SCHEMA_VERSION = "ifv-standard-grpo-group-v1"
 
 DEFAULT_COMPONENT_WEIGHTS = {
-    "evidence_quality": 0.50,
-    "overall_process_quality": 0.50,
+    "evidence_chain_reward": 0.40,
+    "discrepancy_alignment_reward": 0.40,
+    "stop_quality_reward": 0.20,
+    "grounded_finding_reward": 0.20,
+    "gap_coverage_reward": 0.20,
+    "bridge_reward": 0.25,
+    "basis_minimality_reward": 0.20,
+    "stop_calibration_reward": 0.15,
 }
 
-SUPPORTED_COMPONENT_WEIGHTS = frozenset(DEFAULT_COMPONENT_WEIGHTS) | {
-    "investigation_progress",
-    "search_direction",
-    "evidence_use",
-    "belief_revision",
-    "claim_label_agreement",
-    "claim_entailment",
-    "evidence_citation_fidelity",
-}
+SUPPORTED_COMPONENT_WEIGHTS = frozenset(DEFAULT_COMPONENT_WEIGHTS)
+DEFAULT_CORRECT_REWARD_FLOOR = 0.5
 
 
 def _mapping(value: Any, *, location: str) -> Mapping[str, Any]:
@@ -192,7 +193,8 @@ def load_reward_profile(path: Path | None = None) -> dict[str, Any]:
     if path is None:
         return {
             "schema_version": REWARD_PROFILE_SCHEMA_VERSION,
-            "profile_id": "ifv-trajectory-quality-v1",
+            "profile_id": "ifv-deterministic-process-v1",
+            "correct_reward_floor": DEFAULT_CORRECT_REWARD_FLOOR,
             "weights": dict(DEFAULT_COMPONENT_WEIGHTS),
         }
     profile = load_json(path)
@@ -201,6 +203,10 @@ def load_reward_profile(path: Path | None = None) -> dict[str, Any]:
     profile_id = str(profile.get("profile_id", "")).strip()
     if not profile_id:
         raise ValueError("reward profile requires profile_id")
+    correct_reward_floor = _number(
+        profile.get("correct_reward_floor", DEFAULT_CORRECT_REWARD_FLOOR),
+        location="profile.correct_reward_floor",
+    )
     raw_weights = _mapping(profile.get("weights"), location="profile.weights")
     weights: dict[str, float] = {}
     for name, value in raw_weights.items():
@@ -212,9 +218,11 @@ def load_reward_profile(path: Path | None = None) -> dict[str, Any]:
         if numeric < 0.0:
             raise ValueError(f"weight {name} cannot be negative")
         weights[str(name)] = numeric
-    if not any(weights.values()):
-        raise ValueError("reward profile requires at least one positive weight")
-    return {**profile, "weights": weights}
+    return {
+        **profile,
+        "correct_reward_floor": correct_reward_floor,
+        "weights": weights,
+    }
 
 
 def _optional_bool(value: Any, *, location: str) -> bool | None:
@@ -226,63 +234,73 @@ def _optional_bool(value: Any, *, location: str) -> bool | None:
 
 
 def compose_reward_ledger(
-    artifact: Mapping[str, Any],
+    deterministic: Mapping[str, Any],
     *,
-    deterministic: Mapping[str, Any] | None = None,
     profile: Mapping[str, Any] | None = None,
+    semantic_artifact: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    audit = validate_semantic_reward_artifact(artifact)
-    if not audit["passed"]:
-        raise ValueError("invalid semantic reward artifact: " + "; ".join(audit["errors"]))
-    deterministic = deterministic or {}
+    semantic_audit: Mapping[str, Any] | None = None
+    if semantic_artifact is not None:
+        semantic_audit = validate_semantic_reward_artifact(semantic_artifact)
+        if not semantic_audit["passed"]:
+            raise ValueError(
+                "invalid semantic reward artifact: "
+                + "; ".join(semantic_audit["errors"])
+            )
     profile = dict(profile or load_reward_profile())
     if profile.get("schema_version") != REWARD_PROFILE_SCHEMA_VERSION:
         raise ValueError("unsupported reward profile")
     weights = _mapping(profile.get("weights"), location="profile.weights")
-    metrics = _mapping(artifact.get("metrics"), location="artifact.metrics")
-    gates = _mapping(artifact.get("gates"), location="artifact.gates")
-    rollout = _mapping(artifact.get("rollout"), location="artifact.rollout")
+    correct_reward_floor = _number(
+        profile.get("correct_reward_floor", DEFAULT_CORRECT_REWARD_FLOOR),
+        location="profile.correct_reward_floor",
+    )
+    rollout = (
+        _mapping(
+            semantic_artifact.get("rollout"),
+            location="semantic_artifact.rollout",
+        )
+        if semantic_artifact is not None
+        else {}
+    )
 
     classification_correct = _optional_bool(
         deterministic.get("classification_correct"),
         location="deterministic.classification_correct",
     )
     provider_fatal = bool(deterministic.get("fatal_engineering_error", False))
-    engineering_valid = bool(gates.get("engineering_valid")) and not provider_fatal
-    strict_trace_audit = bool(gates.get("strict_trace_audit_pass")) and bool(
-        deterministic.get("strict_trace_audit_pass", True)
+    engineering_valid = not provider_fatal
+    strict_trace_audit = bool(
+        deterministic.get("strict_trace_audit_pass", False)
+    )
+    training_prohibited = bool(
+        deterministic.get("training_prohibited", False)
+    )
+    raw_process_components = deterministic.get("process_components", {})
+    if raw_process_components is None:
+        raw_process_components = {}
+    process_components = _mapping(
+        raw_process_components,
+        location="deterministic.process_components",
     )
     components: dict[str, float | None] = {
         "classification_correct": (
             None if classification_correct is None else float(classification_correct)
         ),
         "strict_trace_audit": float(strict_trace_audit),
-        "verdict_blind_agreement": float(metrics["verdict_blind_agreement"]),
-        "claim_label_agreement": float(metrics["claim_label_agreement"]),
-        "claim_entailment": float(metrics["claim_entailment"]),
-        "evidence_citation_fidelity": float(
-            metrics["evidence_citation_fidelity"]
-        ),
-        "evidence_sufficiency": float(metrics["evidence_sufficiency"]),
-        "evidence_quality": float(metrics["evidence_quality"]),
-        "investigation_progress": float(metrics["investigation_progress"]),
-        "search_direction": float(metrics["search_direction"]),
-        "evidence_use": float(metrics["evidence_use"]),
-        "belief_revision": float(metrics["belief_revision"]),
-        "overall_process_quality": float(metrics["overall_process_quality"]),
     }
-    judge_reference_valid = not (
-        metrics.get("invalid_judge_evidence_ids")
-        or metrics.get("invalid_judge_turn_ids")
-    )
-    fatal_mask = not engineering_valid or provider_fatal or not judge_reference_valid
+    for name in SUPPORTED_COMPONENT_WEIGHTS:
+        if name not in process_components:
+            continue
+        components[name] = _number(
+            process_components.get(name),
+            location=f"deterministic.process_components.{name}",
+        )
+
+    fatal_mask = not engineering_valid or provider_fatal
     mask_reason = ""
     if provider_fatal:
         mask_reason = "fatal_environment_or_provider_error"
-    elif not engineering_valid:
-        mask_reason = "engineering_invalid_rollout"
-    elif not judge_reference_valid:
-        mask_reason = "invalid_teacher_evidence_or_turn_reference"
 
     weighted_terms: list[tuple[str, float, float]] = []
     for name, raw_weight in weights.items():
@@ -292,11 +310,12 @@ def compose_reward_ledger(
             continue
         weighted_terms.append((str(name), float(value), weight))
     weight_sum = sum(weight for _, _, weight in weighted_terms)
-    if weight_sum <= 0.0:
-        raise ValueError("no active reward components after nullable values")
-    quality = sum(
-        value * weight for _, value, weight in weighted_terms
-    ) / weight_sum
+    quality = (
+        sum(value * weight for _, value, weight in weighted_terms)
+        / weight_sum
+        if weight_sum > 0.0
+        else 1.0
+    )
     reward_masked = fatal_mask or not strict_trace_audit
     if reward_masked:
         scalar_reward_value: float | None = None
@@ -307,16 +326,23 @@ def compose_reward_ledger(
         scalar_reward_value = None
         mask_reason = "classification_correctness_missing"
     elif classification_correct is False:
-        # Outcome dominance: an incorrect complete trajectory cannot outrank a
-        # correct one merely because its prose or search style looks polished.
         scalar_reward_value = 0.0
     else:
         scalar_reward_value = round(
-            0.5 + 0.5 * max(0.0, min(1.0, quality)),
+            float(correct_reward_floor)
+            + (1.0 - float(correct_reward_floor))
+            * max(0.0, min(1.0, quality)),
             8,
         )
 
-    case_id = str(artifact.get("case_id", ""))
+    case_id = str(
+        deterministic.get("case_id")
+        or (
+            semantic_artifact.get("case_id")
+            if semantic_artifact is not None
+            else ""
+        )
+    )
     episode_id = str(
         deterministic.get("episode_id") or rollout.get("episode_id") or case_id
     )
@@ -325,39 +351,87 @@ def compose_reward_ledger(
         step_ids = rollout.get("policy_step_ids", [])
     if not isinstance(step_ids, list):
         raise ValueError("deterministic.step_ids must be a list")
+    semantic_metrics = (
+        dict(
+            _mapping(
+                semantic_artifact.get("metrics"),
+                location="semantic_artifact.metrics",
+            )
+        )
+        if semantic_artifact is not None
+        else {}
+    )
+    semantic_gates = (
+        dict(
+            _mapping(
+                semantic_artifact.get("gates"),
+                location="semantic_artifact.gates",
+            )
+        )
+        if semantic_artifact is not None
+        else {}
+    )
     ledger_core = {
         "schema_version": REWARD_LEDGER_SCHEMA_VERSION,
+        "reward_policy": "outcome-dominant-deterministic-v1",
         "case_id": case_id,
         "episode_id": episode_id,
-        "source_semantic_artifact_id": artifact.get("artifact_id"),
-        "source_trace_sha256": _mapping(
-            artifact.get("source_trace"), location="artifact.source_trace"
-        ).get("sha256"),
+        "source_semantic_artifact_id": (
+            semantic_artifact.get("artifact_id")
+            if semantic_artifact is not None
+            else None
+        ),
+        "source_trace_sha256": (
+            deterministic.get("source_trace_sha256")
+            or (
+                _mapping(
+                    semantic_artifact.get("source_trace"),
+                    location="semantic_artifact.source_trace",
+                ).get("sha256")
+                if semantic_artifact is not None
+                else None
+            )
+        ),
         "profile": {
             "profile_id": profile.get("profile_id"),
+            "correct_reward_floor": correct_reward_floor,
             "weights": dict(weights),
             "active_weight_sum": weight_sum,
         },
         "components": components,
-        "semantic_metrics": dict(metrics),
+        "semantic_metrics": semantic_metrics,
+        "diagnostics": {
+            "semantic_reward": (
+                {
+                    "role": "diagnostic_only",
+                    "artifact_id": semantic_artifact.get("artifact_id"),
+                    "semantic_audit_pass": semantic_gates.get(
+                        "semantic_audit_pass"
+                    ),
+                }
+                if semantic_artifact is not None
+                else None
+            )
+        },
         "gates": {
             "engineering_valid": engineering_valid,
             "strict_trace_audit_pass": strict_trace_audit,
-            "semantic_audit_pass": bool(gates.get("semantic_audit_pass")),
-            "judge_reference_valid": judge_reference_valid,
             "classification_correct": classification_correct,
             "has_policy_steps": bool(step_ids),
+            "training_prohibited": training_prohibited,
             "trainable": bool(
                 not fatal_mask
                 and strict_trace_audit
                 and classification_correct is not None
                 and step_ids
+                and not training_prohibited
             ),
             "eligible_for_positive_buffer": bool(
                 not fatal_mask
+                and strict_trace_audit
                 and step_ids
-                and gates.get("semantic_audit_pass")
                 and classification_correct is True
+                and not training_prohibited
             ),
         },
         "fatal_mask": {
@@ -366,7 +440,7 @@ def compose_reward_ledger(
         },
         "scalar_reward": scalar_reward_value,
         "step_ids": [str(value) for value in step_ids],
-        "teacher_usage": _teacher_usage(artifact),
+        "teacher_usage": _teacher_usage(semantic_artifact),
     }
     ledger_id = "sha256:" + hashlib.sha256(
         canonical_json(ledger_core).encode("utf-8")
@@ -378,7 +452,16 @@ def compose_reward_ledger(
     }
 
 
-def _teacher_usage(artifact: Mapping[str, Any]) -> dict[str, int]:
+def _teacher_usage(
+    artifact: Mapping[str, Any] | None,
+) -> dict[str, int]:
+    if artifact is None:
+        return {
+            "call_count": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "thought_tokens": 0,
+        }
     judge = _mapping(artifact.get("judge"), location="artifact.judge")
     calls = judge.get("calls", [])
     totals = {"call_count": 0, "input_tokens": 0, "output_tokens": 0, "thought_tokens": 0}
@@ -398,7 +481,10 @@ def _teacher_usage(artifact: Mapping[str, Any]) -> dict[str, int]:
 
 def validate_reward_ledger(ledger: Mapping[str, Any]) -> dict[str, Any]:
     errors: list[str] = []
-    if ledger.get("schema_version") != REWARD_LEDGER_SCHEMA_VERSION:
+    if ledger.get("schema_version") not in {
+        REWARD_LEDGER_SCHEMA_VERSION,
+        LEGACY_REWARD_LEDGER_SCHEMA_VERSION,
+    }:
         errors.append("unsupported reward ledger schema_version")
     scalar = ledger.get("scalar_reward")
     fatal_mask = _mapping(ledger.get("fatal_mask"), location="fatal_mask")
@@ -480,9 +566,7 @@ def export_framework_reward(
             },
             "extra_info": {
                 "case_id": ledger.get("case_id"),
-                "semantic_audit_pass": _mapping(
-                    ledger.get("gates"), location="gates"
-                ).get("semantic_audit_pass"),
+                "reward_policy": ledger.get("reward_policy"),
             },
         }
     raise ValueError("framework must be rllm or verl")
@@ -602,18 +686,22 @@ def build_standard_grpo_groups(
 
 def build_and_write_ledger(
     *,
-    semantic_artifact_path: Path,
+    deterministic_path: Path,
     output_path: Path,
-    deterministic_path: Path | None = None,
     profile_path: Path | None = None,
+    semantic_artifact_path: Path | None = None,
 ) -> dict[str, Any]:
-    artifact = load_json(semantic_artifact_path)
-    deterministic = load_json(deterministic_path) if deterministic_path else {}
+    deterministic = load_json(deterministic_path)
+    semantic_artifact = (
+        load_json(semantic_artifact_path)
+        if semantic_artifact_path is not None
+        else None
+    )
     profile = load_reward_profile(profile_path)
     ledger = compose_reward_ledger(
-        artifact,
-        deterministic=deterministic,
+        deterministic,
         profile=profile,
+        semantic_artifact=semantic_artifact,
     )
     write_json(output_path, ledger)
     return ledger
@@ -621,33 +709,37 @@ def build_and_write_ledger(
 
 def build_ledgers_from_run_artifacts(
     *,
-    semantic_artifacts: Sequence[Mapping[str, Any]],
     deterministic_rows: Sequence[Mapping[str, Any]],
+    semantic_artifacts: Sequence[Mapping[str, Any]] = (),
     profile: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """Join one semantic artifact and deterministic score per episode."""
+    """Build one reward ledger per deterministic post-rollout row."""
 
-    deterministic_by_episode = {
-        str(row.get("episode_id", "")): row for row in deterministic_rows
-    }
-    if "" in deterministic_by_episode:
-        raise ValueError("deterministic rows require episode_id")
-    ledgers: list[dict[str, Any]] = []
-    seen: set[str] = set()
+    semantic_by_episode: dict[str, Mapping[str, Any]] = {}
     for artifact in semantic_artifacts:
         rollout = _mapping(artifact.get("rollout"), location="artifact.rollout")
         episode_id = str(rollout.get("episode_id", "")).strip()
-        if not episode_id or episode_id in seen:
+        if not episode_id or episode_id in semantic_by_episode:
             raise ValueError("semantic artifacts require unique episode_id values")
-        deterministic = deterministic_by_episode.get(episode_id)
-        if deterministic is None:
-            raise ValueError(f"missing deterministic row for {episode_id}")
+        semantic_by_episode[episode_id] = artifact
+    ledgers: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for deterministic in deterministic_rows:
+        episode_id = str(deterministic.get("episode_id", "")).strip()
+        if not episode_id or episode_id in seen:
+            raise ValueError("deterministic rows require unique episode_id values")
         seen.add(episode_id)
         ledgers.append(
             compose_reward_ledger(
-                artifact,
-                deterministic=deterministic,
+                deterministic,
                 profile=profile,
+                semantic_artifact=semantic_by_episode.get(episode_id),
             )
+        )
+    unused_semantic = sorted(set(semantic_by_episode) - seen)
+    if unused_semantic:
+        raise ValueError(
+            "semantic artifacts lack deterministic rows: "
+            + ", ".join(unused_semantic[:10])
         )
     return ledgers

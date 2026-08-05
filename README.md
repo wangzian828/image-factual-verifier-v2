@@ -73,10 +73,11 @@ protocol validity, and absence of post-verdict actions.
 For on-policy RL, run `--rollouts-per-case 4`. Each member receives a unique
 `episode_id` and sampling seed while retaining the public `case_id`; every complete
 episode owns its workflow, mutable state, interaction lifecycle, runtime archive, and
-trace. The run writes `rollout_groups.jsonl` and `post_rollout_rewards.jsonl`. Then
-use `python -m src.eval.score_semantic_reward` for one frozen Gemini comprehensive
-blind score per trace, followed by `training/ifv-training build-run-rewards` to emit
-standard GRPO groups. See [docs/rl-semantic-reward.md](docs/rl-semantic-reward.md).
+trace. The run writes `rollout_groups.jsonl` and `post_rollout_rewards.jsonl`;
+`training/ifv-training build-run-rewards` consumes those deterministic post-rollout
+records directly and emits standard GRPO groups. `python -m src.eval.score_semantic_reward`
+is optional offline diagnostics only; it is not a reward or eligibility gate. See
+[docs/rl-semantic-reward.md](docs/rl-semantic-reward.md).
 
 ## Validation and acceptance
 
