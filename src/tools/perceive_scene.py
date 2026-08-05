@@ -16,7 +16,7 @@ Inspect the image carefully and return exactly one JSON object:
 {
   "entities": [
     {
-      "name": "specific entity name",
+      "name": "literal visible label or generic descriptor",
       "entity_type": "person|object|building|logo|animal|scene_element",
       "bbox": [x_min, y_min, x_max, y_max],
       "confidence": 0.9
@@ -28,15 +28,18 @@ Inspect the image carefully and return exactly one JSON object:
 
 Rules:
 1. List at most 8 decision-relevant visible entities.
-2. Include visible logos, but do not transcribe text or describe entity attributes;
+2. For people, do not assign a proper-name identity from appearance alone;
+   use a generic visible descriptor such as "pilot", "man in dark suit", or
+   "unidentified person" unless visible text explicitly labels the person.
+3. Include visible logos, but do not transcribe text or describe entity attributes;
    a separate OCR stage handles visible text.
-3. Use normalized [x_min, y_min, x_max, y_max] bounding boxes in [0,1].
+4. Use normalized [x_min, y_min, x_max, y_max] bounding boxes in [0,1].
    If no reliable box is available, use [].
-4. Keep every entity name under 100 characters.
-5. Keep scene_description to one literal, objective sentence under 280 characters.
-6. Do not include explanations, hidden-state reasoning, history, biographies, or
+5. Keep every entity name under 100 characters.
+6. Keep scene_description to one literal, objective sentence under 280 characters.
+7. Do not include explanations, hidden-state reasoning, history, biographies, or
    information that is not directly visible in the pixels.
-7. Output JSON only.
+8. Output JSON only.
 """
 
 PERCEIVE_SCENE_SCHEMA = {

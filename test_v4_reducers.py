@@ -17,6 +17,7 @@ from src.orchestrator.investigation_models import (
     ImageAccountPlanningOutput,
     ImageClaimProposal,
     ImageOnlyInvestigationState,
+    InvestigationDiscovery,
     InvestigationBrief,
     InvestigationEvidence,
     MaterialDiscrepancy,
@@ -161,6 +162,46 @@ def _planned_state() -> ImageOnlyInvestigationState:
     update = apply_image_account_planning(state, _planning_output())
     assert update["accepted"] is True
     return state
+
+
+def test_page_evidence_keeps_paired_reference_image_comparison_pending() -> None:
+    state = _planned_state()
+    task = state.tasks[0]
+    source_url = "https://example.org/source-photo"
+    reference_url = "https://images.example.org/reference-photo.jpg"
+    state.discoveries.append(
+        InvestigationDiscovery(
+            discovery_id="discovery-source-with-reference-image",
+            task_id=task.task_id,
+            fact_ids=list(task.fact_ids),
+            function_call_id="call-reverse-with-reference",
+            tool_name="reverse_image_search",
+            candidate_url=source_url,
+            reference_image_url=reference_url,
+            title="Source photo caption",
+            snippet="A source page with an accompanying reference image.",
+            candidate_type="reverse_image",
+        )
+    )
+    state.attempted_routes.append(
+        json.dumps(
+            {
+                "tool": "visit",
+                "task_id": task.task_id,
+                "urls": [source_url],
+                "outcome": "evidence",
+            }
+        )
+    )
+
+    routes = remaining_claim_hypothesis_routes(
+        state,
+        task_ids={task.task_id},
+    )
+
+    assert routes == [
+        f"compare_with_reference:{task.task_id}:{reference_url}"
+    ]
 
 
 def test_route_selection_exhaustion_blocks_task_without_counting_an_action() -> None:

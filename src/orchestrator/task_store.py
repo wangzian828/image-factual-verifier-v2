@@ -7605,9 +7605,13 @@ def _pending_inspection_batches(
             attempted_outcomes[url] == "evidence"
             for url in attempted_pages
         ):
-            # Fetched source text resolves or materially advances the batch;
-            # sibling pages and images are no longer mandatory.
-            continue
+            if tool_name == "visit":
+                # Fetched source text resolves or materially advances sibling
+                # pages in the batch.  It does not bind an accompanying
+                # reference image to the input pixels; keep reference-image
+                # comparisons eligible so source captions cannot substitute for
+                # visual alignment.
+                continue
         evidence_reference_urls = [
             url
             for url in attempted_references
