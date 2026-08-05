@@ -436,16 +436,30 @@ class SearchHypothesisProposal(StrictModel):
         max_length=80,
         pattern=r"^[a-z0-9][a-z0-9_-]*$",
     )
-    statement: str = Field(min_length=1, max_length=1200)
+    statement: str = Field(
+        min_length=1,
+        max_length=1200,
+        description=(
+            "Neutral answer-seeking investigation route about the source, entity, "
+            "event, relation, or value; not a proposed verdict or media-origin class."
+        ),
+    )
     queries: List[str] = Field(
         default_factory=list,
         max_length=3,
         description=(
-            "Alternative candidate query formulations, not a guaranteed "
-            "execution queue."
+            "Neutral alternative query formulations built from visible anchors "
+            "and relation terms, not a guaranteed execution queue."
         ),
     )
-    expected_information: str = Field(min_length=1, max_length=800)
+    expected_information: str = Field(
+        min_length=1,
+        max_length=800,
+        description=(
+            "The underlying source or relation facts the route should recover, "
+            "without presupposing the final verdict."
+        ),
+    )
     suggested_tools: List[
         Literal[
             "reverse_image_search",
@@ -617,8 +631,19 @@ class VisualReinspectionProposal(StrictModel):
         "text",
         "integrity",
     ]
-    question: str = Field(min_length=1, max_length=800)
-    expected_property: str = Field(min_length=1, max_length=800)
+    question: str = Field(
+        min_length=1,
+        max_length=800,
+        description="One focused question about a directly observable pixel property.",
+    )
+    expected_property: str = Field(
+        min_length=1,
+        max_length=240,
+        description=(
+            "One concise directly visible phrase copied from reviewed Evidence; "
+            "not an inferred measurement or broad authenticity classification."
+        ),
+    )
 
 
 class ClaimAssessmentProposal(StrictModel):

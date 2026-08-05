@@ -543,6 +543,7 @@ def _append_source_visual_conflict_pair(
     record.evidence_ids = [visual.evidence_id] if link_visual_to_reinspection else []
     visual_task = next(item for item in state.tasks if item.task_id == record.task_id)
     visual_task.status = "resolved"
+    assert visual_task.parent_task_id == task.task_id
     return source, visual
 
 
@@ -1523,6 +1524,7 @@ def test_discrepancy_decision_accepts_bounded_visual_reinspection() -> None:
     task = next(item for item in state.tasks if item.task_id == record.task_id)
     assert task.claim_ids == [claim.claim_id]
     assert task.suggested_tools == ["focused_visual_inspection"]
+    assert task.parent_task_id == evidence.task_id
     assert state.discrepancy_decisions[0].accepted_visual_question_id == (
         record.visual_question_id
     )
@@ -2016,8 +2018,8 @@ def test_discrepancy_context_flags_evidence_to_visual_alignment_candidate() -> N
     ]
     assert "targeted visual_reinspection" in candidates[0]["required_review"]
     assert "glove versus bare hand" in DISCREPANCY_DECISION_SYSTEM_PROMPT
-    assert "unverified visible hypothesis" in DISCREPANCY_DECISION_SYSTEM_PROMPT
-    assert "generic AI" in DISCREPANCY_DECISION_SYSTEM_PROMPT
+    assert "absolute size or weight" in DISCREPANCY_DECISION_SYSTEM_PROMPT
+    assert "media origin from style" in DISCREPANCY_DECISION_SYSTEM_PROMPT
     assert context["runtime_visual_reinspection_binding"] == {
         "status": "available",
         "candidates": [

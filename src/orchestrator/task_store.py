@@ -1732,7 +1732,15 @@ def _composite_source_visual_refute_evidence_ids(
             if evidence_id in record.request.grounding_evidence_ids
         ]
         if linked_source_ids:
-            return list(dict.fromkeys([linked_source_ids[0], linked_visual_ids[0]]))
+            source_task_id = evidence_by_id[linked_source_ids[0]].task_id
+            visual_task = task_by_id.get(record.task_id)
+            if (
+                visual_task is not None
+                and visual_task.parent_task_id == source_task_id
+            ):
+                return list(
+                    dict.fromkeys([linked_source_ids[0], linked_visual_ids[0]])
+                )
     return []
 
 
@@ -2870,6 +2878,21 @@ def apply_discrepancy_decision(
                     "visual reinspection grounding must use reviewed Evidence"
                 ),
             }
+        grounding_task_ids = list(
+            dict.fromkeys(
+                evidence_by_id[evidence_id].task_id
+                for evidence_id in grounding_ids
+            )
+        )
+        if len(grounding_task_ids) != 1:
+            return {
+                "accepted": False,
+                "rejected_reason": (
+                    "visual reinspection grounding Evidence must belong to one "
+                    "ResearchTask"
+                ),
+            }
+        parent_task_id = grounding_task_ids[0]
         # A visual request is allowed to resolve an unresolved Claim even when
         # this checkpoint deliberately omits a ClaimAssessment.  In
         # particular, a model may first discover that all reviewed Evidence is
@@ -2941,6 +2964,7 @@ def apply_discrepancy_decision(
             ),
             priority=1,
             status="active",
+            parent_task_id=parent_task_id,
             origin_ids=list(
                 dict.fromkeys(
                     [*visual_fact_ids, *visual_claim_ids, *anchor_ids, *grounding_ids]

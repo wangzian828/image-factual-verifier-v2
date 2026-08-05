@@ -68,7 +68,7 @@ def test_hot_path_prompts_stay_semantic_and_compact() -> None:
     assert "runtime owns task state" in react_prompt
     assert "validates grounding" in planning_prompt
     assert "do not own the verdict" in image_account_prompt
-    assert "SearchHypotheses ask what actually happened" in image_account_prompt
+    assert "search_hypotheses as neutral investigation routes" in image_account_prompt
     assert "one high-salience ImageClaim" in image_account_prompt
     assert "complete subject-event relation" in image_account_prompt
     assert "relation slot, and depicted value" in image_account_prompt
@@ -76,10 +76,10 @@ def test_hot_path_prompts_stay_semantic_and_compact() -> None:
     assert "a defining factual relation may be more useful" in image_account_prompt
     assert "Do not inventory details" in image_account_prompt
     assert "positive world proposition" in image_account_prompt
-    assert "Keep initial retrieval neutral" in image_account_prompt
-    assert "do not hypothesize image generation" in image_account_prompt
-    assert "An exact-source discovery may raise" in image_account_prompt
-    assert "what the relation slot's verified value is" in image_account_prompt
+    assert "neutral investigation routes" in image_account_prompt
+    assert "not candidate verdicts" in image_account_prompt
+    assert "media-origin classification" in image_account_prompt
+    assert "determine the relation slot's verified value" in image_account_prompt
     assert "Image clues guide retrieval but do not restrict it" in image_account_prompt
     assert "Prior knowledge is a lead" in image_account_prompt
     assert "only tool Evidence establishes a fact" in image_account_prompt
@@ -88,8 +88,8 @@ def test_hot_path_prompts_stay_semantic_and_compact() -> None:
     assert "Frame retrieval around what actually happened" in discrepancy_react_prompt
     assert "actual value of the same relation slot" in discrepancy_react_prompt
     assert "identical image can be found" in discrepancy_react_prompt
-    assert "merely because the pixels look unusual" in discrepancy_react_prompt
-    assert "explicitly raises it for this input image" in discrepancy_react_prompt
+    assert "visible anchors, relation slots" in discrepancy_react_prompt
+    assert "unsupported verdict label" in discrepancy_react_prompt
     assert "only tool Evidence establishes a fact" in discrepancy_react_prompt
     assert "Do not change the ImageClaim" in discrepancy_react_prompt
     assert "select one owned ImageClaim" in discrepancy_react_prompt

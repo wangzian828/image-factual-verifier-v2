@@ -80,8 +80,8 @@ The query must remain about the active proposition while changing the stalled
 direction represented by the attempted queries. This is a retrieval hypothesis, not
 a verdict. Select exactly one candidate concept, translate or condense it into one
 concise concept_term, and include that exact concept_term in the replacement query.
-Do not introduce image-generation or authenticity labels that are absent from the
-supplied Evidence.
+Build it only from the active relation, visible anchors, and supplied Evidence; do
+not introduce an unsupported verdict label or media-origin classification.
 """
 
 
@@ -112,9 +112,9 @@ happened, not merely whether the image's proposed value or an identical image ca
 found. When direct queries repeat the proposed value without useful evidence, omit
 that value and retrieve the actual value of the same relation slot. Prior knowledge
 may supply leads, but only tool Evidence establishes a fact.
-Do not add image-generation, fake, or authenticity terms merely because the pixels
-look unusual. Use such a lead only when supplied Discovery or Evidence explicitly
-raises it for this input image.
+Form queries from visible anchors, relation slots, or terms introduced by supplied
+Discovery and Evidence. Do not inject an unsupported verdict label or media-origin
+classification into retrieval.
 Do not change the ImageClaim.
 
 Inspect a promising page or reference image before repeating retrieval for that
@@ -142,11 +142,11 @@ scene detail. Do not inventory details.
 
 Write each claim as the positive world proposition the image asks the viewer to
 accept. Prefer unusual or discriminative visible relations over generic presence or
-scene descriptions. SearchHypotheses ask what actually happened, which source or
-event the image belongs to, and what the relation slot's verified value is. Keep
-initial retrieval neutral: do not hypothesize image generation, manipulation,
-authenticity, or fakery from visual appearance. An exact-source discovery may raise
-an integrity question later. Image clues guide retrieval but do not restrict it.
+scene descriptions. Treat search_hypotheses as neutral investigation routes, not
+candidate verdicts: recover the original occurrence or source context, identify the
+depicted entity or event, or determine the relation slot's verified value. Do not
+encode a proposed verdict or media-origin classification in the route statement,
+expected information, or queries. Image clues guide retrieval but do not restrict it.
 Prior knowledge is a lead; only tool Evidence establishes a fact. Hypotheses do not
 own the verdict. The queries field contains up to three alternative starting
 formulations, not three scheduled actions. Runtime may execute at most two initial
@@ -231,11 +231,10 @@ Before support/real, align source facts with pixels; identity/event agreement is
 insufficient. If Evidence adds an absent/coarse/ambiguous/incompatible value, request
 visual_reinspection. Ask a direct discriminator: glove versus bare hand,
 on versus beside, or one instrument versus another. Set expected_property to
-one concrete property, not A-vs-B; scope relation, subject, or text. Do not redirect
-to generic AI, anatomy, realism, or provenance unless Evidence raises integrity. If
-anchors establish neither alternative, it is an unverified visible hypothesis: keep
-Claim insufficient, request visual_reinspection, and do not create
-a MaterialDiscrepancy until pixels resolve it.
+one concise visible phrase from reviewed Evidence, not A-vs-B. Pixels cannot infer
+absolute size or weight without calibrated scale, or settle media origin from style;
+ask only the observable property and preserve ambiguity. If anchors establish
+neither alternative, keep Claim insufficient and do not create a discrepancy.
 
 After focused visual Evidence reconcile with source. On conflict cite both IDs in
 claim_assessments[].selected_evidence_ids and material_discrepancy.evidence_ids;
