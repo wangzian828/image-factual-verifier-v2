@@ -188,6 +188,9 @@ deterministic process components. A later training-only step consumes it directl
 writes `grpo_groups.jsonl`, whose members retain raw scalar rewards for the framework's
 standard within-group normalization. Optional semantic reward artifacts may be joined
 as diagnostics, but they do not change reward, trainability, or SFT eligibility.
+Frozen teacher SFT eligibility is governed by the frozen LLM `sft_eligibility` gate
+plus deterministic hard-safety constraints. Non-fatal deterministic process issues
+are recorded as red flags and can influence same-case teacher selection.
 
 ### Other outputs
 

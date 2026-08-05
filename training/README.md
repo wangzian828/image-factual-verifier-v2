@@ -48,8 +48,10 @@ positive-buffer eligibility.
 
 ## Frozen teacher SFT export
 
-Frozen teacher export uses a fixed split plus structured eligibility artifacts. It no
-longer requires semantic reward artifacts.
+Frozen teacher export uses a fixed split plus the frozen LLM SFT eligibility gate.
+Deterministic trajectory features are still used as hard-safety constraints for
+clearly invalid teacher positives, as red-flag diagnostics, and as same-case
+tie-breakers. It no longer requires semantic reward artifacts.
 
 ```powershell
 python scripts/trajectory/export_dataset.py `
@@ -61,7 +63,10 @@ python scripts/trajectory/export_dataset.py `
 ```
 
 `--semantic-reward-dir` remains optional and diagnostic-only. When supplied, artifact
-IDs are preserved for audit trails, but they are not eligibility gates.
+IDs are preserved for audit trails, but they are not eligibility gates. Fatal
+deterministic reasons such as `incorrect_result`, `engineering_error`,
+`protocol_rejections`, and `legacy_core_ownership` still reject a teacher positive;
+non-fatal deterministic reasons are retained as `deterministic_red_flags`.
 
 Then convert accepted data for ms-swift:
 

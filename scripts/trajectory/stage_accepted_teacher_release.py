@@ -3,10 +3,10 @@
 
 Teacher retries historically used one rollout per invocation, so their public
 episode IDs equal case IDs and collide across run directories.  This tool selects
-the best strict/structured candidate per case and stages only that candidate into
-one canonical run directory.  Semantic reward artifacts may be copied as optional
-diagnostics, but they are never an eligibility gate.  It never reads
-evaluator-private gold.
+the best strict/structured candidate per case after deterministic hard-fail
+screening and stages only that candidate into one canonical run directory.
+Semantic reward artifacts may be copied as optional diagnostics, but they are
+never an eligibility gate.  It never reads evaluator-private gold.
 """
 
 from __future__ import annotations
@@ -27,6 +27,14 @@ from src.trajectory.exporter import export_policy_examples
 
 
 SCHEMA_VERSION = "ifv-accepted-teacher-release-v1"
+DETERMINISTIC_FATAL_TEACHER_REASONS = frozenset(
+    {
+        "incorrect_result",
+        "engineering_error",
+        "protocol_rejections",
+        "legacy_core_ownership",
+    }
+)
 JSONL_ARTIFACTS = (
     "perception_trajectories.jsonl",
     "trajectory_scores.jsonl",
@@ -99,6 +107,36 @@ def _score_index(run_dir: Path) -> Dict[str, Dict[str, Any]]:
         if episode_id:
             result[episode_id] = row
     return result
+
+
+def _deterministic_teacher_quality(score: Mapping[str, Any]) -> Dict[str, Any]:
+    if not score:
+        return {
+            "hard_gate_pass": False,
+            "fatal_reasons": ["missing_training_quality_score"],
+            "red_flags": [],
+        }
+    reasons = [
+        str(item)
+        for item in score.get("training_exclusion_reasons", []) or []
+        if str(item).strip()
+    ]
+    fatal_reasons = [
+        reason
+        for reason in reasons
+        if reason in DETERMINISTIC_FATAL_TEACHER_REASONS
+    ]
+    if score.get("training_eligible") is False and not reasons:
+        fatal_reasons.append("teacher_quality_gate_failed")
+    return {
+        "hard_gate_pass": not fatal_reasons,
+        "fatal_reasons": list(dict.fromkeys(fatal_reasons)),
+        "red_flags": [
+            reason
+            for reason in reasons
+            if reason not in DETERMINISTIC_FATAL_TEACHER_REASONS
+        ],
+    }
 
 
 def _eligible(
@@ -193,6 +231,10 @@ def stage_release(
             eligibility = eligibility_row["payload"]
             if not _eligible(trace, trace_sha256, eligibility):
                 continue
+            score_row = score_index.get(episode_id) or score_index.get(case_id) or {}
+            deterministic_quality = _deterministic_teacher_quality(score_row)
+            if not deterministic_quality["hard_gate_pass"]:
+                continue
             semantic_row = _matching_semantic_row(
                 semantic_index=semantic_index,
                 episode_id=episode_id,
@@ -200,10 +242,7 @@ def stage_release(
                 trace_sha256=trace_sha256,
             )
             score = float(
-                (score_index.get(episode_id) or score_index.get(case_id) or {}).get(
-                    "total",
-                    0.0,
-                )
+                score_row.get("total", 0.0)
                 or 0.0
             )
             candidate = {
@@ -222,6 +261,10 @@ def stage_release(
                 "semantic": (
                     semantic_row["payload"] if semantic_row is not None else {}
                 ),
+                "deterministic_fatal_reasons": deterministic_quality[
+                    "fatal_reasons"
+                ],
+                "deterministic_red_flags": deterministic_quality["red_flags"],
                 "source_metadata": {
                     "source_run_id": str(manifest.get("run_id", run_dir.name)),
                     "runtime_commit": str(manifest.get("git_commit", "")),
@@ -235,8 +278,16 @@ def stage_release(
                 },
             }
             current = selected.get(case_id)
-            if current is None or (score, candidate["run_id"], episode_id) > (
-                current["score"], current["run_id"], current["episode_id"]
+            if current is None or (
+                -len(candidate["deterministic_red_flags"]),
+                score,
+                candidate["run_id"],
+                episode_id,
+            ) > (
+                -len(current["deterministic_red_flags"]),
+                current["score"],
+                current["run_id"],
+                current["episode_id"],
             ):
                 selected[case_id] = candidate
 
@@ -287,6 +338,11 @@ def stage_release(
                 "source_run_dir": str(candidate["run_dir"]),
                 "source_trace_sha256": candidate["trace_sha256"],
                 "teacher_score": candidate["score"],
+                "deterministic_hard_gate_pass": True,
+                "deterministic_fatal_reasons": candidate[
+                    "deterministic_fatal_reasons"
+                ],
+                "deterministic_red_flags": candidate["deterministic_red_flags"],
                 "sft_eligibility_artifact_id": candidate["eligibility"].get("artifact_id"),
                 "semantic_reward_artifact_id": candidate["semantic"].get("artifact_id"),
             }

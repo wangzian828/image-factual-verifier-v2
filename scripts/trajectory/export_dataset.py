@@ -23,6 +23,14 @@ from src.trajectory.schema import (
 
 
 SPLITS = ("train", "validation", "test")
+DETERMINISTIC_FATAL_TEACHER_REASONS = frozenset(
+    {
+        "incorrect_result",
+        "engineering_error",
+        "protocol_rejections",
+        "legacy_core_ownership",
+    }
+)
 
 
 def _load_json(path: Path) -> Dict[str, Any]:
@@ -182,6 +190,36 @@ def _load_gate_artifacts(
     return result
 
 
+def _deterministic_teacher_quality(score: Mapping[str, Any]) -> Dict[str, Any]:
+    if not score:
+        return {
+            "hard_gate_pass": False,
+            "fatal_reasons": ["missing_training_quality_score"],
+            "red_flags": [],
+        }
+    reasons = [
+        str(item)
+        for item in score.get("training_exclusion_reasons", []) or []
+        if str(item).strip()
+    ]
+    fatal_reasons = [
+        reason
+        for reason in reasons
+        if reason in DETERMINISTIC_FATAL_TEACHER_REASONS
+    ]
+    if score.get("training_eligible") is False and not reasons:
+        fatal_reasons.append("teacher_quality_gate_failed")
+    return {
+        "hard_gate_pass": not fatal_reasons,
+        "fatal_reasons": list(dict.fromkeys(fatal_reasons)),
+        "red_flags": [
+            reason
+            for reason in reasons
+            if reason not in DETERMINISTIC_FATAL_TEACHER_REASONS
+        ],
+    }
+
+
 class _UnionFind:
     def __init__(self, values: Iterable[str]) -> None:
         self.parent = {value: value for value in values}
@@ -309,6 +347,7 @@ def export_dataset(
             case_id = _trace_case_id(trace, episode_id)
             trace_sha256 = _sha256(trace_path)
             score = score_by_episode.get(episode_id, {})
+            deterministic_quality = _deterministic_teacher_quality(score)
             training_eligible = bool(score.get("training_eligible", False))
             eligibility = eligibility_by_episode.get(episode_id, {})
             semantic = semantic_by_episode.get(episode_id, {})
@@ -339,7 +378,7 @@ def export_dataset(
                 runtime_case = _mapping(
                     _mapping(trace.get("state")).get("runtime_case")
                 )
-                training_eligible = bool(
+                structured_gate_pass = bool(
                     str(eligibility.get("case_id", "")) == case_id
                     and str(eligibility.get("episode_id", "")) == episode_id
                     and eligibility_gates.get("strict_trace_audit_pass") is True
@@ -354,6 +393,10 @@ def export_dataset(
                     and str(split_row.get("image_sha256", ""))
                     == str(runtime_case.get("image_sha256", ""))
                 )
+                training_eligible = bool(
+                    structured_gate_pass
+                    and deterministic_quality["hard_gate_pass"]
+                )
             exclusion_reasons = [
                 str(item)
                 for item in score.get(
@@ -365,8 +408,12 @@ def export_dataset(
             if not score:
                 exclusion_reasons = ["missing_training_quality_score"]
             if require_frozen_gates and not training_eligible:
+                frozen_reasons = []
+                if not structured_gate_pass:
+                    frozen_reasons.append("structured_teacher_gate_failed")
+                frozen_reasons.extend(deterministic_quality["fatal_reasons"])
                 exclusion_reasons = [
-                    "frozen_teacher_gate_failed",
+                    *frozen_reasons,
                     *exclusion_reasons,
                 ]
             elif require_frozen_gates:
@@ -384,6 +431,13 @@ def export_dataset(
                 ),
                 "training_eligible": training_eligible,
                 "training_exclusion_reasons": exclusion_reasons,
+                "deterministic_hard_gate_pass": deterministic_quality[
+                    "hard_gate_pass"
+                ],
+                "deterministic_fatal_reasons": deterministic_quality[
+                    "fatal_reasons"
+                ],
+                "deterministic_red_flags": deterministic_quality["red_flags"],
                 "structured_eligibility_pass": eligibility.get("gates", {}).get(
                     "sft_eligibility_pass"
                 ),
@@ -439,6 +493,7 @@ def export_dataset(
             selected_by_case[case_id] = max(
                 candidates,
                 key=lambda episode_id: (
+                    -len(episode_metadata[episode_id]["deterministic_red_flags"]),
                     float(episode_metadata[episode_id]["teacher_score"]),
                     episode_id,
                 ),
@@ -591,6 +646,9 @@ def export_dataset(
                     "source_trace",
                     "sft_eligibility_artifact_id",
                     "semantic_reward_artifact_id",
+                    "deterministic_hard_gate_pass",
+                    "deterministic_fatal_reasons",
+                    "deterministic_red_flags",
                     "teacher_score",
                 )
             }

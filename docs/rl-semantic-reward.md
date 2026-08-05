@@ -77,7 +77,10 @@ ifv-training build-run-rewards `
 ```
 
 Semantic artifacts never change scalar reward, trainability, positive-buffer
-eligibility, or SFT export eligibility. They are not model-visible.
+eligibility, or SFT export eligibility. They are not model-visible. SFT teacher
+positives are screened separately by the frozen LLM `sft_eligibility` judge plus
+deterministic hard constraints; non-fatal deterministic quality issues are recorded
+as red flags and can break ties between multiple passing rollouts for the same case.
 
 ## Reference-chain metrics
 

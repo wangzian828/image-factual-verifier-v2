@@ -211,7 +211,10 @@ episode's policy and visual calls across servers.
 `ifv-policy-v2` exports Image Account Planning, v4 ReAct, Discrepancy Decision, and
 v4 Judgment. The SFT positive-data gate requires classification correctness, complete
 directionally consistent Evidence chains, discrepancy alignment, stop quality, and
-no protocol rejection or legacy core ownership. The pure policy exporter repeats
+no protocol rejection or legacy core ownership. Frozen teacher export requires the
+frozen LLM `sft_eligibility` gate and uses deterministic trajectory features as
+hard-safety constraints, red-flag diagnostics, and same-case tie-breakers; semantic
+reward artifacts are optional diagnostics only. The pure policy exporter repeats
 these gates and rejects a trace even if upstream score metadata is wrong. RL keeps a
 separate, auditable rule: an engineering-valid but incorrect complete episode remains
 in its same-prompt group with reward zero, rather than being silently removed.

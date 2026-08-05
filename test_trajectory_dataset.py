@@ -190,10 +190,10 @@ def test_dataset_export_excludes_quality_gate_failures(
     assert report["excluded_episode_count"] == 1
 
 
-def test_frozen_sft_export_uses_structured_gate_without_semantic_reward(
+def _write_frozen_gate_inputs(
     tmp_path: Path,
-) -> None:
-    run_dir = _run_dir(tmp_path)
+    run_dir: Path,
+) -> tuple[Path, Path]:
     trace_path = run_dir / "traces" / "case_scripted_v3.json"
     trace_sha = hashlib.sha256(trace_path.read_bytes()).hexdigest()
     split = tmp_path / "case_split.jsonl"
@@ -229,6 +229,14 @@ def test_frozen_sft_export_uses_structured_gate_without_semantic_reward(
         ),
         encoding="utf-8",
     )
+    return split, eligibility
+
+
+def test_frozen_sft_export_uses_structured_gate_without_semantic_reward(
+    tmp_path: Path,
+) -> None:
+    run_dir = _run_dir(tmp_path)
+    split, eligibility = _write_frozen_gate_inputs(tmp_path, run_dir)
     output = tmp_path / "frozen-dataset"
     manifest = export_dataset(
         [run_dir],
@@ -243,6 +251,77 @@ def test_frozen_sft_export_uses_structured_gate_without_semantic_reward(
     assert manifest["accepted_case_count"] == 1
     assert manifest["example_counts"]["validation"] == 7
     assert manifest["example_counts"]["train"] == 0
+
+
+def test_frozen_sft_export_records_nonfatal_deterministic_red_flags(
+    tmp_path: Path,
+) -> None:
+    run_dir = _run_dir(tmp_path)
+    _write_jsonl(
+        run_dir / "trajectory_scores.jsonl",
+        [
+            {
+                "case_id": "case_scripted_v3",
+                "episode_id": "case_scripted_v3",
+                "total": 3.0,
+                "components": {"result_reward": 1.0},
+                "training_eligible": False,
+                "training_exclusion_reasons": ["evidence_chain_incomplete"],
+            }
+        ],
+    )
+    split, eligibility = _write_frozen_gate_inputs(tmp_path, run_dir)
+    output = tmp_path / "frozen-nonfatal"
+
+    manifest = export_dataset(
+        [run_dir],
+        output,
+        case_split_path=split,
+        eligibility_dir=eligibility,
+        minimum_accepted_cases=1,
+    )
+    metadata = [
+        json.loads(line)
+        for line in (output / "episode_metadata.jsonl").read_text(
+            encoding="utf-8"
+        ).splitlines()
+        if line.strip()
+    ][0]
+
+    assert manifest["accepted_case_count"] == 1
+    assert metadata["deterministic_hard_gate_pass"] is True
+    assert metadata["deterministic_red_flags"] == [
+        "evidence_chain_incomplete"
+    ]
+
+
+def test_frozen_sft_export_rejects_fatal_deterministic_red_flags(
+    tmp_path: Path,
+) -> None:
+    run_dir = _run_dir(tmp_path)
+    _write_jsonl(
+        run_dir / "trajectory_scores.jsonl",
+        [
+            {
+                "case_id": "case_scripted_v3",
+                "episode_id": "case_scripted_v3",
+                "total": 3.0,
+                "components": {"result_reward": 1.0},
+                "training_eligible": False,
+                "training_exclusion_reasons": ["protocol_rejections"],
+            }
+        ],
+    )
+    split, eligibility = _write_frozen_gate_inputs(tmp_path, run_dir)
+
+    with pytest.raises(ValueError, match="accepted too few cases"):
+        export_dataset(
+            [run_dir],
+            tmp_path / "frozen-fatal",
+            case_split_path=split,
+            eligibility_dir=eligibility,
+            minimum_accepted_cases=1,
+        )
 
 
 def test_frozen_sft_export_rejects_missing_validation_gate(
