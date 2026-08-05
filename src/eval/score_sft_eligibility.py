@@ -213,6 +213,27 @@ async def _run(args: argparse.Namespace) -> Dict[str, Any]:
                     "sft_eligibility_pass": artifact.get("gates", {}).get(
                         "sft_eligibility_pass"
                     ),
+                    "path_match_status": artifact.get("metrics", {}).get(
+                        "path_match_status"
+                    ),
+                    "matched_path_id": artifact.get("metrics", {}).get(
+                        "matched_path_id"
+                    ),
+                    "new_reasonable_path_candidate": artifact.get(
+                        "gates", {}
+                    ).get("new_reasonable_path_candidate"),
+                    "new_path_candidate_confidence": artifact.get(
+                        "metrics", {}
+                    ).get("new_path_candidate_confidence"),
+                    "new_path_candidate_screen_pass": artifact.get(
+                        "gates", {}
+                    ).get("new_path_candidate_screen_pass"),
+                    "new_path_candidate_review_blockers": artifact.get(
+                        "gates", {}
+                    ).get("new_path_candidate_review_blockers"),
+                    "human_review_required": artifact.get("gates", {}).get(
+                        "human_review_required"
+                    ),
                     "from_cache": from_cache,
                 }
             )
@@ -220,7 +241,12 @@ async def _run(args: argparse.Namespace) -> Dict[str, Any]:
         await backend.aclose()
 
     accepted = [row for row in rows if row["sft_eligibility_pass"] is True]
+    candidates = [
+        row for row in rows if row["new_reasonable_path_candidate"] is True
+    ]
+    review_queue = [row for row in rows if row["human_review_required"] is True]
     _write_jsonl(output_dir / "accepted_episodes.jsonl", accepted)
+    _write_jsonl(output_dir / "new_path_review_queue.jsonl", review_queue)
     summary = {
         "schema_version": "ifv-sft-eligibility-summary-v1",
         "run_dir": str(run_dir),
@@ -229,6 +255,8 @@ async def _run(args: argparse.Namespace) -> Dict[str, Any]:
         "model": args.model,
         "episode_count": len(rows),
         "passed_count": len(accepted),
+        "new_path_candidate_count": len(candidates),
+        "human_review_count": len(review_queue),
         "rows": rows,
     }
     _write_json(output_dir / "sft_eligibility_summary.json", summary)

@@ -191,6 +191,12 @@ as diagnostics, but they do not change reward, trainability, or SFT eligibility.
 Frozen teacher SFT eligibility is governed by the frozen LLM `sft_eligibility` gate
 plus deterministic hard-safety constraints. Non-fatal deterministic process issues
 are recorded as red flags and can influence same-case teacher selection.
+The judge can accept a pre-registered primary or optional decision path. A plausible
+unregistered path is never accepted directly: it is written to
+`new_path_review_queue.jsonl` only after confidence, image availability, verdict,
+Claim/Evidence identity, direct same-relation Evidence, value alignment, boundary,
+strict-audit, and engineering checks all pass. Low-confidence or structurally weak
+proposals are rejected automatically and do not create manual-review work.
 
 ### Other outputs
 

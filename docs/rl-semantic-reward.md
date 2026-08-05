@@ -81,6 +81,9 @@ eligibility, or SFT export eligibility. They are not model-visible. SFT teacher
 positives are screened separately by the frozen LLM `sft_eligibility` judge plus
 deterministic hard constraints; non-fatal deterministic quality issues are recorded
 as red flags and can break ties between multiple passing rollouts for the same case.
+That SFT gate may match pre-registered alternative decision paths. A plausible new
+path remains ineligible and is sent to human review only after a second,
+deterministic screen; it never changes RL reward.
 
 ## Reference-chain metrics
 

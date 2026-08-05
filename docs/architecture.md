@@ -219,6 +219,16 @@ these gates and rejects a trace even if upstream score metadata is wrong. RL kee
 separate, auditable rule: an engineering-valid but incorrect complete episode remains
 in its same-prompt group with reward zero, rather than being silently removed.
 
+The SFT judge may match either the primary private-gold decision path or one of up to
+three pre-registered `acceptable_decision_paths`. An unregistered but plausible path
+never passes SFT eligibility. It first becomes a judge proposal, then enters human
+review only if deterministic screening confirms that the image was available to the
+judge, the verdict is correct, cited Claim and Evidence IDs exist, a direct
+same-relation Evidence span supports the proposed path, relation and value alignment
+hold, the inference boundary is respected, confidence is at least `0.7`, and the
+strict trace and engineering gates pass. Other failures remain machine-rejected
+rather than entering the review queue.
+
 After all episodes finish, deterministic post-rollout code joins private gold and
 emits one scalar per episode for standard GRPO; it does not implement a custom
 per-turn advantage. A same-prompt group contains fully isolated episodes, each with a
