@@ -263,8 +263,7 @@ def discrepancy_visual_reinspection_binding(
             if fact_id in fact_by_id
             and fact_by_id[fact_id].origin.type in {"input_image", "ocr"}
         ][:6]
-        grounding_evidence_ids = []
-        source_fragments = []
+        grounding_by_task: Dict[str, Dict[str, List[str]]] = {}
         for evidence_id in reviewed_ids:
             evidence = evidence_by_id.get(evidence_id)
             if evidence is None or evidence.evidence_kind == "image_region":
@@ -275,20 +274,26 @@ def discrepancy_visual_reinspection_binding(
                 and task is not None
                 and claim.claim_id in task.claim_ids
             ):
-                grounding_evidence_ids.append(evidence_id)
-                source_fragments.append(evidence.exact_text)
-        source_visible_property_hint = extract_source_visible_property(
-            " ".join(source_fragments),
-        )
-        if (
-            anchor_fact_ids
-            and grounding_evidence_ids
-            and source_visible_property_hint
-        ):
+                bucket = grounding_by_task.setdefault(
+                    evidence.task_id,
+                    {"evidence_ids": [], "source_fragments": []},
+                )
+                bucket["evidence_ids"].append(evidence_id)
+                bucket["source_fragments"].append(evidence.exact_text)
+        if not anchor_fact_ids:
+            continue
+        for source_task_id, bucket in grounding_by_task.items():
+            grounding_evidence_ids = bucket["evidence_ids"]
+            source_visible_property_hint = extract_source_visible_property(
+                " ".join(bucket["source_fragments"]),
+            )
+            if not grounding_evidence_ids or not source_visible_property_hint:
+                continue
             candidates.append(
                 {
                     "claim_id": claim.claim_id,
                     "claim_fact_id": claim.fact_id,
+                    "source_task_id": source_task_id,
                     "anchor_fact_ids": anchor_fact_ids,
                     "grounding_evidence_ids": grounding_evidence_ids[:8],
                     "source_visible_property_hint": source_visible_property_hint,

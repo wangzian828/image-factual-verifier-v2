@@ -2023,17 +2023,19 @@ def test_discrepancy_context_flags_evidence_to_visual_alignment_candidate() -> N
     assert context["runtime_visual_reinspection_binding"] == {
         "status": "available",
         "candidates": [
-            {
-                "claim_id": claim.claim_id,
-                "claim_fact_id": claim.fact_id,
-                "anchor_fact_ids": claim.anchor_fact_ids,
-                "grounding_evidence_ids": [evidence.evidence_id],
-                "source_visible_property_hint": "without wearing gloves",
+                {
+                    "claim_id": claim.claim_id,
+                    "claim_fact_id": claim.fact_id,
+                    "source_task_id": task.task_id,
+                    "anchor_fact_ids": claim.anchor_fact_ids,
+                    "grounding_evidence_ids": [evidence.evidence_id],
+                    "source_visible_property_hint": "without wearing gloves",
             }
         ],
         "binding": {
             "claim_id": claim.claim_id,
             "claim_fact_id": claim.fact_id,
+            "source_task_id": task.task_id,
             "anchor_fact_ids": claim.anchor_fact_ids,
             "grounding_evidence_ids": [evidence.evidence_id],
             "source_visible_property_hint": "without wearing gloves",
