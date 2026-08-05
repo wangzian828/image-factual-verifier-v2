@@ -182,6 +182,7 @@ class ImageAccountPlanningBackend:
             "search_hypotheses": [
                 {
                     "hypothesis_key": "source_capture",
+                    "route_focus": "same_capture_reference",
                     "statement": (
                         "A traceable source capture may clarify what the person held."
                     ),
@@ -236,6 +237,7 @@ class MediaOriginRevisionPlanningBackend(ImageAccountPlanningBackend):
         if len(self.requests) == 1:
             content = response["steps"][0]["content"][0]
             payload = json.loads(content["text"])
+            payload["search_hypotheses"][0]["route_focus"] = "media_origin"
             payload["search_hypotheses"][0]["statement"] = (
                 "Determine whether the image is real or fake AI-generated media."
             )
@@ -255,6 +257,7 @@ class PublicationContextRevisionPlanningBackend(ImageAccountPlanningBackend):
         if len(self.requests) == 1:
             content = response["steps"][0]["content"][0]
             payload = json.loads(content["text"])
+            payload["search_hypotheses"][0]["route_focus"] = "media_origin"
             payload["search_hypotheses"][0]["statement"] = (
                 "Determine the original creator, publication context, and "
                 "media background of the image."
@@ -639,7 +642,7 @@ def test_image_account_planning_rejects_media_origin_route_before_commit(
 
     assert len(backend.requests) == 2
     assert state.all_steps[0].action_type == "planning_revision"
-    assert "media-origin classification" in state.all_steps[0].metadata[
+    assert "media_origin" in state.all_steps[0].metadata[
         "planning_revision_reason"
     ]
     assert state.all_steps[1].action_type != "planning_revision"
@@ -668,7 +671,7 @@ def test_image_account_planning_rejects_publication_context_route_before_commit(
 
     assert len(backend.requests) == 2
     assert state.all_steps[0].action_type == "planning_revision"
-    assert "media-origin classification" in state.all_steps[0].metadata[
+    assert "media_origin" in state.all_steps[0].metadata[
         "planning_revision_reason"
     ]
     assert state.all_steps[1].action_type != "planning_revision"

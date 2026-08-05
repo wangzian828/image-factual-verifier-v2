@@ -1202,6 +1202,16 @@ def apply_image_account_planning(
             "rejected_reason": "image account planning cannot run after verdict",
         }
     for index, proposal in enumerate(output.search_hypotheses):
+        if proposal.route_focus == "media_origin":
+            return {
+                "accepted": False,
+                "rejected_reason": (
+                    "search hypothesis route_focus=media_origin is not "
+                    "allowed; rewrite the route to test a depicted entity, "
+                    "event, relation value, scene/world constraint, or "
+                    "same-capture visual reference"
+                ),
+            }
         if any(
             _hypothesis_text_equivalent(prior.statement, proposal.statement)
             for prior in output.search_hypotheses[:index]
@@ -1311,6 +1321,7 @@ def apply_image_account_planning(
         hypothesis = SearchHypothesis(
             hypothesis_id=hypothesis_id,
             claim_ids=claim_ids,
+            route_focus=proposal.route_focus,
             statement=proposal.statement,
             queries=list(dict.fromkeys(proposal.queries)),
             expected_information=proposal.expected_information,
@@ -2556,6 +2567,16 @@ def apply_discrepancy_decision(
 
     accepted_hypothesis_ids: List[str] = []
     for index, proposal in enumerate(output.new_hypotheses):
+        if proposal.route_focus == "media_origin":
+            return {
+                "accepted": False,
+                "rejected_reason": (
+                    "new hypothesis route_focus=media_origin is not allowed; "
+                    "rewrite the route to test a depicted entity, event, "
+                    "relation value, scene/world constraint, or same-capture "
+                    "visual reference"
+                ),
+            }
         if any(claim_id not in claim_by_id for claim_id in proposal.claim_ids):
             return {"accepted": False, "rejected_reason": "new hypothesis cites unknown ImageClaim"}
         proposal_claim_ids = list(dict.fromkeys(proposal.claim_ids))
@@ -2584,6 +2605,7 @@ def apply_discrepancy_decision(
         hypothesis = SearchHypothesis(
             hypothesis_id=hypothesis_id,
             claim_ids=proposal_claim_ids,
+            route_focus=proposal.route_focus,
             statement=proposal.statement,
             queries=list(dict.fromkeys(proposal.queries)),
             expected_information=proposal.expected_information,

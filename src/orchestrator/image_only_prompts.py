@@ -141,20 +141,25 @@ event, or artifact, a defining factual relation may be more useful than a transi
 scene detail. Do not inventory details.
 
 Write each claim as the positive world proposition the image asks the viewer to
-accept. Prefer unusual or discriminative visible relations over generic presence or
-scene descriptions. Treat search_hypotheses as neutral investigation routes, not
-candidate verdicts: recover the original occurrence or source context, identify the
-depicted entity or event, or determine the relation slot's verified value. Do not
-encode a proposed verdict or media-origin classification in the route statement,
-expected information, or queries. Image clues guide retrieval but do not restrict it.
-Prior knowledge is a lead; only tool Evidence establishes a fact. Hypotheses do not
-own the verdict. The queries field contains up to three alternative starting
-formulations, not three scheduled actions. Runtime may execute at most two initial
-text_search actions for a Task and chooses adaptively among the alternatives.
+accept. Prefer unusual visible relations over generic presence. Treat
+search_hypotheses as neutral investigation routes, not candidate verdicts: identify
+depicted entity/event, determine the relation slot's verified value, test
+scene/world constraints, check visual consistency, or find a same-capture/reference
+image only for direct comparison to a
+depicted claim. Do not route toward creator, publisher/platform, generation method,
+publication history, or media-origin classification of the image itself.
+
+route_focus must be one of: same_capture_reference, entity_event_identity,
+relation_value, scene_world_constraints, visual_consistency, media_origin.
+media_origin is rejected; rewrite it as a factual focus if it can test the
+ImageClaim. Image clues guide retrieval but do not restrict it. Prior knowledge is a
+lead; only tool Evidence establishes a fact. Queries are alternative starts, not
+scheduled actions; runtime may execute at most two initial text_search actions per
+Task. Routes do not own the verdict.
 
 Output: account_summary; image_claims[{claim_key, statement, kind, predicate,
-anchor_fact_ids, salience}]; search_hypotheses[{hypothesis_key, statement, queries,
-expected_information, suggested_tools, priority}].
+anchor_fact_ids, salience}]; search_hypotheses[{hypothesis_key, route_focus,
+statement, queries, expected_information, suggested_tools, priority}].
 """
 
 
@@ -216,41 +221,43 @@ visual_reinspection or refinement, never both.
 
 
 DISCREPANCY_DECISION_SYSTEM_PROMPT = """\
-You are the sparse multimodal Discrepancy Decision checkpoint. Compare reviewed Evidence with the
-image account; update Claims. MaterialDiscrepancy needs cited Evidence and visible
-anchors. Retire/add a hypothesis or request reinspection. Omit Claims without
-reviewed Evidence.
+You are the sparse multimodal Discrepancy Decision checkpoint. Compare reviewed
+Evidence with image account; update Claims. Discrepancies need cited
+Evidence/visible anchors. Retire/add hypotheses or request reinspection; omit
+unsupported Claims.
 
-Use recorded admissible_stances: neutral Evidence cannot support or refute. For an
+Use recorded admissible_stances: neutral Evidence cannot support/refute. For an
 ImageClaim, support means it is true; refute means it is false. A competing value
-for the same subject-event relation refutes it even if wording differs. Task
-ownership does not establish semantic coverage; use addressed Claims and allowed
-visual anchors.
+for the same subject-event relation refutes it. Task ownership does not establish
+semantic coverage; use addressed Claims and allowed visual anchors.
 
 Before support/real, align source facts with pixels; identity/event agreement alone
 is insufficient. If source Evidence adds a visible value needing alignment, request
-visual_reinspection. Supply two or three candidate_discriminators with
-source_phrase, visible_property, why_discriminative, already_in_claim, and
-expected_if_source_matches; select the highest-information candidate. Never select
-a property already in the Claim/account or a generic confirmation. expected_property
-copies the selected visible_property. Pixels cannot infer absolute size or weight
-without scale, or media origin from style. If anchors establish neither alternative,
-keep Claim insufficient and do not create a discrepancy.
+visual_reinspection. Provide 2-3 candidate_discriminators
+(source_phrase, visible_property, why_discriminative, already_in_claim,
+expected_if_source_matches) and select the highest-information one. Never select a
+property already in the Claim/account or a generic confirmation. expected_property
+copies visible_property. Pixels cannot infer absolute size or weight without scale,
+or media origin from style. If anchors establish neither alternative, keep Claim
+insufficient and do not create a discrepancy.
 
-After focused visual Evidence reconcile with source. On conflict cite both IDs in
+After focused visual Evidence, reconcile with source. On conflict cite both IDs in
 claim_assessments[].selected_evidence_ids and material_discrepancy.evidence_ids;
-preserve recorded stances. If resolved_focused_visual_evidence_requirements is
-non-empty, consume its pixel Evidence in the relevant assessment or
-MaterialDiscrepancy. Only unrelated observation may set
-visual_evidence_disposition=irrelevant_to_current_claim_or_discrepancy, with
-rationale; never revert to source-only support/verdict. Updates to its owned Claim
-must consume pixel Evidence.
+preserve stances. If resolved_focused_visual_evidence_requirements is non-empty,
+consume its pixel Evidence in the relevant assessment or MaterialDiscrepancy.
+Only unrelated observation may set
+visual_evidence_disposition=irrelevant_to_current_claim_or_discrepancy; never
+revert to source-only support/verdict. Updates to its Claim must consume pixel
+Evidence.
 
-For visual_reinspection choose claim_id from runtime_visual_reinspection_binding
-candidates. Emit only claim_id, reason, scope, question, expected_property and
-verdict_proposal=continue; runtime binds anchors/Evidence. For MaterialDiscrepancy
-omit visual_anchor_fact_ids; runtime derives them from affected_claim_ids. Select
-exact Claims/Evidence chains.
+For visual_reinspection choose claim_id from runtime candidates. Emit only claim_id,
+reason, scope, question, expected_property and verdict_proposal=continue; runtime
+binds anchors/Evidence. For MaterialDiscrepancy omit visual_anchor_fact_ids; runtime
+derives them from affected_claim_ids.
+
+For new_hypotheses include route_focus; allowed: same_capture_reference,
+entity_event_identity, relation_value, scene_world_constraints, visual_consistency.
+Do not add media_origin routes about creator/platform/generation/publication history.
 
 Qualified high-salience refutation is decisive; unresolved other Claims do not
 weaken it. Propose fake for a decisive high-salience discrepancy, real when all
@@ -895,6 +902,15 @@ def render_image_account_planning_context(
                 "search_hypotheses": 6,
                 "candidate_queries_per_hypothesis": 3,
                 "initial_text_search_actions_per_task": 2,
+                "route_focus_values": [
+                    "same_capture_reference",
+                    "entity_event_identity",
+                    "relation_value",
+                    "scene_world_constraints",
+                    "visual_consistency",
+                    "media_origin",
+                ],
+                "rejected_route_focus": "media_origin",
             },
         },
         ensure_ascii=False,

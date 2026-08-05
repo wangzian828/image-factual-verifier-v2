@@ -2411,18 +2411,33 @@ class Orchestrator:
             )
             if text_targets_verdict_or_media_origin(value)
         ]
+        blocked_route_focus = [
+            hypothesis.hypothesis_key
+            for hypothesis in parsed.search_hypotheses
+            if hypothesis.route_focus == "media_origin"
+        ]
         if blocked_queries:
             return False, (
                 "SearchHypothesis queries must seek underlying facts or sources, "
                 "not a ready-made fact-check verdict or an excluded source. "
                 "Rewrite the blocked queries without changing the ImageClaims."
             )
+        if blocked_route_focus:
+            return False, (
+                "SearchHypotheses must declare a factual route_focus. "
+                "media_origin routes about creator, publisher/platform, "
+                "generation method, or publication history are not allowed. "
+                "Rewrite the route to test a depicted entity/event, relation "
+                "value, scene/world constraint, visual consistency, or "
+                "same-capture reference tied to the ImageClaim."
+            )
         if blocked_route_text:
             return False, (
-                "SearchHypotheses must stay neutral: recover source context, "
-                "entity identity, event context, or relation values instead of "
-                "presupposing a verdict or media-origin classification. Rewrite "
-                "the blocked route text without changing the ImageClaims."
+                "SearchHypotheses must stay neutral: recover entity identity, "
+                "event context, relation values, scene/world constraints, or "
+                "same-capture visual references instead of presupposing a "
+                "verdict or media-origin classification. Rewrite the blocked "
+                "route text without changing the ImageClaims."
             )
         candidate = investigation.model_copy(deep=True)
         update = apply_image_account_planning(candidate, parsed)

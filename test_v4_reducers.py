@@ -104,6 +104,7 @@ def _planning_output() -> ImageAccountPlanningOutput:
         search_hypotheses=[
             SearchHypothesisProposal(
                 hypothesis_key="source-photo",
+                route_focus="same_capture_reference",
                 statement="A source photograph may show what the presenter held.",
                 queries=["presenter source photograph product"],
                 expected_information="A traceable source image or report.",
@@ -1125,6 +1126,19 @@ def test_search_hypothesis_requires_an_executable_first_hop() -> None:
 
     with pytest.raises(ValidationError, match="executable first-hop tool"):
         ImageAccountPlanningOutput.model_validate(payload)
+
+
+def test_image_account_planning_rejects_media_origin_route_focus_atomically() -> None:
+    state = _state()
+    output = _planning_output().model_copy(deep=True)
+    output.search_hypotheses[0].route_focus = "media_origin"
+    before = state.model_dump(mode="json")
+
+    update = apply_image_account_planning(state, output)
+
+    assert update["accepted"] is False
+    assert "route_focus=media_origin" in update["rejected_reason"]
+    assert state.model_dump(mode="json") == before
 
 
 def test_image_account_planning_requires_one_open_route() -> None:
@@ -2336,6 +2350,7 @@ def test_mixed_visual_decision_is_rejected_instead_of_silently_projected() -> No
         "new_hypotheses": [
             {
                 "claim_ids": ["claim-guess"],
+                "route_focus": "relation_value",
                 "statement": "A speculative new route.",
                 "queries": ["speculative route"],
                 "expected_information": "Speculative information.",
@@ -2886,6 +2901,7 @@ def test_selected_visual_evidence_remains_scoped_to_the_pending_claim() -> None:
         search_hypotheses=[
             SearchHypothesisProposal(
                 hypothesis_key="source-check",
+                route_focus="same_capture_reference",
                 statement="A source may clarify the visible properties.",
                 queries=["source visible properties"],
                 expected_information="A direct source.",
@@ -3373,6 +3389,7 @@ def test_discrepancy_decision_rejects_duplicate_hypothesis_atomically() -> None:
             new_hypotheses=[
                 NewSearchHypothesis(
                     claim_ids=[claim.claim_id],
+                    route_focus="same_capture_reference",
                     statement=hypothesis.statement,
                     queries=["another wording"],
                     expected_information="The same already-open source route.",
@@ -3391,6 +3408,36 @@ def test_discrepancy_decision_rejects_duplicate_hypothesis_atomically() -> None:
     assert state.model_dump(mode="json") == before
 
 
+def test_discrepancy_decision_rejects_media_origin_new_hypothesis_atomically() -> None:
+    state = _planned_state()
+    claim = state.image_claims[0]
+    before = state.model_dump(mode="json")
+
+    update = apply_discrepancy_decision(
+        state,
+        DiscrepancyDecisionOutput(
+            new_hypotheses=[
+                NewSearchHypothesis(
+                    claim_ids=[claim.claim_id],
+                    route_focus="media_origin",
+                    statement="Recover the creator and publishing context of the image.",
+                    queries=["image creator publishing context"],
+                    expected_information="Creator, publisher, and publication history.",
+                    suggested_tools=["text_search"],
+                )
+            ],
+            verdict_proposal="continue",
+            rationale="This media-origin continuation should be rejected.",
+        ),
+        reviewed_evidence_ids=[],
+        trigger="scheduled_boundary",
+    )
+
+    assert update["accepted"] is False
+    assert "route_focus=media_origin" in update["rejected_reason"]
+    assert state.model_dump(mode="json") == before
+
+
 def test_discrepancy_decision_derives_text_search_for_new_query_route() -> None:
     state = _planned_state()
     claim = state.image_claims[0]
@@ -3402,6 +3449,7 @@ def test_discrepancy_decision_derives_text_search_for_new_query_route() -> None:
             new_hypotheses=[
                 NewSearchHypothesis(
                     claim_ids=[claim.claim_id],
+                    route_focus="relation_value",
                     statement=(
                         "Independent event records may identify the object that "
                         "was actually held."

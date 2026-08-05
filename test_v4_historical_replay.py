@@ -60,6 +60,7 @@ def _planning_output(fixture: dict[str, object]) -> ImageAccountPlanningOutput:
         search_hypotheses=[
             SearchHypothesisProposal(
                 hypothesis_key="historical-evidence-route",
+                route_focus="relation_value",
                 statement=str(fixture["hypothesis"]),
                 queries=[],
                 expected_information=str(fixture["expected_information"]),

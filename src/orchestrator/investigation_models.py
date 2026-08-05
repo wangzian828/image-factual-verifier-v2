@@ -7,6 +7,16 @@ from typing import Dict, List, Literal, Optional, Tuple
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
+RouteFocus = Literal[
+    "same_capture_reference",
+    "entity_event_identity",
+    "relation_value",
+    "scene_world_constraints",
+    "visual_consistency",
+    "media_origin",
+]
+
+
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -436,6 +446,14 @@ class SearchHypothesisProposal(StrictModel):
         max_length=80,
         pattern=r"^[a-z0-9][a-z0-9_-]*$",
     )
+    route_focus: RouteFocus = Field(
+        description=(
+            "Primary reason this route exists. Use media_origin only when the "
+            "route would primarily identify creator, publisher/platform, "
+            "generation method, or publication history of the image itself; "
+            "that focus is rejected for factual-image investigation."
+        ),
+    )
     statement: str = Field(
         min_length=1,
         max_length=1200,
@@ -539,6 +557,7 @@ class ImageClaim(StrictModel):
 class SearchHypothesis(StrictModel):
     hypothesis_id: str = Field(min_length=1, max_length=100)
     claim_ids: List[str] = Field(min_length=1, max_length=3)
+    route_focus: RouteFocus = "relation_value"
     statement: str = Field(min_length=1, max_length=1200)
     queries: List[str] = Field(default_factory=list, max_length=3)
     expected_information: str = Field(min_length=1, max_length=800)
@@ -734,6 +753,12 @@ class MaterialDiscrepancyDraft(StrictModel):
 
 class NewSearchHypothesis(StrictModel):
     claim_ids: List[str] = Field(min_length=1, max_length=3)
+    route_focus: RouteFocus = Field(
+        description=(
+            "Primary reason this route exists. media_origin is not an allowed "
+            "continuation route for factual-image investigation."
+        ),
+    )
     statement: str = Field(min_length=1, max_length=1200)
     queries: List[str] = Field(
         default_factory=list,
