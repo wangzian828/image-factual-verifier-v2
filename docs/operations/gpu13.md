@@ -213,6 +213,11 @@ Only an explicitly announced proxy migration should set
 `IFV_SERVER_PROXY_OVERRIDE`. This distinct name prevents a stale inherited
 `IFV_SERVER_PROXY=...:47894` value from silently breaking GitHub and provider access.
 
+GPU selection is dynamic. Do not assume or reserve specific physical GPU IDs;
+before starting a task, inspect current utilization, free memory, and running
+processes with `nvidia-smi`, then choose an available card without terminating
+another user's process.
+
 The following were verified through that proxy:
 
 - GitHub HTTPS and repository `git ls-remote`;
