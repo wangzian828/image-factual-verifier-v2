@@ -4,6 +4,11 @@ from pathlib import Path
 
 from PIL import Image
 
+from src.orchestrator.runtime_events import (
+    CaseRuntimeStore,
+    bind_case_runtime_store,
+    reset_case_runtime_store,
+)
 from src.tools.focused_visual_inspection import (
     FocusedVisualInspectionTool,
     _single_image_packet_if_needed,
@@ -73,6 +78,45 @@ def test_focused_visual_inspection_uses_original_and_anchor_views(
     assert supplied_images[0] != str(image_path)
     assert len(supplied_images) >= 3
     assert all(not Path(path).exists() for path in supplied_images)
+
+
+def test_focused_visual_inspection_persists_view_artifacts(
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "persist.png"
+    Image.new("RGB", (400, 240), color=(120, 140, 160)).save(image_path)
+    client = RecordingMultiViewClient()
+    store = CaseRuntimeStore(tmp_path, case_id="visual-artifacts")
+    token = bind_case_runtime_store(store)
+    try:
+        tool = FocusedVisualInspectionTool(
+            client=client,
+            provider="controlled",
+            model_name="controlled-vlm",
+        )
+        result = tool.call(
+            {
+                "image_input": str(image_path),
+                "visual_question_id": "visual-question-2",
+                "question": "Are the subject and object visibly adjacent?",
+                "expected_property": "Both anchors appear in one coherent scene.",
+                "scope": "relation",
+                "anchor_regions": [
+                    [0.1, 0.2, 0.3, 0.7],
+                    [0.6, 0.25, 0.85, 0.75],
+                ],
+                "active_fact": "The image depicts the subject next to the object.",
+                "evidence_context": "A source introduced this visible relation.",
+            }
+        )
+    finally:
+        reset_case_runtime_store(token)
+
+    assert result["status"] == "success"
+    assert result["view_artifacts"]
+    for artifact in result["view_artifacts"]:
+        descriptor = artifact["artifact"]
+        assert store.artifacts.read_bytes(descriptor)
 
 
 def test_focused_visual_inspection_keeps_global_question_on_original(

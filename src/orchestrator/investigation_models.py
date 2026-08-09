@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Dict, List, Literal, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -1059,6 +1059,7 @@ class VisualReinspectionRecord(StrictModel):
     ] = "pending"
     evidence_ids: List[str] = Field(default_factory=list, max_length=8)
     failure_ids: List[str] = Field(default_factory=list, max_length=4)
+    view_artifacts: List[dict[str, Any]] = Field(default_factory=list, max_length=8)
 
 
 class EvidenceDecisionRecord(StrictModel):

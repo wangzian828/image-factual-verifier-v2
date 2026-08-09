@@ -7,6 +7,7 @@ import json
 import hashlib
 import os
 import tempfile
+from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from src.integrations.gemini import RUNTIME_METRICS_KEY, exception_runtime_metrics
@@ -189,6 +190,7 @@ class FocusedVisualInspectionTool(BaseTool):
             "evidence_context": str(params.get("evidence_context", "")).strip(),
             "views": views,
         }
+        view_artifacts: List[Dict[str, Any]] = []
         try:
             before_version = str(params.get("before_understanding_version", "")).strip()
             client = self._get_client()
@@ -213,6 +215,13 @@ class FocusedVisualInspectionTool(BaseTool):
                 response_schema=FOCUSED_VISUAL_INSPECTION_SCHEMA,
             )
             normalized = _normalize_model_output(parsed, views)
+            view_artifacts = _persist_view_artifacts(
+                request_image_inputs,
+                views,
+                image_packet_mode=image_packet_mode,
+                visual_question_id=request_context["visual_question_id"],
+                question=request_context["question"],
+            )
         except Exception as exc:
             error = {
                 "status": "error",
@@ -246,10 +255,12 @@ class FocusedVisualInspectionTool(BaseTool):
                     "visual_question_id": request_context["visual_question_id"],
                     "question": request_context["question"],
                     "views": views,
+                    "view_artifacts": view_artifacts,
                     "before_understanding_version": before_version or None,
                     "after_understanding_version": after_version,
                     "decision_impact": "pending",
                     "answer_status": normalized["answer_status"],
+                    "image_packet_mode": image_packet_mode,
                 },
             )
         return {
@@ -263,8 +274,10 @@ class FocusedVisualInspectionTool(BaseTool):
             "observations": normalized["observations"],
             "limitations": normalized["limitations"],
             "views": views,
+            "view_artifacts": view_artifacts,
             "before_understanding_version": before_version or None,
             "after_understanding_version": after_version,
+            "image_packet_mode": image_packet_mode,
             RUNTIME_METRICS_KEY: parsed.get(RUNTIME_METRICS_KEY, {}),
         }
 
@@ -463,6 +476,80 @@ def _build_contact_sheet(
     handle.close()
     sheet.save(handle.name, format="JPEG", quality=90, optimize=True)
     return handle.name
+
+
+def _persist_view_artifacts(
+    request_image_inputs: Sequence[str],
+    views: Sequence[Mapping[str, Any]],
+    *,
+    image_packet_mode: str,
+    visual_question_id: str,
+    question: str,
+) -> List[Dict[str, Any]]:
+    store = current_case_runtime_store()
+    if store is None:
+        return []
+
+    entries: List[tuple[str, Mapping[str, Any]]] = []
+    if image_packet_mode == "labeled_contact_sheet":
+        if request_image_inputs:
+            entries.append(
+                (
+                    str(request_image_inputs[0]),
+                    {
+                        "view_index": 0,
+                        "kind": "labeled_contact_sheet",
+                        "region": [0.0, 0.0, 1.0, 1.0],
+                    },
+                )
+            )
+    else:
+        for path, view in zip(request_image_inputs, views):
+            try:
+                if int(view.get("view_index", 0)) <= 0:
+                    continue
+            except (TypeError, ValueError):
+                continue
+            entries.append((str(path), view))
+
+    artifacts: List[Dict[str, Any]] = []
+    for path, view in entries[:4]:
+        file_path = Path(path)
+        descriptor = store.artifacts.put_bytes(
+            file_path.read_bytes(),
+            media_type=_media_type_for_path(file_path),
+            suffix=file_path.suffix or ".bin",
+            metadata={
+                "kind": "focused_visual_reinspection_view",
+                "visual_question_id": visual_question_id,
+                "question": question[:400],
+                "view_index": int(view.get("view_index", 0) or 0),
+                "view_kind": str(view.get("kind", "")),
+            },
+        )
+        artifacts.append(
+            {
+                "view_index": int(view.get("view_index", 0) or 0),
+                "kind": str(view.get("kind", "")),
+                "region": list(view.get("region", [0.0, 0.0, 1.0, 1.0])),
+                "artifact": descriptor,
+                "packet_mode": image_packet_mode,
+            }
+        )
+    return artifacts
+
+
+def _media_type_for_path(path: Path) -> str:
+    suffix = path.suffix.lower()
+    if suffix in {".jpg", ".jpeg"}:
+        return "image/jpeg"
+    if suffix == ".png":
+        return "image/png"
+    if suffix == ".webp":
+        return "image/webp"
+    if suffix == ".gif":
+        return "image/gif"
+    return "application/octet-stream"
 
 
 def _bounded_view(image: Any) -> Any:

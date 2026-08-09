@@ -12,6 +12,17 @@ import pytest
 from PIL import Image
 
 import src.orchestrator.pipeline as pipeline_module
+from src.orchestrator.investigation_models import (
+    FactOrigin,
+    ImageOnlyInvestigationState,
+    InvestigationEvidence,
+    InvestigationBrief,
+    ResearchTask,
+    VisualFact,
+    VisualReinspectionRecord,
+    VisualReinspectionRequest,
+)
+from src.orchestrator.runtime_events import CaseRuntimeStore
 from src.integrations.browse.jina_reader import JinaReaderClient
 from src.integrations.llm.openai_compatible import (
     OpenAICompatibleChatClient,
@@ -29,6 +40,8 @@ from src.orchestrator.state import (
     PerceptionReport,
     VerificationState,
 )
+import src.orchestrator.tool_execution as tool_execution_module
+from src.orchestrator.tool_execution import ToolActionRecord
 from src.orchestrator.tool_cache import ToolResultCache
 from src.orchestrator.tool_health import ToolHealth
 from src.orchestrator.tool_registry import REQUIRED_TOOLS
@@ -37,6 +50,10 @@ from src.orchestrator.tool_result import (
     serialize_tool_result,
 )
 from src.orchestrator.bootstrap import build_bootstrap_investigation
+from src.orchestrator.task_store import (
+    _unique_visual_view_artifacts,
+    record_tool_observation,
+)
 from src.orchestrator.task_store import state_from_bootstrap
 from src.redaction import REDACTED, sanitize_for_persistence
 from src.tools.base import BaseTool
@@ -314,8 +331,246 @@ def test_stage_runner_deadlines_cover_tools_and_native_requests() -> None:
     )
     assert "ToolActionTimeout" in json.loads(serialized)["error"]
     assert metadata["tool_exception"] == "ToolActionTimeout"
+    assert metadata["tool_execution_status"] == "timed_out"
+    assert metadata["tool_action_id"].startswith("tool-")
+    assert metadata["completed_at"]
     with pytest.raises(TimeoutError, match="Gemini request exceeded"):
         asyncio.run(runner._create_interaction())
+
+
+def test_stage_runner_records_successful_tool_lifecycle() -> None:
+    tool = StaticTool("static_tool", {"status": "success", "value": 3})
+    runner = StageRunner(
+        llm=SimpleNamespace(provider="", wire_api=""),
+        system_prompt="test",
+        tools=[tool],
+    )
+
+    serialized, metadata = asyncio.run(
+        runner._execute_tool("static_tool", {})
+    )
+
+    assert json.loads(serialized) == {"status": "success", "value": 3}
+    assert metadata["tool_success"] is True
+    assert metadata["tool_execution_status"] == "completed"
+    assert metadata["tool_action_id"].startswith("tool-")
+    assert metadata["requested_at"]
+    assert metadata["started_at"]
+    assert metadata["completed_at"]
+
+
+def test_tool_action_record_supports_pending_resume_cycle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock_values = iter(
+        [
+            "2026-08-09T00:00:00+00:00",
+            "2026-08-09T00:00:01+00:00",
+            "2026-08-09T00:00:02+00:00",
+            "2026-08-09T00:00:03+00:00",
+        ]
+    )
+    monkeypatch.setattr(
+        tool_execution_module,
+        "_utc_now",
+        lambda: next(clock_values),
+    )
+    record = ToolActionRecord.start(
+        "reverse_image_search",
+        timeout_seconds=12.5,
+        continuation_id="interaction-1",
+    )
+    started_at = record.started_at
+
+    pending = record.mark_pending()
+    assert pending["tool_execution_status"] == "pending"
+    assert pending["completed_at"] is None
+    assert pending["retry_count"] == 0
+
+    resumed = record.resume(continuation_id="interaction-2")
+    assert resumed["tool_execution_status"] == "running"
+    assert resumed["continuation_id"] == "interaction-2"
+    assert resumed["retry_count"] == 1
+
+    finished = record.finish("completed")
+    assert finished["tool_execution_status"] == "completed"
+    assert finished["completed_at"]
+
+
+def test_visual_reinspection_failure_does_not_exhaust_main_task() -> None:
+    state = ImageOnlyInvestigationState(
+        brief=InvestigationBrief(
+            brief_id="brief-1",
+            case_id="case-1",
+        ),
+        facts=[
+            VisualFact(
+                fact_id="fact-1",
+                kind="attribute",
+                statement="A visible cue appears in the scene.",
+                subject_entity_id="entity-1",
+                predicate="appears",
+                basis_ids=["basis-1"],
+                origin=FactOrigin(
+                    type="input_image",
+                    origin_ids=["origin-1"],
+                ),
+            )
+        ],
+        tasks=[
+            ResearchTask(
+                task_id="task-1",
+                fact_ids=["fact-1"],
+                question="What is visible?",
+                purpose="Inspect the scene.",
+                origin_ids=["origin-1"],
+            )
+        ],
+        evidence=[
+            InvestigationEvidence(
+                evidence_id="evidence-1",
+                task_id="task-1",
+                fact_ids=["fact-1"],
+                function_call_id="call-evidence-1",
+                tool_name="focused_visual_inspection",
+                evidence_kind="image_region",
+                source_url="",
+                source_family="image:fake",
+                source_class="visual",
+                exact_text="Visible cue.",
+                image_claim="",
+                retrieval_goal="",
+                image_region=[0.1, 0.1, 0.2, 0.2],
+                artifact_sha256="a" * 64,
+                retrieved_at="2026-08-09T00:00:00+00:00",
+                stance="neutral",
+                quality="weak",
+                directness="direct",
+                claim_binding="pixel_observation",
+                visual_question_id="vq-1",
+                visual_scope="scene",
+                visual_answer_status="ambiguous",
+                visual_observations=[],
+            )
+        ],
+        visual_reinspections=[
+            VisualReinspectionRecord(
+                visual_question_id="vq-1",
+                task_id="task-1",
+                fact_id="fact-1",
+                created_action_count=0,
+                request=VisualReinspectionRequest(
+                    reason="identity",
+                    scope="scene",
+                    question="What is visible?",
+                    expected_property="A clear scene-level cue.",
+                    anchor_fact_ids=["fact-1"],
+                    grounding_evidence_ids=["evidence-1"],
+                ),
+                anchor_regions=[],
+            )
+        ],
+    )
+    step = StageStep(
+        action_type="tool_call",
+        tool_name="focused_visual_inspection",
+        tool_args={"__question_id": "task-1"},
+        tool_result=json.dumps(
+            {"status": "error", "error": "provider unavailable"}
+        ),
+        metadata={"function_call_id": "call-1"},
+    )
+
+    update = record_tool_observation(state, step, image_sha256="a" * 64)
+
+    assert update["task_status"] == "active"
+    assert update["created_evidence_ids"] == []
+    assert update["created_failure_ids"]
+    assert update["visual_view_artifacts"] == []
+    assert state.visual_reinspections[0].status == "failed"
+    assert state.tasks[0].status != "exhausted"
+
+
+def test_native_function_result_reinjects_visual_view_artifacts(
+    tmp_path: Path,
+) -> None:
+    runtime_store = CaseRuntimeStore(tmp_path, case_id="case-reinject")
+    runner = StageRunner(
+        llm=SimpleNamespace(provider="", wire_api=""),
+        system_prompt="test",
+        tools=[],
+        runtime_store=runtime_store,
+    )
+    crop_1 = tmp_path / "crop-1.png"
+    crop_2 = tmp_path / "crop-2.png"
+    Image.new("RGB", (4, 4), "red").save(crop_1)
+    Image.new("RGB", (4, 4), "blue").save(crop_2)
+    artifact_1 = runtime_store.artifacts.put_bytes(
+        crop_1.read_bytes(),
+        media_type="image/png",
+        suffix=".png",
+    )
+    artifact_2 = runtime_store.artifacts.put_bytes(
+        crop_2.read_bytes(),
+        media_type="image/png",
+        suffix=".png",
+    )
+    state_update = {
+        "visual_view_artifacts": [
+            {
+                "view_index": 1,
+                "kind": "anchor_detail",
+                "region": [0.1, 0.1, 0.4, 0.4],
+                "artifact": artifact_1,
+            },
+            {
+                "view_index": 2,
+                "kind": "anchor_detail",
+                "region": [0.5, 0.5, 0.8, 0.8],
+                "artifact": artifact_2,
+            },
+        ]
+    }
+    result = runner._build_native_function_result(
+        call_id="call-visual",
+        tool_name="focused_visual_inspection",
+        tool_args={"__question_id": "task-1"},
+        result=json.dumps(
+            {
+                "status": "success",
+                "answer_status": "observed",
+                "summary": "Visible cues are present.",
+                "observations": [],
+                "limitations": [],
+                "view_artifacts": state_update["visual_view_artifacts"],
+            }
+        ),
+        state_update=state_update,
+    )
+
+    image_items = [
+        item for item in result["result"] if item["type"] == "image"
+    ]
+    assert len(image_items) == 2
+    assert all(item["data"] for item in image_items)
+
+
+def test_visual_view_artifact_deduplication_accepts_mapping_records() -> None:
+    first = {
+        "view_index": 1,
+        "kind": "anchor_detail",
+        "artifact": {"sha256": "a" * 64},
+    }
+    duplicate = dict(first)
+    second = {
+        "view_index": 2,
+        "kind": "anchor_detail",
+        "artifact": {"sha256": "b" * 64},
+    }
+
+    assert _unique_visual_view_artifacts(
+        [first, duplicate, second]
+    ) == [first, second]
 
 
 def test_tool_internal_usage_is_counted_and_hidden(tmp_path: Path) -> None:

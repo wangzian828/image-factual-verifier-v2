@@ -75,6 +75,30 @@ MAX_SEARCH_HYPOTHESES = 12
 MAX_NEW_HYPOTHESES_PER_DECISION = 3
 MAX_V4_VISUAL_REINSPECTIONS = 1
 ROOT_IMAGE_TARGET = "root_image"
+
+
+def _unique_visual_view_artifacts(
+    items: Iterable[Mapping[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Keep stable visual artifact records without hashing mapping objects."""
+
+    unique: List[Dict[str, Any]] = []
+    fingerprints: set[str] = set()
+    for item in items:
+        normalized = dict(item)
+        fingerprint = json.dumps(
+            normalized,
+            ensure_ascii=False,
+            sort_keys=True,
+            default=str,
+        )
+        if fingerprint in fingerprints:
+            continue
+        fingerprints.add(fingerprint)
+        unique.append(normalized)
+    return unique
+
+
 COMPOSITE_SOURCE_VISUAL_DISCREPANCY_FAMILY = (
     "composite:source_visual_discrepancy"
 )
@@ -1097,20 +1121,45 @@ def record_tool_observation(
                 ]
             )
         )[:4]
-        visual_reinspection.status = (
-            "resolved"
-            if evidence_ids
-            else "failed"
-            if failure_ids or not succeeded
-            else "failed"
-        )
+        visual_reinspection.view_artifacts = _unique_visual_view_artifacts(
+            [
+                *visual_reinspection.view_artifacts,
+                *[
+                    item
+                    for item in data.get("view_artifacts", []) or []
+                    if isinstance(item, Mapping)
+                ],
+            ]
+        )[:8]
+        visual_reinspection.status = "resolved" if evidence_ids else "failed"
+
+        _refresh_fact_states(state)
+        if evidence_ids:
+            task.status = "resolved"
+            if hypothesis is not None:
+                hypothesis.status = "exhausted"
+        return {
+            "action_count": state.action_count,
+            "task_id": task.task_id,
+            "task_status": task.status,
+            "created_discovery_ids": discovery_ids,
+            "created_evidence_ids": evidence_ids,
+            "created_finding_ids": finding_ids,
+            "created_failure_ids": failure_ids,
+            "recalled_candidate_ids": recalled_candidate_ids,
+            "read_memory_ids": read_memory_ids,
+            "pending_archive_read_ids": list(state.pending_archive_read_ids),
+            "memory_action_error": memory_action_error,
+            "fact_statuses": {
+                fact.fact_id: fact.status
+                for fact in state.facts
+                if fact.fact_id in task.fact_ids
+            },
+            "visual_view_artifacts": list(visual_reinspection.view_artifacts),
+        }
 
     _refresh_fact_states(state)
-    if visual_reinspection is not None and evidence_ids:
-        task.status = "resolved"
-    elif visual_reinspection is not None:
-        task.status = "exhausted"
-    elif finding_ids and task.claim_ids:
+    if finding_ids and task.claim_ids:
         # In v4, extractor Findings are candidate material for the sparse
         # Discrepancy Decision; they do not resolve an ImageClaim or its search
         # route by themselves.  Keep investigating while a bounded material

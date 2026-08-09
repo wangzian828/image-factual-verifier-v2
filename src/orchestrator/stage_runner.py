@@ -2,6 +2,7 @@
 """Single-path stage runner for multi-round ReAct execution."""
 from __future__ import annotations
 
+import base64
 import asyncio
 import hashlib
 import json
@@ -40,6 +41,7 @@ from src.orchestrator.tool_cache import (
     WEB_EVIDENCE_CONTRACT_VERSION,
 )
 from src.orchestrator.tool_result import ToolResultContractError, parse_tool_result, serialize_tool_result
+from src.orchestrator.tool_execution import ToolActionRecord, ToolExecutionStatus
 from src.orchestrator.source_access import SourceAccessPolicy
 from src.tools.base import BaseTool
 from src.tools.vision_utils import controlled_image_to_data_url
@@ -1983,11 +1985,20 @@ class StageRunner:
                 },
             }
             text = json.dumps(content, ensure_ascii=False, default=str)
+        result_items: List[Dict[str, Any]] = [{"type": "text", "text": text}]
+        result_items.extend(
+            self._visual_reinjection_items(
+                tool_name,
+                result=result,
+                state_update=state_update,
+                control_step=control_step,
+            )
+        )
         return {
             "type": "function_result",
             "name": tool_name,
             "call_id": call_id,
-            "result": [{"type": "text", "text": text}],
+            "result": result_items,
             **({"is_error": True} if self._tool_result_is_error(result) else {}),
         }
 
@@ -1998,6 +2009,68 @@ class StageRunner:
         except Exception:
             return True
         return not succeeded
+
+    def _visual_reinjection_items(
+        self,
+        tool_name: str,
+        *,
+        result: str,
+        state_update: Optional[Dict[str, Any]] = None,
+        control_step: Optional[StageStep] = None,
+    ) -> List[Dict[str, Any]]:
+        if tool_name != "focused_visual_inspection" or self.runtime_store is None:
+            return []
+        artifacts = self._visual_view_artifacts(
+            result,
+            state_update=state_update,
+            control_step=control_step,
+        )
+        items: List[Dict[str, Any]] = []
+        for artifact in artifacts[:4]:
+            descriptor = artifact.get("artifact")
+            if not isinstance(descriptor, dict):
+                continue
+            try:
+                payload = self.runtime_store.artifacts.read_bytes(descriptor)
+            except Exception:
+                continue
+            mime_type = str(descriptor.get("media_type", "")).strip() or "image/png"
+            items.append(
+                {
+                    "type": "image",
+                    "mime_type": mime_type,
+                    "data": base64.b64encode(payload).decode("ascii"),
+                }
+            )
+        return items
+
+    @staticmethod
+    def _visual_view_artifacts(
+        result: str,
+        *,
+        state_update: Optional[Dict[str, Any]] = None,
+        control_step: Optional[StageStep] = None,
+    ) -> List[Dict[str, Any]]:
+        for source in (
+            state_update,
+            getattr(control_step, "metadata", {}).get("investigation_state_update")
+            if control_step is not None
+            else None,
+        ):
+            if isinstance(source, dict):
+                artifacts = source.get("visual_view_artifacts") or source.get("view_artifacts")
+                if isinstance(artifacts, list) and artifacts:
+                    return [dict(item) for item in artifacts if isinstance(item, dict)]
+        try:
+            parsed, succeeded = parse_tool_result(result)
+        except Exception:
+            return []
+        if not succeeded:
+            return []
+        artifacts = parsed.get("view_artifacts") or []
+        if not isinstance(artifacts, list):
+            return []
+        return [dict(item) for item in artifacts if isinstance(item, dict)]
 
     async def _force_native_output(
         self,
@@ -3106,6 +3179,34 @@ class StageRunner:
 
         cache_args = self._build_cache_args(tool_name, tool_args)
         started = time.perf_counter()
+        action = ToolActionRecord.start(
+            tool_name,
+            timeout_seconds=self.tool_timeout_seconds,
+            continuation_id=self._session_previous_interaction_id(),
+        )
+        if self.runtime_store is not None:
+            self.runtime_store.append_event(
+                "tool_action_started",
+                action.to_dict(),
+            )
+
+        def finish_metadata(
+            status: ToolExecutionStatus,
+            metadata: Dict[str, Any],
+            *,
+            error: str = "",
+        ) -> Dict[str, Any]:
+            lifecycle = action.finish(status, error=error)
+            if self.runtime_store is not None:
+                self.runtime_store.append_event(
+                    "tool_action_finished",
+                    lifecycle,
+                )
+            return {
+                **metadata,
+                **lifecycle,
+            }
+
         if self.tool_cache and tool_name in self.cacheable_tools:
             cached = self.tool_cache.get(tool_name, cache_args)
             if cached is not None:
@@ -3127,13 +3228,20 @@ class StageRunner:
                                 sanitized.get("policy_filtered_count", 0) or 0
                             ) + filtered_count
                         cached, succeeded = serialize_tool_result(sanitized)
-                return cached, {
-                    "cache_hit": True,
-                    "tool_success": succeeded,
-                    "observed_at": datetime.now(timezone.utc).isoformat(),
-                    "duration_ms": round((time.perf_counter() - started) * 1000, 2),
-                    "serialized_size": len(cached),
-                }
+                return cached, finish_metadata(
+                    "completed" if succeeded else "failed",
+                    {
+                        "cache_hit": True,
+                        "tool_success": succeeded,
+                        "observed_at": datetime.now(timezone.utc).isoformat(),
+                        "duration_ms": round(
+                            (time.perf_counter() - started) * 1000,
+                            2,
+                        ),
+                        "serialized_size": len(cached),
+                    },
+                    error="" if succeeded else "cached tool result was rejected",
+                )
 
         try:
             if hasattr(tool, "call_async"):
@@ -3157,7 +3265,7 @@ class StageRunner:
                 },
                 ensure_ascii=False,
             )
-            return serialized, {
+            return serialized, finish_metadata("timed_out", {
                 "cache_hit": False,
                 "tool_success": False,
                 "observed_at": datetime.now(timezone.utc).isoformat(),
@@ -3167,11 +3275,11 @@ class StageRunner:
                 "tool_timeout_seconds": self.tool_timeout_seconds,
                 "tool_llm_api_calls": 0,
                 "tool_tokens": self._normalize_tool_tokens(None),
-            }
+            }, error=f"ToolActionTimeout: {tool_name}")
         except Exception as exc:
             serialized = json.dumps({"status": "error", "error": f"{type(exc).__name__}: {exc}"}, ensure_ascii=False)
             runtime_metrics = exception_runtime_metrics(exc)
-            return serialized, {
+            return serialized, finish_metadata("failed", {
                 "cache_hit": False,
                 "tool_success": False,
                 "observed_at": datetime.now(timezone.utc).isoformat(),
@@ -3180,7 +3288,7 @@ class StageRunner:
                 "tool_exception": type(exc).__name__,
                 "tool_llm_api_calls": int(runtime_metrics.get("llm_api_calls", 0) or 0),
                 "tool_tokens": self._normalize_tool_tokens(runtime_metrics.get("tokens")),
-            }
+            }, error=f"{type(exc).__name__}: {exc}")
 
         if not isinstance(result, dict):
             runtime_metrics: Dict[str, Any] = {}
@@ -3200,7 +3308,7 @@ class StageRunner:
                 {"status": "error", "error": f"ToolResultContractError: {exc}"},
                 ensure_ascii=False,
             )
-            return serialized, {
+            return serialized, finish_metadata("failed", {
                 "cache_hit": False,
                 "tool_success": False,
                 "observed_at": datetime.now(timezone.utc).isoformat(),
@@ -3210,7 +3318,7 @@ class StageRunner:
                 "tool_llm_api_calls": int(runtime_metrics.get("llm_api_calls", 0) or 0),
                 "tool_tokens": self._normalize_tool_tokens(runtime_metrics.get("tokens")),
                 "tool_subcalls": tool_subcalls,
-            }
+            }, error=str(exc))
         if succeeded:
             parsed_result, _ = parse_tool_result(serialized)
             canonical = self._canonical_tool_result(
@@ -3238,7 +3346,9 @@ class StageRunner:
                 serialized, succeeded = serialize_tool_result(sanitized)
         if succeeded and self.tool_cache and tool_name in self.cacheable_tools:
             self.tool_cache.put(tool_name, cache_args, serialized)
-        return serialized, {
+        return serialized, finish_metadata(
+            "completed" if succeeded else "failed",
+            {
             "cache_hit": False,
             "tool_success": succeeded,
             "observed_at": datetime.now(timezone.utc).isoformat(),
@@ -3247,7 +3357,9 @@ class StageRunner:
             "tool_llm_api_calls": int(runtime_metrics.get("llm_api_calls", 0) or 0),
             "tool_tokens": self._normalize_tool_tokens(runtime_metrics.get("tokens")),
             "tool_subcalls": tool_subcalls,
-        }
+            },
+            error="" if succeeded else "tool returned an error result",
+        )
 
     @staticmethod
     def _normalize_tool_tokens(value: Any) -> Dict[str, int]:
