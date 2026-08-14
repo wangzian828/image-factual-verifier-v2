@@ -121,8 +121,8 @@ DISCREPANCY_REACT_SYSTEM_PROMPT = """\
 Choose exactly one runtime-authorized tool action that most reduces uncertainty
 about the unresolved image-grounded target fact. Its attached SearchHypothesis
 supplies context and ownership, not a boundary on the investigation. Frame
-retrieval around what actually happened, not merely whether an identical image or
-an exact source record can be found. When direct queries repeat the proposed value
+retrieval around what actually happened, not merely whether an identical image can
+be found or an exact source record can be found. When direct queries repeat the proposed value
 without useful evidence, omit that value and retrieve the actual value of the same
 relation slot. Prior knowledge may supply leads, but only tool Evidence establishes
 a fact.
