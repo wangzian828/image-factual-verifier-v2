@@ -158,7 +158,7 @@ world relation the image asks the viewer to accept. Add a second target only whe
 independently verdict-changing. Do not inventory details.
 
 Write the target fact as the positive world proposition the image asks the viewer
-to accept. Prefer unusual visible relations over generic presence. Treat
+to accept. Prefer unusual visible relations over generic presence; a defining factual relation may be more useful than a generic object label. Treat
 search_hypotheses as neutral investigation routes, not candidate verdicts: identify
 depicted entity/event, determine the relation slot's verified value, test
 scene/world constraints, check visual consistency, or find a same-capture/reference
@@ -242,14 +242,13 @@ visual_reinspection or refinement, never both.
 DISCREPANCY_DECISION_SYSTEM_PROMPT = """\
 判断图像表达的事实内容是否成立。
 
-You are the Discrepancy Decision checkpoint. Compare reviewed
-Evidence with the image-grounded target fact and image account. Cite Evidence or
-visible anchors for discrepancies; retire/add hypotheses or request reinspection;
-omit unsupported target facts.
+You are the sparse multimodal Discrepancy Decision checkpoint. Compare reviewed
+Evidence with the image-grounded target fact and image account. Cite Evidence/anchors
+for discrepancies; retire/add hypotheses or request reinspection; omit unsupported
+facts.
 
-Use admissible_stances: neutral Evidence cannot support/refute. Support means the
-target fact is true; refute means false. A competing value for the same
-subject-event relation refutes it. Ownership is not semantic coverage.
+Use recorded admissible_stances: neutral Evidence cannot support/refute. For the
+target fact, support means it is true; refute means it is false. A competing value for the same subject-event relation refutes it. Task ownership does not establish semantic coverage; use addressed target facts and allowed visual anchors.
 
 Before support/real, align source facts with pixels; identity/event agreement alone
 is insufficient. If source Evidence adds a visible value needing alignment, request
@@ -258,33 +257,31 @@ source_phrase, visible_property, why_discriminative, already_in_claim, and
 expected_if_source_matches; select the highest-information one. source_phrase may
 paraphrase or recombine Evidence. Do not choose a property already in the target
 fact/account or a generic confirmation; expected_property copies visible_property.
-Pixels cannot infer absolute size or weight without scale, or media origin from
-style. If anchors establish neither alternative, keep the target fact insufficient
-and create no discrepancy.
+Pixels cannot infer absolute size or weight without scale, or media origin from style.
+If anchors establish neither alternative, keep the target fact insufficient and
+create no discrepancy.
 
 Reconcile every target-owned pixel Evidence with source; on conflict cite both IDs
 and preserve stances. Every reviewed qualified claim-owned pixel Evidence must be
-consumed or, when unrelated to the current target fact/discrepancy, listed in
+consumed or, when unrelated, listed in
 visual_evidence_disposition.evidence_ids with disposition exactly
-"irrelevant_to_current_claim_or_discrepancy" and an explanation. Normal web/source
-Evidence may be omitted when it is background or redundant. Never silently drop
-target-owned pixel Evidence or dispose of it while updating the same target fact.
+"irrelevant_to_current_claim_or_discrepancy" and an explanation. Web/source Evidence
+may be omitted when background or redundant. Never silently drop target-owned pixel
+Evidence or dispose of it while updating that target fact.
 
 For visual_reinspection choose claim_id from runtime candidates and emit only
 claim_id, reason, scope, question, expected_property, and
-verdict_proposal=continue; runtime binds anchors/Evidence. For
-MaterialDiscrepancy omit visual_anchor_fact_ids; runtime derives them from
-affected_claim_ids.
+verdict_proposal=continue; runtime binds anchors/Evidence. For MaterialDiscrepancy
+omit visual_anchor_fact_ids; runtime derives them from affected_claim_ids.
 
 For new_hypotheses include route_focus: same_capture_reference,
 entity_event_identity, relation_value, scene_world_constraints, or
 visual_consistency. Do not add media_origin routes about creator, platform,
 generation, or publication history.
 
-Qualified refutation of the core target fact is decisive. Propose fake for a
-decisive discrepancy; propose real only when the core target fact is supported
-and routes are closed; otherwise continue. Use supplied IDs and return required
-JSON.
+Qualified refutation is decisive. The core target fact is decisive for real only
+when supported and routes are closed; otherwise continue. Propose fake for a
+decisive discrepancy. Use supplied IDs; return required JSON.
 """
 
 
