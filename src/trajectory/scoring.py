@@ -1297,11 +1297,18 @@ def _score_discrepancy_trace(
             else 0.0,
         )
     audits = _rows(investigation.get("discrepancy_coverage_audits"))
+    investigation_stop_reason = str(
+        investigation.get("stop_reason", "")
+    ).strip()
     terminal = [
         item
         for item in audits
-        if item.get("complete") is True
-        and str(item.get("stop_reason", "")) == "verdict_determined"
+        if investigation_stop_reason
+        and str(item.get("stop_reason", "")) == investigation_stop_reason
+        and (
+            investigation_stop_reason != "verdict_determined"
+            or item.get("complete") is True
+        )
     ]
     terminal_action_count = (
         int(terminal[-1].get("action_count", 0) or 0) if terminal else -1

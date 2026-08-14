@@ -189,6 +189,64 @@ def test_v4_process_scorer_uses_discrepancy_alignment_and_stop_quality(
     ]
 
 
+def test_v4_process_scorer_accepts_bounded_terminal_stop_quality(
+    tmp_path: Path,
+) -> None:
+    trace = json.loads(_v4_trace(tmp_path).read_text(encoding="utf-8"))
+    investigation = trace["state"]["investigation_state"]
+    basis = trace["verdict_basis"]
+    trace["verdict"] = "real"
+    basis.update(
+        {
+            "decision_mode": "bounded_binary_judgment",
+            "discrepancy_ids": [],
+            "finding_ids": [],
+            "evidence_ids": [],
+            "unresolved_gaps": ["The available material does not close the claim."],
+        }
+    )
+    investigation["discrepancy_verdict_basis"] = dict(basis)
+    investigation["material_discrepancies"] = []
+    investigation["claim_assessments"] = []
+    investigation["image_claims"][0]["status"] = "unresolved"
+    investigation["stop_reason"] = "meaningful_routes_exhausted"
+    investigation["discrepancy_coverage_audits"][0].update(
+        {
+            "complete": False,
+            "stop_reason": "meaningful_routes_exhausted",
+        }
+    )
+    for judgment in (
+        trace["judgment"],
+        trace["state"]["judgment"],
+        investigation["discrepancy_judgment"],
+    ):
+        judgment.update(
+            {
+                "verdict": "real",
+                "selected_discrepancy_ids": [],
+                "selected_finding_ids": [],
+                "selected_evidence_ids": [],
+                "unresolved_gaps": [
+                    "The available material does not close the claim."
+                ],
+            }
+        )
+
+    metrics, score = score_process_trace(
+        trace,
+        {
+            "case_id": trace["image_id"],
+            "factual_status": "supported",
+            "decisive_facts": [],
+        },
+    )
+
+    assert metrics["stop_quality"] == 1.0
+    assert metrics["post_determination_action_count"] == 0
+    assert "stop_quality_invalid" not in score["training_exclusion_reasons"]
+
+
 def test_v4_process_scorer_excludes_neutral_evidence_semantic_upgrade(
     tmp_path: Path,
 ) -> None:
