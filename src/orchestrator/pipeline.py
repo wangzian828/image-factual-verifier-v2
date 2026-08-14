@@ -2489,6 +2489,7 @@ class Orchestrator:
             bound,
             reviewed_evidence_ids=reviewed_evidence_ids,
             trigger=trigger,
+            source_access_policy=source_access_policy,
         )
         if not update.get("accepted", False):
             return False, str(
@@ -2546,7 +2547,6 @@ class Orchestrator:
             parsed,
             reviewed_evidence_ids=reviewed_evidence_ids,
             trigger=trigger,
-            source_access_policy=source_access_policy,
         )
         if not update.get("accepted", False):
             return False, str(
