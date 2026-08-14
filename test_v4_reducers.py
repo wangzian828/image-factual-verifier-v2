@@ -1956,7 +1956,9 @@ def test_source_visual_composite_accepts_claim_owned_crop_evidence() -> None:
     visual.visual_question_id = None
     visual.visual_answer_status = None
     visual.visual_scope = None
-    state.visual_reinspections.clear()
+    # Keep the accepted request record because the prior Decision references
+    # it, but leave its evidence_ids empty: the reducer must not require a
+    # focused-reinspection link for claim-owned pixel Evidence.
     claim = state.image_claims[0]
 
     update = apply_discrepancy_decision(
