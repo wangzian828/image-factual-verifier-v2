@@ -358,8 +358,8 @@ def test_stage_runner_does_not_wait_for_blocking_sync_tool_after_deadline() -> N
         llm=SimpleNamespace(provider="", wire_api=""),
         system_prompt="test",
         tools=[HangingSyncTool()],
-        tool_timeout_seconds=0.01,
     )
+    runner.tool_timeout_seconds = 0.01
 
     loop = asyncio.new_event_loop()
     try:
