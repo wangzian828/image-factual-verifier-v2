@@ -420,14 +420,10 @@ def _visual_discriminator_error(
     if proposal.selected_discriminator_index >= len(candidates):
         return "selected visual discriminator is outside the supplied candidates"
 
-    normalized_source = _one_line(source_text).casefold()
     for index, candidate in enumerate(candidates):
         source_phrase = _one_line(candidate.source_phrase)
-        if not source_phrase or source_phrase.casefold() not in normalized_source:
-            return (
-                f"visual discriminator {index} source_phrase must be copied "
-                "verbatim from reviewed Evidence"
-            )
+        if not source_phrase:
+            return f"visual discriminator {index} source_phrase must be non-empty"
         informative_tokens = (
             _semantic_request_tokens(candidate.visible_property)
             - _GENERIC_VISUAL_REQUEST_TOKENS
@@ -538,9 +534,16 @@ def bind_discrepancy_decision_runtime_ids(
                 for item in disposition.get("evidence_ids", []) or []
             )
         )
-        target_ids = listed_ids or [
-            str(item["evidence_id"])
-            for item in resolved_visual_requirements
+        target_ids = [
+            evidence_id
+            for evidence_id in (
+                listed_ids
+                or [
+                    str(item["evidence_id"])
+                    for item in resolved_visual_requirements
+                ]
+            )
+            if evidence_id in resolved_visual_ids
         ]
         remaining_ids = [
             evidence_id
@@ -553,10 +556,10 @@ def bind_discrepancy_decision_runtime_ids(
                 "evidence_ids": remaining_ids,
             }
         else:
-            # The model occasionally emits both mutually exclusive branches. A
-            # selected pixel Evidence is the stronger, auditable action; remove
-            # only the contradictory disposition while preserving all semantic
-            # assessments/discrepancy fields.
+            # Web/source Evidence is not part of the claim-owned pixel
+            # consumption contract. If the model lists it here (for example
+            # after finding an exact image match), ignore that bookkeeping note
+            # instead of turning it into a protocol rejection.
             payload["visual_evidence_disposition"] = None
     discrepancy = output.material_discrepancy
     if discrepancy is not None:
@@ -1874,19 +1877,25 @@ def _discrepancy_contract_errors(
             str(item)
             for item in output.visual_evidence_disposition.evidence_ids
         }
-        disposition_ids = listed_ids or required_visual_ids
-        unknown_disposition_ids = sorted(disposition_ids - required_visual_ids)
+        unknown_disposition_ids = sorted(
+            evidence_id
+            for evidence_id in listed_ids
+            if evidence_id not in evidence_by_id
+        )
         if unknown_disposition_ids:
             errors.append(
-                "visual_evidence_disposition may cite only reviewed qualified "
-                "claim-owned pixel Evidence: "
+                "visual_evidence_disposition cites unknown Evidence: "
                 + ", ".join(unknown_disposition_ids)
             )
-        if not required_visual_ids:
-            errors.append(
-                "visual_evidence_disposition is allowed only for reviewed "
-                "qualified claim-owned pixel Evidence"
-            )
+        # This field is specifically for claim-owned pixel Evidence. Known
+        # web/source Evidence may be mentioned by the model as redundant
+        # bookkeeping (for example after an exact image match), but it is not
+        # an unresolved visual obligation and must not block the Decision.
+        disposition_ids = (
+            listed_ids & required_visual_ids
+            if listed_ids
+            else required_visual_ids
+        )
         overlap_ids = sorted(disposition_ids & selected_required_visual_ids)
         if overlap_ids:
             errors.append(
@@ -2372,6 +2381,27 @@ def apply_discrepancy_decision(
             "accepted": False,
             "rejected_reason": "qualified Evidence checkpoint requires Evidence",
         }
+    effective_visual_disposition = False
+    if output.visual_evidence_disposition is not None:
+        required_visual_ids = {
+            str(item["evidence_id"])
+            for item in claim_owned_visual_evidence_requirements(
+                candidate,
+                reviewed_evidence_ids=reviewed_ids,
+                evidence_by_id=evidence_by_id,
+            )
+        }
+        listed_visual_ids = {
+            str(item)
+            for item in output.visual_evidence_disposition.evidence_ids
+        }
+        effective_visual_disposition = bool(
+            required_visual_ids
+            and (
+                not listed_visual_ids
+                or listed_visual_ids & required_visual_ids
+            )
+        )
     if (
         trigger == "qualified_evidence"
         and reviewed_ids
@@ -2380,7 +2410,7 @@ def apply_discrepancy_decision(
         and not output.retire_hypothesis_ids
         and not output.new_hypotheses
         and output.visual_reinspection is None
-        and output.visual_evidence_disposition is None
+        and not effective_visual_disposition
         and output.verdict_proposal == "continue"
     ):
         return {

@@ -254,20 +254,23 @@ Before support/real, align source facts with pixels; identity/event agreement al
 is insufficient. If source Evidence adds a visible value needing alignment, request
 visual_reinspection. Provide 2-3 candidate_discriminators
 (source_phrase, visible_property, why_discriminative, already_in_claim,
-expected_if_source_matches) and select the highest-information one. Never select a
-property already in the Claim/account or a generic confirmation. expected_property
-copies visible_property. Pixels cannot infer absolute size or weight without scale,
-or media origin from style. If anchors establish neither alternative, keep Claim
+expected_if_source_matches) and select the highest-information one. source_phrase
+is a concise source-grounded cue and may paraphrase or recombine the reviewed
+Evidence; it does not need to be copied verbatim. Never select a property already
+in the Claim/account or a generic confirmation. expected_property copies
+visible_property. Pixels cannot infer absolute size or weight without scale, or
+media origin from style. If anchors establish neither alternative, keep Claim
 insufficient and do not create a discrepancy.
 
 Reconcile every claim-owned pixel Evidence with source. On conflict cite both
-IDs in the assessment and discrepancy; preserve stances. Each listed Evidence
-must be consumed or, only when it is reviewed qualified claim-owned pixel
-Evidence that does not bear on the current Claim/discrepancy, listed in
-visual_evidence_disposition.evidence_ids. In that object, set disposition
-exactly to "irrelevant_to_current_claim_or_discrepancy" and explain why.
-Never silently drop pixel Evidence or dispose of it while updating the same
-Claim.
+IDs in the assessment and discrepancy; preserve stances. Each reviewed qualified
+claim-owned pixel Evidence must be consumed or, only when it does not bear on the
+current Claim/discrepancy, listed in
+visual_evidence_disposition.evidence_ids. In that object, set disposition exactly
+to "irrelevant_to_current_claim_or_discrepancy" and explain why. Normal web/source
+Evidence does not need this disposition and may be omitted when it is only
+background or redundant after an exact image match. Never silently drop
+claim-owned pixel Evidence or dispose of it while updating the same Claim.
 
 For visual_reinspection choose claim_id from runtime candidates. Emit only claim_id,
 reason, scope, question, expected_property and verdict_proposal=continue; runtime

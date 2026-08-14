@@ -635,7 +635,10 @@ class VisualDiscriminatorCandidate(StrictModel):
     source_phrase: str = Field(
         min_length=1,
         max_length=500,
-        description="Exact source Evidence phrase that motivates this pixel check.",
+        description=(
+            "Concise source-grounded cue that motivates this pixel check. "
+            "It may paraphrase or recombine the reviewed Evidence."
+        ),
     )
     visible_property: str = Field(
         min_length=1,

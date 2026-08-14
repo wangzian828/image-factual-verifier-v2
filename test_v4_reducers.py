@@ -2473,7 +2473,7 @@ def test_runtime_binding_requires_model_selected_visual_discriminators() -> None
     assert "at least two source-grounded" in error
 
 
-def test_runtime_binding_rejects_unanchored_visual_discriminator_phrase() -> None:
+def test_runtime_binding_accepts_recomposed_visual_discriminator_phrase() -> None:
     state = _planned_state()
     evidence = _append_evidence(state)
     evidence.evidence_kind = "web_span"
@@ -2484,7 +2484,11 @@ def test_runtime_binding_rejects_unanchored_visual_discriminator_phrase() -> Non
     evidence.relation_stance = "supports"
     candidates = _microphone_discriminators()
     candidates[0] = candidates[0].model_copy(
-        update={"source_phrase": "A phrase absent from the reviewed source."}
+        update={
+            "source_phrase": (
+                "The source describes the presenter with a hand-held microphone."
+            )
+        }
     )
 
     bound, error = bind_discrepancy_decision_runtime_ids(
@@ -2503,8 +2507,8 @@ def test_runtime_binding_rejects_unanchored_visual_discriminator_phrase() -> Non
         reviewed_evidence_ids=[evidence.evidence_id],
     )
 
-    assert bound is None
-    assert "copied verbatim" in error
+    assert error == ""
+    assert bound is not None
 
 
 def test_visual_reinspection_binding_ignores_neutral_indirect_source_titles() -> None:
@@ -2836,6 +2840,48 @@ def test_runtime_binding_prefers_selected_visual_evidence_over_conflicting_irrel
     )
     assert update["accepted"] is True, update
     assert visual.evidence_id in bound.claim_assessments[0].selected_evidence_ids
+
+
+def test_runtime_binding_ignores_web_evidence_in_visual_disposition() -> None:
+    state = _planned_state()
+    source, visual = _append_source_visual_conflict_pair(state)
+    claim = state.image_claims[0]
+
+    bound, error = bind_discrepancy_decision_runtime_ids(
+        state,
+        DiscrepancyDecisionProposalOutput(
+            claim_assessments=[
+                ClaimAssessmentProposal(
+                    claim_id=claim.claim_id,
+                    assessment="insufficient",
+                    selected_evidence_ids=[visual.evidence_id],
+                    rationale="Consume the reviewed pixel observation.",
+                )
+            ],
+            visual_evidence_disposition=VisualEvidenceDisposition(
+                disposition="irrelevant_to_current_claim_or_discrepancy",
+                evidence_ids=[source.evidence_id],
+                rationale=(
+                    "The source page is redundant after the exact image match "
+                    "and is not itself a pixel observation."
+                ),
+            ),
+            verdict_proposal="continue",
+            rationale="The source note must not block the pixel Evidence update.",
+        ),
+        reviewed_evidence_ids=[source.evidence_id, visual.evidence_id],
+    )
+
+    assert error == ""
+    assert bound is not None
+    assert bound.visual_evidence_disposition is None
+    update = apply_discrepancy_decision(
+        state,
+        bound,
+        reviewed_evidence_ids=[source.evidence_id, visual.evidence_id],
+        trigger="qualified_evidence",
+    )
+    assert update["accepted"] is True, update
 
 
 def test_source_assertion_can_be_decided_without_runtime_selected_reinspection() -> None:
