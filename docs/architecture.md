@@ -22,8 +22,7 @@ are not the v4 semantic path.
 
 ```text
 hash-verified original image
-  -> Gemini literal scene perception
-  -> positioned OCR
+  -> Gemini literal scene perception || positioned OCR
   -> deterministic visual facts and retrieval anchors
   -> standalone Image Account Planning (controlled original-image view)
        1-3 ImageClaims
@@ -46,6 +45,12 @@ from an explicit, versioned workspace handoff. One ReAct action may use
 `function_call -> function_result -> output` protocol. No hidden Interaction history
 crosses an action or stage boundary. Tool-internal model calls are independent
 observations and cannot mutate semantic state.
+
+Scene perception and positioned OCR are launched concurrently because both consume
+only the immutable input image; their trace records are archived and merged in a
+fixed scene-then-OCR order. Deterministic perception results may be shared across
+rollouts through the versioned process/disk cache, while Planning, Decision, and
+Judgment remain uncached.
 
 The local Qwen Chat Completions transport has no provider Interaction ID, so the
 runtime records equivalent request ancestry itself. Context manifests distinguish

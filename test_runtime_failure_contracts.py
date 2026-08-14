@@ -306,6 +306,65 @@ def test_perception_exception_is_persisted_as_failed_step(
     assert state.all_steps[0].metadata["tool_exception"] == "RuntimeError"
 
 
+def test_perception_and_ocr_start_concurrently(
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "image.png"
+    Image.new("RGB", (4, 4), "white").save(image_path)
+
+    async def run() -> None:
+        started_tools: set[str] = set()
+        release = asyncio.Event()
+
+        class CoordinatedTool(StaticTool):
+            async def call_async(
+                self,
+                _params: dict[str, Any],
+            ) -> dict[str, Any]:
+                started_tools.add(self.name)
+                if len(started_tools) == 2:
+                    release.set()
+                await asyncio.wait_for(release.wait(), timeout=0.5)
+                if self.name == "perceive_scene":
+                    return {
+                        "status": "success",
+                        "scene_description": "a test scene",
+                        "entities": [],
+                        "image_type": "photo",
+                    }
+                return {
+                    "status": "success",
+                    "text_regions": [],
+                    "total_regions": 0,
+                    "full_text": "",
+                }
+
+        orchestrator = _bare_perception_orchestrator(
+            {
+                "perceive_scene": CoordinatedTool("perceive_scene", {}),
+                "ocr_with_position": CoordinatedTool(
+                    "ocr_with_position",
+                    {},
+                ),
+            }
+        )
+        state = VerificationState(image_path=str(image_path))
+
+        report = await orchestrator._run_perception(
+            state,
+            str(image_path),
+        )
+
+        assert report.scene_description == "a test scene"
+        assert started_tools == {"perceive_scene", "ocr_with_position"}
+        assert [step.tool_name for step in state.all_steps] == [
+            "perceive_scene",
+            "ocr_with_position",
+        ]
+
+    asyncio.run(run())
+
+
 def test_perception_tool_action_deadline_returns_structured_failure() -> None:
     orchestrator = _bare_perception_orchestrator(
         {"hanging_tool": HangingAsyncTool()}
@@ -897,6 +956,42 @@ def test_cache_ttl_and_namespace(
         namespace="provider-b",
     )
     assert other.get("tool", {"query": "x"}) is None
+
+
+def test_cache_singleflight_prevents_duplicate_producers(
+    tmp_path: Path,
+) -> None:
+    async def run() -> None:
+        caches = [
+            ToolResultCache(
+                cache_dir=str(tmp_path),
+                enabled=True,
+                namespace="singleflight",
+            )
+            for _ in range(2)
+        ]
+        producer_count = 0
+
+        async def worker(cache: ToolResultCache) -> str:
+            nonlocal producer_count
+            args = {"image_input": "same-image"}
+            async with cache.singleflight("perceive_scene", args):
+                cached = cache.get("perceive_scene", args)
+                if cached is not None:
+                    return cached
+                producer_count += 1
+                await asyncio.sleep(0.01)
+                result = '{"status":"success","scene":"same"}'
+                cache.put("perceive_scene", args, result)
+                return result
+
+        results = await asyncio.gather(*(worker(cache) for cache in caches))
+        assert [json.loads(result) for result in results] == [
+            {"status": "success", "scene": "same"}
+        ] * 2
+        assert producer_count == 1
+
+    asyncio.run(run())
 
 
 def test_compare_reference_rejects_legacy_backend(tmp_path: Path) -> None:

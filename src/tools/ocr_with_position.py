@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 import threading
 from collections.abc import Mapping
 from contextlib import nullcontext
@@ -19,6 +20,7 @@ from src.tools.base import BaseTool
 
 
 _SHARED_READER: Optional[Any] = None
+_SHARED_READER_PROFILE = ""
 _SHARED_READER_INIT_LOCK = threading.Lock()
 _SHARED_READER_INFERENCE_LOCK = threading.Lock()
 
@@ -88,6 +90,19 @@ class OCRWithPositionTool(BaseTool):
     _reader: Optional[Any] = field(default=None, repr=False)
     min_confidence: float = 0.5
     cpu_threads: int = 1
+    model_profile: str = ""
+
+    def _model_profile(self) -> str:
+        profile = (
+            self.model_profile.strip().lower()
+            or os.getenv("PADDLEOCR_PROFILE", "default").strip().lower()
+            or "default"
+        )
+        if profile not in {"default", "mobile"}:
+            raise ValueError(
+                "PADDLEOCR_PROFILE must be either 'default' or 'mobile'."
+            )
+        return profile
 
     def _get_reader(self):
         """Return the injected test reader or the process-shared CPU reader."""
@@ -95,12 +110,23 @@ class OCRWithPositionTool(BaseTool):
         if self._reader is not None:
             return self._reader
 
-        global _SHARED_READER
+        profile = self._model_profile()
+        global _SHARED_READER, _SHARED_READER_PROFILE
         if _SHARED_READER is None:
             with _SHARED_READER_INIT_LOCK:
                 if _SHARED_READER is None:
                     from paddleocr import PaddleOCR
 
+                    model_kwargs: Dict[str, Any] = {}
+                    if profile == "mobile":
+                        model_kwargs = {
+                            "text_detection_model_name": (
+                                "PP-OCRv5_mobile_det"
+                            ),
+                            "text_recognition_model_name": (
+                                "PP-OCRv5_mobile_rec"
+                            ),
+                        }
                     _SHARED_READER = PaddleOCR(
                         use_doc_orientation_classify=False,
                         use_doc_unwarping=False,
@@ -108,7 +134,15 @@ class OCRWithPositionTool(BaseTool):
                         device="cpu",
                         enable_mkldnn=False,
                         cpu_threads=max(1, int(self.cpu_threads)),
+                        **model_kwargs,
                     )
+                    _SHARED_READER_PROFILE = profile
+        elif _SHARED_READER_PROFILE and _SHARED_READER_PROFILE != profile:
+            raise RuntimeError(
+                "The process-shared PaddleOCR reader was initialized with "
+                f"profile={_SHARED_READER_PROFILE!r}; requested {profile!r}. "
+                "Use one OCR profile per process."
+            )
         return _SHARED_READER
 
     def call(self, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -154,6 +188,7 @@ class OCRWithPositionTool(BaseTool):
                         artifact_bytes
                     ).hexdigest(),
                     "ocr_backend": backend,
+                    "ocr_model_profile": self._model_profile(),
                     "backend_attempts": backend_attempts,
                     "subcalls": self._ocr_subcalls(backend_attempts),
                 }
@@ -216,6 +251,7 @@ class OCRWithPositionTool(BaseTool):
                     if artifact_bytes
                     else ""
                 ),
+                "ocr_model_profile": self._model_profile(),
                 "backend_attempts": backend_attempts,
                 "subcalls": self._ocr_subcalls(backend_attempts),
             }
@@ -231,6 +267,7 @@ class OCRWithPositionTool(BaseTool):
             "expected_property": str(params.get("expected_property", "")),
             "artifact_sha256": hashlib.sha256(artifact_bytes).hexdigest(),
             "ocr_backend": backend,
+            "ocr_model_profile": self._model_profile(),
             "backend_attempts": backend_attempts,
             "subcalls": self._ocr_subcalls(backend_attempts),
         }

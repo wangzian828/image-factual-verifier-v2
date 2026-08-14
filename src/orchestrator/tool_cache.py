@@ -2,19 +2,28 @@
 """Simple disk-backed cache for deterministic tool results."""
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import threading
 import time
 from dataclasses import dataclass, field
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Dict, Optional
+from weakref import WeakKeyDictionary
 
 from src.orchestrator.tool_result import parse_tool_result
 from src.redaction import sanitize_for_persistence
 
 
 WEB_EVIDENCE_CONTRACT_VERSION = "relation-scope-v3"
+
+
+_SINGLEFLIGHT_LOCKS: "WeakKeyDictionary[Any, Dict[str, asyncio.Lock]]" = (
+    WeakKeyDictionary()
+)
+_SINGLEFLIGHT_LOCKS_GUARD = threading.Lock()
 
 
 def _stable_json_dumps(value: Any) -> str:
@@ -77,6 +86,43 @@ class ToolResultCache:
         }
         with self._lock:
             path.write_text(_stable_json_dumps(payload), encoding="utf-8")
+
+    @asynccontextmanager
+    async def singleflight(self, tool_name: str, args: Dict[str, Any]):
+        """Serialize concurrent production of one cache key.
+
+        The lock is process-local and event-loop-local. Different cache objects
+        used by rollout children still coordinate when they share the same event
+        loop and cache directory, while separate processes remain independent.
+        Cache reads and writes stay the source of truth; this only prevents a
+        cache miss stampede.
+        """
+
+        if not self.enabled:
+            yield
+            return
+
+        loop = asyncio.get_running_loop()
+        key = str(self._entry_path(tool_name, args))
+        with _SINGLEFLIGHT_LOCKS_GUARD:
+            loop_locks = _SINGLEFLIGHT_LOCKS.setdefault(loop, {})
+            lock = loop_locks.get(key)
+            if lock is None:
+                lock = asyncio.Lock()
+                loop_locks[key] = lock
+
+        await lock.acquire()
+        try:
+            yield
+        finally:
+            lock.release()
+            waiters = getattr(lock, "_waiters", None)
+            has_waiters = bool(waiters) if waiters is not None else False
+            if not lock.locked() and not has_waiters:
+                with _SINGLEFLIGHT_LOCKS_GUARD:
+                    loop_locks = _SINGLEFLIGHT_LOCKS.get(loop)
+                    if loop_locks is not None and loop_locks.get(key) is lock:
+                        loop_locks.pop(key, None)
 
     def _entry_path(self, tool_name: str, args: Dict[str, Any]) -> Path:
         key_payload = {

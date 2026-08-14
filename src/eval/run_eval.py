@@ -674,6 +674,32 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
             "stage_thinking_levels": stage_thinking_levels,
             "qwen_stage_enable_thinking": qwen_stage_thinking,
             "concurrency": max(1, args.concurrency),
+            "perception_cache_enabled": os.getenv(
+                "PERCEPTION_CACHE_ENABLED",
+                "1",
+            ).strip().lower()
+            in {"1", "true", "yes"},
+            "web_cache_enabled": os.getenv(
+                "TOOL_CACHE_ENABLED",
+                "0",
+            ).strip().lower()
+            in {"1", "true", "yes"},
+            "tool_cache_ttl_seconds": os.getenv(
+                "TOOL_CACHE_TTL_SECONDS",
+                "3600",
+            ),
+            "perception_cache_version": os.getenv(
+                "PERCEPTION_CACHE_VERSION",
+                "perception-v1",
+            ),
+            "ocr_cache_version": os.getenv(
+                "OCR_CACHE_VERSION",
+                "paddleocr-cpu-v1",
+            ),
+            "paddleocr_profile": os.getenv(
+                "PADDLEOCR_PROFILE",
+                "default",
+            ),
             "rollouts_per_case": rollouts_per_case,
             "base_sampling_seed": base_sampling_seed,
             "sampling_seed_derivation": (

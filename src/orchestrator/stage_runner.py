@@ -3171,7 +3171,40 @@ class StageRunner:
         text = re.sub(r"\s*```$", "", text)
         return text.strip()
 
-    async def _execute_tool(self, tool_name: str, tool_args: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
+    async def _execute_tool(
+        self,
+        tool_name: str,
+        tool_args: Dict[str, Any],
+    ) -> Tuple[str, Dict[str, Any]]:
+        """Execute one tool with cache-miss single-flight protection."""
+
+        if self.tool_cache and tool_name in self.cacheable_tools:
+            cache_tool_args = dict(tool_args)
+            for key in (
+                "__question_id",
+                "__claim_id",
+                "__claim_text",
+                "__evidence_goal",
+            ):
+                cache_tool_args.pop(key, None)
+            properties = self.tools[tool_name].parameters.get(
+                "properties",
+                {},
+            )
+            if "image_input" in properties and not cache_tool_args.get(
+                "image_input"
+            ):
+                cache_tool_args["image_input"] = self.image_path
+            cache_args = self._build_cache_args(tool_name, cache_tool_args)
+            async with self.tool_cache.singleflight(tool_name, cache_args):
+                return await self._execute_tool_uncached(tool_name, tool_args)
+        return await self._execute_tool_uncached(tool_name, tool_args)
+
+    async def _execute_tool_uncached(
+        self,
+        tool_name: str,
+        tool_args: Dict[str, Any],
+    ) -> Tuple[str, Dict[str, Any]]:
         tool = self.tools[tool_name]
         tool_args.pop("__question_id", None)
         tool_args.pop("__claim_id", None)

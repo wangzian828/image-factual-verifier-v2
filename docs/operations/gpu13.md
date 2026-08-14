@@ -225,9 +225,25 @@ The following were verified through that proxy:
 - Google Drive HTTPS.
 
 OCR uses the local CPU-only PaddleOCR pipeline. The runtime initializes one
-positioned OCR reader per tool instance and does not use a remote OCR service or
-an alternate fallback backend. A missing PaddleOCR package, model, or runtime
+positioned OCR reader per Python process and shares it across case/tool
+instances; inference remains serialized because the predictor is mutable and
+CPU thread usage is bounded. It does not use a remote OCR service or an
+alternate fallback backend. A missing PaddleOCR package, model, or runtime
 dependency is therefore an explicit `ocr_with_position` tool failure.
+
+The formal canary keeps the default PaddleOCR profile. A separate CPU mobile
+profile is available for measurement only:
+
+```bash
+PADDLEOCR_PROFILE=mobile \
+scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
+  python scripts/benchmark_ocr_profiles.py --profile mobile \
+  /path/to/image.jpg
+```
+
+Use one profile per process. The mobile profile is not a silent fallback and
+must be promoted only after comparing text recall, coordinates, confidence, and
+median warm-call latency against the default profile.
 
 PaddleOCR is used only for visible-text observations:
 
@@ -365,6 +381,12 @@ scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
 ```
 
 Keep benchmark datasets and caches under `IFV_DATA_ROOT`, outside the Git checkout.
+
+For repeated rollouts, deterministic perception caching is enabled by default
+for `perceive_scene` and `ocr_with_position`. Set
+`PERCEPTION_CACHE_ENABLED=0` to disable it. Web-result caching remains opt-in
+through `TOOL_CACHE_ENABLED=1`; do not enable that for freshness-sensitive
+production runs without an explicit cache namespace and TTL.
 
 Dataset acquisition, review, and release finalization now belong to the separate
 `image-factual-verifier-data-pipeline` project. Acquire a finalized release from

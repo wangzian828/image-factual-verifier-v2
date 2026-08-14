@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import threading
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 
@@ -35,6 +36,14 @@ class JinaRerankerClient:
             or os.getenv("JINA_RERANKER_MODEL")
             or "jina-reranker-v3"
         ).strip()
+        self._thread_local = threading.local()
+
+    def _get_session(self) -> requests.Session:
+        session = getattr(self._thread_local, "session", None)
+        if session is None:
+            session = requests.Session()
+            self._thread_local.session = session
+        return session
 
     def rerank(
         self,
@@ -55,7 +64,7 @@ class JinaRerankerClient:
         }
         if top_n is not None:
             payload["top_n"] = max(1, int(top_n))
-        response = requests.post(
+        response = self._get_session().post(
             self.endpoint,
             json=payload,
             headers={

@@ -403,7 +403,11 @@ def render_stage_request(packet: StageHandoffPacket) -> str:
         **dict(stage_input),
         "runtime_handoff": runtime_handoff,
     }
-    return json.dumps(payload, ensure_ascii=False, indent=2)
+    return json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
 
 
 def fit_stage_handoff_to_budget(

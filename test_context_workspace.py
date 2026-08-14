@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from src.orchestrator.context_workspace import (
     build_explicit_workspace,
     build_stage_handoff,
@@ -164,10 +166,11 @@ def test_initial_planning_request_does_not_duplicate_workspace() -> None:
     )
 
     rendered = render_stage_request(packet)
+    payload = json.loads(rendered)
 
     assert '"workspace_version"' in rendered
     assert '"workspace"' not in rendered
-    assert '"task_id": "task-1"' in rendered
+    assert payload["bootstrap_tasks"][0]["task_id"] == "task-1"
 
 
 def test_complete_stage_requests_keep_only_their_workspace_addendum() -> None:
@@ -207,7 +210,13 @@ def test_bounded_judgment_request_omits_general_workspace() -> None:
     )
 
     rendered = render_stage_request(packet)
+    payload = json.loads(rendered)
 
     assert '"workspace_projection"' in rendered
-    assert '"full_workspace_archived": true' in rendered
+    assert (
+        payload["runtime_handoff"]["workspace_projection"][
+            "full_workspace_archived"
+        ]
+        is True
+    )
     assert '"workspace": {' not in rendered

@@ -683,7 +683,7 @@ def render_target_planning_context(
             ],
         },
         ensure_ascii=False,
-        indent=2,
+        separators=(",", ":"),
     )
 
 
@@ -808,7 +808,7 @@ def render_discrepancy_react_context(
             "remaining_action_budget": max(0, 24 - state.action_count),
         },
         ensure_ascii=False,
-        indent=2,
+        separators=(",", ":"),
     )
 
 
@@ -1190,7 +1190,7 @@ def render_discrepancy_decision_context(
             ),
         },
         ensure_ascii=False,
-        indent=2,
+        separators=(",", ":"),
     )
 
 
@@ -1244,7 +1244,7 @@ def render_discrepancy_judgment_context(
             ],
         },
         ensure_ascii=False,
-        indent=2,
+        separators=(",", ":"),
     )
 
 
@@ -1328,7 +1328,7 @@ def render_reflection_context(
             ],
         },
         ensure_ascii=False,
-        indent=2,
+        separators=(",", ":"),
     )
 
 
@@ -1391,7 +1391,7 @@ def render_query_concept_extraction_context(
             ],
         },
         ensure_ascii=False,
-        indent=2,
+        separators=(",", ":"),
     )
 
 
@@ -1455,7 +1455,7 @@ def render_query_replan_context(
             ),
         },
         ensure_ascii=False,
-        indent=2,
+        separators=(",", ":"),
     )
 
 
@@ -1530,7 +1530,7 @@ def render_evidence_decision_context(
             ],
         },
         ensure_ascii=False,
-        indent=2,
+        separators=(",", ":"),
     )
 
 
@@ -1599,5 +1599,5 @@ def render_judgment_context(
             "allowed_evidence": allowed_evidence,
         },
         ensure_ascii=False,
-        indent=2,
+        separators=(",", ":"),
     )

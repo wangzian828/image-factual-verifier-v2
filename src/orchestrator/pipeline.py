@@ -197,25 +197,45 @@ class Orchestrator:
                 os.getenv("VISUAL_SEARCH_PROVIDER", "serper_lens"),
                 os.getenv("IMAGE_UPLOAD_PROVIDER", "oss"),
                 os.getenv("BROWSE_FETCH_PROVIDER", "jina"),
+                os.getenv("PERCEPTION_CACHE_VERSION", "perception-v1"),
+                os.getenv("OCR_CACHE_VERSION", "paddleocr-cpu-v1"),
+                os.getenv("PADDLEOCR_PROFILE", "default"),
                 self.source_access_policy.cache_partition,
             ]
         )
+        perception_cache_enabled = os.getenv(
+            "PERCEPTION_CACHE_ENABLED",
+            "1",
+        ).strip().lower() in {"1", "true", "yes"}
+        web_cache_enabled = os.getenv(
+            "TOOL_CACHE_ENABLED",
+            "0",
+        ).strip().lower() in {"1", "true", "yes"}
         self.tool_cache = ToolResultCache(
             cache_dir=os.getenv("TOOL_CACHE_DIR", default_tool_cache_dir()),
-            enabled=os.getenv("TOOL_CACHE_ENABLED", "0").strip().lower() in {"1", "true", "yes"},
+            enabled=perception_cache_enabled or web_cache_enabled,
             ttl_seconds=float(os.getenv("TOOL_CACHE_TTL_SECONDS", "3600")),
             namespace=cache_namespace,
         )
-        self.cacheable_tools = {
-            "perceive_scene",
-            "ocr_with_position",
-            "text_search",
-            "visit",
-            "crop_and_inspect",
-            "focused_visual_inspection",
-            "check_consistency",
-            "analyze_visual_anomalies",
-        }
+        self.cacheable_tools = set()
+        if perception_cache_enabled:
+            self.cacheable_tools.update(
+                {
+                    "perceive_scene",
+                    "ocr_with_position",
+                }
+            )
+        if web_cache_enabled:
+            self.cacheable_tools.update(
+                {
+                    "text_search",
+                    "visit",
+                    "crop_and_inspect",
+                    "focused_visual_inspection",
+                    "check_consistency",
+                    "analyze_visual_anomalies",
+                }
+            )
         self.verification_tool_limits = {
             "current_time": 1,
             "ocr_with_position": 3,
@@ -380,29 +400,51 @@ class Orchestrator:
             investigation = state_from_bootstrap(bootstrap)
             state.investigation_state = investigation
             self._sync_image_only_state(state, investigation)
-            await self._run_image_account_planning(
-                state,
-                investigation,
-                image_path=image_path,
-                interaction_session=None,
-            )
-            await self._run_discrepancy_investigation(
-                state,
-                investigation,
-                image_path,
-                runtime_case,
-            )
+            planning_started = time.perf_counter()
+            try:
+                await self._run_image_account_planning(
+                    state,
+                    investigation,
+                    image_path=image_path,
+                    interaction_session=None,
+                )
+            finally:
+                state.stage_timings["planning"] = round(
+                    time.perf_counter() - planning_started,
+                    2,
+                )
+
+            investigation_started = time.perf_counter()
+            try:
+                await self._run_discrepancy_investigation(
+                    state,
+                    investigation,
+                    image_path,
+                    runtime_case,
+                )
+            finally:
+                state.stage_timings["investigation"] = round(
+                    time.perf_counter() - investigation_started,
+                    2,
+                )
             self._require_successful_discrepancy_investigation(state)
             compiled_verdict, basis = compile_discrepancy_verdict_basis(
                 investigation
             )
-            judgment = await self._run_discrepancy_judgment(
-                state,
-                investigation,
-                compiled_verdict,
-                basis,
-                interaction_session=None,
-            )
+            judgment_started = time.perf_counter()
+            try:
+                judgment = await self._run_discrepancy_judgment(
+                    state,
+                    investigation,
+                    compiled_verdict,
+                    basis,
+                    interaction_session=None,
+                )
+            finally:
+                state.stage_timings["judgment"] = round(
+                    time.perf_counter() - judgment_started,
+                    2,
+                )
             investigation.discrepancy_judgment = judgment
             state.judgment = judgment  # type: ignore[assignment]
             state.termination = "success"
@@ -551,7 +593,7 @@ class Orchestrator:
             ),
             tools=[],
             output_schema=ImageAccountPlanningOutput,
-            max_rounds=2,
+            max_rounds=self._stage_max_rounds("PLANNING", 2),
             image_path=effective_image_path,
             stage_name="image_account_planning",
             runtime_store=state.runtime_store,
@@ -583,6 +625,17 @@ class Orchestrator:
                 "rejection_reason",
                 "",
             )
+        planning_request_count = sum(
+            1
+            for step in steps
+            if step.metadata.get("llm_duration_ms") is not None
+        )
+        planning_revision_count = sum(
+            1 for step in steps if step.action_type == "planning_revision"
+        )
+        for step in steps:
+            step.metadata["planning_request_count"] = planning_request_count
+            step.metadata["planning_revision_count"] = planning_revision_count
         self._record_stage_steps(state, steps)
         if parsed is None:
             self._sync_image_only_state(state, investigation)
@@ -3322,27 +3375,30 @@ class Orchestrator:
             )
 
         try:
-            tool_result, metadata = await self._execute_tool(
-                "perceive_scene",
-                {"image_input": image_path},
-                image_path,
-            )
-            step = StageStep(
-                round=1,
-                stage_name="perception",
-                action_type="tool_call",
-                tool_name="perceive_scene",
-                tool_args={"image_input": image_path},
-                tool_result=tool_result,
-                metadata={"stage": "perception", **metadata},
-            )
-            self._archive_direct_tool_step(state, step, action_index=1)
-            steps.append(step)
-            if not self._tool_step_succeeded(step):
-                raise RuntimeError(f"perceive_scene failed: {tool_result[:1000]}")
-            report = self._parse_perception_result(tool_result)
-
             if "ocr_with_position" not in self.all_tools:
+                # Preserve the historical failure ordering for incomplete
+                # test/startup registries: scene perception is still attempted
+                # so its provider failure remains the primary diagnostic.
+                tool_result, metadata = await self._execute_tool(
+                    "perceive_scene",
+                    {"image_input": image_path},
+                    image_path,
+                )
+                step = StageStep(
+                    round=1,
+                    stage_name="perception",
+                    action_type="tool_call",
+                    tool_name="perceive_scene",
+                    tool_args={"image_input": image_path},
+                    tool_result=tool_result,
+                    metadata={"stage": "perception", **metadata},
+                )
+                self._archive_direct_tool_step(state, step, action_index=1)
+                steps.append(step)
+                if not self._tool_step_succeeded(step):
+                    raise RuntimeError(
+                        f"perceive_scene failed: {tool_result[:1000]}"
+                    )
                 raise RuntimeError(
                     "Required perception tool 'ocr_with_position' is unavailable: "
                     + str(
@@ -3351,25 +3407,63 @@ class Orchestrator:
                         )
                     )
                 )
-            tool_result, metadata = await self._execute_tool(
-                "ocr_with_position",
-                {"image_input": image_path},
-                image_path,
+
+            # Scene perception and positioned OCR are independent observations
+            # of the same immutable input image. Run them concurrently, then
+            # archive and merge them in a fixed order for deterministic traces.
+            (scene_result, scene_metadata), (ocr_result, ocr_metadata) = (
+                await asyncio.gather(
+                    self._execute_tool(
+                        "perceive_scene",
+                        {"image_input": image_path},
+                        image_path,
+                    ),
+                    self._execute_tool(
+                        "ocr_with_position",
+                        {"image_input": image_path},
+                        image_path,
+                    ),
+                )
             )
-            step = StageStep(
+
+            scene_step = StageStep(
+                round=1,
+                stage_name="perception",
+                action_type="tool_call",
+                tool_name="perceive_scene",
+                tool_args={"image_input": image_path},
+                tool_result=scene_result,
+                metadata={"stage": "perception", **scene_metadata},
+            )
+            ocr_step = StageStep(
                 round=2,
                 stage_name="perception",
                 action_type="tool_call",
                 tool_name="ocr_with_position",
                 tool_args={"image_input": image_path},
-                tool_result=tool_result,
-                metadata={"stage": "perception", **metadata},
+                tool_result=ocr_result,
+                metadata={"stage": "perception", **ocr_metadata},
             )
-            self._archive_direct_tool_step(state, step, action_index=2)
-            steps.append(step)
-            if not self._tool_step_succeeded(step):
-                raise RuntimeError(f"ocr_with_position failed: {tool_result[:1000]}")
-            report = self._merge_ocr(report, tool_result)
+
+            for action_index, step in enumerate((scene_step, ocr_step), start=1):
+                self._archive_direct_tool_step(
+                    state,
+                    step,
+                    action_index=action_index,
+                )
+                steps.append(step)
+
+            if not self._tool_step_succeeded(scene_step):
+                raise RuntimeError(
+                    f"perceive_scene failed: {scene_result[:1000]}"
+                )
+            if not self._tool_step_succeeded(ocr_step):
+                raise RuntimeError(
+                    f"ocr_with_position failed: {ocr_result[:1000]}"
+                )
+
+            report = self._parse_perception_result(scene_result)
+            report = self._merge_ocr(report, ocr_result)
             if (
                 not report.scene_description
                 and not report.entities
@@ -3412,6 +3506,24 @@ class Orchestrator:
         if tokens < 1:
             raise ValueError(f"{env_name} must be positive.")
         return tokens
+
+    def _stage_max_rounds(self, stage_name: str, default: int) -> int:
+        """Read a bounded retry budget without changing stage semantics."""
+
+        normalized_stage = stage_name.strip().upper()
+        env_name = (
+            f"QWEN_{normalized_stage}_MAX_ROUNDS"
+            if self.provider in {"qwen_local", "lmdeploy"}
+            else f"GEMINI_{normalized_stage}_MAX_ROUNDS"
+        )
+        raw = os.getenv(env_name, str(default)).strip()
+        try:
+            rounds = int(raw)
+        except ValueError as exc:
+            raise ValueError(f"{env_name} must be an integer.") from exc
+        if rounds < 1:
+            raise ValueError(f"{env_name} must be positive.")
+        return rounds
 
     @staticmethod
     def _archive_direct_tool_step(
@@ -3542,7 +3654,43 @@ class Orchestrator:
             return config
         return {"thinking_level": self._stage_thinking_level(normalized_stage)}
 
-    async def _execute_tool(self, tool_name: str, args: Dict[str, Any], image_path: str) -> tuple[str, Dict[str, Any]]:
+    async def _execute_tool(
+        self,
+        tool_name: str,
+        args: Dict[str, Any],
+        image_path: str,
+    ) -> tuple[str, Dict[str, Any]]:
+        """Execute one tool with cache-miss single-flight protection."""
+
+        if tool_name in self.cacheable_tools and self.tool_cache.enabled:
+            cache_tool_args = dict(args)
+            properties = self.all_tools[tool_name].parameters.get(
+                "properties",
+                {},
+            )
+            if "image_input" in properties and not cache_tool_args.get(
+                "image_input"
+            ):
+                cache_tool_args["image_input"] = image_path
+            cache_args = self._build_cache_args(
+                tool_name,
+                cache_tool_args,
+                image_path=image_path,
+            )
+            async with self.tool_cache.singleflight(tool_name, cache_args):
+                return await self._execute_tool_uncached(
+                    tool_name,
+                    args,
+                    image_path,
+                )
+        return await self._execute_tool_uncached(tool_name, args, image_path)
+
+    async def _execute_tool_uncached(
+        self,
+        tool_name: str,
+        args: Dict[str, Any],
+        image_path: str,
+    ) -> tuple[str, Dict[str, Any]]:
         tool = self.all_tools[tool_name]
         tool_args = dict(args)
         properties = tool.parameters.get("properties", {})

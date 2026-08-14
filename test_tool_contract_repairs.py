@@ -352,6 +352,30 @@ def test_ocr_tools_share_one_process_reader(
     ]
 
 
+def test_ocr_mobile_profile_selects_mobile_models(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created = []
+
+    class PaddleReader:
+        def __init__(self, **kwargs):
+            created.append(kwargs)
+
+    monkeypatch.setitem(
+        sys.modules,
+        "paddleocr",
+        SimpleNamespace(PaddleOCR=PaddleReader),
+    )
+    monkeypatch.setenv("PADDLEOCR_PROFILE", "mobile")
+    monkeypatch.setattr(ocr_with_position_module, "_SHARED_READER", None)
+    monkeypatch.setattr(ocr_with_position_module, "_SHARED_READER_PROFILE", "")
+
+    OCRWithPositionTool()._get_reader()
+
+    assert created[0]["text_detection_model_name"] == "PP-OCRv5_mobile_det"
+    assert created[0]["text_recognition_model_name"] == "PP-OCRv5_mobile_rec"
+
+
 def test_ocr_backend_failure_is_explicit_without_fallback(
     tmp_path,
 ) -> None:

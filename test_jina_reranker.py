@@ -14,7 +14,7 @@ def test_jina_reranker_preserves_provider_errors(
         raise RuntimeError("reranker unavailable")
 
     monkeypatch.setattr(
-        "src.integrations.search.jina_reranker.requests.post",
+        "src.integrations.search.jina_reranker.requests.Session.post",
         fail,
     )
 
