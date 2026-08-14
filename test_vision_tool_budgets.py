@@ -10,7 +10,7 @@ from src.tools.compare_reference import (
 )
 
 
-def test_gemini_vision_uses_a_small_default_output_floor(monkeypatch) -> None:
+def test_gemini_vision_uses_the_established_default_output_floor(monkeypatch) -> None:
     client = OpenAIVisionClient(provider="gemini")
     client.api_key = "test-key"
     captured = {}

@@ -42,7 +42,7 @@ DIFFERENCE_TYPES = (
 EDIT_DIFFERENCE_TYPES = frozenset({"addition", "removal", "modification"})
 EDIT_STRENGTHS = ("none", "weak", "moderate", "strong")
 SIGNIFICANCE_LEVELS = ("high", "medium", "low")
-DEFAULT_REFERENCE_COMPARE_MAX_OUTPUT_TOKENS = 4096
+DEFAULT_REFERENCE_COMPARE_MAX_OUTPUT_TOKENS = 8192
 
 COMPARE_RESPONSE_SCHEMA: Dict[str, Any] = {
     "type": "object",

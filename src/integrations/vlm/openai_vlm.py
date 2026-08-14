@@ -27,7 +27,7 @@ from src.tools.vision_utils import image_to_data_url
 DEFAULT_JSON_OBJECT_SCHEMA: Dict[str, Any] = {
     "type": "object",
 }
-DEFAULT_GEMINI_VISION_MIN_OUTPUT_TOKENS = 2048
+DEFAULT_GEMINI_VISION_MIN_OUTPUT_TOKENS = 8192
 
 
 @dataclass
