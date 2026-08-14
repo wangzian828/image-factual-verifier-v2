@@ -2064,7 +2064,14 @@ def test_two_mixed_inspections_release_new_retrieval_routes() -> None:
         f"visit:{task.task_id}:https://example.org/page-two",
     ]
     assert executable == {"visit"}
-    assert constraints == {}
+    assert constraints == {
+        "visit": {
+            "url": [
+                "https://example.org/page-one",
+                "https://example.org/page-two",
+            ]
+        }
+    }
 
 
 def test_empty_inspection_batch_does_not_exhaust_unused_text_search_route() -> None:
