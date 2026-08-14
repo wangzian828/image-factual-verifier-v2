@@ -270,7 +270,7 @@ def evidence_serves_claim(
     claim_fact_id: str,
     task_by_id: Mapping[str, ResearchTask] | None = None,
 ) -> bool:
-    """Return whether Evidence is fact-bound or reinspection-bound to one Claim."""
+    """Return whether Evidence is owned by and materially serves one Claim."""
 
     tasks = task_by_id or {item.task_id: item for item in state.tasks}
     task = tasks.get(evidence.task_id)
@@ -279,18 +279,14 @@ def evidence_serves_claim(
     if claim_fact_id in evidence.fact_ids:
         return True
     if (
-        evidence.tool_name != "focused_visual_inspection"
-        or evidence.evidence_kind != "image_region"
-        or not evidence.visual_question_id
+        evidence.evidence_kind != "image_region"
+        or evidence.claim_binding != "pixel_observation"
+        or evidence.stance != "neutral"
+        or evidence.directness != "direct"
+        or evidence.visual_answer_status == "ambiguous"
     ):
         return False
-    return any(
-        record.status == "resolved"
-        and record.task_id == evidence.task_id
-        and record.visual_question_id == evidence.visual_question_id
-        and evidence.evidence_id in record.evidence_ids
-        for record in state.visual_reinspections
-    )
+    return True
 
 
 def _one_line(value: str) -> str:
@@ -1532,7 +1528,6 @@ def _visual_evidence_can_join_source_visual_chain(
     evidence: InvestigationEvidence,
     *,
     claim_id: str,
-    claim_fact_id: str,
     task_by_id: Mapping[str, ResearchTask],
 ) -> bool:
     """Return whether one claim-owned pixel observation can join a refute chain.
@@ -1547,10 +1542,9 @@ def _visual_evidence_can_join_source_visual_chain(
         or evidence.claim_binding != "pixel_observation"
         or evidence.directness != "direct"
         or evidence.quality not in {"strong", "moderate"}
-        or evidence.source_class != "visual"
+        or evidence.stance != "neutral"
         or task is None
         or claim_id not in task.claim_ids
-        or claim_fact_id not in evidence.fact_ids
     ):
         return False
     return evidence.visual_answer_status != "ambiguous"
@@ -1593,7 +1587,6 @@ def _composite_source_visual_refute_evidence_ids(
         and _visual_evidence_can_join_source_visual_chain(
             evidence=evidence_by_id[evidence_id],
             claim_id=claim_id,
-            claim_fact_id=claim_fact_id,
             task_by_id=task_by_id,
         )
     ]

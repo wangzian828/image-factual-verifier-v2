@@ -142,7 +142,6 @@ def _composite_visual_evidence_is_eligible(
         or str(evidence.get("stance", "")).strip() != "neutral"
         or str(evidence.get("directness", "direct")).strip() != "direct"
         or str(evidence.get("quality", "")).strip() not in {"strong", "moderate"}
-        or str(evidence.get("source_class", "")).strip() != "visual"
         or str(evidence.get("visual_answer_status", "")).strip() == "ambiguous"
     ):
         return False
