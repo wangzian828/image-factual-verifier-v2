@@ -129,7 +129,7 @@ def test_image_account_requires_exactly_one_high_salience_claim() -> None:
 
     with pytest.raises(
         ValidationError,
-        match="exactly one high-salience central claim",
+        match="exactly one high-salience central target fact",
     ):
         ImageAccountPlanningOutput.model_validate(payload)
 
@@ -1413,7 +1413,7 @@ def test_refuted_high_salience_claim_cannot_be_downgraded_to_supporting() -> Non
     )
 
     assert update["accepted"] is False
-    assert "refuted high-salience ImageClaim" in update["rejected_reason"]
+    assert "refuted core image-grounded target fact" in update["rejected_reason"]
     assert "verdict_proposal='fake'" in update["rejected_reason"]
     assert "same atomic update" in update["rejected_reason"]
     assert state.model_dump(mode="json") == before
@@ -3834,13 +3834,30 @@ def test_discrepancy_coverage_compiles_real_only_after_routes_close() -> None:
     assert basis.evidence_ids == [evidence.evidence_id]
 
 
-def test_remaining_discrepancy_routes_ignore_tasks_with_only_supported_claims() -> None:
+def test_remaining_discrepancy_routes_ignore_legacy_claim_status() -> None:
     state = _planned_state()
     state.image_claims[0].status = "supported"
 
-    assert remaining_claim_hypothesis_routes(state) == []
+    assert remaining_claim_hypothesis_routes(state)
     audit = audit_discrepancy_coverage(state, decision_checkpoint=True)
-    assert audit.stop_reason == "meaningful_routes_exhausted"
+    assert audit.stop_reason == "continue"
+
+
+def test_discrepancy_coverage_uses_core_fact_not_legacy_claim_status() -> None:
+    state = _planned_state()
+    claim = state.image_claims[0]
+    fact = next(item for item in state.facts if item.fact_id == claim.fact_id)
+    fact.status = "supported"
+    state.core_verdict_fact_id = fact.fact_id
+    state.decisive_fact_ids = [fact.fact_id]
+    claim.status = "unresolved"
+    state.search_hypotheses[0].status = "retired"
+    state.proposed_verdict = "real"
+
+    audit = audit_discrepancy_coverage(state, decision_checkpoint=True)
+
+    assert audit.complete is True
+    assert audit.stop_reason == "verdict_determined"
 
 
 def test_discrepancy_coverage_preserves_gap_for_binary_judgment_after_routes_close() -> None:

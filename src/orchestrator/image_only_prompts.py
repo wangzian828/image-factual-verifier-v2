@@ -119,24 +119,26 @@ DISCREPANCY_REACT_SYSTEM_PROMPT = """\
 判断图像表达的事实内容是否成立。
 
 Choose exactly one runtime-authorized tool action that most reduces uncertainty
-about an unresolved ImageClaim. Its attached SearchHypothesis supplies context and
-ownership, not a boundary on the investigation. Frame retrieval around what actually
-happened, not merely whether the image's proposed value or an identical image can be
-found. When direct queries repeat the proposed value without useful evidence, omit
-that value and retrieve the actual value of the same relation slot. Prior knowledge
-may supply leads, but only tool Evidence establishes a fact.
+about the unresolved image-grounded target fact. Its attached SearchHypothesis
+supplies context and ownership, not a boundary on the investigation. Frame
+retrieval around what actually happened, not merely whether an identical image or
+an exact source record can be found. When direct queries repeat the proposed value
+without useful evidence, omit that value and retrieve the actual value of the same
+relation slot. Prior knowledge may supply leads, but only tool Evidence establishes
+a fact.
 Form queries from visible anchors, relation slots, or terms introduced by supplied
 Discovery and Evidence. Do not inject an unsupported verdict label or media-origin
 classification into retrieval.
-Do not change the ImageClaim.
+The legacy image-claim record is bookkeeping only; do not turn creator,
+provenance, upload history, or exact-capture identity into the target fact.
 
 Inspect a promising page or reference image before repeating retrieval for that
 route. Search titles, snippets, and reverse-image matches are Discovery only.
-For page inspection, select one owned ImageClaim and state the passage sought.
+For page inspection, select one owned target fact and state the passage sought.
 Qualified Evidence requires a fetched exact span or a successful visual
 observation with recorded provenance. Use only supplied observations, do not decide
-a verdict, and do not introduce external identities or metadata as new
-ImageClaims. The runtime owns IDs, claim/hypothesis ownership, route duplication,
+a verdict, and do not introduce external identities or metadata as new target facts.
+The runtime owns IDs, legacy claim/hypothesis bookkeeping, route duplication,
 budgets, Evidence eligibility, state transitions, and stopping.
 
 The runtime may expose a small set of active Tasks. Choose the Task and tool with
@@ -149,25 +151,25 @@ IMAGE_ACCOUNT_PLANNING_SYSTEM_PROMPT = """\
 判断图像表达的事实内容是否成立。
 
 You are the Image Account Planning root. Plan an open fact-check of the account
-communicated by the image. Return one high-salience ImageClaim containing the
-complete subject-event relation, relation slot, and depicted value; add a second
-claim only when independently verdict-changing. For an identified person, place,
-event, or artifact, a defining factual relation may be more useful than a transient
-scene detail. Do not inventory details.
+communicated by the image. The required ``image_claims`` output field is a legacy
+wire name for one high-salience image-grounded target fact; it is not a user Claim
+and must not contain a provenance or exact-capture requirement. Write the visible
+world relation the image asks the viewer to accept. Add a second target only when
+independently verdict-changing. Do not inventory details.
 
-Write each claim as the positive world proposition the image asks the viewer to
-accept. Prefer unusual visible relations over generic presence. Treat
+Write the target fact as the positive world proposition the image asks the viewer
+to accept. Prefer unusual visible relations over generic presence. Treat
 search_hypotheses as neutral investigation routes, not candidate verdicts: identify
 depicted entity/event, determine the relation slot's verified value, test
 scene/world constraints, check visual consistency, or find a same-capture/reference
-image only for direct comparison to a
-depicted claim. Do not route toward creator, publisher/platform, generation method,
-publication history, or media-origin classification of the image itself.
+image only when direct comparison materially tests the target fact. Never make
+finding the exact source image, creator, publisher/platform, generation method, or
+publication history a target or stopping condition.
 
 route_focus must be one of: same_capture_reference, entity_event_identity,
 relation_value, scene_world_constraints, visual_consistency, media_origin.
 media_origin is rejected; rewrite it as a factual focus if it can test the
-ImageClaim. Image clues guide retrieval but do not restrict it. Prior knowledge is a
+target fact. Image clues guide retrieval but do not restrict it. Prior knowledge is a
 lead; only tool Evidence establishes a fact. Queries are alternative starts, not
 scheduled actions; runtime may execute at most two initial text_search actions per
 Task. Routes do not own the verdict.
@@ -241,14 +243,15 @@ DISCREPANCY_DECISION_SYSTEM_PROMPT = """\
 判断图像表达的事实内容是否成立。
 
 You are the sparse multimodal Discrepancy Decision checkpoint. Compare reviewed
-Evidence with image account; update Claims. Discrepancies need cited
+Evidence with the image-grounded target fact and image account; update the
+compatibility bookkeeping records only when needed. Discrepancies need cited
 Evidence/visible anchors. Retire/add hypotheses or request reinspection; omit
-unsupported Claims.
+unsupported target facts.
 
-Use recorded admissible_stances: neutral Evidence cannot support/refute. For an
-ImageClaim, support means it is true; refute means it is false. A competing value
-for the same subject-event relation refutes it. Task ownership does not establish
-semantic coverage; use addressed Claims and allowed visual anchors.
+Use recorded admissible_stances: neutral Evidence cannot support/refute. For the
+target fact, support means it is true; refute means it is false. A competing
+value for the same subject-event relation refutes it. Task ownership does not
+establish semantic coverage; use addressed target facts and allowed visual anchors.
 
 Before support/real, align source facts with pixels; identity/event agreement alone
 is insufficient. If source Evidence adds a visible value needing alignment, request
@@ -257,20 +260,20 @@ visual_reinspection. Provide 2-3 candidate_discriminators
 expected_if_source_matches) and select the highest-information one. source_phrase
 is a concise source-grounded cue and may paraphrase or recombine the reviewed
 Evidence; it does not need to be copied verbatim. Never select a property already
-in the Claim/account or a generic confirmation. expected_property copies
+in the target fact/account or a generic confirmation. expected_property copies
 visible_property. Pixels cannot infer absolute size or weight without scale, or
-media origin from style. If anchors establish neither alternative, keep Claim
-insufficient and do not create a discrepancy.
+media origin from style. If anchors establish neither alternative, keep the
+target fact insufficient and do not create a discrepancy.
 
-Reconcile every claim-owned pixel Evidence with source. On conflict cite both
+Reconcile every target-owned pixel Evidence with source. On conflict cite both
 IDs in the assessment and discrepancy; preserve stances. Each reviewed qualified
 claim-owned pixel Evidence must be consumed or, only when it does not bear on the
-current Claim/discrepancy, listed in
+current target fact/discrepancy, listed in
 visual_evidence_disposition.evidence_ids. In that object, set disposition exactly
 to "irrelevant_to_current_claim_or_discrepancy" and explain why. Normal web/source
 Evidence does not need this disposition and may be omitted when it is only
 background or redundant after an exact image match. Never silently drop
-claim-owned pixel Evidence or dispose of it while updating the same Claim.
+target-owned pixel Evidence or dispose of it while updating the same target fact.
 
 For visual_reinspection choose claim_id from runtime candidates. Emit only claim_id,
 reason, scope, question, expected_property and verdict_proposal=continue; runtime
@@ -281,10 +284,9 @@ For new_hypotheses include route_focus; allowed: same_capture_reference,
 entity_event_identity, relation_value, scene_world_constraints, visual_consistency.
 Do not add media_origin routes about creator/platform/generation/publication history.
 
-Qualified high-salience refutation is decisive; unresolved other Claims do not
-weaken it. Propose fake for a decisive high-salience discrepancy, real when all
-high-salience Claims are supported and routes are closed, otherwise continue. Use
-supplied IDs; return required JSON.
+Qualified refutation of the core target fact is decisive. Propose fake for a
+decisive discrepancy, real only when the core target fact is supported and routes
+are closed, otherwise continue. Use supplied IDs; return required JSON.
 """
 
 
@@ -349,24 +351,18 @@ def select_discrepancy_react_tasks(
     selectable so the caller can expose only ``read_evidence``.
     """
 
-    claims = {claim.claim_id: claim for claim in state.image_claims}
     hypotheses = {
         item.hypothesis_id: item
         for item in state.search_hypotheses
         if item.status in {"open", "active"}
     }
+    core_fact_id = state.core_verdict_fact_id
     active = [
         task
         for task in state.tasks
         if task.status in {"active", "pending"}
         and task.hypothesis_id in hypotheses
-        and task.claim_ids
-        and set(task.claim_ids) <= set(claims)
-        and set(task.claim_ids) <= set(hypotheses[task.hypothesis_id].claim_ids)
-        and any(
-            claims[claim_id].status in {"open", "conflicted", "unresolved"}
-            for claim_id in task.claim_ids
-        )
+        and (core_fact_id is None or core_fact_id in task.fact_ids)
         and (
             bool(state.pending_archive_read_ids)
             or bool(
@@ -381,10 +377,6 @@ def select_discrepancy_react_tasks(
         key=lambda task: (
             task.priority,
             task.task_id not in state.recommended_next_task_ids,
-            min(
-                0 if claims[claim_id].salience == "high" else 1
-                for claim_id in task.claim_ids
-            ),
             task.attempt_count,
             task.task_id,
         )
@@ -709,7 +701,7 @@ def render_discrepancy_react_context(
     if task_ids is not None:
         active = [task for task in active if task.task_id in task_ids]
     active_task_ids = {task.task_id for task in active}
-    claims = {claim.claim_id: claim for claim in state.image_claims}
+    facts = {fact.fact_id: fact for fact in state.facts}
     hypotheses = {
         item.hypothesis_id: item for item in state.search_hypotheses
     }
@@ -741,6 +733,18 @@ def render_discrepancy_react_context(
     return json.dumps(
         {
             "image_account_summary": state.image_account_summary,
+            "image_target_facts": [
+                fact.model_dump(mode="json")
+                for fact in state.facts
+                if fact.decision_relevance == "decisive"
+                or fact.fact_id in {
+                    fact_id
+                    for task in active
+                    for fact_id in task.fact_ids
+                }
+            ],
+            # Legacy aliases remain in the context so historical replay
+            # backends can continue to submit claim_id bookkeeping fields.
             "image_claims": [
                 claim.model_dump(mode="json")
                 for claim in state.image_claims
@@ -753,9 +757,15 @@ def render_discrepancy_react_context(
             "active_tasks": [
                 {
                     **task.model_dump(mode="json"),
+                    "owned_target_facts": [
+                        facts[fact_id].model_dump(mode="json")
+                        for fact_id in task.fact_ids
+                        if fact_id in facts
+                    ],
                     "owned_claims": [
-                        claims[claim_id].model_dump(mode="json")
-                        for claim_id in task.claim_ids
+                        state_claim.model_dump(mode="json")
+                        for state_claim in state.image_claims
+                        if state_claim.claim_id in task.claim_ids
                     ],
                     "owned_hypothesis": hypotheses[
                         task.hypothesis_id
@@ -1137,7 +1147,7 @@ def render_discrepancy_decision_context(
             ),
             "ownership_note": (
                 "Ownership permits review; it does not prove that Evidence "
-                "semantically addresses every owned Claim."
+                "semantically addresses the target fact."
             ),
             "prior_claim_assessments": [
                 item.model_dump(mode="json")

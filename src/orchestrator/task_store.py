@@ -1348,7 +1348,7 @@ def apply_image_account_planning(
     if not high_claim_keys:
         return {
             "accepted": False,
-            "rejected_reason": "image account requires a high-salience claim",
+            "rejected_reason": "image account requires a high-salience target fact",
         }
     if candidate.proposed_verdict in {"fake", "real"}:
         return {
@@ -1520,6 +1520,22 @@ def apply_image_account_planning(
         "accepted_hypothesis_ids": new_hypothesis_ids,
         "accepted_task_ids": new_task_ids,
     }
+
+
+def _core_target_fact(
+    state: ImageOnlyInvestigationState,
+    *,
+    fact_by_id: Mapping[str, VisualFact] | None = None,
+) -> VisualFact | None:
+    facts = fact_by_id or {fact.fact_id: fact for fact in state.facts}
+    if state.core_verdict_fact_id in facts:
+        return facts[state.core_verdict_fact_id]
+    # Compatibility fallback for v4 reducer fixtures and historical replays
+    # created before core_verdict_fact_id became the semantic owner.
+    for claim in state.image_claims:
+        if claim.salience == "high" and claim.fact_id in facts:
+            return facts[claim.fact_id]
+    return None
 
 
 def _claim_directional_chain_ids(
@@ -2191,38 +2207,44 @@ def _discrepancy_contract_errors(
                 )
             ):
                 errors.append(
-                    f"affected ImageClaim {claim_id!r} requires an owned qualified "
+                    f"affected target fact {claim_id!r} requires an owned qualified "
                     "refute Finding -> Evidence discrepancy chain"
                 )
         valid_output_discrepancy = len(errors) == discrepancy_error_count_before
 
-    high_claims = [claim for claim in state.image_claims if claim.salience == "high"]
-    projected_high_status = {
-        claim.claim_id: (
-            valid_assessments[claim.claim_id].assessment
-            if claim.claim_id in valid_assessments
-            else claim.status
-        )
-        for claim in high_claims
+    core_fact = _core_target_fact(state, fact_by_id=fact_by_id)
+    core_claim_ids = {
+        claim.claim_id
+        for claim in state.image_claims
+        if core_fact is not None and claim.fact_id == core_fact.fact_id
     }
+    projected_core_status = core_fact.status if core_fact is not None else ""
+    for claim_id in core_claim_ids:
+        if claim_id in valid_assessments:
+            projected_core_status = valid_assessments[claim_id].assessment
+            break
     retired_ids = set(output.retire_hypothesis_ids)
-    open_high_route_ids = [
+    open_core_route_ids = [
         hypothesis.hypothesis_id
         for hypothesis in state.search_hypotheses
         if hypothesis.status in {"open", "active"}
         and hypothesis.hypothesis_id not in retired_ids
         and any(
-            claim_id in claim_by_id
-            and claim_by_id[claim_id].salience == "high"
-            for claim_id in hypothesis.claim_ids
+            task.hypothesis_id == hypothesis.hypothesis_id
+            and (
+                core_fact is None
+                or core_fact.fact_id in task.fact_ids
+            )
+            for task in task_by_id.values()
         )
     ]
-    new_high_routes = [
+    new_core_routes = [
         item.statement
         for item in output.new_hypotheses
         if any(
             claim_id in claim_by_id
-            and claim_by_id[claim_id].salience == "high"
+            and core_fact is not None
+            and claim_by_id[claim_id].fact_id == core_fact.fact_id
             for claim_id in item.claim_ids
         )
     ]
@@ -2232,78 +2254,69 @@ def _discrepancy_contract_errors(
         if item.materiality == "decisive"
         and item.status in {"established", "conflicted"}
     ]
-    output_established_high_discrepancy = bool(
+    output_established_core_discrepancy = bool(
         discrepancy is not None
         and valid_output_discrepancy
         and discrepancy.materiality == "decisive"
         and discrepancy.status == "established"
         and any(
             claim_id in claim_by_id
-            and claim_by_id[claim_id].salience == "high"
+            and core_fact is not None
+            and claim_by_id[claim_id].fact_id == core_fact.fact_id
             for claim_id in discrepancy.affected_claim_ids
         )
     )
-    current_established_high_discrepancy = any(
+    current_established_core_discrepancy = any(
         item.status == "established"
         and any(
             claim_id in claim_by_id
-            and claim_by_id[claim_id].salience == "high"
+            and core_fact is not None
+            and claim_by_id[claim_id].fact_id == core_fact.fact_id
             for claim_id in item.affected_claim_ids
         )
         for item in current_decisive
     )
-    established_high_discrepancy = (
-        current_established_high_discrepancy
-        or output_established_high_discrepancy
+    established_core_discrepancy = (
+        current_established_core_discrepancy
+        or output_established_core_discrepancy
     )
-    refuted_high_claim_ids = [
-        claim_id
-        for claim_id, status in projected_high_status.items()
-        if status == "refuted"
-    ]
-    if refuted_high_claim_ids and not established_high_discrepancy:
+    if projected_core_status == "refuted" and not established_core_discrepancy:
         errors.append(
-            "refuted high-salience ImageClaim requires a valid decisive "
+            "a refuted core image-grounded target fact requires a valid decisive "
             "established discrepancy and verdict_proposal='fake' in the same "
-            "atomic update; affected high Claim IDs: "
-            + ", ".join(refuted_high_claim_ids)
+            "atomic update"
         )
     if output.verdict_proposal == "real" and (
-        not high_claims
-        or any(status != "supported" for status in projected_high_status.values())
+        not core_fact
+        or projected_core_status != "supported"
         or current_decisive
         or (discrepancy is not None and discrepancy.materiality == "decisive")
-        or open_high_route_ids
-        or new_high_routes
+        or open_core_route_ids
+        or new_core_routes
     ):
         detail: list[str] = []
-        unsupported_ids = [
-            claim_id
-            for claim_id, status in projected_high_status.items()
-            if status != "supported"
-        ]
-        if unsupported_ids:
-            detail.append("unsupported high Claims: " + ", ".join(unsupported_ids))
-        if open_high_route_ids:
-            detail.append("open high routes: " + ", ".join(open_high_route_ids))
-        if new_high_routes:
-            detail.append("new high routes remain open")
+        if not core_fact or projected_core_status != "supported":
+            detail.append("core target fact is not supported")
+        if open_core_route_ids:
+            detail.append("open core routes: " + ", ".join(open_core_route_ids))
+        if new_core_routes:
+            detail.append("new core routes remain open")
         if current_decisive or (
             discrepancy is not None and discrepancy.materiality == "decisive"
         ):
             detail.append("decisive discrepancy remains")
         errors.append(
-            "real verdict requires all high-salience claims supported, no "
-            "decisive discrepancy, and no open high-salience route; choose "
+            "real verdict requires the core target fact to be supported, no "
+            "decisive discrepancy, and no open core route; choose "
             "continue unless those conditions are already satisfied"
             + (f" ({'; '.join(detail)})" if detail else "")
         )
-    if output.verdict_proposal == "fake" and not established_high_discrepancy:
+    if output.verdict_proposal == "fake" and not established_core_discrepancy:
         errors.append(
             "fake verdict requires a valid decisive established discrepancy "
-            "affecting a high-salience ImageClaim; otherwise choose continue"
+            "affecting the core target fact; otherwise choose continue"
         )
-    if established_high_discrepancy and output.verdict_proposal != "fake":
+    if established_core_discrepancy and output.verdict_proposal != "fake":
         errors.append(
             "a valid established decisive high-salience discrepancy requires "
             "verdict_proposal='fake' in the same complete JSON object"
@@ -2951,55 +2964,44 @@ def apply_discrepancy_decision(
     established_decisive = [
         item for item in decisive if item.status == "established"
     ]
-    high_claims = [claim for claim in candidate.image_claims if claim.salience == "high"]
-    refuted_high_claim_ids = {
-        claim.claim_id
-        for claim in high_claims
-        if claim.status == "refuted"
-    }
-    established_high_discrepancy = any(
+    core_fact = _core_target_fact(candidate)
+    established_core_discrepancy = any(
         any(
-            claim_by_id[claim_id].salience == "high"
+            core_fact is not None
+            and claim_id in claim_by_id
+            and claim_by_id[claim_id].fact_id == core_fact.fact_id
             for claim_id in item.affected_claim_ids
         )
         for item in established_decisive
     )
-    if refuted_high_claim_ids and not established_high_discrepancy:
+    if core_fact is not None and core_fact.status == "refuted" and not established_core_discrepancy:
         return {
             "accepted": False,
             "rejected_reason": (
-                "a refuted high-salience ImageClaim requires a decisive "
-                "established discrepancy and fake verdict in the same atomic "
-                "update"
+                "a refuted core image-grounded target fact requires a decisive "
+                "established discrepancy and fake verdict in the same atomic update"
             ),
         }
-    if established_high_discrepancy and output.verdict_proposal != "fake":
+    if established_core_discrepancy and output.verdict_proposal != "fake":
         return {
             "accepted": False,
             "rejected_reason": (
-                "an established decisive high-salience discrepancy requires fake"
+                "an established decisive core discrepancy requires fake"
             ),
         }
-    if output.verdict_proposal == "fake" and not established_high_discrepancy:
+    if output.verdict_proposal == "fake" and not established_core_discrepancy:
         return {"accepted": False, "rejected_reason": "fake verdict requires a decisive established discrepancy"}
     if output.verdict_proposal == "real" and (
-        not high_claims
-        or any(claim.status != "supported" for claim in high_claims)
+        core_fact is None
+        or core_fact.status != "supported"
         or decisive
-        or any(
-            hypothesis.status in {"open", "active"}
-            and any(
-                claim_by_id[claim_id].salience == "high"
-                for claim_id in hypothesis.claim_ids
-            )
-            for hypothesis in candidate.search_hypotheses
-        )
+        or remaining_claim_hypothesis_routes(candidate)
     ):
         return {
             "accepted": False,
             "rejected_reason": (
-                "real verdict requires all high-salience claims supported, "
-                "no decisive discrepancy, and no open high-salience route"
+                "real verdict requires the core target fact to be supported, "
+                "no decisive discrepancy, and no open core route"
             ),
         }
     candidate.proposed_verdict = output.verdict_proposal
@@ -6667,10 +6669,23 @@ def _refresh_fact_states(state: ImageOnlyInvestigationState) -> None:
             (item for item in state.image_claims if item.fact_id == fact.fact_id),
             None,
         )
+        if fact.fact_id == state.core_verdict_fact_id:
+            # The core VisualFact is the semantic owner. A legacy bookkeeping
+            # row may mirror its status for replay, but an unresolved row must
+            # not downgrade an already adjudicated core fact.
+            if fact.status in {"supported", "refuted", "conflicted"}:
+                continue
+            if claim is not None and claim.status in {
+                "supported",
+                "refuted",
+                "conflicted",
+            }:
+                fact.status = claim.status
+            else:
+                fact.status = "active"
+            continue
         if claim is not None:
-            # In v4, fetched Evidence and extractor stance do not decide the
-            # image account. Only the sparse Discrepancy Decision reducer may
-            # change ImageClaim/claim-fact semantics.
+            # Non-core legacy rows remain serializable for old v4 traces.
             fact.status = {
                 "open": "active",
                 "unresolved": "active",
@@ -6678,21 +6693,6 @@ def _refresh_fact_states(state: ImageOnlyInvestigationState) -> None:
                 "refuted": "refuted",
                 "conflicted": "conflicted",
             }[claim.status]
-            continue
-        if fact.fact_id == state.core_verdict_fact_id:
-            decision = latest_evidence_decision(
-                state,
-                fact_id=fact.fact_id,
-            )
-            if decision is None:
-                fact.status = "active"
-            else:
-                fact.status = {
-                    "supported": "supported",
-                    "refuted": "refuted",
-                    "conflicted": "conflicted",
-                    "insufficient": "active",
-                }[decision.output.assessment]
             continue
         fact_findings = findings_by_fact.get(fact.fact_id, [])
         fact_evidence = [
@@ -7034,26 +7034,26 @@ def remaining_claim_hypothesis_routes(
     *,
     task_ids: set[str] | None = None,
 ) -> List[str]:
-    """Return untried routes owned by open v4 claim/hypothesis tasks."""
+    """Return untried routes for the image-grounded target fact.
 
-    claim_by_id = {claim.claim_id: claim for claim in state.image_claims}
-    known_claim_ids = set(claim_by_id)
+    The function name is retained for replay/API compatibility. Route
+    eligibility is owned by task fact IDs and active hypotheses; the status of
+    a legacy ImageClaim bookkeeping row must not close or reopen an
+    investigation route.
+    """
+
     known_hypothesis_ids = {
         hypothesis.hypothesis_id
         for hypothesis in state.search_hypotheses
         if hypothesis.status in {"open", "active"}
     }
+    core_fact_id = state.core_verdict_fact_id
     tasks = [
         task
         for task in state.tasks
         if task.status in {"active", "pending"}
-        and bool(set(task.claim_ids) & known_claim_ids)
         and task.hypothesis_id in known_hypothesis_ids
-        and any(
-            claim_by_id[claim_id].status in {"open", "conflicted", "unresolved"}
-            for claim_id in task.claim_ids
-            if claim_id in claim_by_id
-        )
+        and (core_fact_id is None or core_fact_id in task.fact_ids)
         and (task_ids is None or task.task_id in task_ids)
     ]
     attempted = _attempted_routes_by_task(state)

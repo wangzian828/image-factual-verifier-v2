@@ -2443,7 +2443,7 @@ class Orchestrator:
         if not candidate.image_claims or not any(
             claim.salience == "high" for claim in candidate.image_claims
         ):
-            return False, "Image Account Planning requires a high-salience claim"
+            return False, "Image Account Planning requires a high-salience target fact"
         if candidate.core_verdict_fact_id is not None:
             return False, "Image Account Planning must not select a core verdict fact"
         return True, ""

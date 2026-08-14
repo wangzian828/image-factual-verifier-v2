@@ -71,9 +71,8 @@ def test_hot_path_prompts_stay_semantic_and_compact() -> None:
     assert "validates grounding" in planning_prompt
     assert "do not own the verdict" in image_account_prompt
     assert "search_hypotheses as neutral investigation routes" in image_account_prompt
-    assert "one high-salience ImageClaim" in image_account_prompt
-    assert "complete subject-event relation" in image_account_prompt
-    assert "relation slot, and depicted value" in image_account_prompt
+    assert "one high-salience image-grounded target fact" in image_account_prompt
+    assert "visible world relation" in image_account_prompt
     assert "independently verdict-changing" in image_account_prompt
     assert "a defining factual relation may be more useful" in image_account_prompt
     assert "Do not inventory details" in image_account_prompt
@@ -93,8 +92,8 @@ def test_hot_path_prompts_stay_semantic_and_compact() -> None:
     assert "visible anchors, relation slots" in discrepancy_react_prompt
     assert "unsupported verdict label" in discrepancy_react_prompt
     assert "only tool Evidence establishes a fact" in discrepancy_react_prompt
-    assert "Do not change the ImageClaim" in discrepancy_react_prompt
-    assert "select one owned ImageClaim" in discrepancy_react_prompt
+    assert "legacy image-claim record is bookkeeping only" in discrepancy_react_prompt
+    assert "select one owned target fact" in discrepancy_react_prompt
     assert "state the passage sought" in discrepancy_react_prompt
     assert "reviewed Evidence" in discrepancy_prompt
     assert "recorded admissible_stances" in discrepancy_prompt
@@ -105,5 +104,5 @@ def test_hot_path_prompts_stay_semantic_and_compact() -> None:
     assert "does not establish semantic coverage" in discrepancy_prompt
     assert "allowed visual anchors" in discrepancy_prompt
     assert "MaterialDiscrepancy" in discrepancy_prompt
-    assert "unresolved other Claims do not weaken it" in discrepancy_prompt
+    assert "core target fact is decisive" in discrepancy_prompt
     assert "otherwise continue" in discrepancy_prompt

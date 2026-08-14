@@ -21,6 +21,20 @@ from src.orchestrator.task_store import (
 )
 
 
+def _core_target_fact(
+    state: ImageOnlyInvestigationState,
+) -> VisualFact | None:
+    facts = {item.fact_id: item for item in state.facts}
+    if state.core_verdict_fact_id in facts:
+        return facts[state.core_verdict_fact_id]
+    # Compatibility fallback for v4 reducer fixtures and historical replays
+    # created before core_verdict_fact_id became the semantic owner.
+    for claim in state.image_claims:
+        if claim.salience == "high" and claim.fact_id in facts:
+            return facts[claim.fact_id]
+    return None
+
+
 def _strategy_boundary_has_substantive_update(
     decision: object,
 ) -> bool:
@@ -73,6 +87,7 @@ def audit_discrepancy_coverage(
     pending_archive_ids = list(state.pending_archive_read_ids)
     pending_evidence_ids = pending_discrepancy_evidence_ids(state)
     pending_visual = pending_visual_reinspection(state)
+    core_fact = _core_target_fact(state)
     has_pending_terminal_work = bool(
         pending_archive_ids or pending_evidence_ids or pending_visual is not None
     )
@@ -118,9 +133,10 @@ def audit_discrepancy_coverage(
     high_rows = [item for item in coverage_rows if item.salience == "high"]
     fake_complete = bool(decisive and state.proposed_verdict == "fake")
     real_complete = bool(
-        high_rows
-        and all(item.assessment == "supported" for item in high_rows)
-        and all(item.route_status == "closed" for item in high_rows)
+        core_fact is not None
+        and core_fact.status == "supported"
+        and not remaining_routes
+        and not has_pending_terminal_work
         and not decisive
         and state.proposed_verdict == "real"
     )
@@ -130,7 +146,8 @@ def audit_discrepancy_coverage(
         reason = {
             "fake": "An established decisive discrepancy closes the case.",
             "real": (
-                "Every high-salience ImageClaim is supported and its routes close."
+                "The core image-grounded target fact is supported and its "
+                "routes close."
             ),
         }[state.proposed_verdict]
     elif state.action_count >= MAX_TOOL_ACTIONS:
@@ -230,15 +247,25 @@ def compile_discrepancy_verdict_basis(
         )
         verdict_target = selected.statement
     elif state.proposed_verdict == "real":
-        high_claims = [
-            item for item in state.image_claims if item.salience == "high"
+        core_fact = _core_target_fact(state)
+        core_claims = [
+            item
+            for item in state.image_claims
+            if core_fact is not None and item.fact_id == core_fact.fact_id
         ]
-        claim_ids = [item.claim_id for item in high_claims]
+        claim_ids = [item.claim_id for item in core_claims]
         anchor_ids = list(
             dict.fromkeys(
-                fact_id
-                for claim in high_claims
-                for fact_id in claim.anchor_fact_ids
+                (
+                    list(core_fact.basis_ids)
+                    if core_fact is not None
+                    else []
+                )
+                + [
+                    fact_id
+                    for claim in core_claims
+                    for fact_id in claim.anchor_fact_ids
+                ]
             )
         )
         latest = {}
@@ -248,7 +275,11 @@ def compile_discrepancy_verdict_basis(
             dict.fromkeys(
                 evidence_id
                 for claim_id in claim_ids
-                for evidence_id in latest[claim_id].evidence_ids
+                for evidence_id in (
+                    latest[claim_id].evidence_ids
+                    if claim_id in latest
+                    else []
+                )
             )
         )
         evidence_ids, finding_ids = _directional_verdict_chain(

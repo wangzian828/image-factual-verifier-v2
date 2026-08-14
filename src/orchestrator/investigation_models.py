@@ -509,6 +509,13 @@ class SearchHypothesisProposal(StrictModel):
 
 
 class ImageAccountPlanningOutput(StrictModel):
+    """Image target planning with a legacy ``image_claims`` wire field.
+
+    The wire name remains for replay and training-schema compatibility. These
+    rows are semantically image-grounded target-fact bookkeeping, not
+    user-supplied Claims or provenance requirements.
+    """
+
     account_summary: str = Field(min_length=1, max_length=1600)
     image_claims: List[ImageClaimProposal] = Field(min_length=1, max_length=3)
     search_hypotheses: List[SearchHypothesisProposal] = Field(
@@ -533,12 +540,15 @@ class ImageAccountPlanningOutput(StrictModel):
         ]
         if len(high_claims) != 1:
             raise ValueError(
-                "image account requires exactly one high-salience central claim"
+                "image account requires exactly one high-salience central "
+                "target fact"
             )
         return self
 
 
 class ImageClaim(StrictModel):
+    """Legacy target-fact bookkeeping retained for state/replay compatibility."""
+
     claim_id: str = Field(min_length=1, max_length=100)
     fact_id: str = Field(min_length=1, max_length=100)
     statement: str = Field(min_length=1, max_length=1200)
@@ -650,12 +660,12 @@ class VisualDiscriminatorCandidate(StrictModel):
         max_length=800,
         description=(
             "Why this property has information gain beyond generically "
-            "confirming the current ImageClaim."
+            "confirming the current image-grounded target fact."
         ),
     )
     already_in_claim: bool = Field(
         description=(
-            "Whether the current ImageClaim or visual account already asserts "
+            "Whether the current target fact or visual account already asserts "
             "this property."
         )
     )
