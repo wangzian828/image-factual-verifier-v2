@@ -242,15 +242,11 @@ copies visible_property. Pixels cannot infer absolute size or weight without sca
 or media origin from style. If anchors establish neither alternative, keep Claim
 insufficient and do not create a discrepancy.
 
-After any claim-owned pixel Evidence, reconcile it with source. On conflict cite
-both IDs in claim_assessments[].selected_evidence_ids and
-material_discrepancy.evidence_ids; preserve stances. If
-claim_owned_visual_evidence_requirements is non-empty, every listed pixel
-Evidence must either be consumed by the relevant assessment/discrepancy or be
-listed in visual_evidence_disposition.evidence_ids with a concrete reason it is
-irrelevant. Never revert to source-only support/verdict while silently dropping
-claim-owned pixel Evidence. Updates to a Claim must consume its pixel Evidence;
-only a different current Claim/discrepancy may dispose of it.
+Reconcile every claim-owned pixel Evidence with source. On conflict cite both
+IDs in the assessment and discrepancy; preserve stances. Each listed Evidence
+must be consumed or listed in visual_evidence_disposition.evidence_ids with a
+reason it is irrelevant. Never silently drop pixel Evidence or dispose of it
+while updating the same Claim.
 
 For visual_reinspection choose claim_id from runtime candidates. Emit only claim_id,
 reason, scope, question, expected_property and verdict_proposal=continue; runtime
