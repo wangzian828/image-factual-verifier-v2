@@ -22,6 +22,7 @@ STAGE_TOOLS: Dict[str, List[str]] = {
         "ocr_with_position",
         "reverse_image_search",
         "text_search",
+        "jina_search",
         "visit",
         "compare_with_reference",
         "check_consistency",
@@ -176,6 +177,13 @@ def build_all_tools_with_health(
     register(
         "text_search",
         lambda: __import__("src.tools.text_search", fromlist=["TextSearchTool"]).TextSearchTool(),
+    )
+    register(
+        "jina_search",
+        lambda: __import__(
+            "src.tools.jina_search",
+            fromlist=["JinaSearchTool"],
+        ).JinaSearchTool(),
     )
     register(
         "reverse_image_search",

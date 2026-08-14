@@ -716,7 +716,7 @@ def test_extractor_attaches_preceding_exact_span_for_deictic_primary(
     assert result["evidence_records"][1]["directness"] == "indirect"
 
 
-def test_jina_failure_falls_back_to_direct_and_records_attempts(
+def test_jina_failure_is_explicit_and_does_not_fall_back_to_direct(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client = JinaReaderClient(fetch_provider="jina")
@@ -725,40 +725,17 @@ def test_jina_failure_falls_back_to_direct_and_records_attempts(
         "_fetch_with_jina",
         lambda _url: (_ for _ in ()).throw(RuntimeError("jina unavailable")),
     )
-    monkeypatch.setattr(
-        client,
-        "_fetch_direct",
-        lambda _url: "Direct fallback content about monarch migration.",
-    )
-    monkeypatch.setattr(
-        client,
-        "extract_goal_evidence",
-        lambda _content, **_kwargs: {
-            "rationale": "Direct fallback contained the target.",
-            "evidence": "Direct fallback content about monarch migration.",
-            "summary": "Fallback succeeded.",
-            "relevance": "high",
-            "stance": "support",
-            "directness": "direct",
-            "temporal_alignment": "not_applicable",
-            "artifact_sha256": "a" * 64,
-            "evidence_span": {"start": 0, "end": 49},
-        },
-    )
-
     result = _visit(
         client,
         "https://example.test/monarch",
         "Where do monarch butterflies migrate?",
     )
 
-    assert result["provider"] == "direct_reader"
+    assert result["status"] == "error"
+    assert result["provider"] == "jina_reader"
     assert result["fetch_attempts"][0]["provider"] == "jina_reader"
     assert result["fetch_attempts"][0]["status"] == "error"
-    assert result["fetch_attempts"][1] == {
-        "provider": "direct_reader",
-        "status": "success",
-    }
+    assert len(result["fetch_attempts"]) == 1
 
 
 def test_all_fetch_failures_return_auditable_subcalls(
@@ -783,11 +760,8 @@ def test_all_fetch_failures_return_auditable_subcalls(
     )
 
     assert result["status"] == "error"
-    assert [item["provider"] for item in result["subcalls"]] == [
-        "jina_reader",
-        "direct_reader",
-    ]
-    assert all(item["status"] == "error" for item in result["subcalls"])
+    assert [item["provider"] for item in result["subcalls"]] == ["jina_reader"]
+    assert result["subcalls"][0]["status"] == "error"
 
 
 def test_extraction_failure_records_fetch_and_extract_subcalls(

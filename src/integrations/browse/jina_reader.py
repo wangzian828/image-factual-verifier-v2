@@ -270,7 +270,11 @@ class JinaReaderClient:
                 "url": normalized_url,
                 "image_claim": image_claim,
                 "retrieval_goal": retrieval_goal,
-                "provider": self.fetch_provider,
+                "provider": (
+                    "jina_reader"
+                    if self.fetch_provider == "jina"
+                    else "direct_reader"
+                ),
                 "fetch_attempts": fetch_attempts,
                 "subcalls": self._fetch_subcalls(fetch_attempts),
                 "blocked": False,
@@ -547,29 +551,11 @@ class JinaReaderClient:
                         "error": f"{type(exc).__name__}: {exc}",
                     }
                 )
-                try:
-                    result = (self._fetch_direct(normalized_url), "direct_reader")
-                    attempts.append(
-                        {"provider": "direct_reader", "status": "success"}
-                    )
-                except Exception as direct_exc:
-                    attempts.append(
-                        {
-                            "provider": "direct_reader",
-                            "status": "error",
-                            "error": (
-                                f"{type(direct_exc).__name__}: {direct_exc}"
-                            ),
-                        }
-                    )
-                    self._thread_local.fetch_attempts = attempts
-                    raise RuntimeError(
-                        "All page fetch providers failed: "
-                        + "; ".join(
-                            f"{item['provider']}: {item.get('error', '')}"
-                            for item in attempts
-                        )
-                    ) from direct_exc
+                self._thread_local.fetch_attempts = attempts
+                raise RuntimeError(
+                    "Configured Jina page fetch failed: "
+                    + str(exc)
+                ) from exc
         else:
             result = (self._fetch_direct(normalized_url), "direct_reader")
             attempts.append({"provider": "direct_reader", "status": "success"})

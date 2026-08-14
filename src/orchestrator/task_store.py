@@ -69,8 +69,8 @@ NEW_TASKS_PER_REFLECTION_MAX = 3
 MAX_TEXT_SEARCH_ROUTES_PER_TASK = 2
 MAX_ARCHIVE_RECALL_ROUTES_PER_TASK = 2
 MAX_CORE_FACT_REFINEMENTS = 1
-MAX_INSPECTION_CANDIDATES_PER_BATCH = 4
-MAX_INSPECTION_ATTEMPTS_PER_BATCH = 2
+MAX_TEXT_SEARCH_CANDIDATES_PER_BATCH = 10
+MAX_REVERSE_SEARCH_CANDIDATES_PER_BATCH = 3
 MAX_VISUAL_REINSPECTIONS = 2
 MAX_IMAGE_CLAIMS = 3
 MAX_SEARCH_HYPOTHESES = 3
@@ -6144,7 +6144,7 @@ def _record_discoveries(
                         reference if reference in valid_references else "",
                     )
                 )
-    elif tool_name == "text_search":
+    elif tool_name in {"text_search", "jina_search"}:
         for query in data.get("queries", []) or []:
             if not isinstance(query, Mapping):
                 continue
@@ -6154,8 +6154,15 @@ def _record_discoveries(
                         (
                             str(item.get("url", "")),
                             str(item.get("title", "")),
-                            str(item.get("snippet", "")),
-                            "serp",
+                            str(
+                                item.get("snippet")
+                                or item.get("content_preview", "")
+                            ),
+                            (
+                                "jina_search"
+                                if tool_name == "jina_search"
+                                else "serp"
+                            ),
                             "",
                         )
                     )
@@ -7539,7 +7546,18 @@ def _pending_inspection_batches(
                     else item.reference_image_url
                 )
             )
-        )[:MAX_INSPECTION_CANDIDATES_PER_BATCH]
+        )
+        reverse_batch = any(
+            item.candidate_type in {"reverse_image", "visual_reference"}
+            for item in discoveries
+        )
+        candidate_urls = candidate_urls[
+            :(
+                MAX_REVERSE_SEARCH_CANDIDATES_PER_BATCH
+                if reverse_batch
+                else MAX_TEXT_SEARCH_CANDIDATES_PER_BATCH
+            )
+        ]
         if not candidate_urls:
             continue
         batch_page_urls = {
@@ -7595,9 +7613,6 @@ def _pending_inspection_batches(
                         for url in paired_pages[:1]
                     ]
                 )
-            continue
-        attempted_count = len(attempted_pages | attempted_references)
-        if attempted_count >= MAX_INSPECTION_ATTEMPTS_PER_BATCH:
             continue
         remaining = [
             url for url in candidate_urls if url not in attempted_outcomes

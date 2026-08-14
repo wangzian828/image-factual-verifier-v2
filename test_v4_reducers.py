@@ -4075,7 +4075,7 @@ def test_two_no_gain_actions_open_a_strategy_boundary_without_settling() -> None
     assert state.stop_reason == ""
 
 
-def test_two_empty_strategy_boundaries_mark_information_saturated() -> None:
+def test_two_empty_strategy_boundaries_do_not_end_investigation() -> None:
     state = _planned_state()
 
     for action_count in (1, 2):
@@ -4109,5 +4109,5 @@ def test_two_empty_strategy_boundaries_mark_information_saturated() -> None:
     audit = audit_discrepancy_coverage(state, decision_checkpoint=True)
 
     assert audit.complete is False
-    assert audit.stop_reason == "information_saturated"
-    assert state.stop_reason == "information_saturated"
+    assert audit.stop_reason == "continue"
+    assert state.stop_reason == ""

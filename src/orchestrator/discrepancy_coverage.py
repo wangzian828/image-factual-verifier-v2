@@ -35,44 +35,6 @@ def _core_target_fact(
     return None
 
 
-def _strategy_boundary_has_substantive_update(
-    decision: object,
-) -> bool:
-    """Return whether a strategy checkpoint changed the investigation route."""
-
-    if any(
-        getattr(decision, field, None)
-        for field in (
-            "accepted_discrepancy_id",
-            "accepted_hypothesis_ids",
-            "retired_hypothesis_ids",
-            "accepted_visual_question_id",
-        )
-    ):
-        return True
-    output = getattr(decision, "output", None)
-    for assessment in getattr(output, "claim_assessments", []) or []:
-        if assessment.assessment != "insufficient":
-            return True
-        if assessment.selected_evidence_ids:
-            return True
-    return bool(getattr(output, "visual_evidence_disposition", None))
-
-
-def _repeated_empty_strategy_boundaries(
-    state: ImageOnlyInvestigationState,
-) -> bool:
-    recent = [
-        item
-        for item in reversed(state.discrepancy_decisions)
-        if item.trigger == "strategy_boundary"
-    ][:2]
-    return len(recent) == 2 and all(
-        not _strategy_boundary_has_substantive_update(item)
-        for item in recent
-    )
-
-
 def audit_discrepancy_coverage(
     state: ImageOnlyInvestigationState,
     *,
@@ -153,12 +115,6 @@ def audit_discrepancy_coverage(
     elif state.action_count >= MAX_TOOL_ACTIONS:
         stop_reason = "hard_budget_exhausted"
         reason = "The action budget ended before v4 verdict preconditions closed."
-    elif decision_checkpoint and _repeated_empty_strategy_boundaries(state):
-        stop_reason = "information_saturated"
-        reason = (
-            "Two consecutive strategy boundaries produced no qualified Evidence "
-            "or route transition; stop without inventing a binary verdict."
-        )
     elif (
         not remaining_routes
         and not has_pending_terminal_work
