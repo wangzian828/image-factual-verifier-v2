@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import asyncio
-from concurrent.futures import ThreadPoolExecutor
+import atexit
 import os
-import threading
 from dataclasses import dataclass
 from typing import Any, Dict, Mapping, Optional, Sequence
 
+from src.integrations.async_runtime import PersistentAsyncRuntime
 from src.integrations.gemini import (
     GeminiInteractionsClient,
     RUNTIME_METRICS_KEY,
@@ -32,71 +31,6 @@ DEFAULT_JSON_OBJECT_SCHEMA: Dict[str, Any] = {
 DEFAULT_GEMINI_VISION_MIN_OUTPUT_TOKENS = 8192
 
 
-class _PersistentAsyncRuntime:
-    """Run synchronous vision calls on one reusable async transport thread."""
-
-    def __init__(self) -> None:
-        self._executor = ThreadPoolExecutor(
-            max_workers=1,
-            thread_name_prefix="ifv-gemini-vision",
-        )
-        self._thread_local = threading.local()
-        self._lock = threading.Lock()
-        self._started = False
-        self._closed = False
-
-    def run(self, coroutine: Any) -> Any:
-        with self._lock:
-            if self._closed:
-                raise RuntimeError("The reusable vision runtime is closed.")
-            self._started = True
-        return self._executor.submit(self._run_on_loop, coroutine).result()
-
-    @property
-    def closed(self) -> bool:
-        with self._lock:
-            return self._closed
-
-    def _run_on_loop(self, coroutine: Any) -> Any:
-        runner = getattr(self._thread_local, "runner", None)
-        if hasattr(asyncio, "Runner"):
-            if runner is None:
-                runner = asyncio.Runner()
-                self._thread_local.runner = runner
-            return runner.run(coroutine)
-
-        loop = getattr(self._thread_local, "loop", None)
-        if loop is None:
-            loop = asyncio.new_event_loop()
-            self._thread_local.loop = loop
-            asyncio.set_event_loop(loop)
-        return loop.run_until_complete(coroutine)
-
-    def close(self, cleanup: Any = None) -> None:
-        with self._lock:
-            if self._closed:
-                return
-            self._closed = True
-            started = self._started
-
-        if started:
-            if cleanup is not None:
-                self._executor.submit(self._run_on_loop, cleanup).result(
-                    timeout=10
-                )
-            self._executor.submit(self._close_runner).result(timeout=10)
-        self._executor.shutdown(wait=True, cancel_futures=True)
-
-    def _close_runner(self) -> None:
-        runner = getattr(self._thread_local, "runner", None)
-        if runner is not None:
-            runner.close()
-            return
-        loop = getattr(self._thread_local, "loop", None)
-        if loop is not None and not loop.is_closed():
-            loop.close()
-
-
 @dataclass
 class OpenAIVisionClient:
     api_key: Optional[str] = None
@@ -116,12 +50,13 @@ class OpenAIVisionClient:
         self.api_key = resolve_model_api_key(self.provider, self.api_key)
         self.wire_api = resolve_model_wire_api(self.provider, self.wire_api)
         self.base_url = resolve_model_base_url(self.provider, self.base_url, self.wire_api)
-        self._async_runtime: Optional[_PersistentAsyncRuntime] = (
-            _PersistentAsyncRuntime()
+        self._async_runtime: Optional[PersistentAsyncRuntime] = (
+            PersistentAsyncRuntime(thread_name="ifv-gemini-vision")
             if self.provider == "gemini"
             else None
         )
         self._gemini_interactions_client: Optional[GeminiInteractionsClient] = None
+        atexit.register(self.close)
 
     def close(self) -> None:
         """Close the reusable vision transport if it has been started."""
@@ -131,8 +66,9 @@ class OpenAIVisionClient:
         if self._async_runtime.closed:
             return
         client = self._gemini_interactions_client
-        cleanup = client.aclose() if client is not None else None
-        self._async_runtime.close(cleanup)
+        self._async_runtime.close(
+            (lambda: client.aclose()) if client is not None else None
+        )
 
     def create_image_json(
         self,
