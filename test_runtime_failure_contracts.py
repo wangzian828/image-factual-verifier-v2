@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -89,6 +90,20 @@ class HangingAsyncTool(BaseTool):
 
     async def call_async(self, _params: dict[str, Any]) -> dict[str, Any]:
         await asyncio.Event().wait()
+        return {"status": "success"}
+
+
+class HangingSyncTool(BaseTool):
+    name = "hanging_sync_tool"
+    description = "Blocks a worker thread past the action deadline."
+    parameters = {
+        "type": "object",
+        "properties": {},
+        "required": [],
+    }
+
+    def call(self, _params: dict[str, Any]) -> dict[str, Any]:
+        time.sleep(0.2)
         return {"status": "success"}
 
 
@@ -336,6 +351,25 @@ def test_stage_runner_deadlines_cover_tools_and_native_requests() -> None:
     assert metadata["completed_at"]
     with pytest.raises(TimeoutError, match="Gemini request exceeded"):
         asyncio.run(runner._create_interaction())
+
+
+def test_stage_runner_does_not_wait_for_blocking_sync_tool_after_deadline() -> None:
+    runner = StageRunner(
+        llm=SimpleNamespace(provider="", wire_api=""),
+        system_prompt="test",
+        tools=[HangingSyncTool()],
+        tool_timeout_seconds=0.01,
+    )
+
+    started = time.perf_counter()
+    serialized, metadata = asyncio.run(
+        runner._execute_tool("hanging_sync_tool", {})
+    )
+    elapsed = time.perf_counter() - started
+
+    assert elapsed < 0.15
+    assert "ToolActionTimeout" in json.loads(serialized)["error"]
+    assert metadata["tool_execution_status"] == "timed_out"
 
 
 def test_stage_runner_records_successful_tool_lifecycle() -> None:

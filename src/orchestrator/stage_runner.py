@@ -41,7 +41,11 @@ from src.orchestrator.tool_cache import (
     WEB_EVIDENCE_CONTRACT_VERSION,
 )
 from src.orchestrator.tool_result import ToolResultContractError, parse_tool_result, serialize_tool_result
-from src.orchestrator.tool_execution import ToolActionRecord, ToolExecutionStatus
+from src.orchestrator.tool_execution import (
+    ToolActionRecord,
+    ToolExecutionStatus,
+    run_tool_with_timeout,
+)
 from src.orchestrator.source_access import SourceAccessPolicy
 from src.tools.base import BaseTool
 from src.tools.vision_utils import controlled_image_to_data_url
@@ -3247,14 +3251,14 @@ class StageRunner:
 
         try:
             if hasattr(tool, "call_async"):
-                result = await asyncio.wait_for(
+                result = await run_tool_with_timeout(
                     tool.call_async(tool_args),
-                    timeout=self.tool_timeout_seconds,
+                    timeout_seconds=self.tool_timeout_seconds,
                 )
             else:
-                result = await asyncio.wait_for(
+                result = await run_tool_with_timeout(
                     asyncio.to_thread(tool.call, tool_args),
-                    timeout=self.tool_timeout_seconds,
+                    timeout_seconds=self.tool_timeout_seconds,
                 )
         except asyncio.TimeoutError:
             serialized = json.dumps(
@@ -3978,9 +3982,13 @@ class StageRunner:
                     "[claim-Y]', if you assess claim-Y or propose a discrepancy "
                     "for claim-Y, include evidence-X in "
                     "claim_assessments[].selected_evidence_ids or in "
-                    "material_discrepancy.evidence_ids. If the Evidence is "
-                    "irrelevant, list its exact ID in "
-                    "visual_evidence_disposition.evidence_ids and explain why. "
+                    "material_discrepancy.evidence_ids. If reviewed qualified "
+                    "claim-owned pixel Evidence does not bear on the current "
+                    "Claim/discrepancy, set "
+                    "visual_evidence_disposition.disposition exactly to "
+                    "'irrelevant_to_current_claim_or_discrepancy', list its "
+                    "exact ID in visual_evidence_disposition.evidence_ids, "
+                    "and explain why. Never use the shorthand 'irrelevant'. "
                     "Copy Evidence IDs exactly from the feedback; do not shorten "
                     "or alter any character. Do not dispose of Evidence for the "
                     "same claim. If validator feedback says supported/refuted "

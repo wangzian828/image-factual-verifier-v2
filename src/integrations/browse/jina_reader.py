@@ -42,6 +42,8 @@ DEFAULT_SNIPPET_CHARS = 2000
 DEFAULT_EXTRACT_MAX_CHARS = 60000
 DEFAULT_EXTRACT_MAX_OUTPUT_TOKENS = 4096
 DEFAULT_DIRECT_FETCH_TIMEOUT = 20
+DEFAULT_EXTRACT_TIMEOUT = 60.0
+DEFAULT_EXTRACT_MAX_RETRIES = 0
 
 EXTRACT_PROMPT = """Evaluate image_claim.
 image_claim defines the relation; retrieval_goal is only a flexible
@@ -151,6 +153,8 @@ class JinaReaderClient:
     extract_base_url: Optional[str] = None
     extract_api_key: Optional[str] = None
     extract_wire_api: Optional[str] = None
+    extract_timeout: float = DEFAULT_EXTRACT_TIMEOUT
+    extract_max_retries: int = DEFAULT_EXTRACT_MAX_RETRIES
     direct_fetch_timeout: int = DEFAULT_DIRECT_FETCH_TIMEOUT
     max_workers: int = 4
     fetch_provider: str = "jina"
@@ -180,6 +184,18 @@ class JinaReaderClient:
         if timeout_override:
             try:
                 self.direct_fetch_timeout = max(5, int(timeout_override))
+            except ValueError:
+                pass
+        extract_timeout_override = os.getenv("BROWSE_EXTRACT_TIMEOUT_SECONDS")
+        if extract_timeout_override:
+            try:
+                self.extract_timeout = max(5.0, float(extract_timeout_override))
+            except ValueError:
+                pass
+        extract_retries_override = os.getenv("BROWSE_EXTRACT_MAX_RETRIES")
+        if extract_retries_override:
+            try:
+                self.extract_max_retries = max(0, int(extract_retries_override))
             except ValueError:
                 pass
         workers_override = os.getenv("BROWSE_MAX_CONCURRENCY")
@@ -1381,8 +1397,8 @@ class JinaReaderClient:
                 api_key=api_key,
                 base_url=base_url,
                 wire_api=wire_api,
-                timeout=90.0,
-                max_retries=2,
+                timeout=self.extract_timeout,
+                max_retries=self.extract_max_retries,
             )
             raw = client.create_json_completion(
                 model_name=model_name,
@@ -1499,8 +1515,8 @@ class JinaReaderClient:
     ) -> Dict[str, Any]:
         async with GeminiInteractionsClient(
             base_url=self.extract_base_url,
-            timeout=90.0,
-            max_retries=2,
+            timeout=self.extract_timeout,
+            max_retries=self.extract_max_retries,
         ) as client:
             payload = await client.create(
                 model=model_name,

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
+from src.orchestrator.evidence_semantics import evidence_is_qualified
 from src.orchestrator.investigation_models import (
     ImageOnlyInvestigationState,
     ProgressEvent,
@@ -31,14 +32,50 @@ def record_action_progress(
     failure_ids = list(update.get("created_failure_ids", []) or [])
     recalled_candidate_ids = list(update.get("recalled_candidate_ids", []) or [])
     read_memory_ids = list(update.get("read_memory_ids", []) or [])
+    evidence_by_id = {
+        item.evidence_id: item
+        for item in state.evidence
+    }
+    decision_capable_evidence_ids = [
+        evidence_id
+        for evidence_id in evidence_ids
+        if (
+            evidence_id in evidence_by_id
+            and evidence_is_qualified(evidence_by_id[evidence_id])
+            and (
+                evidence_by_id[evidence_id].stance in {"support", "refute"}
+                or evidence_by_id[evidence_id].evidence_kind
+                in {"image_region", "reference_comparison"}
+            )
+        )
+    ]
     if visual_reinspection and evidence_ids:
-        gain = "visual_understanding_gain"
+        gain = (
+            "visual_understanding_gain"
+            if decision_capable_evidence_ids
+            else "lead_gain"
+        )
         source_ids = [*evidence_ids, *finding_ids]
-        rationale = "Evidence-motivated image reinspection changed the recorded visual account."
-    elif evidence_ids:
+        rationale = (
+            "Evidence-motivated image reinspection changed the recorded visual "
+            "account."
+            if decision_capable_evidence_ids
+            else (
+                "Visual reinspection returned observations, but none were "
+                "qualified for a decision-capable update."
+            )
+        )
+    elif decision_capable_evidence_ids:
         gain = "evidence_gain"
+        source_ids = [*decision_capable_evidence_ids, *finding_ids]
+        rationale = "The accepted action created decision-capable Evidence."
+    elif evidence_ids:
+        gain = "lead_gain"
         source_ids = [*evidence_ids, *finding_ids]
-        rationale = "The accepted action created provenance-complete Evidence."
+        rationale = (
+            "The accepted action created Evidence, but none was qualified "
+            "for a decision-capable update."
+        )
     elif discovery_ids or recalled_candidate_ids or read_memory_ids:
         gain = "lead_gain"
         source_ids = [*discovery_ids, *recalled_candidate_ids, *read_memory_ids]

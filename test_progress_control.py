@@ -5,6 +5,7 @@ from pydantic import ValidationError
 
 from src.orchestrator.investigation_models import (
     ImageOnlyInvestigationState,
+    InvestigationEvidence,
     InvestigationBrief,
 )
 from src.orchestrator.progress_control import (
@@ -43,6 +44,28 @@ def test_evidence_and_decision_gain_reset_streak() -> None:
     assert state.no_substantive_gain_streak == 2
 
     state.action_count = 3
+    state.evidence.append(
+        InvestigationEvidence(
+            evidence_id="evidence-1",
+            task_id="task-1",
+            fact_ids=["fact-1"],
+            function_call_id="call-1",
+            tool_name="visit",
+            evidence_kind="web_span",
+            source_family="test.example",
+            exact_text="The source directly contradicts the image claim.",
+            span_start=0,
+            span_end=10,
+            artifact_sha256="a" * 64,
+            retrieved_at="2026-08-14T00:00:00Z",
+            stance="refute",
+            quality="moderate",
+            directness="direct",
+            claim_binding="source_assertion",
+            relation_scope="same_relation",
+            relation_stance="contradicts",
+        )
+    )
     evidence = record_action_progress(
         state,
         {"created_evidence_ids": ["evidence-1"]},
@@ -57,6 +80,38 @@ def test_evidence_and_decision_gain_reset_streak() -> None:
     )
     assert decision is not None and decision.gain == "decision_gain"
     assert state.no_substantive_gain_streak == 0
+
+
+def test_weak_evidence_remains_non_substantive() -> None:
+    state = _state()
+    state.evidence.append(
+        InvestigationEvidence(
+            evidence_id="evidence-weak",
+            task_id="task-1",
+            fact_ids=["fact-1"],
+            function_call_id="call-weak",
+            tool_name="visit",
+            evidence_kind="web_span",
+            source_family="test.example",
+            exact_text="The page mentions the event but not the disputed value.",
+            span_start=0,
+            span_end=10,
+            artifact_sha256="b" * 64,
+            retrieved_at="2026-08-14T00:00:00Z",
+            stance="neutral",
+            quality="weak",
+            directness="indirect",
+            claim_binding="source_assertion",
+        )
+    )
+
+    event = record_action_progress(
+        state,
+        {"created_evidence_ids": ["evidence-weak"]},
+    )
+
+    assert event.gain == "lead_gain"
+    assert event.no_substantive_gain_streak == 1
 
 
 def test_no_gain_streak_never_sets_a_terminal_state() -> None:

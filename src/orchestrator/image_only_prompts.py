@@ -244,9 +244,12 @@ insufficient and do not create a discrepancy.
 
 Reconcile every claim-owned pixel Evidence with source. On conflict cite both
 IDs in the assessment and discrepancy; preserve stances. Each listed Evidence
-must be consumed or listed in visual_evidence_disposition.evidence_ids with a
-reason it is irrelevant. Never silently drop pixel Evidence or dispose of it
-while updating the same Claim.
+must be consumed or, only when it is reviewed qualified claim-owned pixel
+Evidence that does not bear on the current Claim/discrepancy, listed in
+visual_evidence_disposition.evidence_ids. In that object, set disposition
+exactly to "irrelevant_to_current_claim_or_discrepancy" and explain why.
+Never silently drop pixel Evidence or dispose of it while updating the same
+Claim. Do not use "irrelevant" as the disposition value.
 
 For visual_reinspection choose claim_id from runtime candidates. Emit only claim_id,
 reason, scope, question, expected_property and verdict_proposal=continue; runtime

@@ -82,6 +82,7 @@ from src.orchestrator.stage_runner import (
     StageRunner,
     StageStep,
 )
+from src.orchestrator.tool_execution import run_tool_with_timeout
 from src.orchestrator.source_access import SourceAccessPolicy
 from src.orchestrator.source_provenance import canonicalize_url
 from src.orchestrator.state import (
@@ -3537,18 +3538,18 @@ class Orchestrator:
 
         try:
             if hasattr(tool, "call_async"):
-                result = await asyncio.wait_for(
+                result = await run_tool_with_timeout(
                     tool.call_async(tool_args),
-                    timeout=getattr(
+                    timeout_seconds=getattr(
                         self,
                         "tool_action_timeout_seconds",
                         150.0,
                     ),
                 )
             else:
-                result = await asyncio.wait_for(
+                result = await run_tool_with_timeout(
                     asyncio.to_thread(tool.call, tool_args),
-                    timeout=getattr(
+                    timeout_seconds=getattr(
                         self,
                         "tool_action_timeout_seconds",
                         150.0,

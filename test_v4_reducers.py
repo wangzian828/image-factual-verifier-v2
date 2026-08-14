@@ -2619,6 +2619,11 @@ def test_decision_must_consume_claim_owned_visual_evidence_or_explain_irrelevanc
     state = _planned_state()
     source, visual = _append_source_visual_conflict_pair(state)
     claim = state.image_claims[0]
+    assert (
+        '"irrelevant_to_current_claim_or_discrepancy"'
+        in DISCREPANCY_DECISION_SYSTEM_PROMPT
+    )
+    assert "If the Evidence is irrelevant" not in DISCREPANCY_DECISION_SYSTEM_PROMPT
     before = state.model_dump(mode="json")
     decision_context = json.loads(
         render_discrepancy_decision_context(

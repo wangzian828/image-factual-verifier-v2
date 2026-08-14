@@ -360,9 +360,14 @@ def claim_owned_visual_evidence_requirements(
                     "same_claim_rule": (
                         "If this Decision updates one of these Claims, cite this "
                         "Evidence in that ClaimAssessment or MaterialDiscrepancy. "
-                        "Otherwise list this Evidence ID in "
-                        "visual_evidence_disposition.evidence_ids and explain "
-                        "why it is irrelevant."
+                        "Otherwise, if this is reviewed qualified claim-owned "
+                        "pixel Evidence that does not bear on the current "
+                        "Claim/discrepancy, set "
+                        "visual_evidence_disposition.disposition exactly to "
+                        "'irrelevant_to_current_claim_or_discrepancy', list "
+                        "this Evidence ID in "
+                        "visual_evidence_disposition.evidence_ids, and explain "
+                        "why it does not bear on the current Claim/discrepancy."
                     ),
                 },
             }
@@ -7141,9 +7146,9 @@ def discrepancy_decision_checkpoint_reason(
         if len(qualified_since_prior) >= 2:
             return "scheduled_boundary"
 
-    # Two consecutive no-gain actions are enough to ask whether the current
-    # hypothesis should be retired or replaced. This checkpoint does not settle
-    # the case or relax any verdict precondition.
+    # Two consecutive non-substantive actions are enough to ask whether the
+    # current hypothesis should be retired or replaced. This checkpoint does
+    # not settle the case or relax any verdict precondition.
     latest_progress = state.progress_events[-1] if state.progress_events else None
     latest_strategy_action = max(
         (
@@ -7156,7 +7161,12 @@ def discrepancy_decision_checkpoint_reason(
     if (
         not state.pending_archive_read_ids
         and latest_progress is not None
-        and latest_progress.gain == "no_gain"
+        and latest_progress.gain
+        not in {
+            "evidence_gain",
+            "decision_gain",
+            "visual_understanding_gain",
+        }
         and state.no_substantive_gain_streak >= 2
         and (
             latest_strategy_action < 0

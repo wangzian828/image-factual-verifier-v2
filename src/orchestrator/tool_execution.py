@@ -8,10 +8,14 @@ tool implementation.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Awaitable, Dict, Literal, Optional, TypeVar
 from uuid import uuid4
+
+
+_ToolResult = TypeVar("_ToolResult")
 
 
 ToolExecutionStatus = Literal[
@@ -21,6 +25,41 @@ ToolExecutionStatus = Literal[
     "failed",
     "timed_out",
 ]
+
+
+async def run_tool_with_timeout(
+    awaitable: Awaitable[_ToolResult],
+    *,
+    timeout_seconds: float,
+) -> _ToolResult:
+    """Run one tool call without waiting on an uncancellable worker thread.
+
+    ``asyncio.wait_for(asyncio.to_thread(...))`` can wait past its deadline while
+    the executor thread is still blocked in a synchronous HTTP/provider call.
+    The runtime needs to close the action lifecycle and hand the timeout back to
+    the Agent immediately.  The underlying worker is cancelled when possible;
+    tools must still enforce their own request deadlines for bounded cleanup.
+    """
+
+    task = asyncio.ensure_future(awaitable)
+    done, pending = await asyncio.wait(
+        {task},
+        timeout=max(0.0, float(timeout_seconds)),
+    )
+    if pending:
+        task.cancel()
+
+        def consume_cancelled_task(completed: asyncio.Future[Any]) -> None:
+            if completed.cancelled():
+                return
+            try:
+                completed.exception()
+            except BaseException:
+                pass
+
+        task.add_done_callback(consume_cancelled_task)
+        raise asyncio.TimeoutError
+    return next(iter(done)).result()
 
 
 def _utc_now() -> str:
