@@ -271,7 +271,7 @@ manifests only.
 Push the desired branch from the local repository first:
 
 ```powershell
-git push -u origin codex/image-factual-verifier-v3
+git push -u origin codex/gpu13-canary-20260804-plan-relaxation-01
 ```
 
 Then execute the following on gpu-13 through Jupyter or an approved terminal. The
