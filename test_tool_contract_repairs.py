@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -12,6 +13,7 @@ from src.orchestrator.task_store import record_tool_observation
 from src.orchestrator.tool_registry import build_all_tools_with_health
 from src.tools.crop_and_inspect import CropAndInspectTool
 from src.tools.ocr_with_position import OCRWithPositionTool
+import src.tools.ocr_with_position as ocr_with_position_module
 from test_image_only_state_machine import _runtime_state
 
 
@@ -316,6 +318,38 @@ def test_ocr_accepts_paddle_result_objects_with_json_property(
     assert result["ocr_backend"] == "paddleocr"
     assert result["full_text"] == "Tysons Corner"
     assert result["text_regions"][0]["bbox"] == [0.1, 0.125, 0.9, 0.625]
+
+
+def test_ocr_tools_share_one_process_reader(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created = []
+
+    class PaddleReader:
+        def __init__(self, **kwargs):
+            created.append(kwargs)
+
+    monkeypatch.setitem(
+        sys.modules,
+        "paddleocr",
+        SimpleNamespace(PaddleOCR=PaddleReader),
+    )
+    monkeypatch.setattr(ocr_with_position_module, "_SHARED_READER", None)
+
+    first = OCRWithPositionTool()
+    second = OCRWithPositionTool()
+
+    assert first._get_reader() is second._get_reader()
+    assert created == [
+        {
+            "use_doc_orientation_classify": False,
+            "use_doc_unwarping": False,
+            "use_textline_orientation": False,
+            "device": "cpu",
+            "enable_mkldnn": False,
+            "cpu_threads": 1,
+        }
+    ]
 
 
 def test_ocr_backend_failure_is_explicit_without_fallback(

@@ -9,21 +9,30 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import threading
 from collections.abc import Mapping
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from src.tools.base import BaseTool
 
 
+_SHARED_READER: Optional[Any] = None
+_SHARED_READER_INIT_LOCK = threading.Lock()
+_SHARED_READER_INFERENCE_LOCK = threading.Lock()
+
+
 @dataclass
 class OCRWithPositionTool(BaseTool):
     """CPU-only PaddleOCR tool that returns positioned text observations.
 
-    PaddleOCR is initialized lazily and cached on the tool instance. There is
-    deliberately no alternate OCR backend: a missing model/package is an
-    explicit tool failure rather than a silent change in the observation
-    mechanism.
+    PaddleOCR is initialized lazily once per Python process and shared by the
+    per-case tool instances created by the evaluation harness. Inference is
+    serialized because the shared predictor is mutable and the runtime keeps
+    CPU threading bounded. There is deliberately no alternate OCR backend: a
+    missing package/model is an explicit tool failure rather than a silent
+    change in the observation mechanism.
     """
 
     name: str = "ocr_with_position"
@@ -81,19 +90,26 @@ class OCRWithPositionTool(BaseTool):
     cpu_threads: int = 1
 
     def _get_reader(self):
-        """Lazy initialization of the CPU PaddleOCR pipeline."""
-        if self._reader is None:
-            from paddleocr import PaddleOCR
+        """Return the injected test reader or the process-shared CPU reader."""
 
-            self._reader = PaddleOCR(
-                use_doc_orientation_classify=False,
-                use_doc_unwarping=False,
-                use_textline_orientation=False,
-                device="cpu",
-                enable_mkldnn=False,
-                cpu_threads=max(1, int(self.cpu_threads)),
-            )
-        return self._reader
+        if self._reader is not None:
+            return self._reader
+
+        global _SHARED_READER
+        if _SHARED_READER is None:
+            with _SHARED_READER_INIT_LOCK:
+                if _SHARED_READER is None:
+                    from paddleocr import PaddleOCR
+
+                    _SHARED_READER = PaddleOCR(
+                        use_doc_orientation_classify=False,
+                        use_doc_unwarping=False,
+                        use_textline_orientation=False,
+                        device="cpu",
+                        enable_mkldnn=False,
+                        cpu_threads=max(1, int(self.cpu_threads)),
+                    )
+        return _SHARED_READER
 
     def call(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Run OCR on the image and return structured results."""
@@ -224,10 +240,17 @@ class OCRWithPositionTool(BaseTool):
         ocr_input: Any,
     ) -> tuple[List[Any], str, List[Dict[str, str]]]:
         try:
-            outputs = self._get_reader().predict(input=ocr_input)
-            results: List[Any] = []
-            for output in outputs:
-                results.extend(self._parse_paddle_result(output))
+            shared_reader = self._reader is None
+            inference_lock = (
+                _SHARED_READER_INFERENCE_LOCK
+                if shared_reader
+                else nullcontext()
+            )
+            with inference_lock:
+                outputs = self._get_reader().predict(input=ocr_input)
+                results: List[Any] = []
+                for output in outputs:
+                    results.extend(self._parse_paddle_result(output))
             return results, "paddleocr", [
                 {"backend": "paddleocr", "status": "success"}
             ]
