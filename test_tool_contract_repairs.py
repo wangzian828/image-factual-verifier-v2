@@ -253,7 +253,6 @@ def test_crop_and_inspect_rejects_reversed_or_negative_bbox() -> None:
 
 
 def test_ocr_excludes_low_confidence_regions_from_canonical_text(
-    monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
     from PIL import Image
@@ -261,22 +260,20 @@ def test_ocr_excludes_low_confidence_regions_from_canonical_text(
     image_path = tmp_path / "image.png"
     Image.new("RGB", (100, 40), "white").save(image_path)
 
-    class Reader:
-        def readtext(self, _value):
+    class PaddleReader:
+        def predict(self, *, input):
             return [
-                (
-                    [[0, 0], [20, 0], [20, 10], [0, 10]],
-                    "garbage",
-                    0.08,
-                ),
-                (
-                    [[20, 0], [90, 0], [90, 10], [20, 10]],
-                    "Tysons Corner",
-                    0.92,
-                ),
+                {
+                    "rec_polys": [
+                        [[0, 0], [20, 0], [20, 10], [0, 10]],
+                        [[20, 0], [90, 0], [90, 10], [20, 10]],
+                    ],
+                    "rec_texts": ["garbage", "Tysons Corner"],
+                    "rec_scores": [0.08, 0.92],
+                }
             ]
 
-    tool = OCRWithPositionTool(_reader=Reader(), min_confidence=0.5)
+    tool = OCRWithPositionTool(_reader=PaddleReader(), min_confidence=0.5)
     result = tool.call({"image_input": str(image_path)})
 
     assert result["status"] == "success"
@@ -287,131 +284,86 @@ def test_ocr_excludes_low_confidence_regions_from_canonical_text(
     assert [item["text"] for item in result["rejected_text_regions"]] == [
         "garbage"
     ]
-    assert result["ocr_backend"] == "easyocr"
+    assert result["ocr_backend"] == "paddleocr"
     assert result["artifact_sha256"]
     assert tool._reader is not None
 
 
-def test_ocr_prefers_configured_ppocr_service(
-    monkeypatch: pytest.MonkeyPatch,
+def test_ocr_accepts_paddle_result_objects_with_json_property(
     tmp_path,
 ) -> None:
     from PIL import Image
 
-    image_path = tmp_path / "sign.png"
+    image_path = tmp_path / "json-result.png"
     Image.new("RGB", (100, 40), "white").save(image_path)
 
-    class Response:
-        def raise_for_status(self) -> None:
-            return None
+    class Result:
+        json = {
+            "rec_boxes": [[10, 5, 90, 25]],
+            "rec_texts": ["Tysons Corner"],
+            "rec_scores": [0.92],
+        }
 
-        def json(self):
-            return {
-                "text_regions": [
-                    {
-                        "text": "Tysons Corner",
-                        "confidence": 0.97,
-                        "bbox": [10, 5, 90, 25],
-                    }
-                ]
-            }
+    class PaddleReader:
+        def predict(self, *, input):
+            return [Result()]
 
-    calls = []
-    monkeypatch.setattr(
-        "src.tools.ocr_with_position.requests.post",
-        lambda *args, **kwargs: (
-            calls.append((args, kwargs)) or Response()
-        ),
+    result = OCRWithPositionTool(_reader=PaddleReader()).call(
+        {"image_input": str(image_path)}
     )
-    tool = OCRWithPositionTool(
-        ppocr_service_url="http://127.0.0.1:9999/ocr",
-    )
-
-    result = tool.call({"image_input": str(image_path)})
 
     assert result["status"] == "success"
-    assert result["ocr_backend"] == "ppocr_service"
+    assert result["ocr_backend"] == "paddleocr"
     assert result["full_text"] == "Tysons Corner"
-    assert result["backend_attempts"] == [
-        {"backend": "ppocr_service", "status": "success"}
-    ]
-    assert len(calls) == 1
+    assert result["text_regions"][0]["bbox"] == [0.1, 0.125, 0.9, 0.625]
 
 
-def test_ocr_service_failure_falls_back_to_easyocr(
-    monkeypatch: pytest.MonkeyPatch,
+def test_ocr_backend_failure_is_explicit_without_fallback(
     tmp_path,
 ) -> None:
     from PIL import Image
 
-    image_path = tmp_path / "fallback.png"
+    image_path = tmp_path / "failure.png"
     Image.new("RGB", (100, 40), "white").save(image_path)
 
-    class Reader:
-        def readtext(self, _value):
-            return [
-                (
-                    [[10, 5], [90, 5], [90, 25], [10, 25]],
-                    "fallback text",
-                    0.9,
-                )
-            ]
+    class PaddleReader:
+        def predict(self, *, input):
+            raise RuntimeError("paddleocr unavailable")
 
-    monkeypatch.setattr(
-        "src.tools.ocr_with_position.requests.post",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            RuntimeError("service unavailable")
-        ),
+    result = OCRWithPositionTool(_reader=PaddleReader()).call(
+        {"image_input": str(image_path)}
     )
-    tool = OCRWithPositionTool(
-        _reader=Reader(),
-        ppocr_service_url="http://127.0.0.1:9999/ocr",
-    )
-
-    result = tool.call({"image_input": str(image_path)})
-
-    assert result["status"] == "success"
-    assert result["ocr_backend"] == "easyocr"
-    assert result["full_text"] == "fallback text"
-    assert result["backend_attempts"][0]["status"] == "error"
-    assert result["backend_attempts"][1] == {
-        "backend": "easyocr",
-        "status": "success",
-    }
-
-
-def test_ocr_all_backend_failures_preserve_subcall_accounting(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path,
-) -> None:
-    from PIL import Image
-
-    image_path = tmp_path / "all-fail.png"
-    Image.new("RGB", (100, 40), "white").save(image_path)
-
-    class Reader:
-        def readtext(self, _value):
-            raise RuntimeError("easyocr unavailable")
-
-    monkeypatch.setattr(
-        "src.tools.ocr_with_position.requests.post",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            RuntimeError("ppocr unavailable")
-        ),
-    )
-    tool = OCRWithPositionTool(
-        _reader=Reader(),
-        ppocr_service_url="http://127.0.0.1:9999/ocr",
-    )
-
-    result = tool.call({"image_input": str(image_path)})
 
     assert result["status"] == "error"
-    assert [item["provider"] for item in result["subcalls"]] == [
-        "ppocr_service",
-        "easyocr",
-    ]
-    assert all(item["status"] == "error" for item in result["subcalls"])
+    assert "paddleocr unavailable" in result["error"]
+    assert result["backend_attempts"][0]["backend"] == "paddleocr"
+    assert len(result["subcalls"]) == 1
+    assert result["subcalls"][0]["provider"] == "paddleocr"
+
+
+def test_ocr_rejects_missing_paddle_position_data(
+    tmp_path,
+) -> None:
+    from PIL import Image
+
+    image_path = tmp_path / "missing-boxes.png"
+    Image.new("RGB", (100, 40), "white").save(image_path)
+
+    class PaddleReader:
+        def predict(self, *, input):
+            return [
+                {
+                    "rec_texts": ["Tysons Corner"],
+                    "rec_scores": [0.92],
+                }
+            ]
+
+    result = OCRWithPositionTool(_reader=PaddleReader()).call(
+        {"image_input": str(image_path)}
+    )
+
+    assert result["status"] == "error"
+    assert "matching positioned boxes" in result["error"]
 
 
 def test_ocr_rejects_reversed_bbox_and_hashes_actual_crop(
@@ -424,11 +376,11 @@ def test_ocr_rejects_reversed_bbox_and_hashes_actual_crop(
     image.paste("black", (0, 0, 50, 50))
     image.save(image_path)
 
-    class Reader:
-        def readtext(self, _value):
+    class PaddleReader:
+        def predict(self, *, input):
             return []
 
-    tool = OCRWithPositionTool(_reader=Reader())
+    tool = OCRWithPositionTool(_reader=PaddleReader())
     invalid = tool.call(
         {
             "image_input": str(image_path),

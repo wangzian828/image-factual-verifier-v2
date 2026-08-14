@@ -1,32 +1,29 @@
 # -*- coding: utf-8 -*-
-"""Layered positioned OCR with optional PP-OCR service and EasyOCR fallback.
+"""CPU-only positioned OCR backed by PaddleOCR.
 
 Returns text regions with quadrilateral bounding box coordinates,
 confidence scores, and language detection.
 """
 from __future__ import annotations
 
-import base64
 import hashlib
 import io
-import os
+import json
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
-
-import requests
 
 from src.tools.base import BaseTool
 
 
 @dataclass
 class OCRWithPositionTool(BaseTool):
-    """OCR tool that returns text with position information.
+    """CPU-only PaddleOCR tool that returns positioned text observations.
 
-    Uses a configured PP-OCR/PP-Structure-compatible HTTP service when present,
-    with a local EasyOCR fallback.
-    Supports Chinese + English. Returns both:
-    - bbox_quad: normalized 4-corner quadrilateral for pipeline contracts
-    - bbox: normalized axis-aligned box for crop-oriented tools
+    PaddleOCR is initialized lazily and cached on the tool instance. There is
+    deliberately no alternate OCR backend: a missing model/package is an
+    explicit tool failure rather than a silent change in the observation
+    mechanism.
     """
 
     name: str = "ocr_with_position"
@@ -81,34 +78,17 @@ class OCRWithPositionTool(BaseTool):
 
     _reader: Optional[Any] = field(default=None, repr=False)
     min_confidence: float = 0.5
-    use_gpu: Optional[bool] = None
-    ppocr_service_url: str = ""
-    ppocr_timeout: float = 45.0
-
-    def __post_init__(self) -> None:
-        self.ppocr_service_url = (
-            self.ppocr_service_url
-            or os.getenv("PPOCR_SERVICE_URL", "").strip()
-        )
 
     def _get_reader(self):
-        """Lazy initialization of EasyOCR reader."""
+        """Lazy initialization of the CPU PaddleOCR pipeline."""
         if self._reader is None:
-            import easyocr
+            from paddleocr import PaddleOCR
 
-            gpu = (
-                self.use_gpu
-                if self.use_gpu is not None
-                else os.getenv(
-                    "EASYOCR_GPU",
-                    "false",
-                ).strip().lower()
-                in {"1", "true", "yes", "on"}
-            )
-            self._reader = easyocr.Reader(
-                ["ch_sim", "en"],
-                gpu=gpu,
-                verbose=False,
+            self._reader = PaddleOCR(
+                use_doc_orientation_classify=False,
+                use_doc_unwarping=False,
+                use_textline_orientation=False,
+                device="cpu",
             )
         return self._reader
 
@@ -138,10 +118,7 @@ class OCRWithPositionTool(BaseTool):
                 offset_x = offset_y = 0
                 artifact_bytes = self._image_bytes(img)
 
-            results, backend, backend_attempts = self._run_layered_ocr(
-                ocr_input,
-                artifact_bytes,
-            )
+            results, backend, backend_attempts = self._run_paddle_ocr(ocr_input)
 
             if not results:
                 return {
@@ -239,82 +216,98 @@ class OCRWithPositionTool(BaseTool):
             "subcalls": self._ocr_subcalls(backend_attempts),
         }
 
-    def _run_layered_ocr(
+    def _run_paddle_ocr(
         self,
         ocr_input: Any,
-        artifact_bytes: bytes,
     ) -> tuple[List[Any], str, List[Dict[str, str]]]:
-        attempts: List[Dict[str, str]] = []
-        if self.ppocr_service_url:
-            try:
-                results = self._call_ppocr_service(artifact_bytes)
-                attempts.append(
-                    {"backend": "ppocr_service", "status": "success"}
-                )
-                return results, "ppocr_service", attempts
-            except Exception as exc:
-                attempts.append(
-                    {
-                        "backend": "ppocr_service",
-                        "status": "error",
-                        "error": f"{type(exc).__name__}: {exc}",
-                    }
-                )
         try:
-            reader = self._get_reader()
-            results = reader.readtext(ocr_input)
-            attempts.append({"backend": "easyocr", "status": "success"})
-            return list(results or []), "easyocr", attempts
+            outputs = self._get_reader().predict(input=ocr_input)
+            results: List[Any] = []
+            for output in outputs:
+                results.extend(self._parse_paddle_result(output))
+            return results, "paddleocr", [
+                {"backend": "paddleocr", "status": "success"}
+            ]
         except Exception as exc:
-            attempts.append(
+            attempts = [
                 {
-                    "backend": "easyocr",
+                    "backend": "paddleocr",
                     "status": "error",
                     "error": f"{type(exc).__name__}: {exc}",
                 }
-            )
-            error = RuntimeError("all configured OCR backends failed")
-            error.backend_attempts = attempts  # type: ignore[attr-defined]
-            raise error from exc
+            ]
+            exc.backend_attempts = attempts  # type: ignore[attr-defined]
+            raise
 
-    def _call_ppocr_service(self, image_bytes: bytes) -> List[Any]:
-        response = requests.post(
-            self.ppocr_service_url,
-            json={
-                "image_base64": base64.b64encode(image_bytes).decode("ascii"),
-                "response_format": "ifv_positioned_ocr_v1",
-            },
-            timeout=self.ppocr_timeout,
+    @classmethod
+    def _parse_paddle_result(cls, output: Any) -> List[Any]:
+        data = cls._result_mapping(output)
+        texts = cls._as_list(cls._first_present(data, "rec_texts"))
+        scores = cls._as_list(cls._first_present(data, "rec_scores"))
+        polygons = cls._as_list(
+            cls._first_present(data, "rec_polys", "dt_polys", "rec_boxes")
         )
-        response.raise_for_status()
-        payload = response.json()
-        if not isinstance(payload, dict):
-            raise ValueError("PP-OCR service response must be an object")
-        rows = payload.get("text_regions", payload.get("regions"))
-        if not isinstance(rows, list):
+        if len(scores) < len(texts):
+            scores.extend([1.0] * (len(texts) - len(scores)))
+        if len(polygons) < len(texts):
             raise ValueError(
-                "PP-OCR service response requires text_regions or regions"
+                "PaddleOCR returned text without matching positioned boxes."
             )
-        results: List[Any] = []
-        for index, row in enumerate(rows):
-            if not isinstance(row, dict):
-                raise ValueError(f"PP-OCR region {index} must be an object")
-            text = str(row.get("text", "")).strip()
-            confidence = row.get("confidence", row.get("score"))
-            bbox = row.get("bbox_quad", row.get("points", row.get("bbox")))
-            if (
-                isinstance(confidence, bool)
-                or not isinstance(confidence, (int, float))
-            ):
-                raise ValueError(
-                    f"PP-OCR region {index} requires numeric confidence"
+
+        parsed: List[Any] = []
+        for index, text_value in enumerate(texts):
+            text = str(text_value or "").strip()
+            score = float(scores[index])
+            parsed.append(
+                (
+                    cls._normalize_quad(polygons[index], index=index),
+                    text,
+                    score,
                 )
-            quad = self._service_quad(bbox, index=index)
-            results.append((quad, text, float(confidence)))
-        return results
+            )
+        return parsed
 
     @staticmethod
-    def _service_quad(value: Any, *, index: int) -> List[List[float]]:
+    def _result_mapping(output: Any) -> Dict[str, Any]:
+        if isinstance(output, Mapping):
+            return dict(output)
+        for name in ("json", "to_dict", "dict"):
+            value = getattr(output, name, None)
+            if callable(value):
+                value = value()
+            if isinstance(value, str):
+                value = json.loads(value)
+            if isinstance(value, Mapping):
+                return dict(value)
+        try:
+            value = dict(output)
+        except (TypeError, ValueError) as exc:
+            raise TypeError("PaddleOCR returned an unsupported result object.") from exc
+        return value
+
+    @staticmethod
+    def _first_present(data: Mapping[str, Any], *names: str) -> Any:
+        for name in names:
+            if name in data and data[name] is not None:
+                return data[name]
+        return None
+
+    @staticmethod
+    def _as_list(value: Any) -> List[Any]:
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return list(value)
+        try:
+            return list(value)
+        except TypeError:
+            return [value]
+
+    @staticmethod
+    def _normalize_quad(value: Any, *, index: int) -> List[List[float]]:
+        tolist = getattr(value, "tolist", None)
+        if callable(tolist):
+            value = tolist()
         if (
             isinstance(value, list)
             and len(value) == 4
@@ -343,7 +336,7 @@ class OCRWithPositionTool(BaseTool):
             if x1 < x2 and y1 < y2:
                 return [[x1, y1], [x2, y1], [x2, y2], [x1, y2]]
         raise ValueError(
-            f"PP-OCR region {index} requires bbox_quad or ordered bbox"
+            f"PaddleOCR region {index} requires a quadrilateral or ordered bbox"
         )
 
     @staticmethod

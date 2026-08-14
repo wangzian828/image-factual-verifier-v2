@@ -115,12 +115,18 @@ Canonical OCR text contains only accepted regions. Low-confidence candidates rem
 in diagnostics and cannot enter `full_text`, Evidence, retrieval anchors, or verdict
 bases.
 
-Document/layout text and natural-image scene text are separate routes. Set
-`PPOCR_SERVICE_URL` to use a PP-OCR/PP-Structure-compatible positioned-OCR service;
-otherwise the runtime uses EasyOCR. A configured service failure falls back to
-EasyOCR and records both attempts. Decisive small
-or stylized text requires focused crop verification when the primary OCR result is
-missing, low-confidence, or conflicts with a VLM reading.
+The runtime uses one CPU-only PaddleOCR pipeline. It returns visible text,
+quadrilateral coordinates, axis-aligned coordinates, and recognition confidence.
+There is no remote-service or alternate-engine fallback: package, model, and
+runtime failures are explicit OCR tool failures. Decisive small or stylized text
+requires focused crop verification when the primary OCR result is missing,
+low-confidence, or conflicts with a VLM reading.
+
+OCR is an observation layer, not a fact verifier. Reading a label can ground a
+visible-text fact, but it does not prove that the label is authentic or that its
+implied event, identity, date, or location is true. Absence of a string is
+inconclusive unless the image region and visibility obligation make absence
+meaningful.
 
 ## Stopping
 

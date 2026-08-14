@@ -25,7 +25,7 @@ mkdir -p \
     "${IFV_DATA_ROOT}/benchmarks" \
     "${IFV_DATA_ROOT}/cache/huggingface" \
     "${IFV_DATA_ROOT}/cache/torch" \
-    "${IFV_DATA_ROOT}/cache/easyocr" \
+    "${IFV_DATA_ROOT}/cache/paddle" \
     "${IFV_DATA_ROOT}/cache/tools" \
     "${IFV_DATA_ROOT}/runs/_logs" \
     "${IFV_DATA_ROOT}/runs/traces" \
@@ -64,13 +64,15 @@ fi
 conda run --no-capture-output --name "${ENV_NAME}" python - <<'PY'
 import sys
 
-import easyocr
 import httpx
+import paddle
+import paddleocr
 import pydantic
 import requests
 
 print(f"python={sys.version.split()[0]}")
-print(f"easyocr={easyocr.__version__}")
+print(f"paddlepaddle={paddle.__version__}")
+print(f"paddleocr={paddleocr.__version__}")
 print(f"httpx={httpx.__version__}")
 print(f"pydantic={pydantic.__version__}")
 print(f"requests={requests.__version__}")

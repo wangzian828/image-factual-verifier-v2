@@ -224,17 +224,20 @@ The following were verified through that proxy:
 - Hugging Face HTTPS;
 - Google Drive HTTPS.
 
-Optional layered OCR configuration:
+OCR uses the local CPU-only PaddleOCR pipeline. The runtime initializes one
+positioned OCR reader per tool instance and does not use a remote OCR service or
+an alternate fallback backend. A missing PaddleOCR package, model, or runtime
+dependency is therefore an explicit `ocr_with_position` tool failure.
 
-```bash
-export PPOCR_SERVICE_URL=http://127.0.0.1:<port>/ocr
-```
+PaddleOCR is used only for visible-text observations:
 
-The endpoint must accept `image_base64` and return positioned regions under
-`text_regions` or `regions`. Do not set this variable until a compatible service is
-actually deployed. When unset, the Agent keeps using EasyOCR; when set but temporarily
-unavailable, it records the failed PP-OCR subcall and falls back to EasyOCR without
-changing the Gemini environment.
+- detected text strings;
+- quadrilateral and axis-aligned image coordinates;
+- recognition confidence and a simple language label.
+
+It does not establish the truth of the text's implied real-world claim. Positive
+OCR observations may anchor a visible fact; missing or low-confidence text remains
+inconclusive.
 
 Use `scripts/server/run_gpu13.sh` for project commands. It always sources the
 required proxy, credential-file path, and threading environment and fails if the
@@ -249,7 +252,7 @@ All datasets and generated runtime artifacts live on the gpu-13 data filesystem:
   datasets/       downloaded archives and extracted datasets
   artifacts/      web pages, images, RIS/SERP snapshots, and source material
   benchmarks/     benchmark manifests and benchmark-owned assets
-  cache/          Hugging Face, Torch, EasyOCR, and tool caches
+  cache/          Hugging Face, Torch, PaddleOCR, and tool caches
   runs/
     _logs/        background evaluation stdout and stderr logs
     traces/       standalone JSON Agent trajectories
@@ -259,7 +262,7 @@ All datasets and generated runtime artifacts live on the gpu-13 data filesystem:
 
 `/gs/home/wza/gsdata` resolves to `/gsdata/home/wza`; the latter had about 399 TB
 available during the deployment audit. `gpu13_env.sh` exports `IFV_DATA_ROOT` and
-routes Hugging Face, Torch, EasyOCR, and tool caches into this tree. Runtime and data
+routes Hugging Face, Torch, PaddleOCR, and tool caches into this tree. Runtime and data
 scripts also derive their default output paths from `IFV_DATA_ROOT`.
 
 Do not download datasets, write evaluation traces, or generate images inside the Git
