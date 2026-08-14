@@ -191,7 +191,6 @@ class InvestigationDiscovery(StrictModel):
     tool_name: Literal[
         "reverse_image_search",
         "text_search",
-        "jina_search",
         "crop_and_search",
     ]
     candidate_url: str = Field(default="", max_length=4000)
@@ -200,7 +199,6 @@ class InvestigationDiscovery(StrictModel):
     snippet: str = Field(default="", max_length=2000)
     candidate_type: Literal[
         "serp",
-        "jina_search",
         "reverse_image",
         "visual_reference",
     ]
@@ -410,7 +408,6 @@ class TargetFactProposal(StrictModel):
         Literal[
             "reverse_image_search",
             "text_search",
-            "jina_search",
             "visit",
             "compare_with_reference",
             "check_consistency",
@@ -504,7 +501,6 @@ class SearchHypothesisProposal(StrictModel):
         if not self.queries and not set(self.suggested_tools) & {
             "reverse_image_search",
             "text_search",
-            "jina_search",
             "check_consistency",
             "analyze_visual_anomalies",
             "crop_and_inspect",
@@ -794,7 +790,6 @@ class NewSearchHypothesis(StrictModel):
         Literal[
             "reverse_image_search",
             "text_search",
-            "jina_search",
             "visit",
             "compare_with_reference",
             "check_consistency",
@@ -810,7 +805,6 @@ class NewSearchHypothesis(StrictModel):
         if not self.queries and not set(self.suggested_tools) & {
             "reverse_image_search",
             "text_search",
-            "jina_search",
             "check_consistency",
             "analyze_visual_anomalies",
             "crop_and_inspect",

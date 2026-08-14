@@ -4,6 +4,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Union
 
+from src.integrations.search.jina_reranker import JinaRerankerClient
 from src.integrations.search.serper import SerperTextSearchClient
 from src.orchestrator.source_access import SourceAccessPolicy
 from src.tools.base import BaseTool
@@ -11,15 +12,17 @@ from src.tools.base import BaseTool
 
 @dataclass
 class TextSearchTool(BaseTool):
-    """Pure Serper-backed Discovery search with no hidden page visits or LLM calls."""
+    """Serper search with optional internal candidate reranking."""
 
     client: Optional[SerperTextSearchClient] = None
+    candidate_reranker: Optional[JinaRerankerClient] = None
     top_k: int = 10
     source_access_policy: Optional[SourceAccessPolicy] = None
     name: str = "text_search"
     description: str = (
         "Search the web and return candidate titles, URLs, and snippets as "
-        "Discovery only. Use visit to inspect a selected page and create Evidence."
+        "Discovery only. Candidate ordering may be internally reranked after "
+        "the Serper search; use visit to inspect a selected page and create Evidence."
     )
     parameters: dict = field(
         default_factory=lambda: {
@@ -127,34 +130,57 @@ class TextSearchTool(BaseTool):
             for response in responses
             if str(response.get("search_error", "")).strip()
         ]
+        subcalls: List[Dict[str, Any]] = [
+            {
+                "kind": "search_query",
+                "provider": str(
+                    response.get("provider", "serper")
+                ),
+                "status": (
+                    "error"
+                    if response.get("search_error")
+                    else "success"
+                ),
+                "request_count": 1,
+                "result_count": len(
+                    response.get("results", []) or []
+                ),
+                "duration_ms": float(
+                    (response.get("timings", {}) or {}).get(
+                        "search_ms",
+                        0.0,
+                    )
+                    or 0.0
+                ),
+            }
+            for response in responses
+        ]
+        for response in responses:
+            selection = response.get("candidate_selection")
+            if not isinstance(selection, dict):
+                continue
+            if selection.get("status") == "skipped":
+                continue
+            subcalls.append(
+                {
+                    "kind": "candidate_rerank",
+                    "provider": str(
+                        selection.get("provider", "jina_reranker")
+                    ),
+                    "status": str(selection.get("status", "error")),
+                    "request_count": 1,
+                    "result_count": int(
+                        selection.get("output_count", 0) or 0
+                    ),
+                    "duration_ms": float(
+                        selection.get("duration_ms", 0.0) or 0.0
+                    ),
+                }
+            )
         result: Dict[str, Any] = {
             "status": "success",
             "queries": responses,
-            "subcalls": [
-                {
-                    "kind": "search_query",
-                    "provider": str(
-                        response.get("provider", "serper")
-                    ),
-                    "status": (
-                        "error"
-                        if response.get("search_error")
-                        else "success"
-                    ),
-                    "request_count": 1,
-                    "result_count": len(
-                        response.get("results", []) or []
-                    ),
-                    "duration_ms": float(
-                        (response.get("timings", {}) or {}).get(
-                            "search_ms",
-                            0.0,
-                        )
-                        or 0.0
-                    ),
-                }
-                for response in responses
-            ],
+            "subcalls": subcalls,
         }
         if errors:
             result.update({"status": "error", "error": "; ".join(errors)})
@@ -200,8 +226,101 @@ class TextSearchTool(BaseTool):
                 response["policy_filtered_count"] = blocked_count
         response = dict(response)
         response["results"] = list(response.get("results", []) or [])[: self.top_k]
+        reranked_results, candidate_selection = self._rerank_candidates(
+            query=query,
+            goal=str(goal or query),
+            response=response,
+        )
+        response["results"] = reranked_results
+        response["candidate_selection"] = candidate_selection
         search_duration_ms = round((time.perf_counter() - search_t0) * 1000, 2)
         result = dict(response)
         result["goal"] = str(goal or query)
         result["timings"] = {"search_ms": search_duration_ms}
         return result
+
+    def _rerank_candidates(
+        self,
+        *,
+        query: str,
+        goal: str,
+        response: Dict[str, Any],
+    ) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
+        rows = [
+            dict(item)
+            for item in response.get("results", []) or []
+            if isinstance(item, dict)
+        ]
+        if not rows:
+            return [], {
+                "provider": "jina_reranker",
+                "status": "skipped",
+                "reason": "no_serper_candidates",
+            }
+        if self.candidate_reranker is None:
+            return rows, {
+                "provider": "jina_reranker",
+                "status": "skipped",
+                "reason": "JINA_API_KEY is not configured",
+            }
+
+        documents = [
+            "\n".join(
+                part
+                for part in (
+                    str(row.get("title", "")).strip(),
+                    str(row.get("snippet", "")).strip(),
+                )
+                if part
+            )
+            or str(row.get("url", "")).strip()
+            for row in rows
+        ]
+        started = time.perf_counter()
+        try:
+            ranked = self.candidate_reranker.rerank(
+                goal or query,
+                documents,
+                top_n=min(self.top_k, len(rows)),
+            )
+        except Exception as exc:
+            return rows, {
+                "provider": "jina_reranker",
+                "status": "error",
+                "error": f"{type(exc).__name__}: {exc}",
+                "duration_ms": round(
+                    (time.perf_counter() - started) * 1000,
+                    2,
+                ),
+            }
+
+        ordered: List[Dict[str, Any]] = []
+        used_indexes: set[int] = set()
+        for rerank_rank, item in enumerate(ranked, 1):
+            try:
+                index = int(item.get("index"))
+            except (TypeError, ValueError):
+                continue
+            if index < 0 or index >= len(rows) or index in used_indexes:
+                continue
+            candidate = dict(rows[index])
+            candidate["rerank_rank"] = rerank_rank
+            if item.get("relevance_score") is not None:
+                candidate["rerank_score"] = item.get("relevance_score")
+            ordered.append(candidate)
+            used_indexes.add(index)
+        ordered.extend(
+            dict(rows[index])
+            for index in range(len(rows))
+            if index not in used_indexes
+        )
+        return ordered, {
+            "provider": "jina_reranker",
+            "status": "success",
+            "input_count": len(rows),
+            "output_count": len(ordered),
+            "duration_ms": round(
+                (time.perf_counter() - started) * 1000,
+                2,
+            ),
+        }

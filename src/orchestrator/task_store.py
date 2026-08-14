@@ -6145,7 +6145,7 @@ def _record_discoveries(
                         reference if reference in valid_references else "",
                     )
                 )
-    elif tool_name in {"text_search", "jina_search"}:
+    elif tool_name == "text_search":
         for query in data.get("queries", []) or []:
             if not isinstance(query, Mapping):
                 continue
@@ -6159,11 +6159,7 @@ def _record_discoveries(
                                 item.get("snippet")
                                 or item.get("content_preview", "")
                             ),
-                            (
-                                "jina_search"
-                                if tool_name == "jina_search"
-                                else "serp"
-                            ),
+                            "serp",
                             "",
                         )
                     )

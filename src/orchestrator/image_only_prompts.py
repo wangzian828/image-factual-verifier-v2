@@ -167,9 +167,9 @@ verified value. Routes do not own the verdict.
 Decide whether a visible discriminator is needed. If material, scale,
 biological-versus-model appearance, structure, or a scene relation can change the
 judgment, add one visual_consistency route with crop_and_inspect and state the
-resolving observation. Do not add it only because a webpage may fail. Jina Search
-is explicit: include jina_search only when deliberately choosing Jina, never as a
-hidden text_search fallback.
+resolving observation. Do not add it only because a webpage may fail. Text search
+is the only search route; candidate ordering may be improved internally after the
+search, not a planning choice or additional tool.
 
 Use one allowed route_focus; media-origin classification is rejected and must be
 rewritten as a factual focus. Image clues guide retrieval but do not restrict it.

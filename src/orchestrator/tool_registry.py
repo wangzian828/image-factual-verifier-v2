@@ -22,7 +22,6 @@ STAGE_TOOLS: Dict[str, List[str]] = {
         "ocr_with_position",
         "reverse_image_search",
         "text_search",
-        "jina_search",
         "visit",
         "compare_with_reference",
         "check_consistency",
@@ -176,14 +175,7 @@ def build_all_tools_with_health(
     )
     register(
         "text_search",
-        lambda: __import__("src.tools.text_search", fromlist=["TextSearchTool"]).TextSearchTool(),
-    )
-    register(
-        "jina_search",
-        lambda: __import__(
-            "src.tools.jina_search",
-            fromlist=["JinaSearchTool"],
-        ).JinaSearchTool(),
+        lambda: _build_text_search_tool(),
     )
     register(
         "reverse_image_search",
@@ -211,6 +203,21 @@ def build_all_tools_with_health(
     )
 
     return tools, health
+
+
+def _build_text_search_tool() -> BaseTool:
+    from src.tools.text_search import TextSearchTool
+
+    reranker = None
+    if str(
+        os.getenv("JINA_API_KEY")
+        or os.getenv("JINA_API_KEYS")
+        or ""
+    ).strip():
+        from src.integrations.search.jina_reranker import JinaRerankerClient
+
+        reranker = JinaRerankerClient()
+    return TextSearchTool(candidate_reranker=reranker)
 
 
 def _validate_structured_vision_client(
