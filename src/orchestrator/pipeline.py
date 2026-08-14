@@ -22,7 +22,7 @@ from src.orchestrator.discrepancy_coverage import (
     compile_discrepancy_verdict_basis,
 )
 from src.orchestrator.evidence_policy import (
-    query_targets_fact_check_answer,
+    query_policy_violation,
     text_targets_verdict_or_media_origin,
 )
 from src.orchestrator.evidence_semantics import (
@@ -1384,6 +1384,7 @@ class Orchestrator:
                     parsed,
                     reviewed_evidence_ids=reviewed_evidence_ids,
                     trigger=trigger,
+                    source_access_policy=self.source_access_policy,
                 )
             ),
             max_output_tokens=self._stage_output_tokens(
@@ -1448,6 +1449,7 @@ class Orchestrator:
             bound,
             reviewed_evidence_ids=reviewed_evidence_ids,
             trigger=trigger,
+            source_access_policy=self.source_access_policy,
         )
         if not update.get("accepted", False):
             rejected_reason = str(
@@ -2174,6 +2176,7 @@ class Orchestrator:
                     task_id=task_id,
                     new_evidence_ids=new_evidence_ids,
                     trigger=trigger,
+                    source_access_policy=self.source_access_policy,
                 )
             ),
             max_output_tokens=self._stage_output_tokens("QUERY_REPLAN", 2048),
@@ -2203,6 +2206,7 @@ class Orchestrator:
             parsed,
             trigger=trigger,
             new_evidence_ids=new_evidence_ids,
+            source_access_policy=self.source_access_policy,
         )
         if record.rejected_reason:
             raise RuntimeError(
@@ -2374,6 +2378,7 @@ class Orchestrator:
         task_id: str,
         new_evidence_ids: List[str],
         trigger: str,
+        source_access_policy: Optional[SourceAccessPolicy] = None,
     ) -> tuple[bool, str]:
         if parsed.task_id != task_id:
             return False, "Query Replan must update the supplied task_id"
@@ -2384,6 +2389,7 @@ class Orchestrator:
             parsed,
             trigger=trigger,
             new_evidence_ids=new_evidence_ids,
+            source_access_policy=source_access_policy,
         )
         if record.rejected_reason:
             return False, record.rejected_reason
@@ -2401,8 +2407,10 @@ class Orchestrator:
             query
             for hypothesis in parsed.search_hypotheses
             for query in hypothesis.queries
-            if query_targets_fact_check_answer(query)
-            or policy.blocked_query_reference(query)
+            if query_policy_violation(
+                query,
+                source_access_policy=policy,
+            )
         ]
         blocked_route_text = [
             value
@@ -2466,6 +2474,7 @@ class Orchestrator:
         *,
         reviewed_evidence_ids: Sequence[str],
         trigger: str,
+        source_access_policy: Optional[SourceAccessPolicy] = None,
     ) -> tuple[bool, str]:
         bound, binding_error = bind_discrepancy_decision_runtime_ids(
             investigation,
@@ -2537,6 +2546,7 @@ class Orchestrator:
             parsed,
             reviewed_evidence_ids=reviewed_evidence_ids,
             trigger=trigger,
+            source_access_policy=source_access_policy,
         )
         if not update.get("accepted", False):
             return False, str(

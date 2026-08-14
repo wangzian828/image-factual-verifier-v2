@@ -42,6 +42,7 @@ from src.orchestrator.investigation_models import (
     VisualReinspectionRequest,
 )
 from src.orchestrator.evidence_adjudication import assess_fact
+from src.orchestrator.evidence_policy import query_policy_violation
 from src.orchestrator.evidence_semantics import (
     evidence_is_qualified_for_stance,
     required_assessment_stances,
@@ -2261,8 +2262,31 @@ def apply_discrepancy_decision(
     *,
     reviewed_evidence_ids: Sequence[str],
     trigger: str,
+    source_access_policy: Any = None,
 ) -> Dict[str, Any]:
     """Validate a discrepancy checkpoint on a copy, then commit it atomically."""
+
+    blocked_queries = [
+        (query, reason)
+        for proposal in output.new_hypotheses
+        for query in proposal.queries
+        if (reason := query_policy_violation(
+            query,
+            source_access_policy=source_access_policy,
+        ))
+    ]
+    if blocked_queries:
+        details = "; ".join(
+            f"{reason}: {query!r}" for query, reason in blocked_queries[:3]
+        )
+        return {
+            "accepted": False,
+            "rejected_reason": (
+                "new hypothesis queries must seek underlying facts or sources, "
+                "not a ready-made fact-check verdict or an excluded source; "
+                + details
+            ),
+        }
 
     candidate = state.model_copy(deep=True)
     if candidate.proposed_verdict in {"fake", "real"}:
@@ -5823,6 +5847,7 @@ def apply_query_replan(
     *,
     trigger: str,
     new_evidence_ids: Sequence[str],
+    source_access_policy: Any = None,
 ) -> QueryReplanRecord:
     """Apply one model-proposed search-direction update without judging facts."""
 
@@ -5848,6 +5873,17 @@ def apply_query_replan(
                 output,
                 new_evidence_ids=new_evidence_ids,
             )
+        if not rejected_reason and accepted_query:
+            violation = query_policy_violation(
+                accepted_query,
+                source_access_policy=source_access_policy,
+            )
+            if violation:
+                rejected_reason = (
+                    "replacement query must seek underlying facts or sources, "
+                    "not a ready-made fact-check verdict or an excluded source; "
+                    f"{violation}: {accepted_query!r}"
+                )
         if not rejected_reason:
             rejected_reason = _query_replan_error(
                 state,

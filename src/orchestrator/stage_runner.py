@@ -25,7 +25,7 @@ from src.integrations.gemini import (
     exception_runtime_metrics,
     take_runtime_metrics,
 )
-from src.orchestrator.evidence_policy import query_targets_fact_check_answer
+from src.orchestrator.evidence_policy import query_policy_violation
 from src.orchestrator.llm_backend import LLMBackend, LLMResponse
 from src.orchestrator.route_policy import routes_semantically_equivalent
 from src.orchestrator.runtime_events import CaseRuntimeStore
@@ -2562,8 +2562,10 @@ class StageRunner:
             return ""
         usable = [str(query).strip() for query in queries if str(query).strip()]
         if usable and not any(
-            query_targets_fact_check_answer(query)
-            or self.source_access_policy.blocked_query_reference(query)
+            query_policy_violation(
+                query,
+                source_access_policy=self.source_access_policy,
+            )
             for query in usable
         ):
             return ""
@@ -2593,9 +2595,9 @@ class StageRunner:
             query = str(raw_query).strip()
             if not query:
                 continue
-            if (
-                query_targets_fact_check_answer(query)
-                or self.source_access_policy.blocked_query_reference(query)
+            if query_policy_violation(
+                query,
+                source_access_policy=self.source_access_policy,
             ):
                 rejected.append(query)
             else:

@@ -80,6 +80,22 @@ def query_targets_fact_check_answer(value: str) -> bool:
     )
 
 
+def query_policy_violation(
+    value: str,
+    *,
+    source_access_policy: Any = None,
+) -> str:
+    """Return the deterministic reason a search query cannot be accepted."""
+
+    if query_targets_fact_check_answer(value):
+        return "fact-check-oriented query"
+    if source_access_policy is not None:
+        blocked_reference = source_access_policy.blocked_query_reference(value)
+        if blocked_reference:
+            return f"excluded source reference {blocked_reference!r}"
+    return ""
+
+
 def text_targets_verdict_or_media_origin(value: str) -> bool:
     """Detect route text that presupposes verdict/media-origin classification."""
 

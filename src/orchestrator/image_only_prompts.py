@@ -257,7 +257,10 @@ derives them from affected_claim_ids.
 
 For new_hypotheses include route_focus; allowed: same_capture_reference,
 entity_event_identity, relation_value, scene_world_constraints, visual_consistency.
-Do not add media_origin routes about creator/platform/generation/publication history.
+Their queries must seek underlying facts, source records, or independent reporting;
+never search for a ready-made fact-check verdict, debunk, fake/false label, or an
+excluded fact-check source. Do not add media_origin routes about
+creator/platform/generation/publication history.
 
 Qualified high-salience refutation is decisive; unresolved other Claims do not
 weaken it. Propose fake for a decisive high-salience discrepancy, real when all

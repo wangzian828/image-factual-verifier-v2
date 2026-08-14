@@ -250,6 +250,42 @@ def test_discrepancy_checkpoint_noop_is_an_accepted_nonterminal_update() -> None
     assert state.discrepancy_decisions[-1].trigger == "scheduled_boundary"
 
 
+def test_discrepancy_new_hypothesis_rejects_fact_check_query() -> None:
+    state = _planned_state()
+    before = state.model_dump(mode="json")
+    claim = state.image_claims[0]
+
+    update = apply_discrepancy_decision(
+        state,
+        DiscrepancyDecisionOutput(
+            new_hypotheses=[
+                NewSearchHypothesis(
+                    claim_ids=[claim.claim_id],
+                    route_focus="scene_world_constraints",
+                    statement=(
+                        "Identify the miniature craft shown in the image from "
+                        "independent source records."
+                    ),
+                    queries=["miniature baby sloth tweet debunks fact check"],
+                    expected_information=(
+                        "An original source or product record identifying the "
+                        "depicted miniature."
+                    ),
+                    suggested_tools=["text_search"],
+                )
+            ],
+            verdict_proposal="continue",
+            rationale="Open a source-grounded route for the unresolved claim.",
+        ),
+        reviewed_evidence_ids=[],
+        trigger="scheduled_boundary",
+    )
+
+    assert update["accepted"] is False
+    assert "fact-check-oriented query" in update["rejected_reason"]
+    assert state.model_dump(mode="json") == before
+
+
 def test_qualified_evidence_checkpoint_rejects_empty_continue() -> None:
     state = _planned_state()
     evidence = _append_evidence(state)
