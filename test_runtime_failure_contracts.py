@@ -606,7 +606,7 @@ def test_tool_internal_usage_is_counted_and_hidden(tmp_path: Path) -> None:
     assert "__runtime_metrics__" not in state.all_steps[0].tool_result
 
 
-def test_nonzero_thought_tokens_are_hard_failure() -> None:
+def test_nonzero_thought_tokens_are_recorded_without_failure() -> None:
     orchestrator = object.__new__(Orchestrator)
     orchestrator.provider = "gemini"
     orchestrator.llm = type("LLM", (), {"wire_api": "interactions"})()
@@ -620,8 +620,9 @@ def test_nonzero_thought_tokens_are_hard_failure() -> None:
             "tool_tokens": {"prompt": 20, "completion": 4, "thought": 2},
         },
     )
-    with pytest.raises(RuntimeError, match="non-zero thought tokens"):
-        orchestrator._record_stage_steps(state, [step])
+    orchestrator._record_stage_steps(state, [step])
+
+    assert state.token_usage == {"prompt": 20, "completion": 4, "thought": 2}
 
 
 def test_image_account_planning_records_reasoning_tokens(

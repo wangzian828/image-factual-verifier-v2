@@ -510,7 +510,7 @@ no executable core-gap route remains or when two consecutive action checkpoints 
 no qualified core progress. Open-ended ReAct turns use a 16,384-token output budget;
 Reflection and Judgment use 8,192. Image Account Planning defaults to high thinking;
 its thought tokens are recorded but are not Evidence. Investigation, extraction,
-visual-tool, Decision, and Judgment calls remain minimal. Interactions failures that exhaust the
+visual-tool, Decision, and Judgment calls remain low thinking. Interactions failures that exhaust the
 bounded retry window remain hard failures, and the error trace retains completed
 calls and retry diagnostics. Evaluation also rejects queries that
 explicitly target policy-excluded fact-check domains before Serper.

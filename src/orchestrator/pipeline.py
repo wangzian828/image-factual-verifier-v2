@@ -3720,7 +3720,6 @@ class Orchestrator:
             return
         state.all_steps.extend(steps)
         state.total_tool_calls += sum(1 for step in steps if step.action_type == "tool_call")
-        thought_violation: Optional[StageStep] = None
         for step in steps:
             subcalls = step.metadata.get("tool_subcalls", [])
             if isinstance(subcalls, list):
@@ -3743,29 +3742,12 @@ class Orchestrator:
             for name in ("prompt", "completion", "thought"):
                 state.token_usage[name] += step.tokens.get(name, 0)
                 state.token_usage[name] += int(tool_tokens.get(name, 0) or 0)
-            total_thought = step.tokens.get("thought", 0) + int(
-                tool_tokens.get("thought", 0) or 0
-            )
             if int(step.metadata.get("tool_llm_api_calls", 0) or 0) > 0:
                 step.metadata["total_tokens"] = {
                     name: step.tokens.get(name, 0)
                     + int(tool_tokens.get(name, 0) or 0)
                     for name in ("prompt", "completion", "thought")
                 }
-            if (
-                self.provider == "gemini"
-                and str(self.llm.wire_api).lower() == "interactions"
-            ):
-                policy_thought = int(step.tokens.get("thought", 0) or 0)
-                tool_thought = int(tool_tokens.get("thought", 0) or 0)
-                planning_thought_allowed = (
-                    step.stage_name == "image_account_planning"
-                    and self._stage_thinking_level("PLANNING") != "low"
-                )
-                if tool_thought > 0 or (
-                    policy_thought > 0 and not planning_thought_allowed
-                ):
-                    thought_violation = thought_violation or step
         state.llm_api_calls += sum(
             1 for step in steps if step.metadata.get("llm_duration_ms") is not None
         )
@@ -3773,11 +3755,6 @@ class Orchestrator:
             int(step.metadata.get("tool_llm_api_calls", 0) or 0)
             for step in steps
         )
-        if thought_violation is not None:
-            raise RuntimeError(
-                f"Gemini stage '{thought_violation.stage_name}' returned non-zero thought tokens "
-                "outside the reasoning-enabled Image Account Planning stage."
-            )
 
     @staticmethod
     def _tool_step_succeeded(step: StageStep) -> bool:
