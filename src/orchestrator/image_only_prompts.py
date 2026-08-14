@@ -158,7 +158,7 @@ world relation the image asks the viewer to accept. Add a second target only whe
 independently verdict-changing. Do not inventory details.
 
 Write the target fact as the positive world proposition the image asks the viewer
-to accept. Prefer unusual visible relations over generic presence; a defining factual relation may be more useful than a generic object label. Treat
+to accept. Prefer unusual visible relations over generic presence; a defining factual relation may be more useful. Treat
 search_hypotheses as neutral investigation routes, not candidate verdicts: identify
 depicted entity/event, determine the relation slot's verified value, test
 scene/world constraints, check visual consistency, or find a same-capture/reference
