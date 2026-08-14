@@ -560,7 +560,7 @@ class SemanticRewardJudge:
                 store=True,
                 max_tokens=self.max_tokens,
                 temperature=0.0,
-                generation_config={"thinking_level": "minimal"},
+                generation_config={"thinking_level": "low"},
             )
             _, status = validate_interaction_response(interaction)
             if status != "completed":

@@ -49,7 +49,7 @@ def build_stage_tools(stage_name: str, all_tools: Dict[str, BaseTool]) -> List[B
 
 def build_all_tools_with_health(
     vlm_provider: str = "gemini",
-    vlm_model: str = "gemini-3.6-flash",
+    vlm_model: str = "gemini-3.7-flash",
     vlm_wire_api: Optional[str] = None,
     vlm_base_url: Optional[str] = None,
 ) -> Tuple[Dict[str, BaseTool], Dict[str, ToolHealth]]:

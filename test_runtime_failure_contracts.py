@@ -649,7 +649,7 @@ def test_non_planning_stage_cannot_enable_reasoning(
 ) -> None:
     monkeypatch.setenv("GEMINI_VERIFICATION_THINKING_LEVEL", "high")
 
-    with pytest.raises(ValueError, match="must be one of minimal"):
+    with pytest.raises(ValueError, match="must be one of low"):
         Orchestrator._stage_thinking_level("VERIFICATION")
 
 

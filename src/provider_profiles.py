@@ -36,10 +36,10 @@ PROVIDER_PROFILES = {
     "teacher-gemini": ProviderProfile(
         profile_id="teacher-gemini",
         provider="gemini",
-        default_model="gemini-3.6-flash",
+        default_model="gemini-3.7-flash",
         model_env=None,
         vlm_provider="gemini",
-        default_vlm_model="gemini-3.6-flash",
+        default_vlm_model="gemini-3.7-flash",
         llm_wire_api="interactions",
         vlm_wire_api="interactions",
     ),
@@ -177,7 +177,7 @@ def resolve_provider_settings(
         )
 
     resolved_provider = _clean(provider) or "gemini"
-    resolved_model = _clean(model_name) or "gemini-3.6-flash"
+    resolved_model = _clean(model_name) or "gemini-3.7-flash"
     return ResolvedProviderSettings(
         profile_id=None,
         provider=resolved_provider.lower(),

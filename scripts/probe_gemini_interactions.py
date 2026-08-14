@@ -45,7 +45,7 @@ async def probe_once(model: str, timeout: float) -> Dict[str, Any]:
     }
     generation_config = {
         "max_output_tokens": 128,
-        "thinking_level": "minimal",
+        "thinking_level": "low",
     }
     async with GeminiInteractionsClient(timeout=timeout, max_retries=0) as client:
         structured = await client.create(
@@ -122,7 +122,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Probe the complete Gemini Interactions structured/tool continuation contract."
     )
-    parser.add_argument("--model", default="gemini-3.6-flash")
+    parser.add_argument("--model", default="gemini-3.7-flash")
     parser.add_argument("--timeout", type=float, default=90.0)
     parser.add_argument("--repeat", type=int, default=1)
     args = parser.parse_args()

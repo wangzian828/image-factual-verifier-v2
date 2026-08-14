@@ -141,7 +141,7 @@ class FocusedVisualInspectionTool(BaseTool):
 
     client: Optional[Any] = field(default=None, repr=False)
     provider: str = "gemini"
-    model_name: str = "gemini-3.6-flash"
+    model_name: str = "gemini-3.7-flash"
     max_images_per_prompt: int = field(
         default_factory=lambda: _positive_env_int(
             "IFV_FOCUSED_VISUAL_MAX_IMAGES_PER_PROMPT"

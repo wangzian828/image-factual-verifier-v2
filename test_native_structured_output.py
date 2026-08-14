@@ -89,7 +89,7 @@ def test_stage_generation_config_is_forwarded() -> None:
         stage_name="judgment",
         attach_image=False,
         max_output_tokens=8192,
-        generation_config={"thinking_level": "minimal"},
+        generation_config={"thinking_level": "low"},
     )
 
     parsed, _steps = asyncio.run(runner.run("Evidence context"))
@@ -97,7 +97,7 @@ def test_stage_generation_config_is_forwarded() -> None:
     assert parsed is not None
     assert backend.requests[0]["max_tokens"] == 8192
     assert backend.requests[0]["generation_config"] == {
-        "thinking_level": "minimal"
+        "thinking_level": "low"
     }
 
 

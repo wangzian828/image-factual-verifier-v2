@@ -58,7 +58,7 @@ class APIBackend(LLMBackend):
     def __init__(
         self,
         provider: str = "gemini",
-        model_name: str = "gemini-3.6-flash",
+        model_name: str = "gemini-3.7-flash",
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         wire_api: Optional[str] = None,

@@ -285,7 +285,7 @@ class VisualAnomalyTool(BaseTool):
                 temperature=0.0,
                 generation_config={
                     "thinking_level": require_minimal_thinking(
-                        os.getenv("GEMINI_VISUAL_ANOMALY_THINKING_LEVEL", "minimal"),
+                        os.getenv("GEMINI_VISUAL_ANOMALY_THINKING_LEVEL", "low"),
                         env_name="GEMINI_VISUAL_ANOMALY_THINKING_LEVEL",
                     )
                 },

@@ -1561,7 +1561,7 @@ def test_forced_output_keeps_function_results_as_step_array() -> None:
         max_output_tokens=16384,
         generation_config={"temperature": 0.0},
         final_output_max_tokens=32768,
-        final_output_generation_config={"thinking_level": "minimal"},
+        final_output_generation_config={"thinking_level": "low"},
     )
     parsed, steps = asyncio.run(runner.run("- [q1] verify"))
     assert parsed is not None
@@ -1582,10 +1582,10 @@ def test_forced_output_keeps_function_results_as_step_array() -> None:
     assert forced_request["max_tokens"] == 32768
     assert forced_request["generation_config"] == {
         "temperature": 0.0,
-        "thinking_level": "minimal",
+        "thinking_level": "low",
     }
     assert steps[-1].metadata["max_output_tokens"] == 32768
-    assert steps[-1].metadata["thinking_level"] == "minimal"
+    assert steps[-1].metadata["thinking_level"] == "low"
     assert "No more tool turns remain" in forced_request["system_instruction"]
     assert all(
         item["type"] == "function_result"
@@ -1661,7 +1661,7 @@ def test_forced_output_failure_preserves_completed_tool_steps() -> None:
         min_tool_calls=1,
         attach_image=False,
         final_output_max_tokens=32768,
-        final_output_generation_config={"thinking_level": "minimal"},
+        final_output_generation_config={"thinking_level": "low"},
     )
 
     with pytest.raises(RuntimeError) as captured:
@@ -1672,7 +1672,7 @@ def test_forced_output_failure_preserves_completed_tool_steps() -> None:
     assert partial[0].action_type == "tool_call"
     assert backend.requests[1]["max_tokens"] == 32768
     assert backend.requests[1]["generation_config"] == {
-        "thinking_level": "minimal"
+        "thinking_level": "low"
     }
 
 

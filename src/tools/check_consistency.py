@@ -84,7 +84,7 @@ class CheckConsistencyTool(BaseTool):
 
     client: Optional[Any] = field(default=None, repr=False)
     provider: str = "gemini"
-    model_name: str = "gemini-3.6-flash"
+    model_name: str = "gemini-3.7-flash"
 
     def _get_client(self):
         if self.client is None:

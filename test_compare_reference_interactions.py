@@ -107,7 +107,7 @@ def test_compare_uses_two_interactions_content_images_and_exact_schema(tmp_path:
     assert request["store"] is True
     assert request["max_tokens"] == 8192
     assert request["temperature"] == 0.0
-    assert request["generation_config"] == {"thinking_level": "minimal"}
+    assert request["generation_config"] == {"thinking_level": "low"}
     assert request["response_format"] == {
         "type": "text",
         "mime_type": "application/json",

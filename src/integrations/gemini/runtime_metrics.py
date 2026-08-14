@@ -9,9 +9,18 @@ EXCEPTION_METRICS_ATTR = "_gemini_runtime_metrics"
 
 
 def require_minimal_thinking(value: str, *, env_name: str) -> str:
+    """Return the low-thinking equivalent of the former minimal setting.
+
+    Gemini 3.7 Flash accepts ``low``, ``medium``, and ``high`` but no longer
+    accepts the legacy ``minimal`` value. Keep accepting the old environment
+    spelling as a compatibility alias while emitting the valid API value.
+    """
+
     level = str(value or "").strip().lower()
-    if level != "minimal":
-        raise ValueError(f"{env_name} must be 'minimal' for the active agent.")
+    if level == "minimal":
+        level = "low"
+    if level != "low":
+        raise ValueError(f"{env_name} must be 'low' for the active agent.")
     return level
 
 

@@ -143,7 +143,7 @@ class Orchestrator:
     def __init__(
         self,
         provider: str = "gemini",
-        model_name: str = "gemini-3.6-flash",
+        model_name: str = "gemini-3.7-flash",
         vlm_provider: Optional[str] = None,
         vlm_model: Optional[str] = None,
         llm_wire_api: Optional[str] = None,
@@ -269,25 +269,28 @@ class Orchestrator:
     def _validate_startup_configuration(self) -> None:
         tool_thinking_levels = {
             "GEMINI_VERIFICATION_FINAL_THINKING_LEVEL": os.getenv(
-                "GEMINI_VERIFICATION_FINAL_THINKING_LEVEL", "minimal"
+                "GEMINI_VERIFICATION_FINAL_THINKING_LEVEL", "low"
             ),
             "GEMINI_BROWSE_THINKING_LEVEL": os.getenv(
-                "GEMINI_BROWSE_THINKING_LEVEL", "minimal"
+                "GEMINI_BROWSE_THINKING_LEVEL", "low"
             ),
             "GEMINI_VISION_THINKING_LEVEL": os.getenv(
-                "GEMINI_VISION_THINKING_LEVEL", "minimal"
+                "GEMINI_VISION_THINKING_LEVEL", "low"
             ),
             "GEMINI_REFERENCE_COMPARE_THINKING_LEVEL": os.getenv(
-                "GEMINI_REFERENCE_COMPARE_THINKING_LEVEL", "minimal"
+                "GEMINI_REFERENCE_COMPARE_THINKING_LEVEL", "low"
             ),
             "GEMINI_VISUAL_ANOMALY_THINKING_LEVEL": os.getenv(
-                "GEMINI_VISUAL_ANOMALY_THINKING_LEVEL", "minimal"
+                "GEMINI_VISUAL_ANOMALY_THINKING_LEVEL", "low"
             ),
         }
         for env_name, value in tool_thinking_levels.items():
-            if value.strip().lower() != "minimal":
+            normalized_value = value.strip().lower()
+            if normalized_value == "minimal":
+                normalized_value = "low"
+            if normalized_value != "low":
                 raise ValueError(
-                    f"{env_name} must be 'minimal' for the active agent."
+                    f"{env_name} must be 'low' for the active agent."
                 )
         if self.provider == "gemini" and not self.llm.api_key:
             raise RuntimeError(
@@ -3419,16 +3422,18 @@ class Orchestrator:
         fallback = (
             "high"
             if normalized_stage == "PLANNING"
-            else os.getenv("GEMINI_AGENT_THINKING_LEVEL", "minimal")
+            else os.getenv("GEMINI_AGENT_THINKING_LEVEL", "low")
         )
         value = os.getenv(
             f"GEMINI_{normalized_stage}_THINKING_LEVEL",
             fallback,
         ).strip().lower()
+        if value == "minimal":
+            value = "low"
         allowed = (
-            {"minimal", "low", "medium", "high"}
+            {"low", "medium", "high"}
             if normalized_stage == "PLANNING"
-            else {"minimal"}
+            else {"low"}
         )
         if value not in allowed:
             raise ValueError(
@@ -3755,7 +3760,7 @@ class Orchestrator:
                 tool_thought = int(tool_tokens.get("thought", 0) or 0)
                 planning_thought_allowed = (
                     step.stage_name == "image_account_planning"
-                    and self._stage_thinking_level("PLANNING") != "minimal"
+                    and self._stage_thinking_level("PLANNING") != "low"
                 )
                 if tool_thought > 0 or (
                     policy_thought > 0 and not planning_thought_allowed

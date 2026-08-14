@@ -358,7 +358,7 @@ untracked `.env` on gpu-13 using a secure interactive method, then run:
 
 ```bash
 scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
-  python scripts/probe_gemini_interactions.py --model gemini-3.5-flash
+  python scripts/probe_gemini_interactions.py --model gemini-3.7-flash
 ```
 
 Keep benchmark datasets and caches under `IFV_DATA_ROOT`, outside the Git checkout.

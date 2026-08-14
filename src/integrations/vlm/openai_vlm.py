@@ -223,7 +223,7 @@ class OpenAIVisionClient:
                         "max_output_tokens": max_tokens,
                         "temperature": temperature,
                         "thinking_level": require_minimal_thinking(
-                            os.getenv("GEMINI_VISION_THINKING_LEVEL", "minimal"),
+                            os.getenv("GEMINI_VISION_THINKING_LEVEL", "low"),
                             env_name="GEMINI_VISION_THINKING_LEVEL",
                         ),
                     },

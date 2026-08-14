@@ -566,7 +566,7 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
             (
                 "high"
                 if stage == "PLANNING"
-                else os.getenv("GEMINI_AGENT_THINKING_LEVEL", "minimal")
+                else os.getenv("GEMINI_AGENT_THINKING_LEVEL", "low")
             ),
         ).strip().lower()
         for stage in ("PLANNING", "VERIFICATION", "REFLECTION", "JUDGMENT")
