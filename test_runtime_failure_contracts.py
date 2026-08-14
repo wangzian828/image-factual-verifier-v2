@@ -361,11 +361,15 @@ def test_stage_runner_does_not_wait_for_blocking_sync_tool_after_deadline() -> N
         tool_timeout_seconds=0.01,
     )
 
-    started = time.perf_counter()
-    serialized, metadata = asyncio.run(
-        runner._execute_tool("hanging_sync_tool", {})
-    )
-    elapsed = time.perf_counter() - started
+    loop = asyncio.new_event_loop()
+    try:
+        started = time.perf_counter()
+        serialized, metadata = loop.run_until_complete(
+            runner._execute_tool("hanging_sync_tool", {})
+        )
+        elapsed = time.perf_counter() - started
+    finally:
+        loop.close()
 
     assert elapsed < 0.15
     assert "ToolActionTimeout" in json.loads(serialized)["error"]
