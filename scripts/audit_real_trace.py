@@ -228,7 +228,6 @@ def _audit_thought_tokens(
     for index, step in enumerate(steps):
         metadata = _mapping(step.get("metadata"))
         tokens = _mapping(step.get("tokens"))
-        planning_step = str(step.get("stage", "")).strip() == "image_account_planning"
         if metadata.get("native_interactions"):
             native_steps += 1
             if not any(
@@ -247,7 +246,7 @@ def _audit_thought_tokens(
                     (
                         f"state.all_steps[{index}].tokens.{key}",
                         tokens[key],
-                        planning_step,
+                        True,
                     )
                 )
 
@@ -265,23 +264,7 @@ def _audit_thought_tokens(
             and bool(parent_segments & {"usage", "tokens", "token_usage"})
         )
         if (is_token_field or is_usage_total) and path not in recorded_paths:
-            planning_path = any(
-                f"all_steps[{index}]" in path
-                and str(step.get("stage", "")).strip()
-                == "image_account_planning"
-                for index, step in enumerate(steps)
-            )
-            aggregate_path = path in {
-                "token_usage.thought",
-                "token_usage.thought_tokens",
-                "token_usage.total_thought_tokens",
-                "state.token_usage.thought",
-                "state.token_usage.thought_tokens",
-                "state.token_usage.total_thought_tokens",
-            }
-            locations.append(
-                (path, raw_value, planning_path or aggregate_path)
-            )
+            locations.append((path, raw_value, True))
             recorded_paths.add(path)
 
     report.stats["native_interaction_steps"] = native_steps
@@ -293,16 +276,6 @@ def _audit_thought_tokens(
                 report,
                 "THOUGHT_TOKENS_INVALID",
                 f"thought-token value must be numeric, got {value!r}",
-                location=path,
-            )
-        elif numeric != 0 and not nonzero_allowed:
-            _issue(
-                report,
-                "THOUGHT_TOKENS_NONZERO",
-                (
-                    "Gemini thought tokens must be zero outside "
-                    f"image_account_planning, got {value!r}"
-                ),
                 location=path,
             )
 

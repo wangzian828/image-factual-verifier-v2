@@ -254,7 +254,7 @@ def test_strict_audit_accepts_discrepancy_first_v4_trace(tmp_path: Path) -> None
     assert report.stats["v4_actions"] == 2
 
 
-def test_strict_audit_allows_thought_tokens_only_for_v4_planning(
+def test_strict_audit_records_thought_tokens_for_all_v4_stages(
     tmp_path: Path,
 ) -> None:
     trace_path = _v4_trace(tmp_path)
@@ -279,7 +279,7 @@ def test_strict_audit_allows_thought_tokens_only_for_v4_planning(
         encoding="utf-8",
     )
     report = audit_trace(trace_path)
-    assert "THOUGHT_TOKENS_NONZERO" in {
+    assert "THOUGHT_TOKENS_NONZERO" not in {
         issue.code for issue in report.failures(strict_scheduler=True)
     }
 
