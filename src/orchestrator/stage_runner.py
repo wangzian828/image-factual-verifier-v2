@@ -3972,20 +3972,22 @@ class StageRunner:
                 "visual_evidence_disposition=null, and verdict_proposal="
                 "'continue'. "
             )
-            if "resolved focused visual Evidence" in reason:
+            if "claim-owned visual Evidence" in reason:
                 message += (
                     "For each feedback mapping like 'evidence-X -> claim_ids "
                     "[claim-Y]', if you assess claim-Y or propose a discrepancy "
                     "for claim-Y, include evidence-X in "
                     "claim_assessments[].selected_evidence_ids or in "
-                    "material_discrepancy.evidence_ids. Copy Evidence IDs "
-                    "exactly from the feedback; do not shorten or alter any "
-                    "character. Do not set visual_evidence_disposition for that "
+                    "material_discrepancy.evidence_ids. If the Evidence is "
+                    "irrelevant, list its exact ID in "
+                    "visual_evidence_disposition.evidence_ids and explain why. "
+                    "Copy Evidence IDs exactly from the feedback; do not shorten "
+                    "or alter any character. Do not dispose of Evidence for the "
                     "same claim. If validator feedback says supported/refuted "
                     "lacks a qualified directional Finding chain, change that "
                     "same Claim assessment to insufficient, still include the "
-                    "mapped visual Evidence ID, and keep verdict_proposal "
-                    "continue. "
+                    "mapped visual Evidence ID or explicitly dispose of it, and "
+                    "keep verdict_proposal continue. "
                 )
         return message + f"Runtime validator feedback: {reason}"
 

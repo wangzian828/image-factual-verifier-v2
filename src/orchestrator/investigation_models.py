@@ -800,9 +800,10 @@ class NewSearchHypothesis(StrictModel):
 
 
 class VisualEvidenceDisposition(StrictModel):
-    """Explicit audit note for a resolved pixel check that is not consumed."""
+    """Explicit audit note for claim-owned pixel Evidence that is not consumed."""
 
     disposition: Literal["irrelevant_to_current_claim_or_discrepancy"]
+    evidence_ids: List[str] = Field(default_factory=list, max_length=12)
     rationale: str = Field(min_length=12, max_length=800)
 
 

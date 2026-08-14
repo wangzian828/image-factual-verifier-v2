@@ -2615,7 +2615,7 @@ def test_runtime_binding_rewrites_long_source_text_to_visible_property() -> None
     assert request.scope == "subject"
 
 
-def test_second_decision_must_consume_resolved_visual_evidence_or_explain_irrelevance() -> None:
+def test_decision_must_consume_claim_owned_visual_evidence_or_explain_irrelevance() -> None:
     state = _planned_state()
     source, visual = _append_source_visual_conflict_pair(state)
     claim = state.image_claims[0]
@@ -2627,9 +2627,7 @@ def test_second_decision_must_consume_resolved_visual_evidence_or_explain_irrele
             trigger="qualified_evidence",
         )
     )
-    requirements = decision_context[
-        "resolved_focused_visual_evidence_requirements"
-    ]
+    requirements = decision_context["claim_owned_visual_evidence_requirements"]
     assert len(requirements) == 1
     assert requirements[0]["claim_ids"] == [claim.claim_id]
     assert requirements[0]["required_action"]["claim_ids"] == [claim.claim_id]
@@ -2656,7 +2654,7 @@ def test_second_decision_must_consume_resolved_visual_evidence_or_explain_irrele
     )
 
     assert ignored["accepted"] is False
-    assert "must consume the resolved focused visual Evidence" in ignored["rejected_reason"]
+    assert "claim-owned visual Evidence" in ignored["rejected_reason"]
     assert visual.evidence_id in ignored["rejected_reason"]
     assert claim.claim_id in ignored["rejected_reason"]
     assert state.model_dump(mode="json") == before
@@ -2676,6 +2674,7 @@ def test_second_decision_must_consume_resolved_visual_evidence_or_explain_irrele
             ],
             visual_evidence_disposition=VisualEvidenceDisposition(
                 disposition="irrelevant_to_current_claim_or_discrepancy",
+                evidence_ids=[visual.evidence_id],
                 rationale=(
                     "The visual observation was already considered elsewhere, "
                     "but this Decision would still update the same Claim."
@@ -2697,6 +2696,7 @@ def test_second_decision_must_consume_resolved_visual_evidence_or_explain_irrele
         DiscrepancyDecisionOutput(
             visual_evidence_disposition=VisualEvidenceDisposition(
                 disposition="irrelevant_to_current_claim_or_discrepancy",
+                evidence_ids=[visual.evidence_id],
                 rationale=(
                     "The focused hand-covering observation does not answer the "
                     "separate scene-location claim currently under review."
@@ -2710,6 +2710,71 @@ def test_second_decision_must_consume_resolved_visual_evidence_or_explain_irrele
     )
 
     assert disposition["accepted"] is True, disposition
+    assert state.discrepancy_decisions[-1].output.visual_evidence_disposition
+
+
+def test_decision_context_requires_claim_owned_crop_visual_evidence() -> None:
+    state = _planned_state()
+    source, visual = _append_source_visual_conflict_pair(
+        state,
+        link_visual_to_reinspection=False,
+    )
+    visual.tool_name = "crop_and_inspect"
+    visual.source_family = "visual:crop_and_inspect"
+    visual.visual_question_id = None
+    visual.visual_answer_status = None
+    visual.visual_scope = None
+    claim = state.image_claims[0]
+
+    context = json.loads(
+        render_discrepancy_decision_context(
+            state,
+            reviewed_evidence_ids=[source.evidence_id, visual.evidence_id],
+            trigger="qualified_evidence",
+        )
+    )
+    requirements = context["claim_owned_visual_evidence_requirements"]
+    assert [item["evidence_id"] for item in requirements] == [visual.evidence_id]
+    assert requirements[0]["tool_name"] == "crop_and_inspect"
+
+    ignored = apply_discrepancy_decision(
+        state,
+        DiscrepancyDecisionOutput(
+            claim_assessments=[
+                ClaimAssessmentProposal(
+                    claim_id=claim.claim_id,
+                    assessment="supported",
+                    selected_evidence_ids=[source.evidence_id],
+                    rationale="This source-only update must not drop the crop observation.",
+                )
+            ],
+            verdict_proposal="continue",
+            rationale="The visual Evidence still requires explicit handling.",
+        ),
+        reviewed_evidence_ids=[source.evidence_id, visual.evidence_id],
+        trigger="qualified_evidence",
+    )
+    assert ignored["accepted"] is False
+    assert visual.evidence_id in ignored["rejected_reason"]
+
+    disposed = apply_discrepancy_decision(
+        state,
+        DiscrepancyDecisionOutput(
+            visual_evidence_disposition=VisualEvidenceDisposition(
+                disposition="irrelevant_to_current_claim_or_discrepancy",
+                evidence_ids=[visual.evidence_id],
+                rationale=(
+                    "This crop observation concerns a separate visual property "
+                    "and is not relevant to the current decision."
+                ),
+            ),
+            verdict_proposal="continue",
+            rationale="Record the explicit non-use of the crop Evidence.",
+        ),
+        reviewed_evidence_ids=[source.evidence_id, visual.evidence_id],
+        trigger="qualified_evidence",
+    )
+    assert disposed["accepted"] is True, disposed
     assert state.discrepancy_decisions[-1].output.visual_evidence_disposition
 
 

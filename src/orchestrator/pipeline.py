@@ -115,6 +115,7 @@ from src.orchestrator.task_store import (
     apply_target_planning,
     archive_recall_available,
     bind_discrepancy_decision_runtime_ids,
+    claim_owned_visual_evidence_requirements,
     discrepancy_decision_checkpoint_reason,
     discrepancy_decision_evidence_ids,
     evidence_decision_checkpoint_reason,
@@ -1560,62 +1561,41 @@ class Orchestrator:
         """Conservatively consume resolved pixel Evidence after correction exhaustion.
 
         This fallback is intentionally non-substantive: it never supports, refutes,
-        creates a discrepancy, retires routes, or proposes a terminal verdict.  It
-        only records an ``insufficient`` assessment with the exact resolved focused
-        visual Evidence ID after the model repeatedly failed the same provenance
-        requirement.  That keeps the source-pixel check auditable without silently
+        creates a discrepancy, retires routes, or proposes a terminal verdict. It
+        only records ``insufficient`` assessments with the exact claim-owned pixel
+        Evidence IDs after the model repeatedly failed the same provenance
+        requirement. That keeps the visual observations auditable without silently
         downgrading to a source-only Decision.
         """
 
-        if "must consume the resolved focused visual Evidence" not in rejected_reason:
+        if "claim-owned visual Evidence" not in rejected_reason and (
+            "resolved focused visual Evidence" not in rejected_reason
+        ):
             return None
-        reviewed = set(str(item) for item in reviewed_evidence_ids)
-        task_by_id = {item.task_id: item for item in investigation.tasks}
-        evidence_by_id = {
-            item.evidence_id: item for item in investigation.evidence
-        }
+        requirements = claim_owned_visual_evidence_requirements(
+            investigation,
+            reviewed_evidence_ids=reviewed_evidence_ids,
+        )
         assessments: List[ClaimAssessmentProposal] = []
         seen_claim_ids: set[str] = set()
-        for record in investigation.visual_reinspections:
-            if (
-                record.status != "resolved"
-                or not (set(record.request.grounding_evidence_ids) & reviewed)
-            ):
-                continue
-            task = task_by_id.get(record.task_id)
-            if task is None:
-                continue
-            visual_evidence_ids = [
-                evidence_id
-                for evidence_id in record.evidence_ids
-                if evidence_id in reviewed
-                and evidence_id in evidence_by_id
-                and evidence_by_id[evidence_id].evidence_kind == "image_region"
-                and evidence_by_id[evidence_id].tool_name
-                == "focused_visual_inspection"
-                and evidence_by_id[evidence_id].visual_question_id
-                == record.visual_question_id
-            ]
-            if not visual_evidence_ids:
-                continue
-            for claim_id in task.claim_ids:
+        for requirement in requirements:
+            visual_evidence_id = str(requirement["evidence_id"])
+            for claim_id in requirement["claim_ids"]:
                 if claim_id in seen_claim_ids:
                     continue
                 assessments.append(
                     ClaimAssessmentProposal(
                         claim_id=claim_id,
                         assessment="insufficient",
-                        selected_evidence_ids=list(
-                            dict.fromkeys(visual_evidence_ids)
-                        ),
+                        selected_evidence_ids=[visual_evidence_id],
                         remaining_gap=(
-                            "resolved focused visual Evidence was recorded, "
+                            "Claim-owned pixel Evidence was recorded, "
                             "but no accepted semantic support/refute/discrepancy "
                             "update survived runtime validation"
                         ),
                         rationale=(
                             "Deterministic fallback after correction exhaustion: "
-                            "consume the resolved pixel Evidence conservatively "
+                            "consume the claim-owned pixel Evidence conservatively "
                             "without changing the Claim to supported or refuted."
                         ),
                     )
@@ -1631,7 +1611,7 @@ class Orchestrator:
             claim_assessments=assessments,
             verdict_proposal="continue",
             rationale=(
-                "Conservative runtime fallback consumed resolved focused visual "
+                "Conservative runtime fallback consumed claim-owned visual "
                 "Evidence after model correction exhaustion; no terminal verdict "
                 "or discrepancy was inferred."
             ),

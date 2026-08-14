@@ -12,6 +12,7 @@ from src.orchestrator.investigation_models import (
     VerdictBasis,
 )
 from src.orchestrator.task_store import (
+    claim_owned_visual_evidence_requirements,
     discrepancy_visual_reinspection_binding,
     evidence_serves_claim,
     remaining_claim_hypothesis_routes,
@@ -241,14 +242,15 @@ copies visible_property. Pixels cannot infer absolute size or weight without sca
 or media origin from style. If anchors establish neither alternative, keep Claim
 insufficient and do not create a discrepancy.
 
-After focused visual Evidence, reconcile with source. On conflict cite both IDs in
-claim_assessments[].selected_evidence_ids and material_discrepancy.evidence_ids;
-preserve stances. If resolved_focused_visual_evidence_requirements is non-empty,
-consume its pixel Evidence in the relevant assessment or MaterialDiscrepancy.
-Only unrelated observation may set
-visual_evidence_disposition=irrelevant_to_current_claim_or_discrepancy; never
-revert to source-only support/verdict. Updates to its Claim must consume pixel
-Evidence.
+After any claim-owned pixel Evidence, reconcile it with source. On conflict cite
+both IDs in claim_assessments[].selected_evidence_ids and
+material_discrepancy.evidence_ids; preserve stances. If
+claim_owned_visual_evidence_requirements is non-empty, every listed pixel
+Evidence must either be consumed by the relevant assessment/discrepancy or be
+listed in visual_evidence_disposition.evidence_ids with a concrete reason it is
+irrelevant. Never revert to source-only support/verdict while silently dropping
+claim-owned pixel Evidence. Updates to a Claim must consume its pixel Evidence;
+only a different current Claim/discrepancy may dispose of it.
 
 For visual_reinspection choose claim_id from runtime candidates. Emit only claim_id,
 reason, scope, question, expected_property and verdict_proposal=continue; runtime
@@ -1010,6 +1012,16 @@ def render_discrepancy_decision_context(
         for item in runtime_visual_binding.get("candidates", [])
         if isinstance(item, dict)
     }
+    visual_evidence_requirements = claim_owned_visual_evidence_requirements(
+        state,
+        reviewed_evidence_ids=reviewed,
+        evidence_by_id=evidence_by_id,
+    )
+    claims_with_reviewed_visual_evidence = {
+        str(claim_id)
+        for requirement in visual_evidence_requirements
+        for claim_id in requirement["claim_ids"]
+    }
     visual_alignment_candidates = []
     if len(state.visual_reinspections) < 1:
         facts_by_id = {item.fact_id: item for item in state.facts}
@@ -1025,6 +1037,8 @@ def render_discrepancy_decision_context(
                     "unresolved",
                     "conflicted",
                 }:
+                    continue
+                if claim_id in claims_with_reviewed_visual_evidence:
                     continue
                 if claim.fact_id not in evidence.fact_ids:
                     continue
@@ -1064,62 +1078,6 @@ def render_discrepancy_decision_context(
                         ),
                     }
                 )
-    resolved_focused_visual_evidence_requirements = []
-    for record in state.visual_reinspections:
-        if (
-            record.status != "resolved"
-            or not (
-                set(record.request.grounding_evidence_ids)
-                & reviewed_set
-            )
-        ):
-            continue
-        visual_evidence_ids = [
-            evidence_id
-            for evidence_id in record.evidence_ids
-            if evidence_id in reviewed_set
-            and evidence_id in evidence_by_id
-            and evidence_by_id[evidence_id].evidence_kind == "image_region"
-            and evidence_by_id[evidence_id].tool_name
-            == "focused_visual_inspection"
-            and evidence_by_id[evidence_id].visual_question_id
-            == record.visual_question_id
-        ]
-        if visual_evidence_ids:
-            visual_task = task_by_id.get(record.task_id)
-            visual_claim_ids = (
-                list(visual_task.claim_ids)
-                if visual_task is not None
-                else []
-            )
-            resolved_focused_visual_evidence_requirements.append(
-                {
-                    "visual_question_id": record.visual_question_id,
-                    "claim_ids": visual_claim_ids,
-                    "question": record.request.question,
-                    "expected_property": record.request.expected_property,
-                    "grounding_evidence_ids": list(
-                        record.request.grounding_evidence_ids
-                    ),
-                    "visual_evidence_ids": visual_evidence_ids,
-                    "required_action": {
-                        "same_claim_rule": (
-                            "If this Decision assesses or proposes a discrepancy "
-                            "for any listed claim_id, include the listed "
-                            "visual_evidence_ids in that assessment or "
-                            "discrepancy. Do not use visual_evidence_disposition "
-                            "for those same claim_ids."
-                        ),
-                        "claim_ids": visual_claim_ids,
-                        "visual_evidence_ids": visual_evidence_ids,
-                    },
-                    "required_review": (
-                        "Consume the pixel Evidence in this Decision or explicitly "
-                        "record why it is irrelevant to the current "
-                        "Claim/discrepancy."
-                    ),
-                }
-            )
     return json.dumps(
         {
             "trigger": trigger,
@@ -1154,8 +1112,8 @@ def render_discrepancy_decision_context(
                 visual_alignment_candidates[:12]
             ),
             "runtime_visual_reinspection_binding": runtime_visual_binding,
-            "resolved_focused_visual_evidence_requirements": (
-                resolved_focused_visual_evidence_requirements[:4]
+            "claim_owned_visual_evidence_requirements": (
+                visual_evidence_requirements[:12]
             ),
             "ownership_note": (
                 "Ownership permits review; it does not prove that Evidence "
