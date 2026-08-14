@@ -1300,16 +1300,23 @@ def _score_discrepancy_trace(
     investigation_stop_reason = str(
         investigation.get("stop_reason", "")
     ).strip()
-    terminal = [
-        item
-        for item in audits
-        if investigation_stop_reason
-        and str(item.get("stop_reason", "")) == investigation_stop_reason
-        and (
-            investigation_stop_reason != "verdict_determined"
-            or item.get("complete") is True
-        )
-    ]
+    if investigation_stop_reason:
+        terminal = [
+            item
+            for item in audits
+            if str(item.get("stop_reason", "")) == investigation_stop_reason
+            and (
+                investigation_stop_reason != "verdict_determined"
+                or item.get("complete") is True
+            )
+        ]
+    else:
+        terminal = [
+            item
+            for item in audits
+            if item.get("complete") is True
+            and str(item.get("stop_reason", "")) == "verdict_determined"
+        ]
     terminal_action_count = (
         int(terminal[-1].get("action_count", 0) or 0) if terminal else -1
     )
