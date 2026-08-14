@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import atexit
 import os
 import re
 import threading
@@ -25,6 +26,7 @@ from src.integrations.gemini import (
     normalize_json_schema,
     require_minimal_thinking,
 )
+from src.integrations.async_runtime import PersistentAsyncRuntime
 from src.integrations.llm.openai_compatible import (
     OpenAICompatibleChatClient,
     resolve_model_api_key,
@@ -208,6 +210,33 @@ class JinaReaderClient:
         self._visit_cache: Dict[tuple[str, str, str], Dict[str, Any]] = {}
         self._cache_lock = threading.Lock()
         self._thread_local = threading.local()
+        self._extract_runtime: Optional[PersistentAsyncRuntime] = None
+        self._extract_runtime_lock = threading.Lock()
+        self._gemini_interactions_client: Optional[GeminiInteractionsClient] = None
+        atexit.register(self.close)
+
+    def close(self) -> None:
+        """Close the shared Gemini extraction transport, if it was started."""
+
+        with self._extract_runtime_lock:
+            runtime = self._extract_runtime
+            self._extract_runtime = None
+        if runtime is not None:
+            runtime.close(self._close_gemini_client)
+
+    async def _close_gemini_client(self) -> None:
+        client = self._gemini_interactions_client
+        self._gemini_interactions_client = None
+        if client is not None:
+            await client.aclose()
+
+    def _get_extract_runtime(self) -> PersistentAsyncRuntime:
+        with self._extract_runtime_lock:
+            if self._extract_runtime is None:
+                self._extract_runtime = PersistentAsyncRuntime(
+                    thread_name="ifv-jina-gemini",
+                )
+            return self._extract_runtime
 
     def set_source_access_policy(self, policy: SourceAccessPolicy) -> None:
         self.source_access_policy = policy
@@ -1499,66 +1528,58 @@ class JinaReaderClient:
         retrieval_goal: str,
         max_output_tokens: int,
     ) -> Dict[str, Any]:
-        async with GeminiInteractionsClient(
-            base_url=self.extract_base_url,
-            timeout=self.extract_timeout,
-            max_retries=self.extract_max_retries,
-        ) as client:
-            payload = await client.create(
-                model=model_name,
-                input=(
-                    "IMAGE CLAIM (trusted; stance target):\n"
-                    f"{image_claim}\n\n"
-                    "RETRIEVAL GOAL (trusted; passage selection only):\n"
-                    f"{retrieval_goal}\n\n"
-                    "BEGIN UNTRUSTED WEBPAGE DATA\n"
-                    f"{content}\n"
-                    "END UNTRUSTED WEBPAGE DATA"
-                ),
-                system_instruction=EXTRACT_PROMPT,
-                response_format={
-                    "type": "text",
-                    "mime_type": "application/json",
-                    "schema": normalize_json_schema(
-                        EXTRACT_SCHEMA,
-                        require_all_properties=True,
-                    ),
-                },
-                generation_config={
-                    "max_output_tokens": max_output_tokens,
-                    "temperature": 0.0,
-                    "thinking_level": require_minimal_thinking(
-                        os.getenv("GEMINI_BROWSE_THINKING_LEVEL", "low"),
-                        env_name="GEMINI_BROWSE_THINKING_LEVEL",
-                    ),
-                },
-                background=False,
-                store=True,
+        client = self._gemini_interactions_client
+        if client is None:
+            client = GeminiInteractionsClient(
+                base_url=self.extract_base_url,
+                timeout=self.extract_timeout,
+                max_retries=self.extract_max_retries,
             )
-            raw = extract_text(payload)
-            if not raw.strip():
-                raise attach_runtime_metrics(
-                    RuntimeError("Gemini Interactions evidence extractor returned no text."),
-                    interaction_runtime_metrics(payload),
-                )
-            return {
-                "text": raw,
-                RUNTIME_METRICS_KEY: interaction_runtime_metrics(payload),
-            }
+            self._gemini_interactions_client = client
+        payload = await client.create(
+            model=model_name,
+            input=(
+                "IMAGE CLAIM (trusted; stance target):\n"
+                f"{image_claim}\n\n"
+                "RETRIEVAL GOAL (trusted; passage selection only):\n"
+                f"{retrieval_goal}\n\n"
+                "BEGIN UNTRUSTED WEBPAGE DATA\n"
+                f"{content}\n"
+                "END UNTRUSTED WEBPAGE DATA"
+            ),
+            system_instruction=EXTRACT_PROMPT,
+            response_format={
+                "type": "text",
+                "mime_type": "application/json",
+                "schema": normalize_json_schema(
+                    EXTRACT_SCHEMA,
+                    require_all_properties=True,
+                ),
+            },
+            generation_config={
+                "max_output_tokens": max_output_tokens,
+                "temperature": 0.0,
+                "thinking_level": require_minimal_thinking(
+                    os.getenv("GEMINI_BROWSE_THINKING_LEVEL", "low"),
+                    env_name="GEMINI_BROWSE_THINKING_LEVEL",
+                ),
+            },
+            background=False,
+            store=True,
+        )
+        raw = extract_text(payload)
+        if not raw.strip():
+            raise attach_runtime_metrics(
+                RuntimeError("Gemini Interactions evidence extractor returned no text."),
+                interaction_runtime_metrics(payload),
+            )
+        return {
+            "text": raw,
+            RUNTIME_METRICS_KEY: interaction_runtime_metrics(payload),
+        }
 
-    @staticmethod
-    def _run_async(coroutine):
-        import asyncio
-
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            return asyncio.run(coroutine)
-
-        import concurrent.futures
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-            return executor.submit(asyncio.run, coroutine).result()
+    def _run_async(self, coroutine):
+        return self._get_extract_runtime().run(coroutine)
 
     @staticmethod
     def _normalize_url(url: str) -> str:

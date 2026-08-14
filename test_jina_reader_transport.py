@@ -1,0 +1,103 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any
+
+from src.integrations.browse import jina_reader
+
+
+class FakeGeminiInteractionsClient:
+    instances = 0
+    requests = 0
+    closes = 0
+    active = 0
+    max_active = 0
+    lock = threading.Lock()
+
+    def __init__(self, **_: Any) -> None:
+        type(self).instances += 1
+
+    async def create(self, **_: Any) -> dict[str, Any]:
+        cls = type(self)
+        with cls.lock:
+            cls.requests += 1
+            cls.active += 1
+            cls.max_active = max(cls.max_active, cls.active)
+        await asyncio.sleep(0.01)
+        with cls.lock:
+            cls.active -= 1
+        return {
+            "id": f"interaction-{cls.requests}",
+            "status": "completed",
+            "usage": {
+                "total_input_tokens": 10,
+                "total_output_tokens": 5,
+                "total_thought_tokens": 0,
+            },
+            "output_text": json.dumps(
+                {
+                    "rationale": "matched",
+                    "passage_id": 0,
+                    "supporting_passage_ids": [],
+                    "summary": "The passage supports the relation.",
+                    "relevance": "high",
+                    "relation_scope": "same_relation",
+                    "relation_stance": "supports",
+                    "directness": "direct",
+                    "temporal_alignment": "not_applicable",
+                }
+            ),
+        }
+
+    async def aclose(self) -> None:
+        type(self).closes += 1
+
+
+def _reset_fake() -> None:
+    FakeGeminiInteractionsClient.instances = 0
+    FakeGeminiInteractionsClient.requests = 0
+    FakeGeminiInteractionsClient.closes = 0
+    FakeGeminiInteractionsClient.active = 0
+    FakeGeminiInteractionsClient.max_active = 0
+
+
+def _extract(reader: jina_reader.JinaReaderClient) -> dict[str, Any]:
+    return reader._extract_with_llm(
+        "[PASSAGE 0] The source states the claimed relation.",
+        image_claim="The image depicts the claimed relation.",
+        retrieval_goal="Find the source passage for the relation.",
+    )
+
+
+def test_jina_reuses_one_gemini_transport_and_allows_parallel_extracts(
+    monkeypatch,
+) -> None:
+    _reset_fake()
+    monkeypatch.setattr(
+        jina_reader,
+        "GeminiInteractionsClient",
+        FakeGeminiInteractionsClient,
+    )
+    reader = jina_reader.JinaReaderClient(
+        extract_provider="gemini",
+        extract_model="fake-model",
+    )
+    try:
+        assert _extract(reader)["stance"] == "support"
+        assert _extract(reader)["stance"] == "support"
+
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            results = list(executor.map(lambda _: _extract(reader), range(3)))
+
+        assert all(item["stance"] == "support" for item in results)
+        assert FakeGeminiInteractionsClient.instances == 1
+        assert FakeGeminiInteractionsClient.requests == 5
+        assert FakeGeminiInteractionsClient.max_active >= 2
+    finally:
+        reader.close()
+
+    assert FakeGeminiInteractionsClient.closes == 1
+

@@ -57,6 +57,12 @@ def build_all_tools_with_health(
     health: Dict[str, ToolHealth] = {}
 
     from src.orchestrator.llm_backend import APIBackend
+    from src.integrations.browse.jina_reader import JinaReaderClient
+    from src.integrations.search.serper import (
+        SerperImageSearchClient,
+        SerperLensSearchClient,
+    )
+    from src.integrations.search.visual_search import VisualReverseSearchClient
 
     request_timeout = float(
         os.getenv("VLM_TOOL_REQUEST_TIMEOUT_SECONDS", "90")
@@ -101,6 +107,17 @@ def build_all_tools_with_health(
         if shared_vlm_client is not None:
             return shared_vlm_client
         raise RuntimeError(shared_vlm_error or "shared VLM client is unavailable")
+
+    # These clients are stateless at the tool boundary and already protect
+    # mutable caches/sessions internally. Sharing them lets visit and
+    # crop_and_search reuse page content, HTTP keep-alive sessions, and the
+    # persistent Gemini extraction transport without serializing page visits.
+    shared_browse_client = JinaReaderClient()
+    shared_lens_client = SerperLensSearchClient()
+    shared_image_search_client = SerperImageSearchClient()
+    shared_visual_search_client = VisualReverseSearchClient(
+        serper_lens_client=shared_lens_client,
+    )
 
     def register(name: str, builder) -> None:
         try:
@@ -165,6 +182,10 @@ def build_all_tools_with_health(
         "crop_and_search",
         lambda: __import__("src.tools.crop_and_search", fromlist=["CropAndSearchTool"]).CropAndSearchTool(
             vlm_client=shared_sync_vlm_client(),
+            lens_client=shared_lens_client,
+            image_search_client=shared_image_search_client,
+            browse_client=shared_browse_client,
+            visual_search_client=shared_visual_search_client,
             provider=vlm_provider,
             model_name=vlm_model,
         ),
@@ -193,13 +214,18 @@ def build_all_tools_with_health(
         "reverse_image_search",
         lambda: __import__("src.tools.reverse_image_search", fromlist=["ReverseImageSearchTool"]).ReverseImageSearchTool(
             vlm_client=shared_sync_vlm_client(),
+            image_search_client=shared_image_search_client,
+            lens_client=shared_lens_client,
+            visual_search_client=shared_visual_search_client,
             provider=vlm_provider,
             model_name=vlm_model,
         ),
     )
     register(
         "visit",
-        lambda: __import__("src.tools.visit", fromlist=["VisitTool"]).VisitTool(),
+        lambda: __import__("src.tools.visit", fromlist=["VisitTool"]).VisitTool(
+            client=shared_browse_client,
+        ),
     )
     register(
         "analyze_visual_anomalies",

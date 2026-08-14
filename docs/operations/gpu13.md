@@ -401,6 +401,14 @@ perception, semantic image search, and visual reinspection calls. This changes
 transport reuse only; it does not change prompts, output budgets, tool boundaries,
 or evidence semantics.
 
+Jina page extraction follows the same transport rule. Each process shares one
+Jina Reader client between `visit` and `crop_and_search`; its Gemini evidence
+extractor keeps one persistent async transport while independent page requests
+remain concurrent. The page-content cache and HTTP sessions are shared as well,
+so revisiting a candidate from another tool does not repeat the page fetch; an
+identical claim/goal pair also reuses the completed extraction. This is an
+implementation optimization only and does not turn a page preview into Evidence.
+
 Dataset acquisition, review, and release finalization now belong to the separate
 `image-factual-verifier-data-pipeline` project. Acquire a finalized release from
 gpu-13 itself through Hugging Face, Google Drive, approved object storage, or a
