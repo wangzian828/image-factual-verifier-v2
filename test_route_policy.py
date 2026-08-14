@@ -92,7 +92,7 @@ def test_same_reference_for_a_different_task_is_still_deduplicated() -> None:
     )
 
 
-def test_reverse_image_search_branches_share_one_image_target_route() -> None:
+def test_reverse_image_search_branches_are_distinct_routes() -> None:
     lens = {
         "__question_id": "task-1",
         "image_input": "input.png",
@@ -104,7 +104,7 @@ def test_reverse_image_search_branches_share_one_image_target_route() -> None:
         "branch": "semantic",
     }
 
-    assert routes_semantically_equivalent(
+    assert not routes_semantically_equivalent(
         "reverse_image_search",
         lens,
         "reverse_image_search",

@@ -99,10 +99,17 @@ class JinaSearchTool(BaseTool):
             rows, blocked_count = self.source_access_policy.filter_rows(rows)
         else:
             blocked_count = 0
-        response = {
+        query_record = {
             **response,
             "goal": str(goal or query),
             "results": rows[: self.top_k],
+        }
+        if blocked_count:
+            query_record["policy_filtered_count"] = blocked_count
+        return {
+            "status": "success",
+            "provider": "jina_search",
+            "queries": [query_record],
             "subcalls": [
                 {
                     "kind": "search_query",
@@ -117,9 +124,6 @@ class JinaSearchTool(BaseTool):
                 }
             ],
         }
-        if blocked_count:
-            response["policy_filtered_count"] = blocked_count
-        return {"status": "success", **response}
 
     def call(self, params: Dict[str, Any]) -> Dict[str, Any]:
         return self.search(

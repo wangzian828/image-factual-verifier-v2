@@ -233,6 +233,7 @@ def routes_semantically_equivalent(
     if tool == "reverse_image_search":
         return bool(left.get("image_target")) and (
             left.get("image_target") == right.get("image_target")
+            and left.get("branch", "lens") == right.get("branch", "lens")
         )
     if tool in {
         "current_time",

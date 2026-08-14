@@ -1427,7 +1427,7 @@ def test_task_tool_contract_rejects_unsuggested_ocr() -> None:
     assert task.task_id in error
 
 
-def test_failed_root_image_search_moves_to_text_routes() -> None:
+def test_failed_root_image_search_keeps_the_other_branch_open() -> None:
     case, state = _runtime_state()
     task = next(
         item
@@ -1462,7 +1462,7 @@ def test_failed_root_image_search_moves_to_text_routes() -> None:
     )
 
     assert coverage.stop_reason == "continue"
-    assert not any(
+    assert any(
         route.startswith("reverse_image_search:")
         for route in routes
     )
@@ -1554,7 +1554,10 @@ def test_empty_batch_inspection_exposes_one_bounded_sibling_fallback() -> None:
         fact_id=state.core_verdict_fact_id or "",
     )
 
-    assert released_routes == [f"text_search:{task.task_id}"]
+    assert released_routes == [
+        f"reverse_image_search:root_image:{task.task_id}",
+        f"text_search:{task.task_id}",
+    ]
 
 
 def test_failed_comparison_skips_same_direction_sibling_but_keeps_distinct_lead() -> None:

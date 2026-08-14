@@ -1009,7 +1009,7 @@ def test_discrepancy_action_skips_exhausted_active_task(
     ] == [executable.task_id]
 
 
-def test_root_image_reverse_search_is_consumed_across_tasks(
+def test_root_image_reverse_search_allows_the_other_branch_across_tasks(
     tmp_path: Path,
 ) -> None:
     image_path = tmp_path / "per-task-reverse-routes.jpg"
@@ -1075,22 +1075,29 @@ def test_root_image_reverse_search_is_consumed_across_tasks(
         task_ids={second.task_id},
     )
 
-    assert not any(
+    assert any(
         route.startswith("reverse_image_search:")
         for route in first_routes
     )
-    assert not any(
+    assert any(
         route.startswith("reverse_image_search:")
         for route in second_routes
     )
     task_ids = {first.task_id, second.task_id}
-    assert "reverse_image_search" not in (
+    assert "reverse_image_search" in (
         orchestrator._discrepancy_executable_tool_names(
             investigation,
             task_ids=task_ids,
         )
     )
-    assert "reverse_image_search" not in (
+    assert (
+        orchestrator._discrepancy_tool_argument_constraints(
+            investigation,
+            task_ids=task_ids,
+        )["reverse_image_search"]["branch"]
+        == ["semantic"]
+    )
+    assert "reverse_image_search" in (
         orchestrator._discrepancy_tool_argument_constraints(
             investigation,
             task_ids=task_ids,

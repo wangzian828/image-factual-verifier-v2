@@ -77,6 +77,7 @@ MAX_SEARCH_HYPOTHESES = 3
 MAX_NEW_HYPOTHESES_PER_DECISION = 3
 MAX_V4_VISUAL_REINSPECTIONS = 1
 ROOT_IMAGE_TARGET = "root_image"
+REVERSE_IMAGE_SEARCH_BRANCHES = ("lens", "semantic")
 
 
 def _unique_visual_view_artifacts(
@@ -7334,8 +7335,8 @@ def _remaining_task_material_routes(
 
     text_search_count = 0
     one_shot_tools: set[str] = set()
-    attempted_root_image_reverse_search = _attempted_root_image_reverse_search(
-        state
+    available_root_image_reverse_branches = (
+        remaining_root_image_reverse_branches(state)
     )
     for route in attempts:
         tool_name = str(route.get("tool", "")).strip()
@@ -7389,7 +7390,10 @@ def _remaining_task_material_routes(
         # more optional branch from the stale plan. Once attempted, the normal
         # route inventory resumes.
         return [f"text_search:{task.task_id}"]
-    if "reverse_image_search" in allowed and not attempted_root_image_reverse_search:
+    if (
+        "reverse_image_search" in allowed
+        and available_root_image_reverse_branches
+    ):
         routes.append(
             f"reverse_image_search:{ROOT_IMAGE_TARGET}:{task.task_id}"
         )
@@ -7411,15 +7415,34 @@ def _remaining_task_material_routes(
     return routes
 
 
-def _attempted_root_image_reverse_search(
+def _attempted_root_image_reverse_branches(
     state: ImageOnlyInvestigationState,
-) -> bool:
-    """Current v4 reverse-image calls all target the injected root image."""
+) -> set[str]:
+    """Return root-image reverse branches already used in this investigation."""
 
-    return any(
-        str(route.get("tool", "")).strip() == "reverse_image_search"
+    return {
+        str(route.get("branch", "lens")).strip().lower() or "lens"
         for route in _iter_attempted_routes(state)
-    )
+        if str(route.get("tool", "")).strip() == "reverse_image_search"
+    }
+
+
+def remaining_root_image_reverse_branches(
+    state: ImageOnlyInvestigationState,
+) -> List[str]:
+    """Return distinct reverse-search branches that remain for the root image.
+
+    Lens and semantic search are different retrieval routes. A branch is
+    consumed only after that exact branch has run; the stage-level tool budget
+    still bounds the total number of reverse-image calls.
+    """
+
+    attempted = _attempted_root_image_reverse_branches(state)
+    return [
+        branch
+        for branch in REVERSE_IMAGE_SEARCH_BRANCHES
+        if branch not in attempted
+    ]
 
 
 def _deduplicate_shared_image_routes(routes: Sequence[str]) -> List[str]:

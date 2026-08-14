@@ -38,7 +38,7 @@ IMAGE_QUERY_SCHEMA = {
 
 @dataclass
 class ReverseImageSearchTool(BaseTool):
-    """One bounded search on one image target per action."""
+    """One bounded Lens or semantic search on one image target per action."""
 
     vlm_client: Optional[Any] = None
     image_search_client: Optional[SerperImageSearchClient] = None
@@ -55,9 +55,9 @@ class ReverseImageSearchTool(BaseTool):
     description: str = (
         "Run one image-search branch on the supplied image target. Use "
         "branch='lens' for reverse-image search or branch='semantic' to "
-        "generate one visual query and run image search. The same image target "
-        "must not be searched again; use a different crop or image target "
-        "instead."
+        "generate one visual query and run image search. Do not repeat the "
+        "same target and branch; a different branch or crop is a distinct "
+        "route when it remains useful."
     )
     parameters: dict = field(
         default_factory=lambda: {
@@ -71,8 +71,9 @@ class ReverseImageSearchTool(BaseTool):
                     "type": "string",
                     "enum": ["lens", "semantic"],
                     "description": (
-                        "Search branch for this image target. The runtime may "
-                        "allow another call only for a different image target."
+                        "Search branch for this image target. Lens and semantic "
+                        "are distinct routes; do not repeat the same branch "
+                        "for the same target."
                     ),
                 },
             },

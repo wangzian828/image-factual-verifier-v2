@@ -58,6 +58,33 @@ def test_jina_search_tool_reports_missing_credentials(
     assert "JINA_API_KEY" in result["error"]
 
 
+def test_jina_search_tool_uses_existing_query_result_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.tools.jina_search.JinaSearchClient.search",
+        lambda _self, query, top_k: {
+            "query": query,
+            "provider": "jina_search",
+            "results": [
+                {
+                    "title": "Zoo",
+                    "url": "https://example.test/zoo",
+                    "snippet": "Newborn sloth size.",
+                }
+            ],
+        },
+    )
+
+    result = JinaSearchTool(client=JinaSearchClient(api_key="test")).call(
+        {"queries": ["newborn sloth size"]}
+    )
+
+    assert result["status"] == "success"
+    assert result["queries"][0]["results"][0]["url"] == "https://example.test/zoo"
+    assert result["subcalls"][0]["provider"] == "jina_search"
+
+
 def test_jina_reranker_preserves_provider_errors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

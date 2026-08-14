@@ -126,6 +126,7 @@ from src.orchestrator.task_store import (
     pending_visual_reinspection,
     query_concept_extraction_error,
     query_replan_candidate_task_ids,
+    remaining_root_image_reverse_branches,
     remaining_material_routes,
     remaining_claim_hypothesis_routes,
     record_route_selection_exhaustion,
@@ -2816,7 +2817,9 @@ class Orchestrator:
                 continue
             if parts[0] == "reverse_image_search" and len(parts) == 3:
                 if parts[2] in task_ids:
-                    branches.extend(["lens", "semantic"])
+                    branches.extend(
+                        remaining_root_image_reverse_branches(investigation)
+                    )
             elif parts[0] == "visit" and len(parts) == 3:
                 if parts[1] in task_ids:
                     pages.append(parts[2])
@@ -2924,7 +2927,9 @@ class Orchestrator:
                 continue
             if parts[0] == "reverse_image_search" and len(parts) == 3:
                 if parts[2] in task_ids:
-                    branches.extend(["lens", "semantic"])
+                    branches.extend(
+                        remaining_root_image_reverse_branches(investigation)
+                    )
             elif parts[0] == "visit" and len(parts) == 3:
                 if parts[1] in task_ids:
                     pages.append(parts[2])
@@ -3054,6 +3059,22 @@ class Orchestrator:
                     f"reference image owned by task {task_id!r}."
                 )
             return ""
+        if tool_name == "reverse_image_search":
+            requested_branch = (
+                str(tool_args.get("branch", "lens")).strip().lower()
+            )
+            pending_branches = set(
+                route_constraints.get("reverse_image_search", {}).get(
+                    "branch",
+                    [],
+                )
+            )
+            if requested_branch not in pending_branches:
+                return (
+                    "Tool 'reverse_image_search' must use an untried branch "
+                    f"for task {task_id!r}; pending branches are "
+                    f"{sorted(pending_branches) or ['none']}."
+                )
         if tool_name not in {"text_search", "reverse_image_search"}:
             return ""
         route_inventory = (
