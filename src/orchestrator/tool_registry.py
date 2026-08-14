@@ -90,6 +90,18 @@ def build_all_tools_with_health(
         )
         return client
 
+    shared_vlm_client: Any = None
+    shared_vlm_error = ""
+    try:
+        shared_vlm_client = sync_vlm_client()
+    except Exception as exc:
+        shared_vlm_error = f"{type(exc).__name__}: {exc}"
+
+    def shared_sync_vlm_client() -> Any:
+        if shared_vlm_client is not None:
+            return shared_vlm_client
+        raise RuntimeError(shared_vlm_error or "shared VLM client is unavailable")
+
     def register(name: str, builder) -> None:
         try:
             tool = builder()
@@ -103,7 +115,7 @@ def build_all_tools_with_health(
     register(
         "perceive_scene",
         lambda: __import__("src.tools.perceive_scene", fromlist=["PerceiveSceneTool"]).PerceiveSceneTool(
-            client=sync_vlm_client(),
+            client=shared_sync_vlm_client(),
             provider=vlm_provider,
             model_name=vlm_model,
         ),
@@ -133,7 +145,7 @@ def build_all_tools_with_health(
     register(
         "crop_and_inspect",
         lambda: __import__("src.tools.crop_and_inspect", fromlist=["CropAndInspectTool"]).CropAndInspectTool(
-            client=sync_vlm_client(),
+            client=shared_sync_vlm_client(),
             provider=vlm_provider,
             model_name=vlm_model,
         ),
@@ -144,7 +156,7 @@ def build_all_tools_with_health(
             "src.tools.focused_visual_inspection",
             fromlist=["FocusedVisualInspectionTool"],
         ).FocusedVisualInspectionTool(
-            client=sync_vlm_client(),
+            client=shared_sync_vlm_client(),
             provider=vlm_provider,
             model_name=vlm_model,
         ),
@@ -152,7 +164,7 @@ def build_all_tools_with_health(
     register(
         "crop_and_search",
         lambda: __import__("src.tools.crop_and_search", fromlist=["CropAndSearchTool"]).CropAndSearchTool(
-            vlm_client=sync_vlm_client(),
+            vlm_client=shared_sync_vlm_client(),
             provider=vlm_provider,
             model_name=vlm_model,
         ),
@@ -160,7 +172,7 @@ def build_all_tools_with_health(
     register(
         "count_objects",
         lambda: __import__("src.tools.count_objects", fromlist=["CountObjectsTool"]).CountObjectsTool(
-            client=sync_vlm_client(),
+            client=shared_sync_vlm_client(),
             provider=vlm_provider,
             model_name=vlm_model,
         ),
@@ -168,7 +180,7 @@ def build_all_tools_with_health(
     register(
         "check_consistency",
         lambda: __import__("src.tools.check_consistency", fromlist=["CheckConsistencyTool"]).CheckConsistencyTool(
-            client=sync_vlm_client(),
+            client=shared_sync_vlm_client(),
             provider=vlm_provider,
             model_name=vlm_model,
         ),
@@ -180,7 +192,7 @@ def build_all_tools_with_health(
     register(
         "reverse_image_search",
         lambda: __import__("src.tools.reverse_image_search", fromlist=["ReverseImageSearchTool"]).ReverseImageSearchTool(
-            vlm_client=sync_vlm_client(),
+            vlm_client=shared_sync_vlm_client(),
             provider=vlm_provider,
             model_name=vlm_model,
         ),

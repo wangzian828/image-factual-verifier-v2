@@ -166,6 +166,34 @@ def test_gemini_vlm_supports_ordered_multi_view_input(monkeypatch) -> None:
     ]
 
 
+def test_gemini_vlm_reuses_one_transport_for_repeated_calls(monkeypatch) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    requests = []
+    clients = []
+
+    def make_client(**_kwargs):
+        client = FakeAsyncClient(requests)
+        clients.append(client)
+        return client
+
+    monkeypatch.setattr(httpx, "AsyncClient", make_client)
+    client = build_vlm_client(provider="gemini", model_name="gemini-test")
+    try:
+        for _ in range(2):
+            result = client.create_image_json(
+                system_prompt="Describe the image as JSON.",
+                user_text="Inspect it.",
+                image_input="https://example.test/input.png",
+                max_tokens=128,
+            )
+            assert result["scene"] == "test"
+    finally:
+        client.close()
+
+    assert len(clients) == 1
+    assert len(requests) == 2
+
+
 def test_gemini_vlm_rejects_missing_required_schema_paths(monkeypatch) -> None:
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     requests = []

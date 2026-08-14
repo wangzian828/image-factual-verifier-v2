@@ -394,6 +394,13 @@ same-input A/B on gpu-13 did not show that lower ceilings reduce latency.
 Override either budget only after reproducing a provider-specific truncation or
 latency improvement.
 
+The active process shares one structured VLM client across the visual tools.
+Gemini vision requests from those synchronous tool adapters run on one persistent
+Python 3.11 async transport, so the HTTP connection can be reused across
+perception, semantic image search, and visual reinspection calls. This changes
+transport reuse only; it does not change prompts, output budgets, tool boundaries,
+or evidence semantics.
+
 Dataset acquisition, review, and release finalization now belong to the separate
 `image-factual-verifier-data-pipeline` project. Acquire a finalized release from
 gpu-13 itself through Hugging Face, Google Drive, approved object storage, or a

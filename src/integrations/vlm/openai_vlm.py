@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import os
+import threading
 from dataclasses import dataclass
 from typing import Any, Dict, Mapping, Optional, Sequence
 
@@ -30,6 +32,71 @@ DEFAULT_JSON_OBJECT_SCHEMA: Dict[str, Any] = {
 DEFAULT_GEMINI_VISION_MIN_OUTPUT_TOKENS = 8192
 
 
+class _PersistentAsyncRuntime:
+    """Run synchronous vision calls on one reusable async transport thread."""
+
+    def __init__(self) -> None:
+        self._executor = ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="ifv-gemini-vision",
+        )
+        self._thread_local = threading.local()
+        self._lock = threading.Lock()
+        self._started = False
+        self._closed = False
+
+    def run(self, coroutine: Any) -> Any:
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("The reusable vision runtime is closed.")
+            self._started = True
+        return self._executor.submit(self._run_on_loop, coroutine).result()
+
+    @property
+    def closed(self) -> bool:
+        with self._lock:
+            return self._closed
+
+    def _run_on_loop(self, coroutine: Any) -> Any:
+        runner = getattr(self._thread_local, "runner", None)
+        if hasattr(asyncio, "Runner"):
+            if runner is None:
+                runner = asyncio.Runner()
+                self._thread_local.runner = runner
+            return runner.run(coroutine)
+
+        loop = getattr(self._thread_local, "loop", None)
+        if loop is None:
+            loop = asyncio.new_event_loop()
+            self._thread_local.loop = loop
+            asyncio.set_event_loop(loop)
+        return loop.run_until_complete(coroutine)
+
+    def close(self, cleanup: Any = None) -> None:
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            started = self._started
+
+        if started:
+            if cleanup is not None:
+                self._executor.submit(self._run_on_loop, cleanup).result(
+                    timeout=10
+                )
+            self._executor.submit(self._close_runner).result(timeout=10)
+        self._executor.shutdown(wait=True, cancel_futures=True)
+
+    def _close_runner(self) -> None:
+        runner = getattr(self._thread_local, "runner", None)
+        if runner is not None:
+            runner.close()
+            return
+        loop = getattr(self._thread_local, "loop", None)
+        if loop is not None and not loop.is_closed():
+            loop.close()
+
+
 @dataclass
 class OpenAIVisionClient:
     api_key: Optional[str] = None
@@ -49,6 +116,23 @@ class OpenAIVisionClient:
         self.api_key = resolve_model_api_key(self.provider, self.api_key)
         self.wire_api = resolve_model_wire_api(self.provider, self.wire_api)
         self.base_url = resolve_model_base_url(self.provider, self.base_url, self.wire_api)
+        self._async_runtime: Optional[_PersistentAsyncRuntime] = (
+            _PersistentAsyncRuntime()
+            if self.provider == "gemini"
+            else None
+        )
+        self._gemini_interactions_client: Optional[GeminiInteractionsClient] = None
+
+    def close(self) -> None:
+        """Close the reusable vision transport if it has been started."""
+
+        if self._async_runtime is None:
+            return
+        if self._async_runtime.closed:
+            return
+        client = self._gemini_interactions_client
+        cleanup = client.aclose() if client is not None else None
+        self._async_runtime.close(cleanup)
 
     def create_image_json(
         self,
@@ -205,61 +289,64 @@ class OpenAIVisionClient:
         )
 
         async def _request() -> Dict[str, Any]:
-            async with GeminiInteractionsClient(
-                base_url=self.base_url,
-                timeout=self.timeout,
-                max_retries=self.max_retries,
-            ) as client:
-                payload = await client.create(
-                    model=model_name,
-                    input=[
-                        {"type": "text", "text": user_text},
-                        *[
-                            self._to_interactions_image(image_input)
-                            for image_input in image_inputs
-                        ],
-                    ],
-                    system_instruction=(
-                        f"{system_prompt}\n\n"
-                        "Return exactly one JSON object without markdown or commentary."
-                    ),
-                    response_format={
-                        "type": "text",
-                        "mime_type": "application/json",
-                        "schema": schema,
-                    },
-                    generation_config={
-                        "max_output_tokens": max_tokens,
-                        "temperature": temperature,
-                        "thinking_level": require_minimal_thinking(
-                            os.getenv("GEMINI_VISION_THINKING_LEVEL", "low"),
-                            env_name="GEMINI_VISION_THINKING_LEVEL",
-                        ),
-                    },
-                    background=False,
-                    store=True,
+            client = self._gemini_interactions_client
+            if client is None:
+                client = GeminiInteractionsClient(
+                    base_url=self.base_url,
+                    timeout=self.timeout,
+                    max_retries=self.max_retries,
                 )
-                runtime_metrics = interaction_runtime_metrics(payload)
-                try:
-                    content = client.extract_text(payload)
-                    if not content.strip():
-                        raise RuntimeError("Gemini Interactions vision response was empty.")
-                    parsed = parse_json_object(content)
-                    if not parsed:
-                        raise RuntimeError(
-                            "Gemini Interactions vision response was not a valid JSON object: "
-                            + content[:500]
-                        )
-                    missing = missing_required_paths(parsed, schema)
-                    if missing:
-                        raise RuntimeError(
-                            "Gemini Interactions vision response is missing required fields: "
-                            + ", ".join(missing[:20])
-                        )
-                except Exception as exc:
-                    raise attach_runtime_metrics(exc, runtime_metrics)
-                parsed[RUNTIME_METRICS_KEY] = runtime_metrics
-                return parsed
+                self._gemini_interactions_client = client
+            payload = await client.create(
+                model=model_name,
+                input=[
+                    {"type": "text", "text": user_text},
+                    *[
+                        self._to_interactions_image(image_input)
+                        for image_input in image_inputs
+                    ],
+                ],
+                system_instruction=(
+                    f"{system_prompt}\n\n"
+                    "Return exactly one JSON object without markdown or commentary."
+                ),
+                response_format={
+                    "type": "text",
+                    "mime_type": "application/json",
+                    "schema": schema,
+                },
+                generation_config={
+                    "max_output_tokens": max_tokens,
+                    "temperature": temperature,
+                    "thinking_level": require_minimal_thinking(
+                        os.getenv("GEMINI_VISION_THINKING_LEVEL", "low"),
+                        env_name="GEMINI_VISION_THINKING_LEVEL",
+                    ),
+                },
+                background=False,
+                store=True,
+            )
+            runtime_metrics = interaction_runtime_metrics(payload)
+            try:
+                content = client.extract_text(payload)
+                if not content.strip():
+                    raise RuntimeError("Gemini Interactions vision response was empty.")
+                parsed = parse_json_object(content)
+                if not parsed:
+                    raise RuntimeError(
+                        "Gemini Interactions vision response was not a valid JSON object: "
+                        + content[:500]
+                    )
+                missing = missing_required_paths(parsed, schema)
+                if missing:
+                    raise RuntimeError(
+                        "Gemini Interactions vision response is missing required fields: "
+                        + ", ".join(missing[:20])
+                    )
+            except Exception as exc:
+                raise attach_runtime_metrics(exc, runtime_metrics)
+            parsed[RUNTIME_METRICS_KEY] = runtime_metrics
+            return parsed
 
         return self._run_async(_request())
 
@@ -279,14 +366,7 @@ class OpenAIVisionClient:
         mime_type = header[5:].split(";", 1)[0] or "image/jpeg"
         return {"type": "image", "mime_type": mime_type, "data": data}
 
-    @staticmethod
-    def _run_async(coroutine):
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            return asyncio.run(coroutine)
-
-        import concurrent.futures
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-            return executor.submit(asyncio.run, coroutine).result()
+    def _run_async(self, coroutine: Any) -> Any:
+        if self._async_runtime is None:
+            raise RuntimeError("Reusable async vision runtime is unavailable.")
+        return self._async_runtime.run(coroutine)
