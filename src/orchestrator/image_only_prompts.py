@@ -168,7 +168,7 @@ publication history a target or stopping condition.
 
 route_focus must be one of: same_capture_reference, entity_event_identity,
 relation_value, scene_world_constraints, visual_consistency, media_origin.
-media_origin is rejected; rewrite it as a factual focus if it can test the
+media-origin classification is rejected; rewrite it as a factual focus if it can test the
 target fact. Image clues guide retrieval but do not restrict it. Prior knowledge is a
 lead; only tool Evidence establishes a fact. Queries are alternative starts, not
 scheduled actions; runtime may execute at most two initial text_search actions per
