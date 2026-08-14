@@ -26,6 +26,8 @@ from src.orchestrator.source_provenance import canonicalize_url
 
 
 REACT_SYSTEM_PROMPT = """\
+判断图像表达的事实内容是否成立。
+
 Investigate one supplied active task with one tool call. It must serve the stated
 core fact and an open evidence gap. Search results are leads, not evidence: inspect
 a promising page or reference image before another retrieval for that task. Use
@@ -37,6 +39,8 @@ the runtime owns task state, evidence, duplicate control, source policy, and ver
 
 
 REFLECTION_SYSTEM_PROMPT = """\
+判断图像表达的事实内容是否成立。
+
 You are the structured Reflection step of an image-only factual investigation.
 Review the global state at a scheduled interval or before an unresolved stop.
 
@@ -63,6 +67,8 @@ JSON object matching the schema.
 
 
 QUERY_CONCEPT_EXTRACTION_SYSTEM_PROMPT = """\
+判断图像表达的事实内容是否成立。
+
 Extract searchable concepts newly introduced by the supplied exact Evidence, rather
 than repeating subjects, products, places, or relations already explicit in the
 active proposition or attempted queries. Include each materially distinct novel
@@ -74,6 +80,8 @@ knowledge absent from the Evidence.
 
 
 QUERY_REPLAN_SYSTEM_PROMPT = """\
+判断图像表达的事实内容是否成立。
+
 Choose one supplied Evidence-derived concept that best closes the remaining gap in
 the active proposition, then write one complete replacement web query.
 
@@ -87,6 +95,8 @@ not introduce an unsupported verdict label or media-origin classification.
 
 
 TARGET_PLANNING_SYSTEM_PROMPT = """\
+判断图像表达的事实内容是否成立。
+
 You are the initial target-planning step of an open-domain image investigation.
 Return exactly one small, decisive, pixel-grounded proposition: subject, event or
 context, relation slot, and the value shown by the image. The proposition is the
@@ -106,6 +116,8 @@ state, and output structure.
 
 
 DISCREPANCY_REACT_SYSTEM_PROMPT = """\
+判断图像表达的事实内容是否成立。
+
 Choose exactly one runtime-authorized tool action that most reduces uncertainty
 about an unresolved ImageClaim. Its attached SearchHypothesis supplies context and
 ownership, not a boundary on the investigation. Frame retrieval around what actually
@@ -134,6 +146,8 @@ execution order. You may switch to another Task when the current route is weak.
 
 
 IMAGE_ACCOUNT_PLANNING_SYSTEM_PROMPT = """\
+判断图像表达的事实内容是否成立。
+
 You are the Image Account Planning root. Plan an open fact-check of the account
 communicated by the image. Return one high-salience ImageClaim containing the
 complete subject-event relation, relation slot, and depicted value; add a second
@@ -165,6 +179,8 @@ statement, queries, expected_information, suggested_tools, priority}].
 
 
 EVIDENCE_DECISION_SYSTEM_PROMPT = """\
+判断图像表达的事实内容是否成立。
+
 You are a semantic decision checkpoint for an image-grounded investigation.
 Evaluate the active proposition against the supplied eligible Evidence, not against
 the wording of the search query that found it. Decide whether the proposition is
@@ -222,6 +238,8 @@ visual_reinspection or refinement, never both.
 
 
 DISCREPANCY_DECISION_SYSTEM_PROMPT = """\
+判断图像表达的事实内容是否成立。
+
 You are the sparse multimodal Discrepancy Decision checkpoint. Compare reviewed
 Evidence with image account; update Claims. Discrepancies need cited
 Evidence/visible anchors. Retire/add hypotheses or request reinspection; omit
@@ -900,7 +918,7 @@ def render_image_account_planning_context(
             "planning_limits": {
                 "image_claims": 3,
                 "high_salience_image_claims": 1,
-                "search_hypotheses": 6,
+                "search_hypotheses": 3,
                 "candidate_queries_per_hypothesis": 3,
                 "initial_text_search_actions_per_task": 2,
                 "route_focus_values": [
@@ -1154,7 +1172,7 @@ def render_discrepancy_decision_context(
             },
             "remaining_hypothesis_budget": max(
                 0,
-                12 - len(state.search_hypotheses),
+                3 - len(state.search_hypotheses),
             ),
             "remaining_visual_reinspection_budget": max(
                 0,

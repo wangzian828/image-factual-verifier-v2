@@ -30,6 +30,7 @@ def test_hot_path_prompts_stay_semantic_and_compact() -> None:
     for name, (prompt, maximum_length) in prompts.items():
         assert len(prompt) <= maximum_length, name
         assert "\nRules:" not in prompt, name
+        assert "判断图像表达的事实内容是否成立。" in prompt, name
 
     browse_prompt = " ".join(EXTRACT_PROMPT.split())
     react_prompt = " ".join(REACT_SYSTEM_PROMPT.split())

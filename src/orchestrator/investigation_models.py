@@ -513,7 +513,7 @@ class ImageAccountPlanningOutput(StrictModel):
     image_claims: List[ImageClaimProposal] = Field(min_length=1, max_length=3)
     search_hypotheses: List[SearchHypothesisProposal] = Field(
         min_length=1,
-        max_length=6,
+        max_length=3,
     )
 
     @model_validator(mode="after")

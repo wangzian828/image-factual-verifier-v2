@@ -134,6 +134,22 @@ def test_image_account_requires_exactly_one_high_salience_claim() -> None:
         ImageAccountPlanningOutput.model_validate(payload)
 
 
+def test_image_account_limits_search_hypotheses_to_three() -> None:
+    payload = _planning_output().model_dump(mode="json")
+    first = payload["search_hypotheses"][0]
+    payload["search_hypotheses"] = [
+        {
+            **first,
+            "hypothesis_key": f"route-{index}",
+            "statement": f"Distinct route {index} may clarify the visible fact.",
+        }
+        for index in range(4)
+    ]
+
+    with pytest.raises(ValidationError):
+        ImageAccountPlanningOutput.model_validate(payload)
+
+
 def test_planning_derives_text_search_from_nonempty_queries() -> None:
     payload = _planning_output().model_dump(mode="json")
     payload["search_hypotheses"][0]["suggested_tools"] = [
