@@ -1528,6 +1528,34 @@ def _is_composite_source_visual_discrepancy_finding(
     )
 
 
+def _visual_evidence_can_join_source_visual_chain(
+    evidence: InvestigationEvidence,
+    *,
+    claim_id: str,
+    claim_fact_id: str,
+    task_by_id: Mapping[str, ResearchTask],
+) -> bool:
+    """Return whether one claim-owned pixel observation can join a refute chain.
+
+    The Evidence contract, rather than the producing tool or a task transition,
+    determines whether a visual observation is usable.
+    """
+
+    task = task_by_id.get(evidence.task_id)
+    if (
+        evidence.evidence_kind != "image_region"
+        or evidence.claim_binding != "pixel_observation"
+        or evidence.directness != "direct"
+        or evidence.quality not in {"strong", "moderate"}
+        or evidence.source_class != "visual"
+        or task is None
+        or claim_id not in task.claim_ids
+        or claim_fact_id not in evidence.fact_ids
+    ):
+        return False
+    return evidence.visual_answer_status != "ambiguous"
+
+
 def _composite_source_visual_refute_evidence_ids(
     state: ImageOnlyInvestigationState,
     *,
@@ -1539,10 +1567,10 @@ def _composite_source_visual_refute_evidence_ids(
 ) -> List[str]:
     """Return a narrow source+pixel conflict chain without relabeling Evidence.
 
-    This is for cases like a source stating a visible property for an event
-    while a focused reinspection of the original pixels observes the competing
-    property.  Neither Evidence record changes stance; the directional object is
-    the composite Finding created by the Decision reducer.
+    Neither Evidence record changes stance; the directional object is the
+    composite Finding created by the Decision reducer. The pixel side may come
+    from any direct, claim-owned image-region observation that satisfies the
+    Evidence contract.
     """
 
     source_ids = [
@@ -1562,65 +1590,17 @@ def _composite_source_visual_refute_evidence_ids(
         evidence_id
         for evidence_id in dict.fromkeys(evidence_ids)
         if evidence_id in evidence_by_id
-        and evidence_by_id[evidence_id].task_id in task_by_id
-        and claim_id
-            in task_by_id[evidence_by_id[evidence_id].task_id].claim_ids
-        if evidence_by_id[evidence_id].evidence_kind == "image_region"
-        and evidence_by_id[evidence_id].tool_name == "focused_visual_inspection"
-        and evidence_by_id[evidence_id].claim_binding == "pixel_observation"
-        and evidence_by_id[evidence_id].visual_answer_status
-        in {"observed", "not_observed"}
-        and evidence_by_id[evidence_id].visual_scope in {
-            "subject",
-            "relation",
-            "scene",
-            "text",
-        }
+        and _visual_evidence_can_join_source_visual_chain(
+            evidence=evidence_by_id[evidence_id],
+            claim_id=claim_id,
+            claim_fact_id=claim_fact_id,
+            task_by_id=task_by_id,
+        )
     ]
     if not source_ids or not visual_ids:
         return []
 
-    # A composite refutation is only admissible when the focused visual result
-    # was produced by the exact runtime-owned reinspection that was grounded in
-    # the selected source Evidence.  This keeps neutral pixel observations
-    # neutral while still allowing the Decision reducer to represent a source /
-    # pixel conflict as one directional Finding.
-    for record in state.visual_reinspections:
-        if (
-            record.status != "resolved"
-            or record.task_id not in task_by_id
-            or claim_id not in task_by_id[record.task_id].claim_ids
-            or not set(record.request.grounding_evidence_ids) & set(source_ids)
-        ):
-            continue
-        linked_visual_ids = [
-            evidence_id
-            for evidence_id in visual_ids
-            if evidence_id in record.evidence_ids
-            and evidence_by_id[evidence_id].task_id == record.task_id
-            and evidence_by_id[evidence_id].visual_question_id
-            == record.visual_question_id
-            and evidence_by_id[evidence_id].visual_answer_status
-            in {"observed", "not_observed"}
-        ]
-        if not linked_visual_ids:
-            continue
-        linked_source_ids = [
-            evidence_id
-            for evidence_id in source_ids
-            if evidence_id in record.request.grounding_evidence_ids
-        ]
-        if linked_source_ids:
-            source_task_id = evidence_by_id[linked_source_ids[0]].task_id
-            visual_task = task_by_id.get(record.task_id)
-            if (
-                visual_task is not None
-                and visual_task.parent_task_id == source_task_id
-            ):
-                return list(
-                    dict.fromkeys([linked_source_ids[0], linked_visual_ids[0]])
-                )
-    return []
+    return list(dict.fromkeys([source_ids[0], visual_ids[0]]))
 
 
 def _composite_source_visual_refute_finding_ids(

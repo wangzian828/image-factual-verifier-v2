@@ -128,6 +128,46 @@ def _task_descends_from(
     return False
 
 
+def _composite_visual_evidence_is_eligible(
+    evidence: Mapping[str, Any],
+    *,
+    finding: Mapping[str, Any],
+    task_by_id: Mapping[str, Mapping[str, Any]],
+) -> bool:
+    """Accept claim-owned pixel Evidence without depending on its tool name."""
+
+    if (
+        str(evidence.get("evidence_kind", "")).strip() != "image_region"
+        or str(evidence.get("claim_binding", "")).strip() != "pixel_observation"
+        or str(evidence.get("stance", "")).strip() != "neutral"
+        or str(evidence.get("directness", "direct")).strip() != "direct"
+        or str(evidence.get("quality", "")).strip() not in {"strong", "moderate"}
+        or str(evidence.get("source_class", "")).strip() != "visual"
+        or str(evidence.get("visual_answer_status", "")).strip() == "ambiguous"
+    ):
+        return False
+    finding_task = task_by_id.get(str(finding.get("task_id", "")).strip())
+    evidence_task = task_by_id.get(str(evidence.get("task_id", "")).strip())
+    if finding_task is None or evidence_task is None:
+        return False
+    finding_claims = {
+        str(item) for item in finding_task.get("claim_ids", []) or []
+    }
+    evidence_claims = {
+        str(item) for item in evidence_task.get("claim_ids", []) or []
+    }
+    finding_facts = {
+        str(item) for item in finding.get("fact_ids", []) or []
+    }
+    evidence_facts = {
+        str(item) for item in evidence.get("fact_ids", []) or []
+    }
+    return bool(
+        finding_claims & evidence_claims
+        or finding_facts & evidence_facts
+    )
+
+
 def _state(trace: Mapping[str, Any]) -> Mapping[str, Any]:
     state = trace.get("state")
     return state if isinstance(state, Mapping) else trace
@@ -1354,19 +1394,22 @@ def _audit_discrepancy_trace(
                 )
                 continue
             evidence_task_id = str(evidence_row.get("task_id", "")).strip()
-            descendant_evidence = _task_descends_from(
-                evidence_task_id,
-                task_id,
-                task_by_id,
+            composite_visual_evidence = (
+                is_source_visual_composite
+                and _composite_visual_evidence_is_eligible(
+                    evidence_row,
+                    finding=finding,
+                    task_by_id=task_by_id,
+                )
             )
             if evidence_task_id != task_id and not (
-                is_source_visual_composite and descendant_evidence
+                composite_visual_evidence
             ):
                 _issue(
                     report,
                     "V4_FINDING_EVIDENCE_OWNERSHIP_INVALID",
                     "Finding Evidence must belong to its ResearchTask or an "
-                    "explicit visual-reinspection child task",
+                    "explicit claim-owned visual Evidence",
                     location=location,
                 )
                 continue
@@ -1380,21 +1423,15 @@ def _audit_discrepancy_trace(
                 ):
                     composite_source_seen = True
                 elif (
-                    descendant_evidence
-                    and str(evidence_row.get("evidence_kind", "")).strip()
-                    == "image_region"
-                    and str(evidence_row.get("tool_name", "")).strip()
-                    == "focused_visual_inspection"
-                    and str(evidence_row.get("stance", "")).strip() == "neutral"
+                    composite_visual_evidence
                 ):
                     composite_visual_seen = True
                 else:
                     _issue(
                         report,
                         "V4_COMPOSITE_FINDING_EVIDENCE_INVALID",
-                        "Source-visual composite Finding must pair parent-task "
-                        "source Evidence with neutral focused visual Evidence "
-                        "from its child task",
+                        "Source-visual composite Finding must pair source "
+                        "Evidence with claim-owned neutral pixel Evidence",
                         location=location,
                     )
             elif str(evidence_row.get("stance", "")).strip() != finding_stance:
@@ -1413,7 +1450,7 @@ def _audit_discrepancy_trace(
                 report,
                 "V4_COMPOSITE_FINDING_CHAIN_INCOMPLETE",
                 "Source-visual composite Finding requires a refute stance, "
-                "parent-task source Evidence, and child-task neutral visual Evidence",
+                "source Evidence, and claim-owned neutral pixel Evidence",
                 location=location,
             )
 
@@ -2766,19 +2803,22 @@ def _audit_image_only_trace(
                 )
                 continue
             evidence_task_id = str(evidence_record.get("task_id", "")).strip()
-            if evidence_task_id != task_id and not (
+            composite_visual_evidence = (
                 is_source_visual_composite
-                and _task_descends_from(
-                    evidence_task_id,
-                    task_id,
-                    task_by_id,
+                and _composite_visual_evidence_is_eligible(
+                    evidence_record,
+                    finding=finding,
+                    task_by_id=task_by_id,
                 )
+            )
+            if evidence_task_id != task_id and not (
+                composite_visual_evidence
             ):
                 _issue(
                     report,
                     "FINDING_EVIDENCE_OWNERSHIP_INVALID",
                     "Finding Evidence must belong to its ResearchTask or an "
-                    "explicit visual-reinspection child task",
+                    "explicit claim-owned visual Evidence",
                     location=location,
                 )
 

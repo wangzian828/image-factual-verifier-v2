@@ -1945,14 +1945,19 @@ def test_source_visual_composite_allows_reinspection_specific_visual_fact() -> N
     assert basis.evidence_ids == [source.evidence_id, visual.evidence_id]
 
 
-def test_source_visual_composite_rejects_unlinked_visual_evidence() -> None:
+def test_source_visual_composite_accepts_claim_owned_crop_evidence() -> None:
     state = _planned_state()
     source, visual = _append_source_visual_conflict_pair(
         state,
         link_visual_to_reinspection=False,
     )
+    visual.tool_name = "crop_and_inspect"
+    visual.source_family = "visual:crop_and_inspect"
+    visual.visual_question_id = None
+    visual.visual_answer_status = None
+    visual.visual_scope = None
+    state.visual_reinspections.clear()
     claim = state.image_claims[0]
-    before = state.model_dump(mode="json")
 
     update = apply_discrepancy_decision(
         state,
@@ -1962,28 +1967,33 @@ def test_source_visual_composite_rejects_unlinked_visual_evidence() -> None:
                     claim_id=claim.claim_id,
                     assessment="refuted",
                     selected_evidence_ids=[source.evidence_id, visual.evidence_id],
-                    rationale="This cites an unrelated neutral visual observation.",
+                    rationale=(
+                        "The source measurement and claim-owned crop observation "
+                        "jointly refute the depicted living animal."
+                    ),
                 )
             ],
             material_discrepancy=MaterialDiscrepancyProposal(
-                statement="An unrelated visual observation must not refute the Claim.",
+                statement=(
+                    "The source measurements conflict with the miniature object "
+                    "shown in the claim-owned crop."
+                ),
                 affected_claim_ids=[claim.claim_id],
                 visual_anchor_fact_ids=claim.anchor_fact_ids,
                 evidence_ids=[source.evidence_id, visual.evidence_id],
                 materiality="decisive",
                 status="established",
-                rationale="The proposed composite has no runtime reinspection link.",
+                rationale="Both Evidence records are direct and claim-owned.",
             ),
             verdict_proposal="fake",
-            rationale="This must fail closed.",
+            rationale="A decisive source-pixel discrepancy is established.",
         ),
         reviewed_evidence_ids=[source.evidence_id, visual.evidence_id],
         trigger="qualified_evidence",
     )
 
-    assert update["accepted"] is False
-    assert "qualified refute" in update["rejected_reason"]
-    assert state.model_dump(mode="json") == before
+    assert update["accepted"] is True, update
+    assert len(update["created_composite_finding_ids"]) == 1
 
 
 def test_source_visual_composite_rejects_ambiguous_visual_result() -> None:
