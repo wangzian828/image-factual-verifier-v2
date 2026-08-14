@@ -2059,8 +2059,11 @@ def test_two_mixed_inspections_release_new_retrieval_routes() -> None:
         task_ids={task.task_id},
     )
 
-    assert routes == [f"text_search:{task.task_id}"]
-    assert executable == {"text_search"}
+    assert routes == [
+        f"visit:{task.task_id}:https://example.org/page-one",
+        f"visit:{task.task_id}:https://example.org/page-two",
+    ]
+    assert executable == {"visit"}
     assert constraints == {}
 
 
