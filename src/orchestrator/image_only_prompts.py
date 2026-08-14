@@ -158,13 +158,13 @@ world relation the image asks the viewer to accept. Add a second target only whe
 independently verdict-changing. Do not inventory details.
 
 Write the target fact as the positive world proposition the image asks the viewer
-to accept. Prefer unusual visible relations over generic presence; a defining factual relation may be more useful. Treat
+to accept. Prefer unusual visible relations over generic presence; a defining factual relation may be more useful. Keep it pixel-visible.
+Retrieved place/date/store/event identity, creator, platform, generation, and
+publication history belong in hypotheses, not the target; exact-capture absence is
+never a target gap. Treat
 search_hypotheses as neutral investigation routes, not candidate verdicts: identify
 depicted entity/event, determine the relation slot's verified value, test
-scene/world constraints, check visual consistency, or find a same-capture/reference
-image only when direct comparison materially tests the target fact. Never make
-finding the exact source image, creator, publisher/platform, generation method, or
-publication history a target or stopping condition.
+scene/world constraints or visual consistency, and use same-capture only when material.
 
 route_focus must be one of: same_capture_reference, entity_event_identity,
 relation_value, scene_world_constraints, visual_consistency, media_origin.
