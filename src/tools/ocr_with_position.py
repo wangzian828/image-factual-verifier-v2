@@ -78,6 +78,7 @@ class OCRWithPositionTool(BaseTool):
 
     _reader: Optional[Any] = field(default=None, repr=False)
     min_confidence: float = 0.5
+    cpu_threads: int = 1
 
     def _get_reader(self):
         """Lazy initialization of the CPU PaddleOCR pipeline."""
@@ -89,6 +90,8 @@ class OCRWithPositionTool(BaseTool):
                 use_doc_unwarping=False,
                 use_textline_orientation=False,
                 device="cpu",
+                enable_mkldnn=False,
+                cpu_threads=max(1, int(self.cpu_threads)),
             )
         return self._reader
 
