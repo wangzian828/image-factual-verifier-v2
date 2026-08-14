@@ -9,6 +9,9 @@ from src.orchestrator.source_access import SourceAccessPolicy
 from src.tools.base import BaseTool
 
 
+MAX_VISIT_URLS_PER_ACTION = 3
+
+
 @dataclass
 class VisitTool(BaseTool):
     """Goal-conditioned webpage visit using Jina Reader."""
@@ -17,8 +20,9 @@ class VisitTool(BaseTool):
     source_access_policy: Optional[SourceAccessPolicy] = None
     name: str = "visit"
     description: str = (
-        "Visit one webpage and extract an exact passage for the runtime-bound "
-        "image claim and retrieval goal."
+        "Visit up to three candidate webpages concurrently and extract an "
+        "independent exact passage from each for the runtime-bound image claim "
+        "and retrieval goal."
     )
     parameters: dict = field(
         default_factory=lambda: {
@@ -28,10 +32,10 @@ class VisitTool(BaseTool):
                     "type": ["string", "array"],
                     "items": {"type": "string"},
                     "minItems": 1,
-                    "maxItems": 1,
+                    "maxItems": MAX_VISIT_URLS_PER_ACTION,
                     "description": (
-                        "Exactly one webpage URL. Additional pages require "
-                        "separate policy actions."
+                        "One to three candidate webpage URLs. Each page is "
+                        "fetched and extracted independently."
                     ),
                 },
                 "image_claim": {
@@ -68,27 +72,49 @@ class VisitTool(BaseTool):
     ) -> dict:
         try:
             if isinstance(url, list):
-                urls = [str(item) for item in url if str(item).strip()]
-                if len(urls) != 1:
+                urls = list(dict.fromkeys(
+                    str(item).strip()
+                    for item in url
+                    if str(item).strip()
+                ))
+                if not urls or len(urls) > MAX_VISIT_URLS_PER_ACTION:
                     return {
                         "status": "error",
                         "error": (
-                            "visit accepts exactly one URL per action; inspect "
-                            "additional pages only if the core gap remains open."
+                            "visit accepts one to three unique URLs per action."
                         ),
                     }
                 if self.source_access_policy is not None:
-                    urls = [item for item in urls if self.source_access_policy.allows(item)]
+                    blocked = [
+                        item
+                        for item in urls
+                        if not self.source_access_policy.allows(item)
+                    ]
+                    if blocked:
+                        return {
+                            "status": "error",
+                            "error": (
+                                "One or more requested URLs are blocked by the "
+                                "active source access policy."
+                            ),
+                        }
                 if not urls:
                     return {
                         "status": "error",
                         "error": "All requested URLs are blocked by the active source access policy.",
                     }
-                result = self.client.visit(
-                    urls[0],
-                    image_claim=image_claim,
-                    retrieval_goal=retrieval_goal,
-                )
+                if len(urls) == 1:
+                    result = self.client.visit(
+                        urls[0],
+                        image_claim=image_claim,
+                        retrieval_goal=retrieval_goal,
+                    )
+                else:
+                    result = self.client.visit_many(
+                        urls,
+                        image_claim=image_claim,
+                        retrieval_goal=retrieval_goal,
+                    )
             else:
                 if self.source_access_policy is not None and not self.source_access_policy.allows(str(url)):
                     return {

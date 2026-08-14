@@ -132,9 +132,10 @@ classification into retrieval.
 The legacy image-claim record is bookkeeping only; do not turn creator,
 provenance, upload history, or exact-capture identity into the target fact.
 
-Inspect a promising page or reference image before repeating retrieval for that
-route. Search titles, snippets, and reverse-image matches are Discovery only.
-For page inspection, select one owned target fact and state the passage sought.
+Inspect a promising page or reference before repeating retrieval. Titles, snippets,
+and reverse matches are Discovery only. For page inspection, select one owned
+target fact and state the passage sought; batch up to three pending pages when
+useful. Each page remains separate Evidence.
 Qualified Evidence requires a fetched exact span or a successful visual
 observation with recorded provenance. Use only supplied observations, do not decide
 a verdict, and do not introduce external identities or metadata as new target facts.

@@ -348,10 +348,10 @@ total_tool_subcalls    real provider requests inside those actions
 tool_subcalls_by_kind  search, fetch, extract, OCR, upload, and comparison counts
 ```
 
-The active runtime enforces one text query, one visited page, or one reverse-image
-branch per policy action. `crop_and_search` and `count_objects` are not exposed to the
-Agent loop; general VLM anomaly checks remain diagnostic and cannot create verdict
-Evidence.
+The active runtime enforces one text query, up to three independently visited pages,
+or one reverse-image branch per policy action. `crop_and_search` and `count_objects`
+are not exposed to the Agent loop; general VLM anomaly checks remain diagnostic and
+cannot create verdict Evidence.
 
 These are contract and scripted-state checks. For real Gemini transport, create an
 untracked `.env` on gpu-13 using a secure interactive method, then run:

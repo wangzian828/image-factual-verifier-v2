@@ -96,7 +96,7 @@ but they must not enter the v4 default path.
   focused visual reinspection, but it cannot silently expand an ImageClaim.
 - General VLM consistency/anomaly opinions are diagnostic and cannot create verdict
   Evidence.
-- `text_search` accepts one query, `visit` one URL, and
+- `text_search` accepts one query, `visit` up to three URLs per action, and
   `reverse_image_search` one explicit Lens or semantic branch per action.
 - If all investigation tools fail, or a provider/protocol/runtime boundary fails, stop
   with an engineering error before Judgment.

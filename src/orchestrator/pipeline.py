@@ -3033,13 +3033,21 @@ class Orchestrator:
                     [],
                 )
             }
+            normalized_requested_urls = list(
+                dict.fromkeys(
+                    canonicalize_url(str(url))
+                    for url in requested_urls
+                    if canonicalize_url(str(url))
+                )
+            )
             if (
-                len(requested_urls) != 1
-                or canonicalize_url(str(requested_urls[0])) not in pending_urls
+                not normalized_requested_urls
+                or len(normalized_requested_urls) > 3
+                or not set(normalized_requested_urls) <= pending_urls
             ):
                 return (
-                    f"Tool 'visit' must inspect one pending candidate page owned "
-                    f"by task {task_id!r}."
+                    f"Tool 'visit' must inspect one to three pending candidate "
+                    f"pages owned by task {task_id!r}."
                 )
             return ""
         if tool_name == "compare_with_reference":

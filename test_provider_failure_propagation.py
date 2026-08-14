@@ -937,7 +937,7 @@ def test_visit_tool_converts_single_provider_exception_to_error() -> None:
     }
 
 
-def test_visit_tool_rejects_multiple_urls_before_provider_call() -> None:
+def test_visit_tool_rejects_more_than_three_urls_before_provider_call() -> None:
     class BrowseClient:
         called = False
 
@@ -947,13 +947,18 @@ def test_visit_tool_rejects_multiple_urls_before_provider_call() -> None:
 
     client = BrowseClient()
     result = VisitTool(client=client).visit(
-        ["https://one.example", "https://two.example"],
+        [
+            "https://one.example",
+            "https://two.example",
+            "https://three.example",
+            "https://four.example",
+        ],
         image_claim="goal",
         retrieval_goal="goal",
     )
 
     assert result["status"] == "error"
-    assert "exactly one URL" in result["error"]
+    assert "one to three unique URLs" in result["error"]
     assert client.called is False
 
 
