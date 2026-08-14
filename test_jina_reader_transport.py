@@ -101,3 +101,43 @@ def test_jina_reuses_one_gemini_transport_and_allows_parallel_extracts(
 
     assert FakeGeminiInteractionsClient.closes == 1
 
+
+def test_jina_reuses_page_visit_executor_across_batches() -> None:
+    reader = jina_reader.JinaReaderClient(max_workers=3)
+
+    def fake_visit(
+        url: str,
+        *,
+        image_claim: str,
+        retrieval_goal: str,
+    ) -> dict[str, Any]:
+        return {
+            "status": "success",
+            "url": url,
+            "image_claim": image_claim,
+            "retrieval_goal": retrieval_goal,
+            "evidence": f"Evidence from {url}",
+            "summary": "ok",
+            "relevance": "medium",
+        }
+
+    reader.visit = fake_visit  # type: ignore[method-assign]
+    try:
+        reader.visit_many(
+            ["https://one.example", "https://two.example"],
+            image_claim="claim",
+            retrieval_goal="goal",
+        )
+        executor = reader._visit_executor
+        assert executor is not None
+
+        reader.visit_many(
+            ["https://three.example", "https://four.example"],
+            image_claim="claim",
+            retrieval_goal="goal",
+        )
+        assert reader._visit_executor is executor
+    finally:
+        reader.close()
+
+    assert executor._shutdown is True

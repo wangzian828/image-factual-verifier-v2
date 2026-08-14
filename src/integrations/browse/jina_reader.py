@@ -210,6 +210,8 @@ class JinaReaderClient:
         self._visit_cache: Dict[tuple[str, str, str], Dict[str, Any]] = {}
         self._cache_lock = threading.Lock()
         self._thread_local = threading.local()
+        self._visit_executor: Optional[ThreadPoolExecutor] = None
+        self._visit_executor_lock = threading.Lock()
         self._extract_runtime: Optional[PersistentAsyncRuntime] = None
         self._extract_runtime_lock = threading.Lock()
         self._gemini_interactions_client: Optional[GeminiInteractionsClient] = None
@@ -217,6 +219,12 @@ class JinaReaderClient:
 
     def close(self) -> None:
         """Close the shared Gemini extraction transport, if it was started."""
+
+        with self._visit_executor_lock:
+            visit_executor = self._visit_executor
+            self._visit_executor = None
+        if visit_executor is not None:
+            visit_executor.shutdown(wait=True, cancel_futures=True)
 
         with self._extract_runtime_lock:
             runtime = self._extract_runtime
@@ -736,30 +744,33 @@ class JinaReaderClient:
                     )
                 )
         else:
-            max_workers = min(self.max_workers, len(normalized_urls))
-            with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                future_map = {
-                    executor.submit(
-                        self.visit,
+            executor = self._get_visit_executor(self.max_workers)
+            future_map = {
+                executor.submit(
+                    self.visit,
+                    target_url,
+                    image_claim=image_claim,
+                    retrieval_goal=retrieval_goal,
+                ): target_url
+                for target_url in normalized_urls
+            }
+            by_url: Dict[str, Dict[str, Any]] = {}
+            for future in as_completed(future_map):
+                target_url = future_map[future]
+                try:
+                    by_url[target_url] = future.result()
+                except Exception as exc:
+                    by_url[target_url] = self._build_failed_visit(
                         target_url,
                         image_claim=image_claim,
                         retrieval_goal=retrieval_goal,
-                    ): target_url
-                    for target_url in normalized_urls
-                }
-                by_url: Dict[str, Dict[str, Any]] = {}
-                for future in as_completed(future_map):
-                    target_url = future_map[future]
-                    try:
-                        by_url[target_url] = future.result()
-                    except Exception as exc:
-                        by_url[target_url] = self._build_failed_visit(
-                            target_url,
-                            image_claim=image_claim,
-                            retrieval_goal=retrieval_goal,
-                            exc=exc,
-                        )
-                visits = [by_url[target_url] for target_url in normalized_urls if target_url in by_url]
+                        exc=exc,
+                    )
+            visits = [
+                by_url[target_url]
+                for target_url in normalized_urls
+                if target_url in by_url
+            ]
 
         best_visit = self._pick_best_visit(visits)
         result = {
@@ -810,6 +821,15 @@ class JinaReaderClient:
                 for visit in failed
             )
         return result
+
+    def _get_visit_executor(self, max_workers: int) -> ThreadPoolExecutor:
+        with self._visit_executor_lock:
+            if self._visit_executor is None:
+                self._visit_executor = ThreadPoolExecutor(
+                    max_workers=max_workers,
+                    thread_name_prefix="ifv-jina-page",
+                )
+            return self._visit_executor
 
     @staticmethod
     def _build_failed_visit(
