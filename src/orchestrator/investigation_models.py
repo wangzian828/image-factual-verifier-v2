@@ -954,6 +954,7 @@ class DiscrepancyCoverageAudit(StrictModel):
         "continue",
         "verdict_determined",
         "meaningful_routes_exhausted",
+        "information_saturated",
         "hard_budget_exhausted",
     ] = "continue"
     decision_checkpoint: bool = False

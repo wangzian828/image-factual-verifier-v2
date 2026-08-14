@@ -118,10 +118,37 @@ def record_decision_progress(
     state: ImageOnlyInvestigationState,
     update: Mapping[str, Any],
 ) -> ProgressEvent | None:
+    assessment_by_id = {
+        item.assessment_id: item
+        for item in state.claim_assessments
+    }
+    evidence_by_id = {
+        item.evidence_id: item
+        for item in state.evidence
+    }
+    substantive_assessment_ids: list[str] = []
+    for assessment_id in update.get("accepted_assessment_ids", []) or []:
+        assessment = assessment_by_id.get(str(assessment_id))
+        if assessment is None:
+            continue
+        if assessment.assessment != "insufficient":
+            substantive_assessment_ids.append(assessment.assessment_id)
+            continue
+        if any(
+            evidence_id in evidence_by_id
+            and evidence_is_qualified(evidence_by_id[evidence_id])
+            and (
+                evidence_by_id[evidence_id].stance in {"support", "refute"}
+                or evidence_by_id[evidence_id].evidence_kind
+                in {"image_region", "reference_comparison"}
+            )
+            for evidence_id in assessment.evidence_ids
+        ):
+            substantive_assessment_ids.append(assessment.assessment_id)
     changed_ids = list(
         dict.fromkeys(
             [
-                *(update.get("accepted_assessment_ids", []) or []),
+                *substantive_assessment_ids,
                 *(update.get("accepted_hypothesis_ids", []) or []),
                 *(update.get("retired_hypothesis_ids", []) or []),
                 *(
@@ -132,6 +159,11 @@ def record_decision_progress(
                 *(
                     [update.get("accepted_visual_question_id")]
                     if update.get("accepted_visual_question_id")
+                    else []
+                ),
+                *(
+                    ["visual-evidence-disposition"]
+                    if update.get("accepted_visual_evidence_disposition")
                     else []
                 ),
             ]

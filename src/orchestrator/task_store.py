@@ -3009,6 +3009,9 @@ def apply_discrepancy_decision(
         "accepted_hypothesis_ids": accepted_hypothesis_ids,
         "retired_hypothesis_ids": retired_ids,
         "accepted_visual_question_id": accepted_visual_question_id,
+        "accepted_visual_evidence_disposition": bool(
+            output.visual_evidence_disposition
+        ),
         "verdict_proposal": output.verdict_proposal,
     }
 

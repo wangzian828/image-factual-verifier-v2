@@ -444,7 +444,12 @@ def _v4_quality_gate(trace: Mapping[str, Any], state: Mapping[str, Any]) -> None
             and str(item.get("stop_reason", "")) == "verdict_determined"
         )
         and str(item.get("stop_reason", ""))
-        in {"verdict_determined", "meaningful_routes_exhausted", "hard_budget_exhausted"}
+        in {
+            "verdict_determined",
+            "meaningful_routes_exhausted",
+            "information_saturated",
+            "hard_budget_exhausted",
+        }
     ]
     if not terminal:
         raise ValueError("v4 policy export requires terminal discrepancy Coverage")

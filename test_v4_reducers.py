@@ -3994,3 +3994,41 @@ def test_two_no_gain_actions_open_a_strategy_boundary_without_settling() -> None
     assert update["accepted"] is True
     assert state.proposed_verdict == "continue"
     assert state.stop_reason == ""
+
+
+def test_two_empty_strategy_boundaries_mark_information_saturated() -> None:
+    state = _planned_state()
+
+    for action_count in (1, 2):
+        state.action_count = action_count
+        record_action_progress(state, {})
+    first = apply_discrepancy_decision(
+        state,
+        DiscrepancyDecisionOutput(
+            verdict_proposal="continue",
+            rationale="The first strategy checkpoint found no substantive update.",
+        ),
+        reviewed_evidence_ids=[],
+        trigger="strategy_boundary",
+    )
+    assert first["accepted"] is True
+
+    for action_count in (3, 4):
+        state.action_count = action_count
+        record_action_progress(state, {})
+    second = apply_discrepancy_decision(
+        state,
+        DiscrepancyDecisionOutput(
+            verdict_proposal="continue",
+            rationale="The second strategy checkpoint found no substantive update.",
+        ),
+        reviewed_evidence_ids=[],
+        trigger="strategy_boundary",
+    )
+    assert second["accepted"] is True
+
+    audit = audit_discrepancy_coverage(state, decision_checkpoint=True)
+
+    assert audit.complete is False
+    assert audit.stop_reason == "information_saturated"
+    assert state.stop_reason == "information_saturated"
