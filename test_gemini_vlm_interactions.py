@@ -84,7 +84,7 @@ def test_gemini_vlm_uses_interactions(monkeypatch) -> None:
     assert request["body"]["model"] == "gemini-test"
     assert request["body"]["store"] is True
     assert request["body"]["stream"] is False
-    assert request["body"]["generation_config"]["max_output_tokens"] == 8192
+    assert request["body"]["generation_config"]["max_output_tokens"] == 2048
     assert request["body"]["generation_config"]["thinking_level"] == "low"
     assert request["body"]["response_format"] == {
         "type": "text",

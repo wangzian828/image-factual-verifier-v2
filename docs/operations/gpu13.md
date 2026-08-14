@@ -388,6 +388,13 @@ for `perceive_scene` and `ocr_with_position`. Set
 through `TOOL_CACHE_ENABLED=1`; do not enable that for freshness-sensitive
 production runs without an explicit cache namespace and TTL.
 
+Tool-internal Gemini vision requests use bounded structured-output budgets:
+`GEMINI_VISION_MIN_OUTPUT_TOKENS` defaults to `2048`, and
+`GEMINI_REFERENCE_COMPARE_MAX_OUTPUT_TOKENS` defaults to `4096`. These tools
+return compact JSON observations; the previous 8192-token floor was unnecessary
+for their schemas and increased latency. Override either value only when a
+provider truncation or schema-completeness failure is reproduced.
+
 Dataset acquisition, review, and release finalization now belong to the separate
 `image-factual-verifier-data-pipeline` project. Acquire a finalized release from
 gpu-13 itself through Hugging Face, Google Drive, approved object storage, or a

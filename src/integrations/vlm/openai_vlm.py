@@ -27,6 +27,7 @@ from src.tools.vision_utils import image_to_data_url
 DEFAULT_JSON_OBJECT_SCHEMA: Dict[str, Any] = {
     "type": "object",
 }
+DEFAULT_GEMINI_VISION_MIN_OUTPUT_TOKENS = 2048
 
 
 @dataclass
@@ -99,10 +100,18 @@ class OpenAIVisionClient:
             raise ValueError("create_images_json requires at least one image input.")
 
         if self.provider == "gemini":
-            minimum_tokens = max(
-                1,
-                int(os.getenv("GEMINI_VISION_MIN_OUTPUT_TOKENS", "8192")),
-            )
+            try:
+                minimum_tokens = max(
+                    1,
+                    int(
+                        os.getenv(
+                            "GEMINI_VISION_MIN_OUTPUT_TOKENS",
+                            str(DEFAULT_GEMINI_VISION_MIN_OUTPUT_TOKENS),
+                        )
+                    ),
+                )
+            except ValueError:
+                minimum_tokens = DEFAULT_GEMINI_VISION_MIN_OUTPUT_TOKENS
             return self._create_gemini_interactions_images_json(
                 system_prompt=system_prompt,
                 user_text=user_text,

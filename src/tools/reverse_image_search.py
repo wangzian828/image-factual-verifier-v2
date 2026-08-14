@@ -262,19 +262,23 @@ class ReverseImageSearchTool(BaseTool):
         try:
             query_t0 = time.perf_counter()
             query_payload = self._generate_query(image_input)
+            query_duration_ms = round(
+                (time.perf_counter() - query_t0) * 1000,
+                2,
+            )
             if query_payload.get(RUNTIME_METRICS_KEY):
                 payload[RUNTIME_METRICS_KEY] = query_payload[RUNTIME_METRICS_KEY]
-            payload["timings"]["vlm_query_ms"] = round((time.perf_counter() - query_t0) * 1000, 2)
+            payload["timings"]["vlm_query_ms"] = query_duration_ms
             query = str(query_payload.get("query", "")).strip()
             payload["vlm_query"] = query
-            payload["subcalls"].append(
-                {
-                    "kind": "vision_extract",
-                    "provider": self.provider,
-                    "status": "success" if query else "error",
-                    "request_count": 1,
-                }
-            )
+            query_subcall = {
+                "kind": "vision_extract",
+                "provider": self.provider,
+                "status": "success" if query else "error",
+                "request_count": 1,
+                "duration_ms": query_duration_ms,
+            }
+            payload["subcalls"].append(query_subcall)
             if query:
                 semantic_t0 = time.perf_counter()
                 image_search_subcall = {
@@ -296,6 +300,7 @@ class ReverseImageSearchTool(BaseTool):
                         "result_count": len(
                             payload["semantic_results"] or []
                         ),
+                        "duration_ms": payload["timings"]["semantic_search_ms"],
                     }
                 )
         except Exception as exc:

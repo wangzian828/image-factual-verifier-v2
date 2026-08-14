@@ -7,6 +7,7 @@ import os
 import re
 import base64
 import io
+import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, Mapping, Optional
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
@@ -41,6 +42,7 @@ DIFFERENCE_TYPES = (
 EDIT_DIFFERENCE_TYPES = frozenset({"addition", "removal", "modification"})
 EDIT_STRENGTHS = ("none", "weak", "moderate", "strong")
 SIGNIFICANCE_LEVELS = ("high", "medium", "low")
+DEFAULT_REFERENCE_COMPARE_MAX_OUTPUT_TOKENS = 4096
 
 COMPARE_RESPONSE_SCHEMA: Dict[str, Any] = {
     "type": "object",
@@ -191,6 +193,8 @@ class CompareWithReferenceTool(BaseTool):
             download: Dict[str, Any] = {}
             download_subcalls: list[Dict[str, Any]] = []
             comparison_attempted = False
+            comparison_started: Optional[float] = None
+            comparison_duration_ms: Optional[float] = None
             download = (
                 await self._download_reference(
                     reference_url,
@@ -264,6 +268,7 @@ class CompareWithReferenceTool(BaseTool):
                 require_all_properties=True,
             )
             comparison_attempted = True
+            comparison_started = time.perf_counter()
             payload = await self.vlm_backend.create_interaction(
                 input_payload=input_payload,
                 system_instruction=SYSTEM_INSTRUCTION,
@@ -273,7 +278,7 @@ class CompareWithReferenceTool(BaseTool):
                     "schema": schema,
                 },
                 store=True,
-                max_tokens=8192,
+                max_tokens=self._configured_max_output_tokens(),
                 temperature=0.0,
                 generation_config={
                     "thinking_level": require_minimal_thinking(
@@ -281,6 +286,10 @@ class CompareWithReferenceTool(BaseTool):
                         env_name="GEMINI_REFERENCE_COMPARE_THINKING_LEVEL",
                     )
                 },
+            )
+            comparison_duration_ms = round(
+                (time.perf_counter() - comparison_started) * 1000,
+                2,
             )
             runtime_metrics = interaction_runtime_metrics(payload)
             _, status = validate_interaction_response(payload)
@@ -316,6 +325,17 @@ class CompareWithReferenceTool(BaseTool):
                             ),
                             "status": "error",
                             "request_count": 1,
+                            "duration_ms": (
+                                round(
+                                    (
+                                        time.perf_counter() - comparison_started
+                                    )
+                                    * 1000,
+                                    2,
+                                )
+                                if comparison_started is not None
+                                else None
+                            ),
                         }
                     ]
                     if locals().get("comparison_attempted", False)
@@ -349,11 +369,23 @@ class CompareWithReferenceTool(BaseTool):
                     ),
                     "status": "success",
                     "request_count": 1,
+                    "duration_ms": comparison_duration_ms,
                 },
             ],
             **validated,
             RUNTIME_METRICS_KEY: runtime_metrics,
         }
+
+    @staticmethod
+    def _configured_max_output_tokens() -> int:
+        raw = os.getenv(
+            "GEMINI_REFERENCE_COMPARE_MAX_OUTPUT_TOKENS",
+            str(DEFAULT_REFERENCE_COMPARE_MAX_OUTPUT_TOKENS),
+        )
+        try:
+            return max(1024, int(raw))
+        except ValueError:
+            return DEFAULT_REFERENCE_COMPARE_MAX_OUTPUT_TOKENS
 
     @staticmethod
     def _deterministic_exact_match(
