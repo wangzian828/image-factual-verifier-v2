@@ -11,6 +11,10 @@ from pathlib import Path
 from typing import Any, Dict, Mapping
 
 from scripts.audit_real_trace import audit_trace
+from scripts.trajectory.stage_accepted_teacher_release import (
+    SCHEMA_VERSION as TEACHER_STORAGE_SCHEMA_VERSION,
+    stage_release,
+)
 from src.eval.score_semantic_reward import _resolve_image_path
 from src.orchestrator.llm_backend import APIBackend
 from src.trajectory.semantic_reward import sha256_file
@@ -31,6 +35,14 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--cache-dir", type=Path)
     parser.add_argument("--image-root", type=Path)
+    parser.add_argument(
+        "--storage-dir",
+        type=Path,
+        help=(
+            "Automatic structured teacher storage destination. Defaults to a "
+            "run-specific directory under the data root's generated/sft tree."
+        ),
+    )
     parser.add_argument("--provider", default="gemini", choices=["gemini"])
     parser.add_argument(
         "--model",
@@ -106,6 +118,49 @@ def _load_cache(path: Path) -> Dict[str, Any] | None:
     if value.get("schema_version") != SFT_ELIGIBILITY_SCHEMA_VERSION:
         raise ValueError(f"unsupported SFT eligibility cache entry: {path}")
     return value
+
+
+def _default_storage_dir(run_dir: Path) -> Path:
+    resolved = run_dir.expanduser().resolve()
+    runs_root = next(
+        (ancestor for ancestor in (resolved, *resolved.parents) if ancestor.name == "runs"),
+        None,
+    )
+    if runs_root is None:
+        return resolved / "sft-storage"
+    data_root = runs_root.parent
+    if resolved.parent.name == "eval":
+        storage_name = resolved.name
+    else:
+        storage_name = f"{resolved.parent.name}-{resolved.name}"
+    return data_root / "generated" / "sft" / storage_name
+
+
+def _existing_storage_manifest(
+    storage_dir: Path,
+    *,
+    run_dir: Path,
+    eligibility_dir: Path,
+) -> Dict[str, Any] | None:
+    manifest_path = storage_dir / "accepted_release_manifest.json"
+    if not manifest_path.is_file():
+        return None
+    manifest = _json_object(manifest_path)
+    if manifest.get("schema_version") != TEACHER_STORAGE_SCHEMA_VERSION:
+        return None
+    sources = manifest.get("sources") or []
+    if len(sources) != 1:
+        return None
+    source = sources[0]
+    if (
+        str(source.get("run_dir", "")) == str(run_dir)
+        and str(source.get("eligibility_dir", "")) == str(eligibility_dir)
+    ):
+        return manifest
+    raise FileExistsError(
+        "storage directory already belongs to another run: "
+        f"{storage_dir}"
+    )
 
 
 async def _run(args: argparse.Namespace) -> Dict[str, Any]:
@@ -252,6 +307,22 @@ async def _run(args: argparse.Namespace) -> Dict[str, Any]:
 
     accepted = [row for row in rows if row["sft_eligibility_pass"] is True]
     _write_jsonl(output_dir / "accepted_episodes.jsonl", accepted)
+    storage_dir = (
+        args.storage_dir.expanduser().resolve()
+        if args.storage_dir
+        else _default_storage_dir(run_dir)
+    )
+    storage_manifest = _existing_storage_manifest(
+        storage_dir,
+        run_dir=run_dir,
+        eligibility_dir=output_dir,
+    )
+    if storage_manifest is None:
+        storage_manifest = stage_release(
+            [(run_dir, output_dir, None)],
+            storage_dir,
+            minimum_accepted_cases=0,
+        )
     summary = {
         "schema_version": "ifv-sft-eligibility-summary-v2",
         "run_dir": str(run_dir),
@@ -260,9 +331,20 @@ async def _run(args: argparse.Namespace) -> Dict[str, Any]:
         "model": args.model,
         "episode_count": len(rows),
         "passed_count": len(accepted),
+        "storage": {
+            "run_dir": str(storage_dir),
+            "accepted_case_count": storage_manifest.get("accepted_case_count", 0),
+            "rejected_case_count": storage_manifest.get("rejected_case_count", 0),
+            "manifest": str(
+                storage_dir / "accepted_release_manifest.json"
+            ),
+        },
         "rows": rows,
     }
     _write_json(output_dir / "sft_eligibility_summary.json", summary)
+    run_manifest = _json_object(run_dir / "run_manifest.json")
+    run_manifest["sft_storage"] = summary["storage"]
+    _write_json(run_dir / "run_manifest.json", run_manifest)
     return summary
 
 

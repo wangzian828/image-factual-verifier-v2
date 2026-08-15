@@ -26,7 +26,7 @@ if str(REPO_ROOT) not in sys.path:
 from src.trajectory.exporter import export_policy_examples
 
 
-SCHEMA_VERSION = "ifv-accepted-teacher-release-v1"
+SCHEMA_VERSION = "ifv-accepted-teacher-release-v2"
 DETERMINISTIC_FATAL_TEACHER_REASONS = frozenset(
     {
         "incorrect_result",
@@ -156,6 +156,64 @@ def _eligible(
     )
 
 
+def _rejection_reasons(
+    *,
+    trace: Mapping[str, Any],
+    trace_sha256: str,
+    eligibility: Mapping[str, Any] | None,
+) -> list[str]:
+    if eligibility is None:
+        return ["missing_sft_eligibility_artifact"]
+    reasons: list[str] = []
+    gates = eligibility.get("gates") or {}
+    if str(trace.get("termination", "")) != "success":
+        reasons.append("trace_not_successful")
+    if str(trace.get("verdict", "")) not in {"real", "fake"}:
+        reasons.append("missing_binary_verdict")
+    if gates.get("strict_trace_audit_pass") is not True:
+        reasons.append("strict_trace_audit_failed")
+    if gates.get("engineering_valid") is not True:
+        reasons.append("engineering_invalid")
+    if gates.get("sft_eligibility_pass") is not True:
+        reasons.append("sft_judge_rejected")
+    if str((eligibility.get("source_trace") or {}).get("sha256", "")) != trace_sha256:
+        reasons.append("trace_sha256_mismatch")
+    metrics = eligibility.get("metrics") or {}
+    if metrics.get("fatal_errors"):
+        reasons.append("sft_judge_fatal_errors")
+    return list(dict.fromkeys(reasons))
+
+
+def _stage_rejected_trace(
+    *,
+    output_dir: Path,
+    trace_path: Path,
+    eligibility_path: Path | None,
+    trace_sha256: str,
+) -> Dict[str, str]:
+    trace_destination = (
+        output_dir
+        / "rejected"
+        / "traces"
+        / f"{trace_sha256[:12]}--{trace_path.name}"
+    )
+    trace_destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(trace_path, trace_destination)
+    result = {
+        "trace_path": trace_destination.relative_to(output_dir).as_posix(),
+    }
+    if eligibility_path is not None and eligibility_path.is_file():
+        eligibility_destination = (
+            output_dir / "rejected" / "eligibility" / eligibility_path.name
+        )
+        eligibility_destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(eligibility_path, eligibility_destination)
+        result["eligibility_path"] = (
+            eligibility_destination.relative_to(output_dir).as_posix()
+        )
+    return result
+
+
 def _matching_semantic_row(
     *,
     semantic_index: Mapping[str, Mapping[str, Any]],
@@ -192,8 +250,11 @@ def stage_release(
 ) -> Dict[str, Any]:
     if output_dir.exists() and any(output_dir.iterdir()):
         raise FileExistsError(f"output directory must be new or empty: {output_dir}")
+    if minimum_accepted_cases < 0:
+        raise ValueError("minimum_accepted_cases must be non-negative")
     output_dir.mkdir(parents=True, exist_ok=True)
     selected: Dict[str, Dict[str, Any]] = {}
+    rejected_rows: list[Dict[str, Any]] = []
     source_manifests: list[Dict[str, Any]] = []
 
     for run_dir, eligibility_dir, semantic_dir in sources:
@@ -226,14 +287,77 @@ def stage_release(
                 raise ValueError(f"trace has no case/episode ID: {trace_path}")
             eligibility_row = eligibility_index.get(episode_id)
             if not eligibility_row:
+                trace_sha256 = _sha256(trace_path)
+                stored = _stage_rejected_trace(
+                    output_dir=output_dir,
+                    trace_path=trace_path,
+                    eligibility_path=None,
+                    trace_sha256=trace_sha256,
+                )
+                rejected_rows.append(
+                    {
+                        "case_id": case_id,
+                        "episode_id": episode_id,
+                        "source_run_id": str(
+                            manifest.get("run_id", run_dir.name)
+                        ),
+                        "source_trace_sha256": trace_sha256,
+                        "rejection_reasons": [
+                            "missing_sft_eligibility_artifact"
+                        ],
+                        **stored,
+                    }
+                )
                 continue
             trace_sha256 = _sha256(trace_path)
             eligibility = eligibility_row["payload"]
             if not _eligible(trace, trace_sha256, eligibility):
+                stored = _stage_rejected_trace(
+                    output_dir=output_dir,
+                    trace_path=trace_path,
+                    eligibility_path=eligibility_row["path"],
+                    trace_sha256=trace_sha256,
+                )
+                rejected_rows.append(
+                    {
+                        "case_id": case_id,
+                        "episode_id": episode_id,
+                        "source_run_id": str(
+                            manifest.get("run_id", run_dir.name)
+                        ),
+                        "source_trace_sha256": trace_sha256,
+                        "rejection_reasons": _rejection_reasons(
+                            trace=trace,
+                            trace_sha256=trace_sha256,
+                            eligibility=eligibility,
+                        ),
+                        **stored,
+                    }
+                )
                 continue
             score_row = score_index.get(episode_id) or score_index.get(case_id) or {}
             deterministic_quality = _deterministic_teacher_quality(score_row)
             if not deterministic_quality["hard_gate_pass"]:
+                stored = _stage_rejected_trace(
+                    output_dir=output_dir,
+                    trace_path=trace_path,
+                    eligibility_path=eligibility_row["path"],
+                    trace_sha256=trace_sha256,
+                )
+                rejected_rows.append(
+                    {
+                        "case_id": case_id,
+                        "episode_id": episode_id,
+                        "source_run_id": str(
+                            manifest.get("run_id", run_dir.name)
+                        ),
+                        "source_trace_sha256": trace_sha256,
+                        "rejection_reasons": (
+                            deterministic_quality["fatal_reasons"]
+                        ),
+                        **stored,
+                    }
+                )
                 continue
             semantic_row = _matching_semantic_row(
                 semantic_index=semantic_index,
@@ -374,20 +498,26 @@ def stage_release(
             "run_id": output_dir.name,
             "status": "completed",
             "accepted_case_count": len(selected_rows),
+            "rejected_case_count": len(rejected_rows),
             "accepted_sources": source_manifests,
             "selected_episodes": "selected_episodes.jsonl",
+            "rejected_episodes": "rejected_episodes.jsonl",
             "source_run_kind": "strict-structured-selected",
         }
     )
     _write_json(output_dir / "run_manifest.json", first_manifest)
     _write_jsonl(output_dir / "selected_episodes.jsonl", selected_rows)
+    _write_jsonl(output_dir / "rejected_episodes.jsonl", rejected_rows)
     manifest = {
         "schema_version": SCHEMA_VERSION,
         "accepted_case_count": len(selected_rows),
+        "rejected_case_count": len(rejected_rows),
         "sources": source_manifests,
         "artifacts": {
             "run_dir": str(output_dir),
             "selected_episodes": "selected_episodes.jsonl",
+            "rejected_episodes": "rejected_episodes.jsonl",
+            "rejected_dir": "rejected",
             "eligibility_dir": "eligibility",
             "semantic_rewards_dir": (
                 "semantic_rewards" if has_semantic_diagnostics else None
