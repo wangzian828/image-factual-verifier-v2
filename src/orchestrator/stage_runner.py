@@ -599,11 +599,17 @@ class StageRunner:
                 )
                 if filtered_query_count:
                     step.metadata["policy_filtered_query_count"] = filtered_query_count
-                search_policy_error = self._search_policy_error(tool_name, step.tool_args)
+                search_policy_error = self._search_policy_error(
+                    tool_name,
+                    step.tool_args,
+                    rejected_query_count=filtered_query_count,
+                )
                 if search_policy_error:
-                    step.action_type = "format_error"
-                    step.metadata["error_class"] = "protocol_error"
-                    step.metadata["search_policy_rejection"] = True
+                    self._record_search_query_rejection(
+                        step,
+                        tool_name,
+                        search_policy_error,
+                    )
                     step.tool_result = json.dumps(
                         {"status": "error", "error": search_policy_error},
                         ensure_ascii=False,
@@ -1310,11 +1316,14 @@ class StageRunner:
                             search_policy_error = self._search_policy_error(
                                 tool_name,
                                 prepared_args,
+                                rejected_query_count=filtered_query_count,
                             )
                             if search_policy_error:
-                                step.action_type = "format_error"
-                                step.metadata["error_class"] = "protocol_error"
-                                step.metadata["search_policy_rejection"] = True
+                                self._record_search_query_rejection(
+                                    step,
+                                    tool_name,
+                                    search_policy_error,
+                                )
                                 step.tool_result = json.dumps(
                                     {
                                         "status": "error",
@@ -1783,8 +1792,16 @@ class StageRunner:
         path: str,
     ) -> str:
         expected = spec.get("type")
-        if expected == "string" and not isinstance(value, str):
-            return f"{path} must be a string."
+        if expected == "string":
+            if not isinstance(value, str):
+                return f"{path} must be a string."
+            minimum = spec.get("minLength")
+            maximum = spec.get("maxLength")
+            normalized_length = len(value.strip())
+            if isinstance(minimum, int) and normalized_length < minimum:
+                return f"{path} must be a non-empty string."
+            if isinstance(maximum, int) and len(value) > maximum:
+                return f"{path} must contain at most {maximum} characters."
         if expected == "array":
             if not isinstance(value, list):
                 return f"{path} must be an array."
@@ -2556,7 +2573,13 @@ class StageRunner:
         # creates avoidable rejected turns.
         return ""
 
-    def _search_policy_error(self, tool_name: str, tool_args: Dict[str, Any]) -> str:
+    def _search_policy_error(
+        self,
+        tool_name: str,
+        tool_args: Dict[str, Any],
+        *,
+        rejected_query_count: int = 0,
+    ) -> str:
         if not self.source_access_policy.active or tool_name != "text_search":
             return ""
         queries = tool_args.get("queries", [])
@@ -2565,6 +2588,15 @@ class StageRunner:
         if not isinstance(queries, list):
             return ""
         usable = [str(query).strip() for query in queries if str(query).strip()]
+        if not usable:
+            if rejected_query_count > 0:
+                return (
+                    "Search policy removed every query because it targeted a "
+                    "ready-made fact-check verdict or an excluded source. "
+                    "Reformulate with claim terms, an original statement, an "
+                    "official record, a primary source, or independent reporting."
+                )
+            return "text_search requires exactly one non-empty query."
         if usable and not any(
             query_policy_violation(
                 query,
@@ -2579,6 +2611,28 @@ class StageRunner:
             "an original statement, an official record, a primary source, or "
             "independent reporting."
         )
+
+    @staticmethod
+    def _is_empty_search_query_error(tool_name: str, message: str) -> bool:
+        return (
+            tool_name == "text_search"
+            and str(message).strip()
+            == "text_search requires exactly one non-empty query."
+        )
+
+    def _record_search_query_rejection(
+        self,
+        step: StageStep,
+        tool_name: str,
+        message: str,
+    ) -> None:
+        step.action_type = "format_error"
+        if self._is_empty_search_query_error(tool_name, message):
+            step.metadata["error_class"] = "tool_argument_error"
+            step.metadata["search_query_format_error"] = True
+        else:
+            step.metadata["error_class"] = "protocol_error"
+            step.metadata["search_policy_rejection"] = True
 
     def _sanitize_search_queries(
         self,

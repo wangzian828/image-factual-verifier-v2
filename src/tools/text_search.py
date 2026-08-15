@@ -29,13 +29,11 @@ class TextSearchTool(BaseTool):
             "type": "object",
             "properties": {
                 "queries": {
-                    "type": ["array", "string"],
-                    "items": {"type": "string"},
-                    "minItems": 1,
-                    "maxItems": 1,
+                    "type": "string",
+                    "minLength": 1,
                     "description": (
-                        "Exactly one query string. One text_search action maps "
-                        "to one provider request."
+                        "Exactly one non-empty query string. One text_search "
+                        "action maps to one provider request."
                     ),
                 },
                 "gl": {"type": "string", "description": "Country code such as us or cn."},

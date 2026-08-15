@@ -801,6 +801,50 @@ def test_blocked_duplicate_route_is_a_warning_not_a_protocol_failure(
     }
 
 
+def test_empty_text_search_query_is_a_format_warning_not_protocol_rejection(
+    tmp_path: Path,
+) -> None:
+    trace_path = _scripted_trace(tmp_path)
+    trace = json.loads(trace_path.read_text(encoding="utf-8"))
+    trace["state"]["all_steps"].insert(
+        2,
+        {
+            "round": 1,
+            "stage": "image_only_investigation",
+            "action_type": "format_error",
+            "tool_name": "text_search",
+            "tool_args": {"queries": []},
+            "tool_result": json.dumps(
+                {
+                    "status": "error",
+                    "error": (
+                        "Search policy removed every query because it targeted a "
+                        "ready-made fact-check verdict or an excluded source."
+                    ),
+                }
+            ),
+            "metadata": {
+                "stage": "image_only_investigation",
+                "search_policy_rejection": True,
+                "function_call_id": "call-empty-query",
+            },
+        },
+    )
+    trace_path.write_text(
+        json.dumps(trace, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    report = audit_trace(trace_path)
+
+    assert not report.failures(strict_scheduler=True)
+    assert report.stats["protocol_rejections"] == 0
+    assert report.stats["tool_argument_format_errors"] == 1
+    assert "TOOL_ARGUMENT_FORMAT_ERROR" in {
+        item.code for item in report.warnings(strict_scheduler=True)
+    }
+
+
 def test_successful_planning_revision_is_not_a_protocol_rejection(
     tmp_path: Path,
 ) -> None:

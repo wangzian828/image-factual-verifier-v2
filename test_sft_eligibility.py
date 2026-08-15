@@ -281,6 +281,29 @@ def test_protocol_audit_error_still_blocks_sft() -> None:
     assert artifact["gates"]["fatal_audit_errors"]
 
 
+def test_tool_argument_format_error_does_not_block_sft() -> None:
+    packet = _packet()
+    artifact = build_sft_eligibility_artifact(
+        trace=_trace(),
+        trace_sha256="b" * 64,
+        packet=packet,
+        judgment=_judgment(),
+        judge_audit={},
+        strict_trace_audit_pass=True,
+        strict_trace_audit_warnings=[
+            {
+                "code": "TOOL_ARGUMENT_FORMAT_ERROR",
+                "category": "format",
+                "message": "text_search requires exactly one non-empty query.",
+            }
+        ],
+    )
+
+    assert artifact["gates"]["sft_eligibility_pass"] is True
+    assert artifact["gates"]["fatal_audit_errors"] == []
+    assert artifact["gates"]["audit_warnings"]
+
+
 def test_invalid_selected_evidence_id_blocks_sft() -> None:
     packet = _packet()
     metrics = sft_eligibility_metrics(

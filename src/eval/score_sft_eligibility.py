@@ -179,6 +179,7 @@ async def _run(args: argparse.Namespace) -> Dict[str, Any]:
                 enforce_source_access_policy=source_policy_active,
             )
             failures = report.failures(strict_scheduler=True)
+            warnings = report.warnings(strict_scheduler=True)
             fatal_audit_errors, _ = classify_sft_audit_failures(
                 [asdict(item) for item in failures]
             )
@@ -212,6 +213,7 @@ async def _run(args: argparse.Namespace) -> Dict[str, Any]:
                     judge_audit=judge_audit,
                     strict_trace_audit_pass=not failures,
                     strict_trace_audit_failures=[asdict(item) for item in failures],
+                    strict_trace_audit_warnings=[asdict(item) for item in warnings],
                 )
                 _write_json(cache_path, artifact)
             episode_id = str(artifact.get("episode_id", ""))

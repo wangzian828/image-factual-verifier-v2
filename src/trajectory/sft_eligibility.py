@@ -29,7 +29,7 @@ SFT_ELIGIBILITY_SCHEMA_VERSION = "ifv-sft-eligibility-v2"
 SFT_ELIGIBILITY_INPUT_VERSION = "ifv-sft-eligibility-input-v3"
 SFT_ELIGIBILITY_PROMPT_VERSION = "ifv-sft-private-image-fact-gate-v1"
 SFT_ELIGIBILITY_GENERATION_VERSION = "minimal-thinking-4096-v3"
-SFT_ELIGIBILITY_POSTPROCESS_VERSION = "image-fact-safety-gate-v1"
+SFT_ELIGIBILITY_POSTPROCESS_VERSION = "image-fact-safety-gate-v2"
 
 
 SFT_ELIGIBILITY_SYSTEM_PROMPT = (
@@ -474,7 +474,6 @@ def classify_sft_audit_failures(
     warnings: List[Dict[str, Any]] = []
     fatal_markers = (
         "ENGINEERING",
-        "PROTOCOL",
         "SOURCE_ACCESS",
         "POLICY_VIOLATION",
         "TRACE_CORRUPT",
@@ -485,10 +484,16 @@ def classify_sft_audit_failures(
         "EVIDENCE_CALL_NOT_SUCCESSFUL",
         "INVALID_EVIDENCE",
     )
+    fatal_protocol_codes = {
+        "PROTOCOL_ERROR",
+        "PROTOCOL_REJECTION",
+    }
     for raw in failures:
         item = dict(raw)
         code = str(item.get("code", "")).upper()
-        if any(marker in code for marker in fatal_markers):
+        if code in fatal_protocol_codes or any(
+            marker in code for marker in fatal_markers
+        ):
             fatal.append(item)
         else:
             warnings.append(item)
@@ -722,15 +727,20 @@ def build_sft_eligibility_artifact(
     judge_audit: Mapping[str, Any] | None,
     strict_trace_audit_pass: bool,
     strict_trace_audit_failures: Iterable[Mapping[str, Any]] = (),
+    strict_trace_audit_warnings: Iterable[Mapping[str, Any]] = (),
 ) -> Dict[str, Any]:
     engineering_valid = bool(
         str(trace.get("termination", "")) == "success"
         and str(trace.get("verdict", "")) in {"real", "fake"}
     )
     audit_failures = [dict(item) for item in strict_trace_audit_failures]
-    fatal_audit_errors, audit_warnings = classify_sft_audit_failures(
+    explicit_audit_warnings = [
+        dict(item) for item in strict_trace_audit_warnings
+    ]
+    fatal_audit_errors, failure_warnings = classify_sft_audit_failures(
         audit_failures
     )
+    audit_warnings = [*failure_warnings, *explicit_audit_warnings]
     metrics = sft_eligibility_metrics(packet, judgment)
     metrics["fatal_audit_errors"] = fatal_audit_errors
     metrics["audit_warnings"] = audit_warnings
@@ -767,6 +777,7 @@ def build_sft_eligibility_artifact(
         "gates": {
             "strict_trace_audit_pass": bool(strict_trace_audit_pass),
             "strict_trace_audit_failures": audit_failures,
+            "strict_trace_audit_warnings": explicit_audit_warnings,
             "fatal_audit_errors": fatal_audit_errors,
             "audit_warnings": audit_warnings,
             "engineering_valid": engineering_valid,

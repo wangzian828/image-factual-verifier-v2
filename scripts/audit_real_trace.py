@@ -39,6 +39,7 @@ PROTOCOL = "protocol"
 ROUTE_CONTROL = "route_control"
 CORRECTION = "correction"
 BOUNDED_FALLBACK = "bounded_fallback"
+FORMAT = "format"
 REJECTION_ACTIONS = frozenset({"format_error", "output_rejected"})
 WEB_EVIDENCE_TOOLS = frozenset({"visit", "crop_and_search"})
 COMPOSITE_SOURCE_VISUAL_DISCREPANCY_FAMILY = (
@@ -602,6 +603,8 @@ def _audit_leaks(
 
 def _rejection_category(step: Mapping[str, Any]) -> str:
     metadata = _mapping(step.get("metadata"))
+    if metadata.get("search_query_format_error") or _empty_text_search_query(step):
+        return FORMAT
     if metadata.get("unbalanced_priority_coverage") or metadata.get("tool_budget_reached"):
         return SCHEDULER
     reason = str(metadata.get("rejection_reason", "")).casefold()
@@ -627,6 +630,18 @@ def _rejection_category(step: Mapping[str, Any]) -> str:
     return PROTOCOL
 
 
+def _empty_text_search_query(step: Mapping[str, Any]) -> bool:
+    if str(step.get("tool_name", "")).strip() != "text_search":
+        return False
+    tool_args = _mapping(step.get("tool_args"))
+    queries = tool_args.get("queries", tool_args.get("query", []))
+    if isinstance(queries, str):
+        return not queries.strip()
+    if not isinstance(queries, list):
+        return True
+    return not any(str(query).strip() for query in queries)
+
+
 def _audit_rejections(
     steps: Sequence[Mapping[str, Any]], report: TraceReport
 ) -> None:
@@ -635,6 +650,7 @@ def _audit_rejections(
     route_control_count = 0
     corrected_count = 0
     bounded_fallback_count = 0
+    format_count = 0
 
     def rejected(candidate: Mapping[str, Any]) -> bool:
         candidate_metadata = _mapping(candidate.get("metadata"))
@@ -758,6 +774,8 @@ def _audit_rejections(
             bounded_fallback_count += 1
         elif category == ROUTE_CONTROL:
             route_control_count += 1
+        elif category == FORMAT:
+            format_count += 1
         elif category == SCHEDULER:
             scheduler_count += 1
         else:
@@ -771,6 +789,8 @@ def _audit_rejections(
                 if category == BOUNDED_FALLBACK
                 else "ROUTE_CONTROL_REJECTION"
                 if category == ROUTE_CONTROL
+                else "TOOL_ARGUMENT_FORMAT_ERROR"
+                if category == FORMAT
                 else "SCHEDULER_REJECTION"
                 if category == SCHEDULER
                 else "PROTOCOL_REJECTION"
@@ -784,6 +804,7 @@ def _audit_rejections(
     report.stats["route_control_rejections"] = route_control_count
     report.stats["successful_protocol_corrections"] = corrected_count
     report.stats["bounded_protocol_fallbacks"] = bounded_fallback_count
+    report.stats["tool_argument_format_errors"] = format_count
 
 
 

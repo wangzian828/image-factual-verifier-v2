@@ -125,6 +125,17 @@ def test_text_search_rejects_multiple_queries_without_provider_calls() -> None:
     assert client.calls == []
 
 
+def test_text_search_exposes_one_nonempty_native_query_argument() -> None:
+    tool = TextSearchTool(client=FakeSearchClient())
+    query_schema = tool.parameters["properties"]["queries"]
+
+    assert query_schema["type"] == "string"
+    assert query_schema["minLength"] == 1
+    result = tool.call({"queries": ""})
+    assert result["status"] == "error"
+    assert "non-empty" in result["error"]
+
+
 def test_async_text_search_has_the_same_single_query_contract() -> None:
     client = FakeSearchClient()
     tool = TextSearchTool(client=client, top_k=4)
