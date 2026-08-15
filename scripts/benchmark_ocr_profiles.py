@@ -1,10 +1,10 @@
-"""Benchmark one CPU PaddleOCR profile on a set of local images.
+"""Benchmark the PaddleOCR cloud API on local images.
 
-Run one profile per process because the runtime deliberately shares one OCR
-reader per process:
+Every repeat submits a billable remote OCR job. Use a small repeat count when
+checking latency:
 
-    python scripts/benchmark_ocr_profiles.py --profile default image.jpg
-    python scripts/benchmark_ocr_profiles.py --profile mobile image.jpg
+    PADDLEOCR_API_TOKEN=... \
+    python scripts/benchmark_ocr_profiles.py --repeats 1 image.jpg
 """
 from __future__ import annotations
 
@@ -24,11 +24,6 @@ from src.tools.ocr_with_position import OCRWithPositionTool
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--profile",
-        choices=("default", "mobile"),
-        required=True,
-    )
-    parser.add_argument(
         "--repeats",
         type=int,
         default=2,
@@ -38,7 +33,6 @@ def main() -> int:
     if args.repeats < 1:
         parser.error("--repeats must be positive")
 
-    os.environ["PADDLEOCR_PROFILE"] = args.profile
     tool = OCRWithPositionTool()
     rows = []
     for raw_path in args.images:
@@ -53,7 +47,8 @@ def main() -> int:
             {
                 "image_path": image_path,
                 "status": last_result.get("status"),
-                "profile": last_result.get("ocr_model_profile", args.profile),
+                "model": last_result.get("ocr_model"),
+                "backend": last_result.get("ocr_backend"),
                 "regions": last_result.get("total_regions", 0),
                 "timings_seconds": timings,
                 "median_seconds": statistics.median(timings),
@@ -64,7 +59,7 @@ def main() -> int:
     print(
         json.dumps(
             {
-                "profile": args.profile,
+                "backend": "paddleocr_api",
                 "repeats": args.repeats,
                 "rows": rows,
             },

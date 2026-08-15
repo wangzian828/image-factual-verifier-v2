@@ -11,8 +11,6 @@ dependencies = [
     "python-dotenv>=1.0",
     "oss2>=2.18",
     "Pillow>=10.0",
-    "paddlepaddle>=3.0,<4",
-    "paddleocr>=3.0,<4",
     "scikit-image>=0.24,<0.25",
 ]
 

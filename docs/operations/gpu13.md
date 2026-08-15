@@ -224,26 +224,34 @@ The following were verified through that proxy:
 - Hugging Face HTTPS;
 - Google Drive HTTPS.
 
-OCR uses the local CPU-only PaddleOCR pipeline. The runtime initializes one
-positioned OCR reader per Python process and shares it across case/tool
-instances; inference remains serialized because the predictor is mutable and
-CPU thread usage is bounded. It does not use a remote OCR service or an
-alternate fallback backend. A missing PaddleOCR package, model, or runtime
-dependency is therefore an explicit `ocr_with_position` tool failure.
+OCR uses the PaddleOCR official asynchronous cloud API. The runtime submits
+one image or crop, polls the returned job, downloads the JSONL result, and
+normalizes its text regions, coordinates, and confidence. It never starts a
+local PaddleOCR service and has no local OCR fallback. A missing
+`PADDLEOCR_API_TOKEN`, failed request, failed job, malformed result, or timeout
+is an explicit `ocr_with_position` tool failure.
 
-The formal canary keeps the default PaddleOCR profile. A separate CPU mobile
-profile is available for measurement only:
+Set the token only in the untracked runtime environment file or the process
+environment:
 
 ```bash
-PADDLEOCR_PROFILE=mobile \
-scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
-  python scripts/benchmark_ocr_profiles.py --profile mobile \
-  /path/to/image.jpg
+PADDLEOCR_API_TOKEN=<secret>
+PADDLEOCR_API_MODEL=PaddleOCR-VL-1.6
 ```
 
-Use one profile per process. The mobile profile is not a silent fallback and
-must be promoted only after comparing text recall, coordinates, confidence, and
-median warm-call latency against the default profile.
+Optional API timing controls are `PADDLEOCR_API_POLL_SECONDS`,
+`PADDLEOCR_API_JOB_TIMEOUT_SECONDS`, and
+`PADDLEOCR_API_REQUEST_TIMEOUT_SECONDS`. The default endpoint is
+`https://paddleocr.aistudio-app.com/api/v2/ocr/jobs`; override it only for an
+explicitly compatible deployment with `PADDLEOCR_API_URL`.
+
+The latency probe submits real remote jobs and should use a small repeat count:
+
+```bash
+scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
+  python scripts/benchmark_ocr_profiles.py --repeats 1 \
+  /path/to/image.jpg
+```
 
 PaddleOCR is used only for visible-text observations:
 
@@ -268,7 +276,7 @@ All datasets and generated runtime artifacts live on the gpu-13 data filesystem:
   datasets/       downloaded archives and extracted datasets
   artifacts/      web pages, images, RIS/SERP snapshots, and source material
   benchmarks/     benchmark manifests and benchmark-owned assets
-  cache/          Hugging Face, Torch, PaddleOCR, and tool caches
+  cache/          Hugging Face, Torch, and tool caches
   runs/
     _logs/        background evaluation stdout and stderr logs
     traces/       standalone JSON Agent trajectories
@@ -278,7 +286,7 @@ All datasets and generated runtime artifacts live on the gpu-13 data filesystem:
 
 `/gs/home/wza/gsdata` resolves to `/gsdata/home/wza`; the latter had about 399 TB
 available during the deployment audit. `gpu13_env.sh` exports `IFV_DATA_ROOT` and
-routes Hugging Face, Torch, PaddleOCR, and tool caches into this tree. Runtime and data
+routes Hugging Face, Torch, and tool caches into this tree. Runtime and data
 scripts also derive their default output paths from `IFV_DATA_ROOT`.
 
 Do not download datasets, write evaluation traces, or generate images inside the Git

@@ -115,7 +115,7 @@ Canonical OCR text contains only accepted regions. Low-confidence candidates rem
 in diagnostics and cannot enter `full_text`, Evidence, retrieval anchors, or verdict
 bases.
 
-The runtime uses one CPU-only PaddleOCR pipeline. It returns visible text,
+The runtime uses the PaddleOCR cloud API. It returns visible text,
 quadrilateral coordinates, axis-aligned coordinates, and recognition confidence.
 There is no remote-service or alternate-engine fallback: package, model, and
 runtime failures are explicit OCR tool failures. Decisive small or stylized text

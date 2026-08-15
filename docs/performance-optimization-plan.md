@@ -10,7 +10,7 @@
 - `compare_with_reference` 的参考图缓存、线程级 HTTP session 复用；
 - 本地图像 base64/JPEG 序列化缓存；
 - 反向搜索上传 URL 的图片 SHA-256 缓存；
-- 现有 `visit_many` 页面并发、PaddleOCR 实例池和 OCR perception cache 保持启用。
+- 现有 `visit_many` 页面并发、PaddleOCR API 调用和 OCR perception cache 保持启用。
 
 ## 1. 目标
 
@@ -35,7 +35,7 @@ Agent action 一个工具”协议的前提下，降低：
 - Jina 网页抽取复用 Gemini transport；
 - Jina `visit_many` 最多并发访问 3 个页面；
 - 页面线程池、HTTP session、Jina Reader、搜索客户端和缓存复用；
-- CPU PaddleOCR 实例池；
+- PaddleOCR API 请求与轮询；
 - 相关 transport、线程池测试以及服务器测试。
 
 后续工作应建立在这些基础上，避免重新引入每个 action 独立初始化

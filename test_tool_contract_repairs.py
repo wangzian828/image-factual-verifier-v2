@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import inspect
 import json
-import sys
 from types import SimpleNamespace
 
 import pytest
@@ -13,7 +12,6 @@ from src.orchestrator.task_store import record_tool_observation
 from src.orchestrator.tool_registry import build_all_tools_with_health
 from src.tools.crop_and_inspect import CropAndInspectTool
 from src.tools.ocr_with_position import OCRWithPositionTool
-import src.tools.ocr_with_position as ocr_with_position_module
 from test_image_only_state_machine import _runtime_state
 
 
@@ -254,28 +252,100 @@ def test_crop_and_inspect_rejects_reversed_or_negative_bbox() -> None:
     assert "bbox" in result["error"]
 
 
-def test_ocr_excludes_low_confidence_regions_from_canonical_text(
+class _FakeOCRResponse:
+    def __init__(self, payload=None, *, text="", status_code=200):
+        self._payload = payload
+        self.text = text
+        self.status_code = status_code
+        self.ok = 200 <= status_code < 400
+
+    def json(self):
+        if isinstance(self._payload, BaseException):
+            raise self._payload
+        return self._payload
+
+
+class _FakeOCRHTTP:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = []
+
+    def post(self, url, **kwargs):
+        self.calls.append(("post", url, kwargs))
+        return self.responses.pop(0)
+
+    def get(self, url, **kwargs):
+        self.calls.append(("get", url, kwargs))
+        return self.responses.pop(0)
+
+
+def test_ocr_api_filters_low_confidence_regions_and_parses_jsonl(
     tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from PIL import Image
 
     image_path = tmp_path / "image.png"
     Image.new("RGB", (100, 40), "white").save(image_path)
 
-    class PaddleReader:
-        def predict(self, *, input):
-            return [
+    result_jsonl = "\n".join(
+        [
+            json.dumps(
                 {
-                    "rec_polys": [
-                        [[0, 0], [20, 0], [20, 10], [0, 10]],
-                        [[20, 0], [90, 0], [90, 10], [20, 10]],
-                    ],
-                    "rec_texts": ["garbage", "Tysons Corner"],
-                    "rec_scores": [0.08, 0.92],
+                    "result": {
+                        "layoutParsingResults": [
+                            {
+                                "prunedResult": json.dumps(
+                                    {
+                                        "rec_polys": [
+                                            [
+                                                [0, 0],
+                                                [20, 0],
+                                                [20, 10],
+                                                [0, 10],
+                                            ],
+                                            [
+                                                [20, 0],
+                                                [90, 0],
+                                                [90, 10],
+                                                [20, 10],
+                                            ],
+                                        ],
+                                        "rec_texts": [
+                                            "garbage",
+                                            "Tysons Corner",
+                                        ],
+                                        "rec_scores": [0.08, 0.92],
+                                    }
+                                )
+                            }
+                        ]
+                    }
                 }
-            ]
-
-    tool = OCRWithPositionTool(_reader=PaddleReader(), min_confidence=0.5)
+            )
+        ]
+    )
+    http = _FakeOCRHTTP(
+        [
+            _FakeOCRResponse({"data": {"jobId": "job-1"}}),
+            _FakeOCRResponse({"data": {"state": "pending"}}),
+            _FakeOCRResponse(
+                {
+                    "data": {
+                        "state": "done",
+                        "resultUrl": {"jsonUrl": "https://result.test/job-1.jsonl"},
+                    }
+                }
+            ),
+            _FakeOCRResponse(text=result_jsonl),
+        ]
+    )
+    monkeypatch.setenv("PADDLEOCR_API_TOKEN", "test-token")
+    tool = OCRWithPositionTool(
+        http_client=http,
+        poll_seconds=0.2,
+        min_confidence=0.5,
+    )
     result = tool.call({"image_input": str(image_path)})
 
     assert result["status"] == "success"
@@ -286,142 +356,175 @@ def test_ocr_excludes_low_confidence_regions_from_canonical_text(
     assert [item["text"] for item in result["rejected_text_regions"]] == [
         "garbage"
     ]
-    assert result["ocr_backend"] == "paddleocr"
+    assert result["ocr_backend"] == "paddleocr_api"
     assert result["artifact_sha256"]
-    assert tool._reader is not None
+    assert len(http.calls) == 4
+    assert http.calls[0][0] == "post"
+    assert http.calls[0][2]["data"]["model"] == "PaddleOCR-VL-1.6"
+    assert http.calls[0][2]["headers"]["Authorization"] == "bearer test-token"
 
 
-def test_ocr_accepts_paddle_result_objects_with_json_property(
+def test_ocr_api_accepts_axis_aligned_boxes_and_maps_crop_coordinates(
     tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from PIL import Image
 
-    image_path = tmp_path / "json-result.png"
-    Image.new("RGB", (100, 40), "white").save(image_path)
-
-    class Result:
-        json = {
-            "rec_boxes": [[10, 5, 90, 25]],
-            "rec_texts": ["Tysons Corner"],
-            "rec_scores": [0.92],
+    image_path = tmp_path / "crop.png"
+    Image.new("RGB", (100, 100), "white").save(image_path)
+    http = _FakeOCRHTTP(
+        [
+            _FakeOCRResponse({"data": {"jobId": "job-2"}}),
+            _FakeOCRResponse(
+                {
+                    "data": {
+                        "state": "done",
+                        "resultUrl": {"jsonUrl": "https://result.test/job-2.jsonl"},
+                    }
+                }
+            ),
+            _FakeOCRResponse(
+                text=json.dumps(
+                    {
+                        "result": {
+                            "layoutParsingResults": [
+                                {
+                                    "prunedResult": json.dumps(
+                                        {
+                                            "rec_boxes": [[6, 5, 54, 20]],
+                                            "rec_texts": ["Tysons Corner"],
+                                            "rec_scores": [0.92],
+                                        }
+                                    )
+                                }
+                            ]
+                        }
+                    }
+                )
+            ),
+        ]
+    )
+    monkeypatch.setenv("PADDLEOCR_API_TOKEN", "test-token")
+    result = OCRWithPositionTool(
+        http_client=http,
+        poll_seconds=0.2,
+    ).call(
+        {
+            "image_input": str(image_path),
+            "bbox": [0.2, 0.2, 0.8, 0.8],
         }
-
-    class PaddleReader:
-        def predict(self, *, input):
-            return [Result()]
-
-    result = OCRWithPositionTool(_reader=PaddleReader()).call(
-        {"image_input": str(image_path)}
     )
 
     assert result["status"] == "success"
-    assert result["ocr_backend"] == "paddleocr"
+    assert result["ocr_backend"] == "paddleocr_api"
     assert result["full_text"] == "Tysons Corner"
-    assert result["text_regions"][0]["bbox"] == [0.1, 0.125, 0.9, 0.625]
+    assert result["text_regions"][0]["bbox"] == [0.26, 0.25, 0.74, 0.4]
+    assert result["requested_bbox"] == [0.2, 0.2, 0.8, 0.8]
 
 
-def test_ocr_tools_share_one_process_reader(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    created = []
-
-    class PaddleReader:
-        def __init__(self, **kwargs):
-            created.append(kwargs)
-
-    monkeypatch.setitem(
-        sys.modules,
-        "paddleocr",
-        SimpleNamespace(PaddleOCR=PaddleReader),
-    )
-    monkeypatch.setattr(ocr_with_position_module, "_SHARED_READER", None)
-
-    first = OCRWithPositionTool()
-    second = OCRWithPositionTool()
-
-    assert first._get_reader() is second._get_reader()
-    assert created == [
-        {
-            "use_doc_orientation_classify": False,
-            "use_doc_unwarping": False,
-            "use_textline_orientation": False,
-            "device": "cpu",
-            "enable_mkldnn": False,
-            "cpu_threads": 1,
-        }
-    ]
-
-
-def test_ocr_mobile_profile_selects_mobile_models(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    created = []
-
-    class PaddleReader:
-        def __init__(self, **kwargs):
-            created.append(kwargs)
-
-    monkeypatch.setitem(
-        sys.modules,
-        "paddleocr",
-        SimpleNamespace(PaddleOCR=PaddleReader),
-    )
-    monkeypatch.setenv("PADDLEOCR_PROFILE", "mobile")
-    monkeypatch.setattr(ocr_with_position_module, "_SHARED_READER", None)
-    monkeypatch.setattr(ocr_with_position_module, "_SHARED_READER_PROFILE", "")
-
-    OCRWithPositionTool()._get_reader()
-
-    assert created[0]["text_detection_model_name"] == "PP-OCRv5_mobile_det"
-    assert created[0]["text_recognition_model_name"] == "PP-OCRv5_mobile_rec"
-
-
-def test_ocr_backend_failure_is_explicit_without_fallback(
+def test_ocr_api_failure_is_explicit_without_local_fallback(
     tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from PIL import Image
 
     image_path = tmp_path / "failure.png"
     Image.new("RGB", (100, 40), "white").save(image_path)
-
-    class PaddleReader:
-        def predict(self, *, input):
-            raise RuntimeError("paddleocr unavailable")
-
-    result = OCRWithPositionTool(_reader=PaddleReader()).call(
+    http = _FakeOCRHTTP(
+        [
+            _FakeOCRResponse(
+                {"error": "quota exceeded"},
+                text="quota exceeded",
+                status_code=429,
+            )
+        ]
+    )
+    monkeypatch.setenv("PADDLEOCR_API_TOKEN", "test-token")
+    result = OCRWithPositionTool(http_client=http).call(
         {"image_input": str(image_path)}
     )
 
     assert result["status"] == "error"
-    assert "paddleocr unavailable" in result["error"]
-    assert result["backend_attempts"][0]["backend"] == "paddleocr"
+    assert "HTTP 429" in result["error"]
+    assert result["backend_attempts"][0]["backend"] == "paddleocr_api"
     assert len(result["subcalls"]) == 1
-    assert result["subcalls"][0]["provider"] == "paddleocr"
+    assert result["subcalls"][0]["provider"] == "paddleocr_api"
 
 
-def test_ocr_rejects_missing_paddle_position_data(
+def test_ocr_api_requires_token(
     tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from PIL import Image
 
-    image_path = tmp_path / "missing-boxes.png"
+    image_path = tmp_path / "missing-token.png"
     Image.new("RGB", (100, 40), "white").save(image_path)
 
-    class PaddleReader:
-        def predict(self, *, input):
-            return [
-                {
-                    "rec_texts": ["Tysons Corner"],
-                    "rec_scores": [0.92],
-                }
-            ]
-
-    result = OCRWithPositionTool(_reader=PaddleReader()).call(
-        {"image_input": str(image_path)}
-    )
+    monkeypatch.delenv("PADDLEOCR_API_TOKEN", raising=False)
+    result = OCRWithPositionTool().call({"image_input": str(image_path)})
 
     assert result["status"] == "error"
-    assert "matching positioned boxes" in result["error"]
+    assert "PADDLEOCR_API_TOKEN is required" in result["error"]
+
+
+def test_ocr_api_does_not_treat_image_only_markdown_as_text(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from PIL import Image
+
+    image_path = tmp_path / "image-only.png"
+    Image.new("RGB", (100, 40), "white").save(image_path)
+    http = _FakeOCRHTTP(
+        [
+            _FakeOCRResponse({"data": {"jobId": "job-3"}}),
+            _FakeOCRResponse(
+                {
+                    "data": {
+                        "state": "done",
+                        "resultUrl": {"jsonUrl": "https://result.test/job-3.jsonl"},
+                    }
+                }
+            ),
+            _FakeOCRResponse(
+                text=json.dumps(
+                    {
+                        "result": {
+                            "layoutParsingResults": [
+                                {
+                                    "markdown": {
+                                        "text": (
+                                            '<div><img src="imgs/image.jpg" '
+                                            'alt="Image" /></div>'
+                                        )
+                                    },
+                                    "prunedResult": {
+                                        "parsing_res_list": [
+                                            {
+                                                "block_content": "",
+                                                "block_bbox": [0, 0, 100, 40],
+                                            }
+                                        ]
+                                    },
+                                }
+                            ]
+                        }
+                    }
+                )
+            ),
+        ]
+    )
+    monkeypatch.setenv("PADDLEOCR_API_TOKEN", "test-token")
+
+    result = OCRWithPositionTool(
+        http_client=http,
+        poll_seconds=0.2,
+    ).call({"image_input": str(image_path)})
+
+    assert result["status"] == "success"
+    assert result["text_regions"] == []
+    assert result["total_regions"] == 0
+    assert result["full_text"] == ""
 
 
 def test_ocr_rejects_reversed_bbox_and_hashes_actual_crop(
@@ -434,11 +537,7 @@ def test_ocr_rejects_reversed_bbox_and_hashes_actual_crop(
     image.paste("black", (0, 0, 50, 50))
     image.save(image_path)
 
-    class PaddleReader:
-        def predict(self, *, input):
-            return []
-
-    tool = OCRWithPositionTool(_reader=PaddleReader())
+    tool = OCRWithPositionTool()
     invalid = tool.call(
         {
             "image_input": str(image_path),
@@ -455,4 +554,8 @@ def test_ocr_rejects_reversed_bbox_and_hashes_actual_crop(
 
     assert invalid["status"] == "error"
     assert "ordered" in invalid["error"]
+    assert cropped["status"] == "error"
+    assert full["status"] == "error"
+    assert cropped["artifact_sha256"]
+    assert full["artifact_sha256"]
     assert cropped["artifact_sha256"] != full["artifact_sha256"]
