@@ -552,6 +552,7 @@ class ContextLedger:
         explicit_chars = 0
         serialized_input_chars = 0
         media_bytes = 0
+        component_sizes: Dict[str, Dict[str, Any]] = {}
         for index, (kind, value, reason) in enumerate(components, start=1):
             if value is None or value == [] or value == {} or value == "":
                 continue
@@ -573,7 +574,22 @@ class ContextLedger:
             # retaining the raw serialized size and exact request hash.
             explicit_chars += len(serialized_persisted)
             serialized_input_chars += len(serialized_actual)
-            media_bytes += sum(int(item.get("byte_count", 0) or 0) for item in media)
+            component_media_bytes = sum(
+                int(item.get("byte_count", 0) or 0) for item in media
+            )
+            media_bytes += component_media_bytes
+            component_sizes[kind] = {
+                "char_count": len(serialized_persisted),
+                "serialized_input_chars": len(serialized_actual),
+                "token_count_estimate": max(
+                    1,
+                    (len(serialized_persisted) + 3) // 4,
+                ),
+                "media_bytes": component_media_bytes,
+                "content_hash": sha256_bytes(
+                    serialized_actual.encode("utf-8")
+                ),
+            }
             descriptor = self.store.artifacts.put_bytes(
                 stable_json_bytes(persisted),
                 media_type="application/json; charset=utf-8",
@@ -619,9 +635,24 @@ class ContextLedger:
             "explicit_input_tokens_estimate": max(1, (explicit_chars + 3) // 4),
             "serialized_input_chars": serialized_input_chars,
             "media_bytes": media_bytes,
+            "component_sizes": component_sizes,
+            "request_snapshot_sha256": sha256_bytes(
+                stable_json_bytes(
+                    {
+                        "system_instruction": system_instruction,
+                        "input_payload": input_payload,
+                        "tools": tools or [],
+                        "response_format": response_format,
+                        "generation_config": generation_config or {},
+                        "max_output_tokens": max_output_tokens,
+                        "previous_interaction_id": previous_interaction_id,
+                    }
+                )
+            ),
             "provider_input_tokens": None,
             "provider_output_tokens": None,
             "provider_thought_tokens": None,
+            "retry_metadata": None,
             "response_content_chars": None,
             "response_reasoning_chars": None,
             "reasoning_artifact": None,
@@ -673,6 +704,7 @@ class ContextLedger:
                     "total_thought_tokens",
                     "thought_tokens",
                 ),
+                "retry_metadata": normalized_response.get("retry_metadata"),
                 "response_content_chars": normalized_response.get(
                     "response_content_chars"
                 ),
@@ -700,6 +732,7 @@ class ContextLedger:
                 "provider_input_tokens": manifest["provider_input_tokens"],
                 "provider_output_tokens": manifest["provider_output_tokens"],
                 "provider_thought_tokens": manifest["provider_thought_tokens"],
+                "retry_metadata": manifest["retry_metadata"],
                 "response_content_chars": manifest["response_content_chars"],
                 "response_reasoning_chars": manifest[
                     "response_reasoning_chars"

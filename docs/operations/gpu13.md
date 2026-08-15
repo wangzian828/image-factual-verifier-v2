@@ -388,6 +388,21 @@ for `perceive_scene` and `ocr_with_position`. Set
 through `TOOL_CACHE_ENABLED=1`; do not enable that for freshness-sensitive
 production runs without an explicit cache namespace and TTL.
 
+Reference-image comparison now reuses downloaded reference data within a process,
+with an LRU/TTL cache. Configure it with
+`REFERENCE_IMAGE_CACHE_TTL_SECONDS` and `REFERENCE_IMAGE_CACHE_MAX_BYTES`.
+Unchanged local image serializations reuse their file-metadata-keyed base64/JPEG
+cache. Visual reverse search reuses an unexpired upload URL for the same local
+image SHA-256; configure its lifetime with
+`VISUAL_SEARCH_UPLOAD_CACHE_TTL_SECONDS`. These caches avoid repeated download,
+encoding, and upload work only; they do not cache a new factual judgment.
+
+The context ledger records per-request component sizes, an exact logical request
+snapshot hash, provider token usage, and native Gemini retry metadata. Compare
+`provider_input_tokens` against the component sizes in the request manifest when
+evaluating context compaction; shrinking an archive file alone is not evidence
+that the provider request became smaller.
+
 Tool-internal Gemini vision requests record per-subcall durations for diagnosis.
 Their established 8192-token output budgets remain the default: a controlled
 same-input A/B on gpu-13 did not show that lower ceilings reduce latency.

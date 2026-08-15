@@ -4,6 +4,7 @@ import base64
 import hashlib
 import io
 import os
+from functools import lru_cache
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -52,6 +53,29 @@ def image_to_data_url(image_input: str) -> str:
     if not path.exists():
         raise FileNotFoundError(f"Image not found: {image_input}")
 
+    stat = path.stat()
+    return _local_image_to_data_url(
+        str(path.resolve()),
+        int(stat.st_mtime_ns),
+        int(stat.st_size),
+    )
+
+
+@lru_cache(maxsize=64)
+def _local_image_to_data_url(
+    path_string: str,
+    mtime_ns: int,
+    size: int,
+) -> str:
+    """Serialize an unchanged local image only once per process.
+
+    The file metadata is part of the cache key, so replacing an image at the
+    same path cannot silently reuse an old payload. This cache is deliberately
+    process-local: the canonical image hash and runtime cache remain the
+    cross-process sources of truth.
+    """
+
+    path = Path(path_string)
     mime = _guess_mime_from_name(path.name)
     encoded = base64.b64encode(path.read_bytes()).decode("utf-8")
     return f"data:{mime};base64,{encoded}"
@@ -83,14 +107,44 @@ def controlled_image_to_data_url(
     path = Path(image_input)
     if not path.exists():
         raise FileNotFoundError(f"Image not found: {image_input}")
-    edge = max(
+    stat = path.stat()
+    edge = _resolve_image_edge(max_long_edge)
+    quality = _resolve_image_quality(jpeg_quality)
+    data_url, metadata = _controlled_local_image_to_data_url(
+        str(path.resolve()),
+        int(stat.st_mtime_ns),
+        int(stat.st_size),
+        edge,
+        quality,
+    )
+    return data_url, dict(metadata)
+
+
+def _resolve_image_edge(value: int | None) -> int:
+    return max(
         256,
-        int(max_long_edge or os.getenv("IFV_IMAGE_MAX_LONG_EDGE", "1280")),
+        int(value or os.getenv("IFV_IMAGE_MAX_LONG_EDGE", "1280")),
     )
-    quality = max(
+
+
+def _resolve_image_quality(value: int | None) -> int:
+    return max(
         55,
-        min(95, int(jpeg_quality or os.getenv("IFV_IMAGE_JPEG_QUALITY", "88"))),
+        min(95, int(value or os.getenv("IFV_IMAGE_JPEG_QUALITY", "88"))),
     )
+
+
+@lru_cache(maxsize=32)
+def _controlled_local_image_to_data_url(
+    path_string: str,
+    mtime_ns: int,
+    size: int,
+    edge: int,
+    quality: int,
+) -> tuple[str, dict]:
+    path = Path(path_string)
+    from PIL import Image, ImageOps
+
     original_bytes = path.read_bytes()
     try:
         with Image.open(io.BytesIO(original_bytes)) as opened:
@@ -104,7 +158,7 @@ def controlled_image_to_data_url(
         # Deterministic protocol fixtures sometimes use stable non-image bytes.
         # Preserve the old wire behavior for those fixtures; production hash and
         # perception validation still reject truly unusable case media upstream.
-        return image_to_data_url(image_input), {
+        return image_to_data_url(path_string), {
             "source_kind": "local_file",
             "source_sha256": hashlib.sha256(original_bytes).hexdigest(),
             "sha256": hashlib.sha256(original_bytes).hexdigest(),

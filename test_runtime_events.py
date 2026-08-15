@@ -59,6 +59,16 @@ def test_context_manifest_reconstructs_exact_image_request(tmp_path: Path) -> No
     assert manifest["parent_interaction_id"] is None
     assert manifest["parent_request_id"] is None
     assert manifest["max_output_tokens"] == 8192
+    assert set(manifest["component_sizes"]) == {
+        "system_prompt",
+        "input_payload",
+        "response_format",
+    }
+    assert (
+        manifest["component_sizes"]["input_payload"]["media_bytes"]
+        == len(image_bytes)
+    )
+    assert len(manifest["request_snapshot_sha256"]) == 64
 
 
 def test_context_manifest_records_local_protocol_correction_parent(

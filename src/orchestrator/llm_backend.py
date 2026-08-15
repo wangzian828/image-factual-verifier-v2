@@ -544,7 +544,7 @@ class APIBackend(LLMBackend):
             ),
             client=self._get_shared_client(),
         )
-        return await client.create(
+        payload = await client.create(
             model=self.model_name,
             input=input_payload,
             system_instruction=system_instruction,
@@ -555,3 +555,8 @@ class APIBackend(LLMBackend):
             background=background,
             store=store,
         )
+        retry_metadata = dict(getattr(client, "last_retry_metadata", {}) or {})
+        if int(retry_metadata.get("retry_attempts", 0) or 0) > 0:
+            payload = dict(payload)
+            payload["__retry_metadata__"] = retry_metadata
+        return payload

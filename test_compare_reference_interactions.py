@@ -315,3 +315,24 @@ def test_reference_download_builds_transform_and_page_image_fallbacks() -> None:
         "https://example.org/photo.jpg",
     )
     assert extracted == ("https://example.org/media/original.jpg",)
+
+
+def test_reference_download_cache_reuses_success_without_network() -> None:
+    tool = CompareWithReferenceTool()
+    tool._put_reference_cache(
+        "https://example.org/reference.jpg\n",
+        {
+            "data_url": "data:image/jpeg;base64,cmVm",
+            "resolved_url": "https://example.org/reference.jpg",
+            "download_method": "direct",
+            "attempted_urls": ["https://example.org/reference.jpg"],
+        },
+    )
+
+    result = asyncio.run(
+        tool._download_reference("https://example.org/reference.jpg")
+    )
+
+    assert result["cache_hit"] is True
+    assert result["data_url"] == "data:image/jpeg;base64,cmVm"
+    assert tool._download_subcalls(result) == []

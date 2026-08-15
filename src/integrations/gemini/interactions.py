@@ -109,6 +109,11 @@ class GeminiInteractionsClient:
         self._random_uniform = random_uniform
         self._client = client or httpx.AsyncClient(timeout=timeout)
         self._owns_client = client is None
+        self.last_retry_metadata: dict[str, Any] = {
+            "retry_attempts": 0,
+            "retry_delays": [],
+            "retry_backoff_seconds": 0.0,
+        }
 
     async def __aenter__(self) -> "GeminiInteractionsClient":
         return self
@@ -272,6 +277,11 @@ class GeminiInteractionsClient:
             "Content-Type": "application/json",
         }
         retry_delays: list[float] = []
+        self.last_retry_metadata = {
+            "retry_attempts": 0,
+            "retry_delays": [],
+            "retry_backoff_seconds": 0.0,
+        }
 
         for attempt in range(self.max_retries + 1):
             try:
@@ -331,6 +341,11 @@ class GeminiInteractionsClient:
                     "Gemini Interactions returned a non-object JSON payload: "
                     f"{data!r}"
                 )
+            self.last_retry_metadata = {
+                "retry_attempts": attempt,
+                "retry_delays": list(retry_delays),
+                "retry_backoff_seconds": round(sum(retry_delays), 3),
+            }
             return data
 
         raise AssertionError("Retry loop exited unexpectedly.")

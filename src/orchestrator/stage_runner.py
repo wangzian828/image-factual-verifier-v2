@@ -3133,6 +3133,9 @@ class StageRunner:
                 ),
                 interaction_id=str(payload.get("id", "")).strip() or None,
                 status=str(payload.get("status", "completed")),
+                response_metadata={
+                    "retry_metadata": payload.get("__retry_metadata__"),
+                },
             )
         self._last_context_request_id = request_id
         return payload

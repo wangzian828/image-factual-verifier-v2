@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import threading
 import time
@@ -64,6 +65,7 @@ class ImageUploadClient:
     timeout: int = 30
     last_upload_meta: Dict[str, Any] | None = None
     oss_signed_url_expiry_seconds: int = 3600
+    upload_cache_ttl_seconds: int = 900
 
     def __post_init__(self) -> None:
         self.provider = (
@@ -78,8 +80,26 @@ class ImageUploadClient:
         self.oss_signed_url_expiry_seconds = int(
             os.getenv("OSS_SIGNED_URL_EXPIRY_SECONDS", str(self.oss_signed_url_expiry_seconds)).strip()
         )
+        try:
+            self.upload_cache_ttl_seconds = max(
+                0,
+                int(
+                    os.getenv(
+                        "VISUAL_SEARCH_UPLOAD_CACHE_TTL_SECONDS",
+                        str(self.upload_cache_ttl_seconds),
+                    ).strip()
+                ),
+            )
+        except ValueError:
+            self.upload_cache_ttl_seconds = max(
+                0,
+                int(self.upload_cache_ttl_seconds),
+            )
         self.last_upload_meta = None
         self._thread_local = threading.local()
+        self._upload_cache: Dict[str, tuple[float, str, Dict[str, Any]]] = {}
+        self._file_hash_cache: Dict[tuple[str, int, int], str] = {}
+        self._upload_cache_lock = threading.Lock()
 
     def _get_session(self) -> requests.Session:
         session = getattr(self._thread_local, "session", None)
@@ -92,6 +112,16 @@ class ImageUploadClient:
         path = Path(image_path)
         if not path.exists():
             raise FileNotFoundError(f"Image not found: {image_path}")
+        image_sha256 = self._file_sha256(path)
+        cached = self._get_cached_upload(image_sha256)
+        if cached is not None:
+            url, metadata = cached
+            self.last_upload_meta = {
+                **metadata,
+                "image_sha256": image_sha256,
+                "cache_hit": True,
+            }
+            return url
 
         if self.provider == "oss":
             self.validate_configuration()
@@ -100,7 +130,10 @@ class ImageUploadClient:
                 "source": "oss",
                 "used_temp_host": False,
                 "upload_api_url": "",
+                "image_sha256": image_sha256,
+                "cache_hit": False,
             }
+            self._cache_upload(image_sha256, url, self.last_upload_meta)
             return url
 
         if self.provider == "custom":
@@ -111,7 +144,10 @@ class ImageUploadClient:
                 "source": "custom_upload_api",
                 "used_temp_host": False,
                 "upload_api_url": self.upload_api_url,
+                "image_sha256": image_sha256,
+                "cache_hit": False,
             }
+            self._cache_upload(image_sha256, url, self.last_upload_meta)
             return url
 
         url = self._upload_via_http(path, self.temp_upload_url)
@@ -119,8 +155,59 @@ class ImageUploadClient:
             "source": "temp_host",
             "used_temp_host": True,
             "upload_api_url": self.temp_upload_url,
+            "image_sha256": image_sha256,
+            "cache_hit": False,
         }
+        self._cache_upload(image_sha256, url, self.last_upload_meta)
         return url
+
+    def _get_cached_upload(
+        self,
+        image_sha256: str,
+    ) -> Optional[tuple[str, Dict[str, Any]]]:
+        if self.upload_cache_ttl_seconds <= 0:
+            return None
+        now = time.time()
+        with self._upload_cache_lock:
+            item = self._upload_cache.get(image_sha256)
+            if item is None:
+                return None
+            created_at, url, metadata = item
+            if now - created_at > self.upload_cache_ttl_seconds:
+                self._upload_cache.pop(image_sha256, None)
+                return None
+            return url, dict(metadata)
+
+    def _cache_upload(
+        self,
+        image_sha256: str,
+        url: str,
+        metadata: Dict[str, Any],
+    ) -> None:
+        if self.upload_cache_ttl_seconds <= 0 or not url:
+            return
+        with self._upload_cache_lock:
+            self._upload_cache[image_sha256] = (
+                time.time(),
+                url,
+                dict(metadata),
+            )
+
+    def _file_sha256(self, path: Path) -> str:
+        stat = path.stat()
+        cache_key = (str(path.resolve()), int(stat.st_mtime_ns), int(stat.st_size))
+        with self._upload_cache_lock:
+            cached = self._file_hash_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        value = digest.hexdigest()
+        with self._upload_cache_lock:
+            self._file_hash_cache[cache_key] = value
+        return value
 
     def validate_configuration(self) -> None:
         if self.provider == "oss" and not self._oss_is_configured():

@@ -2,12 +2,15 @@
 """Compare the current image with one reference image using Gemini Interactions."""
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
 import base64
 import io
+import threading
 import time
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any, Dict, Mapping, Optional
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
@@ -144,9 +147,48 @@ class CompareWithReferenceTool(BaseTool):
     vlm_backend: Any = None
     image_path: str = ""
     source_access_policy: Any = None
+    _reference_cache: OrderedDict[str, tuple[float, Dict[str, Any], int]] = field(
+        default_factory=OrderedDict,
+        init=False,
+        repr=False,
+    )
+    _reference_cache_bytes: int = field(default=0, init=False, repr=False)
+    _reference_cache_lock: threading.Lock = field(
+        default_factory=threading.Lock,
+        init=False,
+        repr=False,
+    )
+    _reference_cache_ttl_seconds: float = field(default=1800.0, init=False, repr=False)
+    _reference_cache_max_bytes: int = field(
+        default=64 * 1024 * 1024,
+        init=False,
+        repr=False,
+    )
+    _reference_thread_local: threading.local = field(
+        default_factory=threading.local,
+        init=False,
+        repr=False,
+    )
+
+    def __post_init__(self) -> None:
+        self._reference_cache_ttl_seconds = self._env_float(
+            "REFERENCE_IMAGE_CACHE_TTL_SECONDS",
+            1800.0,
+            minimum=0.0,
+        )
+        self._reference_cache_max_bytes = int(
+            self._env_float(
+                "REFERENCE_IMAGE_CACHE_MAX_BYTES",
+                64 * 1024 * 1024,
+                minimum=0.0,
+            )
+        )
 
     def set_source_access_policy(self, policy: SourceAccessPolicy) -> None:
         self.source_access_policy = policy
+        with self._reference_cache_lock:
+            self._reference_cache.clear()
+            self._reference_cache_bytes = 0
 
     def call(self, params: Dict[str, Any]) -> Any:
         """Synchronous compatibility entry point."""
@@ -244,6 +286,9 @@ class CompareWithReferenceTool(BaseTool):
                     ),
                     "attempted_urls": list(
                         (download or {}).get("attempted_urls", [reference_url])
+                    ),
+                    "reference_cache_hit": bool(
+                        (download or {}).get("cache_hit", False)
                     ),
                     "comparison_method": "deterministic_exact_pixels",
                     "subcalls": [
@@ -359,6 +404,9 @@ class CompareWithReferenceTool(BaseTool):
             "attempted_urls": list(
                 (download or {}).get("attempted_urls", [reference_url])
             ),
+            "reference_cache_hit": bool(
+                (download or {}).get("cache_hit", False)
+            ),
             "comparison_method": "vlm",
             "subcalls": [
                 *self._download_subcalls(download or {}),
@@ -386,6 +434,13 @@ class CompareWithReferenceTool(BaseTool):
             return max(1024, int(raw))
         except ValueError:
             return DEFAULT_REFERENCE_COMPARE_MAX_OUTPUT_TOKENS
+
+    @staticmethod
+    def _env_float(name: str, default: float, *, minimum: float) -> float:
+        try:
+            return max(minimum, float(os.getenv(name, str(default))))
+        except (TypeError, ValueError):
+            return default
 
     @staticmethod
     def _deterministic_exact_match(
@@ -429,6 +484,8 @@ class CompareWithReferenceTool(BaseTool):
 
     @staticmethod
     def _download_subcalls(download: Mapping[str, Any]) -> list[Dict[str, Any]]:
+        if bool(download.get("cache_hit", False)):
+            return []
         attempted = [
             str(url).strip()
             for url in download.get("attempted_urls", []) or []
@@ -462,9 +519,25 @@ class CompareWithReferenceTool(BaseTool):
         source_page_url: str = "",
     ) -> Optional[Dict[str, Any]]:
         """Download a reference image through direct, URL, and page fallbacks."""
-        import base64
+        cache_key = self._reference_cache_key(url, source_page_url)
+        cached = self._get_reference_cache(cache_key)
+        if cached is not None:
+            return cached
+        return await asyncio.to_thread(
+            self._download_reference_sync,
+            url,
+            source_page_url,
+            cache_key,
+        )
 
-        import httpx
+    def _download_reference_sync(
+        self,
+        url: str,
+        source_page_url: str,
+        cache_key: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Download through a thread-local session with connection reuse."""
+        import requests
 
         attempted: list[str] = []
         pending = list(self._reference_url_variants(url))
@@ -472,10 +545,86 @@ class CompareWithReferenceTool(BaseTool):
             pending.append(source_page_url)
         seen: set[str] = set()
         try:
-            async with httpx.AsyncClient(
-                timeout=30,
-                follow_redirects=True,
-                headers={
+            client = self._get_reference_session()
+            while pending and len(attempted) < 12:
+                candidate = str(pending.pop(0) or "").strip()
+                if not candidate or candidate in seen:
+                    continue
+                seen.add(candidate)
+                if (
+                    self.source_access_policy is not None
+                    and not self.source_access_policy.allows(candidate)
+                ):
+                    continue
+                attempted.append(candidate)
+                headers = {}
+                if source_page_url and candidate != source_page_url:
+                    headers["Referer"] = source_page_url
+                try:
+                    response = client.get(
+                        candidate,
+                        headers=headers,
+                        timeout=30,
+                        allow_redirects=True,
+                    )
+                except requests.RequestException:
+                    continue
+                self._validate_download_redirects(response)
+                if response.status_code != 200 or not response.content:
+                    continue
+                content_type = response.headers.get(
+                    "content-type",
+                    "",
+                ).split(";", 1)[0].strip().lower()
+                image_mime = (
+                    content_type
+                    if content_type.startswith("image/")
+                    else self._sniff_image_mime(response.content)
+                )
+                if image_mime:
+                    encoded = base64.b64encode(response.content).decode(
+                        "ascii"
+                    )
+                    result = {
+                        "data_url": (
+                            f"data:{image_mime};base64,{encoded}"
+                        ),
+                        "resolved_url": str(response.url),
+                        "download_method": (
+                            "direct"
+                            if candidate == url
+                            else "url_or_page_fallback"
+                        ),
+                        "attempted_urls": attempted,
+                    }
+                    self._put_reference_cache(cache_key, result)
+                    return result
+                if "html" not in content_type:
+                    continue
+                html = response.text[:2_000_000]
+                for image_url in self._extract_page_image_urls(
+                    html,
+                    base_url=str(response.url),
+                ):
+                    if image_url not in seen:
+                        pending.append(image_url)
+        except Exception:
+            pass
+        return {
+            "data_url": "",
+            "resolved_url": "",
+            "download_method": "",
+            "attempted_urls": attempted,
+        }
+
+    def _get_reference_session(self) -> Any:
+        session = getattr(self._reference_thread_local, "session", None)
+        if session is None:
+            import requests
+
+            session = requests.Session()
+            session.headers.update(
+                {
                     "User-Agent": (
                         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                         "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -486,71 +635,65 @@ class CompareWithReferenceTool(BaseTool):
                         "image/*,*/*;q=0.8"
                     ),
                     "Accept-Language": "en-US,en;q=0.8",
-                },
-            ) as client:
-                while pending and len(attempted) < 12:
-                    candidate = str(pending.pop(0) or "").strip()
-                    if not candidate or candidate in seen:
-                        continue
-                    seen.add(candidate)
-                    if (
-                        self.source_access_policy is not None
-                        and not self.source_access_policy.allows(candidate)
-                    ):
-                        continue
-                    attempted.append(candidate)
-                    headers = {}
-                    if source_page_url and candidate != source_page_url:
-                        headers["Referer"] = source_page_url
-                    try:
-                        response = await client.get(candidate, headers=headers)
-                    except httpx.HTTPError:
-                        continue
-                    self._validate_download_redirects(response)
-                    if response.status_code != 200 or not response.content:
-                        continue
-                    content_type = response.headers.get(
-                        "content-type",
-                        "",
-                    ).split(";", 1)[0].strip().lower()
-                    image_mime = (
-                        content_type
-                        if content_type.startswith("image/")
-                        else self._sniff_image_mime(response.content)
-                    )
-                    if image_mime:
-                        encoded = base64.b64encode(response.content).decode(
-                            "ascii"
-                        )
-                        return {
-                            "data_url": (
-                                f"data:{image_mime};base64,{encoded}"
-                            ),
-                            "resolved_url": str(response.url),
-                            "download_method": (
-                                "direct"
-                                if candidate == url
-                                else "url_or_page_fallback"
-                            ),
-                            "attempted_urls": attempted,
-                        }
-                    if "html" not in content_type:
-                        continue
-                    html = response.text[:2_000_000]
-                    for image_url in self._extract_page_image_urls(
-                        html,
-                        base_url=str(response.url),
-                    ):
-                        if image_url not in seen:
-                            pending.append(image_url)
-        except Exception:
-            pass
-        return {
-            "data_url": "",
-            "resolved_url": "",
-            "download_method": "",
-            "attempted_urls": attempted,
+                }
+            )
+            self._reference_thread_local.session = session
+        return session
+
+    @staticmethod
+    def _reference_cache_key(url: str, source_page_url: str) -> str:
+        return f"{str(url or '').strip()}\n{str(source_page_url or '').strip()}"
+
+    def _get_reference_cache(self, cache_key: str) -> Optional[Dict[str, Any]]:
+        if self._reference_cache_ttl_seconds <= 0 or self._reference_cache_max_bytes <= 0:
+            return None
+        now = time.time()
+        with self._reference_cache_lock:
+            entry = self._reference_cache.get(cache_key)
+            if entry is None:
+                return None
+            created_at, result, _size = entry
+            if now - created_at > self._reference_cache_ttl_seconds:
+                self._reference_cache.pop(cache_key, None)
+                self._reference_cache_bytes -= _size
+                return None
+            self._reference_cache.move_to_end(cache_key)
+            cached = dict(result)
+            cached["attempted_urls"] = list(
+                cached.get("attempted_urls", []) or []
+            )
+            cached["cache_hit"] = True
+            return cached
+
+    def _put_reference_cache(
+        self,
+        cache_key: str,
+        result: Mapping[str, Any],
+    ) -> None:
+        if self._reference_cache_ttl_seconds <= 0 or self._reference_cache_max_bytes <= 0:
+            return
+        data_url = str(result.get("data_url", ""))
+        size = len(data_url.encode("utf-8"))
+        if not data_url or size > self._reference_cache_max_bytes:
+            return
+        cached = {
+            key: (list(value) if key == "attempted_urls" else value)
+            for key, value in result.items()
         }
+        with self._reference_cache_lock:
+            previous = self._reference_cache.pop(cache_key, None)
+            if previous is not None:
+                self._reference_cache_bytes -= previous[2]
+            while (
+                self._reference_cache
+                and self._reference_cache_bytes + size > self._reference_cache_max_bytes
+            ):
+                _old_key, (_created_at, _old_result, old_size) = (
+                    self._reference_cache.popitem(last=False)
+                )
+                self._reference_cache_bytes -= old_size
+            self._reference_cache[cache_key] = (time.time(), cached, size)
+            self._reference_cache_bytes += size
 
     def _validate_download_redirects(self, response: Any) -> None:
         if self.source_access_policy is None:
