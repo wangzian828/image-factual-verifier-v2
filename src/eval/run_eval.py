@@ -694,11 +694,7 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
             ),
             "ocr_cache_version": os.getenv(
                 "OCR_CACHE_VERSION",
-                "paddleocr-cpu-v1",
-            ),
-            "paddleocr_profile": os.getenv(
-                "PADDLEOCR_PROFILE",
-                "default",
+                "paddleocr-api-v1",
             ),
             "rollouts_per_case": rollouts_per_case,
             "base_sampling_seed": base_sampling_seed,
