@@ -99,9 +99,18 @@ def private_index(
 ) -> Dict[str, Dict[str, Any]]:
     indexed: Dict[str, Dict[str, Any]] = {}
     for row in rows:
-        rendered = str(row.get(key, "")).strip()
+        rendered = next(
+            (
+                str(row.get(candidate_key, "")).strip()
+                for candidate_key in (key, "candidate_id", "assignment_id")
+                if str(row.get(candidate_key, "")).strip()
+            ),
+            "",
+        )
         if not rendered:
-            raise ValueError(f"{name} row lacks non-empty {key}")
+            raise ValueError(
+                f"{name} row lacks non-empty {key}/candidate_id/assignment_id"
+            )
         if rendered in indexed:
             raise ValueError(f"duplicate {name} row for {rendered}")
         indexed[rendered] = row

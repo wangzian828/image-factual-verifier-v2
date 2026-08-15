@@ -27,6 +27,16 @@ def test_classification_prediction_accepts_only_binary_v4_verdicts() -> None:
     ) is None
 
 
+def test_private_index_accepts_candidate_id_for_runtime_case_id() -> None:
+    indexed = run_eval._private_index(
+        [{"candidate_id": "case-candidate", "label": "supported"}],
+        key="case_id",
+        name="evaluation-gold",
+    )
+
+    assert indexed["case-candidate"]["label"] == "supported"
+
+
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
