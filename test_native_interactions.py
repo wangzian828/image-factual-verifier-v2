@@ -1319,9 +1319,10 @@ def test_evaluation_rejects_fact_check_query_before_search_and_continues(
     parsed, steps = asyncio.run(runner.run("- [q1] verify the party claim"))
 
     assert parsed is not None
-    assert steps[0].action_type == "format_error"
-    assert steps[0].metadata["error_class"] == "protocol_error"
+    assert steps[0].action_type == "policy_replan"
+    assert steps[0].metadata["error_class"] == "policy_replan"
     assert steps[0].metadata["search_policy_rejection"] is True
+    assert steps[0].metadata["search_policy_replan_required"] is True
     assert tool.calls == [{"queries": ["politician official party statement"]}]
     returned = backend.requests[1]["input_payload"][0]
     assert returned["is_error"] is True

@@ -918,7 +918,11 @@ class StageRunner:
             dict.fromkeys(
                 str(step.metadata.get("context_request_id", "")).strip()
                 for step in steps
-                if step.action_type in {"format_error", "output_rejected"}
+                if step.action_type in {
+                    "format_error",
+                    "output_rejected",
+                    "policy_replan",
+                }
                 and str(step.metadata.get("context_request_id", "")).strip()
             )
         )
@@ -2626,13 +2630,21 @@ class StageRunner:
         tool_name: str,
         message: str,
     ) -> None:
-        step.action_type = "format_error"
         if self._is_empty_search_query_error(tool_name, message):
+            step.action_type = "format_error"
             step.metadata["error_class"] = "tool_argument_error"
             step.metadata["search_query_format_error"] = True
         else:
-            step.metadata["error_class"] = "protocol_error"
+            # The request was structurally valid, but the source-access policy
+            # removed every query before the search tool ran. Keep this out of
+            # schema/argument diagnostics so trajectory analysis can distinguish
+            # model formatting failures from a recoverable query replan. It is
+            # still a protocol correction and never counts as a tool action.
+            step.action_type = "policy_replan"
+            step.metadata["error_class"] = "policy_replan"
             step.metadata["search_policy_rejection"] = True
+            step.metadata["search_policy_replan_required"] = True
+            step.metadata["rejection_reason"] = message
 
     def _sanitize_search_queries(
         self,
@@ -4066,6 +4078,20 @@ class StageRunner:
                 "visual_evidence_disposition=null, and verdict_proposal="
                 "'continue'. "
             )
+            if "source support is insufficient" in reason or (
+                "requires owned qualified" in reason
+                and "Evidence" in reason
+            ):
+                message += (
+                    "The selected Evidence may be correctly bound and directionally "
+                    "relevant but still insufficient to close a high-salience claim. "
+                    "Do not repeat the same terminal fake/real proposal. Either add "
+                    "a genuinely independent direct qualified source, a trusted "
+                    "official/news/visual source, or an eligible same-capture edit "
+                    "comparison; if none is available, return the same Claim as "
+                    "insufficient with verdict_proposal='continue' and open at most "
+                    "one new factual route. "
+                )
             if "claim-owned visual Evidence" in reason:
                 message += (
                     "For each feedback mapping like 'evidence-X -> claim_ids "
@@ -4091,6 +4117,15 @@ class StageRunner:
                     "mapped visual Evidence ID or explicitly dispose of it, and "
                     "keep verdict_proposal continue. "
                 )
+        if "Search policy removed every query" in reason:
+            message += (
+                "This search was not executed and produced no Evidence. Rewrite the "
+                "query once using neutral entity/event/relation/source terms, without "
+                "fact-check, fake, hoax, altered, debunk, or a preselected outlet. "
+                "Do not repeat the blocked query. If no neutral reformulation is "
+                "available, return a non-terminal continue state instead of emitting "
+                "another empty or policy-blocked search. "
+            )
         return message + f"Runtime validator feedback: {reason}"
 
     def _has_duplicate_tool_call(self, steps: List[StageStep], tool_name: str, tool_args: Dict[str, Any]) -> bool:

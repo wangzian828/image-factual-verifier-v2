@@ -2019,13 +2019,46 @@ def _discrepancy_contract_errors(
                 selected_directions = sorted(
                     {evidence_by_id[item].stance for item in known_ids}
                 )
-                errors.append(
-                    f"{proposal.assessment} assessment for ImageClaim "
-                    f"{proposal.claim_id!r} requires owned qualified {stance} "
-                    "Evidence; selected Evidence records direction(s): "
-                    f"{', '.join(selected_directions) or 'none'}. Omit the "
-                    "assessment or keep it insufficient; do not relabel Evidence"
-                )
+                owned_directional_ids = [
+                    evidence_id
+                    for evidence_id in known_ids
+                    if evidence_is_qualified_for_stance(
+                        evidence_by_id[evidence_id],
+                        stance,
+                    )
+                    and evidence_by_id[evidence_id].task_id in task_by_id
+                    and proposal.claim_id
+                    in task_by_id[evidence_by_id[evidence_id].task_id].claim_ids
+                ]
+                if owned_directional_ids and stance in {"refute", "support"}:
+                    source_details = []
+                    for evidence_id in owned_directional_ids:
+                        evidence = evidence_by_id[evidence_id]
+                        source_details.append(
+                            f"{evidence_id}="
+                            f"{getattr(evidence, 'source_class', 'unknown')}/"
+                            f"{getattr(evidence, 'source_family', 'unknown')}"
+                        )
+                    errors.append(
+                        f"{proposal.assessment} assessment for ImageClaim "
+                        f"{proposal.claim_id!r} requires owned qualified {stance} Evidence, "
+                        "but its source support is insufficient for this high-salience "
+                        f"{stance} decision: {', '.join(source_details)}. "
+                        "This is not a missing Finding or Evidence-ID binding. For a "
+                        "refute/support closure, add either two independent direct "
+                        "qualified source families, one trusted official/news/visual "
+                        "source, or an eligible same-capture comparison; otherwise "
+                        "keep the assessment insufficient and verdict_proposal='continue'. "
+                        "Do not resubmit the same terminal verdict."
+                    )
+                else:
+                    errors.append(
+                        f"{proposal.assessment} assessment for ImageClaim "
+                        f"{proposal.claim_id!r} requires owned qualified {stance} "
+                        "Evidence; selected Evidence records direction(s): "
+                        f"{', '.join(selected_directions) or 'none'}. Omit the "
+                        "assessment or keep it insufficient; do not relabel Evidence"
+                    )
             elif not finding_ids and not composite_candidate_ids:
                 errors.append(
                     f"{proposal.assessment} assessment for ImageClaim "

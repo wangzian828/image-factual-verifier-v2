@@ -196,6 +196,7 @@ def _policy_step_ids(trace: Mapping[str, Any], episode_id: str) -> List[str]:
         if str(step.get("action_type", "")) in {
             "format_error",
             "output_rejected",
+            "policy_replan",
         }:
             continue
         interaction_id = str(metadata.get("interaction_id", "")).strip()
@@ -251,7 +252,7 @@ def _project_investigation_turns(
     tool_ordinal = 0
     for index, step in enumerate(_rows(state.get("all_steps"))):
         action_type = str(step.get("action_type", ""))
-        if action_type in {"format_error", "output_rejected"}:
+        if action_type in {"format_error", "output_rejected", "policy_replan"}:
             continue
         stage = str(step.get("stage", ""))
         if stage in {

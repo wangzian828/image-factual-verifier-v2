@@ -1340,6 +1340,10 @@ def _score_discrepancy_trace(
         str(item.get("action_type", "")) in {"format_error", "output_rejected"}
         for item in steps
     )
+    policy_replans = sum(
+        str(item.get("action_type", "")) == "policy_replan"
+        for item in steps
+    )
     training_exclusion_reasons: List[str] = []
     if not result_correct:
         training_exclusion_reasons.append("incorrect_result")
@@ -1380,6 +1384,7 @@ def _score_discrepancy_trace(
         "invalid_discrepancy_count": len(invalid_discrepancy_ids),
         "post_determination_action_count": post_verdict_actions,
         "tool_actions": int(investigation.get("action_count", 0) or 0),
+        "policy_replans": policy_replans,
         "training_eligible": training_eligible,
         "training_exclusion_reasons": training_exclusion_reasons,
     }
@@ -1412,6 +1417,7 @@ def _score_discrepancy_trace(
             "judgment_basis_consistent": judgment_basis_consistent,
             "post_determination_action_count": post_verdict_actions,
             "protocol_rejections": protocol_rejections,
+            "policy_replans": policy_replans,
         },
     }
     return process_metrics, teacher_score

@@ -505,6 +505,7 @@ def export_policy_examples(
             "planning_revision",
             "format_error",
             "output_rejected",
+            "policy_replan",
         }:
             continue
         stage = str(step.get("stage", "")).strip()
@@ -531,6 +532,7 @@ def export_policy_examples(
         action_valid = str(step.get("action_type", "")) not in {
             "format_error",
             "output_rejected",
+            "policy_replan",
         }
         fatal_boundary = trace_failed and position == len(candidates) - 1
         trainable = action_valid and not fatal_boundary

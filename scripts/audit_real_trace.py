@@ -40,7 +40,7 @@ ROUTE_CONTROL = "route_control"
 CORRECTION = "correction"
 BOUNDED_FALLBACK = "bounded_fallback"
 FORMAT = "format"
-REJECTION_ACTIONS = frozenset({"format_error", "output_rejected"})
+REJECTION_ACTIONS = frozenset({"format_error", "output_rejected", "policy_replan"})
 WEB_EVIDENCE_TOOLS = frozenset({"visit", "crop_and_search"})
 COMPOSITE_SOURCE_VISUAL_DISCREPANCY_FAMILY = (
     "composite:source_visual_discrepancy"

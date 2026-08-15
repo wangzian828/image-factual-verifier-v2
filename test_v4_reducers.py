@@ -1328,6 +1328,8 @@ def test_single_unknown_web_span_cannot_close_high_salience_claim() -> None:
 
     assert update["accepted"] is False
     assert "requires owned qualified refute Evidence" in update["rejected_reason"]
+    assert "source support is insufficient" in update["rejected_reason"]
+    assert "not a missing Finding or Evidence-ID binding" in update["rejected_reason"]
     assert state.model_dump(mode="json") == before
 
 
