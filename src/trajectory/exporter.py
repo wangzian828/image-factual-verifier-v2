@@ -184,7 +184,12 @@ def _v4_claim_has_directional_chain(
     return False
 
 
-def _v4_quality_gate(trace: Mapping[str, Any], state: Mapping[str, Any]) -> None:
+def _v4_quality_gate(
+    trace: Mapping[str, Any],
+    state: Mapping[str, Any],
+    *,
+    allow_incomplete_verdict_chain: bool = False,
+) -> None:
     """Reject v4 episodes that cannot teach claim/discrepancy alignment."""
 
     if str(trace.get("termination", "")) != "success":
@@ -407,7 +412,7 @@ def _v4_quality_gate(trace: Mapping[str, Any], state: Mapping[str, Any]) -> None
             for finding_id in basis_finding_ids & set(findings)
             for evidence_id in findings[finding_id].get("evidence_ids", []) or []
         }
-        if (
+        if not allow_incomplete_verdict_chain and (
             not basis_claim_ids
             or not basis_evidence_ids
             or not basis_finding_ids
@@ -473,8 +478,16 @@ def export_policy_examples(
     *,
     tokenizer: TokenizerAdapter | None = None,
     source_metadata: Mapping[str, Any] | None = None,
+    allow_incomplete_verdict_chain: bool = False,
 ) -> List[PolicyExample]:
-    """Export actual model-visible requests/actions from one canonical trace."""
+    """Export actual model-visible requests/actions from one canonical trace.
+
+    ``allow_incomplete_verdict_chain`` is reserved for the post-rollout SFT
+    release path after the frozen SFT judge has accepted the episode.  It only
+    relaxes the final Finding/Evidence closure check; protocol validity,
+    private-data isolation, judgment/basis consistency, and post-verdict
+    action checks remain enforced.
+    """
 
     state = _mapping(trace.get("state"))
     if str(trace.get("input_mode") or state.get("input_mode") or "") != (
@@ -489,7 +502,11 @@ def export_policy_examples(
     if policy_version not in {"reinspect-v2", "discrepancy-first-v4"}:
         raise ValueError("policy exporter received an unsupported decision policy")
     if policy_version == "discrepancy-first-v4":
-        _v4_quality_gate(trace, state)
+        _v4_quality_gate(
+            trace,
+            state,
+            allow_incomplete_verdict_chain=allow_incomplete_verdict_chain,
+        )
 
     tokenizer = tokenizer or Utf8ByteTokenizer()
     source_metadata = source_metadata or {}

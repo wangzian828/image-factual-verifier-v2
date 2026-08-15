@@ -323,9 +323,16 @@ def stage_release(
                 output_dir / "semantic_rewards" / candidate["semantic_path"].name,
             )
         trace = _load_json(candidate["trace_path"])
+        sft_judge_passed = (
+            (candidate["eligibility"].get("gates") or {}).get(
+                "sft_eligibility_pass"
+            )
+            is True
+        )
         exported_policy = export_policy_examples(
             trace,
             source_metadata=candidate["source_metadata"],
+            allow_incomplete_verdict_chain=sft_judge_passed,
         )
         if not exported_policy:
             raise ValueError(f"accepted trace exported no policy examples: {case_id}")

@@ -157,6 +157,62 @@ def test_v4_exporter_skips_corrected_rejections_and_accepts_terminal_route_exhau
     assert all(item.action_valid for item in examples)
 
 
+def test_v4_sft_release_can_allow_incomplete_final_chain_only(
+    tmp_path: Path,
+) -> None:
+    trace = json.loads(_v4_trace(tmp_path).read_text(encoding="utf-8"))
+    for step in trace["state"]["all_steps"]:
+        metadata = step.setdefault("metadata", {})
+        metadata["policy_input"] = {"input_payload": {"stage": step["stage"]}}
+        metadata["policy_action"] = (
+            {"type": "tool_call", "name": step["tool_name"], "arguments": {}}
+            if step["action_type"] == "tool_call"
+            else {"type": "output", "value": {"stage": step["stage"]}}
+        )
+
+    investigation = trace["state"]["investigation_state"]
+    investigation["claim_assessments"] = []
+    investigation["material_discrepancies"] = []
+    incomplete_basis = dict(trace["verdict_basis"])
+    incomplete_basis.update(
+        {
+            "discrepancy_ids": [],
+            "finding_ids": [],
+            "evidence_ids": [],
+        }
+    )
+    incomplete_judgment = dict(trace["judgment"])
+    incomplete_judgment.update(
+        {
+            "selected_discrepancy_ids": [],
+            "selected_finding_ids": [],
+            "selected_evidence_ids": [],
+        }
+    )
+    trace["verdict_basis"] = incomplete_basis
+    trace["state"]["investigation_state"]["discrepancy_verdict_basis"] = (
+        incomplete_basis
+    )
+    trace["judgment"] = incomplete_judgment
+    trace["state"]["judgment"] = incomplete_judgment
+    trace["state"]["investigation_state"]["discrepancy_judgment"] = (
+        incomplete_judgment
+    )
+
+    try:
+        export_policy_examples(trace)
+    except ValueError as exc:
+        assert "incomplete verdict Finding/Evidence chain" in str(exc)
+    else:
+        raise AssertionError("strict exporter must reject incomplete final chain")
+
+    examples = export_policy_examples(
+        trace,
+        allow_incomplete_verdict_chain=True,
+    )
+    assert examples
+
+
 def test_v4_process_scorer_uses_discrepancy_alignment_and_stop_quality(
     tmp_path: Path,
 ) -> None:
@@ -299,7 +355,10 @@ def test_v4_policy_export_rejects_neutral_evidence_semantic_upgrade(
     )
 
     try:
-        export_policy_examples(trace)
+        export_policy_examples(
+            trace,
+            allow_incomplete_verdict_chain=True,
+        )
     except ValueError as exc:
         assert "ClaimAssessment/Evidence direction mismatch" in str(exc)
     else:
