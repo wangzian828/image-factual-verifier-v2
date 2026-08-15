@@ -19,6 +19,7 @@ from src.trajectory.sft_eligibility import (
     SFTEligibilityJudge,
     build_sft_eligibility_artifact,
     build_sft_eligibility_input,
+    classify_sft_audit_failures,
     sft_eligibility_cache_key,
 )
 
@@ -58,10 +59,19 @@ def _jsonl_index(path: Path) -> Dict[str, Dict[str, Any]]:
         row = json.loads(line)
         if not isinstance(row, dict):
             raise ValueError(f"{path}:{line_number} must be an object")
-        case_id = str(row.get("case_id", "")).strip()
-        if not case_id or case_id in result:
-            raise ValueError(f"invalid or duplicate private case_id: {case_id!r}")
-        result[case_id] = row
+        aliases = [
+            str(row.get(key, "")).strip()
+            for key in ("case_id", "candidate_id", "assignment_id")
+        ]
+        aliases = [value for value in aliases if value]
+        if not aliases:
+            raise ValueError(
+                f"{path}:{line_number} lacks case_id/candidate_id/assignment_id"
+            )
+        for alias in aliases:
+            if alias in result and result[alias] is not row:
+                raise ValueError(f"duplicate private target alias: {alias!r}")
+            result[alias] = row
     return result
 
 
@@ -169,6 +179,9 @@ async def _run(args: argparse.Namespace) -> Dict[str, Any]:
                 enforce_source_access_policy=source_policy_active,
             )
             failures = report.failures(strict_scheduler=True)
+            fatal_audit_errors, _ = classify_sft_audit_failures(
+                [asdict(item) for item in failures]
+            )
             engineering_valid = bool(
                 str(trace.get("termination", "")) == "success"
                 and str(trace.get("verdict", "")) in {"real", "fake"}
@@ -186,7 +199,7 @@ async def _run(args: argparse.Namespace) -> Dict[str, Any]:
             if artifact is None:
                 judgment = None
                 judge_audit = None
-                if engineering_valid and not failures:
+                if engineering_valid and not fatal_audit_errors:
                     judgment, judge_audit = await judge.judge(
                         packet,
                         image_path=image_path,
@@ -213,27 +226,19 @@ async def _run(args: argparse.Namespace) -> Dict[str, Any]:
                     "sft_eligibility_pass": artifact.get("gates", {}).get(
                         "sft_eligibility_pass"
                     ),
-                    "path_match_status": artifact.get("metrics", {}).get(
-                        "path_match_status"
+                    "fact_alignment": artifact.get("metrics", {}).get(
+                        "fact_alignment"
                     ),
-                    "matched_path_id": artifact.get("metrics", {}).get(
-                        "matched_path_id"
+                    "decision_support": artifact.get("metrics", {}).get(
+                        "decision_support"
                     ),
-                    "new_reasonable_path_candidate": artifact.get(
-                        "gates", {}
-                    ).get("new_reasonable_path_candidate"),
-                    "new_path_candidate_confidence": artifact.get(
-                        "metrics", {}
-                    ).get("new_path_candidate_confidence"),
-                    "new_path_candidate_screen_pass": artifact.get(
-                        "gates", {}
-                    ).get("new_path_candidate_screen_pass"),
-                    "new_path_candidate_review_blockers": artifact.get(
-                        "gates", {}
-                    ).get("new_path_candidate_review_blockers"),
-                    "human_review_required": artifact.get("gates", {}).get(
-                        "human_review_required"
+                    "decisive_evidence_ids": artifact.get("metrics", {}).get(
+                        "decisive_evidence_ids"
                     ),
+                    "fatal_errors": artifact.get("metrics", {}).get(
+                        "fatal_errors"
+                    ),
+                    "warnings": artifact.get("metrics", {}).get("warnings"),
                     "from_cache": from_cache,
                 }
             )
@@ -241,22 +246,15 @@ async def _run(args: argparse.Namespace) -> Dict[str, Any]:
         await backend.aclose()
 
     accepted = [row for row in rows if row["sft_eligibility_pass"] is True]
-    candidates = [
-        row for row in rows if row["new_reasonable_path_candidate"] is True
-    ]
-    review_queue = [row for row in rows if row["human_review_required"] is True]
     _write_jsonl(output_dir / "accepted_episodes.jsonl", accepted)
-    _write_jsonl(output_dir / "new_path_review_queue.jsonl", review_queue)
     summary = {
-        "schema_version": "ifv-sft-eligibility-summary-v1",
+        "schema_version": "ifv-sft-eligibility-summary-v2",
         "run_dir": str(run_dir),
         "private_gold": {"path": str(gold_path), "sha256": sha256_file(gold_path)},
         "provider": args.provider,
         "model": args.model,
         "episode_count": len(rows),
         "passed_count": len(accepted),
-        "new_path_candidate_count": len(candidates),
-        "human_review_count": len(review_queue),
         "rows": rows,
     }
     _write_json(output_dir / "sft_eligibility_summary.json", summary)

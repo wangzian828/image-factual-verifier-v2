@@ -224,15 +224,15 @@ these gates and rejects a trace even if upstream score metadata is wrong. RL kee
 separate, auditable rule: an engineering-valid but incorrect complete episode remains
 in its same-prompt group with reward zero, rather than being silently removed.
 
-The SFT judge may match either the primary private-gold decision path or one of up to
-three pre-registered `acceptable_decision_paths`. An unregistered but plausible path
-never passes SFT eligibility. It first becomes a judge proposal, then enters human
-review only if deterministic screening confirms that the image was available to the
-judge, the verdict is correct, cited Claim and Evidence IDs exist, a direct
-same-relation Evidence span supports the proposed path, relation and value alignment
-hold, the inference boundary is respected, confidence is at least `0.7`, and the
-strict trace and engineering gates pass. Other failures remain machine-rejected
-rather than entering the review queue.
+The v2 SFT judge projects the final data-pipeline row into one generic image-level
+fact target. It receives all successful Evidence rows, not only the final basis,
+and may accept a semantically equivalent sub-fact when it decisively establishes
+the same image-level verdict. Claim IDs remain optional lineage references; exact
+Claim wording, relation slots, URLs, original-image recovery, and registered
+decision paths are not SFT gates. Fatal engineering, protocol, source-policy, and
+invalid-reference failures remain hard rejections. Non-fatal audit findings are
+warnings used for diagnostics and teacher tie-breaking, and no human-review queue
+is produced.
 
 After all episodes finish, deterministic post-rollout code joins private gold and
 emits one scalar per episode for standard GRPO; it does not implement a custom

@@ -11,15 +11,16 @@ from src.trajectory.sft_eligibility import (
     SFTEligibilityJudgment,
     build_sft_eligibility_artifact,
     build_sft_eligibility_input,
+    build_sft_target,
     sft_eligibility_metrics,
     sft_eligibility_passes,
 )
 
 
-def _trace() -> dict[str, Any]:
+def _trace(*, verdict: str = "fake") -> dict[str, Any]:
     return {
         "image_id": "case-1--teacher-r000",
-        "verdict": "fake",
+        "verdict": verdict,
         "termination": "success",
         "verdict_basis": {
             "claim_ids": ["claim-1"],
@@ -43,11 +44,22 @@ def _trace() -> dict[str, Any]:
                         "anchor_fact_ids": ["anchor-1"],
                     }
                 ],
+                "findings": [
+                    {
+                        "finding_id": "finding-1",
+                        "task_id": "task-1",
+                        "fact_ids": ["fact-1"],
+                        "evidence_ids": ["evidence-1"],
+                        "stance": "refute",
+                        "summary": "The official result names B.",
+                    }
+                ],
                 "material_discrepancies": [
                     {
                         "discrepancy_id": "discrepancy-1",
                         "statement": "The official winner was B, not A.",
                         "affected_claim_ids": ["claim-1"],
+                        "evidence_ids": ["evidence-1"],
                     }
                 ],
                 "evidence": [
@@ -58,10 +70,23 @@ def _trace() -> dict[str, Any]:
                         "exact_text": "B won the 2026 final.",
                         "directness": "direct",
                         "claim_binding": "source_assertion",
-                        "relation_scope": "same_relation",
+                        "relation_scope": "different_scope",
                         "relation_stance": "contradicts",
                         "stance": "refute",
-                    }
+                        "claim_ids": [],
+                        "successful_call": True,
+                    },
+                    {
+                        "evidence_id": "evidence-2",
+                        "source_url": "https://example.org/context",
+                        "exact_text": "The final took place in Berlin.",
+                        "directness": "direct",
+                        "claim_binding": "source_assertion",
+                        "relation_scope": "location",
+                        "relation_stance": "background",
+                        "stance": "neutral",
+                        "successful_call": True,
+                    },
                 ],
             },
         },
@@ -70,161 +95,59 @@ def _trace() -> dict[str, Any]:
 
 def _gold() -> dict[str, Any]:
     return {
-        "schema_version": "ifv-scoring-gold-v1",
-        "case_id": "case-1",
-        "label": "refuted",
+        "schema_version": "ifv-route-aware-human-review-candidate-v1",
+        "candidate_id": "case-1",
+        "factual_status": "refuted",
         "target_claim": "The image claims A won the 2026 final.",
-        "decisive_fact": {
-            "statement": "A won the 2026 final.",
-            "visual_anchors": ["winner A"],
-        },
         "claim_atom": {
             "subject": "2026 final",
-            "event": "2026 final",
-            "slot": "winner",
+            "event_or_context": "2026 final",
+            "relation_slot": "winner",
             "depicted_value": "A",
         },
-        "key_error": {
-            "slot": "winner",
-            "depicted_value": "A",
-            "verified_value": "B",
-            "summary": "The displayed winner is wrong.",
-        },
-        "evidence_target": {
+        "decisive_visual_atom": "The scoreboard displays A as the winner.",
+        "visible_scene_facts": ["A is displayed as the winner."],
+        "evidence": {
             "binding": {
-                "subject": "2026 final",
-                "event": "2026 final",
-                "slot": "winner",
-                "depicted_value": "A",
-                "match": "same_relation",
+                "target_claim": "A won the 2026 final.",
+                "source_evidence_span": "B won the 2026 final.",
+                "source_url": "https://example.org/final",
+                "match": "same_event",
             },
-            "required_directness": "direct",
-            "required_stance": "contradicts",
-            "statement": "B",
-        },
-        "boundary": {
-            "directly_decides": "A won the 2026 final.",
-            "does_not_prove": ["A has never won another event."],
+            "used_exact_spans": [
+                {"exact_span": "B won the 2026 final.", "role": "event_fact"}
+            ],
         },
     }
-
-
-def _optional_path() -> dict[str, Any]:
-    return {
-        "path_id": "scene_location_mismatch",
-        "target_claim": "The image claims the 2026 final happened in Paris.",
-        "decisive_fact": {
-            "statement": "The depicted venue is Paris.",
-            "visual_anchors": ["Paris venue signage"],
-        },
-        "claim_atom": {
-            "subject": "2026 final",
-            "event": "2026 final",
-            "slot": "location",
-            "depicted_value": "Paris",
-        },
-        "key_error": {
-            "type": "CD1",
-            "slot": "location",
-            "depicted_value": "Paris",
-            "verified_value": "Berlin",
-            "summary": "The depicted venue is wrong.",
-        },
-        "evidence_target": {
-            "binding": {
-                "subject": "2026 final",
-                "event": "2026 final",
-                "slot": "location",
-                "depicted_value": "Paris",
-                "match": "same_relation",
-            },
-            "required_directness": "direct",
-            "required_stance": "contradicts",
-            "statement": "Berlin",
-        },
-        "boundary": {
-            "directly_decides": "The official venue directly contradicts Paris.",
-            "does_not_prove": ["It does not prove the winner."],
-        },
-        "certifying_evidence": [
-            {
-                "evidence_id": "gold-evidence-2",
-                "source_id": "source-2",
-                "url": "https://example.org/location",
-                "snapshot_sha256": "c" * 64,
-                "exact_span": "The 2026 final was held in Berlin.",
-                "stance": "contradicts",
-                "directness": "direct",
-                "binding": {
-                    "subject": "2026 final",
-                    "event": "2026 final",
-                    "slot": "location",
-                    "depicted_value": "Paris",
-                    "match": "same_relation",
-                },
-            }
-        ],
-        "review_origin": "human_added",
-    }
-
-
-def _location_trace() -> dict[str, Any]:
-    trace = _trace()
-    trace["verdict_basis"].update(
-        {
-            "verdict_target": (
-                "The image depicts the final in Paris, but the official venue was Berlin."
-            ),
-        }
-    )
-    investigation = trace["state"]["investigation_state"]
-    investigation["image_claims"][0]["statement"] = (
-        "The 2026 final happened in Paris."
-    )
-    investigation["material_discrepancies"][0]["statement"] = (
-        "The official venue was Berlin, not Paris."
-    )
-    investigation["evidence"][0].update(
-        {
-            "source_url": "https://example.org/location",
-            "exact_text": "The 2026 final was held in Berlin.",
-        }
-    )
-    return trace
 
 
 def _judgment(**updates: Any) -> SFTEligibilityJudgment:
     payload: Dict[str, Any] = {
-        "selected_claim_ids": ["claim-1"],
-        "claim_relation_match": "same_relation",
-        "subject_event_slot_aligned": True,
-        "depicted_value_alignment": "equivalent",
-        "key_error_slot_alignment": "equivalent",
-        "verified_value_alignment": "equivalent",
-        "spurious_error": False,
-        "evidence_reviews": [
-            {
-                "evidence_id": "evidence-1",
-                "relation_match": "same_relation",
-                "directness": "direct",
-                "stance": "contradicts",
-                "target_value_stated": True,
-                "explanation": "The exact span names B as winner.",
-            }
-        ],
-        "boundary_respected": True,
-        "boundary_violations": [],
-        "explanation": "The candidate identifies the intended winner substitution.",
+        "fact_alignment": "same_image_fact",
+        "decision_support": "supports_fake",
+        "decisive_evidence_ids": ["evidence-1"],
+        "supporting_evidence_ids": [],
+        "overclaiming": "none",
+        "boundary_assessment": "respected",
+        "confidence": 0.72,
+        "explanation": "The evidence directly establishes the incorrect winner.",
     }
     payload.update(updates)
     return SFTEligibilityJudgment.model_validate(payload)
+
+
+def _packet() -> dict[str, Any]:
+    packet = build_sft_eligibility_input(_trace(), _gold())
+    packet["image"]["available_to_judge"] = True
+    return packet
 
 
 class _MockBackend:
     provider = "mock"
     model_name = "frozen-mock"
 
-    def __init__(self) -> None:
+    def __init__(self, judgment: SFTEligibilityJudgment | None = None) -> None:
+        self.judgment = judgment or _judgment()
         self.messages: List[List[Dict[str, Any]]] = []
 
     async def get_response(
@@ -232,288 +155,178 @@ class _MockBackend:
     ) -> LLMResponse:
         self.messages.append(messages)
         return LLMResponse(
-            text=_judgment().model_dump_json(),
+            text=self.judgment.model_dump_json(),
             prompt_tokens=120,
             completion_tokens=40,
         )
 
 
-def test_structured_gate_requires_same_relation_value_and_direct_evidence() -> None:
-    packet = build_sft_eligibility_input(_trace(), _gold())
-    assert packet["private_target"]["decision_paths"][0]["path_id"] == "primary"
-    metrics = sft_eligibility_metrics(packet, _judgment())
-    assert metrics["path_match_status"] == "matched_registered_path"
-    assert metrics["matched_path_id"] == "primary"
-    assert metrics["verdict_correct"] is True
-    assert metrics["claim_relation_aligned"] is True
-    assert metrics["error_slot_and_value_aligned"] is True
-    assert metrics["eligible_evidence_ids"] == ["evidence-1"]
-    assert sft_eligibility_passes(
-        metrics,
-        strict_trace_audit_pass=True,
-        engineering_valid=True,
-    )
+def test_target_adapter_uses_one_generic_image_fact_shape() -> None:
+    target = build_sft_target(_gold())
+
+    assert target["schema_version"] == "ifv-sft-target-v2"
+    assert target["expected_verdict"] == "fake"
+    assert target["image_fact"]["statement"].startswith("The image claims")
+    assert target["image_fact"]["visible_anchors"]
+    assert target["reference_facts"][0]["evidence_text"]
 
 
-def test_registered_optional_decision_path_can_pass_sft_gate() -> None:
-    gold = _gold()
-    gold["acceptable_decision_paths"] = [_optional_path()]
-    packet = build_sft_eligibility_input(_location_trace(), gold)
-    judgment = _judgment(
-        matched_path_id="scene_location_mismatch",
-        explanation="The candidate follows the registered venue path.",
-    )
-
-    metrics = sft_eligibility_metrics(packet, judgment)
-
-    assert metrics["matched_path_id"] == "scene_location_mismatch"
-    assert metrics["claim_relation_aligned"] is True
-    assert sft_eligibility_passes(
-        metrics,
-        strict_trace_audit_pass=True,
-        engineering_valid=True,
-    )
-
-
-def test_plausible_unregistered_path_requires_human_review_without_pass() -> None:
-    packet = build_sft_eligibility_input(_location_trace(), _gold())
-    packet["image"]["available_to_judge"] = True
-    judgment = _judgment(
-        path_match_status="plausible_new_path_candidate",
-        matched_path_id="",
-        new_path_candidate={
-            "proposed_path_type": "location",
-            "visible_image_anchor": "Paris venue signage",
-            "teacher_evidence_anchor": "The exact span says Berlin.",
-            "why_not_existing_path": "Registered path covers winner, not venue.",
-            "confidence": 0.85,
-            "needs_human_review": True,
+def test_target_adapter_accepts_web_chain_without_claim_atom() -> None:
+    row = {
+        "candidate_id": "web-1",
+        "factual_status": "refuted",
+        "target_claim": "The image shows a real event.",
+        "event_identity": "the claimed event",
+        "relation_identity": "the image depicts the event",
+        "evidence": {
+            "binding": {
+                "chain": [
+                    {
+                        "binding": {
+                            "target_claim": "The image shows a real event.",
+                            "source_url": "https://example.org/check",
+                        },
+                        "exact_span": "The image was digitally altered.",
+                        "role": "contradiction",
+                    }
+                ]
+            }
         },
-    )
-
-    metrics = sft_eligibility_metrics(packet, judgment)
-
-    assert metrics["new_reasonable_path_candidate"] is True
-    assert metrics["new_path_candidate_screen_pass"] is True
-    assert metrics["new_path_candidate_filter_reasons"] == []
-    assert metrics["claim_relation_aligned"] is False
-    assert not sft_eligibility_passes(
-        metrics,
-        strict_trace_audit_pass=True,
-        engineering_valid=True,
-    )
-    artifact = build_sft_eligibility_artifact(
-        trace=_location_trace(),
-        trace_sha256="b" * 64,
-        packet=packet,
-        judgment=judgment,
-        judge_audit={},
-        strict_trace_audit_pass=True,
-    )
-    assert artifact["gates"]["human_review_required"] is True
-    assert artifact["gates"]["sft_eligibility_pass"] is False
-
-
-def test_low_confidence_new_path_candidate_is_not_sent_to_human_review() -> None:
-    packet = build_sft_eligibility_input(_location_trace(), _gold())
-    packet["image"]["available_to_judge"] = True
-    judgment = _judgment(
-        path_match_status="plausible_new_path_candidate",
-        matched_path_id="",
-        new_path_candidate={
-            "proposed_path_type": "location",
-            "visible_image_anchor": "Paris venue signage",
-            "teacher_evidence_anchor": "The exact span says Berlin.",
-            "why_not_existing_path": "Registered path covers winner, not venue.",
-            "confidence": 0.6,
-            "needs_human_review": True,
-        },
-    )
-
-    artifact = build_sft_eligibility_artifact(
-        trace=_location_trace(),
-        trace_sha256="b" * 64,
-        packet=packet,
-        judgment=judgment,
-        judge_audit={},
-        strict_trace_audit_pass=True,
-    )
-
-    assert artifact["metrics"]["new_reasonable_path_candidate"] is True
-    assert artifact["metrics"]["new_path_candidate_screen_pass"] is False
-    assert (
-        "confidence_below_threshold"
-        in artifact["metrics"]["new_path_candidate_filter_reasons"]
-    )
-    assert artifact["gates"]["human_review_required"] is False
-
-
-def test_new_path_candidate_requires_image_and_valid_direct_evidence() -> None:
-    trace = _location_trace()
-    trace["state"]["investigation_state"]["evidence"][0][
-        "relation_scope"
-    ] = "different_instance"
-    packet = build_sft_eligibility_input(trace, _gold())
-    judgment = _judgment(
-        path_match_status="plausible_new_path_candidate",
-        matched_path_id="",
-        new_path_candidate={
-            "proposed_path_type": "location",
-            "visible_image_anchor": "Paris venue signage",
-            "teacher_evidence_anchor": "The exact span says Berlin.",
-            "why_not_existing_path": "Registered path covers winner, not venue.",
-            "confidence": 0.9,
-            "needs_human_review": True,
-        },
-    )
-
-    metrics = sft_eligibility_metrics(packet, judgment)
-
-    assert metrics["new_path_candidate_screen_pass"] is False
-    assert set(metrics["new_path_candidate_filter_reasons"]) == {
-        "image_unavailable_to_judge",
-        "no_direct_same_relation_evidence",
     }
 
+    target = build_sft_target(row)
 
-def test_duplicate_optional_decision_path_ids_fail_closed() -> None:
-    gold = _gold()
-    gold["acceptable_decision_paths"] = [_optional_path(), _optional_path()]
-
-    try:
-        build_sft_eligibility_input(_trace(), gold)
-    except ValueError as exc:
-        assert "path_id must be unique" in str(exc)
-    else:
-        raise AssertionError("duplicate optional decision paths must be rejected")
-
-
-def test_unknown_registered_path_id_fails_closed() -> None:
-    packet = build_sft_eligibility_input(_trace(), _gold())
-    metrics = sft_eligibility_metrics(
-        packet,
-        _judgment(matched_path_id="not_registered"),
+    assert target["expected_verdict"] == "fake"
+    assert target["image_fact"]["relation"] == (
+        "the image depicts the event"
     )
-
-    assert metrics["invalid_judge_path_id"] == "not_registered"
-    assert not sft_eligibility_passes(
-        metrics,
-        strict_trace_audit_pass=True,
-        engineering_valid=True,
+    assert target["reference_facts"][0]["role"] == "contradiction"
+    assert target["reference_facts"][0]["evidence_text"] == (
+        "The image was digitally altered."
     )
 
 
-def test_inconsistent_registered_path_output_fails_closed() -> None:
-    packet = build_sft_eligibility_input(_trace(), _gold())
-    metrics = sft_eligibility_metrics(
-        packet,
-        _judgment(
-            new_path_candidate={
-                "proposed_path_type": "location",
-                "visible_image_anchor": "Paris venue signage",
-                "teacher_evidence_anchor": "The exact span says Berlin.",
-                "why_not_existing_path": "It is unrelated to the primary path.",
-                "confidence": 0.9,
-                "needs_human_review": True,
-            }
-        ),
-    )
+def test_packet_exposes_all_valid_evidence_and_basis_is_only_a_flag() -> None:
+    packet = _packet()
+    evidence = {
+        row["evidence_id"]: row for row in packet["candidate"]["evidence"]
+    }
 
-    assert metrics["judge_path_output_consistent"] is False
-    assert not sft_eligibility_passes(
-        metrics,
-        strict_trace_audit_pass=True,
-        engineering_valid=True,
-    )
+    assert set(evidence) == {"evidence-1", "evidence-2"}
+    assert evidence["evidence-1"]["basis_selected"] is True
+    assert evidence["evidence-2"]["basis_selected"] is False
+    assert packet["candidate"]["claims"][0]["claim_id"] == "claim-1"
 
 
-def test_new_path_status_without_payload_is_screened_out() -> None:
-    packet = build_sft_eligibility_input(_location_trace(), _gold())
-    packet["image"]["available_to_judge"] = True
-    metrics = sft_eligibility_metrics(
-        packet,
-        _judgment(
-            path_match_status="plausible_new_path_candidate",
-            matched_path_id="",
-            new_path_candidate=None,
-        ),
-    )
-
-    assert metrics["new_reasonable_path_candidate"] is True
-    assert metrics["new_path_candidate_screen_pass"] is False
-    assert "candidate_payload_missing" in metrics[
-        "new_path_candidate_filter_reasons"
-    ]
-
-
-def test_model_review_cannot_override_runtime_evidence_metadata() -> None:
-    trace = _trace()
-    trace["state"]["investigation_state"]["evidence"][0][
-        "relation_scope"
-    ] = "different_instance"
-    packet = build_sft_eligibility_input(trace, _gold())
-    metrics = sft_eligibility_metrics(packet, _judgment())
-    assert metrics["direct_same_relation_evidence_present"] is False
-    assert not sft_eligibility_passes(
-        metrics,
-        strict_trace_audit_pass=True,
-        engineering_valid=True,
-    )
-
-
-def test_supported_target_accepts_equivalent_verified_value() -> None:
-    trace = _trace()
-    trace["verdict"] = "real"
-    trace["verdict_basis"]["discrepancy_ids"] = []
-    trace["state"]["investigation_state"]["evidence"][0].update(
-        {
-            "exact_text": "A won the 2026 final.",
-            "relation_stance": "supports",
-            "stance": "support",
-        }
-    )
-    gold = _gold()
-    gold["label"] = "supported"
-    gold["key_error"] = None
-    gold["evidence_target"]["required_stance"] = "supports"
+def test_compatible_subfact_can_pass_without_claim_relation_matching() -> None:
+    packet = _packet()
     judgment = _judgment(
-        key_error_slot_alignment="not_applicable",
-        verified_value_alignment="equivalent",
-        evidence_reviews=[
+        fact_alignment="compatible_subfact",
+        decision_support="supports_fake",
+        decisive_evidence_ids=["evidence-1"],
+    )
+    metrics = sft_eligibility_metrics(packet, judgment)
+
+    assert metrics["verdict_correct"] is True
+    assert metrics["fatal_errors"] == []
+    assert sft_eligibility_passes(
+        metrics,
+        strict_trace_audit_pass=False,
+        engineering_valid=True,
+    )
+
+
+def test_nonfatal_audit_warning_does_not_veto_sft() -> None:
+    packet = _packet()
+    artifact = build_sft_eligibility_artifact(
+        trace=_trace(),
+        trace_sha256="b" * 64,
+        packet=packet,
+        judgment=_judgment(),
+        judge_audit={},
+        strict_trace_audit_pass=False,
+        strict_trace_audit_failures=[
             {
-                "evidence_id": "evidence-1",
-                "relation_match": "same_relation",
-                "directness": "direct",
-                "stance": "supports",
-                "target_value_stated": True,
-                "explanation": "The exact span states A as the winner.",
+                "code": "BASIS_OMITS_VALID_EVIDENCE",
+                "category": "hard",
+                "message": "A valid Evidence row was not selected in basis.",
             }
         ],
     )
 
-    metrics = sft_eligibility_metrics(
-        build_sft_eligibility_input(trace, gold),
-        judgment,
+    assert artifact["gates"]["sft_eligibility_pass"] is True
+    assert artifact["gates"]["fatal_audit_errors"] == []
+    assert artifact["gates"]["audit_warnings"]
+
+
+def test_protocol_audit_error_still_blocks_sft() -> None:
+    packet = _packet()
+    artifact = build_sft_eligibility_artifact(
+        trace=_trace(),
+        trace_sha256="b" * 64,
+        packet=packet,
+        judgment=_judgment(),
+        judge_audit={},
+        strict_trace_audit_pass=False,
+        strict_trace_audit_failures=[
+            {
+                "code": "PROTOCOL_ERROR",
+                "category": "protocol",
+                "message": "Unrecoverable protocol boundary.",
+            }
+        ],
     )
 
-    assert metrics["error_slot_and_value_aligned"] is True
-    assert sft_eligibility_passes(
+    assert artifact["gates"]["sft_eligibility_pass"] is False
+    assert artifact["gates"]["fatal_audit_errors"]
+
+
+def test_invalid_selected_evidence_id_blocks_sft() -> None:
+    packet = _packet()
+    metrics = sft_eligibility_metrics(
+        packet,
+        _judgment(decisive_evidence_ids=["missing-evidence"]),
+    )
+
+    assert metrics["invalid_judge_evidence_ids"] == ["missing-evidence"]
+    assert not sft_eligibility_passes(
         metrics,
         strict_trace_audit_pass=True,
         engineering_valid=True,
     )
 
 
-def test_private_structured_judge_is_one_post_rollout_call() -> None:
+def test_no_decisive_evidence_blocks_sft() -> None:
+    packet = _packet()
+    metrics = sft_eligibility_metrics(
+        packet,
+        _judgment(
+            decision_support="supporting_only",
+            decisive_evidence_ids=[],
+            supporting_evidence_ids=["evidence-2"],
+        ),
+    )
+
+    assert "no_decisive_evidence" in metrics["fatal_errors"]
+    assert not sft_eligibility_passes(
+        metrics,
+        strict_trace_audit_pass=True,
+        engineering_valid=True,
+    )
+
+
+def test_judge_is_one_post_rollout_call_and_does_not_request_human_review() -> None:
     async def run() -> None:
-        packet = build_sft_eligibility_input(_trace(), _gold())
+        packet = _packet()
         backend = _MockBackend()
         judgment, audit = await SFTEligibilityJudge(backend).judge(packet)
-        assert judgment.claim_relation_match == "same_relation"
+
+        assert judgment.fact_alignment == "same_image_fact"
         assert len(backend.messages) == 1
         request = json.dumps(backend.messages[0], ensure_ascii=False)
-        assert "certifying_evidence" not in request
-        assert "snapshot_path" not in request
+        assert "decision_paths" not in request
+        assert "human_review" not in request
+
         artifact = build_sft_eligibility_artifact(
             trace=_trace(),
             trace_sha256="b" * 64,
@@ -523,12 +336,16 @@ def test_private_structured_judge_is_one_post_rollout_call() -> None:
             strict_trace_audit_pass=True,
         )
         assert artifact["gates"]["sft_eligibility_pass"] is True
+        assert "human_review_required" not in artifact["gates"]
         assert len(artifact["judge"]["calls"]) == 1
 
     asyncio.run(run())
 
 
-def test_private_judge_stance_is_relative_to_candidate_claim() -> None:
+def test_prompt_is_image_fact_based_not_claim_path_based() -> None:
     prompt = " ".join(SFT_ELIGIBILITY_SYSTEM_PROMPT.split())
-    assert "Every Evidence stance is relative to the candidate Claim" in prompt
-    assert "verified alternative contradicts a candidate" in prompt
+    prompt_lower = prompt.lower()
+
+    assert "factual content expressed by the supplied image" in prompt
+    assert "Do not require the teacher to reproduce the target wording" in prompt
+    assert "do not create human-review work" in prompt_lower
