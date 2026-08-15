@@ -125,6 +125,7 @@ def _judgment(**updates: Any) -> SFTEligibilityJudgment:
     payload: Dict[str, Any] = {
         "fact_alignment": "same_image_fact",
         "decision_support": "supports_fake",
+        "retrieval_quality": "effective",
         "decisive_evidence_ids": ["evidence-1"],
         "supporting_evidence_ids": [],
         "overclaiming": "none",
@@ -169,6 +170,75 @@ def test_target_adapter_uses_one_generic_image_fact_shape() -> None:
     assert target["image_fact"]["statement"].startswith("The image claims")
     assert target["image_fact"]["visible_anchors"]
     assert target["reference_facts"][0]["evidence_text"]
+
+
+def test_packet_includes_compact_retrieval_history() -> None:
+    trace = _trace()
+    trace["state"]["all_steps"] = [
+        {
+            "action_type": "tool_call",
+            "tool_name": "text_search",
+            "tool_args": {
+                "queries": "official 2026 final result",
+                "goal": "Find the official final result.",
+            },
+            "tool_result": json.dumps(
+                {
+                    "status": "success",
+                    "queries": [
+                        {
+                            "results": [
+                                {"url": "https://example.org/final"},
+                                {"url": "https://example.org/news"},
+                            ]
+                        }
+                    ],
+                }
+            ),
+        },
+        {
+            "action_type": "tool_call",
+            "tool_name": "visit",
+            "tool_args": {
+                "url": ["https://example.org/final"],
+                "goal": "Read the official result.",
+            },
+            "tool_result": json.dumps(
+                {
+                    "status": "success",
+                    "url": "https://example.org/final",
+                    "evidence": "B won the 2026 final.",
+                }
+            ),
+        },
+        {
+            "action_type": "format_error",
+            "tool_name": "text_search",
+            "tool_args": {"queries": []},
+        },
+    ]
+
+    packet = build_sft_eligibility_input(trace, _gold())
+
+    assert packet["schema_version"] == "ifv-sft-eligibility-input-v5"
+    assert packet["candidate"]["retrieval_history"] == [
+        {
+            "tool": "text_search",
+            "goal": "Find the official final result.",
+            "queries": ["official 2026 final result"],
+            "status": "success",
+            "result_count": 2,
+            "search_error": "",
+        },
+        {
+            "tool": "visit",
+            "goal": "Read the official result.",
+            "source_urls": ["https://example.org/final"],
+            "status": "success",
+            "page_text_extracted": True,
+            "fetch_error": "",
+        },
+    ]
 
 
 def test_target_adapter_accepts_web_chain_without_claim_atom() -> None:
@@ -338,6 +408,20 @@ def test_no_decisive_evidence_blocks_sft() -> None:
     )
 
 
+def test_poor_retrieval_quality_blocks_sft() -> None:
+    metrics = sft_eligibility_metrics(
+        _packet(),
+        _judgment(retrieval_quality="poor"),
+    )
+
+    assert "poor_retrieval_quality" in metrics["fatal_errors"]
+    assert not sft_eligibility_passes(
+        metrics,
+        strict_trace_audit_pass=True,
+        engineering_valid=True,
+    )
+
+
 def test_judge_is_one_post_rollout_call_and_does_not_request_human_review() -> None:
     async def run() -> None:
         packet = _packet()
@@ -371,4 +455,7 @@ def test_prompt_is_image_fact_based_not_claim_path_based() -> None:
 
     assert "factual content expressed by the supplied image" in prompt
     assert "Do not require the teacher to reproduce the target wording" in prompt
+    assert "Retrieval history describes what the teacher actually investigated" in prompt
+    assert "generic web search failure" in prompt
+    assert "Assess retrieval_quality" in prompt
     assert "do not create human-review work" in prompt_lower

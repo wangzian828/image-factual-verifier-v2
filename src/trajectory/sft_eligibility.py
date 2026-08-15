@@ -8,6 +8,7 @@ cite decisive, image-relevant Evidence?
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Literal, Mapping, Sequence
@@ -26,10 +27,10 @@ from src.trajectory.semantic_reward import (
 
 
 SFT_ELIGIBILITY_SCHEMA_VERSION = "ifv-sft-eligibility-v2"
-SFT_ELIGIBILITY_INPUT_VERSION = "ifv-sft-eligibility-input-v3"
-SFT_ELIGIBILITY_PROMPT_VERSION = "ifv-sft-private-image-fact-gate-v1"
-SFT_ELIGIBILITY_GENERATION_VERSION = "minimal-thinking-4096-v3"
-SFT_ELIGIBILITY_POSTPROCESS_VERSION = "image-fact-safety-gate-v2"
+SFT_ELIGIBILITY_INPUT_VERSION = "ifv-sft-eligibility-input-v5"
+SFT_ELIGIBILITY_PROMPT_VERSION = "ifv-sft-private-image-fact-gate-v3"
+SFT_ELIGIBILITY_GENERATION_VERSION = "minimal-thinking-4096-v5"
+SFT_ELIGIBILITY_POSTPROCESS_VERSION = "image-fact-safety-gate-v4"
 
 
 SFT_ELIGIBILITY_SYSTEM_PROMPT = (
@@ -43,11 +44,19 @@ SFT_ELIGIBILITY_SYSTEM_PROMPT = (
     "decision path. Accept a different but clearly image-grounded sub-fact when it "
     "decisively establishes the same image-level verdict. Evidence may be a "
     "successful visual observation, OCR/crop result, source passage, same-image "
-    "context, or a multi-item chain. Do not treat search failure, topical "
-    "relatedness, or absence of a found original as decisive evidence. Select only "
-    "supplied Evidence IDs. Mark major overclaiming when the cited material does "
-    "not establish the conclusion. Do not search and do not create human-review "
-    "work."
+    "context, or a multi-item chain. Retrieval history describes what the teacher "
+    "actually investigated, but is not itself factual Evidence and has no Evidence "
+    "IDs. A lack of matching results may only supplement an image-grounded chain "
+    "when the history targets a named, plausibly authoritative source or bounded "
+    "collection; generic web search failure, topical relatedness, or absence of a "
+    "found original never decides the verdict. Select only supplied Evidence IDs. "
+    "Assess retrieval_quality as effective when the trajectory's retrieval is "
+    "targeted and converted into relevant inspection or Evidence; mixed when its "
+    "central route is useful despite some noise or corrected turns; poor when its "
+    "central route is generic, repeatedly low-yield, premise-led, ignores useful "
+    "candidates, or treats non-results as a conclusion. Mark major overclaiming "
+    "when the cited material does not establish the conclusion. Do not search and "
+    "do not create human-review work."
 )
 
 
@@ -65,6 +74,7 @@ class SFTEligibilityJudgment(_StrictModel):
         "insufficient",
         "unclear",
     ]
+    retrieval_quality: Literal["effective", "mixed", "poor"]
     decisive_evidence_ids: List[str] = Field(
         default_factory=list,
         max_length=40,
@@ -343,6 +353,93 @@ def _project_candidate_evidence(
     }
 
 
+def _tool_result_mapping(step: Mapping[str, Any]) -> Mapping[str, Any]:
+    raw = step.get("tool_result")
+    if isinstance(raw, Mapping):
+        return raw
+    if not isinstance(raw, str) or not raw.strip():
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return _mapping(parsed)
+
+
+def _string_list(value: Any, *, limit: int) -> List[str]:
+    values = value if isinstance(value, list) else [value]
+    return _unique(
+        [
+            str(item).strip()
+            for item in values
+            if isinstance(item, str) and item.strip()
+        ],
+        limit=limit,
+    )
+
+
+def _retrieval_history(state: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    """Compress actual text retrieval into judge-visible process context."""
+
+    history: List[Dict[str, Any]] = []
+    for step in _rows(state.get("all_steps")):
+        if str(step.get("action_type", "")).strip() != "tool_call":
+            continue
+        tool_name = str(step.get("tool_name", "")).strip()
+        if tool_name not in {"text_search", "visit"}:
+            continue
+        tool_args = _mapping(step.get("tool_args"))
+        result = _tool_result_mapping(step)
+        status = str(result.get("status", "")).strip().lower()
+        if tool_name == "text_search":
+            query_rows = _rows(result.get("queries"))
+            history.append(
+                {
+                    "tool": tool_name,
+                    "goal": _text(tool_args.get("goal"), limit=800),
+                    "queries": _string_list(
+                        tool_args.get("queries", tool_args.get("query", [])),
+                        limit=3,
+                    ),
+                    "status": status or "unknown",
+                    "result_count": sum(
+                        len(_rows(row.get("results")))
+                        for row in query_rows
+                    ),
+                    "search_error": _text(result.get("search_error"), result.get("error"), limit=500),
+                }
+            )
+        else:
+            source_urls = _string_list(tool_args.get("url", []), limit=3)
+            source_urls = _unique(
+                [*source_urls, *_string_list(result.get("url", ""), limit=1)],
+                limit=3,
+            )
+            history.append(
+                {
+                    "tool": tool_name,
+                    "goal": _text(
+                        tool_args.get("retrieval_goal"),
+                        tool_args.get("goal"),
+                        limit=800,
+                    ),
+                    "source_urls": source_urls,
+                    "status": status or "unknown",
+                    "page_text_extracted": bool(
+                        _text(
+                            result.get("evidence"),
+                            result.get("exact_text"),
+                            result.get("content"),
+                        )
+                    ),
+                    "fetch_error": _text(result.get("error"), limit=500),
+                }
+            )
+        if len(history) >= 24:
+            break
+    return history
+
+
 def build_sft_eligibility_input(
     trace: Mapping[str, Any],
     gold: Mapping[str, Any],
@@ -447,6 +544,7 @@ def build_sft_eligibility_input(
             "findings": findings,
             "evidence": evidence,
             "discrepancies": discrepancies,
+            "retrieval_history": _retrieval_history(state),
             "basis_claim_ids": basis_claim_ids,
             "basis_discrepancy_ids": basis_discrepancy_ids,
             "verdict_target": _text(basis.get("verdict_target"), limit=4000),
@@ -521,6 +619,7 @@ def sft_eligibility_metrics(
         judgment_values: Dict[str, Any] = {
             "fact_alignment": "unclear",
             "decision_support": "unclear",
+            "retrieval_quality": "poor",
             "decisive_evidence_ids": [],
             "supporting_evidence_ids": [],
             "overclaiming": "major",
@@ -563,6 +662,7 @@ def sft_eligibility_metrics(
     ]
     fact_alignment = str(judgment_values.get("fact_alignment", "unclear"))
     decision_support = str(judgment_values.get("decision_support", "unclear"))
+    retrieval_quality = str(judgment_values.get("retrieval_quality", "poor"))
     fatal_errors = [
         *(
             ["image_unavailable_to_judge"]
@@ -590,6 +690,11 @@ def sft_eligibility_metrics(
             else []
         ),
         *(
+            ["poor_retrieval_quality"]
+            if retrieval_quality == "poor"
+            else []
+        ),
+        *(
             ["no_decisive_evidence"]
             if not valid_decisive_ids
             else []
@@ -600,6 +705,8 @@ def sft_eligibility_metrics(
         warnings.append("fact_alignment_unclear")
     if decision_support in {"supporting_only", "insufficient", "unclear"}:
         warnings.append("decision_support_not_decisive")
+    if retrieval_quality == "mixed":
+        warnings.append("mixed_retrieval_quality")
     if judgment_values.get("overclaiming") == "minor":
         warnings.append("minor_overclaiming")
     if judgment_values.get("boundary_assessment") != "respected":
@@ -625,6 +732,7 @@ def sft_eligibility_metrics(
         "image_available": image_available,
         "fact_alignment": fact_alignment,
         "decision_support": decision_support,
+        "retrieval_quality": retrieval_quality,
         "decisive_evidence_ids": valid_decisive_ids,
         "selected_evidence_ids": selected_ids,
         "invalid_judge_evidence_ids": invalid_ids,

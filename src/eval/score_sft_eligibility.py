@@ -234,6 +234,9 @@ async def _run(args: argparse.Namespace) -> Dict[str, Any]:
                     "decision_support": artifact.get("metrics", {}).get(
                         "decision_support"
                     ),
+                    "retrieval_quality": artifact.get("metrics", {}).get(
+                        "retrieval_quality"
+                    ),
                     "decisive_evidence_ids": artifact.get("metrics", {}).get(
                         "decisive_evidence_ids"
                     ),
