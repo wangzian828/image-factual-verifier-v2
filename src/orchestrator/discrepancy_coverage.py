@@ -343,7 +343,6 @@ def _directional_verdict_chain(
     selected_finding_ids: List[str] = []
     for claim_id in claim_ids:
         claim = claim_by_id[claim_id]
-        matched = None
         if stance == "refute":
             composite = next(
                 (
@@ -363,6 +362,8 @@ def _directional_verdict_chain(
                 selected_evidence_ids.extend(composite.evidence_ids)
                 selected_finding_ids.append(composite.finding_id)
                 continue
+        matched_evidence_ids: List[str] = []
+        matched_finding_ids: List[str] = []
         for evidence_id in candidate_evidence_ids:
             evidence = evidence_by_id.get(evidence_id)
             if evidence is None or not evidence_is_qualified_for_stance(
@@ -385,15 +386,19 @@ def _directional_verdict_chain(
                 None,
             )
             if finding is not None:
-                matched = (evidence_id, finding.finding_id)
-                break
-        if matched is None:
+                matched_evidence_ids.append(evidence_id)
+                matched_finding_ids.append(finding.finding_id)
+        if not matched_evidence_ids:
             raise RuntimeError(
                 f"{stance} verdict basis lacks a qualified Finding -> Evidence "
                 f"chain for ImageClaim {claim_id!r}"
             )
-        selected_evidence_ids.append(matched[0])
-        selected_finding_ids.append(matched[1])
+        # Preserve the complete accepted directional support bundle. The order
+        # of candidate Evidence is an investigation-history detail, not a
+        # sufficiency rule; selecting the first matching span can silently drop
+        # the independent sources that made the Decision admissible.
+        selected_evidence_ids.extend(matched_evidence_ids)
+        selected_finding_ids.extend(matched_finding_ids)
     return (
         list(dict.fromkeys(selected_evidence_ids)),
         list(dict.fromkeys(selected_finding_ids)),

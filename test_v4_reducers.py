@@ -1380,6 +1380,14 @@ def test_two_independent_unknown_web_spans_can_close_high_salience_claim() -> No
     assert update["accepted"] is True, update
     assert state.proposed_verdict == "fake"
     assert state.material_discrepancies[0].evidence_ids == evidence_ids
+    audit_discrepancy_coverage(state, decision_checkpoint=True)
+    verdict, basis = compile_discrepancy_verdict_basis(state)
+    assert verdict == "fake"
+    assert basis.evidence_ids == evidence_ids
+    assert basis.finding_ids == [
+        "finding-web-refute-one",
+        "finding-web-refute-two",
+    ]
 
 
 def test_refuted_high_salience_claim_cannot_be_downgraded_to_supporting() -> None:
