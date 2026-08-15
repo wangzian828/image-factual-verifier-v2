@@ -603,7 +603,11 @@ def _audit_leaks(
 
 def _rejection_category(step: Mapping[str, Any]) -> str:
     metadata = _mapping(step.get("metadata"))
-    if metadata.get("search_query_format_error") or _empty_text_search_query(step):
+    if metadata.get("search_query_format_error"):
+        return FORMAT
+    if metadata.get("search_policy_rejection"):
+        return CORRECTION
+    if _empty_text_search_query(step):
         return FORMAT
     if metadata.get("unbalanced_priority_coverage") or metadata.get("tool_budget_reached"):
         return SCHEDULER

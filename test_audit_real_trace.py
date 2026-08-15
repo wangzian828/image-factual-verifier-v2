@@ -817,15 +817,12 @@ def test_empty_text_search_query_is_a_format_warning_not_protocol_rejection(
             "tool_result": json.dumps(
                 {
                     "status": "error",
-                    "error": (
-                        "Search policy removed every query because it targeted a "
-                        "ready-made fact-check verdict or an excluded source."
-                    ),
+                    "error": "text_search requires exactly one non-empty query.",
                 }
             ),
             "metadata": {
                 "stage": "image_only_investigation",
-                "search_policy_rejection": True,
+                "search_query_format_error": True,
                 "function_call_id": "call-empty-query",
             },
         },
