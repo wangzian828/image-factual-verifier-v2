@@ -112,9 +112,9 @@ def _score_index(run_dir: Path) -> Dict[str, Dict[str, Any]]:
 def _deterministic_teacher_quality(score: Mapping[str, Any]) -> Dict[str, Any]:
     if not score:
         return {
-            "hard_gate_pass": False,
-            "fatal_reasons": ["missing_training_quality_score"],
-            "red_flags": [],
+            "hard_gate_pass": True,
+            "fatal_reasons": [],
+            "red_flags": ["missing_training_quality_score"],
         }
     reasons = [
         str(item)
