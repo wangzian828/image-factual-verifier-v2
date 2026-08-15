@@ -76,7 +76,19 @@ def _trace_path(run_dir: Path, row: Mapping[str, Any]) -> Path:
         path = (run_dir / recorded).resolve()
     else:
         episode_id = str(row.get("episode_id") or row.get("case_id") or "")
-        path = (run_dir / "traces" / f"{episode_id}.json").resolve()
+        safe_id = "".join(
+            character if character.isalnum() or character in "-_."
+            else "_"
+            for character in episode_id
+        )
+        candidates = [
+            run_dir / "traces" / f"{episode_id}.json",
+            run_dir / "traces" / f"{safe_id}.json",
+        ]
+        path = next(
+            (candidate.resolve() for candidate in candidates if candidate.is_file()),
+            candidates[-1].resolve(),
+        )
     try:
         path.relative_to(run_dir.resolve())
     except ValueError as exc:

@@ -37,6 +37,12 @@ def test_private_index_accepts_candidate_id_for_runtime_case_id() -> None:
     assert indexed["case-candidate"]["label"] == "supported"
 
 
+def test_safe_trace_filename_matches_workflow_sanitization() -> None:
+    assert run_eval._safe_trace_filename(
+        "baseline:historical:generated:case-01"
+    ) == "baseline_historical_generated_case-01.json"
+
+
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 

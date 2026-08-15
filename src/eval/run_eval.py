@@ -366,6 +366,15 @@ def _private_index(
     return indexed
 
 
+def _safe_trace_filename(identifier: str) -> str:
+    safe_id = "".join(
+        character if character.isalnum() or character in "-_."
+        else "_"
+        for character in str(identifier)
+    )
+    return f"{safe_id}.json"
+
+
 def _select_samples(
     samples: List[Dict[str, Any]],
     *,
@@ -790,7 +799,7 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
                     "sampling_seed": spec["sampling_seed"],
                 }
             )
-            trace_path = trace_dir / f"{episode_id}.json"
+            trace_path = trace_dir / _safe_trace_filename(episode_id)
             member = {
                 "schema_version": ROLLOUT_MEMBER_SCHEMA_VERSION,
                 "prompt_group_id": spec["prompt_group_id"],
