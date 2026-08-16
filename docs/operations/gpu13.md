@@ -79,8 +79,9 @@ model name alone.
 The judge receives compact rejected-turn history and returns `clean`,
 `recovered_minor`, `degraded_repetition`, or `unresolved`. Only clean and
 materially recovered trajectories may pass; repeated or unresolved blocked behavior
-remains in rejected trace storage. This is an SFT export change, not an Agent
-rollout-version claim.
+remains in rejected trace storage. `0961205` isolates automatic SFT storage by
+eligibility output version, so a rerun cannot collide with an earlier scored version
+of the same rollout. These are SFT export changes, not Agent rollout-version claims.
 
 The historical result mapping is maintained in
 [`gpu13-version-registry.md`](gpu13-version-registry.md). In particular,
