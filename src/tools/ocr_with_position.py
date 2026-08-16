@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""CPU EasyOCR tool with normalized positioned text observations."""
+"""OCR tool with normalized positioned text observations."""
 
 from __future__ import annotations
 
@@ -7,11 +7,13 @@ import hashlib
 import io
 import os
 import threading
+import time
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from numbers import Real
 from typing import Any, Dict, List, Optional
 
+from src.integrations.ocr.baidu import BaiduOCRError, BaiduOCRClient
 from src.tools.base import BaseTool
 
 
@@ -22,17 +24,18 @@ _READ_LOCK = threading.Lock()
 
 @dataclass
 class OCRWithPositionTool(BaseTool):
-    """Extract positioned text with one process-shared CPU EasyOCR reader.
+    """Extract positioned text through an explicitly selected OCR backend.
 
-    EasyOCR is intentionally the only backend.  A reader is initialized lazily
-    and shared by tool instances in the process; OCR calls are serialized because
-    the same reader is not assumed to be thread-safe.
+    ``OCR_BACKEND=easyocr`` uses the process-shared local reader.  Setting
+    ``OCR_BACKEND=baidu`` uses the Baidu general OCR API.  Backends never
+    silently fall back to one another.
     """
 
     name: str = "ocr_with_position"
     description: str = (
-        "Extract text from the image with position information through EasyOCR. "
-        "Returns text regions, bounding boxes, confidence scores, and language."
+        "Extract text from the image with position information through the "
+        "configured OCR backend. Returns text regions, bounding boxes, "
+        "confidence scores, and language."
     )
     parameters: dict = field(
         default_factory=lambda: {
@@ -77,8 +80,24 @@ class OCRWithPositionTool(BaseTool):
         }
     )
     _reader: Optional[Any] = field(default=None, repr=False)
+    baidu_client: Optional[BaiduOCRClient] = field(default=None, repr=False)
+    backend: Optional[str] = None
     min_confidence: float = 0.5
     use_gpu: Optional[bool] = None
+
+    def _backend(self) -> str:
+        value = (self.backend or os.getenv("OCR_BACKEND", "easyocr")).strip().lower()
+        aliases = {
+            "easyocr": "easyocr",
+            "baidu": "baidu",
+            "baidu_ocr": "baidu",
+            "baidu_general": "baidu",
+        }
+        if value not in aliases:
+            raise ValueError(
+                f"Unsupported OCR_BACKEND={value!r}; expected easyocr or baidu"
+            )
+        return aliases[value]
 
     def _use_gpu(self) -> bool:
         if self.use_gpu is not None:
@@ -106,6 +125,8 @@ class OCRWithPositionTool(BaseTool):
         return self._reader
 
     def _ocr_model(self) -> str:
+        if self._backend() == "baidu":
+            return "baidu-general"
         try:
             import easyocr
 
@@ -118,13 +139,14 @@ class OCRWithPositionTool(BaseTool):
         artifact_bytes = b""
         requested_bbox: List[float] = []
         attempts: List[Dict[str, Any]] = []
+        backend = "unknown"
 
         try:
             from PIL import Image
-            import numpy as np
 
             if not image_path:
                 raise ValueError("image_input is required")
+            backend = self._backend()
             with Image.open(image_path).convert("RGB") as image:
                 image_width, image_height = image.size
                 requested_bbox = self._normalize_bbox(
@@ -144,6 +166,22 @@ class OCRWithPositionTool(BaseTool):
                     offset_x = offset_y = 0
                 ocr_width, ocr_height = ocr_image.size
                 artifact_bytes = self._image_bytes(ocr_image)
+                if backend == "baidu":
+                    return self._call_baidu(
+                        params,
+                        artifact_bytes=artifact_bytes,
+                        requested_bbox=requested_bbox,
+                        image_width=image_width,
+                        image_height=image_height,
+                        offset_x=offset_x,
+                        offset_y=offset_y,
+                        crop_width=ocr_width,
+                        crop_height=ocr_height,
+                        attempts=attempts,
+                    )
+
+                import numpy as np
+
                 ocr_input = np.asarray(ocr_image)
 
             reader = self._get_reader()
@@ -209,6 +247,8 @@ class OCRWithPositionTool(BaseTool):
 
             return self._success(
                 params,
+                backend=backend,
+                model=self._ocr_model(),
                 requested_bbox=requested_bbox,
                 artifact_bytes=artifact_bytes,
                 text_regions=text_regions,
@@ -220,15 +260,24 @@ class OCRWithPositionTool(BaseTool):
             if not attempts:
                 attempts.append(
                     {
-                        "backend": "easyocr",
+                        "backend": backend,
                         "status": "error",
-                        "device": "gpu" if self._use_gpu() else "cpu",
+                        "request_count": (
+                            int(getattr(exc, "request_count", 1))
+                            if isinstance(exc, BaiduOCRError)
+                            else 1
+                        ),
                         "error": f"{type(exc).__name__}: {exc}",
                     }
                 )
+            try:
+                model = self._ocr_model()
+            except Exception:
+                model = backend
+            prefix = "EasyOCR" if backend == "easyocr" else "Baidu OCR"
             return {
                 "status": "error",
-                "error": f"EasyOCR failed: {exc}",
+                "error": f"{prefix} failed: {exc}",
                 "text_regions": [],
                 "total_regions": 0,
                 "full_text": "",
@@ -246,16 +295,192 @@ class OCRWithPositionTool(BaseTool):
                     if artifact_bytes
                     else ""
                 ),
-                "ocr_backend": "easyocr",
-                "ocr_model": self._ocr_model(),
+                "ocr_backend": backend,
+                "ocr_model": model,
                 "backend_attempts": attempts,
                 "subcalls": self._ocr_subcalls(attempts),
             }
+
+    def _call_baidu(
+        self,
+        params: Dict[str, Any],
+        *,
+        artifact_bytes: bytes,
+        requested_bbox: List[float],
+        image_width: int,
+        image_height: int,
+        offset_x: int,
+        offset_y: int,
+        crop_width: int,
+        crop_height: int,
+        attempts: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        client = self.baidu_client or BaiduOCRClient()
+        token_started = time.perf_counter()
+        token, cache_hit = client.get_access_token()
+        if not cache_hit:
+            attempts.append(
+                {
+                    "backend": "baidu_token",
+                    "status": "success",
+                    "request_count": 1,
+                    "duration_ms": round(
+                        (time.perf_counter() - token_started) * 1000,
+                        2,
+                    ),
+                }
+            )
+
+        ocr_started = time.perf_counter()
+        payload = client.recognize(
+            artifact_bytes,
+            access_token=token,
+        )
+        attempts.append(
+            {
+                "backend": "baidu_ocr",
+                "status": "success",
+                "request_count": 1,
+                "duration_ms": round(
+                    (time.perf_counter() - ocr_started) * 1000,
+                    2,
+                ),
+            }
+        )
+        text_regions: List[Dict[str, Any]] = []
+        rejected_text_regions: List[Dict[str, Any]] = []
+        full_text_parts: List[str] = []
+        for index, item in enumerate(payload.get("words_result", [])):
+            region = self._baidu_region(
+                item,
+                index=index,
+                image_width=image_width,
+                image_height=image_height,
+                offset_x=offset_x,
+                offset_y=offset_y,
+                crop_width=crop_width,
+                crop_height=crop_height,
+            )
+            if (
+                region["text"].strip()
+                and float(region["confidence"]) >= float(self.min_confidence)
+            ):
+                text_regions.append(region)
+                full_text_parts.append(region["text"])
+            else:
+                rejected_text_regions.append(region)
+        return self._success(
+            params,
+            backend="baidu",
+            model="baidu-general",
+            requested_bbox=requested_bbox,
+            artifact_bytes=artifact_bytes,
+            text_regions=text_regions,
+            rejected_text_regions=rejected_text_regions,
+            full_text=" ".join(full_text_parts),
+            attempts=attempts,
+        )
+
+    @staticmethod
+    def _baidu_region(
+        item: Any,
+        *,
+        index: int,
+        image_width: int,
+        image_height: int,
+        offset_x: int,
+        offset_y: int,
+        crop_width: int,
+        crop_height: int,
+    ) -> Dict[str, Any]:
+        if not isinstance(item, dict):
+            raise ValueError(f"Baidu OCR result {index} must be an object")
+        text = str(item.get("words", "")).strip()
+        location = item.get("location")
+        if not isinstance(location, dict):
+            raise ValueError(f"Baidu OCR result {index} lacks location")
+        try:
+            left = float(location["left"])
+            top = float(location["top"])
+            width = float(location["width"])
+            height = float(location["height"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(
+                f"Baidu OCR result {index} has invalid location"
+            ) from exc
+        if width <= 0 or height <= 0:
+            raise ValueError(f"Baidu OCR result {index} has empty location")
+        vertices = item.get("vertexes_location")
+        quad: List[List[float]] = []
+        if isinstance(vertices, list) and len(vertices) == 4:
+            for point in vertices:
+                if not isinstance(point, dict):
+                    quad = []
+                    break
+                try:
+                    quad.append([float(point["x"]), float(point["y"])])
+                except (KeyError, TypeError, ValueError):
+                    quad = []
+                    break
+        if not quad:
+            quad = [
+                [left, top],
+                [left + width, top],
+                [left + width, top + height],
+                [left, top + height],
+            ]
+        global_quad = [
+            [point[0] + offset_x, point[1] + offset_y]
+            for point in quad
+        ]
+        xs = [point[0] for point in global_quad]
+        ys = [point[1] for point in global_quad]
+        if (
+            min(xs) < 0
+            or min(ys) < 0
+            or max(xs) > image_width
+            or max(ys) > image_height
+        ):
+            raise ValueError(f"Baidu OCR result {index} is outside the image")
+        probability = item.get("probability", 1.0)
+        if isinstance(probability, dict):
+            probability = probability.get(
+                "average",
+                probability.get("min", 1.0),
+            )
+        try:
+            confidence = float(probability)
+        except (TypeError, ValueError):
+            confidence = 1.0
+        return {
+            "text": text,
+            "bbox_quad": [
+                [
+                    round(float(point[0]) / image_width, 4),
+                    round(float(point[1]) / image_height, 4),
+                ]
+                for point in global_quad
+            ],
+            "bbox": [
+                round(min(xs) / image_width, 4),
+                round(min(ys) / image_height, 4),
+                round(max(xs) / image_width, 4),
+                round(max(ys) / image_height, 4),
+            ],
+            "confidence": round(confidence, 3),
+            "language": (
+                "zh"
+                if any(0x4E00 <= ord(char) <= 0x9FFF for char in text)
+                else "en"
+            ),
+        }
 
     def _success(
         self,
         params: Dict[str, Any],
         *,
+        backend: str,
+        model: str,
         requested_bbox: List[float],
         artifact_bytes: bytes,
         text_regions: List[Dict[str, Any]],
@@ -278,8 +503,8 @@ class OCRWithPositionTool(BaseTool):
                 params.get("expected_property", "")
             ),
             "artifact_sha256": hashlib.sha256(artifact_bytes).hexdigest(),
-            "ocr_backend": "easyocr",
-            "ocr_model": self._ocr_model(),
+            "ocr_backend": backend,
+            "ocr_model": model,
             "backend_attempts": attempts,
             "subcalls": self._ocr_subcalls(attempts),
         }
@@ -308,9 +533,10 @@ class OCRWithPositionTool(BaseTool):
                 "kind": "ocr",
                 "provider": str(item.get("backend", "easyocr")),
                 "status": str(item.get("status", "error")),
-                "request_count": 1,
+                "request_count": int(item.get("request_count", 1)),
             }
             for item in attempts
+            if int(item.get("request_count", 1)) > 0
         ]
 
     @staticmethod

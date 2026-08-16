@@ -115,13 +115,13 @@ Canonical OCR text contains only accepted regions. Low-confidence candidates rem
 in diagnostics and cannot enter `full_text`, Evidence, retrieval anchors, or verdict
 bases.
 
-The runtime uses a process-shared EasyOCR reader, on CPU by default. It returns
-visible text, quadrilateral coordinates, axis-aligned coordinates, and
-recognition confidence. There is no remote service or alternate-engine
-fallback: package, reader initialization, and runtime failures are explicit OCR
-tool failures. Decisive small or stylized text requires focused crop
-verification when the primary OCR result is missing, low-confidence, or
-conflicts with a VLM reading.
+The runtime uses the explicitly configured OCR backend. EasyOCR is the local
+CPU backend; Baidu general OCR is the remote backend. Both return visible text,
+quadrilateral coordinates, axis-aligned coordinates, and recognition
+confidence. There is no silent alternate-engine fallback: package, credential,
+provider, and runtime failures are explicit OCR tool failures. Decisive small
+or stylized text requires focused crop verification when the primary OCR result
+is missing, low-confidence, or conflicts with a VLM reading.
 
 OCR is an observation layer, not a fact verifier. Reading a label can ground a
 visible-text fact, but it does not prove that the label is authentic or that its

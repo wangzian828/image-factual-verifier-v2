@@ -1,4 +1,4 @@
-"""Benchmark the process-shared CPU EasyOCR reader on local images.
+"""Benchmark a configured OCR backend on local images.
 
 The first call may include reader initialization. Use a small repeat count when
 checking latency:
@@ -27,12 +27,18 @@ def main() -> int:
         type=int,
         default=2,
     )
+    parser.add_argument(
+        "--backend",
+        choices=("easyocr", "baidu"),
+        default=None,
+        help="Explicit OCR backend; otherwise use OCR_BACKEND.",
+    )
     parser.add_argument("images", nargs="+")
     args = parser.parse_args()
     if args.repeats < 1:
         parser.error("--repeats must be positive")
 
-    tool = OCRWithPositionTool()
+    tool = OCRWithPositionTool(backend=args.backend)
     rows = []
     for raw_path in args.images:
         image_path = str(Path(raw_path).expanduser().resolve())

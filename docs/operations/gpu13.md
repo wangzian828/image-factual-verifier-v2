@@ -276,15 +276,32 @@ The following were verified through that proxy:
 - Hugging Face HTTPS;
 - Google Drive HTTPS.
 
-OCR uses one process-shared EasyOCR reader on CPU by default. The reader is
-initialized lazily and OCR calls are serialized because a reader instance is
-not assumed to be thread-safe. It never starts a separate OCR service and has
-no PaddleOCR or other engine fallback. A missing package, reader
-initialization failure, malformed result, or runtime exception is an explicit
-`ocr_with_position` tool failure.
+OCR is selected explicitly with `OCR_BACKEND`; the default is `easyocr`.
+EasyOCR uses one process-shared CPU reader and serializes calls because a
+reader instance is not assumed to be thread-safe. Baidu uses the general OCR
+API with an in-memory access-token cache. There is no silent backend fallback:
+a missing package, missing credential, failed request, malformed result, or
+runtime exception is an explicit `ocr_with_position` tool failure.
 
-GPU OCR is opt-in through `EASYOCR_GPU=true`; the GPU setting must be chosen
-from the actual server capacity and is not required for the default runtime.
+For the local backend:
+
+```bash
+OCR_BACKEND=easyocr
+EASYOCR_GPU=false
+```
+
+For Baidu general OCR, keep all values in the untracked runtime environment
+file or the process environment:
+
+```bash
+OCR_BACKEND=baidu
+BAIDU_OCR_API_KEY=<api-key>
+BAIDU_OCR_SECRET_KEY=<secret-key>
+BAIDU_OCR_TIMEOUT_SECONDS=30
+```
+
+`BAIDU_OCR_ACCESS_TOKEN` may be supplied for a controlled run instead of the
+API key/secret pair. Tokens are never written to traces or source files.
 
 The latency probe reports the shared-reader initialization separately from
 steady-state calls and should use a small repeat count:
@@ -295,7 +312,7 @@ scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
   /path/to/image.jpg
 ```
 
-EasyOCR is used only for visible-text observations:
+The configured OCR backend is used only for visible-text observations:
 
 - detected text strings;
 - quadrilateral and axis-aligned image coordinates;

@@ -11,7 +11,7 @@ case_id + image_path + image_sha256
 The runtime is:
 
 ```text
-Gemini perception + process-shared EasyOCR
+Gemini perception + configured OCR backend (EasyOCR or Baidu general OCR)
 -> deterministic VisualFact/task bootstrap
 -> native Interactions ReAct
 -> Reflection every four real actions
