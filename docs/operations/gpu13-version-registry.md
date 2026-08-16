@@ -9,7 +9,7 @@
 | 项目 | 值 |
 |---|---|
 | canonical branch | `codex/gpu13-canary-20260804-plan-relaxation-01` |
-| 最近部署的 OCR 实现 commit | `b9cf09d` |
+| 最近部署的 OCR 实现 commit | `3168f1c`（bounded JPEG upload、10s/120s timeouts、non-JSON diagnostics；global-4 pure OCR probe 10/10） |
 | 最近一次行为测试 commit | `d34cf63` |
 | 模型 | `gemini-3.7-flash` |
 | 当前 OCR | Baidu general OCR；默认 `OCR_BACKEND=baidu`；GPU13 smoke 已通过 |
