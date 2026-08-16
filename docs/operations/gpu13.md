@@ -659,6 +659,23 @@ python scripts/monitor_runtime_events.py \
 The monitor reports each model request's stage, estimated input, output cap, actual
 provider token counts, tool result, and terminal engineering-error/final snapshot.
 
+For background evaluation launched with `start_eval_gpu13.sh`, poll by run ID only:
+
+```bash
+scripts/server/poll_eval_gpu13.sh <run-id>
+```
+
+The launcher requires every background output directory to be exactly
+`$IFV_DATA_ROOT/runs/eval/<run-id>`, prints the resolved `run_id`, and registers
+the log path under `$IFV_DATA_ROOT/runs/_jobs/`. The polling helper resolves the
+same canonical data-root path itself and refuses checkout paths, full output
+paths, unsafe IDs, non-canonical branches, and non-canonical checkouts. Do not
+copy a historical absolute path from an old run command.
+
+The helper also works for runs created before this registration change: it reports
+the durable run files and detects a live evaluator from its `--output-dir`
+argument, but there may be no registered log path.
+
 `run_real_canary.py` refuses a dirty checkout and rejects any `GIT_COMMIT` value that
 does not match the actual HEAD. The child evaluator receives the verified HEAD, so a
 run directory name or inherited environment variable cannot falsify manifest

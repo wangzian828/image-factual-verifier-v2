@@ -11,6 +11,9 @@ usage: start_eval_gpu13.sh --output-dir DIR [run_eval ARG ...]
 
 Starts python -m src.eval.run_eval in the gpu-13 ifv-agent Conda environment.
 All run_eval arguments, including --output-dir, are passed through unchanged.
+The output directory must be a single run directory under
+$IFV_DATA_ROOT/runs/eval/<run-id>. The launcher prints the canonical run-id
+and the status command to use for polling.
 EOF
 }
 
@@ -47,6 +50,37 @@ if [[ "${output_dir_seen}" != "true" ]]; then
     exit 2
 fi
 
+eval_root="$(realpath -m -- "${IFV_DATA_ROOT}/runs/eval")"
+output_dir="$(realpath -m -- "${output_dir}")"
+case "${output_dir}" in
+    "${eval_root}"/*) ;;
+    *)
+        echo "Evaluation output directory must be under ${eval_root}/<run-id>." >&2
+        echo "actual=${output_dir}" >&2
+        exit 2
+        ;;
+esac
+run_id="${output_dir#"${eval_root}"/}"
+if [[ -z "${run_id}" || "${run_id}" == */* || "${run_id}" == *[!A-Za-z0-9._-]* ]]; then
+    echo "Evaluation output directory must contain one safe <run-id> component." >&2
+    echo "actual=${output_dir}" >&2
+    exit 2
+fi
+
+# Pass the same canonical absolute path to run_eval that was validated above.
+# Otherwise a relative --output-dir could be validated here but resolved again
+# against a different working directory by the child process.
+for ((i = 0; i < ${#args[@]}; i++)); do
+    case "${args[i]}" in
+        --output-dir)
+            args[i + 1]="${output_dir}"
+            ;;
+        --output-dir=*)
+            args[i]="--output-dir=${output_dir}"
+            ;;
+    esac
+done
+
 if [[ -d "${output_dir}" ]] && find "${output_dir}" -mindepth 1 -print -quit | grep -q .; then
     echo "Evaluation output directory must be new or empty: ${output_dir}" >&2
     exit 2
@@ -54,8 +88,10 @@ fi
 
 LOG_DIR="${IFV_DATA_ROOT}/runs/_logs"
 PID_DIR="/tmp/image-factual-verifier-v3"
+JOB_DIR="${IFV_DATA_ROOT}/runs/_jobs"
 
 mkdir -p -- "${LOG_DIR}"
+mkdir -p -- "${JOB_DIR}"
 if [[ ! "${IFV_LOG_RETENTION_DAYS}" =~ ^[0-9]+$ ]]; then
     echo "IFV_LOG_RETENTION_DAYS must be a non-negative integer" >&2
     exit 2
@@ -86,3 +122,14 @@ pid=$!
 printf 'pid=%s\n' "${pid}"
 printf 'pid_file=%s\n' "${pid_file}"
 printf 'log_file=%s\n' "${log_file}"
+printf 'run_id=%s\n' "${run_id}"
+printf 'status_command=scripts/server/poll_eval_gpu13.sh %s\n' "${run_id}"
+
+job_record="${JOB_DIR}/${job_name}.env"
+{
+    printf 'run_id=%s\n' "${run_id}"
+    printf 'output_dir=%s\n' "${output_dir}"
+    printf 'log_file=%s\n' "${log_file}"
+    printf 'pid_file=%s\n' "${pid_file}"
+    printf 'pid=%s\n' "${pid}"
+} >"${job_record}"
