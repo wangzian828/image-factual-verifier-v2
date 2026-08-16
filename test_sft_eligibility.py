@@ -15,6 +15,7 @@ from src.trajectory.sft_eligibility import (
     sft_eligibility_metrics,
     sft_eligibility_passes,
 )
+from scripts.trajectory.stage_accepted_teacher_release import _eligible as stage_eligible
 
 
 def _trace(*, verdict: str = "fake") -> dict[str, Any]:
@@ -130,6 +131,7 @@ def _judgment(**updates: Any) -> SFTEligibilityJudgment:
         "supporting_evidence_ids": [],
         "overclaiming": "none",
         "boundary_assessment": "respected",
+        "trajectory_conduct": "clean",
         "confidence": 0.72,
         "explanation": "The evidence directly establishes the incorrect winner.",
     }
@@ -172,7 +174,7 @@ def test_target_adapter_uses_one_generic_image_fact_shape() -> None:
     assert target["reference_facts"][0]["evidence_text"]
 
 
-def test_packet_includes_compact_retrieval_history() -> None:
+def test_packet_includes_compact_retrieval_and_rejection_history() -> None:
     trace = _trace()
     trace["state"]["all_steps"] = [
         {
@@ -214,13 +216,24 @@ def test_packet_includes_compact_retrieval_history() -> None:
         {
             "action_type": "format_error",
             "tool_name": "text_search",
-            "tool_args": {"queries": []},
+            "tool_args": {
+                "queries": [],
+                "goal": "Find an official result.",
+            },
+            "metadata": {"error_class": "protocol_error"},
+            "tool_result": json.dumps(
+                {"status": "error", "error": "duplicate tool call"}
+            ),
+        },
+        {
+            "action_type": "planning_revision",
+            "metadata": {"rejection_reason": "Internal plan correction."},
         },
     ]
 
     packet = build_sft_eligibility_input(trace, _gold())
 
-    assert packet["schema_version"] == "ifv-sft-eligibility-input-v5"
+    assert packet["schema_version"] == "ifv-sft-eligibility-input-v6"
     assert packet["candidate"]["retrieval_history"] == [
         {
             "tool": "text_search",
@@ -239,6 +252,23 @@ def test_packet_includes_compact_retrieval_history() -> None:
             "fetch_error": "",
         },
     ]
+    assert packet["candidate"]["rejection_history"] == {
+        "count": 1,
+        "by_action_type": {"format_error": 1},
+        "by_stage": {"unknown": 1},
+        "events": [
+            {
+                "step_index": 2,
+                "stage": "unknown",
+                "action_type": "format_error",
+                "tool": "text_search",
+                "error_class": "protocol_error",
+                "reason": "duplicate tool call",
+                "goal": "Find an official result.",
+                "queries": [],
+            }
+        ],
+    }
 
 
 def test_target_adapter_accepts_web_chain_without_claim_atom() -> None:
@@ -329,7 +359,7 @@ def test_nonfatal_audit_warning_does_not_veto_sft() -> None:
     assert artifact["gates"]["audit_warnings"]
 
 
-def test_protocol_audit_error_still_blocks_sft() -> None:
+def test_recovered_protocol_error_does_not_block_sft_or_staging() -> None:
     packet = _packet()
     artifact = build_sft_eligibility_artifact(
         trace=_trace(),
@@ -342,13 +372,37 @@ def test_protocol_audit_error_still_blocks_sft() -> None:
             {
                 "code": "PROTOCOL_ERROR",
                 "category": "protocol",
-                "message": "Unrecoverable protocol boundary.",
+                "message": "A corrected intermediate policy attempt.",
             }
         ],
     )
 
-    assert artifact["gates"]["sft_eligibility_pass"] is False
-    assert artifact["gates"]["fatal_audit_errors"]
+    assert artifact["gates"]["sft_eligibility_pass"] is True
+    assert artifact["gates"]["fatal_audit_errors"] == []
+    assert artifact["gates"]["audit_warnings"]
+    assert stage_eligible(
+        _trace(),
+        "b" * 64,
+        artifact,
+    )
+
+
+def test_repeated_or_unresolved_conduct_blocks_sft() -> None:
+    packet = _packet()
+    for conduct in ("degraded_repetition", "unresolved"):
+        artifact = build_sft_eligibility_artifact(
+            trace=_trace(),
+            trace_sha256="b" * 64,
+            packet=packet,
+            judgment=_judgment(trajectory_conduct=conduct),
+            judge_audit={},
+            strict_trace_audit_pass=True,
+        )
+
+        assert artifact["gates"]["sft_eligibility_pass"] is False
+        assert f"trajectory_conduct_{conduct}" in artifact["metrics"][
+            "fatal_errors"
+        ]
 
 
 def test_tool_argument_format_error_does_not_block_sft() -> None:
@@ -458,4 +512,5 @@ def test_prompt_is_image_fact_based_not_claim_path_based() -> None:
     assert "Retrieval history describes what the teacher actually investigated" in prompt
     assert "generic web search failure" in prompt
     assert "Assess retrieval_quality" in prompt
+    assert "trajectory_conduct" in prompt
     assert "do not create human-review work" in prompt_lower

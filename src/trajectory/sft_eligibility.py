@@ -26,11 +26,11 @@ from src.trajectory.semantic_reward import (
 )
 
 
-SFT_ELIGIBILITY_SCHEMA_VERSION = "ifv-sft-eligibility-v2"
-SFT_ELIGIBILITY_INPUT_VERSION = "ifv-sft-eligibility-input-v5"
-SFT_ELIGIBILITY_PROMPT_VERSION = "ifv-sft-private-image-fact-gate-v3"
-SFT_ELIGIBILITY_GENERATION_VERSION = "minimal-thinking-4096-v5"
-SFT_ELIGIBILITY_POSTPROCESS_VERSION = "image-fact-safety-gate-v4"
+SFT_ELIGIBILITY_SCHEMA_VERSION = "ifv-sft-eligibility-v3"
+SFT_ELIGIBILITY_INPUT_VERSION = "ifv-sft-eligibility-input-v6"
+SFT_ELIGIBILITY_PROMPT_VERSION = "ifv-sft-private-image-fact-gate-v4"
+SFT_ELIGIBILITY_GENERATION_VERSION = "minimal-thinking-4096-v6"
+SFT_ELIGIBILITY_POSTPROCESS_VERSION = "image-fact-safety-gate-v5"
 
 
 SFT_ELIGIBILITY_SYSTEM_PROMPT = (
@@ -56,7 +56,19 @@ SFT_ELIGIBILITY_SYSTEM_PROMPT = (
     "central route is generic, repeatedly low-yield, premise-led, ignores useful "
     "candidates, or treats non-results as a conclusion. Mark major overclaiming "
     "when the cited material does not establish the conclusion. Do not search and "
-    "do not create human-review work."
+    "do not create human-review work. The candidate also contains a compact record "
+    "of rejected intermediate policy outputs. A single rejected attempt that is "
+    "followed by a materially different, successful investigation or decision is a "
+    "recoverable minor error. Repeated duplicate tool attempts, repeated terminal "
+    "verdict proposals after the same stated deficiency, or a rejection that the "
+    "trajectory never substantively repairs are degraded teacher conduct. Classify "
+    "trajectory_conduct as clean when there is no material rejected turn; "
+    "recovered_minor when any rejected turn is clearly repaired and the final path "
+    "is suitable to imitate; degraded_repetition when the trajectory loops or "
+    "repeats a blocked behavior; or unresolved when the final path still depends "
+    "on an unresolved rejected behavior. Rejected turns are not themselves SFT "
+    "targets, but their presence is relevant to whether the accepted trajectory "
+    "would teach good behavior."
 )
 
 
@@ -88,6 +100,12 @@ class SFTEligibilityJudgment(_StrictModel):
         "respected",
         "minor_issue",
         "major_issue",
+    ]
+    trajectory_conduct: Literal[
+        "clean",
+        "recovered_minor",
+        "degraded_repetition",
+        "unresolved",
     ]
     confidence: float = Field(ge=0.0, le=1.0)
     explanation: str = Field(min_length=1, max_length=1600)
@@ -440,6 +458,70 @@ def _retrieval_history(state: Mapping[str, Any]) -> List[Dict[str, Any]]:
     return history
 
 
+def _rejection_history(state: Mapping[str, Any]) -> Dict[str, Any]:
+    """Project rejected policy turns for the post-rollout judge.
+
+    This intentionally preserves the runtime's structural outcome and compact
+    route context, rather than inferring a semantic error category from fragile
+    message matching. The frozen judge decides whether the trajectory recovered
+    or repeated the rejected behavior.
+    """
+
+    events: List[Dict[str, Any]] = []
+    action_counts: Dict[str, int] = {}
+    stage_counts: Dict[str, int] = {}
+    for index, step in enumerate(_rows(state.get("all_steps"))):
+        action_type = str(step.get("action_type", "")).strip()
+        metadata = _mapping(step.get("metadata"))
+        if action_type in {"planning_revision", "evidence_decision_revision"}:
+            # Internal revisions are not emitted as policy targets.
+            continue
+        rejected = (
+            action_type in {"format_error", "output_rejected"}
+            or str(metadata.get("error_class", "")).strip() == "protocol_error"
+            or bool(str(metadata.get("rejection_reason", "")).strip())
+        )
+        if not rejected:
+            continue
+        tool_args = _mapping(step.get("tool_args"))
+        tool_result = _tool_result_mapping(step)
+        stage = str(step.get("stage", "")).strip() or "unknown"
+        action_key = action_type or "rejected_step"
+        action_counts[action_key] = action_counts.get(action_key, 0) + 1
+        stage_counts[stage] = stage_counts.get(stage, 0) + 1
+        events.append(
+            {
+                "step_index": index,
+                "stage": stage,
+                "action_type": action_key,
+                "tool": str(step.get("tool_name", "")).strip(),
+                "error_class": str(metadata.get("error_class", "")).strip(),
+                "reason": _text(
+                    metadata.get("rejection_reason"),
+                    tool_result.get("error"),
+                    limit=1200,
+                ),
+                "goal": _text(
+                    tool_args.get("retrieval_goal"),
+                    tool_args.get("goal"),
+                    limit=700,
+                ),
+                "queries": _string_list(
+                    tool_args.get("queries", tool_args.get("query", [])),
+                    limit=3,
+                ),
+            }
+        )
+        if len(events) >= 16:
+            break
+    return {
+        "count": sum(action_counts.values()),
+        "by_action_type": action_counts,
+        "by_stage": stage_counts,
+        "events": events,
+    }
+
+
 def build_sft_eligibility_input(
     trace: Mapping[str, Any],
     gold: Mapping[str, Any],
@@ -545,6 +627,7 @@ def build_sft_eligibility_input(
             "evidence": evidence,
             "discrepancies": discrepancies,
             "retrieval_history": _retrieval_history(state),
+            "rejection_history": _rejection_history(state),
             "basis_claim_ids": basis_claim_ids,
             "basis_discrepancy_ids": basis_discrepancy_ids,
             "verdict_target": _text(basis.get("verdict_target"), limit=4000),
@@ -582,16 +665,10 @@ def classify_sft_audit_failures(
         "EVIDENCE_CALL_NOT_SUCCESSFUL",
         "INVALID_EVIDENCE",
     )
-    fatal_protocol_codes = {
-        "PROTOCOL_ERROR",
-        "PROTOCOL_REJECTION",
-    }
     for raw in failures:
         item = dict(raw)
         code = str(item.get("code", "")).upper()
-        if code in fatal_protocol_codes or any(
-            marker in code for marker in fatal_markers
-        ):
+        if any(marker in code for marker in fatal_markers):
             fatal.append(item)
         else:
             warnings.append(item)
@@ -624,6 +701,7 @@ def sft_eligibility_metrics(
             "supporting_evidence_ids": [],
             "overclaiming": "major",
             "boundary_assessment": "major_issue",
+            "trajectory_conduct": "unresolved",
             "confidence": 0.0,
             "explanation": "judge_not_run",
         }
@@ -663,6 +741,9 @@ def sft_eligibility_metrics(
     fact_alignment = str(judgment_values.get("fact_alignment", "unclear"))
     decision_support = str(judgment_values.get("decision_support", "unclear"))
     retrieval_quality = str(judgment_values.get("retrieval_quality", "poor"))
+    trajectory_conduct = str(
+        judgment_values.get("trajectory_conduct", "unresolved")
+    )
     fatal_errors = [
         *(
             ["image_unavailable_to_judge"]
@@ -699,6 +780,11 @@ def sft_eligibility_metrics(
             if not valid_decisive_ids
             else []
         ),
+        *(
+            [f"trajectory_conduct_{trajectory_conduct}"]
+            if trajectory_conduct in {"degraded_repetition", "unresolved"}
+            else []
+        ),
     ]
     warnings: List[str] = []
     if fact_alignment == "unclear":
@@ -711,6 +797,8 @@ def sft_eligibility_metrics(
         warnings.append("minor_overclaiming")
     if judgment_values.get("boundary_assessment") != "respected":
         warnings.append("boundary_warning")
+    if trajectory_conduct == "recovered_minor":
+        warnings.append("recovered_policy_rejection")
     basis_ids = set(_unique(candidate.get("basis_claim_ids", []), limit=12))
     if basis_ids and not basis_ids.intersection(
         {
@@ -733,6 +821,7 @@ def sft_eligibility_metrics(
         "fact_alignment": fact_alignment,
         "decision_support": decision_support,
         "retrieval_quality": retrieval_quality,
+        "trajectory_conduct": trajectory_conduct,
         "decisive_evidence_ids": valid_decisive_ids,
         "selected_evidence_ids": selected_ids,
         "invalid_judge_evidence_ids": invalid_ids,

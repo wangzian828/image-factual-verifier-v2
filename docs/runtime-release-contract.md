@@ -196,8 +196,10 @@ identifiers remain lineage metadata, but the judge does not require Claim wordin
 relation slots, a specific URL, an original-image match, or a registered evidence
 path. It receives all successful Evidence rows and may select any decisive,
 image-grounded Evidence or compatible sub-fact. Fatal safety, engineering, and
-invalid-reference failures reject SFT eligibility; non-fatal audit issues are
-recorded as warnings and do not create a human-review queue.
+invalid-reference failures reject SFT eligibility. The frozen judge also receives a
+compact rejected-turn history and rejects trajectories that repeat blocked behavior
+or leave it unresolved; a single materially corrected turn is a warning rather than
+an automatic veto. No audit result creates a human-review queue.
 
 ### Other outputs
 

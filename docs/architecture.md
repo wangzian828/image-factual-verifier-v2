@@ -214,10 +214,14 @@ episode, so independent replicas increase episode throughput without mixing an
 episode's policy and visual calls across servers.
 
 `ifv-policy-v2` exports Image Account Planning, v4 ReAct, Discrepancy Decision, and
-v4 Judgment. The SFT positive-data gate requires classification correctness, complete
-directionally consistent Evidence chains, discrepancy alignment, stop quality, and
-no protocol rejection or legacy core ownership. Frozen teacher export requires the
-frozen LLM `sft_eligibility` gate and uses deterministic trajectory features as
+v4 Judgment. The SFT positive-data gate requires classification correctness and a
+decisive, directionally coherent Evidence chain. A rejected intermediate policy turn
+is not an automatic exclusion: the frozen SFT judge receives a compact rejection
+history and classifies the completed behavior as `clean`, `recovered_minor`,
+`degraded_repetition`, or `unresolved`. Clean and materially recovered trajectories
+may enter SFT; repeated blocked behavior and unresolved rejected paths do not. The
+exporter omits rejected policy turns from SFT targets. Frozen teacher export requires
+the frozen LLM `sft_eligibility` gate and uses deterministic trajectory features as
 hard-safety constraints, red-flag diagnostics, and same-case tie-breakers; semantic
 reward artifacts are optional diagnostics only. The pure policy exporter repeats
 these gates and rejects a trace even if upstream score metadata is wrong. RL keeps a
@@ -229,10 +233,11 @@ fact target. It receives all successful Evidence rows, not only the final basis,
 and may accept a semantically equivalent sub-fact when it decisively establishes
 the same image-level verdict. Claim IDs remain optional lineage references; exact
 Claim wording, relation slots, URLs, original-image recovery, and registered
-decision paths are not SFT gates. Fatal engineering, protocol, source-policy, and
-invalid-reference failures remain hard rejections. Non-fatal audit findings are
-warnings used for diagnostics and teacher tie-breaking, and no human-review queue
-is produced.
+decision paths are not SFT gates. Fatal engineering, source-policy, and
+invalid-reference failures remain hard rejections. Intermediate protocol rejections
+are judged as trajectory conduct: repeated or unresolved behavior rejects SFT, while
+a material recovery is a warning. Other audit findings are diagnostics and
+teacher tie-breakers, and no human-review queue is produced.
 
 After all episodes finish, deterministic post-rollout code joins private gold and
 emits one scalar per episode for standard GRPO; it does not implement a custom

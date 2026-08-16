@@ -27,7 +27,6 @@ DETERMINISTIC_FATAL_TEACHER_REASONS = frozenset(
     {
         "incorrect_result",
         "engineering_error",
-        "protocol_rejections",
         "legacy_core_ownership",
     }
 )
@@ -381,7 +380,6 @@ def export_dataset(
                 structured_gate_pass = bool(
                     str(eligibility.get("case_id", "")) == case_id
                     and str(eligibility.get("episode_id", "")) == episode_id
-                    and eligibility_gates.get("strict_trace_audit_pass") is True
                     and eligibility_gates.get("engineering_valid") is True
                     and eligibility_gates.get("sft_eligibility_pass") is True
                     and str(

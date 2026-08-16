@@ -31,7 +31,6 @@ DETERMINISTIC_FATAL_TEACHER_REASONS = frozenset(
     {
         "incorrect_result",
         "engineering_error",
-        "protocol_rejections",
         "legacy_core_ownership",
     }
 )
@@ -148,7 +147,6 @@ def _eligible(
     return bool(
         str(trace.get("termination", "")) == "success"
         and str(trace.get("verdict", "")) in {"real", "fake"}
-        and eligibility_gates.get("strict_trace_audit_pass") is True
         and eligibility_gates.get("engineering_valid") is True
         and eligibility_gates.get("sft_eligibility_pass") is True
         and str((eligibility.get("source_trace") or {}).get("sha256", ""))
@@ -170,8 +168,6 @@ def _rejection_reasons(
         reasons.append("trace_not_successful")
     if str(trace.get("verdict", "")) not in {"real", "fake"}:
         reasons.append("missing_binary_verdict")
-    if gates.get("strict_trace_audit_pass") is not True:
-        reasons.append("strict_trace_audit_failed")
     if gates.get("engineering_valid") is not True:
         reasons.append("engineering_invalid")
     if gates.get("sft_eligibility_pass") is not True:
