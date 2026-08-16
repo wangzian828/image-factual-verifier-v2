@@ -6528,8 +6528,29 @@ def _visual_evidence_record(
             ):
                 stance = "support"
     elif tool_name == "crop_and_inspect":
-        statement = str(
-            data.get("answer", "") or data.get("description", "")
+        observations = data.get("observations")
+        if not isinstance(observations, list):
+            # Compatibility for traces produced before observations replaced
+            # the old findings field. The legacy answer field is intentionally
+            # excluded because it was an unconstrained judgment, not an image
+            # observation.
+            observations = data.get("findings", [])
+        statement = "\n".join(
+            item
+            for item in [
+                str(data.get("description", "")).strip(),
+                *[
+                    str(observation).strip()
+                    for observation in observations or []
+                    if str(observation).strip()
+                ],
+                *[
+                    str(anomaly).strip()
+                    for anomaly in data.get("anomalies", []) or []
+                    if str(anomaly).strip()
+                ],
+            ]
+            if item
         ).strip()
     elif tool_name == "focused_visual_inspection":
         summary = str(data.get("summary", "")).strip()

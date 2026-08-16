@@ -3960,7 +3960,15 @@ class StageRunner:
             return f"[perceive_scene] scene={str(data.get('scene_description', ''))[:100]}"
 
         if tool_name == "crop_and_inspect" and isinstance(data, dict):
-            return f"[crop_and_inspect] {str(data.get('answer', '') or data.get('description', ''))[:120]}"
+            observations = data.get("observations")
+            if not isinstance(observations, list):
+                observations = data.get("findings", [])
+            first_observation = (
+                observations[0]
+                if isinstance(observations, list) and observations
+                else ""
+            )
+            return f"[crop_and_inspect] {str(first_observation or data.get('description', ''))[:120]}"
 
         if tool_name == "crop_and_search" and isinstance(data, dict):
             return f"[crop_and_search] {str(data.get('summary', '') or data.get('evidence', ''))[:120]}"

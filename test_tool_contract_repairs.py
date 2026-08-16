@@ -10,7 +10,7 @@ from src.integrations.vlm.qwen_vl import QwenVLClient
 from src.orchestrator.stage_runner import StageRunner
 from src.orchestrator.task_store import record_tool_observation
 from src.orchestrator.tool_registry import build_all_tools_with_health
-from src.tools.crop_and_inspect import CropAndInspectTool
+from src.tools.crop_and_inspect import CropAndInspectTool, INSPECT_SCHEMA
 from src.tools.ocr_with_position import OCRWithPositionTool
 from test_image_only_state_machine import _runtime_state
 
@@ -250,6 +250,42 @@ def test_crop_and_inspect_rejects_reversed_or_negative_bbox() -> None:
 
     assert result["status"] == "error"
     assert "bbox" in result["error"]
+
+
+def test_crop_and_inspect_requests_observations_without_direct_answer_field() -> None:
+    assert "observations" in INSPECT_SCHEMA["properties"]
+    assert "answer" not in INSPECT_SCHEMA["properties"]
+
+
+def test_crop_and_inspect_keeps_legacy_findings_as_observations(
+    tmp_path,
+) -> None:
+    from PIL import Image
+
+    image_path = tmp_path / "legacy-crop.png"
+    Image.new("RGB", (20, 20), "white").save(image_path)
+
+    class FakeClient:
+        def create_image_json(self, **kwargs):
+            return {
+                "description": "A small cropped region.",
+                "findings": ["A visible horizontal edge crosses the region."],
+                "answer": "This is definitely fake.",
+            }
+
+    result = CropAndInspectTool(client=FakeClient()).call(
+        {
+            "image_input": str(image_path),
+            "bbox": [0.0, 0.0, 1.0, 1.0],
+            "focus_question": "What is visibly present?",
+        }
+    )
+
+    assert result["status"] == "success"
+    assert result["observations"] == [
+        "A visible horizontal edge crosses the region."
+    ]
+    assert "answer" not in result
 
 
 class _FakeOCRResponse:

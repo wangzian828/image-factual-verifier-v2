@@ -17,19 +17,21 @@ Focus question: {focus_question}
 Return exactly one JSON object:
 {{
   "description": "literal description of the cropped region",
-  "findings": ["finding 1", "finding 2"],
-  "anomalies": ["anomaly 1"],
-  "answer": "direct answer to the focus question"
+  "observations": ["literal visible observation 1", "literal visible observation 2"],
+  "anomalies": ["specific visible irregularity, if any"],
+  "limitations": ["what the crop cannot establish, if relevant"]
 }}
 
-Be concrete and conservative. Output JSON only.
+Be concrete and conservative. Describe visible pixels, object relations, and
+observation limits. Write anomalies as the visible phenomenon itself and keep
+causal interpretation separate from the observation. Output JSON only.
 """
 
 INSPECT_SCHEMA = {
     "type": "object",
     "properties": {
         "description": {"type": "string", "maxLength": 700},
-        "findings": {
+        "observations": {
             "type": "array",
             "items": {"type": "string", "maxLength": 300},
             "maxItems": 8,
@@ -39,7 +41,11 @@ INSPECT_SCHEMA = {
             "items": {"type": "string", "maxLength": 300},
             "maxItems": 8,
         },
-        "answer": {"type": "string", "maxLength": 700},
+        "limitations": {
+            "type": "array",
+            "items": {"type": "string", "maxLength": 300},
+            "maxItems": 4,
+        },
     },
 }
 
@@ -163,12 +169,21 @@ class CropAndInspectTool(BaseTool):
             except OSError:
                 pass
 
+        observations = parsed.get("observations")
+        if not isinstance(observations, list):
+            # Older cached/model responses called these literal visual items
+            # "findings". Keep them usable as observations, but never revive
+            # the removed free-form "answer" field as a verdict.
+            observations = parsed.get("findings", [])
+        if not isinstance(observations, list):
+            observations = []
+
         return {
             "status": "success",
             "description": str(parsed.get("description", "")),
-            "findings": parsed.get("findings", []),
+            "observations": observations,
             "anomalies": parsed.get("anomalies", []),
-            "answer": str(parsed.get("answer", "")),
+            "limitations": parsed.get("limitations", []),
             "crop_bbox": bbox,
             "focus_question": focus_question,
             RUNTIME_METRICS_KEY: parsed.get(RUNTIME_METRICS_KEY, {}),
