@@ -20,6 +20,8 @@ from src.tools.base import BaseTool
 _SHARED_READERS: dict[bool, Any] = {}
 _READER_LOCK = threading.RLock()
 _READ_LOCK = threading.Lock()
+_SHARED_BAIDU_CLIENT: Optional[BaiduOCRClient] = None
+_BAIDU_CLIENT_LOCK = threading.RLock()
 
 
 @dataclass
@@ -139,6 +141,7 @@ class OCRWithPositionTool(BaseTool):
         artifact_bytes = b""
         requested_bbox: List[float] = []
         attempts: List[Dict[str, Any]] = []
+        ocr_input_metadata: Dict[str, Any] = {}
         backend = "unknown"
 
         try:
@@ -165,8 +168,21 @@ class OCRWithPositionTool(BaseTool):
                     ocr_image = image.copy()
                     offset_x = offset_y = 0
                 ocr_width, ocr_height = ocr_image.size
-                artifact_bytes = self._image_bytes(ocr_image)
                 if backend == "baidu":
+                    (
+                        artifact_bytes,
+                        upload_width,
+                        upload_height,
+                        ocr_input_metadata,
+                    ) = self._baidu_image_bytes(ocr_image)
+                    attempts.append(
+                        {
+                            "backend": "baidu_input",
+                            "status": "success",
+                            "request_count": 0,
+                            **ocr_input_metadata,
+                        }
+                    )
                     return self._call_baidu(
                         params,
                         artifact_bytes=artifact_bytes,
@@ -177,8 +193,12 @@ class OCRWithPositionTool(BaseTool):
                         offset_y=offset_y,
                         crop_width=ocr_width,
                         crop_height=ocr_height,
+                        upload_width=upload_width,
+                        upload_height=upload_height,
+                        ocr_input_metadata=ocr_input_metadata,
                         attempts=attempts,
                     )
+                artifact_bytes = self._image_bytes(ocr_image)
 
                 import numpy as np
 
@@ -255,6 +275,7 @@ class OCRWithPositionTool(BaseTool):
                 rejected_text_regions=rejected_text_regions,
                 full_text=" ".join(full_text_parts),
                 attempts=attempts,
+                ocr_input_metadata=ocr_input_metadata,
             )
         except Exception as exc:
             if not attempts:
@@ -263,9 +284,9 @@ class OCRWithPositionTool(BaseTool):
                         "backend": backend,
                         "status": "error",
                         "request_count": (
-                            int(getattr(exc, "request_count", 1))
+                            int(getattr(exc, "request_count", 0))
                             if isinstance(exc, BaiduOCRError)
-                            else 1
+                            else (0 if backend == "baidu" else 1)
                         ),
                         "error": f"{type(exc).__name__}: {exc}",
                     }
@@ -297,6 +318,7 @@ class OCRWithPositionTool(BaseTool):
                 ),
                 "ocr_backend": backend,
                 "ocr_model": model,
+                "ocr_input": ocr_input_metadata,
                 "backend_attempts": attempts,
                 "subcalls": self._ocr_subcalls(attempts),
             }
@@ -313,11 +335,29 @@ class OCRWithPositionTool(BaseTool):
         offset_y: int,
         crop_width: int,
         crop_height: int,
+        upload_width: int,
+        upload_height: int,
+        ocr_input_metadata: Dict[str, Any],
         attempts: List[Dict[str, Any]],
     ) -> Dict[str, Any]:
-        client = self.baidu_client or BaiduOCRClient()
+        client = self._get_baidu_client()
         token_started = time.perf_counter()
-        token, cache_hit = client.get_access_token()
+        try:
+            token, cache_hit = client.get_access_token()
+        except BaiduOCRError as exc:
+            attempts.append(
+                {
+                    "backend": "baidu_token",
+                    "status": "error",
+                    "request_count": exc.request_count,
+                    "duration_ms": round(
+                        (time.perf_counter() - token_started) * 1000,
+                        2,
+                    ),
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            )
+            raise
         if not cache_hit:
             attempts.append(
                 {
@@ -332,15 +372,30 @@ class OCRWithPositionTool(BaseTool):
             )
 
         ocr_started = time.perf_counter()
-        payload = client.recognize(
-            artifact_bytes,
-            access_token=token,
-        )
+        try:
+            payload, request_count = client.recognize_with_metadata(
+                artifact_bytes,
+                access_token=token,
+            )
+        except BaiduOCRError as exc:
+            attempts.append(
+                {
+                    "backend": "baidu_ocr",
+                    "status": "error",
+                    "request_count": exc.request_count,
+                    "duration_ms": round(
+                        (time.perf_counter() - ocr_started) * 1000,
+                        2,
+                    ),
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            )
+            raise
         attempts.append(
             {
                 "backend": "baidu_ocr",
                 "status": "success",
-                "request_count": 1,
+                "request_count": request_count,
                 "duration_ms": round(
                     (time.perf_counter() - ocr_started) * 1000,
                     2,
@@ -360,6 +415,8 @@ class OCRWithPositionTool(BaseTool):
                 offset_y=offset_y,
                 crop_width=crop_width,
                 crop_height=crop_height,
+                upload_width=upload_width,
+                upload_height=upload_height,
             )
             if (
                 region["text"].strip()
@@ -379,6 +436,7 @@ class OCRWithPositionTool(BaseTool):
             rejected_text_regions=rejected_text_regions,
             full_text=" ".join(full_text_parts),
             attempts=attempts,
+            ocr_input_metadata=ocr_input_metadata,
         )
 
     @staticmethod
@@ -392,6 +450,8 @@ class OCRWithPositionTool(BaseTool):
         offset_y: int,
         crop_width: int,
         crop_height: int,
+        upload_width: int,
+        upload_height: int,
     ) -> Dict[str, Any]:
         if not isinstance(item, dict):
             raise ValueError(f"Baidu OCR result {index} must be an object")
@@ -429,8 +489,15 @@ class OCRWithPositionTool(BaseTool):
                 [left + width, top + height],
                 [left, top + height],
             ]
+        if upload_width <= 0 or upload_height <= 0:
+            raise ValueError("Baidu OCR upload dimensions must be positive")
+        scale_x = float(crop_width) / float(upload_width)
+        scale_y = float(crop_height) / float(upload_height)
         global_quad = [
-            [point[0] + offset_x, point[1] + offset_y]
+            [
+                point[0] * scale_x + offset_x,
+                point[1] * scale_y + offset_y,
+            ]
             for point in quad
         ]
         xs = [point[0] for point in global_quad]
@@ -487,6 +554,7 @@ class OCRWithPositionTool(BaseTool):
         rejected_text_regions: List[Dict[str, Any]],
         full_text: str,
         attempts: List[Dict[str, Any]],
+        ocr_input_metadata: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         return {
             "status": "success",
@@ -505,6 +573,7 @@ class OCRWithPositionTool(BaseTool):
             "artifact_sha256": hashlib.sha256(artifact_bytes).hexdigest(),
             "ocr_backend": backend,
             "ocr_model": model,
+            "ocr_input": dict(ocr_input_metadata or {}),
             "backend_attempts": attempts,
             "subcalls": self._ocr_subcalls(attempts),
         }
@@ -523,6 +592,108 @@ class OCRWithPositionTool(BaseTool):
         buffer = io.BytesIO()
         image.save(buffer, format="PNG")
         return buffer.getvalue()
+
+    def _get_baidu_client(self) -> BaiduOCRClient:
+        if self.baidu_client is not None:
+            return self.baidu_client
+        global _SHARED_BAIDU_CLIENT
+        with _BAIDU_CLIENT_LOCK:
+            if _SHARED_BAIDU_CLIENT is None:
+                _SHARED_BAIDU_CLIENT = BaiduOCRClient()
+            return _SHARED_BAIDU_CLIENT
+
+    @staticmethod
+    def _baidu_image_bytes(
+        image: Any,
+    ) -> tuple[bytes, int, int, Dict[str, Any]]:
+        """Encode a bounded JPEG payload accepted by Baidu general OCR."""
+        from PIL import Image
+
+        source_width, source_height = image.size
+        max_edge = OCRWithPositionTool._positive_int_env(
+            "BAIDU_OCR_MAX_EDGE", 4096, minimum=64, maximum=4096
+        )
+        max_upload_bytes = OCRWithPositionTool._positive_int_env(
+            "BAIDU_OCR_MAX_UPLOAD_BYTES",
+            4_500_000,
+            minimum=250_000,
+            maximum=5_500_000,
+        )
+        initial_quality = OCRWithPositionTool._positive_int_env(
+            "BAIDU_OCR_JPEG_QUALITY", 90, minimum=55, maximum=95
+        )
+        current = image.copy()
+        largest_edge = max(source_width, source_height)
+        if largest_edge > max_edge:
+            scale = float(max_edge) / float(largest_edge)
+            resampling = getattr(Image, "Resampling", Image)
+            current = current.resize(
+                (
+                    max(1, int(round(source_width * scale))),
+                    max(1, int(round(source_height * scale))),
+                ),
+                resample=resampling.LANCZOS,
+            )
+
+        quality = initial_quality
+        for _ in range(10):
+            buffer = io.BytesIO()
+            current.save(
+                buffer,
+                format="JPEG",
+                quality=quality,
+                optimize=False,
+                progressive=False,
+            )
+            payload = buffer.getvalue()
+            if len(payload) <= max_upload_bytes:
+                return (
+                    payload,
+                    current.width,
+                    current.height,
+                    {
+                        "format": "jpeg",
+                        "source_width": source_width,
+                        "source_height": source_height,
+                        "upload_width": current.width,
+                        "upload_height": current.height,
+                        "upload_bytes": len(payload),
+                        "max_upload_bytes": max_upload_bytes,
+                        "jpeg_quality": quality,
+                    },
+                )
+            if quality > 55:
+                quality = max(55, quality - 8)
+                continue
+            if min(current.width, current.height) <= 64:
+                break
+            resampling = getattr(Image, "Resampling", Image)
+            current = current.resize(
+                (
+                    max(64, int(round(current.width * 0.8))),
+                    max(64, int(round(current.height * 0.8))),
+                ),
+                resample=resampling.LANCZOS,
+            )
+            quality = initial_quality
+        raise ValueError(
+            "Baidu OCR image cannot be compressed below "
+            f"{max_upload_bytes} bytes"
+        )
+
+    @staticmethod
+    def _positive_int_env(
+        name: str,
+        default: int,
+        *,
+        minimum: int,
+        maximum: int,
+    ) -> int:
+        try:
+            value = int(os.getenv(name, str(default)).strip())
+        except ValueError:
+            value = default
+        return max(minimum, min(maximum, value))
 
     @staticmethod
     def _ocr_subcalls(

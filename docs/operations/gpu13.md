@@ -297,11 +297,25 @@ file or the process environment:
 OCR_BACKEND=baidu
 BAIDU_OCR_API_KEY=<api-key>
 BAIDU_OCR_SECRET_KEY=<secret-key>
-BAIDU_OCR_TIMEOUT_SECONDS=30
+BAIDU_OCR_CONNECT_TIMEOUT_SECONDS=10
+BAIDU_OCR_READ_TIMEOUT_SECONDS=120
+BAIDU_OCR_MAX_RETRIES=0
+BAIDU_OCR_MAX_EDGE=4096
+BAIDU_OCR_MAX_UPLOAD_BYTES=4500000
 ```
 
 `BAIDU_OCR_ACCESS_TOKEN` may be supplied for a controlled run instead of the
 API key/secret pair. Tokens are never written to traces or source files.
+
+The Baidu path converts the image or requested crop to JPEG before submission,
+limits its longest side to 4096 pixels, and bounds the uploaded JPEG to 4.5 MB
+so the base64/form-encoded request remains below the provider limit. OCR
+coordinates are mapped back to the original image. `BAIDU_OCR_TIMEOUT_SECONDS`
+remains a compatibility alias for the read timeout. Retries are off by default:
+a timeout may mean the provider received the image but the response was lost.
+If a controlled retry is needed, set `BAIDU_OCR_MAX_RETRIES=1`; the trace records
+the actual provider request count. Non-JSON responses record only HTTP status,
+content type, byte count, and a body digest, never the raw body.
 
 The latency probe reports the shared-reader initialization separately from
 steady-state calls and should use a small repeat count:
