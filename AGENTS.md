@@ -13,6 +13,13 @@ Read these active documents before changing the runtime:
 - `docs/runtime-release-contract.md`
 - `docs/rl-semantic-reward.md`
 
+For current Agent runs, the source checkout and server rollout baseline are
+`codex/gpu13-canary-20260804-plan-relaxation-01`. Do not switch to the v3, v4,
+v4-minimal, or `feature/visual-fact-search-agent` branches for a normal run.
+Those lines are historical/experimental worktrees. Before running evaluation,
+verify `git branch --show-current`, `git status --short --branch`, and
+`git log -1 --oneline --decorate`; a branch mismatch is a hard stop.
+
 The July 14 implementation plan is a superseded historical record. The implementation
 and contract tests win when an old research note disagrees.
 

@@ -27,6 +27,51 @@ or other credential.
 7. Keep credentials in an untracked server `.env` or process environment. Never put
    them in Git, shell scripts, notebooks, traces, or this document.
 
+## Active runtime branch
+
+The only supported branch for current Agent evaluation, Gemini teacher runs, and
+gpu-13 rollout work is:
+
+```text
+codex/gpu13-canary-20260804-plan-relaxation-01
+```
+
+The maintained local source checkout is
+`C:\Users\wangza\ifv-gpu13-canary-20260804-01`. The maintained server checkout is:
+
+```text
+/gs/home/wza/projects/image-factual-verifier-v2-worktrees/gpu13-canary-20260804-plan-relaxation-01
+```
+
+Do not use `codex/image-factual-verifier-v3`,
+`codex/image-factual-verifier-v4`, `codex/image-factual-verifier-v4-minimal`, or
+`feature/visual-fact-search-agent` as the current runtime baseline. Those branches
+are historical or experimental lines and must not be substituted for the canary
+without an explicitly recorded reproduction plan.
+
+Before every server run, verify the checkout before starting any provider or
+evaluation process:
+
+```bash
+git branch --show-current
+git status --short --branch
+git log -1 --oneline --decorate
+```
+
+The first command must print the active canary branch. If it does not, stop and
+repair the checkout with the maintained update script; do not continue on the
+wrong branch. The script's default branch is intentionally the active canary:
+
+```powershell
+python scripts/server/jupyter_remote.py --kernel-name ifv-agent --shell `
+  'cd /gs/home/wza/projects/image-factual-verifier-v2-worktrees/gpu13-canary-20260804-plan-relaxation-01 && git branch --show-current && git status --short --branch'
+```
+
+Historical commits such as `fe43bdd` and `0738e59` are useful for reproducing
+older measurements, but they are not the current branch baseline. Record the
+exact commit in every run manifest and do not infer the runtime version from the
+model name alone.
+
 The maintained gpu-13 wrappers automatically set `IFV_ENV_FILE` to the following
 private file when it exists:
 
