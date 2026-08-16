@@ -72,6 +72,16 @@ older measurements, but they are not the current branch baseline. Record the
 exact commit in every run manifest and do not infer the runtime version from the
 model name alone.
 
+### SFT eligibility behavior
+
+`176a8a6` changes frozen SFT eligibility from an all-or-nothing
+`protocol_rejections` exclusion to an automatic recovered-trajectory assessment.
+The judge receives compact rejected-turn history and returns `clean`,
+`recovered_minor`, `degraded_repetition`, or `unresolved`. Only clean and
+materially recovered trajectories may pass; repeated or unresolved blocked behavior
+remains in rejected trace storage. This is an SFT export change, not an Agent
+rollout-version claim.
+
 The historical result mapping is maintained in
 [`gpu13-version-registry.md`](gpu13-version-registry.md). In particular,
 `fe43bdd` is the accepted construction high baseline and `0738e59` is the
