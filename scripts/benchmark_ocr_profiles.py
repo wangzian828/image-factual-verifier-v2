@@ -1,9 +1,8 @@
-"""Benchmark the PaddleOCR cloud API on local images.
+"""Benchmark the process-shared CPU EasyOCR reader on local images.
 
-Every repeat submits a billable remote OCR job. Use a small repeat count when
+The first call may include reader initialization. Use a small repeat count when
 checking latency:
 
-    PADDLEOCR_API_TOKEN=... \
     python scripts/benchmark_ocr_profiles.py --repeats 1 image.jpg
 """
 from __future__ import annotations
@@ -59,7 +58,7 @@ def main() -> int:
     print(
         json.dumps(
             {
-                "backend": "paddleocr_api",
+                "backend": last_result.get("ocr_backend"),
                 "repeats": args.repeats,
                 "rows": rows,
             },

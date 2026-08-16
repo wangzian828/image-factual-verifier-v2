@@ -276,28 +276,18 @@ The following were verified through that proxy:
 - Hugging Face HTTPS;
 - Google Drive HTTPS.
 
-OCR uses the PaddleOCR official asynchronous cloud API. The runtime submits
-one image or crop, polls the returned job, downloads the JSONL result, and
-normalizes its text regions, coordinates, and confidence. It never starts a
-local PaddleOCR service and has no local OCR fallback. A missing
-`PADDLEOCR_API_TOKEN`, failed request, failed job, malformed result, or timeout
-is an explicit `ocr_with_position` tool failure.
+OCR uses one process-shared EasyOCR reader on CPU by default. The reader is
+initialized lazily and OCR calls are serialized because a reader instance is
+not assumed to be thread-safe. It never starts a separate OCR service and has
+no PaddleOCR or other engine fallback. A missing package, reader
+initialization failure, malformed result, or runtime exception is an explicit
+`ocr_with_position` tool failure.
 
-Set the token only in the untracked runtime environment file or the process
-environment:
+GPU OCR is opt-in through `EASYOCR_GPU=true`; the GPU setting must be chosen
+from the actual server capacity and is not required for the default runtime.
 
-```bash
-PADDLEOCR_API_TOKEN=<secret>
-PADDLEOCR_API_MODEL=PaddleOCR-VL-1.6
-```
-
-Optional API timing controls are `PADDLEOCR_API_POLL_SECONDS`,
-`PADDLEOCR_API_JOB_TIMEOUT_SECONDS`, and
-`PADDLEOCR_API_REQUEST_TIMEOUT_SECONDS`. The default endpoint is
-`https://paddleocr.aistudio-app.com/api/v2/ocr/jobs`; override it only for an
-explicitly compatible deployment with `PADDLEOCR_API_URL`.
-
-The latency probe submits real remote jobs and should use a small repeat count:
+The latency probe reports the shared-reader initialization separately from
+steady-state calls and should use a small repeat count:
 
 ```bash
 scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
@@ -305,7 +295,7 @@ scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
   /path/to/image.jpg
 ```
 
-PaddleOCR is used only for visible-text observations:
+EasyOCR is used only for visible-text observations:
 
 - detected text strings;
 - quadrilateral and axis-aligned image coordinates;

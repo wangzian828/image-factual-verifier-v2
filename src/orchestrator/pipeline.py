@@ -198,7 +198,7 @@ class Orchestrator:
                 os.getenv("IMAGE_UPLOAD_PROVIDER", "oss"),
                 os.getenv("BROWSE_FETCH_PROVIDER", "jina"),
                 os.getenv("PERCEPTION_CACHE_VERSION", "perception-v1"),
-                os.getenv("OCR_CACHE_VERSION", "paddleocr-api-v1"),
+                os.getenv("OCR_CACHE_VERSION", "easyocr-v1"),
                 self.source_access_policy.cache_partition,
             ]
         )

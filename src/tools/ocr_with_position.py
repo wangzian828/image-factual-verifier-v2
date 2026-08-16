@@ -1,51 +1,37 @@
 # -*- coding: utf-8 -*-
-"""Positioned OCR backed by the PaddleOCR cloud job API."""
+"""CPU EasyOCR tool with normalized positioned text observations."""
 
 from __future__ import annotations
 
 import hashlib
-import html
 import io
-import json
 import os
-import re
-import time
-from collections.abc import Mapping
+import threading
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, List
-
-import requests
+from typing import Any, Dict, List, Optional
 
 from src.tools.base import BaseTool
 
 
-DEFAULT_JOB_URL = "https://paddleocr.aistudio-app.com/api/v2/ocr/jobs"
-DEFAULT_MODEL = "PaddleOCR-VL-1.6"
-DEFAULT_POLL_SECONDS = 2.0
-DEFAULT_JOB_TIMEOUT_SECONDS = 180.0
-DEFAULT_REQUEST_TIMEOUT_SECONDS = 30.0
-DEFAULT_SUBMIT_RETRIES = 3
-DEFAULT_RETRY_BACKOFF_SECONDS = 5.0
-
-
-class PaddleOCRAPIError(RuntimeError):
-    """An explicit remote OCR provider failure."""
+_SHARED_READERS: dict[bool, Any] = {}
+_READER_LOCK = threading.RLock()
+_READ_LOCK = threading.Lock()
 
 
 @dataclass
 class OCRWithPositionTool(BaseTool):
-    """Extract positioned text through PaddleOCR's asynchronous cloud API.
+    """Extract positioned text with one process-shared CPU EasyOCR reader.
 
-    The API is deliberately the only runtime OCR backend.  Missing credentials,
-    failed jobs, malformed provider output, and timeouts are explicit tool
-    failures; there is no local PaddleOCR fallback.
+    EasyOCR is intentionally the only backend.  A reader is initialized lazily
+    and shared by tool instances in the process; OCR calls are serialized because
+    the same reader is not assumed to be thread-safe.
     """
 
     name: str = "ocr_with_position"
     description: str = (
-        "Extract text from the image with position information through the "
-        "PaddleOCR cloud OCR API. Returns text regions, bounding boxes, "
-        "confidence scores, and detected language."
+        "Extract text from the image with position information through EasyOCR. "
+        "Returns text regions, bounding boxes, confidence scores, and language."
     )
     parameters: dict = field(
         default_factory=lambda: {
@@ -75,95 +61,66 @@ class OCRWithPositionTool(BaseTool):
                 },
                 "expected_property": {
                     "type": "string",
-                    "description": "Discriminative text or property expected in the region.",
+                    "description": "Discriminative text or property expected in the target region.",
                 },
                 "visual_question_id": {
                     "type": "string",
-                    "description": "Pending visual question this OCR resolves.",
+                    "description": "Pending visual question this regional OCR resolves.",
                 },
                 "source_discovery_id": {
                     "type": "string",
-                    "description": "Discovery id that motivated this revisit.",
+                    "description": "Discovery id that motivated this visual revisit.",
                 },
             },
             "required": ["image_input"],
         }
     )
+    _reader: Optional[Any] = field(default=None, repr=False)
     min_confidence: float = 0.5
-    job_url: str = ""
-    model: str = ""
-    poll_seconds: float = DEFAULT_POLL_SECONDS
-    job_timeout_seconds: float = DEFAULT_JOB_TIMEOUT_SECONDS
-    request_timeout_seconds: float = DEFAULT_REQUEST_TIMEOUT_SECONDS
-    http_client: Any = field(default=None, repr=False)
+    use_gpu: Optional[bool] = None
 
-    def _job_url(self) -> str:
+    def _use_gpu(self) -> bool:
+        if self.use_gpu is not None:
+            return bool(self.use_gpu)
         return (
-            self.job_url.strip()
-            or os.getenv("PADDLEOCR_API_URL", "").strip()
-            or DEFAULT_JOB_URL
+            os.getenv("EASYOCR_GPU", "false").strip().lower()
+            in {"1", "true", "yes", "on"}
         )
 
-    def _model(self) -> str:
-        return (
-            self.model.strip()
-            or os.getenv("PADDLEOCR_API_MODEL", "").strip()
-            or DEFAULT_MODEL
-        )
+    def _get_reader(self) -> Any:
+        if self._reader is not None:
+            return self._reader
 
-    def _token(self) -> str:
-        token = os.getenv("PADDLEOCR_API_TOKEN", "").strip()
-        if not token:
-            raise PaddleOCRAPIError(
-                "PADDLEOCR_API_TOKEN is required for ocr_with_position"
-            )
-        return token
+        use_gpu = self._use_gpu()
+        with _READER_LOCK:
+            if use_gpu not in _SHARED_READERS:
+                import easyocr
 
-    def _poll_interval(self) -> float:
-        raw = os.getenv(
-            "PADDLEOCR_API_POLL_SECONDS",
-            str(self.poll_seconds),
-        )
-        return max(0.2, float(raw))
+                _SHARED_READERS[use_gpu] = easyocr.Reader(
+                    ["ch_sim", "en"],
+                    gpu=use_gpu,
+                    verbose=False,
+                )
+            self._reader = _SHARED_READERS[use_gpu]
+        return self._reader
 
-    def _job_timeout(self) -> float:
-        raw = os.getenv(
-            "PADDLEOCR_API_JOB_TIMEOUT_SECONDS",
-            str(self.job_timeout_seconds),
-        )
-        return max(5.0, float(raw))
+    def _ocr_model(self) -> str:
+        try:
+            import easyocr
 
-    def _request_timeout(self) -> float:
-        raw = os.getenv(
-            "PADDLEOCR_API_REQUEST_TIMEOUT_SECONDS",
-            str(self.request_timeout_seconds),
-        )
-        return max(1.0, float(raw))
-
-    def _submit_retries(self) -> int:
-        raw = os.getenv(
-            "PADDLEOCR_API_SUBMIT_RETRIES",
-            str(DEFAULT_SUBMIT_RETRIES),
-        )
-        return max(0, min(5, int(raw)))
-
-    def _retry_backoff_seconds(self, attempt: int) -> float:
-        raw = os.getenv(
-            "PADDLEOCR_API_RETRY_BACKOFF_SECONDS",
-            str(DEFAULT_RETRY_BACKOFF_SECONDS),
-        )
-        return min(60.0, max(0.0, float(raw)) * (2**attempt))
-
-    def _http(self) -> Any:
-        return self.http_client or requests
+            return f"easyocr-{getattr(easyocr, '__version__', 'unknown')}"
+        except Exception:
+            return "easyocr"
 
     def call(self, params: Dict[str, Any]) -> Dict[str, Any]:
         image_path = str(params.get("image_input", "")).strip()
         artifact_bytes = b""
         requested_bbox: List[float] = []
+        attempts: List[Dict[str, Any]] = []
 
         try:
             from PIL import Image
+            import numpy as np
 
             if not image_path:
                 raise ValueError("image_input is required")
@@ -179,65 +136,102 @@ class OCRWithPositionTool(BaseTool):
                     py1 = int(round(requested_bbox[1] * image_height))
                     px2 = int(round(requested_bbox[2] * image_width))
                     py2 = int(round(requested_bbox[3] * image_height))
-                    image = image.crop((px1, py1, px2, py2))
+                    ocr_image = image.crop((px1, py1, px2, py2))
                     offset_x, offset_y = px1, py1
                 else:
+                    ocr_image = image.copy()
                     offset_x = offset_y = 0
-                ocr_width, ocr_height = image.size
-                artifact_bytes = self._image_bytes(image)
+                ocr_width, ocr_height = ocr_image.size
+                artifact_bytes = self._image_bytes(ocr_image)
+                ocr_input = np.asarray(ocr_image)
 
-            payload, attempts = self._submit_and_poll(artifact_bytes)
-            raw_regions, markdown_text = self._extract_regions(payload)
+            reader = self._get_reader()
+            with _READ_LOCK:
+                raw_results = reader.readtext(
+                    ocr_input,
+                    detail=1,
+                    paragraph=False,
+                )
+            attempts.append(
+                {
+                    "backend": "easyocr",
+                    "status": "success",
+                    "device": "gpu" if self._use_gpu() else "cpu",
+                }
+            )
+
             text_regions: List[Dict[str, Any]] = []
             rejected_text_regions: List[Dict[str, Any]] = []
-
-            for raw_bbox, text, confidence in raw_regions:
-                region = self._build_region(
-                    raw_bbox,
-                    text,
-                    confidence,
-                    width=ocr_width,
-                    height=ocr_height,
-                    offset_x=offset_x,
-                    offset_y=offset_y,
-                    original_width=image_width,
-                    original_height=image_height,
-                )
+            full_text_parts: List[str] = []
+            for index, raw in enumerate(raw_results or []):
+                bbox, text, confidence = self._parse_result(raw, index=index)
+                quad = self._normalize_quad(bbox, index=index)
+                global_quad = [
+                    [point[0] + offset_x, point[1] + offset_y]
+                    for point in quad
+                ]
+                xs = [point[0] for point in global_quad]
+                ys = [point[1] for point in global_quad]
+                region = {
+                    "text": text,
+                    "bbox_quad": [
+                        [
+                            round(float(point[0]) / image_width, 4),
+                            round(float(point[1]) / image_height, 4),
+                        ]
+                        for point in global_quad
+                    ],
+                    "bbox": [
+                        round(min(xs) / image_width, 4),
+                        round(min(ys) / image_height, 4),
+                        round(max(xs) / image_width, 4),
+                        round(max(ys) / image_height, 4),
+                    ],
+                    "confidence": round(float(confidence), 3),
+                    "language": (
+                        "zh"
+                        if any(
+                            0x4E00 <= ord(char) <= 0x9FFF
+                            for char in text
+                        )
+                        else "en"
+                    ),
+                }
                 if (
-                    region["text"].strip()
-                    and float(region["confidence"]) >= float(self.min_confidence)
+                    text.strip()
+                    and float(confidence) >= float(self.min_confidence)
                 ):
                     text_regions.append(region)
+                    full_text_parts.append(text)
                 else:
                     rejected_text_regions.append(region)
 
-            position_quality = "api_layout"
-            if not text_regions and markdown_text.strip():
-                # Keep visible text usable when a provider version returns
-                # Markdown but omits per-block coordinates.
-                fallback = self._build_region(
-                    [[0, 0], [ocr_width, 0], [ocr_width, ocr_height], [0, ocr_height]],
-                    markdown_text.strip(),
-                    1.0,
-                    width=ocr_width,
-                    height=ocr_height,
-                    offset_x=offset_x,
-                    offset_y=offset_y,
-                    original_width=image_width,
-                    original_height=image_height,
-                )
-                text_regions.append(fallback)
-                position_quality = "whole_crop_fallback"
-
-            full_text = " ".join(
-                item["text"] for item in text_regions if item["text"].strip()
+            return self._success(
+                params,
+                requested_bbox=requested_bbox,
+                artifact_bytes=artifact_bytes,
+                text_regions=text_regions,
+                rejected_text_regions=rejected_text_regions,
+                full_text=" ".join(full_text_parts),
+                attempts=attempts,
             )
+        except Exception as exc:
+            if not attempts:
+                attempts.append(
+                    {
+                        "backend": "easyocr",
+                        "status": "error",
+                        "device": "gpu" if self._use_gpu() else "cpu",
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                )
             return {
-                "status": "success",
-                "text_regions": text_regions,
-                "total_regions": len(text_regions),
-                "full_text": full_text,
-                "rejected_text_regions": rejected_text_regions,
+                "status": "error",
+                "error": f"EasyOCR failed: {exc}",
+                "text_regions": [],
+                "total_regions": 0,
+                "full_text": "",
+                "rejected_text_regions": [],
                 "requested_bbox": requested_bbox,
                 "goal": str(params.get("goal", "")),
                 "source_evidence_id": str(
@@ -246,411 +240,60 @@ class OCRWithPositionTool(BaseTool):
                 "expected_property": str(
                     params.get("expected_property", "")
                 ),
-                "artifact_sha256": hashlib.sha256(
-                    artifact_bytes
-                ).hexdigest(),
-                "ocr_backend": "paddleocr_api",
-                "ocr_model": self._model(),
-                "position_quality": position_quality,
-                "backend_attempts": attempts,
-                "subcalls": self._ocr_subcalls(attempts),
-            }
-        except Exception as exc:
-            return {
-                "status": "error",
-                "error": f"OCR API failed: {exc}",
-                "text_regions": [],
-                "total_regions": 0,
-                "full_text": "",
-                "rejected_text_regions": [],
-                "requested_bbox": requested_bbox,
                 "artifact_sha256": (
                     hashlib.sha256(artifact_bytes).hexdigest()
                     if artifact_bytes
                     else ""
                 ),
-                "ocr_backend": "paddleocr_api",
-                "ocr_model": self._model(),
-                "backend_attempts": [
-                    {
-                        "backend": "paddleocr_api",
-                        "status": "error",
-                        "error": f"{type(exc).__name__}: {exc}",
-                    }
-                ],
-                "subcalls": [
-                    {
-                        "kind": "ocr",
-                        "provider": "paddleocr_api",
-                        "status": "error",
-                        "request_count": 1,
-                    }
-                ],
+                "ocr_backend": "easyocr",
+                "ocr_model": self._ocr_model(),
+                "backend_attempts": attempts,
+                "subcalls": self._ocr_subcalls(attempts),
             }
 
-    def _submit_and_poll(
+    def _success(
         self,
-        image_bytes: bytes,
-    ) -> tuple[Dict[str, Any], List[Dict[str, Any]]]:
-        job_url = self._job_url()
-        headers = {"Authorization": f"bearer {self._token()}"}
-        optional_payload = {
-            "useDocOrientationClassify": False,
-            "useDocUnwarping": False,
-            "useChartRecognition": False,
-        }
-        attempts: List[Dict[str, Any]] = []
-        response = None
-        max_attempts = self._submit_retries() + 1
-        for attempt in range(max_attempts):
-            response = self._http().post(
-                job_url,
-                headers=headers,
-                data={
-                    "model": self._model(),
-                    "optionalPayload": json.dumps(optional_payload),
-                },
-                files={
-                    "file": (
-                        "ocr-input.png",
-                        image_bytes,
-                        "image/png",
-                    )
-                },
-                timeout=self._request_timeout(),
-            )
-            if response.ok:
-                attempts.append(
-                    {
-                        "backend": "paddleocr_api_submit",
-                        "status": "success",
-                        "attempt": attempt + 1,
-                    }
-                )
-                break
-
-            if (
-                self._retryable_submit_response(response)
-                and attempt + 1 < max_attempts
-            ):
-                delay = self._retry_backoff_seconds(attempt)
-                attempts.append(
-                    {
-                        "backend": "paddleocr_api_submit",
-                        "status": "retry",
-                        "http_status": response.status_code,
-                        "retry_after_seconds": delay,
-                        "attempt": attempt + 1,
-                    }
-                )
-                time.sleep(delay)
-                continue
-
-            attempts.append(
-                {
-                    "backend": "paddleocr_api_submit",
-                    "status": "error",
-                    "http_status": response.status_code,
-                    "attempt": attempt + 1,
-                }
-            )
-            raise PaddleOCRAPIError(
-                f"submit returned HTTP {response.status_code}: "
-                f"{response.text[:500]}"
-            )
-        if response is None or not response.ok:
-            raise PaddleOCRAPIError("submit did not return a usable response")
-        try:
-            job_id = str(response.json()["data"]["jobId"]).strip()
-        except (KeyError, TypeError, ValueError) as exc:
-            raise PaddleOCRAPIError(
-                "submit response lacks data.jobId"
-            ) from exc
-        if not job_id:
-            raise PaddleOCRAPIError("submit response returned an empty jobId")
-
-        deadline = time.monotonic() + self._job_timeout()
-        while True:
-            if time.monotonic() >= deadline:
-                raise TimeoutError(
-                    f"PaddleOCR job {job_id} exceeded "
-                    f"{self._job_timeout():.1f}s"
-                )
-            status_response = self._http().get(
-                f"{job_url}/{job_id}",
-                headers=headers,
-                timeout=self._request_timeout(),
-            )
-            if not status_response.ok:
-                raise PaddleOCRAPIError(
-                    f"poll returned HTTP {status_response.status_code}: "
-                    f"{status_response.text[:500]}"
-                )
-            try:
-                data = status_response.json()["data"]
-                state = str(data.get("state", "")).lower()
-            except (KeyError, TypeError, ValueError) as exc:
-                raise PaddleOCRAPIError(
-                    "poll response lacks data.state"
-                ) from exc
-            attempts.append(
-                {
-                    "backend": "paddleocr_api_poll",
-                    "status": state or "unknown",
-                }
-            )
-            if state == "done":
-                json_url = str(
-                    (data.get("resultUrl") or {}).get("jsonUrl", "")
-                ).strip()
-                if not json_url:
-                    raise PaddleOCRAPIError(
-                        "completed job lacks data.resultUrl.jsonUrl"
-                    )
-                result_response = self._http().get(
-                    json_url,
-                    timeout=self._request_timeout(),
-                )
-                if not result_response.ok:
-                    raise PaddleOCRAPIError(
-                        "result download returned HTTP "
-                        f"{result_response.status_code}"
-                    )
-                attempts.append(
-                    {
-                        "backend": "paddleocr_api_result",
-                        "status": "success",
-                    }
-                )
-                return self._decode_jsonl_result(result_response.text), attempts
-            if state == "failed":
-                raise PaddleOCRAPIError(
-                    f"job failed: {str(data.get('errorMsg', 'unknown error'))[:500]}"
-                )
-            time.sleep(min(self._poll_interval(), max(0.2, deadline - time.monotonic())))
-
-    @staticmethod
-    def _retryable_submit_response(response: Any) -> bool:
-        try:
-            payload = response.json()
-        except (TypeError, ValueError):
-            return False
-        code = str(payload.get("code", "")).strip()
-        message = str(payload.get("msg", "")).lower()
-        return code == "10010" or "queue" in message or "队列" in message
-
-    @staticmethod
-    def _decode_jsonl_result(text: str) -> Dict[str, Any]:
-        rows = [
-            json.loads(line)
-            for line in text.splitlines()
-            if line.strip()
-        ]
-        if not rows:
-            raise PaddleOCRAPIError("result JSONL is empty")
-        first = rows[0]
-        if not isinstance(first, Mapping):
-            raise PaddleOCRAPIError("result JSONL row is not an object")
-        result = first.get("result", first)
-        if not isinstance(result, Mapping):
-            raise PaddleOCRAPIError("result JSONL lacks an object result")
-        return dict(result)
-
-    @classmethod
-    def _extract_regions(
-        cls,
-        payload: Mapping[str, Any],
-    ) -> tuple[List[tuple[Any, str, float]], str]:
-        regions: List[tuple[Any, str, float]] = []
-        markdown_parts: List[str] = []
-        pages = payload.get("layoutParsingResults")
-        if not isinstance(pages, list):
-            pages = [payload]
-
-        for page in pages:
-            if not isinstance(page, Mapping):
-                continue
-            markdown_parts.extend(cls._markdown_texts(page))
-            parsed = cls._json_value(page.get("prunedResult"))
-            candidates = [
-                page,
-                parsed,
-                parsed.get("overall_ocr_res")
-                if isinstance(parsed, Mapping)
-                else None,
-            ]
-            for candidate in candidates:
-                if not isinstance(candidate, Mapping):
-                    continue
-                regions.extend(cls._array_regions(candidate))
-                if regions:
-                    break
-            if not regions:
-                for candidate in candidates:
-                    if isinstance(candidate, Mapping):
-                        regions.extend(cls._block_regions(candidate))
-                        if regions:
-                            break
-
-        deduped: List[tuple[Any, str, float]] = []
-        seen: set[tuple[str, str]] = set()
-        for bbox, text, confidence in regions:
-            key = (json.dumps(bbox, sort_keys=True), text.strip())
-            if key not in seen and text.strip():
-                seen.add(key)
-                deduped.append((bbox, text, confidence))
-        return deduped, "\n".join(markdown_parts)
-
-    @classmethod
-    def _array_regions(
-        cls,
-        data: Mapping[str, Any],
-    ) -> List[tuple[Any, str, float]]:
-        texts = cls._as_list(
-            cls._first_present(data, "rec_texts", "texts")
-        )
-        boxes = cls._as_list(
-            cls._first_present(data, "rec_polys", "dt_polys", "rec_boxes")
-        )
-        scores = cls._as_list(
-            cls._first_present(data, "rec_scores", "scores")
-        )
-        if not texts or not boxes:
-            return []
-        if len(scores) < len(texts):
-            scores.extend([1.0] * (len(texts) - len(scores)))
-        return [
-            (boxes[index], str(texts[index] or "").strip(), float(scores[index]))
-            for index in range(min(len(texts), len(boxes)))
-        ]
-
-    @classmethod
-    def _block_regions(
-        cls,
-        data: Mapping[str, Any],
-    ) -> List[tuple[Any, str, float]]:
-        for key in ("parsing_res_list", "layout_res_list", "blocks"):
-            items = data.get(key)
-            if not isinstance(items, list):
-                continue
-            regions: List[tuple[Any, str, float]] = []
-            for item in items:
-                if not isinstance(item, Mapping):
-                    continue
-                text = str(
-                    cls._first_present(
-                        item,
-                        "block_content",
-                        "text",
-                        "content",
-                    )
-                    or ""
-                ).strip()
-                bbox = cls._first_present(
-                    item,
-                    "block_bbox",
-                    "bbox",
-                    "box",
-                    "coordinate",
-                )
-                if text and bbox is not None:
-                    regions.append(
-                        (
-                            bbox,
-                            text,
-                            float(item.get("score", item.get("confidence", 1.0))),
-                        )
-                    )
-            if regions:
-                return regions
-        return []
-
-    @staticmethod
-    def _json_value(value: Any) -> Any:
-        if isinstance(value, str):
-            try:
-                return json.loads(value)
-            except json.JSONDecodeError:
-                return {}
-        return value
-
-    @staticmethod
-    def _markdown_texts(page: Mapping[str, Any]) -> List[str]:
-        markdown = page.get("markdown")
-        if isinstance(markdown, Mapping):
-            value = markdown.get("text") or markdown.get("markdown_texts")
-            if isinstance(value, list):
-                return [
-                    cleaned
-                    for item in value
-                    if (cleaned := OCRWithPositionTool._clean_markdown_text(item))
-                ]
-            if value:
-                cleaned = OCRWithPositionTool._clean_markdown_text(value)
-                return [cleaned] if cleaned else []
-        return []
-
-    @staticmethod
-    def _clean_markdown_text(value: Any) -> str:
-        text = html.unescape(str(value))
-        text = re.sub(r"!\[[^\]]*\]\([^)]*\)", " ", text)
-        text = re.sub(r"<img\b[^>]*>", " ", text, flags=re.IGNORECASE)
-        text = re.sub(r"<[^>]+>", " ", text)
-        text = re.sub(r"`{1,3}", "", text)
-        return re.sub(r"\s+", " ", text).strip()
-
-    def _build_region(
-        self,
-        bbox: Any,
-        text: str,
-        confidence: float,
+        params: Dict[str, Any],
         *,
-        width: int,
-        height: int,
-        offset_x: int,
-        offset_y: int,
-        original_width: int,
-        original_height: int,
+        requested_bbox: List[float],
+        artifact_bytes: bytes,
+        text_regions: List[Dict[str, Any]],
+        rejected_text_regions: List[Dict[str, Any]],
+        full_text: str,
+        attempts: List[Dict[str, Any]],
     ) -> Dict[str, Any]:
-        quad = self._normalize_quad(bbox, index=0)
-        if any(
-            point[0] < 0
-            or point[1] < 0
-            or point[0] > width
-            or point[1] > height
-            for point in quad
-        ):
-            raise PaddleOCRAPIError(
-                "PaddleOCR API region coordinates exceed the uploaded image"
-            )
-        global_bbox = [
-            [point[0] + offset_x, point[1] + offset_y]
-            for point in quad
-        ]
-        xs = [point[0] for point in global_bbox]
-        ys = [point[1] for point in global_bbox]
         return {
-            "text": str(text).strip(),
-            "bbox_quad": [
-                [
-                    round(float(point[0]) / original_width, 4),
-                    round(float(point[1]) / original_height, 4),
-                ]
-                for point in global_bbox
-            ],
-            "bbox": [
-                round(min(xs) / original_width, 4),
-                round(min(ys) / original_height, 4),
-                round(max(xs) / original_width, 4),
-                round(max(ys) / original_height, 4),
-            ],
-            "confidence": round(float(confidence), 3),
-            "language": (
-                "zh"
-                if any(0x4E00 <= ord(char) <= 0x9FFF for char in str(text))
-                else "en"
+            "status": "success",
+            "text_regions": text_regions,
+            "total_regions": len(text_regions),
+            "full_text": full_text,
+            "rejected_text_regions": rejected_text_regions,
+            "requested_bbox": requested_bbox,
+            "goal": str(params.get("goal", "")),
+            "source_evidence_id": str(
+                params.get("source_evidence_id", "")
             ),
+            "expected_property": str(
+                params.get("expected_property", "")
+            ),
+            "artifact_sha256": hashlib.sha256(artifact_bytes).hexdigest(),
+            "ocr_backend": "easyocr",
+            "ocr_model": self._ocr_model(),
+            "backend_attempts": attempts,
+            "subcalls": self._ocr_subcalls(attempts),
         }
+
+    @staticmethod
+    def _parse_result(raw: Any, *, index: int) -> tuple[Any, str, float]:
+        if not isinstance(raw, (list, tuple)) or len(raw) < 3:
+            raise ValueError(f"EasyOCR result {index} must be [bbox, text, score]")
+        bbox, text, confidence = raw[0], str(raw[1]).strip(), raw[2]
+        if isinstance(confidence, bool) or not isinstance(
+            confidence,
+            (int, float),
+        ):
+            raise ValueError(f"EasyOCR result {index} has invalid confidence")
+        return bbox, text, float(confidence)
 
     @staticmethod
     def _image_bytes(image: Any) -> bytes:
@@ -660,12 +303,12 @@ class OCRWithPositionTool(BaseTool):
 
     @staticmethod
     def _ocr_subcalls(
-        attempts: Iterable[Mapping[str, Any]],
+        attempts: Iterable[Dict[str, Any]],
     ) -> List[Dict[str, Any]]:
         return [
             {
                 "kind": "ocr",
-                "provider": str(item.get("backend", "paddleocr_api")),
+                "provider": str(item.get("backend", "easyocr")),
                 "status": str(item.get("status", "error")),
                 "request_count": 1,
             }
@@ -673,7 +316,11 @@ class OCRWithPositionTool(BaseTool):
         ]
 
     @staticmethod
-    def _normalize_bbox(raw_bbox: Any, width: int, height: int) -> List[float]:
+    def _normalize_bbox(
+        raw_bbox: Any,
+        width: int,
+        height: int,
+    ) -> List[float]:
         if raw_bbox in (None, []):
             return []
         if not isinstance(raw_bbox, list) or len(raw_bbox) != 4:
@@ -695,24 +342,6 @@ class OCRWithPositionTool(BaseTool):
         if x2 - x1 <= 0.001 or y2 - y1 <= 0.001:
             raise ValueError("bbox must describe a non-empty region inside the image.")
         return [round(x1, 6), round(y1, 6), round(x2, 6), round(y2, 6)]
-
-    @staticmethod
-    def _first_present(data: Mapping[str, Any], *names: str) -> Any:
-        for name in names:
-            if name in data and data[name] is not None:
-                return data[name]
-        return None
-
-    @staticmethod
-    def _as_list(value: Any) -> List[Any]:
-        if value is None:
-            return []
-        if isinstance(value, list):
-            return list(value)
-        try:
-            return list(value)
-        except TypeError:
-            return [value]
 
     @staticmethod
     def _normalize_quad(value: Any, *, index: int) -> List[List[float]]:
@@ -746,6 +375,4 @@ class OCRWithPositionTool(BaseTool):
             x1, y1, x2, y2 = [float(item) for item in value]
             if x1 < x2 and y1 < y2:
                 return [[x1, y1], [x2, y1], [x2, y2], [x1, y2]]
-        raise ValueError(
-            f"PaddleOCR API region {index} requires a quadrilateral or bbox"
-        )
+        raise ValueError(f"EasyOCR result {index} requires a quadrilateral or bbox")

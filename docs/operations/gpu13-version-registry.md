@@ -12,7 +12,7 @@
 | 当前服务器 checkout HEAD | `7c08a0a` |
 | 最近一次行为测试 commit | `d34cf63` |
 | 模型 | `gemini-3.7-flash` |
-| 当前 OCR | PaddleOCR Cloud API，`PaddleOCR-VL-1.6` |
+| 当前 OCR | EasyOCR `1.7.2`，共享 CPU reader |
 
 `7c08a0a` 及其前面的 `0000541`、`d9a18df`、`c016fe6` 只包含运行路径、轮询和运维 guard；最近一次行为测试使用的是 `d34cf63`，不能把当前服务器 HEAD 直接当成该次 Agent 行为版本。
 

@@ -279,6 +279,7 @@ class _FakeOCRHTTP:
         return self.responses.pop(0)
 
 
+@pytest.mark.skip(reason="PaddleOCR API backend was removed; runtime is EasyOCR-only")
 def test_ocr_api_filters_low_confidence_regions_and_parses_jsonl(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
@@ -364,6 +365,7 @@ def test_ocr_api_filters_low_confidence_regions_and_parses_jsonl(
     assert http.calls[0][2]["headers"]["Authorization"] == "bearer test-token"
 
 
+@pytest.mark.skip(reason="PaddleOCR API backend was removed; runtime is EasyOCR-only")
 def test_ocr_api_retries_transient_queue_full_without_local_fallback(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
@@ -409,6 +411,7 @@ def test_ocr_api_retries_transient_queue_full_without_local_fallback(
     assert result["backend_attempts"][1]["status"] == "success"
 
 
+@pytest.mark.skip(reason="PaddleOCR API backend was removed; runtime is EasyOCR-only")
 def test_ocr_api_accepts_axis_aligned_boxes_and_maps_crop_coordinates(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
@@ -467,6 +470,7 @@ def test_ocr_api_accepts_axis_aligned_boxes_and_maps_crop_coordinates(
     assert result["requested_bbox"] == [0.2, 0.2, 0.8, 0.8]
 
 
+@pytest.mark.skip(reason="PaddleOCR API backend was removed; runtime is EasyOCR-only")
 def test_ocr_api_failure_is_explicit_without_local_fallback(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
@@ -496,6 +500,7 @@ def test_ocr_api_failure_is_explicit_without_local_fallback(
     assert result["subcalls"][0]["provider"] == "paddleocr_api"
 
 
+@pytest.mark.skip(reason="PaddleOCR API backend was removed; runtime is EasyOCR-only")
 def test_ocr_api_requires_token(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
@@ -512,6 +517,7 @@ def test_ocr_api_requires_token(
     assert "PADDLEOCR_API_TOKEN is required" in result["error"]
 
 
+@pytest.mark.skip(reason="PaddleOCR API backend was removed; runtime is EasyOCR-only")
 def test_ocr_api_does_not_treat_image_only_markdown_as_text(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
@@ -578,7 +584,20 @@ def test_ocr_rejects_reversed_bbox_and_hashes_actual_crop(
 ) -> None:
     from PIL import Image
 
-    monkeypatch.delenv("PADDLEOCR_API_TOKEN", raising=False)
+    class EmptyReader:
+        def readtext(self, _image, **_kwargs):
+            return []
+
+    monkeypatch.setattr(
+        OCRWithPositionTool,
+        "_get_reader",
+        lambda _self: EmptyReader(),
+    )
+    monkeypatch.setattr(
+        OCRWithPositionTool,
+        "_ocr_model",
+        lambda _self: "easyocr-test",
+    )
     image_path = tmp_path / "crop.png"
     image = Image.new("RGB", (100, 100), "white")
     image.paste("black", (0, 0, 50, 50))
@@ -601,8 +620,8 @@ def test_ocr_rejects_reversed_bbox_and_hashes_actual_crop(
 
     assert invalid["status"] == "error"
     assert "ordered" in invalid["error"]
-    assert cropped["status"] == "error"
-    assert full["status"] == "error"
+    assert cropped["status"] == "success"
+    assert full["status"] == "success"
     assert cropped["artifact_sha256"]
     assert full["artifact_sha256"]
     assert cropped["artifact_sha256"] != full["artifact_sha256"]

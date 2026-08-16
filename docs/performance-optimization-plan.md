@@ -10,7 +10,7 @@
 - `compare_with_reference` 的参考图缓存、线程级 HTTP session 复用；
 - 本地图像 base64/JPEG 序列化缓存；
 - 反向搜索上传 URL 的图片 SHA-256 缓存；
-- 现有 `visit_many` 页面并发、PaddleOCR API 调用和 OCR perception cache 保持启用。
+- 现有 `visit_many` 页面并发、共享 EasyOCR reader 和 OCR perception cache 保持启用。
 
 ## 1. 目标
 
@@ -35,7 +35,7 @@ Agent action 一个工具”协议的前提下，降低：
 - Jina 网页抽取复用 Gemini transport；
 - Jina `visit_many` 最多并发访问 3 个页面；
 - 页面线程池、HTTP session、Jina Reader、搜索客户端和缓存复用；
-- PaddleOCR API 请求与轮询；
+- EasyOCR reader 共享与 OCR 调用串行化；
 - 相关 transport、线程池测试以及服务器测试。
 
 后续工作应建立在这些基础上，避免重新引入每个 action 独立初始化
@@ -150,14 +150,14 @@ Agent 层继续保持：
 
 ## 8. 阶段 5：OCR 优化
 
-在现有 PaddleOCR 实例池基础上增加结果复用：
+在现有共享 EasyOCR reader 基础上增加结果复用：
 
 - 按原图 hash 和 crop hash 缓存 OCR；
 - 合并同一张图的重复 OCR 请求；
 - 对相同处理参数直接复用结果；
 - 对确认没有文字区域的图片避免重复 OCR；
 - 只在视觉复查或文字证据确实需要时触发 OCR；
-- 以服务器 CPU 运行方式为基准，不为通用兼容性保留低效 fallback。
+- 以服务器 CPU 运行方式为基准；GPU 只作为显式配置，不为通用兼容性保留低效 fallback。
 
 OCR 缓存结果必须携带图片 hash、裁剪区域和处理参数，避免不同 crop
 之间发生误复用。
