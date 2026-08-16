@@ -490,6 +490,17 @@ def test_poor_retrieval_quality_blocks_sft() -> None:
     )
 
 
+def test_out_of_range_diagnostic_confidence_is_normalized() -> None:
+    metrics = sft_eligibility_metrics(
+        _packet(),
+        _judgment(confidence=4.5),
+    )
+
+    assert metrics["raw_confidence"] == 4.5
+    assert metrics["confidence"] == 1.0
+    assert "confidence_normalized_out_of_range" in metrics["warnings"]
+
+
 def test_judge_is_one_post_rollout_call_and_does_not_request_human_review() -> None:
     async def run() -> None:
         packet = _packet()

@@ -107,7 +107,10 @@ class SFTEligibilityJudgment(_StrictModel):
         "degraded_repetition",
         "unresolved",
     ]
-    confidence: float = Field(ge=0.0, le=1.0)
+    # Confidence is diagnostic-only. Some providers emit a five-point score
+    # despite the JSON schema; normalize it downstream instead of failing an
+    # otherwise complete SFT eligibility batch.
+    confidence: float
     explanation: str = Field(min_length=1, max_length=1600)
 
 
@@ -811,6 +814,10 @@ def sft_eligibility_metrics(
         }
     ):
         warnings.append("decisive_evidence_not_claim_basis_selected")
+    raw_confidence = float(judgment_values.get("confidence", 0.0) or 0.0)
+    normalized_confidence = max(0.0, min(1.0, raw_confidence))
+    if normalized_confidence != raw_confidence:
+        warnings.append("confidence_normalized_out_of_range")
 
     return {
         "expected_verdict": expected_verdict,
@@ -828,7 +835,8 @@ def sft_eligibility_metrics(
         "failed_selected_evidence_ids": failed_ids,
         "fatal_errors": _unique(fatal_errors, limit=20),
         "warnings": _unique(warnings, limit=20),
-        "confidence": float(judgment_values.get("confidence", 0.0) or 0.0),
+        "confidence": normalized_confidence,
+        "raw_confidence": raw_confidence,
         "explanation": str(judgment_values.get("explanation", "")),
     }
 
