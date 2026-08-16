@@ -9,7 +9,7 @@
 | 项目 | 值 |
 |---|---|
 | canonical branch | `codex/gpu13-canary-20260804-plan-relaxation-01` |
-| 当前服务器 checkout HEAD | `7c08a0a` |
+| 当前服务器 checkout HEAD | `34a2eeb` |
 | 最近一次行为测试 commit | `d34cf63` |
 | 模型 | `gemini-3.7-flash` |
 | 当前 OCR | EasyOCR `1.7.2`，共享 CPU reader |
