@@ -22,9 +22,15 @@ Return exactly one JSON object:
   "limitations": ["what the crop cannot establish, if relevant"]
 }}
 
-Be concrete and conservative. Describe visible pixels, object relations, and
-observation limits. Write anomalies as the visible phenomenon itself and keep
-causal interpretation separate from the observation. Output JSON only.
+Be concrete and conservative. This response is a visual record:
+- description summarizes the cropped region;
+- each observation names a visible region or object and its visible property;
+- each anomaly names a visible region or object and its visible irregularity;
+- each limitation names an unresolved question and the missing visual or
+  external information.
+
+Use quoted on-image text and concrete spatial details when they are visible.
+Output JSON only.
 """
 
 INSPECT_SCHEMA = {
