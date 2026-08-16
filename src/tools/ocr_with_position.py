@@ -9,6 +9,7 @@ import os
 import threading
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+from numbers import Real
 from typing import Any, Dict, List, Optional
 
 from src.tools.base import BaseTool
@@ -288,10 +289,7 @@ class OCRWithPositionTool(BaseTool):
         if not isinstance(raw, (list, tuple)) or len(raw) < 3:
             raise ValueError(f"EasyOCR result {index} must be [bbox, text, score]")
         bbox, text, confidence = raw[0], str(raw[1]).strip(), raw[2]
-        if isinstance(confidence, bool) or not isinstance(
-            confidence,
-            (int, float),
-        ):
+        if isinstance(confidence, bool) or not isinstance(confidence, Real):
             raise ValueError(f"EasyOCR result {index} has invalid confidence")
         return bbox, text, float(confidence)
 
@@ -367,7 +365,7 @@ class OCRWithPositionTool(BaseTool):
                 isinstance(point, list)
                 and len(point) == 2
                 and all(
-                    isinstance(item, (int, float))
+                    isinstance(item, Real)
                     and not isinstance(item, bool)
                     for item in point
                 )
@@ -379,7 +377,7 @@ class OCRWithPositionTool(BaseTool):
             isinstance(value, list)
             and len(value) == 4
             and all(
-                isinstance(item, (int, float))
+                isinstance(item, Real)
                 and not isinstance(item, bool)
                 for item in value
             )
