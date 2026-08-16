@@ -27,7 +27,8 @@ usage() {
 usage: start_eval_gpu13.sh --output-dir DIR [run_eval ARG ...]
 
 Starts python -m src.eval.run_eval in the gpu-13 ifv-agent Conda environment.
-All run_eval arguments, including --output-dir, are passed through unchanged.
+All run_eval arguments are forwarded; --output-dir is normalized to the
+canonical absolute run path before the child starts.
 The output directory must be a single run directory under
 $IFV_DATA_ROOT/runs/eval/<run-id>. The launcher prints the canonical run-id
 and the status command to use for polling.
