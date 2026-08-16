@@ -50,6 +50,12 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--max-tokens", type=int, default=4096)
     parser.add_argument("--timeout", type=float, default=180.0)
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=1,
+        help="Maximum simultaneous frozen-judge provider calls.",
+    )
     parser.add_argument("--force", action="store_true")
     return parser.parse_args()
 
@@ -178,6 +184,8 @@ async def _run(args: argparse.Namespace) -> Dict[str, Any]:
     trace_paths = sorted((run_dir / "traces").glob("*.json"))
     if not trace_paths:
         raise FileNotFoundError(f"no canonical traces under {run_dir / 'traces'}")
+    if args.concurrency < 1:
+        raise ValueError("--concurrency must be at least 1")
 
     # The completed-manifest check intentionally precedes this private read.
     gold_path = args.gold.expanduser().resolve()
@@ -200,108 +208,117 @@ async def _run(args: argparse.Namespace) -> Dict[str, Any]:
         model=args.model,
         max_tokens=args.max_tokens,
     )
-    rows: list[Dict[str, Any]] = []
-    try:
-        for trace_path in trace_paths:
-            trace = _json_object(trace_path)
-            state = trace.get("state") if isinstance(trace.get("state"), Mapping) else {}
-            runtime_case = (
-                state.get("runtime_case")
-                if isinstance(state, Mapping)
-                and isinstance(state.get("runtime_case"), Mapping)
-                else {}
+    judge_semaphore = asyncio.Semaphore(args.concurrency)
+
+    async def score_trace(trace_path: Path) -> Dict[str, Any]:
+        trace = _json_object(trace_path)
+        state = (
+            trace.get("state")
+            if isinstance(trace.get("state"), Mapping)
+            else {}
+        )
+        runtime_case = (
+            state.get("runtime_case")
+            if isinstance(state, Mapping)
+            and isinstance(state.get("runtime_case"), Mapping)
+            else {}
+        )
+        case_id = str(runtime_case.get("case_id", "")).strip()
+        if case_id not in gold:
+            raise ValueError(f"private gold lacks trace case_id {case_id!r}")
+        image_path = _resolve_image_path(
+            trace,
+            explicit_image=None,
+            image_root=image_root,
+        )
+        if image_path is None:
+            raise FileNotFoundError(
+                f"cannot resolve original image for teacher trace: {trace_path}"
             )
-            case_id = str(runtime_case.get("case_id", "")).strip()
-            if case_id not in gold:
-                raise ValueError(f"private gold lacks trace case_id {case_id!r}")
-            image_path = _resolve_image_path(
-                trace,
-                explicit_image=None,
-                image_root=image_root,
-            )
-            if image_path is None:
-                raise FileNotFoundError(
-                    f"cannot resolve original image for teacher trace: {trace_path}"
-                )
-            packet = build_sft_eligibility_input(
-                trace,
-                gold[case_id],
-                image_path=image_path,
-            )
-            trace_sha = sha256_file(trace_path)
-            report = audit_trace(
-                trace_path,
-                enforce_source_access_policy=source_policy_active,
-            )
-            failures = report.failures(strict_scheduler=True)
-            warnings = report.warnings(strict_scheduler=True)
-            fatal_audit_errors, _ = classify_sft_audit_failures(
-                [asdict(item) for item in failures]
-            )
-            engineering_valid = bool(
-                str(trace.get("termination", "")) == "success"
-                and str(trace.get("verdict", "")) in {"real", "fake"}
-            )
-            cache_key = sft_eligibility_cache_key(
-                trace_sha256=trace_sha,
-                packet=packet,
-                provider=args.provider,
-                model=args.model,
-                generation_version=judge.generation_identity,
-            )
-            cache_path = cache_dir / cache_key[:2] / f"{cache_key}.json"
-            artifact = None if args.force else _load_cache(cache_path)
-            from_cache = artifact is not None
-            if artifact is None:
-                judgment = None
-                judge_audit = None
-                if engineering_valid and not fatal_audit_errors:
+        packet = build_sft_eligibility_input(
+            trace,
+            gold[case_id],
+            image_path=image_path,
+        )
+        trace_sha = sha256_file(trace_path)
+        report = audit_trace(
+            trace_path,
+            enforce_source_access_policy=source_policy_active,
+        )
+        failures = report.failures(strict_scheduler=True)
+        warnings = report.warnings(strict_scheduler=True)
+        fatal_audit_errors, _ = classify_sft_audit_failures(
+            [asdict(item) for item in failures]
+        )
+        engineering_valid = bool(
+            str(trace.get("termination", "")) == "success"
+            and str(trace.get("verdict", "")) in {"real", "fake"}
+        )
+        cache_key = sft_eligibility_cache_key(
+            trace_sha256=trace_sha,
+            packet=packet,
+            provider=args.provider,
+            model=args.model,
+            generation_version=judge.generation_identity,
+        )
+        cache_path = cache_dir / cache_key[:2] / f"{cache_key}.json"
+        artifact = None if args.force else _load_cache(cache_path)
+        from_cache = artifact is not None
+        if artifact is None:
+            judgment = None
+            judge_audit = None
+            if engineering_valid and not fatal_audit_errors:
+                async with judge_semaphore:
                     judgment, judge_audit = await judge.judge(
                         packet,
                         image_path=image_path,
                     )
-                artifact = build_sft_eligibility_artifact(
-                    trace=trace,
-                    trace_sha256=trace_sha,
-                    packet=packet,
-                    judgment=judgment,
-                    judge_audit=judge_audit,
-                    strict_trace_audit_pass=not failures,
-                    strict_trace_audit_failures=[asdict(item) for item in failures],
-                    strict_trace_audit_warnings=[asdict(item) for item in warnings],
-                )
-                _write_json(cache_path, artifact)
-            episode_id = str(artifact.get("episode_id", ""))
-            artifact_path = output_dir / f"{episode_id}.sft_eligibility.json"
-            _write_json(artifact_path, artifact)
-            rows.append(
-                {
-                    "case_id": case_id,
-                    "episode_id": episode_id,
-                    "artifact": str(artifact_path),
-                    "artifact_id": artifact.get("artifact_id"),
-                    "sft_eligibility_pass": artifact.get("gates", {}).get(
-                        "sft_eligibility_pass"
-                    ),
-                    "fact_alignment": artifact.get("metrics", {}).get(
-                        "fact_alignment"
-                    ),
-                    "decision_support": artifact.get("metrics", {}).get(
-                        "decision_support"
-                    ),
-                    "retrieval_quality": artifact.get("metrics", {}).get(
-                        "retrieval_quality"
-                    ),
-                    "decisive_evidence_ids": artifact.get("metrics", {}).get(
-                        "decisive_evidence_ids"
-                    ),
-                    "fatal_errors": artifact.get("metrics", {}).get(
-                        "fatal_errors"
-                    ),
-                    "warnings": artifact.get("metrics", {}).get("warnings"),
-                    "from_cache": from_cache,
-                }
+            artifact = build_sft_eligibility_artifact(
+                trace=trace,
+                trace_sha256=trace_sha,
+                packet=packet,
+                judgment=judgment,
+                judge_audit=judge_audit,
+                strict_trace_audit_pass=not failures,
+                strict_trace_audit_failures=[asdict(item) for item in failures],
+                strict_trace_audit_warnings=[asdict(item) for item in warnings],
             )
+            _write_json(cache_path, artifact)
+        episode_id = str(artifact.get("episode_id", ""))
+        artifact_path = output_dir / f"{episode_id}.sft_eligibility.json"
+        _write_json(artifact_path, artifact)
+        return {
+            "case_id": case_id,
+            "episode_id": episode_id,
+            "artifact": str(artifact_path),
+            "artifact_id": artifact.get("artifact_id"),
+            "sft_eligibility_pass": artifact.get("gates", {}).get(
+                "sft_eligibility_pass"
+            ),
+            "fact_alignment": artifact.get("metrics", {}).get(
+                "fact_alignment"
+            ),
+            "decision_support": artifact.get("metrics", {}).get(
+                "decision_support"
+            ),
+            "retrieval_quality": artifact.get("metrics", {}).get(
+                "retrieval_quality"
+            ),
+            "decisive_evidence_ids": artifact.get("metrics", {}).get(
+                "decisive_evidence_ids"
+            ),
+            "fatal_errors": artifact.get("metrics", {}).get(
+                "fatal_errors"
+            ),
+            "warnings": artifact.get("metrics", {}).get("warnings"),
+            "from_cache": from_cache,
+        }
+
+    rows: list[Dict[str, Any]] = []
+    try:
+        rows = list(
+            await asyncio.gather(*(score_trace(path) for path in trace_paths))
+        )
     finally:
         await backend.aclose()
 
