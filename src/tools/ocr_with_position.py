@@ -348,11 +348,23 @@ class OCRWithPositionTool(BaseTool):
         tolist = getattr(value, "tolist", None)
         if callable(tolist):
             value = tolist()
+        if isinstance(value, tuple):
+            value = list(value)
+        if isinstance(value, list):
+            normalized_points: List[Any] = []
+            for point in value:
+                point_tolist = getattr(point, "tolist", None)
+                if callable(point_tolist):
+                    point = point_tolist()
+                if isinstance(point, tuple):
+                    point = list(point)
+                normalized_points.append(point)
+            value = normalized_points
         if (
             isinstance(value, list)
             and len(value) == 4
             and all(
-                isinstance(point, (list, tuple))
+                isinstance(point, list)
                 and len(point) == 2
                 and all(
                     isinstance(item, (int, float))

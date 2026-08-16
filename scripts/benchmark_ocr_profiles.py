@@ -52,6 +52,7 @@ def main() -> int:
                 "timings_seconds": timings,
                 "median_seconds": statistics.median(timings),
                 "full_text": str(last_result.get("full_text", ""))[:500],
+                "error": str(last_result.get("error", ""))[:500],
             }
         )
 

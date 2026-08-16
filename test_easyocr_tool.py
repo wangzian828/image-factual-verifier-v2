@@ -97,6 +97,28 @@ def test_easyocr_maps_crop_coordinates(tmp_path, monkeypatch) -> None:
     assert result["requested_bbox"] == [0.2, 0.2, 0.8, 0.8]
 
 
+def test_easyocr_accepts_tuple_position_output(tmp_path, monkeypatch) -> None:
+    from PIL import Image
+
+    image_path = tmp_path / "tuple-box.png"
+    Image.new("RGB", (100, 40), "white").save(image_path)
+    reader = FakeEasyOCRReader(
+        [
+            (
+                ((0, 0), (80, 0), (80, 20), (0, 20)),
+                "tuple box",
+                0.91,
+            )
+        ]
+    )
+    patch_reader(monkeypatch, reader)
+
+    result = OCRWithPositionTool().call({"image_input": str(image_path)})
+
+    assert result["status"] == "success"
+    assert result["text_regions"][0]["bbox"] == [0.0, 0.0, 0.8, 0.5]
+
+
 def test_easyocr_failure_is_explicit(tmp_path, monkeypatch) -> None:
     from PIL import Image
 
