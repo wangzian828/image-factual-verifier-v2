@@ -120,19 +120,19 @@ def _load_cache(path: Path) -> Dict[str, Any] | None:
     return value
 
 
-def _default_storage_dir(run_dir: Path) -> Path:
+def _default_storage_dir(run_dir: Path, eligibility_dir: Path) -> Path:
+    """Keep independently scored eligibility versions in separate storage roots."""
+
     resolved = run_dir.expanduser().resolve()
+    resolved_eligibility = eligibility_dir.expanduser().resolve()
     runs_root = next(
         (ancestor for ancestor in (resolved, *resolved.parents) if ancestor.name == "runs"),
         None,
     )
     if runs_root is None:
-        return resolved / "sft-storage"
+        return resolved / "sft-storage" / resolved_eligibility.name
     data_root = runs_root.parent
-    if resolved.parent.name == "eval":
-        storage_name = resolved.name
-    else:
-        storage_name = f"{resolved.parent.name}-{resolved.name}"
+    storage_name = f"{resolved.name}--{resolved_eligibility.name}"
     return data_root / "generated" / "sft" / storage_name
 
 
@@ -310,7 +310,7 @@ async def _run(args: argparse.Namespace) -> Dict[str, Any]:
     storage_dir = (
         args.storage_dir.expanduser().resolve()
         if args.storage_dir
-        else _default_storage_dir(run_dir)
+        else _default_storage_dir(run_dir, output_dir)
     )
     storage_manifest = _existing_storage_manifest(
         storage_dir,

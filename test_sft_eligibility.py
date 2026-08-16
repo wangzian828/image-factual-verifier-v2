@@ -5,6 +5,7 @@ import json
 from typing import Any, Dict, List
 
 from src.orchestrator.llm_backend import LLMResponse
+from src.eval.score_sft_eligibility import _default_storage_dir
 from src.trajectory.sft_eligibility import (
     SFT_ELIGIBILITY_SYSTEM_PROMPT,
     SFTEligibilityJudge,
@@ -143,6 +144,19 @@ def _packet() -> dict[str, Any]:
     packet = build_sft_eligibility_input(_trace(), _gold())
     packet["image"]["available_to_judge"] = True
     return packet
+
+
+def test_default_storage_isolated_by_eligibility_output_version(tmp_path: Any) -> None:
+    run_dir = tmp_path / "data" / "runs" / "eval" / "teacher-run"
+    v2_dir = run_dir / "sft-eligibility-v2"
+    v3_dir = run_dir / "sft-eligibility-v3"
+
+    v2_storage = _default_storage_dir(run_dir, v2_dir)
+    v3_storage = _default_storage_dir(run_dir, v3_dir)
+
+    assert v2_storage != v3_storage
+    assert v2_storage.name == "teacher-run--sft-eligibility-v2"
+    assert v3_storage.name == "teacher-run--sft-eligibility-v3"
 
 
 class _MockBackend:
