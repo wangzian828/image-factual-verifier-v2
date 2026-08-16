@@ -431,8 +431,6 @@ class OCRWithPositionTool(BaseTool):
 
     @staticmethod
     def _retryable_submit_response(response: Any) -> bool:
-        if response.status_code in {408, 425, 429, 500, 502, 503, 504}:
-            return True
         try:
             payload = response.json()
         except (TypeError, ValueError):
