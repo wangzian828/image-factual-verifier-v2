@@ -24,6 +24,8 @@ DEFAULT_MODEL = "PaddleOCR-VL-1.6"
 DEFAULT_POLL_SECONDS = 2.0
 DEFAULT_JOB_TIMEOUT_SECONDS = 180.0
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 30.0
+DEFAULT_SUBMIT_RETRIES = 3
+DEFAULT_RETRY_BACKOFF_SECONDS = 5.0
 
 
 class PaddleOCRAPIError(RuntimeError):
@@ -137,6 +139,20 @@ class OCRWithPositionTool(BaseTool):
             str(self.request_timeout_seconds),
         )
         return max(1.0, float(raw))
+
+    def _submit_retries(self) -> int:
+        raw = os.getenv(
+            "PADDLEOCR_API_SUBMIT_RETRIES",
+            str(DEFAULT_SUBMIT_RETRIES),
+        )
+        return max(0, min(5, int(raw)))
+
+    def _retry_backoff_seconds(self, attempt: int) -> float:
+        raw = os.getenv(
+            "PADDLEOCR_API_RETRY_BACKOFF_SECONDS",
+            str(DEFAULT_RETRY_BACKOFF_SECONDS),
+        )
+        return min(60.0, max(0.0, float(raw)) * (2**attempt))
 
     def _http(self) -> Any:
         return self.http_client or requests
@@ -284,33 +300,66 @@ class OCRWithPositionTool(BaseTool):
             "useChartRecognition": False,
         }
         attempts: List[Dict[str, Any]] = []
-        response = self._http().post(
-            job_url,
-            headers=headers,
-            data={
-                "model": self._model(),
-                "optionalPayload": json.dumps(optional_payload),
-            },
-            files={
-                "file": (
-                    "ocr-input.png",
-                    image_bytes,
-                    "image/png",
+        response = None
+        max_attempts = self._submit_retries() + 1
+        for attempt in range(max_attempts):
+            response = self._http().post(
+                job_url,
+                headers=headers,
+                data={
+                    "model": self._model(),
+                    "optionalPayload": json.dumps(optional_payload),
+                },
+                files={
+                    "file": (
+                        "ocr-input.png",
+                        image_bytes,
+                        "image/png",
+                    )
+                },
+                timeout=self._request_timeout(),
+            )
+            if response.ok:
+                attempts.append(
+                    {
+                        "backend": "paddleocr_api_submit",
+                        "status": "success",
+                        "attempt": attempt + 1,
+                    }
                 )
-            },
-            timeout=self._request_timeout(),
-        )
-        attempts.append(
-            {
-                "backend": "paddleocr_api_submit",
-                "status": "success" if response.ok else "error",
-            }
-        )
-        if not response.ok:
+                break
+
+            if (
+                self._retryable_submit_response(response)
+                and attempt + 1 < max_attempts
+            ):
+                delay = self._retry_backoff_seconds(attempt)
+                attempts.append(
+                    {
+                        "backend": "paddleocr_api_submit",
+                        "status": "retry",
+                        "http_status": response.status_code,
+                        "retry_after_seconds": delay,
+                        "attempt": attempt + 1,
+                    }
+                )
+                time.sleep(delay)
+                continue
+
+            attempts.append(
+                {
+                    "backend": "paddleocr_api_submit",
+                    "status": "error",
+                    "http_status": response.status_code,
+                    "attempt": attempt + 1,
+                }
+            )
             raise PaddleOCRAPIError(
                 f"submit returned HTTP {response.status_code}: "
                 f"{response.text[:500]}"
             )
+        if response is None or not response.ok:
+            raise PaddleOCRAPIError("submit did not return a usable response")
         try:
             job_id = str(response.json()["data"]["jobId"]).strip()
         except (KeyError, TypeError, ValueError) as exc:
@@ -379,6 +428,18 @@ class OCRWithPositionTool(BaseTool):
                     f"job failed: {str(data.get('errorMsg', 'unknown error'))[:500]}"
                 )
             time.sleep(min(self._poll_interval(), max(0.2, deadline - time.monotonic())))
+
+    @staticmethod
+    def _retryable_submit_response(response: Any) -> bool:
+        if response.status_code in {408, 425, 429, 500, 502, 503, 504}:
+            return True
+        try:
+            payload = response.json()
+        except (TypeError, ValueError):
+            return False
+        code = str(payload.get("code", "")).strip()
+        message = str(payload.get("msg", "")).lower()
+        return code == "10010" or "queue" in message or "队列" in message
 
     @staticmethod
     def _decode_jsonl_result(text: str) -> Dict[str, Any]:

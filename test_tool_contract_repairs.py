@@ -364,6 +364,51 @@ def test_ocr_api_filters_low_confidence_regions_and_parses_jsonl(
     assert http.calls[0][2]["headers"]["Authorization"] == "bearer test-token"
 
 
+def test_ocr_api_retries_transient_queue_full_without_local_fallback(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from PIL import Image
+
+    image_path = tmp_path / "queue-retry.png"
+    Image.new("RGB", (100, 40), "white").save(image_path)
+    http = _FakeOCRHTTP(
+        [
+            _FakeOCRResponse(
+                {"code": 10010, "msg": "任务提交队列已满，请稍后重试"},
+                status_code=400,
+            ),
+            _FakeOCRResponse({"data": {"jobId": "job-retry"}}),
+            _FakeOCRResponse(
+                {
+                    "data": {
+                        "state": "done",
+                        "resultUrl": {
+                            "jsonUrl": "https://result.test/job-retry.jsonl"
+                        },
+                    }
+                }
+            ),
+            _FakeOCRResponse(
+                text=json.dumps({"result": {"layoutParsingResults": []}})
+            ),
+        ]
+    )
+    monkeypatch.setenv("PADDLEOCR_API_TOKEN", "test-token")
+    monkeypatch.setenv("PADDLEOCR_API_SUBMIT_RETRIES", "1")
+    monkeypatch.setenv("PADDLEOCR_API_RETRY_BACKOFF_SECONDS", "0")
+
+    result = OCRWithPositionTool(http_client=http, poll_seconds=0.2).call(
+        {"image_input": str(image_path)}
+    )
+
+    assert result["status"] == "success"
+    assert result["ocr_backend"] == "paddleocr_api"
+    assert [call[0] for call in http.calls] == ["post", "post", "get", "get"]
+    assert result["backend_attempts"][0]["status"] == "retry"
+    assert result["backend_attempts"][1]["status"] == "success"
+
+
 def test_ocr_api_accepts_axis_aligned_boxes_and_maps_crop_coordinates(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
