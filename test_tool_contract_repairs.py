@@ -574,9 +574,11 @@ def test_ocr_api_does_not_treat_image_only_markdown_as_text(
 
 def test_ocr_rejects_reversed_bbox_and_hashes_actual_crop(
     tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from PIL import Image
 
+    monkeypatch.delenv("PADDLEOCR_API_TOKEN", raising=False)
     image_path = tmp_path / "crop.png"
     image = Image.new("RGB", (100, 100), "white")
     image.paste("black", (0, 0, 50, 50))
