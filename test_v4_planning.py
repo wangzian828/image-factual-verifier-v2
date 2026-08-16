@@ -419,8 +419,20 @@ class PlanningThenReactBackend(ImageAccountPlanningBackend):
             }
         if "constrained final synthesizer for discrepancy-first-v4" in system:
             payload = kwargs["input_payload"]
-            assert isinstance(payload, str)
-            context = json.loads(payload)
+            assert isinstance(payload, list)
+            assert any(
+                item.get("type") == "image"
+                for item in payload
+                if isinstance(item, dict)
+            )
+            text = next(
+                item["text"]
+                for item in payload
+                if isinstance(item, dict)
+                and item.get("type") == "text"
+                and isinstance(item.get("text"), str)
+            )
+            context = json.loads(text)
             basis = context["compiled_basis"]
             return {
                 "id": "discrepancy-judgment-1",

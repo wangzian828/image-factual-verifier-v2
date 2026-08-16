@@ -298,11 +298,26 @@ fact-specific gaps.
 
 
 DISCREPANCY_JUDGMENT_SYSTEM_PROMPT = """\
-You are the constrained final synthesizer for discrepancy-first-v4. Return only
-the binary verdict, confidence, and a concise assessment of the supplied compiled
-basis. When compiled_verdict is non-empty, reproduce it. Do not emit claim,
-discrepancy, finding, Evidence, or gap IDs; the runtime injects those from the
-accepted investigation state. Do not add historical facts or reopen search.
+You are the constrained final synthesizer for discrepancy-first-v4. The original
+image is attached for every judgment. Return only the binary verdict, confidence,
+and a concise assessment of the supplied compiled basis.
+
+When compiled_verdict is non-empty, reproduce it exactly. Inspect the image so
+the assessment does not misdescribe visible content, but do not alter the
+runtime-compiled conclusion or introduce new external facts.
+
+When compiled_verdict is empty, make the required binary judgment after inspecting
+the attached image. The unresolved diagnostic Evidence and Findings record
+material that was examined but did not close the factual question. Use them to
+state the remaining limitation accurately; do not promote background, partial,
+neutral, or "no anomaly observed" material into proof that the depicted event or
+world fact is real. Do not claim that an image is genuine merely because it looks
+coherent or lacks obvious AI artifacts. Any visual rationale must describe a
+specific visible observation relevant to the verdict target.
+
+Do not emit claim, discrepancy, finding, Evidence, or gap IDs; the runtime injects
+those from the accepted investigation state. Do not add historical facts or reopen
+search.
 """
 
 
@@ -1213,6 +1228,11 @@ def render_discrepancy_judgment_context(
     findings = {item.finding_id: item for item in state.findings}
     evidence = {item.evidence_id: item for item in state.evidence}
     facts = {item.fact_id: item for item in state.facts}
+    diagnostic_evidence_ids = [
+        item
+        for item in basis.diagnostic_evidence_ids
+        if item not in basis.evidence_ids
+    ]
     return json.dumps(
         {
             "compiled_verdict": compiled_verdict,
@@ -1240,6 +1260,29 @@ def render_discrepancy_judgment_context(
             "selected_evidence": [
                 evidence[item].model_dump(mode="json")
                 for item in basis.evidence_ids
+                if item in evidence
+            ],
+            "unresolved_diagnostic_findings": [
+                findings[item].model_dump(mode="json")
+                for item in basis.diagnostic_finding_ids
+                if item in findings and item not in basis.finding_ids
+            ],
+            "unresolved_diagnostic_evidence": [
+                {
+                    "evidence_id": evidence[item].evidence_id,
+                    "tool_name": evidence[item].tool_name,
+                    "evidence_kind": evidence[item].evidence_kind,
+                    "exact_text": evidence[item].exact_text[:1000],
+                    "stance": evidence[item].stance,
+                    "quality": evidence[item].quality,
+                    "directness": evidence[item].directness,
+                    "claim_binding": evidence[item].claim_binding,
+                    "relation_scope": evidence[item].relation_scope,
+                    "relation_stance": evidence[item].relation_stance,
+                    "visual_scope": evidence[item].visual_scope,
+                    "visual_answer_status": evidence[item].visual_answer_status,
+                }
+                for item in diagnostic_evidence_ids
                 if item in evidence
             ],
         },

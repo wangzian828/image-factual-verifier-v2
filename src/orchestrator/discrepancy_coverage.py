@@ -186,6 +186,8 @@ def compile_discrepancy_verdict_basis(
     discrepancy_ids: List[str] = []
     anchor_ids: List[str] = []
     unresolved_gaps: List[str] = []
+    diagnostic_finding_ids: List[str] = []
+    diagnostic_evidence_ids: List[str] = []
     if state.proposed_verdict == "fake":
         selected = next(
             item
@@ -285,6 +287,35 @@ def compile_discrepancy_verdict_basis(
                 "No evidence-determined verdict was accepted before "
                 f"{state.stop_reason}."
             ]
+        task_by_id = {item.task_id: item for item in state.tasks}
+        diagnostic_candidates = []
+        for evidence in state.evidence:
+            task = task_by_id.get(evidence.task_id)
+            if task is None:
+                continue
+            if not any(claim_id in task.claim_ids for claim_id in claim_ids):
+                continue
+            diagnostic_candidates.append(evidence)
+        diagnostic_candidates.sort(
+            key=lambda item: (
+                item.stance == "neutral",
+                item.directness != "direct",
+                item.relation_scope not in {"same_relation", "same_capture"},
+            )
+        )
+        diagnostic_evidence_ids = [
+            item.evidence_id for item in diagnostic_candidates[:12]
+        ]
+        diagnostic_evidence_id_set = set(diagnostic_evidence_ids)
+        diagnostic_finding_ids = [
+            item.finding_id
+            for item in state.findings
+            if set(item.evidence_ids) & diagnostic_evidence_id_set
+            and (
+                not claim_ids
+                or _finding_serves_claims(state, item.task_id, claim_ids)
+            )
+        ][:12]
         verdict_target = state.image_account_summary
 
     if state.proposed_verdict not in {"fake", "real"}:
@@ -323,6 +354,8 @@ def compile_discrepancy_verdict_basis(
         visual_anchor_fact_ids=anchor_ids,
         finding_ids=list(dict.fromkeys(finding_ids)),
         evidence_ids=evidence_ids,
+        diagnostic_finding_ids=list(dict.fromkeys(diagnostic_finding_ids)),
+        diagnostic_evidence_ids=list(dict.fromkeys(diagnostic_evidence_ids)),
         unresolved_gaps=unresolved_gaps[:12],
     )
     state.discrepancy_verdict_basis = basis

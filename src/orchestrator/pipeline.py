@@ -440,6 +440,7 @@ class Orchestrator:
                     investigation,
                     compiled_verdict,
                     basis,
+                    image_path=image_path,
                     interaction_session=None,
                 )
             finally:
@@ -2306,6 +2307,7 @@ class Orchestrator:
         compiled_verdict: str,
         basis: Any,
         *,
+        image_path: str,
         interaction_session: InteractionSession,
     ) -> DiscrepancyJudgment:
         runner = StageRunner(
@@ -2314,10 +2316,11 @@ class Orchestrator:
             tools=[],
             output_schema=DiscrepancyJudgmentOutput,
             max_rounds=1,
+            image_path=image_path,
             stage_name="image_only_discrepancy_judgment",
             runtime_store=state.runtime_store,
             handoff_state=investigation,
-            attach_image=False,
+            attach_image=bool(image_path),
             interaction_session=interaction_session,
             output_validator=lambda parsed, _steps: (
                 self._validate_discrepancy_judgment(

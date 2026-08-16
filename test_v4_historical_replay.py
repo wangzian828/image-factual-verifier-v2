@@ -11,7 +11,11 @@ from src.orchestrator.discrepancy_coverage import (
     audit_discrepancy_coverage,
     compile_discrepancy_verdict_basis,
 )
+from src.orchestrator.image_only_prompts import (
+    render_discrepancy_judgment_context,
+)
 from src.orchestrator.investigation_models import (
+    ClaimAssessmentProposal,
     DiscrepancyDecisionOutput,
     DiscrepancyJudgment,
     FactOrigin,
@@ -164,6 +168,98 @@ def _append_frozen_evidence(
         task.finding_ids.append(state.findings[-1].finding_id)
     state.action_count = 1
     return evidence
+
+
+def test_bounded_basis_exposes_nondecisive_claim_material_to_judgment() -> None:
+    fixture = _fixtures()[0]
+    state = _base_state(fixture)
+    assert apply_image_account_planning(
+        state,
+        _planning_output(fixture),
+    )["accepted"] is True
+    claim = state.image_claims[0]
+    task = state.tasks[0]
+    evidence = InvestigationEvidence(
+        evidence_id="evidence-nondecisive",
+        task_id=task.task_id,
+        fact_ids=[claim.fact_id],
+        function_call_id="call-nondecisive",
+        tool_name="visit",
+        evidence_kind="web_span",
+        source_url="https://example.org/background",
+        source_family="domain:example.org",
+        source_class="unknown",
+        exact_text=(
+            "The source provides background context but does not establish "
+            "the visible relation."
+        ),
+        span_start=0,
+        span_end=74,
+        artifact_sha256="a" * 64,
+        retrieved_at="2026-08-16T00:00:00+00:00",
+        stance="neutral",
+        quality="weak",
+        directness="indirect",
+        claim_binding="source_assertion",
+        relation_scope="partial_relation",
+        relation_stance="background",
+    )
+    state.evidence.append(evidence)
+    decision = apply_discrepancy_decision(
+        state,
+        DiscrepancyDecisionOutput(
+            claim_assessments=[
+                ClaimAssessmentProposal(
+                    claim_id=claim.claim_id,
+                    assessment="insufficient",
+                    selected_evidence_ids=[evidence.evidence_id],
+                    remaining_gap="The visible relation remains unresolved.",
+                    rationale="The page supplies context only.",
+                )
+            ],
+            material_discrepancy=None,
+            retire_hypothesis_ids=[],
+            new_hypotheses=[],
+            visual_reinspection=None,
+            visual_evidence_disposition=None,
+            verdict_proposal="continue",
+            rationale="The page supplies context only.",
+        ),
+        reviewed_evidence_ids=[evidence.evidence_id],
+        trigger="qualified_evidence",
+    )
+    assert decision["accepted"] is True
+    task.status = "exhausted"
+    state.search_hypotheses[0].status = "retired"
+    state.action_count = 1
+
+    terminal = audit_discrepancy_coverage(state, decision_checkpoint=True)
+    assert terminal.stop_reason == "meaningful_routes_exhausted"
+    verdict, basis = compile_discrepancy_verdict_basis(state)
+
+    assert verdict == ""
+    assert basis.evidence_ids == []
+    assert basis.diagnostic_evidence_ids == [evidence.evidence_id]
+    rendered = json.loads(
+        render_discrepancy_judgment_context(state, verdict, basis)
+    )
+    assert rendered["selected_evidence"] == []
+    assert rendered["unresolved_diagnostic_evidence"] == [
+        {
+            "evidence_id": evidence.evidence_id,
+            "tool_name": "visit",
+            "evidence_kind": "web_span",
+            "exact_text": evidence.exact_text,
+            "stance": "neutral",
+            "quality": "weak",
+            "directness": "indirect",
+            "claim_binding": "source_assertion",
+            "relation_scope": "partial_relation",
+            "relation_stance": "background",
+            "visual_scope": None,
+            "visual_answer_status": None,
+        }
+    ]
 
 
 def _decision_output(

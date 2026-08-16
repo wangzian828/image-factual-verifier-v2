@@ -991,6 +991,8 @@ class DiscrepancyVerdictBasis(StrictModel):
     visual_anchor_fact_ids: List[str] = Field(default_factory=list, max_length=24)
     finding_ids: List[str] = Field(default_factory=list, max_length=20)
     evidence_ids: List[str] = Field(default_factory=list, max_length=40)
+    diagnostic_finding_ids: List[str] = Field(default_factory=list, max_length=12)
+    diagnostic_evidence_ids: List[str] = Field(default_factory=list, max_length=12)
     unresolved_gaps: List[str] = Field(default_factory=list, max_length=12)
 
 
