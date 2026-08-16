@@ -72,6 +72,13 @@ older measurements, but they are not the current branch baseline. Record the
 exact commit in every run manifest and do not infer the runtime version from the
 model name alone.
 
+The historical result mapping is maintained in
+[`gpu13-version-registry.md`](gpu13-version-registry.md). In particular,
+`fe43bdd` is the accepted construction high baseline and `0738e59` is the
+accepted EF3 high baseline; `f9d3a28` is an older 8/10 result and must not be
+described as the high baseline. The combined 9/10 figure is a capability-group
+aggregate across those two commits, not one 10-case run from a single version.
+
 The maintained gpu-13 wrappers automatically set `IFV_ENV_FILE` to the following
 private file when it exists:
 
