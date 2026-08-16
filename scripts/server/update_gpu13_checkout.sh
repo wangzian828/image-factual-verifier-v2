@@ -6,10 +6,17 @@ REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 # shellcheck source=gpu13_env.sh
 source "${SCRIPT_DIR}/gpu13_env.sh"
 
-BRANCH="${1:-codex/gpu13-canary-20260804-plan-relaxation-01}"
+EXPECTED_BRANCH="codex/gpu13-canary-20260804-plan-relaxation-01"
+BRANCH="${1:-${EXPECTED_BRANCH}}"
 
 if [[ "$(hostname)" != "gpu-13" ]]; then
     echo "update_gpu13_checkout.sh must run on gpu-13" >&2
+    exit 2
+fi
+if [[ "${BRANCH}" != "${EXPECTED_BRANCH}" ]]; then
+    echo "Refusing to update a non-canonical runtime branch." >&2
+    echo "expected=${EXPECTED_BRANCH}" >&2
+    echo "actual=${BRANCH}" >&2
     exit 2
 fi
 

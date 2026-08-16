@@ -369,11 +369,11 @@ The active canary checkout verified on 2026-08-05 is:
 /gs/home/wza/projects/image-factual-verifier-v2-worktrees/gpu13-canary-20260804-plan-relaxation-01
 ```
 
-Do not run `/gs/home/wza/projects/image-factual-verifier-v2`: it is a legacy
-`feature/visual-fact-search-agent` checkout with an unrelated staged migration.
-Do not assume older worktree names such as `visual-fact-search-agent` are current:
-first list `/gs/home/wza/projects/image-factual-verifier-v2-worktrees`, then verify
-`git status --short --branch` and `git rev-parse HEAD` in the selected checkout.
+The former `/gs/home/wza/projects/image-factual-verifier-v2` and
+`visual-fact-search-agent` server checkouts were removed on 2026-08-16. They are
+not valid runtime paths and must not be recreated for normal work. The
+`run_gpu13.sh` wrapper now rejects any non-canonical path or branch before starting
+a project process.
 The currently verified canary branch is
 `codex/gpu13-canary-20260804-plan-relaxation-01`; its exact HEAD is intentionally
 not recorded here because it changes after every deployment. The server source tree
@@ -676,8 +676,8 @@ D:\image-factual-verifier-runs\group-001-v3-canary-20260715-19
 gpu-13 commit:
 abb7db553cd4d3e8046faed3c43dac3dce67e328
 
-gpu-13 checkout (historical; no longer current):
-/gs/home/wza/projects/image-factual-verifier-v2-worktrees/visual-fact-search-agent
+gpu-13 checkout (historical; removed on 2026-08-16):
+<removed historical checkout; artifacts remain under the run directory>
 
 gpu-13 run:
 /gsdata/home/wza/image-factual-verifier-v2-data/runs/eval/
