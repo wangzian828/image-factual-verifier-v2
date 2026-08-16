@@ -9,6 +9,8 @@ from typing import Any
 import pytest
 
 from src.orchestrator.investigation_models import (
+    DiscrepancyJudgmentOutput,
+    DiscrepancyVerdictBasis,
     FactOrigin,
     Finding,
     ImageOnlyInvestigationState,
@@ -434,6 +436,30 @@ class PlanningThenReactBackend(ImageAccountPlanningBackend):
             )
             context = json.loads(text)
             basis = context["compiled_basis"]
+            payload = {
+                "verdict": context["compiled_verdict"] or "fake",
+                "confidence": 0.99,
+                "overall_assessment": (
+                    "The compiled Evidence establishes the selected material "
+                    "discrepancy."
+                ),
+                "terminal_visual_rationale": None,
+            }
+            if not context["compiled_verdict"]:
+                payload["terminal_visual_rationale"] = {
+                    "target_visible_property": (
+                        "The visible product relation in the image."
+                    ),
+                    "observed_property": (
+                        "The crop shows the product packet rather than the "
+                        "source-described microphone."
+                    ),
+                    "counterfactual_difference": (
+                        "A source-matching image would show a microphone in "
+                        "the same hand and position."
+                    ),
+                    "relation_to_verdict": "supports_fake",
+                }
             return {
                 "id": "discrepancy-judgment-1",
                 "status": "completed",
@@ -448,16 +474,7 @@ class PlanningThenReactBackend(ImageAccountPlanningBackend):
                         "content": [
                             {
                                 "type": "text",
-                                "text": json.dumps(
-                                    {
-                                        "verdict": context["compiled_verdict"],
-                                        "confidence": 0.99,
-                                        "overall_assessment": (
-                                            "The compiled Evidence establishes the "
-                                            "selected material discrepancy."
-                                        ),
-                                    }
-                                ),
+                                "text": json.dumps(payload),
                             }
                         ],
                     }
@@ -1458,6 +1475,52 @@ def test_default_workflow_runs_complete_discrepancy_first_v4_path(
     assert trace_path.is_file()
     report = audit_trace(trace_path)
     assert not report.failures(strict_scheduler=True)
+
+
+def test_bounded_discrepancy_judgment_requires_matching_visual_rationale() -> None:
+    basis = DiscrepancyVerdictBasis(
+        decision_mode="bounded_binary_judgment",
+        verdict_target="A target-visible relation in the image.",
+        claim_ids=["claim-1"],
+    )
+    missing = DiscrepancyJudgmentOutput(
+        verdict="fake",
+        confidence=0.8,
+        overall_assessment="A specific visible relation supports fake.",
+    )
+    assert Orchestrator._validate_discrepancy_judgment(
+        missing,
+        compiled_verdict="",
+        basis=basis,
+    ) == (
+        False,
+        "bounded binary judgment requires terminal_visual_rationale",
+    )
+
+    mismatched = DiscrepancyJudgmentOutput(
+        verdict="fake",
+        confidence=0.8,
+        overall_assessment="A specific visible relation supports fake.",
+        terminal_visual_rationale={
+            "target_visible_property": "The visible relation.",
+            "observed_property": "The relation is visibly absent.",
+            "counterfactual_difference": (
+                "A real instance would visibly show the relation."
+            ),
+            "relation_to_verdict": "supports_real",
+        },
+    )
+    assert Orchestrator._validate_discrepancy_judgment(
+        mismatched,
+        compiled_verdict="",
+        basis=basis,
+    ) == (
+        False,
+        (
+            "terminal_visual_rationale relation_to_verdict must match the "
+            "binary verdict (supports_fake)"
+        ),
+    )
 
 
 def test_public_orchestrator_rejects_frozen_v3_policy(tmp_path: Path) -> None:

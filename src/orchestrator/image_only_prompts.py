@@ -304,16 +304,26 @@ and a concise assessment of the supplied compiled basis.
 
 When compiled_verdict is non-empty, reproduce it exactly. Inspect the image so
 the assessment does not misdescribe visible content, but do not alter the
-runtime-compiled conclusion or introduce new external facts.
+runtime-compiled conclusion or introduce new external facts. Set
+terminal_visual_rationale to null.
 
 When compiled_verdict is empty, make the required binary judgment after inspecting
-the attached image. The unresolved diagnostic Evidence and Findings record
-material that was examined but did not close the factual question. Use them to
-state the remaining limitation accurately; do not promote background, partial,
-neutral, or "no anomaly observed" material into proof that the depicted event or
-world fact is real. Do not claim that an image is genuine merely because it looks
-coherent or lacks obvious AI artifacts. Any visual rationale must describe a
-specific visible observation relevant to the verdict target.
+the attached image. Treat this as a target-specific visual discrimination task,
+not a general assessment of whether the image looks photographic. Return
+terminal_visual_rationale with all four fields:
+
+- target_visible_property: the one target property whose visible state would
+  distinguish the two possible factual outcomes;
+- observed_property: the concrete pixels that show its state in this image;
+- counterfactual_difference: what visibly differs between the real and fake
+  alternatives for that same property;
+- relation_to_verdict: whether that comparison supports real or fake.
+
+The chosen property must concern the factual target rather than overall visual
+polish. Give spatial, relational, textual, structural, or physical detail that a
+reviewer can locate in the image. The unresolved diagnostics remain useful for
+describing the limitation, but the final rationale must stand on its own visible
+comparison.
 
 Do not emit claim, discrepancy, finding, Evidence, or gap IDs; the runtime injects
 those from the accepted investigation state. Do not add historical facts or reopen
@@ -1236,6 +1246,25 @@ def render_discrepancy_judgment_context(
     return json.dumps(
         {
             "compiled_verdict": compiled_verdict,
+            "terminal_visual_rationale_required": not bool(compiled_verdict),
+            "terminal_visual_rationale_contract": (
+                {
+                    "target_visible_property": (
+                        "One target-specific property that can be located in "
+                        "the image and distinguishes real from fake."
+                    ),
+                    "observed_property": (
+                        "The concrete visible state of that same property."
+                    ),
+                    "counterfactual_difference": (
+                        "The visible difference between the two factual "
+                        "alternatives for that property."
+                    ),
+                    "relation_to_verdict": ["supports_real", "supports_fake"],
+                }
+                if not compiled_verdict
+                else None
+            ),
             "compiled_basis": basis.model_dump(mode="json"),
             "selected_claims": [
                 claims[item].model_dump(mode="json")

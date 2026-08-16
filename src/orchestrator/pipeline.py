@@ -2358,6 +2358,7 @@ class Orchestrator:
             selected_finding_ids=list(basis.finding_ids),
             selected_evidence_ids=list(basis.evidence_ids),
             unresolved_gaps=list(basis.unresolved_gaps),
+            terminal_visual_rationale=parsed.terminal_visual_rationale,
         )
 
     @staticmethod
@@ -2647,6 +2648,18 @@ class Orchestrator:
             return False, (
                 f"verdict must be {compiled_verdict}, received {parsed.verdict}"
             )
+        if not compiled_verdict:
+            rationale = parsed.terminal_visual_rationale
+            if rationale is None:
+                return False, (
+                    "bounded binary judgment requires terminal_visual_rationale"
+                )
+            expected_relation = f"supports_{parsed.verdict}"
+            if rationale.relation_to_verdict != expected_relation:
+                return False, (
+                    "terminal_visual_rationale relation_to_verdict must match "
+                    f"the binary verdict ({expected_relation})"
+                )
         return True, ""
 
     @staticmethod

@@ -996,6 +996,15 @@ class DiscrepancyVerdictBasis(StrictModel):
     unresolved_gaps: List[str] = Field(default_factory=list, max_length=12)
 
 
+class TerminalVisualRationale(StrictModel):
+    """Target-specific pixel rationale for an otherwise unclosed final verdict."""
+
+    target_visible_property: str = Field(min_length=1, max_length=600)
+    observed_property: str = Field(min_length=1, max_length=900)
+    counterfactual_difference: str = Field(min_length=1, max_length=900)
+    relation_to_verdict: Literal["supports_real", "supports_fake"]
+
+
 class DiscrepancyJudgmentOutput(StrictModel):
     """Model-owned portion of the final binary judgment.
 
@@ -1007,6 +1016,7 @@ class DiscrepancyJudgmentOutput(StrictModel):
     verdict: Literal["real", "fake"]
     confidence: float = Field(ge=0.0, le=1.0)
     overall_assessment: str = Field(min_length=1, max_length=2000)
+    terminal_visual_rationale: Optional[TerminalVisualRationale] = None
 
 
 class DiscrepancyJudgment(StrictModel):
@@ -1022,6 +1032,7 @@ class DiscrepancyJudgment(StrictModel):
     selected_finding_ids: List[str] = Field(default_factory=list, max_length=20)
     selected_evidence_ids: List[str] = Field(default_factory=list, max_length=40)
     overall_assessment: str = Field(min_length=1, max_length=2000)
+    terminal_visual_rationale: Optional[TerminalVisualRationale] = None
     unresolved_gaps: List[str] = Field(default_factory=list, max_length=12)
 
 
