@@ -33,6 +33,8 @@ from src.orchestrator.investigation_models import (
     ReflectionOutput,
     ReflectionRecord,
     ResearchTask,
+    RouteLocalReplanOutput,
+    RouteLocalReplanRecord,
     SearchHypothesis,
     TargetFactProposal,
     TargetPlanningOutput,
@@ -6062,6 +6064,264 @@ def apply_query_replan(
         rejected_reason=rejected_reason,
     )
     state.query_replans.append(record)
+    return record
+
+
+def route_local_replan_candidate(
+    state: ImageOnlyInvestigationState,
+    *,
+    observation_update: Mapping[str, Any],
+) -> tuple[str, str] | None:
+    """Return one task-local boundary that merits a bounded model replan.
+
+    This is intentionally structural rather than semantic.  It observes whether a
+    candidate batch was exhausted, a source failed, or an inspected image/source
+    produced material but unresolved information.  The model—not this helper—then
+    chooses whether to change query, add a visual inspection, continue, or retire
+    the route.
+    """
+
+    task_id = str(observation_update.get("task_id", "")).strip()
+    task = _task_by_id(state, task_id)
+    core_id = state.core_verdict_fact_id or ""
+    if (
+        task is None
+        or task.route_replan_count >= 1
+        or task.status not in {"active", "pending", "exhausted"}
+        or not core_id
+        or core_id not in task.fact_ids
+    ):
+        return None
+    core = next((item for item in state.facts if item.fact_id == core_id), None)
+    if core is None or core.status in {"supported", "refuted", "conflicted"}:
+        return None
+
+    attempts = _attempted_routes_by_task(state).get(task.task_id, [])
+    if not attempts:
+        return None
+    latest = attempts[-1]
+    tool_name = str(latest.get("tool", "")).strip()
+    outcome = str(latest.get("outcome", "")).strip()
+
+    failure_ids = {
+        str(item)
+        for item in observation_update.get("created_failure_ids", []) or []
+    }
+    failures = {
+        item.failure_id: item
+        for item in state.failures
+        if item.task_id == task.task_id
+    }
+    if any(
+        failure_id in failures
+        and failures[failure_id].recoverable
+        and failures[failure_id].code
+        in {
+            "tool_error",
+            "rate_limited",
+            "provider_unavailable",
+            "access_limited",
+            "malformed_result",
+            "timeout",
+        }
+        for failure_id in failure_ids
+    ):
+        return task.task_id, "source_failure"
+
+    created_evidence_ids = {
+        str(item)
+        for item in observation_update.get("created_evidence_ids", []) or []
+    }
+    if tool_name in {
+        "crop_and_inspect",
+        "focused_visual_inspection",
+        "check_consistency",
+        "analyze_visual_anomalies",
+    }:
+        if created_evidence_ids or outcome in {"empty", "context"}:
+            return task.task_id, "visual_signal"
+
+    if tool_name in {"visit", "compare_with_reference"}:
+        if created_evidence_ids:
+            return task.task_id, "related_unclosed"
+        pending_pages = _pending_inspection_batches(
+            state,
+            task,
+            attempts,
+            tool_name="visit",
+        )
+        pending_references = _pending_inspection_batches(
+            state,
+            task,
+            attempts,
+            tool_name="compare_with_reference",
+        )
+        if not pending_pages and not pending_references:
+            return task.task_id, "candidate_exhausted"
+
+    if tool_name == "text_search" and outcome in {"empty", "failed"}:
+        return task.task_id, "candidate_exhausted"
+    return None
+
+
+def apply_route_local_replan(
+    state: ImageOnlyInvestigationState,
+    output: RouteLocalReplanOutput,
+    *,
+    trigger: str,
+    source_access_policy: Any = None,
+) -> RouteLocalReplanRecord:
+    """Apply one free but bounded route-local replanning decision.
+
+    The initial Planning graph is unchanged.  This only changes an existing route
+    after the runtime has reached an observed retrieval/inspection boundary.
+    """
+
+    task = _task_by_id(state, output.task_id)
+    accepted_strategy = "rejected"
+    accepted_query = ""
+    rejected_reason = ""
+    valid_triggers = {
+        "related_unclosed",
+        "candidate_exhausted",
+        "source_failure",
+        "visual_signal",
+    }
+
+    if trigger not in valid_triggers:
+        rejected_reason = "route-local replan requires a recognized route boundary"
+    elif task is None:
+        rejected_reason = f"unknown task {output.task_id}"
+    elif task.route_replan_count >= 1:
+        rejected_reason = "the task already used its one route-local replan"
+    elif task.status not in {"active", "pending", "exhausted"}:
+        rejected_reason = "route-local replan task is not available"
+    elif state.core_verdict_fact_id not in task.fact_ids:
+        rejected_reason = "route-local replan task must own the open core fact"
+    else:
+        core = next(
+            (
+                item
+                for item in state.facts
+                if item.fact_id == state.core_verdict_fact_id
+            ),
+            None,
+        )
+        if core is None or core.status in {"supported", "refuted", "conflicted"}:
+            rejected_reason = "cannot replan after the core fact is resolved"
+
+    if not rejected_reason and task is not None:
+        if output.strategy == "replace_query":
+            if task.query_replan_count >= 1:
+                rejected_reason = "the task already has one replacement query"
+            elif "text_search" not in runtime_task_tool_names(state, task):
+                rejected_reason = "route cannot replace a query without text_search"
+            else:
+                accepted_query = _novel_replan_query(
+                    state,
+                    task,
+                    output.replacement_query,
+                )
+                if not accepted_query:
+                    rejected_reason = "replacement query is empty or semantically repeated"
+                else:
+                    violation = query_policy_violation(
+                        accepted_query,
+                        source_access_policy=source_access_policy,
+                    )
+                    if violation:
+                        rejected_reason = (
+                            "replacement query must seek underlying facts or sources; "
+                            f"{violation}: {accepted_query!r}"
+                        )
+            if not rejected_reason:
+                task.query_replan_count += 1
+                task.suggested_queries = [accepted_query]
+                task.status = "active"
+                task.route_replan_focus = ""
+                _abandon_stale_discoveries(
+                    state,
+                    task,
+                    reason=output.rationale,
+                )
+                accepted_strategy = "replace_query"
+        elif output.strategy == "add_visual_route":
+            focus = " ".join(output.visual_focus.split())
+            attempts = _attempted_routes_by_task(state).get(task.task_id, [])
+            already_inspected = any(
+                str(item.get("tool", "")).strip() == "crop_and_inspect"
+                for item in attempts
+            )
+            if not focus:
+                rejected_reason = "visual route requires a concrete visible focus"
+            elif already_inspected:
+                rejected_reason = "route already used crop_and_inspect"
+            else:
+                task.suggested_tools = list(
+                    dict.fromkeys([*task.suggested_tools, "crop_and_inspect"])
+                )
+                task.route_replan_focus = focus
+                task.status = "active"
+                _abandon_stale_discoveries(
+                    state,
+                    task,
+                    reason=output.rationale,
+                )
+                accepted_strategy = "add_visual_route"
+        elif output.strategy == "continue":
+            if task.status == "exhausted":
+                rejected_reason = "cannot continue an exhausted route without a new action"
+            else:
+                task.route_replan_focus = ""
+                accepted_strategy = "continue"
+        elif output.strategy == "stop_route":
+            task.status = "exhausted"
+            task.route_replan_focus = ""
+            hypothesis = next(
+                (
+                    item
+                    for item in state.search_hypotheses
+                    if item.hypothesis_id == task.hypothesis_id
+                ),
+                None,
+            )
+            if hypothesis is not None and not any(
+                other.task_id != task.task_id
+                and other.hypothesis_id == task.hypothesis_id
+                and other.status in {"active", "pending"}
+                for other in state.tasks
+            ):
+                hypothesis.status = "exhausted"
+            accepted_strategy = "stop_route"
+
+    if accepted_strategy != "rejected" and task is not None:
+        task.route_replan_count += 1
+        state.recommended_next_task_ids = list(
+            dict.fromkeys(
+                [
+                    task.task_id,
+                    *state.recommended_next_task_ids,
+                ]
+            )
+        )[:4]
+
+    record = RouteLocalReplanRecord(
+        replan_id=stable_id(
+            "route-local-replan",
+            state.brief.case_id,
+            state.action_count,
+            len(state.route_local_replans) + 1,
+            output.model_dump(mode="json"),
+        ),
+        action_count=max(1, state.action_count),
+        trigger=trigger,
+        task_id=output.task_id,
+        output=output,
+        accepted_strategy=accepted_strategy,
+        accepted_query=accepted_query if accepted_strategy == "replace_query" else "",
+        rejected_reason=rejected_reason,
+    )
+    state.route_local_replans.append(record)
     return record
 
 

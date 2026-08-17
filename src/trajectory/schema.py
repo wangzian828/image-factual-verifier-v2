@@ -34,6 +34,7 @@ class PolicyExample(StrictModel):
         "discrepancy_decision",
         "query_concept_extraction",
         "query_replan",
+        "route_local_replan",
         "reflection",
         "judgment",
     ]

@@ -135,6 +135,7 @@ STAGE_OBJECTIVES = {
     "image_only_judgment": "依据裁决材料输出最终结论。",
     "image_only_query_concept_extraction": "从新增证据提取可用于下一步调查的概念。",
     "image_only_query_replan": "基于证据生成一个非重复的新调查查询。",
+    "image_only_route_local_replan": "在路线边界自由调整查询、视觉核查或停止当前路线。",
     "image_only_planning": "建立初始可核查事实目标。",
 }
 

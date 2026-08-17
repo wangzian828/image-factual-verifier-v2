@@ -43,6 +43,7 @@ from src.orchestrator.image_only_prompts import (
     JUDGMENT_SYSTEM_PROMPT as IMAGE_ONLY_JUDGMENT_PROMPT,
     QUERY_CONCEPT_EXTRACTION_SYSTEM_PROMPT as IMAGE_ONLY_QUERY_CONCEPT_EXTRACTION_PROMPT,
     QUERY_REPLAN_SYSTEM_PROMPT as IMAGE_ONLY_QUERY_REPLAN_PROMPT,
+    ROUTE_LOCAL_REPLAN_SYSTEM_PROMPT as IMAGE_ONLY_ROUTE_LOCAL_REPLAN_PROMPT,
     REACT_SYSTEM_PROMPT as IMAGE_ONLY_REACT_PROMPT,
     REFLECTION_SYSTEM_PROMPT as IMAGE_ONLY_REFLECTION_PROMPT,
     TARGET_PLANNING_SYSTEM_PROMPT as IMAGE_ONLY_TARGET_PLANNING_PROMPT,
@@ -54,6 +55,7 @@ from src.orchestrator.image_only_prompts import (
     render_judgment_context as render_image_only_judgment_context,
     render_query_concept_extraction_context as render_image_only_query_concept_extraction_context,
     render_query_replan_context as render_image_only_query_replan_context,
+    render_route_local_replan_context as render_image_only_route_local_replan_context,
     render_react_context as render_image_only_react_context,
     render_reflection_context as render_image_only_reflection_context,
     render_target_planning_context as render_image_only_target_planning_context,
@@ -74,6 +76,7 @@ from src.orchestrator.investigation_models import (
     QueryConceptExtractionOutput,
     QueryReplanOutput,
     ReflectionOutput,
+    RouteLocalReplanOutput,
     TargetPlanningOutput,
 )
 from src.orchestrator.llm_backend import APIBackend
@@ -112,6 +115,7 @@ from src.orchestrator.task_store import (
     apply_discrepancy_decision,
     apply_image_account_planning,
     apply_query_replan,
+    apply_route_local_replan,
     apply_reflection,
     apply_target_planning,
     archive_recall_available,
@@ -126,6 +130,7 @@ from src.orchestrator.task_store import (
     pending_visual_reinspection,
     query_concept_extraction_error,
     query_replan_candidate_task_ids,
+    route_local_replan_candidate,
     remaining_root_image_reverse_branches,
     remaining_material_routes,
     remaining_claim_hypothesis_routes,
@@ -1188,6 +1193,27 @@ class Orchestrator:
                 )
             else:
                 audit_discrepancy_coverage(investigation)
+
+            route_replan_request = route_local_replan_candidate(
+                investigation,
+                observation_update=observation_update,
+            )
+            if (
+                route_replan_request is not None
+                and investigation.proposed_verdict not in {"fake", "real"}
+            ):
+                route_task_id, route_trigger = route_replan_request
+                await self._run_image_only_route_local_replan(
+                    state,
+                    investigation,
+                    image_path=image_path,
+                    task_id=route_task_id,
+                    trigger=route_trigger,
+                )
+                audit_discrepancy_coverage(
+                    investigation,
+                    decision_checkpoint=True,
+                )
             self._sync_image_only_state(state, investigation)
 
             # Recall remains two-step: candidate recall is followed by an exact
@@ -2254,6 +2280,73 @@ class Orchestrator:
         self._sync_image_only_state(state, investigation)
         return bool(record.accepted_queries)
 
+    async def _run_image_only_route_local_replan(
+        self,
+        state: VerificationState,
+        investigation: ImageOnlyInvestigationState,
+        *,
+        image_path: str,
+        task_id: str,
+        trigger: str,
+    ) -> bool:
+        """Let one stalled route change direction without constraining Planning."""
+
+        runner = StageRunner(
+            llm=self.llm,
+            system_prompt=self._sp(IMAGE_ONLY_ROUTE_LOCAL_REPLAN_PROMPT),
+            tools=[],
+            output_schema=RouteLocalReplanOutput,
+            max_rounds=2,
+            image_path=image_path,
+            stage_name="image_only_route_local_replan",
+            runtime_store=state.runtime_store,
+            handoff_state=investigation,
+            attach_image=bool(image_path),
+            output_validator=lambda parsed, _steps: (
+                self._validate_image_only_route_local_replan(
+                    investigation,
+                    parsed,
+                    task_id=task_id,
+                    trigger=trigger,
+                    source_access_policy=self.source_access_policy,
+                )
+            ),
+            max_output_tokens=self._stage_output_tokens(
+                "ROUTE_LOCAL_REPLAN",
+                2048,
+            ),
+            generation_config=self._stage_generation_config(
+                "ROUTE_LOCAL_REPLAN"
+            ),
+            request_timeout_seconds=self.stage_request_timeout_seconds,
+        )
+        parsed, steps = await runner.run(
+            render_image_only_route_local_replan_context(
+                investigation,
+                task_id=task_id,
+                trigger=trigger,
+            )
+        )
+        for step in steps:
+            if step.action_type == "output_rejected":
+                step.action_type = "route_local_replan_revision"
+                step.metadata["route_local_replan_revision_reason"] = (
+                    step.metadata.get("rejection_reason", "")
+                )
+        self._record_stage_steps(state, steps)
+        if parsed is None:
+            raise RuntimeError(
+                "image-only route-local replan did not produce valid structured output"
+            )
+        record = apply_route_local_replan(
+            investigation,
+            parsed,
+            trigger=trigger,
+            source_access_policy=self.source_access_policy,
+        )
+        self._sync_image_only_state(state, investigation)
+        return record.accepted_strategy != "rejected"
+
     async def _run_image_only_judgment(
         self,
         state: VerificationState,
@@ -2430,6 +2523,28 @@ class Orchestrator:
             parsed,
             trigger=trigger,
             new_evidence_ids=new_evidence_ids,
+            source_access_policy=source_access_policy,
+        )
+        if record.rejected_reason:
+            return False, record.rejected_reason
+        return True, ""
+
+    @staticmethod
+    def _validate_image_only_route_local_replan(
+        investigation: ImageOnlyInvestigationState,
+        parsed: RouteLocalReplanOutput,
+        *,
+        task_id: str,
+        trigger: str,
+        source_access_policy: Optional[SourceAccessPolicy] = None,
+    ) -> tuple[bool, str]:
+        if parsed.task_id != task_id:
+            return False, "route-local replan must update the supplied task_id"
+        candidate = investigation.model_copy(deep=True)
+        record = apply_route_local_replan(
+            candidate,
+            parsed,
+            trigger=trigger,
             source_access_policy=source_access_policy,
         )
         if record.rejected_reason:

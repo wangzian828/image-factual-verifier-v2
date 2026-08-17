@@ -182,6 +182,36 @@ statement, queries, expected_information, suggested_tools, priority}].
 """
 
 
+ROUTE_LOCAL_REPLAN_SYSTEM_PROMPT = """\
+判断图像表达的事实内容是否成立。
+You are a route-local replanning step inside an open image-fact investigation.
+The initial plan and its target fact remain valid; do not rewrite either one and
+do not give a real/fake verdict.
+
+The runtime called you because this one route reached a concrete boundary:
+related-but-unclosed material, an exhausted candidate batch, a recoverable source
+failure, or a newly useful visual observation.  You may choose exactly one:
+
+- replace_query: write one genuinely different web query for the same route;
+- add_visual_route: ask for one concrete visual inspection focus that can
+  distinguish the current image from merely related material;
+- continue: retain the route because a concrete executable next step remains;
+- stop_route: retire only this route because it has no useful next direction.
+
+Preserve investigation freedom.  A route need not identify a person, place, date,
+or original image.  Treat any such identity in prior material as a tentative lead,
+not an established fact.  You may use any supplied image observation, source
+result, or failure detail; do not force them into predefined semantic slots.
+
+For replace_query, change the investigation angle rather than paraphrasing an
+attempted query.  For add_visual_route, state a visible property, region, object,
+text, relationship, or structural cue to inspect; do not ask whether the image is
+"real", "fake", AI-generated, or otherwise make an authenticity classification.
+For continue, point to the concrete remaining action.  For stop_route, explain why
+this route—not the whole investigation—has no material next action.
+"""
+
+
 EVIDENCE_DECISION_SYSTEM_PROMPT = """\
 判断图像表达的事实内容是否成立。
 
@@ -530,7 +560,8 @@ def render_react_context(state: ImageOnlyInvestigationState) -> str:
             f"status={task.status}; attempts={task.attempt_count}; "
             f"question={task.question}; facts={related}; "
             f"suggested_tools={task.suggested_tools}; "
-            f"suggested_queries={task.suggested_queries}"
+            f"suggested_queries={task.suggested_queries}; "
+            f"route_replan_focus={task.route_replan_focus}"
         )
     active_task_ids = {task.task_id for task in active}
     remaining_routes = (
@@ -1525,6 +1556,80 @@ def render_query_replan_context(
             "remaining_gap": (
                 decision.output.remaining_gap if decision is not None else ""
             ),
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
+def render_route_local_replan_context(
+    state: ImageOnlyInvestigationState,
+    *,
+    task_id: str,
+    trigger: str,
+) -> str:
+    """Render one route boundary without constraining the model's next angle."""
+
+    task = next(
+        (item for item in state.tasks if item.task_id == task_id),
+        None,
+    )
+    core = next(
+        (
+            item
+            for item in state.facts
+            if item.fact_id == state.core_verdict_fact_id
+        ),
+        None,
+    )
+    attempted_routes: List[Dict[str, Any]] = []
+    for raw in state.attempted_routes:
+        try:
+            route = json.loads(raw)
+        except (TypeError, ValueError):
+            continue
+        if route.get("task_id") == task_id:
+            attempted_routes.append(route)
+    task_discoveries = [
+        item.model_dump(mode="json")
+        for item in state.discoveries
+        if item.task_id == task_id
+    ][-20:]
+    task_evidence = [
+        _render_semantic_evidence(item)
+        for item in state.evidence
+        if item.task_id == task_id
+    ][-16:]
+    task_failures = [
+        item.model_dump(mode="json")
+        for item in state.failures
+        if item.task_id == task_id
+    ][-12:]
+    visual_observations = [
+        fact.model_dump(mode="json")
+        for fact in state.facts
+        if fact.origin.type in {"input_image", "ocr"}
+    ][:36]
+    return json.dumps(
+        {
+            "route_boundary": trigger,
+            "active_target": core.model_dump(mode="json") if core else None,
+            "current_route": task.model_dump(mode="json") if task else None,
+            "image_observations": visual_observations,
+            "route_discoveries": task_discoveries,
+            "route_evidence": task_evidence,
+            "route_failures": task_failures,
+            "attempted_routes": attempted_routes[-16:],
+            "prior_route_replans": [
+                item.model_dump(mode="json")
+                for item in state.route_local_replans
+                if item.task_id == task_id
+            ],
+            "remaining_route_inventory": remaining_claim_hypothesis_routes(
+                state,
+                task_ids={task_id},
+            ),
+            "remaining_actions": max(0, 24 - state.action_count),
         },
         ensure_ascii=False,
         separators=(",", ":"),

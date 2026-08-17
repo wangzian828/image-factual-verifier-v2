@@ -165,9 +165,11 @@ class ResearchTask(StrictModel):
     ] = "active"
     parent_task_id: Optional[str] = Field(default=None, max_length=100)
     origin_ids: List[str] = Field(min_length=1, max_length=12)
-    suggested_tools: List[str] = Field(default_factory=list, max_length=4)
+    suggested_tools: List[str] = Field(default_factory=list, max_length=5)
     suggested_queries: List[str] = Field(default_factory=list, max_length=3)
     query_replan_count: int = Field(default=0, ge=0, le=1)
+    route_replan_count: int = Field(default=0, ge=0, le=1)
+    route_replan_focus: str = Field(default="", max_length=800)
     attempt_count: int = Field(default=0, ge=0)
     finding_ids: List[str] = Field(default_factory=list, max_length=20)
 
@@ -1155,6 +1157,45 @@ class QueryReplanRecord(StrictModel):
     rejected_reason: str = Field(default="", max_length=800)
 
 
+class RouteLocalReplanOutput(StrictModel):
+    """One bounded, route-local response to an observed investigation boundary."""
+
+    task_id: str = Field(min_length=1, max_length=100)
+    strategy: Literal[
+        "replace_query",
+        "add_visual_route",
+        "continue",
+        "stop_route",
+    ]
+    replacement_query: str = Field(default="", max_length=500)
+    visual_focus: str = Field(default="", max_length=800)
+    rationale: str = Field(min_length=1, max_length=1200)
+
+
+class RouteLocalReplanRecord(StrictModel):
+    """Audit one free but runtime-bounded route-local replanning decision."""
+
+    replan_id: str = Field(min_length=1, max_length=100)
+    action_count: int = Field(ge=1, le=24)
+    trigger: Literal[
+        "related_unclosed",
+        "candidate_exhausted",
+        "source_failure",
+        "visual_signal",
+    ]
+    task_id: str = Field(min_length=1, max_length=100)
+    output: RouteLocalReplanOutput
+    accepted_strategy: Literal[
+        "replace_query",
+        "add_visual_route",
+        "continue",
+        "stop_route",
+        "rejected",
+    ] = "rejected"
+    accepted_query: str = Field(default="", max_length=500)
+    rejected_reason: str = Field(default="", max_length=800)
+
+
 class EvidenceGap(StrictModel):
     gap_id: str = Field(min_length=1, max_length=100)
     fact_id: str = Field(min_length=1, max_length=100)
@@ -1274,6 +1315,10 @@ class ImageOnlyInvestigationState(StrictModel):
     failures: List[InvestigationFailure] = Field(default_factory=list, max_length=120)
     reflections: List[ReflectionRecord] = Field(default_factory=list, max_length=7)
     query_replans: List[QueryReplanRecord] = Field(
+        default_factory=list,
+        max_length=12,
+    )
+    route_local_replans: List[RouteLocalReplanRecord] = Field(
         default_factory=list,
         max_length=12,
     )

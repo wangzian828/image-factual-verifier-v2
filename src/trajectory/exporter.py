@@ -126,6 +126,8 @@ def _example_type(stage: str) -> str | None:
         return "query_concept_extraction"
     if stage == "image_only_query_replan":
         return "query_replan"
+    if stage == "image_only_route_local_replan":
+        return "route_local_replan"
     if stage in {
         "image_only_planning",
         "image_only_attribution_planning",

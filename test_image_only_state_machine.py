@@ -24,6 +24,7 @@ from src.orchestrator.investigation_models import (
     QueryReplanOutput,
     ReflectionOutput,
     ResearchTask,
+    RouteLocalReplanOutput,
     TargetFactProposal,
     TargetPlanningOutput,
     TaskUpdate,
@@ -56,6 +57,8 @@ from src.orchestrator.task_store import (
     query_concept_extraction_error,
     remaining_material_routes,
     record_tool_observation,
+    apply_route_local_replan,
+    route_local_replan_candidate,
     state_from_bootstrap,
 )
 
@@ -6016,6 +6019,145 @@ def test_query_replan_validator_rejects_semantic_duplicate() -> None:
 
     assert valid is False
     assert reason == "proposed no genuinely new semantic query"
+
+
+def test_route_local_replan_can_replace_query_after_empty_search_batch() -> None:
+    case, state = _runtime_state()
+    task = next(
+        item
+        for item in state.tasks
+        if state.core_verdict_fact_id in item.fact_ids
+    )
+    task.suggested_tools = ["text_search"]
+    task.suggested_queries = ["marked research vessel R 225"]
+    search_step = _step(
+        task_id=task.task_id,
+        call_id="call-route-local-empty-search",
+        tool_name="text_search",
+        result=json.dumps(
+            {
+                "status": "success",
+                "queries": [
+                    {
+                        "query": "marked research vessel R 225",
+                        "results": [],
+                    }
+                ],
+            }
+        ),
+    )
+    search_step.tool_args["queries"] = ["marked research vessel R 225"]
+    update = record_tool_observation(
+        state,
+        search_step,
+        image_sha256=case.image_sha256,
+    )
+
+    assert route_local_replan_candidate(
+        state,
+        observation_update=update,
+    ) == (task.task_id, "candidate_exhausted")
+
+    record = apply_route_local_replan(
+        state,
+        RouteLocalReplanOutput(
+            task_id=task.task_id,
+            strategy="replace_query",
+            replacement_query=(
+                "marked research vessel fisheries survey vessel identity"
+            ),
+            rationale=(
+                "Switch from one hull-marking lead to the vessel's visible "
+                "research role."
+            ),
+        ),
+        trigger="candidate_exhausted",
+    )
+
+    assert record.rejected_reason == ""
+    assert record.accepted_strategy == "replace_query"
+    assert record.accepted_query == (
+        "marked research vessel fisheries survey vessel identity"
+    )
+    assert task.query_replan_count == 1
+    assert task.route_replan_count == 1
+    assert remaining_material_routes(
+        state,
+        fact_id=state.core_verdict_fact_id or "",
+    ) == [f"text_search:{task.task_id}"]
+
+
+def test_route_local_replan_can_add_visual_route_without_rewriting_plan() -> None:
+    _, state = _runtime_state()
+    task = next(
+        item
+        for item in state.tasks
+        if state.core_verdict_fact_id in item.fact_ids
+    )
+    original_question = task.question
+    original_queries = list(task.suggested_queries)
+    task.suggested_tools = ["text_search", "visit"]
+
+    record = apply_route_local_replan(
+        state,
+        RouteLocalReplanOutput(
+            task_id=task.task_id,
+            strategy="add_visual_route",
+            visual_focus=(
+                "Inspect the vessel hull marking, bridge geometry, and mast "
+                "layout to distinguish it from related research ships."
+            ),
+            rationale=(
+                "The source leads are related but do not identify the same "
+                "visible vessel."
+            ),
+        ),
+        trigger="related_unclosed",
+    )
+
+    assert record.rejected_reason == ""
+    assert record.accepted_strategy == "add_visual_route"
+    assert task.question == original_question
+    assert task.suggested_queries == original_queries
+    assert task.route_replan_count == 1
+    assert task.route_replan_focus.startswith("Inspect the vessel hull marking")
+    assert "crop_and_inspect" in task.suggested_tools
+    assert f"crop_and_inspect:{task.task_id}" in remaining_material_routes(
+        state,
+        fact_id=state.core_verdict_fact_id or "",
+    )
+
+
+def test_route_local_replan_triggers_on_recoverable_source_failure() -> None:
+    case, state = _runtime_state()
+    task = next(
+        item
+        for item in state.tasks
+        if state.core_verdict_fact_id in item.fact_ids
+    )
+    task.suggested_tools = ["text_search", "visit"]
+    failed_visit = _step(
+        task_id=task.task_id,
+        call_id="call-route-local-source-failure",
+        tool_name="visit",
+        result=json.dumps(
+            {
+                "status": "error",
+                "error": "Configured Jina page fetch failed: 422",
+            }
+        ),
+    )
+    failed_visit.tool_args["url"] = "https://example.org/blocked-source"
+    update = record_tool_observation(
+        state,
+        failed_visit,
+        image_sha256=case.image_sha256,
+    )
+
+    assert route_local_replan_candidate(
+        state,
+        observation_update=update,
+    ) == (task.task_id, "source_failure")
 
 
 def test_visual_scene_identity_is_not_blocked_by_source_record_predicate() -> None:
