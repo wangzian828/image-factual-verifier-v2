@@ -6086,7 +6086,7 @@ def route_local_replan_candidate(
     if (
         task is None
         or task.route_replan_count >= 1
-        or task.status not in {"active", "pending", "exhausted"}
+        or task.status not in {"active", "pending", "exhausted", "superseded"}
         or not _task_serves_open_route_local_target(state, task)
     ):
         return None
@@ -6166,7 +6166,7 @@ def route_local_exhausted_candidate(
     for task in state.tasks:
         if (
             task.route_replan_count >= 1
-            or task.status not in {"active", "pending", "exhausted"}
+            or task.status not in {"active", "pending", "exhausted", "superseded"}
             or not _task_serves_open_route_local_target(state, task)
             or _route_local_target_is_resolved(state, task)
         ):
@@ -6262,7 +6262,7 @@ def apply_route_local_replan(
         rejected_reason = f"unknown task {output.task_id}"
     elif task.route_replan_count >= 1:
         rejected_reason = "the task already used its one route-local replan"
-    elif task.status not in {"active", "pending", "exhausted"}:
+    elif task.status not in {"active", "pending", "exhausted", "superseded"}:
         rejected_reason = "route-local replan task is not available"
     elif not _task_serves_open_route_local_target(state, task):
         rejected_reason = "route-local replan task must own an open target fact"
@@ -6298,6 +6298,7 @@ def apply_route_local_replan(
                 task.suggested_queries = [accepted_query]
                 task.status = "active"
                 task.route_replan_focus = ""
+                _reactivate_route_hypothesis(state, task)
                 _abandon_stale_discoveries(
                     state,
                     task,
@@ -6321,6 +6322,7 @@ def apply_route_local_replan(
                 )
                 task.route_replan_focus = focus
                 task.status = "active"
+                _reactivate_route_hypothesis(state, task)
                 _abandon_stale_discoveries(
                     state,
                     task,
@@ -6328,8 +6330,10 @@ def apply_route_local_replan(
                 )
                 accepted_strategy = "add_visual_route"
         elif output.strategy == "continue":
-            if task.status == "exhausted":
-                rejected_reason = "cannot continue an exhausted route without a new action"
+            if task.status in {"exhausted", "superseded"}:
+                rejected_reason = (
+                    "cannot continue a retired route without a new executable action"
+                )
             else:
                 task.route_replan_focus = ""
                 accepted_strategy = "continue"
@@ -6382,6 +6386,26 @@ def apply_route_local_replan(
     )
     state.route_local_replans.append(record)
     return record
+
+
+def _reactivate_route_hypothesis(
+    state: ImageOnlyInvestigationState,
+    task: ResearchTask,
+) -> None:
+    """Reopen only the hypothesis selected by an accepted local replan."""
+
+    if not task.hypothesis_id:
+        return
+    hypothesis = next(
+        (
+            item
+            for item in state.search_hypotheses
+            if item.hypothesis_id == task.hypothesis_id
+        ),
+        None,
+    )
+    if hypothesis is not None:
+        hypothesis.status = "active"
 
 
 def _inherit_refinement_discoveries(

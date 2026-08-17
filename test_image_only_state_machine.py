@@ -26,6 +26,7 @@ from src.orchestrator.investigation_models import (
     ReflectionOutput,
     ResearchTask,
     RouteLocalReplanOutput,
+    SearchHypothesis,
     TargetFactProposal,
     TargetPlanningOutput,
     TaskUpdate,
@@ -6224,6 +6225,48 @@ def test_route_local_replan_offers_one_final_route_after_exhaustion() -> None:
         task.task_id,
         "candidate_exhausted",
     )
+
+
+def test_route_local_replan_reactivates_one_retired_hypothesis() -> None:
+    _, state = _runtime_state()
+    task = next(
+        item
+        for item in state.tasks
+        if state.core_verdict_fact_id in item.fact_ids
+    )
+    task.status = "superseded"
+    task.hypothesis_id = "hypothesis-retired-route-local"
+    task.suggested_tools = ["text_search"]
+    task.suggested_queries = ["marked research vessel R 225"]
+    state.search_hypotheses = [
+        SearchHypothesis(
+            hypothesis_id=task.hypothesis_id,
+            claim_ids=["claim-retired-route-local"],
+            statement="Identify the marked research vessel.",
+            queries=list(task.suggested_queries),
+            expected_information="A source that identifies the visible vessel.",
+            suggested_tools=["text_search"],
+            task_id=task.task_id,
+            status="retired",
+        )
+    ]
+
+    record = apply_route_local_replan(
+        state,
+        RouteLocalReplanOutput(
+            task_id=task.task_id,
+            strategy="replace_query",
+            replacement_query=(
+                "marked research vessel fisheries survey vessel identity"
+            ),
+            rationale="The retired route has one new evidence-seeking direction.",
+        ),
+        trigger="candidate_exhausted",
+    )
+
+    assert record.rejected_reason == ""
+    assert task.status == "active"
+    assert state.search_hypotheses[0].status == "active"
 
 
 def test_visual_scene_identity_is_not_blocked_by_source_record_predicate() -> None:
