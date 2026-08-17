@@ -15,7 +15,7 @@ def test_hot_path_prompts_stay_semantic_and_compact() -> None:
         "target planning": (TARGET_PLANNING_SYSTEM_PROMPT, 1300),
         "image account planning": (
             IMAGE_ACCOUNT_PLANNING_SYSTEM_PROMPT,
-            1900,
+            2900,
         ),
         "discrepancy investigation": (
             DISCREPANCY_REACT_SYSTEM_PROMPT,
@@ -84,6 +84,10 @@ def test_hot_path_prompts_stay_semantic_and_compact() -> None:
     assert "Image clues guide retrieval" in image_account_prompt
     assert "exact source matching is retrieval context" in image_account_prompt
     assert "only tool Evidence establishes a fact" in image_account_prompt
+    assert "Generic example" in image_account_prompt
+    assert "smallest positive proposition" in image_account_prompt
+    assert "same subject and relation" in image_account_prompt
+    assert "media-origin focus is rewritten as a factual focus" in image_account_prompt
     assert "Output: account_summary" in image_account_prompt
     assert "not a boundary on the investigation" in discrepancy_react_prompt
     assert "Frame retrieval around what actually happened" in discrepancy_react_prompt

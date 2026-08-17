@@ -173,6 +173,10 @@ and publication history belong in hypotheses, not the target; exact source
 matching is retrieval context. Treat search_hypotheses as neutral investigation
 routes, not candidate verdicts; determine the relation slot's verified value.
 Routes do not own the verdict.
+Keep the target centered on the depicted subject, event, relation, value, or
+scene/world constraint. Source image, creator, platform, generation method, and
+publication history are retrieval context rather than target facts. The absence
+of an exact capture is not a target gap.
 If scale, biology, structure, or a scene relation can change judgment, add one
 visual_consistency/crop_and_inspect route with its resolving observation. Do not
 add it only because a webpage may fail. Text search is the only search route;
@@ -180,6 +184,21 @@ candidate ordering is internal.
 
 """ + TARGET_RELATION_ROUTE_CONTRACT + """Image clues guide retrieval; only tool
 Evidence establishes a fact.
+
+Use one route_focus centered on a depicted entity, event, relation value,
+scene/world constraint, or visual consistency question. A media-origin focus is
+rewritten as a factual focus. Prior knowledge is a lead; only tool Evidence
+establishes a fact.
+
+Generic example:
+Formulate the target as the smallest positive proposition about the depicted
+subject, event, relation, value, or scene constraint.
+Target: "[Subject] [has/performs/participates in] [relation or event] with
+[value/object/context]."
+Visual route: "Inspect [visible region, property, text, geometry, or spatial
+relation] that can distinguish whether the target relation holds."
+Search route: "Retrieve evidence about the same subject and relation, then
+determine the verified value of that relation."
 
 Output: account_summary; image_claims[{claim_key, statement, kind, predicate,
 anchor_fact_ids, salience}]; search_hypotheses[{hypothesis_key, route_focus,
