@@ -340,31 +340,34 @@ image is attached for every judgment. Return only the binary verdict, confidence
 and a concise assessment of the supplied compiled basis.
 
 When compiled_verdict is non-empty, reproduce it exactly. Inspect the image so
-the assessment does not misdescribe visible content, but do not alter the
-runtime-compiled conclusion or introduce new external facts. Set
-terminal_visual_rationale to null.
+the assessment accurately describes the supplied visible content and stays within
+the runtime-compiled conclusion. Set terminal_visual_rationale to null.
 
-When compiled_verdict is empty, make the required binary judgment after inspecting
-the attached image. Treat this as a target-specific visual discrimination task,
-not a general assessment of whether the image looks photographic. Return
-terminal_visual_rationale with all four fields:
+When compiled_verdict is empty, make the required binary judgment by evaluating
+whether the attached pixels establish or contradict the image-grounded factual
+relation in the compiled target. Return terminal_visual_rationale with all four
+fields:
 
-- target_visible_property: the one target property whose visible state would
-  distinguish the two possible factual outcomes;
-- observed_property: the concrete pixels that show its state in this image;
-- counterfactual_difference: what visibly differs between the real and fake
-  alternatives for that same property;
-- relation_to_verdict: whether that comparison supports real or fake.
+- target_visible_property: the target entity, relation, factual value, or directly
+  observable condition under evaluation;
+- observed_property: the concrete pixels that establish the target value or a
+  competing value for that same relation;
+- counterfactual_difference: the visible correspondence or competing relation that
+  determines whether the target factual relation holds;
+- relation_to_verdict: whether that target-specific comparison supports real or
+  fake.
 
-The chosen property must concern the factual target rather than overall visual
-polish. Give spatial, relational, textual, structural, or physical detail that a
-reviewer can locate in the image. The unresolved diagnostics remain useful for
-describing the limitation, but the final rationale must stand on its own visible
-comparison.
+Ground the rationale in a target-specific, directly observable correspondence or
+contradiction: an entity, relationship, event configuration, quantity, time/place
+cue, or legible text value. Give spatial, relational, textual, structural, or
+physical detail that a reviewer can locate in the image. The unresolved diagnostics
+remain useful for describing the limitation, while the final states the
+visible relation that determines the binary judgment.
 
-Do not emit claim, discrepancy, finding, Evidence, or gap IDs; the runtime injects
-those from the accepted investigation state. Do not add historical facts or reopen
-search.
+Return the binary verdict, confidence, concise assessment, and rationale fields.
+The runtime supplies claim, discrepancy, finding, Evidence, and gap identifiers
+from the accepted investigation state. The assessment uses the supplied visible
+content and compiled basis.
 """
 
 
@@ -1288,15 +1291,16 @@ def render_discrepancy_judgment_context(
             "terminal_visual_rationale_contract": (
                 {
                     "target_visible_property": (
-                        "One target-specific property that can be located in "
-                        "the image and distinguishes real from fake."
+                        "The image-grounded entity, relation, value, or "
+                        "observable condition at issue in the target."
                     ),
                     "observed_property": (
-                        "The concrete visible state of that same property."
+                        "Concrete pixels establishing that target value or a "
+                        "competing value for the same relation."
                     ),
                     "counterfactual_difference": (
-                        "The visible difference between the two factual "
-                        "alternatives for that property."
+                        "The visible correspondence or competing relation that "
+                        "determines whether the target relation holds."
                     ),
                     "relation_to_verdict": ["supports_real", "supports_fake"],
                 }
