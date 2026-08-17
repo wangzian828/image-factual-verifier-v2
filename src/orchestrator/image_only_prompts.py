@@ -148,33 +148,38 @@ execution order. You may switch to another Task when the current route is weak.
 """
 
 
+TARGET_RELATION_ROUTE_CONTRACT = """\
+Use the image account's positive world proposition as the fixed target:
+subject, event/relation, value, or scene/world constraint. Keep that same
+proposition when choosing a route. Visual routes inspect pixels bearing on it:
+text, value, geometry, anatomy, layout, or spatial relation.
+"""
+
+
 IMAGE_ACCOUNT_PLANNING_SYSTEM_PROMPT = """\
 判断图像表达的事实内容是否成立。
 
-You are the Image Account Planning root. Plan an open fact-check of the image.
+You are the Image Account Planning root. Plan the image fact-check.
 ``image_claims`` is a legacy wire name for one high-salience image-grounded target
-fact, not a provenance requirement. Write the visible world relation the image asks
-the viewer to accept; add a second target only when independently verdict-changing.
+fact, not provenance. Write the visible world relation the image asks the viewer
+to accept; add a second target only when independently verdict-changing.
 Do not inventory details.
 
 Write the target as the positive world proposition the image asks the viewer to
 accept, anchored to a concrete subject and relation. It may include living versus
 model or biologically possible size. Prefer unusual visible relations; a defining
-factual relation may be more useful. Retrieved place/date/event identity, creator,
-platform, and publication history belong in hypotheses, not the target; exact
-source matching is retrieval context. Treat search_hypotheses as neutral
-investigation routes, not candidate verdicts; determine the relation slot's
-verified value. Routes do not own the verdict.
-Decide whether a visible discriminator is needed. If material, scale,
-biological-versus-model appearance, structure, or a scene relation can change the
-judgment, add one visual_consistency route with crop_and_inspect and state the
-resolving observation. Do not add it only because a webpage may fail. Text search
-is the only search route; candidate ordering may be improved internally after the
-search, not a planning choice or additional tool.
+factual relation may be more useful. Retrieved identity, date, creator, platform,
+and publication history belong in hypotheses, not the target; exact source
+matching is retrieval context. Treat search_hypotheses as neutral investigation
+routes, not candidate verdicts; determine the relation slot's verified value.
+Routes do not own the verdict.
+If scale, biology, structure, or a scene relation can change judgment, add one
+visual_consistency/crop_and_inspect route with its resolving observation. Do not
+add it only because a webpage may fail. Text search is the only search route;
+candidate ordering is internal.
 
-Use one allowed route_focus centered on a depicted entity, event, relation value,
-scene/world constraint, or visual consistency question. Image clues guide
-retrieval; only tool Evidence establishes a fact.
+""" + TARGET_RELATION_ROUTE_CONTRACT + """Image clues guide retrieval; only tool
+Evidence establishes a fact.
 
 Output: account_summary; image_claims[{claim_key, statement, kind, predicate,
 anchor_fact_ids, salience}]; search_hypotheses[{hypothesis_key, route_focus,
@@ -188,6 +193,13 @@ You are a route-local replanning step inside an open image-fact investigation.
 The initial plan and its target fact remain valid; do not rewrite either one and
 do not give a real/fake verdict.
 
+""" + TARGET_RELATION_ROUTE_CONTRACT + """\
+Use ``active_target.statement`` and ``image_account_summary`` as the canonical
+target wording. The current route is only an investigation path toward that
+target. Every replacement query, visual focus, or continuation should state the
+concrete information or visible cue that can support, refute, or discriminate
+the active target relation.
+
 The runtime called you because this one route reached a concrete execution
 boundary. This may be related-but-unclosed material, an exhausted candidate batch,
 a recoverable source failure, an exhausted policy call, a useful visual
@@ -200,15 +212,14 @@ may choose exactly one:
 - continue: retain the route because a concrete executable next step remains;
 - stop_route: retire only this route because it has no useful next direction.
 
-Preserve investigation freedom.  A route need not identify a person, place, date,
-or original image.  Treat any such identity in prior material as a tentative lead,
-not an established fact.  You may use any supplied image observation, source
-result, or failure detail; do not force them into predefined semantic slots.
+Preserve investigation freedom. Identity, place, date, and source details are
+tentative leads until they resolve the active target relation. You may use any
+supplied image observation, source result, or failure detail; do not force them
+into predefined semantic slots.
 
 For replace_query, change the investigation angle rather than paraphrasing an
-attempted query.  For add_visual_route, state a visible property, region, object,
-text, relationship, or structural cue that distinguishes the target factual
-relation.
+attempted query. For add_visual_route, state a visible property, region, object,
+text, relationship, or structural cue and the target relation it distinguishes.
 When related candidates propose incompatible places, people, events, or dates, do
 not concatenate those competing guesses into one OR query.  Either select one
 tentative lead for a coherent source-specific query, or choose a visual route that
@@ -1639,6 +1650,19 @@ def render_route_local_replan_context(
     return json.dumps(
         {
             "route_boundary": trigger,
+            "image_account_summary": state.image_account_summary,
+            "planned_target_relation": (
+                {
+                    "fact": core.model_dump(mode="json"),
+                    "claims": [
+                        claim.model_dump(mode="json")
+                        for claim in state.image_claims
+                        if claim.fact_id == core.fact_id
+                    ],
+                }
+                if core is not None
+                else None
+            ),
             "active_target": core.model_dump(mode="json") if core else None,
             "current_route": task.model_dump(mode="json") if task else None,
             "image_observations": visual_observations,

@@ -1327,6 +1327,30 @@ def apply_image_account_planning(
     """Atomically install the image account, claims, hypotheses, and tasks."""
 
     candidate = state.model_copy(deep=True)
+    normalized_account_summary = _normalize_relation_text(output.account_summary)
+    normalized_claims = [
+        proposal.model_copy(
+            update={
+                "statement": _normalize_relation_text(proposal.statement),
+            }
+        )
+        for proposal in output.image_claims
+    ]
+    normalized_hypotheses = [
+        proposal.model_copy(
+            update={
+                "statement": _normalize_relation_text(proposal.statement),
+                "queries": [
+                    _normalize_relation_text(query)
+                    for query in proposal.queries
+                ],
+                "expected_information": _normalize_relation_text(
+                    proposal.expected_information
+                ),
+            }
+        )
+        for proposal in output.search_hypotheses
+    ]
     if candidate.image_claims or candidate.search_hypotheses:
         return {
             "accepted": False,
@@ -1334,18 +1358,21 @@ def apply_image_account_planning(
         }
 
     fact_by_id = {fact.fact_id: fact for fact in candidate.facts}
-    if len(candidate.facts) + len(output.image_claims) > 72:
+    if len(candidate.facts) + len(normalized_claims) > 72:
         return {"accepted": False, "rejected_reason": "VisualFact budget exhausted"}
-    if len(output.image_claims) > MAX_IMAGE_CLAIMS:
+    if len(normalized_claims) > MAX_IMAGE_CLAIMS:
         return {"accepted": False, "rejected_reason": "image claim budget exhausted"}
-    if len(candidate.search_hypotheses) + len(output.search_hypotheses) > MAX_SEARCH_HYPOTHESES:
+    if (
+        len(candidate.search_hypotheses) + len(normalized_hypotheses)
+        > MAX_SEARCH_HYPOTHESES
+    ):
         return {"accepted": False, "rejected_reason": "search hypothesis budget exhausted"}
-    if len(candidate.tasks) + len(output.search_hypotheses) > TOTAL_TASKS_MAX:
+    if len(candidate.tasks) + len(normalized_hypotheses) > TOTAL_TASKS_MAX:
         return {"accepted": False, "rejected_reason": "total task budget exhausted"}
 
     high_claim_keys = {
         item.claim_key
-        for item in output.image_claims
+        for item in normalized_claims
         if item.salience == "high"
     }
     if not high_claim_keys:
@@ -1358,7 +1385,7 @@ def apply_image_account_planning(
             "accepted": False,
             "rejected_reason": "image account planning cannot run after verdict",
         }
-    for index, proposal in enumerate(output.search_hypotheses):
+    for index, proposal in enumerate(normalized_hypotheses):
         if proposal.route_focus == "media_origin":
             return {
                 "accepted": False,
@@ -1371,7 +1398,7 @@ def apply_image_account_planning(
             }
         if any(
             _hypothesis_text_equivalent(prior.statement, proposal.statement)
-            for prior in output.search_hypotheses[:index]
+            for prior in normalized_hypotheses[:index]
         ):
             return {
                 "accepted": False,
@@ -1383,7 +1410,7 @@ def apply_image_account_planning(
     new_claim_ids: List[str] = []
     new_hypothesis_ids: List[str] = []
     new_task_ids: List[str] = []
-    for proposal in output.image_claims:
+    for proposal in normalized_claims:
         anchors = [fact_by_id.get(fact_id) for fact_id in proposal.anchor_fact_ids]
         if any(anchor is None for anchor in anchors):
             return {
@@ -1451,7 +1478,7 @@ def apply_image_account_planning(
         fact_by_id[fact_id].predicate == "visual_integrity"
         for fact_id in fact_ids
     )
-    for proposal in output.search_hypotheses:
+    for proposal in normalized_hypotheses:
         suggested_tools = _runtime_hypothesis_tools(
             proposal.suggested_tools,
             proposal.queries,
@@ -1507,7 +1534,7 @@ def apply_image_account_planning(
         new_hypothesis_ids.append(hypothesis_id)
         new_task_ids.append(task_id)
 
-    candidate.image_account_summary = output.account_summary
+    candidate.image_account_summary = normalized_account_summary
     try:
         validated = ImageOnlyInvestigationState.model_validate(candidate.model_dump())
     except Exception as exc:
@@ -3662,6 +3689,91 @@ def _normalize_target_authenticity_wrapper(
     )
 
 
+def _normalize_relation_text(value: str) -> str:
+    """Keep canonical task text focused on the depicted factual relation.
+
+    Models occasionally wrap a useful world proposition in a media-origin
+    description or carry that description into a visual replan.  The runtime
+    keeps the visible relation and rewrites only that wrapper so later stages
+    receive the same factual target in a stable form.
+    """
+
+    original = " ".join(str(value or "").split())
+    if not original:
+        return original
+    text = original
+    text = re.sub(
+        r"\b(?:a|an)\s+(?:real|genuine|authentic)\s+"
+        r"(?:[a-z][a-z-]*\s+){0,3}(?:photograph|photo|image)\s+"
+        r"(?:of|depicting|showing)\s+",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"\b(?:real|genuine|authentic)\s+"
+        r"((?:[a-z][a-z-]*\s+){0,3})(photograph|photo|image)\b",
+        r"\1\2",
+        text,
+        flags=re.IGNORECASE,
+    )
+    replacements = (
+        (
+            r"\b(?:synthetic generative AI artifacts?|synthetic generation "
+            r"artifacts?|synthetic artifacts?|synthetic anomalies?)\b",
+            "visible target-relation properties",
+        ),
+        (
+            r"\b(?:AI[- ]generated|generative AI|AI synthesis|AI generation)\b",
+            "visible target-relation properties",
+        ),
+        (
+            r"\b(?:synthetic rendering|synthetic scene)\b",
+            "depicted scene",
+        ),
+        (
+            r"\b(?:image|photo|photograph)\s+authenticity\b",
+            "target relation",
+        ),
+        (
+            r"\bauthenticity\s+of\s+(?:the\s+)?(?:depicted\s+)?image\b",
+            "target relation",
+        ),
+        (
+            r"\b(?:real|authentic|genuine)\s+capture\b",
+            "depicted scene",
+        ),
+    )
+    for pattern, replacement in replacements:
+        text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text or original
+
+
+def _route_local_replan_scope_violation(
+    output: RouteLocalReplanOutput,
+) -> str:
+    """Keep a local replan attached to the planned world relation.
+
+    The model remains free to choose the investigation angle. This check only
+    catches a route that changes the object of judgment into media-origin or
+    fabrication attribution instead of the active image fact.
+    """
+
+    route_text = " ".join(
+        (
+            output.replacement_query,
+            output.visual_focus,
+        )
+    )
+    if _contains_initial_image_authenticity_scope(route_text):
+        return (
+            "route-local replan must investigate the active target relation; "
+            "provide a concrete world fact or visible discriminator"
+        )
+    return ""
+
+
 def _contains_initial_image_authenticity_scope(value: str) -> bool:
     lowered = " ".join(str(value or "").casefold().split())
     return (
@@ -5421,6 +5533,14 @@ def _contains_fabrication_attribution(value: str) -> bool:
             "composite image",
             "synthetic image",
             "fabricated image",
+            "generative ai",
+            "ai artifact",
+            "ai artifacts",
+            "synthetic artifact",
+            "synthetic artifacts",
+            "synthetic anomaly",
+            "synthetic anomalies",
+            "real capture",
             "physically impossible",
             "fictional scene",
             "fictional concept",
@@ -6293,6 +6413,7 @@ def apply_route_local_replan(
     after the runtime has reached an observed retrieval/inspection boundary.
     """
 
+    scope_violation = _route_local_replan_scope_violation(output)
     task = _task_by_id(state, output.task_id)
     accepted_strategy = "rejected"
     accepted_query = ""
@@ -6306,7 +6427,9 @@ def apply_route_local_replan(
         "policy_failure",
     }
 
-    if trigger not in valid_triggers:
+    if scope_violation:
+        rejected_reason = scope_violation
+    elif trigger not in valid_triggers:
         rejected_reason = "route-local replan requires a recognized route boundary"
     elif task is None:
         rejected_reason = f"unknown task {output.task_id}"

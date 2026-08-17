@@ -24,6 +24,7 @@ from src.orchestrator.investigation_models import (
     MaterialDiscrepancyDraft,
     MaterialDiscrepancyProposal,
     NewSearchHypothesis,
+    RouteLocalReplanOutput,
     SearchHypothesisProposal,
     VisualEntity,
     VisualEvidenceDisposition,
@@ -52,6 +53,7 @@ from src.orchestrator.task_store import (
     record_tool_observation,
     remaining_claim_hypothesis_routes,
     runtime_task_tool_names,
+    apply_route_local_replan,
 )
 from src.orchestrator.pipeline import Orchestrator
 from src.orchestrator.progress_control import record_action_progress
@@ -172,6 +174,81 @@ def test_planning_derives_text_search_from_nonempty_queries() -> None:
         "reverse_image_search",
         "text_search",
     ]
+
+
+def test_image_account_normalizes_media_wrappers_before_state_commit() -> None:
+    state = _state()
+    output = ImageAccountPlanningOutput(
+        account_summary=(
+            "The image asks whether an authentic photograph of the presenter "
+            "holding the shown product is being presented."
+        ),
+        image_claims=[
+            ImageClaimProposal(
+                claim_key="person-product",
+                statement=(
+                    "The image depicts an authentic photograph of the presenter "
+                    "holding the shown product."
+                ),
+                kind="relation",
+                predicate="depicts_relation",
+                anchor_fact_ids=["fact-visible-person"],
+                salience="high",
+            )
+        ],
+        search_hypotheses=[
+            SearchHypothesisProposal(
+                hypothesis_key="source-check",
+                route_focus="same_capture_reference",
+                statement=(
+                    "Determine whether this is an AI-generated rendering of "
+                    "the product interaction."
+                ),
+                queries=["authentic photograph presenter product"],
+                expected_information=(
+                    "Whether the authentic photograph records the shown relation."
+                ),
+                suggested_tools=["text_search"],
+            )
+        ],
+    )
+
+    update = apply_image_account_planning(state, output)
+
+    assert update["accepted"] is True
+    assert state.image_claims[0].statement == (
+        "The image depicts the presenter holding the shown product."
+    )
+    assert "authentic photograph" not in state.image_account_summary.casefold()
+    assert "AI-generated" not in state.tasks[0].question
+    assert "authentic photograph" not in state.tasks[0].purpose.casefold()
+
+
+def test_route_local_replan_keeps_visual_focus_on_target_relation() -> None:
+    state = _planned_state()
+    task = state.tasks[0]
+    record = apply_route_local_replan(
+        state,
+        RouteLocalReplanOutput(
+            task_id=task.task_id,
+            strategy="add_visual_route",
+            visual_focus=(
+                "Inspect the product label and hand geometry to document "
+                "unmistakable synthetic generative AI artifacts."
+            ),
+            rationale=(
+                "The visual route should determine whether the image is "
+                "AI-generated rather than a real capture."
+            ),
+        ),
+        trigger="visual_signal",
+    )
+
+    assert record.accepted_strategy == "rejected"
+    assert "active target relation" in record.rejected_reason
+    assert state.tasks[0].route_replan_focus == ""
+    assert state.tasks[0].route_replan_count == 0
+    assert "AI-generated" in record.output.rationale
 
 
 def _planned_state() -> ImageOnlyInvestigationState:
