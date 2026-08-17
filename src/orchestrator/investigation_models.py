@@ -1182,6 +1182,8 @@ class RouteLocalReplanRecord(StrictModel):
         "candidate_exhausted",
         "source_failure",
         "visual_signal",
+        "decision_stalled",
+        "policy_failure",
     ]
     task_id: str = Field(min_length=1, max_length=100)
     output: RouteLocalReplanOutput

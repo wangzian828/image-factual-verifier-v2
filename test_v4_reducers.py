@@ -965,7 +965,9 @@ def test_visual_evidence_is_scoped_to_the_selected_claim() -> None:
         tool_result=json.dumps(
             {
                 "status": "success",
-                "answer": "A visible label is present on the product.",
+                "observations": [
+                    "A visible label is present on the product."
+                ],
                 "bbox": [0.1, 0.1, 0.8, 0.8],
             }
         ),

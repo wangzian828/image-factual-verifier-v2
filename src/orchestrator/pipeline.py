@@ -1177,6 +1177,25 @@ class Orchestrator:
                 interaction_session=InteractionSession(),
             )
             if observation_update.get("route_selection_exhausted"):
+                route_replan_request = route_local_replan_candidate(
+                    investigation,
+                    observation_update=observation_update,
+                )
+                if route_replan_request is not None:
+                    route_task_id, route_trigger = route_replan_request
+                    if await self._run_image_only_route_local_replan(
+                        state,
+                        investigation,
+                        image_path=image_path,
+                        task_id=route_task_id,
+                        trigger=route_trigger,
+                    ):
+                        audit_discrepancy_coverage(
+                            investigation,
+                            decision_checkpoint=True,
+                        )
+                        self._sync_image_only_state(state, investigation)
+                        continue
                 await self._run_discrepancy_decision(
                     state,
                     investigation,

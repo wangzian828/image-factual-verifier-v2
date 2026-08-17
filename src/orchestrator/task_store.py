@@ -6075,23 +6075,29 @@ def route_local_replan_candidate(
     """Return one task-local boundary that merits a bounded model replan.
 
     This is intentionally structural rather than semantic.  It observes whether a
-    candidate batch was exhausted, a source failed, or an inspected image/source
-    produced material but unresolved information.  The model—not this helper—then
-    chooses whether to change query, add a visual inspection, continue, or retire
-    the route.
+    candidate batch was exhausted, a source or policy step failed, a Decision left
+    a concrete unresolved gap, or an inspected image/source produced material but
+    unresolved information. The model—not this helper—then chooses whether to
+    change query, add a visual inspection, continue, or retire the route.
     """
 
     task_id = str(observation_update.get("task_id", "")).strip()
     task = _task_by_id(state, task_id)
+    policy_failure = bool(observation_update.get("route_selection_exhausted"))
     if (
         task is None
         or task.route_replan_count >= 1
-        or task.status not in {"active", "pending", "exhausted", "superseded"}
+        or (
+            task.status not in {"active", "pending", "exhausted", "superseded"}
+            and not (policy_failure and task.status == "blocked")
+        )
         or not _task_serves_open_route_local_target(state, task)
     ):
         return None
     if _route_local_target_is_resolved(state, task):
         return None
+    if policy_failure:
+        return task.task_id, "policy_failure"
 
     attempts = _attempted_routes_by_task(state).get(task.task_id, [])
     if not attempts:
@@ -6109,12 +6115,6 @@ def route_local_replan_candidate(
         for item in state.failures
         if item.task_id == task.task_id
     }
-    has_concrete_remaining_route = bool(
-        remaining_claim_hypothesis_routes(
-            state,
-            task_ids={task.task_id},
-        )
-    )
     if any(
         failure_id in failures
         and failures[failure_id].recoverable
@@ -6128,13 +6128,29 @@ def route_local_replan_candidate(
             "timeout",
         }
         for failure_id in failure_ids
-    ) and not has_concrete_remaining_route:
+    ):
         return task.task_id, "source_failure"
 
     created_evidence_ids = {
         str(item)
         for item in observation_update.get("created_evidence_ids", []) or []
     }
+    if _decision_left_route_gap(state, task):
+        return task.task_id, "decision_stalled"
+
+    if (
+        created_evidence_ids
+        and task.parent_task_id is None
+        and tool_name
+        in {
+            "ocr_with_position",
+            "crop_and_inspect",
+            "check_consistency",
+            "analyze_visual_anomalies",
+        }
+    ):
+        return task.task_id, "visual_signal"
+
     if tool_name in {"visit", "compare_with_reference"}:
         if created_evidence_ids:
             return task.task_id, "related_unclosed"
@@ -6156,6 +6172,38 @@ def route_local_replan_candidate(
     if tool_name == "text_search" and outcome in {"empty", "failed"}:
         return task.task_id, "candidate_exhausted"
     return None
+
+
+def _decision_left_route_gap(
+    state: ImageOnlyInvestigationState,
+    task: ResearchTask,
+) -> bool:
+    """Whether the just-completed Decision consumed material but left this route open.
+
+    This is deliberately generic: it detects a recorded unresolved Claim gap, not
+    semantic categories such as people, places, dates, or media provenance.  A
+    newly accepted hypothesis or focused visual question already supplies a
+    follow-up, so it must execute before another replan is requested.
+    """
+
+    if not state.discrepancy_decisions or not task.claim_ids:
+        return False
+    decision = state.discrepancy_decisions[-1]
+    if (
+        decision.action_count != state.action_count
+        or decision.output.verdict_proposal != "continue"
+        or decision.accepted_hypothesis_ids
+        or decision.accepted_visual_question_id
+        or decision.accepted_discrepancy_id
+        or decision.retired_hypothesis_ids
+    ):
+        return False
+    return any(
+        assessment.claim_id in set(task.claim_ids)
+        and assessment.assessment in {"insufficient", "conflicted"}
+        and bool(assessment.remaining_gap.strip())
+        for assessment in decision.output.claim_assessments
+    )
 
 
 def route_local_exhausted_candidate(
@@ -6254,6 +6302,8 @@ def apply_route_local_replan(
         "candidate_exhausted",
         "source_failure",
         "visual_signal",
+        "decision_stalled",
+        "policy_failure",
     }
 
     if trigger not in valid_triggers:
@@ -6262,7 +6312,9 @@ def apply_route_local_replan(
         rejected_reason = f"unknown task {output.task_id}"
     elif task.route_replan_count >= 1:
         rejected_reason = "the task already used its one route-local replan"
-    elif task.status not in {"active", "pending", "exhausted", "superseded"}:
+    elif task.status not in {"active", "pending", "exhausted", "superseded"} and not (
+        trigger == "policy_failure" and task.status == "blocked"
+    ):
         rejected_reason = "route-local replan task is not available"
     elif not _task_serves_open_route_local_target(state, task):
         rejected_reason = "route-local replan task must own an open target fact"
@@ -6330,7 +6382,7 @@ def apply_route_local_replan(
                 )
                 accepted_strategy = "add_visual_route"
         elif output.strategy == "continue":
-            if task.status in {"exhausted", "superseded"}:
+            if task.status in {"blocked", "exhausted", "superseded"}:
                 rejected_reason = (
                     "cannot continue a retired route without a new executable action"
                 )

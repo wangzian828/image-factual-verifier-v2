@@ -295,7 +295,7 @@ def test_frozen_sft_export_records_nonfatal_deterministic_red_flags(
     ]
 
 
-def test_frozen_sft_export_rejects_fatal_deterministic_red_flags(
+def test_frozen_sft_export_records_protocol_rejections_as_nonfatal_red_flags(
     tmp_path: Path,
 ) -> None:
     run_dir = _run_dir(tmp_path)
@@ -309,6 +309,46 @@ def test_frozen_sft_export_rejects_fatal_deterministic_red_flags(
                 "components": {"result_reward": 1.0},
                 "training_eligible": False,
                 "training_exclusion_reasons": ["protocol_rejections"],
+            }
+        ],
+    )
+    split, eligibility = _write_frozen_gate_inputs(tmp_path, run_dir)
+    output = tmp_path / "frozen-protocol-red-flag"
+
+    manifest = export_dataset(
+        [run_dir],
+        output,
+        case_split_path=split,
+        eligibility_dir=eligibility,
+        minimum_accepted_cases=1,
+    )
+    metadata = [
+        json.loads(line)
+        for line in (output / "episode_metadata.jsonl").read_text(
+            encoding="utf-8"
+        ).splitlines()
+        if line.strip()
+    ][0]
+
+    assert manifest["accepted_case_count"] == 1
+    assert metadata["deterministic_hard_gate_pass"] is True
+    assert metadata["deterministic_red_flags"] == ["protocol_rejections"]
+
+
+def test_frozen_sft_export_rejects_actual_fatal_deterministic_red_flags(
+    tmp_path: Path,
+) -> None:
+    run_dir = _run_dir(tmp_path)
+    _write_jsonl(
+        run_dir / "trajectory_scores.jsonl",
+        [
+            {
+                "case_id": "case_scripted_v3",
+                "episode_id": "case_scripted_v3",
+                "total": 3.0,
+                "components": {"result_reward": 1.0},
+                "training_eligible": False,
+                "training_exclusion_reasons": ["engineering_error"],
             }
         ],
     )

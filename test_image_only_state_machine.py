@@ -12,6 +12,9 @@ from src.orchestrator.coverage import (
 )
 from src.orchestrator.evidence_adjudication import assess_fact
 from src.orchestrator.investigation_models import (
+    ClaimAssessmentProposal,
+    DiscrepancyDecisionOutput,
+    DiscrepancyDecisionRecord,
     EvidenceDecisionOutput,
     EvidenceDecisionRefinement,
     FactOrigin,
@@ -6200,6 +6203,133 @@ def test_route_local_replan_triggers_on_recoverable_source_failure() -> None:
         state,
         observation_update=update,
     ) == (task.task_id, "source_failure")
+
+
+def test_route_local_replan_reopens_a_protocol_block_with_a_real_next_action() -> None:
+    _, state = _runtime_state()
+    task = next(
+        item
+        for item in state.tasks
+        if state.core_verdict_fact_id in item.fact_ids
+    )
+    task.status = "blocked"
+    task.suggested_tools = ["text_search"]
+
+    update = {
+        "task_id": task.task_id,
+        "route_selection_exhausted": True,
+    }
+    assert route_local_replan_candidate(
+        state,
+        observation_update=update,
+    ) == (task.task_id, "policy_failure")
+
+    record = apply_route_local_replan(
+        state,
+        RouteLocalReplanOutput(
+            task_id=task.task_id,
+            strategy="replace_query",
+            replacement_query="marked research vessel fisheries survey vessel",
+            rationale=(
+                "The prior policy call did not produce an executable action, so "
+                "use a new concrete search direction."
+            ),
+        ),
+        trigger="policy_failure",
+    )
+
+    assert record.rejected_reason == ""
+    assert record.accepted_strategy == "replace_query"
+    assert task.status == "active"
+    assert task.route_replan_count == 1
+
+
+def test_route_local_replan_triggers_on_explicit_unresolved_decision_gap() -> None:
+    _, state = _runtime_state()
+    task = next(
+        item
+        for item in state.tasks
+        if state.core_verdict_fact_id in item.fact_ids
+    )
+    fact_id = task.fact_ids[0]
+    state.core_verdict_fact_id = None
+    claim = ImageClaim(
+        claim_id="claim-route-gap",
+        fact_id=fact_id,
+        statement="The shown vessel is the stated NOAA survey ship.",
+        anchor_fact_ids=[fact_id],
+        task_ids=[task.task_id],
+    )
+    state.image_claims = [claim]
+    task.claim_ids = [claim.claim_id]
+    state.action_count = 1
+    state.attempted_routes.append(
+        json.dumps(
+            {
+                "task_id": task.task_id,
+                "tool": "visit",
+                "outcome": "evidence",
+            }
+        )
+    )
+    state.discrepancy_decisions.append(
+        DiscrepancyDecisionRecord(
+            decision_id="decision-route-gap",
+            action_count=1,
+            trigger="qualified_evidence",
+            reviewed_evidence_ids=["evidence-route-gap"],
+            output=DiscrepancyDecisionOutput(
+                claim_assessments=[
+                    ClaimAssessmentProposal(
+                        claim_id=claim.claim_id,
+                        assessment="insufficient",
+                        selected_evidence_ids=["evidence-route-gap"],
+                        remaining_gap=(
+                            "The related vessel page does not establish the "
+                            "visible hull marking."
+                        ),
+                        rationale="The source is relevant but does not close the relation.",
+                    )
+                ],
+                rationale="Keep investigating the unresolved visible identity.",
+            ),
+        )
+    )
+
+    assert route_local_replan_candidate(
+        state,
+        observation_update={
+            "task_id": task.task_id,
+            "created_evidence_ids": ["evidence-route-gap"],
+        },
+    ) == (task.task_id, "decision_stalled")
+
+
+def test_route_local_replan_triggers_on_material_visual_observation() -> None:
+    _, state = _runtime_state()
+    task = next(
+        item
+        for item in state.tasks
+        if state.core_verdict_fact_id in item.fact_ids
+    )
+    task.suggested_tools = ["crop_and_inspect"]
+    state.attempted_routes.append(
+        json.dumps(
+            {
+                "task_id": task.task_id,
+                "tool": "crop_and_inspect",
+                "outcome": "evidence",
+            }
+        )
+    )
+
+    assert route_local_replan_candidate(
+        state,
+        observation_update={
+            "task_id": task.task_id,
+            "created_evidence_ids": ["evidence-visual-signal"],
+        },
+    ) == (task.task_id, "visual_signal")
 
 
 def test_route_local_replan_offers_one_final_route_after_exhaustion() -> None:

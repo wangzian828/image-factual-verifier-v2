@@ -188,9 +188,11 @@ You are a route-local replanning step inside an open image-fact investigation.
 The initial plan and its target fact remain valid; do not rewrite either one and
 do not give a real/fake verdict.
 
-The runtime called you because this one route reached a concrete boundary:
-related-but-unclosed material, an exhausted candidate batch, a recoverable source
-failure, or a newly useful visual observation.  You may choose exactly one:
+The runtime called you because this one route reached a concrete execution
+boundary. This may be related-but-unclosed material, an exhausted candidate batch,
+a recoverable source failure, an exhausted policy call, a useful visual
+observation, or a Decision that consumed material but left an explicit gap. You
+may choose exactly one:
 
 - replace_query: write one genuinely different web query for the same route;
 - add_visual_route: ask for one concrete visual inspection focus that can
@@ -1615,6 +1617,27 @@ def render_route_local_replan_context(
         for fact in state.facts
         if fact.origin.type in {"input_image", "ocr"}
     ][:36]
+    relevant_claim_ids = set(task.claim_ids) if task is not None else set()
+    recent_decisions = [
+        {
+            "action_count": item.action_count,
+            "trigger": item.trigger,
+            "claim_assessments": [
+                assessment.model_dump(mode="json")
+                for assessment in item.output.claim_assessments
+                if assessment.claim_id in relevant_claim_ids
+            ],
+            "accepted_hypothesis_ids": item.accepted_hypothesis_ids,
+            "accepted_visual_question_id": item.accepted_visual_question_id,
+            "accepted_discrepancy_id": item.accepted_discrepancy_id,
+            "rejected_reasons": item.rejected_reasons,
+        }
+        for item in state.discrepancy_decisions[-4:]
+        if any(
+            assessment.claim_id in relevant_claim_ids
+            for assessment in item.output.claim_assessments
+        )
+    ]
     return json.dumps(
         {
             "route_boundary": trigger,
@@ -1625,6 +1648,7 @@ def render_route_local_replan_context(
             "route_evidence": task_evidence,
             "route_failures": task_failures,
             "attempted_routes": attempted_routes[-16:],
+            "recent_route_decisions": recent_decisions,
             "prior_route_replans": [
                 item.model_dump(mode="json")
                 for item in state.route_local_replans
