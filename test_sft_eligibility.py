@@ -247,7 +247,7 @@ def test_packet_includes_compact_retrieval_and_rejection_history() -> None:
 
     packet = build_sft_eligibility_input(trace, _gold())
 
-    assert packet["schema_version"] == "ifv-sft-eligibility-input-v6"
+    assert packet["schema_version"] == "ifv-sft-eligibility-input-v7"
     assert packet["candidate"]["retrieval_history"] == [
         {
             "tool": "text_search",

@@ -13,7 +13,7 @@ import asyncio
 import copy
 import os
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 # Limit thread usage to prevent memory explosion
 os.environ.setdefault("OMP_NUM_THREADS", "1")
@@ -53,6 +53,9 @@ class WorkflowConfig:
     vlm_wire_api: Optional[str] = None
     llm_base_url: Optional[str] = field(default=None, init=False)
     vlm_base_url: Optional[str] = field(default=None, init=False)
+    image_access_mode: Literal["direct_multimodal", "separate_vlm"] = (
+        "direct_multimodal"
+    )
     temperature: float = 0.0
     max_tokens: int = 8192
     sampling_seed: Optional[int] = None
@@ -85,6 +88,15 @@ class WorkflowConfig:
         self.vlm_wire_api = resolved.vlm_wire_api
         self.llm_base_url = resolved.base_url
         self.vlm_base_url = resolved.vlm_base_url
+        configured_image_access_mode = str(self.image_access_mode).strip().lower()
+        if configured_image_access_mode not in {
+            "direct_multimodal",
+            "separate_vlm",
+        }:
+            raise ValueError(
+                "image_access_mode must be 'direct_multimodal' or 'separate_vlm'"
+            )
+        self.image_access_mode = configured_image_access_mode  # type: ignore[assignment]
 
 
 class VerificationWorkflow:
@@ -106,6 +118,7 @@ class VerificationWorkflow:
                 vlm_wire_api=self.config.vlm_wire_api,
                 llm_base_url=self.config.llm_base_url,
                 vlm_base_url=self.config.vlm_base_url,
+                image_access_mode=self.config.image_access_mode,
                 timeout=self.config.timeout,
                 temperature=self.config.temperature,
                 max_tokens=self.config.max_tokens,

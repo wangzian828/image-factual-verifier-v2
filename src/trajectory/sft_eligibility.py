@@ -27,8 +27,8 @@ from src.trajectory.semantic_reward import (
 
 
 SFT_ELIGIBILITY_SCHEMA_VERSION = "ifv-sft-eligibility-v3"
-SFT_ELIGIBILITY_INPUT_VERSION = "ifv-sft-eligibility-input-v6"
-SFT_ELIGIBILITY_PROMPT_VERSION = "ifv-sft-private-image-fact-gate-v4"
+SFT_ELIGIBILITY_INPUT_VERSION = "ifv-sft-eligibility-input-v7"
+SFT_ELIGIBILITY_PROMPT_VERSION = "ifv-sft-private-image-fact-gate-v5"
 SFT_ELIGIBILITY_GENERATION_VERSION = "minimal-thinking-4096-v6"
 SFT_ELIGIBILITY_POSTPROCESS_VERSION = "image-fact-safety-gate-v5"
 
@@ -50,6 +50,9 @@ SFT_ELIGIBILITY_SYSTEM_PROMPT = (
     "when the history targets a named, plausibly authoritative source or bounded "
     "collection; generic web search failure, topical relatedness, or absence of a "
     "found original never decides the verdict. Select only supplied Evidence IDs. "
+    "If final_visual_audit is present, treat it as a structured VLM observation "
+    "available to the terminal judgment, not as an Evidence record and not as a "
+    "replacement for the cited Evidence chain. "
     "Assess retrieval_quality as effective when the trajectory's retrieval is "
     "targeted and converted into relevant inspection or Evidence; mixed when its "
     "central route is useful despite some noise or corrected turns; poor when its "
@@ -631,6 +634,7 @@ def build_sft_eligibility_input(
             "discrepancies": discrepancies,
             "retrieval_history": _retrieval_history(state),
             "rejection_history": _rejection_history(state),
+            "final_visual_audit": _mapping(state.get("final_visual_audit")),
             "basis_claim_ids": basis_claim_ids,
             "basis_discrepancy_ids": basis_discrepancy_ids,
             "verdict_target": _text(basis.get("verdict_target"), limit=4000),

@@ -159,6 +159,7 @@ class Orchestrator:
         vlm_wire_api: Optional[str] = None,
         llm_base_url: Optional[str] = None,
         vlm_base_url: Optional[str] = None,
+        image_access_mode: str = "direct_multimodal",
         timeout: float = 1800.0,
         temperature: float = 0.0,
         max_tokens: int = 8192,
@@ -172,6 +173,16 @@ class Orchestrator:
         self.vlm_model = vlm_model or model_name
         self.llm_base_url = llm_base_url
         self.vlm_base_url = vlm_base_url
+        self.image_access_mode = str(
+            image_access_mode or "direct_multimodal"
+        ).strip().lower()
+        if self.image_access_mode not in {
+            "direct_multimodal",
+            "separate_vlm",
+        }:
+            raise ValueError(
+                "image_access_mode must be 'direct_multimodal' or 'separate_vlm'"
+            )
         self.llm_wire_api = llm_wire_api or os.getenv("AGENT_LLM_WIRE_API")
         if self.llm_wire_api is None and self.provider == "gemini":
             self.llm_wire_api = os.getenv("GEMINI_WIRE_API")
@@ -369,6 +380,14 @@ class Orchestrator:
     def _sp(self, stage_system_prompt: str) -> str:
         return self.date_prefix + stage_system_prompt
 
+    def _uses_separate_vlm(self) -> bool:
+        return getattr(self, "image_access_mode", "direct_multimodal") == (
+            "separate_vlm"
+        )
+
+    def _main_llm_attaches_image(self) -> bool:
+        return not self._uses_separate_vlm()
+
     async def run(
         self,
         image_path: str,
@@ -439,6 +458,15 @@ class Orchestrator:
             compiled_verdict, basis = compile_discrepancy_verdict_basis(
                 investigation
             )
+            final_visual_audit = None
+            if self._uses_separate_vlm():
+                final_visual_audit = await self._run_final_visual_audit(
+                    state,
+                    investigation,
+                    compiled_verdict=compiled_verdict,
+                    basis=basis,
+                    image_path=image_path,
+                )
             judgment_started = time.perf_counter()
             try:
                 judgment = await self._run_discrepancy_judgment(
@@ -447,6 +475,7 @@ class Orchestrator:
                     compiled_verdict,
                     basis,
                     image_path=image_path,
+                    final_visual_audit=final_visual_audit,
                     interaction_session=None,
                 )
             finally:
@@ -478,6 +507,7 @@ class Orchestrator:
             "investigation_status": self._investigation_status(investigation),
             "verification_layers": self._verification_layers(investigation),
             "verdict_basis": basis.model_dump(mode="json"),
+            "final_visual_audit": final_visual_audit,
             "state": state.to_dict(),
             "termination": state.termination,
             "time_taken": state.stage_timings["total"],
@@ -535,7 +565,8 @@ class Orchestrator:
             stage_name="image_only_planning",
             runtime_store=state.runtime_store,
             handoff_state=investigation,
-            attach_image=bool(effective_image_path),
+            attach_image=bool(effective_image_path)
+            and self._main_llm_attaches_image(),
             interaction_session=interaction_session,
             output_validator=lambda parsed, _steps: (
                 self._validate_image_only_target_planning(
@@ -607,7 +638,8 @@ class Orchestrator:
             stage_name="image_account_planning",
             runtime_store=state.runtime_store,
             handoff_state=investigation,
-            attach_image=bool(effective_image_path),
+            attach_image=bool(effective_image_path)
+            and self._main_llm_attaches_image(),
             interaction_session=interaction_session,
             output_validator=lambda parsed, _steps: (
                 self._validate_image_account_planning(
@@ -2339,7 +2371,8 @@ class Orchestrator:
             stage_name="image_only_route_local_replan",
             runtime_store=state.runtime_store,
             handoff_state=investigation,
-            attach_image=bool(image_path),
+            attach_image=bool(image_path)
+            and self._main_llm_attaches_image(),
             output_validator=lambda parsed, _steps: (
                 self._validate_image_only_route_local_replan(
                     investigation,
@@ -2384,6 +2417,139 @@ class Orchestrator:
         )
         self._sync_image_only_state(state, investigation)
         return record.accepted_strategy != "rejected"
+
+    async def _run_final_visual_audit(
+        self,
+        state: VerificationState,
+        investigation: ImageOnlyInvestigationState,
+        *,
+        compiled_verdict: str,
+        basis: Any,
+        image_path: str,
+    ) -> Dict[str, Any]:
+        """Ask the VLM for final pixel observations before text judgment."""
+
+        if "focused_visual_inspection" not in self.all_tools:
+            raise RuntimeError(
+                "separate_vlm mode requires focused_visual_inspection"
+            )
+        evidence_by_id = {
+            item.evidence_id: item for item in investigation.evidence
+        }
+        evidence_context = [
+            {
+                "evidence_id": evidence_id,
+                "source_class": evidence_by_id[evidence_id].source_class,
+                "source_url": evidence_by_id[evidence_id].source_url,
+                "exact_text": evidence_by_id[evidence_id].exact_text[:1000],
+                "stance": evidence_by_id[evidence_id].stance,
+                "relation_scope": evidence_by_id[evidence_id].relation_scope,
+                "directness": evidence_by_id[evidence_id].directness,
+            }
+            for evidence_id in basis.evidence_ids
+            if evidence_id in evidence_by_id
+        ]
+        tool_args: Dict[str, Any] = {
+            "image_input": image_path,
+            "visual_question_id": "final-visual-audit",
+            "question": (
+                "Inspect the original pixels as a final visual audit for the "
+                "target relation. Report concrete visible observations that "
+                "support, contradict, or leave ambiguous the target property. "
+                "Do not decide real or fake and do not infer source, creator, "
+                "generation method, or any fact that is not visually observable."
+            ),
+            "expected_property": (
+                "The concrete visible subject, relation, value, or scene "
+                "condition relevant to the target and its competing alternative."
+            ),
+            "scope": "scene",
+            "anchor_regions": self._final_visual_anchor_regions(state),
+            "active_fact": str(
+                getattr(basis, "verdict_target", "")
+                or compiled_verdict
+                or investigation.image_account_summary
+            ),
+            "evidence_context": json.dumps(
+                {
+                    "compiled_verdict": compiled_verdict,
+                    "verdict_basis": basis.model_dump(mode="json"),
+                    "selected_evidence": evidence_context,
+                },
+                ensure_ascii=False,
+            )[:6000],
+            "trace_stage": "image_only_final_visual_audit",
+            "trace_purpose": "final_judgment_visual_context",
+        }
+        tool_result, metadata = await self._execute_tool(
+            "focused_visual_inspection",
+            tool_args,
+            image_path,
+        )
+        step = StageStep(
+            round=1,
+            stage_name="image_only_final_visual_audit",
+            action_type="tool_call",
+            tool_name="focused_visual_inspection",
+            tool_args=dict(tool_args),
+            tool_result=tool_result,
+            metadata={
+                "stage": "image_only_final_visual_audit",
+                "non_policy_action": True,
+                "excluded_from_investigation_budget": True,
+                **metadata,
+            },
+        )
+        self._archive_direct_tool_step(
+            state,
+            step,
+            action_index=state.total_tool_calls + 1,
+        )
+        self._record_stage_steps(state, [step])
+        if not self._tool_step_succeeded(step):
+            raise RuntimeError(
+                "final VLM visual audit failed: "
+                + str(
+                    self._safe_json_dict(tool_result).get(
+                        "error",
+                        tool_result,
+                    )
+                )[:1200]
+            )
+        audit = self._safe_json_dict(tool_result)
+        audit["stage"] = "image_only_final_visual_audit"
+        audit["purpose"] = "final_judgment_visual_context"
+        audit["main_llm_received_image"] = False
+        state.final_visual_audit = audit
+        return audit
+
+    @staticmethod
+    def _final_visual_anchor_regions(
+        state: VerificationState,
+    ) -> List[List[float]]:
+        report = state.perception
+        if report is None:
+            return []
+        regions: List[List[float]] = []
+        for entity in report.entities:
+            if len(entity.bbox) == 4:
+                regions.append([round(float(value), 6) for value in entity.bbox])
+        for text_region in report.text_regions:
+            points = text_region.bbox_quad
+            if len(points) < 4:
+                continue
+            xs = [float(point[0]) for point in points if len(point) >= 2]
+            ys = [float(point[1]) for point in points if len(point) >= 2]
+            if len(xs) >= 4 and len(ys) >= 4:
+                regions.append(
+                    [
+                        round(max(0.0, min(xs)), 6),
+                        round(max(0.0, min(ys)), 6),
+                        round(min(1.0, max(xs)), 6),
+                        round(min(1.0, max(ys)), 6),
+                    ]
+                )
+        return regions[:4]
 
     async def _run_image_only_judgment(
         self,
@@ -2439,6 +2605,7 @@ class Orchestrator:
         basis: Any,
         *,
         image_path: str,
+        final_visual_audit: Optional[Dict[str, Any]] = None,
         interaction_session: InteractionSession,
     ) -> DiscrepancyJudgment:
         runner = StageRunner(
@@ -2451,7 +2618,7 @@ class Orchestrator:
             stage_name="image_only_discrepancy_judgment",
             runtime_store=state.runtime_store,
             handoff_state=investigation,
-            attach_image=bool(image_path),
+            attach_image=bool(image_path) and self._main_llm_attaches_image(),
             interaction_session=interaction_session,
             output_validator=lambda parsed, _steps: (
                 self._validate_discrepancy_judgment(
@@ -2469,6 +2636,7 @@ class Orchestrator:
                 investigation,
                 compiled_verdict,
                 basis,
+                final_visual_audit=final_visual_audit,
             )
         )
         self._record_stage_steps(state, steps)

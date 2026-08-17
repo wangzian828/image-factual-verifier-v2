@@ -297,6 +297,8 @@ def _command(args: argparse.Namespace) -> list[str]:
         str(args.output_dir),
         "--profile",
         "teacher-gemini",
+        "--image-access-mode",
+        getattr(args, "image_access_mode", "direct_multimodal"),
         "--concurrency",
         "1",
         "--limit",
@@ -316,6 +318,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--benchmark", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--limit", type=int, default=2)
+    parser.add_argument(
+        "--image-access-mode",
+        choices=["direct_multimodal", "separate_vlm"],
+        default="direct_multimodal",
+        help="Image access mode for the main LLM.",
+    )
     parser.add_argument(
         "--case-id",
         action="append",

@@ -1295,6 +1295,8 @@ def render_discrepancy_judgment_context(
     state: ImageOnlyInvestigationState,
     compiled_verdict: str,
     basis: Any,
+    *,
+    final_visual_audit: Any = None,
 ) -> str:
     claims = {item.claim_id: item for item in state.image_claims}
     discrepancies = {
@@ -1311,6 +1313,19 @@ def render_discrepancy_judgment_context(
     return json.dumps(
         {
             "compiled_verdict": compiled_verdict,
+            "final_visual_audit": (
+                final_visual_audit
+                if isinstance(final_visual_audit, dict)
+                else None
+            ),
+            "visual_input_policy": (
+                "The original image was inspected by the external VLM. "
+                "Use only the structured visual audit below for pixel "
+                "observations; this judgment request does not include image "
+                "pixels."
+                if isinstance(final_visual_audit, dict)
+                else "The original image is attached to this judgment request."
+            ),
             "terminal_visual_rationale_required": not bool(compiled_verdict),
             "terminal_visual_rationale_contract": (
                 {

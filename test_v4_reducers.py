@@ -2401,7 +2401,7 @@ def test_discrepancy_context_flags_evidence_to_visual_alignment_candidate() -> N
     ]
     assert "candidate discriminators" in candidates[0]["required_review"]
     assert "absolute size or weight" in DISCREPANCY_DECISION_SYSTEM_PROMPT
-    assert "media origin from style" in DISCREPANCY_DECISION_SYSTEM_PROMPT
+    assert "directly observable properties" in DISCREPANCY_DECISION_SYSTEM_PROMPT
     assert context["runtime_visual_reinspection_binding"] == {
         "status": "available",
         "candidates": [

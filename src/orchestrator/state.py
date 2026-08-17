@@ -89,6 +89,7 @@ class VerificationState:
     findings: List[Finding] = field(default_factory=list)
     retrieval_anchors: List[RetrievalAnchor] = field(default_factory=list)
     perception: Optional[PerceptionReport] = None
+    final_visual_audit: Optional[Dict[str, Any]] = None
     judgment: Optional[ImageOnlyJudgment | DiscrepancyJudgment] = None
     all_steps: List[Any] = field(default_factory=list)
     stage_timings: Dict[str, float] = field(default_factory=dict)
@@ -167,6 +168,7 @@ class VerificationState:
                 "perception": (
                     self.perception.model_dump() if self.perception else None
                 ),
+                "final_visual_audit": self.final_visual_audit,
                 "judgment": (
                     self.judgment.model_dump(mode="json")
                     if self.judgment

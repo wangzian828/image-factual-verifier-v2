@@ -419,6 +419,26 @@ not recorded here because it changes after every deployment. The server source t
 must not be reset or reused when it is dirty or on a different branch than the
 committed local work.
 
+### Gemini-only separated visual mode
+
+The runtime supports two explicit image-access modes:
+
+- `direct_multimodal`: historical behavior; the main Gemini LLM receives the
+  image at image-aware planning and final judgment.
+- `separate_vlm`: the Gemini VLM performs perception and one final visual audit;
+  the main Gemini LLM receives only structured perception/audit and never the
+  original image at planning, route-local replan, or final judgment.
+
+Select the separated mode explicitly with:
+
+```bash
+--image-access-mode separate_vlm
+```
+
+The final VLM audit is recorded as `image_only_final_visual_audit`. It is visual
+context for judgment, not a policy action, Finding, Evidence record, or
+investigation-budget action.
+
 The deployment uses the isolated `ifv-agent` environment with Python 3.11. The
 bootstrap script is idempotent and stores `OMP_NUM_THREADS=1` in that Conda
 environment as an additional guard. It also installs the `ifv-agent` Jupyter
@@ -636,9 +656,13 @@ the evidence target, and ReAct selects the first tool route; there is no fixed i
 reverse-image call. Structured Reflection runs after accepted actions 4, 8, 12, 16,
 20, and 24.
 
-Target Planning uploads the original image once as the root of the stored Gemini
-Interactions main chain. ReAct, Evidence Decision, Reflection, and Judgment continue
-through `previous_interaction_id`; they do not upload the same image again.
+In `direct_multimodal` mode, Target Planning uploads the original image once as
+the root of the stored Gemini Interactions main chain. In `separate_vlm` mode,
+the VLM owns the image calls: Planning, ReAct, Evidence Decision, Reflection,
+route-local replan, and Judgment receive structured state only, while the final
+VLM audit provides the last pixel observations before Judgment. ReAct, Evidence
+Decision, Reflection, and Judgment continue through `previous_interaction_id`;
+they do not upload the same image again.
 Query Concept Extraction, Query Replan, OCR, webpage extraction, and tool-internal
 Gemini calls remain separate. If a tool action ends at a deterministic segment
 boundary, its pending `function_result` is submitted with the next main-chain

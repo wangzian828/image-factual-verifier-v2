@@ -79,6 +79,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--vlm-provider", default=None, help="Optional VLM provider.")
     parser.add_argument("--vlm-model", default=None, help="Optional VLM model.")
     parser.add_argument(
+        "--image-access-mode",
+        choices=["direct_multimodal", "separate_vlm"],
+        default="direct_multimodal",
+    )
+    parser.add_argument(
         "--llm-wire-api",
         default=None,
         choices=["interactions", "responses", "chat_completions"],
@@ -195,6 +200,11 @@ def _workflow_config(args: argparse.Namespace) -> WorkflowConfig:
         model_name=getattr(args, "model", None),
         vlm_provider=getattr(args, "vlm_provider", None),
         vlm_model=getattr(args, "vlm_model", None),
+        image_access_mode=getattr(
+            args,
+            "image_access_mode",
+            "direct_multimodal",
+        ),
         llm_wire_api=getattr(args, "llm_wire_api", None),
         vlm_wire_api=getattr(args, "vlm_wire_api", None),
         timeout=args.timeout,
@@ -289,6 +299,7 @@ async def _run_cases(args: argparse.Namespace) -> Dict[str, Any]:
             "model": config.model_name,
             "vlm_provider": config.vlm_provider,
             "vlm_model": config.vlm_model,
+            "image_access_mode": config.image_access_mode,
             "base_url": config.llm_base_url,
             "vlm_base_url": config.vlm_base_url,
             "llm_wire_api": config.llm_wire_api,

@@ -26,6 +26,15 @@ def main():
     parser.add_argument("--vlm-provider", default=None)
     parser.add_argument("--vlm-model", default=None)
     parser.add_argument(
+        "--image-access-mode",
+        choices=["direct_multimodal", "separate_vlm"],
+        default=None,
+        help=(
+            "Whether the main LLM receives the image directly or only receives "
+            "structured VLM observations."
+        ),
+    )
+    parser.add_argument(
         "--llm-wire-api",
         default=None,
         choices=["interactions", "responses", "chat_completions"],
@@ -52,6 +61,7 @@ def main():
         model_name=args.model,
         vlm_provider=args.vlm_provider,
         vlm_model=args.vlm_model,
+        image_access_mode=args.image_access_mode or "direct_multimodal",
         llm_wire_api=args.llm_wire_api,
         vlm_wire_api=args.vlm_wire_api,
         output_dir=args.output_dir,

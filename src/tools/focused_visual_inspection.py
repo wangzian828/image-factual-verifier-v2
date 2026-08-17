@@ -127,6 +127,14 @@ class FocusedVisualInspectionTool(BaseTool):
                 },
                 "active_fact": {"type": "string"},
                 "evidence_context": {"type": "string"},
+                "trace_stage": {
+                    "type": "string",
+                    "description": "Internal trace stage for this visual call.",
+                },
+                "trace_purpose": {
+                    "type": "string",
+                    "description": "Internal purpose label for this visual call.",
+                },
             },
             "required": [
                 "image_input",
@@ -192,6 +200,18 @@ class FocusedVisualInspectionTool(BaseTool):
             "evidence_context": str(params.get("evidence_context", "")).strip(),
             "views": views,
         }
+        trace_stage = (
+            str(params.get("trace_stage") or "image_only_visual_reinspection")
+            .strip()
+            or "image_only_visual_reinspection"
+        )
+        trace_purpose = (
+            str(
+                params.get("trace_purpose")
+                or "evidence_motivated_reinspection"
+            ).strip()
+            or "evidence_motivated_reinspection"
+        )
         view_artifacts: List[Dict[str, Any]] = []
         try:
             before_version = str(params.get("before_understanding_version", "")).strip()
@@ -251,8 +271,8 @@ class FocusedVisualInspectionTool(BaseTool):
             store.append_event(
                 "image_view",
                 {
-                    "stage": "image_only_visual_reinspection",
-                    "purpose": "evidence_motivated_reinspection",
+                    "stage": trace_stage,
+                    "purpose": trace_purpose,
                     "image_id": "input-image",
                     "visual_question_id": request_context["visual_question_id"],
                     "question": request_context["question"],
@@ -280,6 +300,8 @@ class FocusedVisualInspectionTool(BaseTool):
             "before_understanding_version": before_version or None,
             "after_understanding_version": after_version,
             "image_packet_mode": image_packet_mode,
+            "trace_stage": trace_stage,
+            "trace_purpose": trace_purpose,
             RUNTIME_METRICS_KEY: parsed.get(RUNTIME_METRICS_KEY, {}),
         }
 
