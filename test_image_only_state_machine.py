@@ -16,6 +16,7 @@ from src.orchestrator.investigation_models import (
     EvidenceDecisionRefinement,
     FactOrigin,
     Finding,
+    ImageClaim,
     InvestigationEvidence,
     InvestigationSegmentOutput,
     ImageOnlyJudgment,
@@ -6126,6 +6127,45 @@ def test_route_local_replan_can_add_visual_route_without_rewriting_plan() -> Non
         state,
         fact_id=state.core_verdict_fact_id or "",
     )
+
+
+def test_route_local_replan_accepts_v4_image_claim_target_ownership() -> None:
+    _, state = _runtime_state()
+    task = next(
+        item
+        for item in state.tasks
+        if state.core_verdict_fact_id in item.fact_ids
+    )
+    fact_id = task.fact_ids[0]
+    state.core_verdict_fact_id = None
+    claim = ImageClaim(
+        claim_id="claim-v4-route-local",
+        fact_id=fact_id,
+        statement="The shown research vessel is the stated NOAA survey ship.",
+        anchor_fact_ids=[fact_id],
+        task_ids=[task.task_id],
+    )
+    state.image_claims = [claim]
+    task.claim_ids = [claim.claim_id]
+    task.suggested_tools = ["text_search"]
+
+    record = apply_route_local_replan(
+        state,
+        RouteLocalReplanOutput(
+            task_id=task.task_id,
+            strategy="replace_query",
+            replacement_query=(
+                "marked research vessel fisheries survey vessel identity"
+            ),
+            rationale="Change the stalled hull-number search direction.",
+        ),
+        trigger="candidate_exhausted",
+    )
+
+    assert record.rejected_reason == ""
+    assert record.accepted_strategy == "replace_query"
+    assert task.route_replan_count == 1
+    assert task.query_replan_count == 1
 
 
 def test_route_local_replan_triggers_on_recoverable_source_failure() -> None:

@@ -6083,17 +6083,14 @@ def route_local_replan_candidate(
 
     task_id = str(observation_update.get("task_id", "")).strip()
     task = _task_by_id(state, task_id)
-    core_id = state.core_verdict_fact_id or ""
     if (
         task is None
         or task.route_replan_count >= 1
         or task.status not in {"active", "pending", "exhausted"}
-        or not core_id
-        or core_id not in task.fact_ids
+        or not _task_serves_open_route_local_target(state, task)
     ):
         return None
-    core = next((item for item in state.facts if item.fact_id == core_id), None)
-    if core is None or core.status in {"supported", "refuted", "conflicted"}:
+    if _route_local_target_is_resolved(state, task):
         return None
 
     attempts = _attempted_routes_by_task(state).get(task.task_id, [])
@@ -6164,6 +6161,56 @@ def route_local_replan_candidate(
     return None
 
 
+def _task_serves_open_route_local_target(
+    state: ImageOnlyInvestigationState,
+    task: ResearchTask,
+) -> bool:
+    """Accept both legacy core facts and v4 image-claim target ownership."""
+
+    core_id = state.core_verdict_fact_id or ""
+    if core_id:
+        return core_id in task.fact_ids
+    open_claims = [
+        item
+        for item in state.image_claims
+        if item.status in {"open", "unresolved", "conflicted"}
+    ]
+    if not open_claims:
+        return False
+    open_claim_ids = {item.claim_id for item in open_claims}
+    open_fact_ids = {item.fact_id for item in open_claims}
+    return bool(
+        set(task.claim_ids) & open_claim_ids
+        or set(task.fact_ids) & open_fact_ids
+    )
+
+
+def _route_local_target_is_resolved(
+    state: ImageOnlyInvestigationState,
+    task: ResearchTask,
+) -> bool:
+    """Return whether the route's active target has already closed."""
+
+    if state.proposed_verdict in {"fake", "real"}:
+        return True
+    core_id = state.core_verdict_fact_id or ""
+    if core_id:
+        core = next((item for item in state.facts if item.fact_id == core_id), None)
+        return bool(
+            core is not None
+            and core.status in {"supported", "refuted", "conflicted"}
+        )
+    claims_by_id = {item.claim_id: item for item in state.image_claims}
+    route_claims = [
+        claims_by_id[item]
+        for item in task.claim_ids
+        if item in claims_by_id
+    ]
+    return bool(route_claims) and all(
+        item.status in {"supported", "refuted"} for item in route_claims
+    )
+
+
 def apply_route_local_replan(
     state: ImageOnlyInvestigationState,
     output: RouteLocalReplanOutput,
@@ -6196,19 +6243,10 @@ def apply_route_local_replan(
         rejected_reason = "the task already used its one route-local replan"
     elif task.status not in {"active", "pending", "exhausted"}:
         rejected_reason = "route-local replan task is not available"
-    elif state.core_verdict_fact_id not in task.fact_ids:
-        rejected_reason = "route-local replan task must own the open core fact"
-    else:
-        core = next(
-            (
-                item
-                for item in state.facts
-                if item.fact_id == state.core_verdict_fact_id
-            ),
-            None,
-        )
-        if core is None or core.status in {"supported", "refuted", "conflicted"}:
-            rejected_reason = "cannot replan after the core fact is resolved"
+    elif not _task_serves_open_route_local_target(state, task):
+        rejected_reason = "route-local replan task must own an open target fact"
+    elif _route_local_target_is_resolved(state, task):
+        rejected_reason = "cannot replan after the route target is resolved"
 
     if not rejected_reason and task is not None:
         if output.strategy == "replace_query":
