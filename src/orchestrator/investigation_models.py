@@ -454,10 +454,9 @@ class SearchHypothesisProposal(StrictModel):
     )
     route_focus: RouteFocus = Field(
         description=(
-            "Primary reason this route exists. Use media_origin only when the "
-            "route would primarily identify creator, publisher/platform, "
-            "generation method, or publication history of the image itself; "
-            "that focus is rejected for factual-image investigation."
+            "Primary reason this route exists. Keep it centered on a depicted "
+            "entity, event, relation value, scene/world constraint, or visible "
+            "image property."
         ),
     )
     statement: str = Field(
@@ -465,7 +464,7 @@ class SearchHypothesisProposal(StrictModel):
         max_length=1200,
         description=(
             "Neutral answer-seeking investigation route about the source, entity, "
-            "event, relation, or value; not a proposed verdict or media-origin class."
+            "event, relation, or value, grounded in the target fact."
         ),
     )
     queries: List[str] = Field(
@@ -711,7 +710,7 @@ class VisualReinspectionProposal(StrictModel):
         max_length=240,
         description=(
             "The selected candidate's concise visible property; not an inferred "
-            "measurement or broad authenticity classification."
+            "measurement; describe a directly observable target property."
         ),
     )
     candidate_discriminators: List[VisualDiscriminatorCandidate] = Field(

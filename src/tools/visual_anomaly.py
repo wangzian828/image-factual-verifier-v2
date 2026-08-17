@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Visual anomaly detection tool."""
+"""Legacy visual consistency diagnostic tool."""
 from __future__ import annotations
 
 import os
@@ -21,11 +21,14 @@ from src.tools.base import BaseTool
 
 
 CHECK_TYPES = (
-    "ai_generation",
-    "manipulation",
     "physical_consistency",
+    "logical_consistency",
     "all",
 )
+_LEGACY_CHECK_TYPE_ALIASES = {
+    "ai_generation": "all",
+    "manipulation": "all",
+}
 
 ShortRequiredText = Annotated[
     str,
@@ -54,10 +57,10 @@ class _VisualAnomaly(BaseModel):
     reasoning: RequiredText
     severity: int = Field(ge=0, le=100)
     anomaly_type: Literal[
-        "ai_generation",
-        "manipulation",
         "physical_inconsistency",
         "logical_inconsistency",
+        "relation_mismatch",
+        "text_mismatch",
     ] = Field(alias="type")
     entities_involved: list[EntityText] = Field(min_length=1, max_length=12)
 
@@ -66,12 +69,7 @@ class _VisualAnomalyResponse(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     anomalies: list[_VisualAnomaly] = Field(max_length=12)
-    overall_authenticity: Literal[
-        "authentic",
-        "likely_ai",
-        "likely_manipulated",
-        "uncertain",
-    ]
+    target_relation_status: Literal["observed", "not_observed", "ambiguous"]
     confidence: float = Field(ge=0.0, le=1.0)
     notes: NotesText
 
@@ -87,14 +85,14 @@ VISUAL_ANOMALY_RESPONSE_FORMAT = {
 }
 VISUAL_ANOMALY_MAX_OUTPUT_TOKENS = 8192
 VISUAL_ANOMALY_SYSTEM_INSTRUCTION = (
-    "You are an expert image forensics analyst. Follow the supplied JSON schema "
+    "You are an expert visual-consistency analyst. Follow the supplied JSON schema "
     "exactly and return only one JSON object without markdown or commentary."
 )
 
 
 TARGETED_ANALYSIS_PROMPT = """\
-You are an expert image forensics analyst. Analyze this image for visual anomalies
-based on the specific focus areas and context provided.
+You are an expert visual-consistency analyst. Inspect this image for concrete,
+locatable visual properties that bear on the supplied target relation.
 
 ## Focus Areas
 {focus_areas}
@@ -107,9 +105,11 @@ based on the specific focus areas and context provided.
 ## Instructions
 For each focus area:
 1. Identify the entities involved.
-2. Check whether their relationship and geometry look visually consistent.
-3. If there is an anomaly, describe the visible phenomenon precisely.
-4. Explain why it is anomalous using physics, anatomy, geometry, or image structure.
+2. Describe the visible relationship, geometry, text, or physical configuration.
+3. When the observed configuration differs from the expected target relation,
+   describe that difference precisely.
+4. Explain the observation using visible physics, anatomy, geometry, or image
+   structure.
 5. Score severity from 0 to 100.
 
 ## Output Format
@@ -122,27 +122,29 @@ Return exactly one JSON object:
       "phenomenon": "visible issue",
       "reasoning": "why it is anomalous",
       "severity": 0,
-      "type": "ai_generation | manipulation | physical_inconsistency | logical_inconsistency",
+      "type": "physical_inconsistency | logical_inconsistency | relation_mismatch | text_mismatch",
       "entities_involved": ["entity A", "entity B"]
     }}
   ],
-  "overall_authenticity": "authentic | likely_ai | likely_manipulated | uncertain",
+  "target_relation_status": "observed | not_observed | ambiguous",
   "confidence": 0.0,
-  "notes": "additional observations"
+  "notes": "additional target-relation observations"
 }}
 
-Be conservative. Report only anomalies that are clearly supported by the image.
+Report only concrete observations that are clearly supported by the image.
 """
 
 
 BROAD_SCAN_PROMPT = """\
-You are an expert image forensics analyst. Perform a broad anomaly scan on this image.
+You are an expert visual-consistency analyst. Perform a broad scan of the image
+for concrete relationships and physical configurations relevant to the target.
 
 ## Analysis Steps
 1. Inventory major entities, text, and structures.
 2. Check internal consistency of each entity.
 3. Check relationships between interacting entities.
-4. Check global consistency of perspective, lighting, and background structure.
+4. Check perspective, lighting, and background structure where they bear on a
+   visible target relation.
 
 ## Check Type: {check_type}
 
@@ -156,16 +158,16 @@ Return exactly one JSON object:
       "phenomenon": "visible issue",
       "reasoning": "why it is anomalous",
       "severity": 0,
-      "type": "ai_generation | manipulation | physical_inconsistency | logical_inconsistency",
+      "type": "physical_inconsistency | logical_inconsistency | relation_mismatch | text_mismatch",
       "entities_involved": ["entity A", "entity B"]
     }}
   ],
-  "overall_authenticity": "authentic | likely_ai | likely_manipulated | uncertain",
+  "target_relation_status": "observed | not_observed | ambiguous",
   "confidence": 0.0,
-  "notes": "additional observations"
+  "notes": "additional target-relation observations"
 }}
 
-Be conservative. Do not hallucinate issues.
+Report only concrete observations that are clearly supported by the image.
 """
 
 
@@ -175,8 +177,9 @@ class VisualAnomalyTool(BaseTool):
 
     name: str = "analyze_visual_anomalies"
     description: str = (
-        "Analyze the image for visual anomalies indicating AI generation, manipulation, "
-        "or physical/logical inconsistencies."
+        "Inspect the image for concrete visual inconsistencies in a supplied "
+        "entity, relationship, text value, or physical configuration. This is "
+        "a diagnostic observation tool; its output does not own the verdict."
     )
     parameters: Dict[str, Any] = field(default_factory=lambda: {
         "type": "object",
@@ -236,7 +239,10 @@ class VisualAnomalyTool(BaseTool):
         context = context.strip()
 
         check_type = params.get("check_type", "all")
-        if check_type not in CHECK_TYPES:
+        if (
+            check_type not in CHECK_TYPES
+            and check_type not in _LEGACY_CHECK_TYPE_ALIASES
+        ):
             return {
                 "status": "error",
                 "error": f"check_type must be one of: {', '.join(CHECK_TYPES)}.",
@@ -249,14 +255,18 @@ class VisualAnomalyTool(BaseTool):
                 "error": "VLM backend does not support Gemini Interactions.",
             }
 
+        normalized_check_type = _LEGACY_CHECK_TYPE_ALIASES.get(
+            check_type,
+            check_type,
+        )
         if focus_areas:
             prompt = TARGETED_ANALYSIS_PROMPT.format(
                 focus_areas="\n".join(f"- {item}" for item in focus_areas),
                 context=context or "No additional context provided.",
-                check_type=check_type,
+                check_type=normalized_check_type,
             )
         else:
-            prompt = BROAD_SCAN_PROMPT.format(check_type=check_type)
+            prompt = BROAD_SCAN_PROMPT.format(check_type=normalized_check_type)
             if context:
                 prompt += f"\n\n## Additional Context\n{context}"
 

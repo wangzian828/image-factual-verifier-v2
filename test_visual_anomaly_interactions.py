@@ -18,11 +18,11 @@ VALID_RESPONSE = {
             "phenomenon": "Two fingers merge into one continuous shape.",
             "reasoning": "The visible finger topology is anatomically implausible.",
             "severity": 82,
-            "type": "ai_generation",
+            "type": "relation_mismatch",
             "entities_involved": ["left hand", "fingers"],
         }
     ],
-    "overall_authenticity": "likely_ai",
+    "target_relation_status": "not_observed",
     "confidence": 0.91,
     "notes": "The anomaly is localized and clearly visible.",
 }
@@ -157,10 +157,10 @@ def test_visual_anomaly_uses_interactions_with_exact_structured_schema(tmp_path)
                             "type": {
                                 "type": "string",
                                 "enum": [
-                                    "ai_generation",
-                                    "manipulation",
                                     "physical_inconsistency",
                                     "logical_inconsistency",
+                                    "relation_mismatch",
+                                    "text_mismatch",
                                 ],
                             },
                             "entities_involved": {
@@ -185,13 +185,12 @@ def test_visual_anomaly_uses_interactions_with_exact_structured_schema(tmp_path)
                         ],
                     },
                 },
-                "overall_authenticity": {
+                "target_relation_status": {
                     "type": "string",
                     "enum": [
-                        "authentic",
-                        "likely_ai",
-                        "likely_manipulated",
-                        "uncertain",
+                        "observed",
+                        "not_observed",
+                        "ambiguous",
                     ],
                 },
                 "confidence": {
@@ -203,7 +202,7 @@ def test_visual_anomaly_uses_interactions_with_exact_structured_schema(tmp_path)
             },
             "required": [
                 "anomalies",
-                "overall_authenticity",
+                "target_relation_status",
                 "confidence",
                 "notes",
             ],

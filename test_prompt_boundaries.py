@@ -79,10 +79,10 @@ def test_hot_path_prompts_stay_semantic_and_compact() -> None:
     assert "positive world proposition" in image_account_prompt
     assert "neutral investigation routes" in image_account_prompt
     assert "not candidate verdicts" in image_account_prompt
-    assert "media-origin classification" in image_account_prompt
+    assert "retrieval context" in image_account_prompt
     assert "determine the relation slot's verified value" in image_account_prompt
-    assert "Image clues guide retrieval but do not restrict it" in image_account_prompt
-    assert "Prior knowledge is a lead" in image_account_prompt
+    assert "Image clues guide retrieval" in image_account_prompt
+    assert "exact source matching is retrieval context" in image_account_prompt
     assert "only tool Evidence establishes a fact" in image_account_prompt
     assert "Output: account_summary" in image_account_prompt
     assert "not a boundary on the investigation" in discrepancy_react_prompt
@@ -90,7 +90,7 @@ def test_hot_path_prompts_stay_semantic_and_compact() -> None:
     assert "actual value of the same relation slot" in discrepancy_react_prompt
     assert "identical image can be found" in discrepancy_react_prompt
     assert "visible anchors, relation slots" in discrepancy_react_prompt
-    assert "unsupported verdict label" in discrepancy_react_prompt
+    assert "target relation" in discrepancy_react_prompt
     assert "only tool Evidence establishes a fact" in discrepancy_react_prompt
     assert "legacy image-claim record is bookkeeping only" in discrepancy_react_prompt
     assert "select one owned target fact" in discrepancy_react_prompt

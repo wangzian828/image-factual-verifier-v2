@@ -89,8 +89,8 @@ The query must remain about the active proposition while changing the stalled
 direction represented by the attempted queries. This is a retrieval hypothesis, not
 a verdict. Select exactly one candidate concept, translate or condense it into one
 concise concept_term, and include that exact concept_term in the replacement query.
-Build it only from the active relation, visible anchors, and supplied Evidence; do
-not introduce an unsupported verdict label or media-origin classification.
+Build it only from the active relation, visible anchors, and supplied Evidence;
+keep the query centered on the target relation.
 """
 
 
@@ -104,10 +104,11 @@ real-world fact the image asks the viewer to accept, not a list of visible detai
 
 Prefer a specific, discriminative relation over a generic scene description:
 an action, identity, number, text, date, object, color, physical position, unusual
-anatomy, or similar slot. State the purported world event or property, even when the
-pixels may be synthetic or composited. Image integrity is an investigation route,
-not a self-confirming claim that the pixels are an illustration. Never replace the
-world relation with creator, title, upload history, or other provenance metadata.
+anatomy, or similar slot. State the depicted world event or property as the
+image-grounded target relation. Keep the target centered on the subject, event,
+relation slot, and visible value; retrieval context can then test that relation.
+Never replace the world relation with creator, title, upload history, or other
+provenance metadata.
 When a person, place, event, or artifact is identifiable, a defining factual
 relation about that identity may be more decisive than transient scene appearance.
 Keep the target positive and atomic. The runtime validates grounding, ownership,
@@ -127,10 +128,9 @@ without useful evidence, omit that value and retrieve the actual value of the sa
 relation slot. Prior knowledge may supply leads, but only tool Evidence establishes
 a fact.
 Form queries from visible anchors, relation slots, or terms introduced by supplied
-Discovery and Evidence. Do not inject an unsupported verdict label or media-origin
-classification into retrieval.
-The legacy image-claim record is bookkeeping only; do not turn creator,
-provenance, upload history, or exact-capture identity into the target fact.
+Discovery and Evidence. Keep each query centered on the target relation.
+The legacy image-claim record is bookkeeping only. Keep creator, provenance,
+upload history, and exact-source details as retrieval context.
 
 Inspect a promising page or reference before repeating retrieval. Titles, snippets,
 and reverse matches are Discovery only. For page inspection, select one owned
@@ -161,8 +161,8 @@ Write the target as the positive world proposition the image asks the viewer to
 accept, anchored to a concrete subject and relation. It may include living versus
 model or biologically possible size. Prefer unusual visible relations; a defining
 factual relation may be more useful. Retrieved place/date/event identity, creator,
-platform, generation, and publication history belong in hypotheses, not the target;
-exact-capture absence is never a target gap. Treat search_hypotheses as neutral
+platform, and publication history belong in hypotheses, not the target; exact
+source matching is retrieval context. Treat search_hypotheses as neutral
 investigation routes, not candidate verdicts; determine the relation slot's
 verified value. Routes do not own the verdict.
 Decide whether a visible discriminator is needed. If material, scale,
@@ -172,9 +172,9 @@ resolving observation. Do not add it only because a webpage may fail. Text searc
 is the only search route; candidate ordering may be improved internally after the
 search, not a planning choice or additional tool.
 
-Use one allowed route_focus; media-origin classification is rejected and must be
-rewritten as a factual focus. Image clues guide retrieval but do not restrict it.
-Prior knowledge is a lead; only tool Evidence establishes a fact.
+Use one allowed route_focus centered on a depicted entity, event, relation value,
+scene/world constraint, or visual consistency question. Image clues guide
+retrieval; only tool Evidence establishes a fact.
 
 Output: account_summary; image_claims[{claim_key, statement, kind, predicate,
 anchor_fact_ids, salience}]; search_hypotheses[{hypothesis_key, route_focus,
@@ -207,8 +207,8 @@ result, or failure detail; do not force them into predefined semantic slots.
 
 For replace_query, change the investigation angle rather than paraphrasing an
 attempted query.  For add_visual_route, state a visible property, region, object,
-text, relationship, or structural cue to inspect; do not ask whether the image is
-"real", "fake", AI-generated, or otherwise make an authenticity classification.
+text, relationship, or structural cue that distinguishes the target factual
+relation.
 When related candidates propose incompatible places, people, events, or dates, do
 not concatenate those competing guesses into one OR query.  Either select one
 tentative lead for a coherent source-specific query, or choose a visual route that
@@ -241,17 +241,15 @@ A same-capture image is required only when the conclusion depends on proving tha
 source assertion describes this exact input image; the absence of a reference image
 is not itself a reason to keep searching.
 
-Whether a reference is the same photographic capture is not a general quality gate.
-A different capture may directly establish a stable visible identity, place, event,
-or relation when its actual observation answers the active proposition. It cannot by
-itself establish hidden authorization, creator, upload history, provenance, or the
-existence of an exact source image. Failure to find an exact capture is never
-refutation of a visible-world proposition.
+Whether a reference is the same source capture is one possible image-binding
+relation. A different capture may directly establish a stable visible identity,
+place, event, or relation when its actual observation answers the active proposition.
+Creator, upload history, provenance, and source-record details remain retrieval
+context unless visibly part of the target relation.
 
-Judge the supplied active proposition as written. Do not replace a subject-to-place,
-event, identity, or date relation with the different question of whether the whole
-image is authentic, manipulated, composite, or AI-generated. Reliable range,
-habitat, chronology, or event evidence that is incompatible with the depicted
+Judge the supplied active proposition as written. Keep subject-to-place, event,
+identity, date, range, habitat, chronology, and other world relations as the
+adjudicated target. Reliable evidence that is incompatible with the depicted
 relation can be text-sufficient refutation.
 
 If the evidence reveals a more specific visible subject, place, or event but does
@@ -260,21 +258,18 @@ in supplied pixel/OCR anchor facts and Evidence. You may instead use object_cate
 once to replace a visible product or object SKU with the smallest category needed by
 the evidence, but only while preserving the same visible subject, object entity, and
 relation. For example, a named packet may become "the shown health product" when
-exact Evidence establishes that category-level impersonation relation. Do not
-generalize to every product, replace the subject, or switch to authenticity,
-provenance, creator, or platform questions. Creator, title, platform, upload date,
-and asset metadata are retrieval context unless visibly part of the image. Do not
-invent facts, ids, sources, or a requirement for a second source.
+exact Evidence establishes that category-level impersonation relation. Keep the
+same visible subject, object, and relation while refining one supported value.
+Creator, title, platform, upload date, and asset metadata are retrieval context
+unless visibly part of the image. Use only supplied facts, ids, and sources.
 
 When newly reviewed Evidence introduces a concrete hypothesis about a property
 that should be visible in the original pixels, request visual_reinspection before
 refining or continuing broad search if a focused re-observation could materially
 confirm, contradict, or disambiguate that hypothesis. This includes newly learned
-subject identity, visible relation, scene/location cue, event cue, text, or image
-integrity. Do not request it for creator, upload date, hidden provenance, or other
-facts the image cannot show. Do not request it merely for reassurance after the
-active proposition is already supported or refuted. A decision must choose either
-visual_reinspection or refinement, never both.
+subject identity, visible relation, scene/location cue, event cue, or text. Focus
+the request on a property the image can show and choose either visual_reinspection
+or refinement for one checkpoint.
 """
 
 
@@ -283,30 +278,29 @@ DISCREPANCY_DECISION_SYSTEM_PROMPT = """\
 
 You are the sparse multimodal Discrepancy Decision checkpoint. Compare reviewed
 Evidence with the image-grounded target fact and image account. Cite Evidence/anchors
-for discrepancies; retire/add hypotheses or request reinspection; omit unsupported
-facts.
+for discrepancies; update hypotheses or request reinspection; use supplied facts.
 
 Use recorded admissible_stances: neutral Evidence cannot support/refute. For the
 target fact, support means it is true; refute means it is false. A competing value for the same subject-event relation refutes it. Task ownership does not establish semantic coverage; use addressed target facts and allowed visual anchors.
 
-Before support/real, align source facts with pixels; identity/event agreement alone
-is insufficient. If source Evidence adds a visible value needing alignment, request
-visual_reinspection. Return 2-3 candidate_discriminators with
+Before support/real, align source facts with pixels. If source Evidence adds a
+visible value needing alignment, request visual_reinspection. Return 2-3
+candidate_discriminators with
 source_phrase, visible_property, why_discriminative, already_in_claim, and
 expected_if_source_matches; select the highest-information one. source_phrase may
-paraphrase or recombine Evidence. Do not choose a property already in the target
-fact/account or a generic confirmation; expected_property copies visible_property.
-Pixels cannot infer absolute size or weight without scale, or media origin from style.
-If anchors establish neither alternative, keep the target fact insufficient and
-create no discrepancy.
+paraphrase or recombine Evidence. Choose a new target-specific discriminator
+grounded in the visible relation; expected_property copies visible_property.
+Use scale evidence for absolute size or weight and directly observable properties
+for other comparisons. When the anchors establish no competing value, keep the
+target fact insufficient and create no discrepancy.
 
 Reconcile every target-owned pixel Evidence with source; on conflict cite both IDs
 and preserve stances. Every reviewed qualified claim-owned pixel Evidence must be
 consumed or, when unrelated, listed in
 visual_evidence_disposition.evidence_ids with disposition exactly
 "irrelevant_to_current_claim_or_discrepancy" and an explanation. Web/source Evidence
-may be omitted when background or redundant. Never silently drop target-owned pixel
-Evidence or dispose of it while updating that target fact.
+may be omitted when background or redundant. Preserve every target-owned pixel
+Evidence in the claim update or record its explicit disposition.
 
 For visual_reinspection choose claim_id from runtime candidates and emit only
 claim_id, reason, scope, question, expected_property, and
@@ -315,8 +309,8 @@ omit visual_anchor_fact_ids; runtime derives them from affected_claim_ids.
 
 For new_hypotheses include route_focus: same_capture_reference,
 entity_event_identity, relation_value, scene_world_constraints, or
-visual_consistency. Do not add media_origin routes about creator, platform,
-generation, or publication history.
+visual_consistency. Keep each route centered on the depicted entity, event,
+relation value, scene/world constraint, or visual property.
 
 Qualified refutation is decisive. The core target fact is decisive for real only
 when supported and routes are closed; otherwise continue. Propose fake for a

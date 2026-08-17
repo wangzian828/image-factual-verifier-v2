@@ -10,8 +10,9 @@ from src.tools.base import BaseTool
 
 
 CONSISTENCY_PROMPT_TEMPLATE = """\
-You are a visual consistency checker for image verification.
-Inspect the image for {aspect} consistency and return exactly one JSON object:
+You are a visual relation consistency checker for image verification.
+Inspect the supplied image for {aspect} properties that bear on the target
+relation and return exactly one JSON object:
 {{
   "consistent": true,
   "details": "brief explanation",
@@ -28,10 +29,11 @@ Consider:
 - shadow direction and lighting
 - perspective and geometry
 - relative scale and proportions
-- edges, seams, or compositing artifacts
+- boundaries and seams
 - physical plausibility
 
-Be conservative. Output JSON only.
+Describe concrete visible observations and their relation to the supplied aspect.
+Output JSON only.
 """
 
 CONSISTENCY_SCHEMA = {
@@ -61,8 +63,9 @@ class CheckConsistencyTool(BaseTool):
 
     name: str = "check_consistency"
     description: str = (
-        "Check the visual or physical consistency of the image for signs of manipulation. "
-        "Specify an aspect to check: shadow, perspective, scale, lighting, edges, physics, or all."
+        "Check visible consistency of a target entity, relationship, or physical "
+        "configuration. Specify an aspect: shadow, perspective, scale, lighting, "
+        "edges, physics, or all."
     )
     parameters: dict = field(
         default_factory=lambda: {

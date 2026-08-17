@@ -270,14 +270,17 @@ Exact instruction:
 
 - Source: `src/orchestrator/image_only_prompts.py::DISCREPANCY_JUDGMENT_SYSTEM_PROMPT`
 - Interaction: `standalone_request`
-- Sees original image: no; receives the compiled basis and recorded image understanding
+- Sees original image: yes; also receives the compiled basis and recorded image understanding
 - Input:
   - compiled verdict when Evidence already determined one;
   - accepted `DiscrepancyVerdictBasis`;
   - selected claims, discrepancies, Findings, and Evidence;
   - unresolved gaps.
 - Purpose:
-  - explain the already compiled verdict;
+  - explain the already compiled verdict, or make a bounded binary judgment when
+    no Evidence-determined verdict was accepted;
+  - ground any terminal visual rationale in the target factual relation and
+    concrete visible properties;
   - return only verdict, confidence, and a concise assessment;
   - add no new facts, searches, or identifiers. Runtime injects the compiled
     claim/discrepancy/finding/Evidence IDs and unresolved gaps into canonical
@@ -287,11 +290,15 @@ Exact instruction:
 
 Exact instruction:
 
-> You are the constrained final synthesizer for discrepancy-first-v4. Return only
-> the binary verdict, confidence, and a concise assessment of the supplied compiled
-> basis. When compiled_verdict is non-empty, reproduce it. Do not emit claim,
+> You are the constrained final synthesizer for discrepancy-first-v4. The original
+> image is attached for every judgment. When compiled_verdict is non-empty, reproduce
+> it exactly and keep the assessment within the runtime-compiled conclusion. When it
+> is empty, make the required binary judgment by evaluating whether the attached
+> pixels establish or contradict the image-grounded factual relation in the compiled
+> target. Ground the rationale in a target-specific entity, relationship, event
+> configuration, quantity, time/place cue, or legible text value. Do not emit claim,
 > discrepancy, finding, Evidence, or gap IDs; the runtime injects those from the
-> accepted investigation state. Do not add historical facts or reopen search.
+> accepted investigation state.
 
 ## 3. Auxiliary Gemini calls
 
@@ -302,9 +309,9 @@ observations, not state transitions.
 |---|---|---:|---|
 | semantic reverse search | `src/tools/reverse_image_search.py::IMAGE_QUERY_PROMPT` | yes | derive retrieval query from the image |
 | crop query | `src/tools/crop_and_search.py::CROP_QUERY_PROMPT` | crop | describe a local visual retrieval anchor |
-| focused visual inspection | `src/tools/focused_visual_inspection.py::FOCUSED_VISUAL_INSPECTION_PROMPT` | original/crop | answer one Evidence-motivated visual question |
+| focused visual inspection | `src/tools/focused_visual_inspection.py::FOCUSED_VISUAL_INSPECTION_PROMPT` | original/crop | record the visible property of one target relation |
 | reference comparison | `src/tools/compare_reference.py::COMPARE_PROMPT` | original + reference | record same-capture and material-difference observations |
-| visual anomaly scan | `src/tools/visual_anomaly.py` prompts | original | diagnostic pixel observations only |
+| visual anomaly scan | `src/tools/visual_anomaly.py` prompts | original | diagnostic observations about target-relation consistency only |
 | webpage extraction | `src/integrations/browse/jina_reader.py::EXTRACT_PROMPT` | no | select exact passages and classify their relation to the bound `image_claim` |
 
 The webpage extractor is an independent request with two trusted fields:
