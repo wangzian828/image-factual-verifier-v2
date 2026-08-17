@@ -131,6 +131,7 @@ from src.orchestrator.task_store import (
     query_concept_extraction_error,
     query_replan_candidate_task_ids,
     route_local_replan_candidate,
+    route_local_exhausted_candidate,
     remaining_root_image_reverse_branches,
     remaining_material_routes,
     remaining_claim_hypothesis_routes,
@@ -1134,6 +1135,24 @@ class Orchestrator:
                 continue
             routes = remaining_claim_hypothesis_routes(investigation)
             if not routes:
+                exhausted_replan_request = route_local_exhausted_candidate(
+                    investigation
+                )
+                if exhausted_replan_request is not None:
+                    route_task_id, route_trigger = exhausted_replan_request
+                    if await self._run_image_only_route_local_replan(
+                        state,
+                        investigation,
+                        image_path=image_path,
+                        task_id=route_task_id,
+                        trigger=route_trigger,
+                    ):
+                        audit_discrepancy_coverage(
+                            investigation,
+                            decision_checkpoint=True,
+                        )
+                        self._sync_image_only_state(state, investigation)
+                        continue
                 reviewed_ids = discrepancy_decision_evidence_ids(investigation)
                 await self._run_discrepancy_decision(
                     state,

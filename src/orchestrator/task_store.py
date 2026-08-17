@@ -6158,6 +6158,30 @@ def route_local_replan_candidate(
     return None
 
 
+def route_local_exhausted_candidate(
+    state: ImageOnlyInvestigationState,
+) -> tuple[str, str] | None:
+    """Offer one final local replan before v4 settles an exhausted investigation."""
+
+    for task in state.tasks:
+        if (
+            task.route_replan_count >= 1
+            or task.status not in {"active", "pending", "exhausted"}
+            or not _task_serves_open_route_local_target(state, task)
+            or _route_local_target_is_resolved(state, task)
+        ):
+            continue
+        if not _attempted_routes_by_task(state).get(task.task_id, []):
+            continue
+        if remaining_claim_hypothesis_routes(
+            state,
+            task_ids={task.task_id},
+        ):
+            continue
+        return task.task_id, "candidate_exhausted"
+    return None
+
+
 def _task_serves_open_route_local_target(
     state: ImageOnlyInvestigationState,
     task: ResearchTask,

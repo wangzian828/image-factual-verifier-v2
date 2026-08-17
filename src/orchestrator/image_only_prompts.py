@@ -207,6 +207,11 @@ For replace_query, change the investigation angle rather than paraphrasing an
 attempted query.  For add_visual_route, state a visible property, region, object,
 text, relationship, or structural cue to inspect; do not ask whether the image is
 "real", "fake", AI-generated, or otherwise make an authenticity classification.
+When related candidates propose incompatible places, people, events, or dates, do
+not concatenate those competing guesses into one OR query.  Either select one
+tentative lead for a coherent source-specific query, or choose a visual route that
+can distinguish them.  A query may remain broad when the image does not justify a
+specific identity.
 For continue, point to the concrete remaining action.  For stop_route, explain why
 this route—not the whole investigation—has no material next action.
 """

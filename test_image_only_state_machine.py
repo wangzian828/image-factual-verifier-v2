@@ -60,6 +60,7 @@ from src.orchestrator.task_store import (
     record_tool_observation,
     apply_route_local_replan,
     route_local_replan_candidate,
+    route_local_exhausted_candidate,
     state_from_bootstrap,
 )
 
@@ -6198,6 +6199,31 @@ def test_route_local_replan_triggers_on_recoverable_source_failure() -> None:
         state,
         observation_update=update,
     ) == (task.task_id, "source_failure")
+
+
+def test_route_local_replan_offers_one_final_route_after_exhaustion() -> None:
+    _, state = _runtime_state()
+    task = next(
+        item
+        for item in state.tasks
+        if state.core_verdict_fact_id in item.fact_ids
+    )
+    task.suggested_tools = []
+    state.attempted_routes.append(
+        json.dumps(
+            {
+                "task_id": task.task_id,
+                "tool": "visit",
+                "urls": ["https://example.org/exhausted"],
+                "outcome": "empty",
+            }
+        )
+    )
+
+    assert route_local_exhausted_candidate(state) == (
+        task.task_id,
+        "candidate_exhausted",
+    )
 
 
 def test_visual_scene_identity_is_not_blocked_by_source_record_predicate() -> None:
