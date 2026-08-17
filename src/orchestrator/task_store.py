@@ -6109,6 +6109,12 @@ def route_local_replan_candidate(
         for item in state.failures
         if item.task_id == task.task_id
     }
+    has_concrete_remaining_route = bool(
+        remaining_claim_hypothesis_routes(
+            state,
+            task_ids={task.task_id},
+        )
+    )
     if any(
         failure_id in failures
         and failures[failure_id].recoverable
@@ -6122,22 +6128,13 @@ def route_local_replan_candidate(
             "timeout",
         }
         for failure_id in failure_ids
-    ):
+    ) and not has_concrete_remaining_route:
         return task.task_id, "source_failure"
 
     created_evidence_ids = {
         str(item)
         for item in observation_update.get("created_evidence_ids", []) or []
     }
-    if tool_name in {
-        "crop_and_inspect",
-        "focused_visual_inspection",
-        "check_consistency",
-        "analyze_visual_anomalies",
-    }:
-        if created_evidence_ids or outcome in {"empty", "context"}:
-            return task.task_id, "visual_signal"
-
     if tool_name in {"visit", "compare_with_reference"}:
         if created_evidence_ids:
             return task.task_id, "related_unclosed"

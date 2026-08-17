@@ -6097,7 +6097,7 @@ def test_route_local_replan_can_add_visual_route_without_rewriting_plan() -> Non
     )
     original_question = task.question
     original_queries = list(task.suggested_queries)
-    task.suggested_tools = ["text_search", "visit"]
+    task.suggested_tools = []
 
     record = apply_route_local_replan(
         state,
