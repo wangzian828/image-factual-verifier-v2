@@ -24,6 +24,7 @@ def test_archive_adapter_projects_only_minimal_runtime_fields(
         json.dumps(
             {
                 "candidate_id": "candidate:0001",
+                "archive_source_version_id": "archive:source:0001",
                 "archive_image_path": "artifacts/images/0001.jpg",
                 "factual_status": "refuted",
                 "claim_atom": {"subject": "private"},
@@ -40,7 +41,7 @@ def test_archive_adapter_projects_only_minimal_runtime_fields(
     assert source.case_count == 1
     assert source.rows == [
         {
-            "case_id": "candidate:0001",
+            "case_id": "archive:source:0001",
             "image_path": str(image.resolve()),
             "image_sha256": hashlib.sha256(b"archive-image").hexdigest(),
         }
@@ -86,6 +87,41 @@ def test_archive_adapter_rejects_duplicate_candidate_ids(
 
     with pytest.raises(ValueError, match="duplicate archive candidate_id"):
         load_archive_runtime_input(root)
+
+
+def test_archive_adapter_uses_archive_version_id_for_duplicate_candidates(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "archive"
+    image_dir = root / "artifacts" / "images"
+    image_dir.mkdir(parents=True)
+    first = image_dir / "0001.jpg"
+    second = image_dir / "0002.jpg"
+    first.write_bytes(b"archive-image-1")
+    second.write_bytes(b"archive-image-2")
+    rows = [
+        {
+            "candidate_id": "same-candidate",
+            "archive_source_version_id": "source-a:0001",
+            "archive_image_path": "artifacts/images/0001.jpg",
+        },
+        {
+            "candidate_id": "same-candidate",
+            "archive_source_version_id": "source-b:0002",
+            "archive_image_path": "artifacts/images/0002.jpg",
+        },
+    ]
+    (root / "human-review-candidates.jsonl").write_text(
+        "".join(json.dumps(row) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+
+    source = load_archive_runtime_input(root)
+
+    assert [row["case_id"] for row in source.rows] == [
+        "source-a:0001",
+        "source-b:0002",
+    ]
 
 
 def test_archive_adapter_enforces_runtime_case_id_limit(

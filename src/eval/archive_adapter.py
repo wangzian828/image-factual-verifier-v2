@@ -42,6 +42,26 @@ def _required_text(row: Mapping[str, Any], key: str, *, line_number: int) -> str
     return value
 
 
+def _runtime_case_id(
+    candidate: Mapping[str, Any],
+    *,
+    line_number: int,
+) -> str:
+    candidate_id = _required_text(
+        candidate,
+        "candidate_id",
+        line_number=line_number,
+    )
+    version_id = str(candidate.get("archive_source_version_id") or "").strip()
+    case_id = version_id or candidate_id
+    if len(case_id) > 200:
+        raise ValueError(
+            f"{CANDIDATE_FILE_NAME} line {line_number} archive identity exceeds "
+            "the runtime case_id limit of 200 characters"
+        )
+    return case_id
+
+
 def _resolve_image(root: Path, value: str, *, line_number: int) -> Path:
     relative = Path(value)
     if relative.is_absolute():
@@ -102,9 +122,9 @@ def _iter_jsonl(path: Path) -> Iterable[tuple[int, Mapping[str, Any]]]:
 def load_archive_runtime_input(archive_root: Path) -> ArchiveRuntimeInput:
     """Load candidate rows without modifying or reserializing the archive.
 
-    Only ``candidate_id`` and ``archive_image_path`` are read into the runtime
-    projection.  Fields such as ``factual_status``, ``claim_atom``, ``evidence``,
-    and source/construction metadata are deliberately not copied.
+    Only the stable archive identity and ``archive_image_path`` are read into the
+    runtime projection.  Fields such as ``factual_status``, ``claim_atom``,
+    ``evidence``, and source/construction metadata are deliberately not copied.
     """
 
     root = archive_root.expanduser().resolve()
@@ -129,7 +149,7 @@ def load_archive_runtime_input(archive_root: Path) -> ArchiveRuntimeInput:
     rows: List[Dict[str, str]] = []
     seen_case_ids: set[str] = set()
     for line_number, candidate in _iter_jsonl(candidate_path):
-        case_id = _required_text(candidate, "candidate_id", line_number=line_number)
+        case_id = _runtime_case_id(candidate, line_number=line_number)
         image_value = _required_text(
             candidate,
             "archive_image_path",
