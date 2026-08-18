@@ -17,6 +17,7 @@ from src.eval.case_selection import (
     metadata_index,
     select_samples,
 )
+from src.eval.archive_baseline import write_archive_baseline_metrics
 from src.eval.archive_adapter import load_archive_runtime_input
 from src.eval.public_release import load_public_release, resolve_image_path
 from src.eval.release_adapter import image_only_case_from_runtime_row
@@ -424,6 +425,29 @@ async def _run_cases(args: argparse.Namespace) -> Dict[str, Any]:
         summary = compute_summary(run_results)
         summary["run_id"] = manifest["run_id"]
         summary["num_cases"] = len(samples)
+        if archive_input is not None:
+            baseline_metrics = write_archive_baseline_metrics(
+                run_dir,
+                archive_input.candidate_path,
+                run_results,
+                run_id=manifest["run_id"],
+                git_commit=runtime_commit,
+            )
+            summary["baseline_metrics"] = {
+                key: baseline_metrics[key]
+                for key in (
+                    "raw_accuracy",
+                    "valid_only_accuracy",
+                    "engineering_error_rate",
+                    "valid_predictions",
+                    "correct",
+                    "total_cases",
+                )
+            }
+            manifest["artifacts"]["baseline_metrics"] = "baseline_metrics.json"
+            manifest["artifacts"][
+                "baseline_case_metrics"
+            ] = "baseline_case_metrics.jsonl"
         _write_jsonl(run_dir / "run_results.jsonl", run_results)
         _write_jsonl(run_dir / "predictions.jsonl", predictions)
         _write_json(run_dir / "summary.json", summary)
