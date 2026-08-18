@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 RouteFocus = Literal[
@@ -1577,3 +1577,10 @@ class BootstrapInvestigation(StrictModel):
         max_length=24,
     )
     findings: List[Finding] = Field(default_factory=list)
+
+    @field_validator("retrieval_anchors", mode="before")
+    @classmethod
+    def truncate_retrieval_anchors(cls, value: Any) -> Any:
+        if isinstance(value, list):
+            return value[:24]
+        return value
