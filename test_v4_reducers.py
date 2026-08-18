@@ -32,6 +32,7 @@ from src.orchestrator.investigation_models import (
     VisualFact,
     VisualReinspectionProposal,
     VisualReinspectionRequest,
+    build_discrepancy_decision_output_schema,
 )
 from src.orchestrator.discrepancy_coverage import (
     audit_discrepancy_coverage,
@@ -401,6 +402,65 @@ def test_qualified_evidence_checkpoint_rejects_empty_continue() -> None:
     assert state.model_dump(mode="json") == before
 
 
+def test_correction_exhaustion_allows_deterministic_empty_continue() -> None:
+    state = _planned_state()
+    evidence = _append_evidence(state)
+
+    update = apply_discrepancy_decision(
+        state,
+        DiscrepancyDecisionOutput(
+            verdict_proposal="continue",
+            rationale="Preserve the workspace after an invalid Decision retry chain.",
+        ),
+        reviewed_evidence_ids=[evidence.evidence_id],
+        trigger="qualified_evidence",
+        allow_empty_continue=True,
+    )
+
+    assert update["accepted"] is True
+    assert state.proposed_verdict == "continue"
+    assert state.claim_assessments == []
+    assert state.material_discrepancies == []
+
+
+def test_discrepancy_schema_constrains_runtime_id_namespaces() -> None:
+    schema = build_discrepancy_decision_output_schema(
+        claim_ids=["claim-allowed"],
+        evidence_ids=["evidence-allowed"],
+        hypothesis_ids=["hypothesis-allowed"],
+    )
+
+    parsed = schema.model_validate(
+        {
+            "claim_assessments": [
+                {
+                    "claim_id": "claim-allowed",
+                    "assessment": "insufficient",
+                    "selected_evidence_ids": ["evidence-allowed"],
+                    "rationale": "Keep the unresolved target open.",
+                }
+            ],
+            "rationale": "Continue with the recorded workspace.",
+        }
+    )
+    assert parsed.claim_assessments[0].claim_id == "claim-allowed"
+
+    with pytest.raises(ValidationError, match="Input should be 'claim-allowed'"):
+        schema.model_validate(
+            {
+                "claim_assessments": [
+                    {
+                        "claim_id": "vf-not-a-claim",
+                        "assessment": "insufficient",
+                        "selected_evidence_ids": ["ve-not-reviewed"],
+                        "rationale": "This must be rejected.",
+                    }
+                ],
+                "rationale": "Continue.",
+            }
+        )
+
+
 def test_decision_exhaustion_fallback_records_reviewed_evidence_only() -> None:
     state = _planned_state()
     evidence = _append_evidence(state)
@@ -500,6 +560,12 @@ def test_decision_context_and_reducer_reject_task_only_claim_ownership() -> None
         )
     )
 
+    assert context["runtime_id_registry"]["reviewed_evidence_ids"] == [
+        evidence.evidence_id
+    ]
+    assert context["runtime_id_registry"]["field_namespace"][
+        "selected_evidence_ids"
+    ] == "reviewed_evidence_ids"
     assert context["reviewable_claim_ids"] == [claim.claim_id]
     assert context["reviewed_evidence_ownership"][0]["claim_ids"] == [
         claim.claim_id

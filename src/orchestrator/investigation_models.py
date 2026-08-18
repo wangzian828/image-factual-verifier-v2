@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    create_model,
+    field_validator,
+    model_validator,
+)
 
 
 RouteFocus = Literal[
@@ -914,6 +921,149 @@ class DiscrepancyDecisionProposalOutput(DiscrepancyDecisionOutput):
                 "visual reinspection proposal requires verdict_proposal='continue'"
             )
         return self
+
+
+def build_discrepancy_decision_output_schema(
+    *,
+    claim_ids: List[str],
+    evidence_ids: List[str],
+    hypothesis_ids: List[str],
+) -> type[DiscrepancyDecisionProposalOutput]:
+    """Build a per-checkpoint schema with runtime-owned ID choices.
+
+    The state remains the source of truth.  This schema only narrows model
+    references to IDs that exist in the current handoff; it does not select a
+    claim, Evidence record, or route on the model's behalf.
+    """
+
+    def literal_or_string(values: List[str]) -> Any:
+        unique = tuple(dict.fromkeys(str(item) for item in values if str(item)))
+        return Literal.__getitem__(unique) if unique else str
+
+    claim_id_type = literal_or_string(claim_ids)
+    evidence_id_type = literal_or_string(evidence_ids)
+    hypothesis_id_type = literal_or_string(hypothesis_ids)
+
+    runtime_claim_assessment = create_model(
+        "RuntimeClaimAssessmentProposal",
+        __base__=ClaimAssessmentProposal,
+        claim_id=(
+            claim_id_type,
+            Field(
+                min_length=1,
+                max_length=100,
+                description="Copy one exact ImageClaim ID from runtime_id_registry.",
+            ),
+        ),
+        selected_evidence_ids=(
+            List[evidence_id_type],
+            Field(
+                default_factory=list,
+                max_length=20,
+                description=(
+                    "Use only exact reviewed Evidence IDs from "
+                    "runtime_id_registry."
+                ),
+            ),
+        ),
+    )
+    runtime_discrepancy = create_model(
+        "RuntimeMaterialDiscrepancyDraft",
+        __base__=MaterialDiscrepancyDraft,
+        affected_claim_ids=(
+            List[claim_id_type],
+            Field(
+                min_length=1,
+                max_length=3,
+                description="Use only exact ImageClaim IDs from runtime_id_registry.",
+            ),
+        ),
+        evidence_ids=(
+            List[evidence_id_type],
+            Field(
+                min_length=1,
+                max_length=20,
+                description=(
+                    "Use only exact reviewed Evidence IDs; VisualFact IDs "
+                    "belong to a separate namespace."
+                ),
+            ),
+        ),
+    )
+    runtime_hypothesis = create_model(
+        "RuntimeNewSearchHypothesis",
+        __base__=NewSearchHypothesis,
+        claim_ids=(
+            List[claim_id_type],
+            Field(
+                min_length=1,
+                max_length=3,
+                description="Use only exact ImageClaim IDs from runtime_id_registry.",
+            ),
+        ),
+    )
+    runtime_visual_reinspection = create_model(
+        "RuntimeVisualReinspectionProposal",
+        __base__=VisualReinspectionProposal,
+        claim_id=(
+            claim_id_type,
+            Field(
+                min_length=1,
+                max_length=100,
+                description="Copy one exact ImageClaim ID from runtime_id_registry.",
+            ),
+        ),
+    )
+    runtime_disposition = create_model(
+        "RuntimeVisualEvidenceDisposition",
+        __base__=VisualEvidenceDisposition,
+        evidence_ids=(
+            List[evidence_id_type],
+            Field(
+                default_factory=list,
+                max_length=12,
+                description=(
+                    "Use only exact reviewed Evidence IDs from "
+                    "runtime_id_registry."
+                ),
+            ),
+        ),
+    )
+    return create_model(
+        "RuntimeDiscrepancyDecisionProposalOutput",
+        __base__=DiscrepancyDecisionProposalOutput,
+        claim_assessments=(
+            List[runtime_claim_assessment],
+            Field(default_factory=list, max_length=3),
+        ),
+        material_discrepancy=(
+            Optional[runtime_discrepancy],
+            None,
+        ),
+        retire_hypothesis_ids=(
+            List[hypothesis_id_type],
+            Field(
+                default_factory=list,
+                max_length=6,
+                description=(
+                    "Use only exact SearchHypothesis IDs from "
+                    "runtime_id_registry."
+                ),
+            ),
+        ),
+        new_hypotheses=(
+            List[runtime_hypothesis],
+            Field(default_factory=list, max_length=3),
+        ),
+        visual_reinspection=(
+            Optional[runtime_visual_reinspection],
+            None,
+        ),
+        visual_evidence_disposition=(
+            Optional[runtime_disposition],
+            None,
+        ),
+    )
 
 
 class ClaimAssessment(StrictModel):

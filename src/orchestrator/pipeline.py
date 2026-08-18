@@ -69,6 +69,7 @@ from src.orchestrator.investigation_models import (
     DiscrepancyDecisionOutput,
     DiscrepancyJudgment,
     DiscrepancyJudgmentOutput,
+    build_discrepancy_decision_output_schema,
     ImageAccountPlanningOutput,
     ImageOnlyInvestigationState,
     ImageOnlyJudgment,
@@ -1522,12 +1523,22 @@ class Orchestrator:
         """Run and atomically apply one sparse v4 multimodal checkpoint."""
 
         before_signature = self._discrepancy_progress_signature(investigation)
+        decision_output_schema = build_discrepancy_decision_output_schema(
+            claim_ids=[
+                claim.claim_id for claim in investigation.image_claims
+            ],
+            evidence_ids=list(reviewed_evidence_ids),
+            hypothesis_ids=[
+                hypothesis.hypothesis_id
+                for hypothesis in investigation.search_hypotheses
+            ],
+        )
 
         runner = StageRunner(
             llm=self.llm,
             system_prompt=self._sp(IMAGE_ONLY_DISCREPANCY_DECISION_PROMPT),
             tools=[],
-            output_schema=DiscrepancyDecisionProposalOutput,
+            output_schema=decision_output_schema,
             max_rounds=3,
             stage_name="image_only_discrepancy_decision",
             runtime_store=state.runtime_store,
@@ -1677,6 +1688,16 @@ class Orchestrator:
                 rejected_reason=rejected_reason,
             )
             fallback_kind = "decision_correction_exhaustion"
+        if fallback is None and exhaustion_boundary:
+            fallback = DiscrepancyDecisionOutput(
+                verdict_proposal="continue",
+                rationale=(
+                    "Deterministic correction-exhaustion boundary: preserve the "
+                    "current workspace and continue without applying an invalid "
+                    "Decision update."
+                ),
+            )
+            fallback_kind = "empty_continue"
         if fallback is None:
             return None
 
@@ -1685,13 +1706,16 @@ class Orchestrator:
             fallback,
             reviewed_evidence_ids=reviewed_evidence_ids,
             trigger=trigger,
+            allow_empty_continue=fallback_kind == "empty_continue",
         )
         if not update.get("accepted", False):
             return None
         if fallback_kind == "visual_consumption":
             update["deterministic_visual_consumption_fallback"] = True
-        else:
+        elif fallback_kind == "decision_correction_exhaustion":
             update["deterministic_decision_exhaustion_fallback"] = True
+        else:
+            update["deterministic_empty_continue_fallback"] = True
         update["fallback_rejected_reason"] = rejected_reason
         if exhaustion_boundary:
             update["protocol_correction_exhaustion_boundary"] = True

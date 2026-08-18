@@ -1198,6 +1198,29 @@ def render_discrepancy_decision_context(
     return json.dumps(
         {
             "trigger": trigger,
+            "runtime_id_registry": {
+                "image_claim_ids": sorted(claims_by_id),
+                "reviewed_evidence_ids": [
+                    evidence_id
+                    for evidence_id in reviewed
+                    if evidence_id in evidence_by_id
+                ],
+                "visual_fact_ids": [
+                    fact.fact_id for fact in state.facts
+                ],
+                "search_hypothesis_ids": [
+                    hypothesis.hypothesis_id
+                    for hypothesis in state.search_hypotheses
+                ],
+                "field_namespace": {
+                    "claim_id": "image_claim_ids",
+                    "affected_claim_ids": "image_claim_ids",
+                    "selected_evidence_ids": "reviewed_evidence_ids",
+                    "evidence_ids": "reviewed_evidence_ids",
+                    "retire_hypothesis_ids": "search_hypothesis_ids",
+                    "visual_anchor_fact_ids": "visual_fact_ids",
+                },
+            },
             "image_account_summary": state.image_account_summary,
             "image_claims": [
                 item.model_dump(mode="json") for item in state.image_claims

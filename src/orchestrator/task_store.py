@@ -2402,8 +2402,14 @@ def apply_discrepancy_decision(
     reviewed_evidence_ids: Sequence[str],
     trigger: str,
     source_access_policy: Any = None,
+    allow_empty_continue: bool = False,
 ) -> Dict[str, Any]:
-    """Validate a discrepancy checkpoint on a copy, then commit it atomically."""
+    """Validate a discrepancy checkpoint on a copy, then commit it atomically.
+
+    ``allow_empty_continue`` is reserved for the deterministic correction-
+    exhaustion boundary. It records a no-op checkpoint without allowing the
+    model to bypass the normal qualified-Evidence consumption contract.
+    """
 
     blocked_queries = [
         (query, reason)
@@ -2495,6 +2501,7 @@ def apply_discrepancy_decision(
         and output.visual_reinspection is None
         and not effective_visual_disposition
         and output.verdict_proposal == "continue"
+        and not allow_empty_continue
     ):
         return {
             "accepted": False,
