@@ -64,15 +64,17 @@ def _build_public_release(tmp_path: Path, *, case_count: int = 1) -> Path:
 
 
 def _args(
-    benchmark: Path,
+    benchmark: Path | None,
     run_dir: Path,
     *,
+    archive_root: Path | None = None,
     metadata: Path | None = None,
     case_list: Path | None = None,
     case_id: list[str] | None = None,
 ) -> argparse.Namespace:
     return argparse.Namespace(
-        benchmark=str(benchmark),
+        benchmark=str(benchmark) if benchmark else None,
+        archive_root=str(archive_root) if archive_root else None,
         metadata=str(metadata) if metadata else None,
         profile=None,
         provider="gemini",
@@ -280,6 +282,96 @@ def test_run_cases_supports_case_list_selection(
         if line.strip()
     ]
     assert [row["case_id"] for row in rows] == ["case_02", "case_00"]
+
+
+def test_run_cases_reads_archive_without_exposing_candidate_metadata(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    archive_root = tmp_path / "archive"
+    image = archive_root / "artifacts" / "images" / "0001.jpg"
+    image.parent.mkdir(parents=True)
+    image.write_bytes(b"archive-image")
+    (archive_root / "archive-summary.json").write_text(
+        json.dumps({"archive_id": "archive-fixture"}),
+        encoding="utf-8",
+    )
+    (archive_root / "human-review-candidates.jsonl").write_text(
+        json.dumps(
+            {
+                "candidate_id": "candidate:0001",
+                "archive_image_path": "artifacts/images/0001.jpg",
+                "factual_status": "refuted",
+                "claim_atom": {"private": True},
+                "evidence": {"private": True},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    run_dir = tmp_path / "run"
+    seen: list[dict[str, Any]] = []
+
+    class ImageOnlyWorkflow:
+        def __init__(self, config: Any) -> None:
+            self.config = config
+
+        async def run_batch(self, **kwargs: Any) -> list[dict[str, Any]]:
+            case = kwargs["runtime_cases"][0]
+            seen.append(case.model_dump())
+            trace_dir = Path(self.config.output_dir)
+            trace_dir.mkdir(parents=True, exist_ok=True)
+            (trace_dir / "candidate_0001.json").write_text(
+                json.dumps(
+                    {
+                        "image_id": "candidate:0001",
+                        "input_mode": "image_only",
+                        "verdict": "real",
+                        "termination": "success",
+                        "state": {},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            return [
+                {
+                    "image_id": "candidate:0001",
+                    "image_path": str(image.resolve()),
+                    "verdict": "real",
+                    "confidence": 0.5,
+                    "termination": "success",
+                    "time_taken": 0.1,
+                    "state": {},
+                }
+            ]
+
+    monkeypatch.setattr(run_cases, "VerificationWorkflow", ImageOnlyWorkflow)
+    monkeypatch.setattr(run_cases, "_git_commit", lambda: "c" * 40)
+
+    summary = asyncio.run(
+        run_cases._run_cases(
+            _args(
+                None,
+                run_dir,
+                archive_root=archive_root,
+            )
+        )
+    )
+
+    assert summary["num_cases"] == 1
+    assert seen == [
+        {
+            "case_id": "candidate:0001",
+            "image_path": str(image.resolve()),
+            "image_sha256": _sha256(image),
+        }
+    ]
+    manifest = json.loads(
+        (run_dir / "run_manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest["benchmark"]["archive_input"] is True
+    assert manifest["benchmark"]["archive_id"] == "archive-fixture"
+    assert manifest["execution"]["mode"] == "archive_case_run"
 
 
 def test_run_cases_rejects_duplicate_metadata(tmp_path: Path) -> None:

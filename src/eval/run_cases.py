@@ -17,6 +17,7 @@ from src.eval.case_selection import (
     metadata_index,
     select_samples,
 )
+from src.eval.archive_adapter import load_archive_runtime_input
 from src.eval.public_release import load_public_release, resolve_image_path
 from src.eval.release_adapter import image_only_case_from_runtime_row
 from src.eval.result_records import (
@@ -55,10 +56,17 @@ def _parse_args() -> argparse.Namespace:
             "training trajectories."
         )
     )
-    parser.add_argument(
+    input_group = parser.add_mutually_exclusive_group(required=True)
+    input_group.add_argument(
         "--benchmark",
-        required=True,
         help="Path to runtime_input/cases.jsonl.",
+    )
+    input_group.add_argument(
+        "--archive-root",
+        help=(
+            "Read-only historical archive root containing "
+            "human-review-candidates.jsonl and artifacts/images/."
+        ),
     )
     parser.add_argument(
         "--metadata",
@@ -176,7 +184,7 @@ def _git_commit() -> str:
     return actual or configured
 
 
-def _selected_cases(args: argparse.Namespace, benchmark_path: Path) -> list[Dict[str, Any]]:
+def _selection_requests(args: argparse.Namespace) -> list[str]:
     case_list_path = (
         Path(args.case_list).expanduser().resolve()
         if getattr(args, "case_list", None)
@@ -184,13 +192,25 @@ def _selected_cases(args: argparse.Namespace, benchmark_path: Path) -> list[Dict
     )
     if getattr(args, "case_id", None) and case_list_path is not None:
         raise ValueError("--case-id and --case-list are mutually exclusive")
+    return getattr(args, "case_id", None) or case_list(case_list_path)
+
+
+def _selected_cases(args: argparse.Namespace, benchmark_path: Path) -> list[Dict[str, Any]]:
     return select_samples(
         load_benchmark(benchmark_path),
-        requested_case_ids=getattr(args, "case_id", None) or case_list(case_list_path),
+        requested_case_ids=_selection_requests(args),
         limit=getattr(args, "limit", None),
         shard_count=int(getattr(args, "shard_count", 1)),
         shard_index=int(getattr(args, "shard_index", 0)),
     )
+
+
+def _safe_trace_filename(identifier: str) -> str:
+    safe_id = "".join(
+        character if character.isalnum() or character in "-_." else "_"
+        for character in str(identifier)
+    )
+    return f"{safe_id}.json"
 
 
 def _workflow_config(args: argparse.Namespace) -> WorkflowConfig:
@@ -214,17 +234,36 @@ def _workflow_config(args: argparse.Namespace) -> WorkflowConfig:
 
 
 async def _run_cases(args: argparse.Namespace) -> Dict[str, Any]:
-    benchmark_path = Path(args.benchmark).expanduser().resolve()
+    archive_input = (
+        load_archive_runtime_input(Path(args.archive_root))
+        if getattr(args, "archive_root", None)
+        else None
+    )
+    benchmark_path = (
+        archive_input.candidate_path
+        if archive_input is not None
+        else Path(args.benchmark).expanduser().resolve()
+    )
     metadata_path = (
         Path(args.metadata).expanduser().resolve()
         if getattr(args, "metadata", None)
         else None
     )
-    release = load_public_release(benchmark_path)
-    samples = [
-        resolve_image_path(sample, release=release, benchmark_path=benchmark_path)
-        for sample in _selected_cases(args, benchmark_path)
-    ]
+    release = None
+    if archive_input is not None:
+        samples = select_samples(
+            archive_input.rows,
+            requested_case_ids=_selection_requests(args),
+            limit=getattr(args, "limit", None),
+            shard_count=int(getattr(args, "shard_count", 1)),
+            shard_index=int(getattr(args, "shard_index", 0)),
+        )
+    else:
+        release = load_public_release(benchmark_path)
+        samples = [
+            resolve_image_path(sample, release=release, benchmark_path=benchmark_path)
+            for sample in _selected_cases(args, benchmark_path)
+        ]
     metadata_by_case = metadata_index(metadata_path)
     runtime_cases = [image_only_case_from_runtime_row(sample) for sample in samples]
     for runtime_case in runtime_cases:
@@ -241,7 +280,7 @@ async def _run_cases(args: argparse.Namespace) -> Dict[str, Any]:
         SourceAccessPolicy.load(args.source_access_policy)
         if getattr(args, "source_access_policy", None)
         else SourceAccessPolicy.load(release.source_access_policy_path)
-        if release.source_access_policy_path is not None
+        if release is not None and release.source_access_policy_path is not None
         else None
     )
     config.source_access_policy = explicit_policy
@@ -283,13 +322,29 @@ async def _run_cases(args: argparse.Namespace) -> Dict[str, Any]:
             "limit": getattr(args, "limit", None),
             "shard_count": int(getattr(args, "shard_count", 1)),
             "shard_index": int(getattr(args, "shard_index", 0)),
-            "release_id": release.release_id,
-            "release_stage": release.release_stage,
-            "schema_version": release.schema_version,
-            "runtime_contract_version": release.runtime_contract_version,
-            "input_mode": release.input_mode,
-            "decision_policy_version": release.decision_policy_version,
-            "release_manifest": _file_descriptor(release.manifest_path),
+            "runtime_release": release is not None,
+            "archive_input": archive_input is not None,
+            "archive_adapter_schema_version": (
+                archive_input.schema_version if archive_input is not None else None
+            ),
+            "archive_id": archive_input.archive_id if archive_input is not None else None,
+            "release_id": release.release_id if release is not None else None,
+            "release_stage": release.release_stage if release is not None else None,
+            "schema_version": release.schema_version if release is not None else None,
+            "runtime_contract_version": (
+                release.runtime_contract_version if release is not None else None
+            ),
+            "input_mode": "image_only",
+            "decision_policy_version": (
+                release.decision_policy_version
+                if release is not None
+                else "archive-candidate-projection"
+            ),
+            "release_manifest": (
+                _file_descriptor(release.manifest_path)
+                if release is not None
+                else None
+            ),
         },
         "metadata": _file_descriptor(metadata_path),
         "agent": {
@@ -310,7 +365,7 @@ async def _run_cases(args: argparse.Namespace) -> Dict[str, Any]:
             "base_sampling_seed": base_sampling_seed,
         },
         "execution": {
-            "mode": "case_run",
+            "mode": "archive_case_run" if archive_input is not None else "case_run",
             "host": socket.gethostname(),
             "platform": platform.platform(),
             "python": sys.version.split()[0],
@@ -344,7 +399,7 @@ async def _run_cases(args: argparse.Namespace) -> Dict[str, Any]:
         for spec, result in zip(rollout_specs, results):
             case_id = str(spec["case_id"])
             episode_id = str(spec["episode_id"])
-            trace_path = trace_dir / f"{episode_id}.json"
+            trace_path = trace_dir / _safe_trace_filename(episode_id)
             relative_trace = (
                 trace_path.relative_to(run_dir).as_posix()
                 if trace_path.exists()

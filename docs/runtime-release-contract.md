@@ -216,3 +216,26 @@ only after rollout.
 
 The consumer fails closed on any schema, input mode, runtime contract, or decision
 policy other than the values above. There is no v0.2 or claim-mode fallback.
+
+## Read-only archive collection
+
+For teacher trajectory collection from the benchmark-pipeline historical archive,
+the lightweight `src.eval.run_cases` runner also accepts:
+
+```bash
+python -m src.eval.run_cases \
+  --archive-root /path/to/archive \
+  --profile teacher-gemini \
+  --output-dir /path/to/run
+```
+
+The archive adapter reads only `human-review-candidates.jsonl` and resolves each
+row's `archive_image_path`. It projects the candidate into the three runtime
+fields `case_id`, `image_path`, and `image_sha256`; labels, claims, evidence,
+source metadata, and construction metadata are not passed to the Agent. The
+archive is never rewritten.
+
+This mode is a rollout-collection path, not a v0.3 release and not a scoring
+release. It writes traces and minimal run diagnostics under the independent run
+directory. Classification accuracy, process scoring, and SFT eligibility must be
+performed later with an explicit evaluator-side gold/review package.
