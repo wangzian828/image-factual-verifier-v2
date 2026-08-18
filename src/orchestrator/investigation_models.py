@@ -863,6 +863,34 @@ class DiscrepancyDecisionProposalOutput(DiscrepancyDecisionOutput):
     material_discrepancy: Optional[MaterialDiscrepancyDraft] = None
     visual_reinspection: Optional[VisualReinspectionProposal] = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_visual_reinspection_transition(
+        cls,
+        data: Any,
+    ) -> Any:
+        """Let a visual reinspection request win over bundled non-visual edits.
+
+        The decision prompt asks the policy to make a visual reinspection request
+        the sole transition.  In practice, smaller/local policies may also echo
+        an ``insufficient`` claim assessment, retire a route, or preserve other
+        bookkeeping fields in the same JSON object.  Treat those extras as
+        non-authoritative scaffolding instead of turning a recoverable policy
+        output into an engineering failure.  The runtime still applies exactly
+        one transition: the bound visual reinspection request.
+        """
+
+        if not isinstance(data, dict) or data.get("visual_reinspection") is None:
+            return data
+        normalized = dict(data)
+        normalized["claim_assessments"] = []
+        normalized["material_discrepancy"] = None
+        normalized["retire_hypothesis_ids"] = []
+        normalized["new_hypotheses"] = []
+        normalized["visual_evidence_disposition"] = None
+        normalized["verdict_proposal"] = "continue"
+        return normalized
+
     @model_validator(mode="after")
     def validate_sparse_visual_transition(
         self,

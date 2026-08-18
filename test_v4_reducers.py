@@ -2484,7 +2484,7 @@ def test_runtime_binding_rewrites_misdirected_integrity_visual_question() -> Non
     assert "unsupported integrity" in error
 
 
-def test_mixed_visual_decision_is_rejected_instead_of_silently_projected() -> None:
+def test_mixed_visual_decision_is_normalized_to_visual_reinspection() -> None:
     payload = {
         "claim_assessments": [
             {
@@ -2521,8 +2521,15 @@ def test_mixed_visual_decision_is_rejected_instead_of_silently_projected() -> No
         "rationale": "The visual check must be isolated first.",
     }
 
-    with pytest.raises(ValueError, match="visual reinspection proposal"):
-        DiscrepancyDecisionProposalOutput.model_validate(payload)
+    parsed = DiscrepancyDecisionProposalOutput.model_validate(payload)
+
+    assert parsed.visual_reinspection is not None
+    assert parsed.claim_assessments == []
+    assert parsed.material_discrepancy is None
+    assert parsed.new_hypotheses == []
+    assert parsed.retire_hypothesis_ids == []
+    assert parsed.visual_evidence_disposition is None
+    assert parsed.verdict_proposal == "continue"
 
 
 def test_runtime_binding_requires_model_selected_visual_discriminators() -> None:

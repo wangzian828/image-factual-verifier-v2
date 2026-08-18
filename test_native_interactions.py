@@ -468,13 +468,21 @@ def test_native_structured_output_steps_record_request_parent_and_response_id() 
     assert backend.requests[1]["previous_interaction_id"] == steps[1].metadata["previous_interaction_id"]
 
 
-def test_native_structured_output_correction_receives_exact_validator_error() -> None:
+def test_native_structured_output_normalizes_visual_reinspection_only_transition() -> None:
     def decision_response(
         interaction_id: str,
         retire_hypothesis_ids: List[str],
     ) -> Dict[str, Any]:
         output = {
-            "claim_assessments": [],
+            "claim_assessments": [
+                {
+                    "claim_id": "claim-1",
+                    "assessment": "insufficient",
+                    "selected_evidence_ids": [],
+                    "remaining_gap": "Focused pixels need review first.",
+                    "rationale": "Do not close the claim before reinspection.",
+                }
+            ],
             "material_discrepancy": None,
             "retire_hypothesis_ids": retire_hypothesis_ids,
             "new_hypotheses": [],
@@ -485,7 +493,11 @@ def test_native_structured_output_correction_receives_exact_validator_error() ->
                 "question": "Does the image show the source-grounded relation?",
                 "expected_property": "the source-grounded relation",
             },
-            "visual_evidence_disposition": None,
+            "visual_evidence_disposition": {
+                "disposition": "irrelevant_to_current_claim_or_discrepancy",
+                "evidence_ids": ["evidence-1"],
+                "rationale": "Bookkeeping copied by the policy beside reinspection.",
+            },
             "verdict_proposal": "continue",
             "rationale": "Inspect the pixels before changing other state.",
         }
@@ -507,8 +519,7 @@ def test_native_structured_output_correction_receives_exact_validator_error() ->
 
     backend = NativeFakeBackend(
         [
-            decision_response("decision-invalid", ["hypothesis-1"]),
-            decision_response("decision-corrected", []),
+            decision_response("decision-normalized", ["hypothesis-1"]),
         ]
     )
     runner = StageRunner(
@@ -525,17 +536,12 @@ def test_native_structured_output_correction_receives_exact_validator_error() ->
 
     assert parsed is not None
     assert parsed.visual_reinspection is not None
-    assert steps[0].action_type == "output_rejected"
-    assert (
-        "visual reinspection proposal must be the only state transition"
-        in steps[0].metadata["rejection_reason"]
-    )
-    correction = backend.requests[1]["input_payload"]
-    assert (
-        "visual reinspection proposal must be the only state transition"
-        in correction
-    )
-    assert "claim_assessments=[]" in correction
+    assert parsed.claim_assessments == []
+    assert parsed.retire_hypothesis_ids == []
+    assert parsed.visual_evidence_disposition is None
+    assert parsed.verdict_proposal == "continue"
+    assert steps[0].action_type == "output"
+    assert len(backend.requests) == 1
 
 
 def test_native_structured_output_returns_opt_in_exhaustion_boundary(
