@@ -6570,6 +6570,46 @@ def apply_route_local_replan(
     return record
 
 
+def bind_route_local_replan_runtime_ids(
+    state: ImageOnlyInvestigationState,
+    output: RouteLocalReplanOutput,
+    *,
+    task_id: str,
+) -> tuple[RouteLocalReplanOutput | None, str]:
+    """Bind a route-local proposal to the task that opened this stage.
+
+    Route-local replan is an optional runtime-bound stage. The model may echo a
+    stale task ID from the archived workspace, and it may answer ``continue``
+    after the route was already retired while the stage was being corrected.
+    Neither should turn an otherwise recoverable boundary into an engineering
+    failure. The runtime owns the active task identity; a retired route is
+    closed deterministically instead of being reopened without an action.
+    """
+
+    task = _task_by_id(state, task_id)
+    if task is None:
+        return None, f"route-local replan supplied task {task_id!r} is unknown"
+
+    normalized = output.model_copy(update={"task_id": task_id})
+    if normalized.strategy == "continue" and task.status in {
+        "blocked",
+        "exhausted",
+        "superseded",
+    }:
+        normalized = normalized.model_copy(
+            update={
+                "strategy": "stop_route",
+                "replacement_query": "",
+                "visual_focus": "",
+                "rationale": (
+                    normalized.rationale
+                    + " Runtime closed the already retired route."
+                )[:1200],
+            }
+        )
+    return normalized, ""
+
+
 def _reactivate_route_hypothesis(
     state: ImageOnlyInvestigationState,
     task: ResearchTask,

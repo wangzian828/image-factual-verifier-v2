@@ -46,6 +46,7 @@ from src.orchestrator.task_store import (
     apply_discrepancy_decision,
     apply_image_account_planning,
     archive_recall_available,
+    bind_route_local_replan_runtime_ids,
     bind_discrepancy_decision_runtime_ids,
     discrepancy_decision_checkpoint_reason,
     discrepancy_visual_reinspection_binding,
@@ -2699,6 +2700,48 @@ def test_runtime_binding_drops_visual_request_without_runtime_candidate() -> Non
     assert bound is not None
     assert bound.visual_reinspection is None
     assert bound.verdict_proposal == "continue"
+
+
+def test_route_local_replan_binds_runtime_task_and_closes_retired_continue() -> None:
+    state = _planned_state()
+    task = state.tasks[0]
+    task.status = "exhausted"
+
+    bound, error = bind_route_local_replan_runtime_ids(
+        state,
+        RouteLocalReplanOutput(
+            task_id="stale-task-from-context",
+            strategy="continue",
+            rationale="The model echoed a stale route and continued it.",
+        ),
+        task_id=task.task_id,
+    )
+
+    assert error == ""
+    assert bound is not None
+    assert bound.task_id == task.task_id
+    assert bound.strategy == "stop_route"
+
+
+def test_route_local_replan_binds_active_runtime_task_without_rewriting_strategy() -> None:
+    state = _planned_state()
+    task = state.tasks[0]
+
+    bound, error = bind_route_local_replan_runtime_ids(
+        state,
+        RouteLocalReplanOutput(
+            task_id="stale-task-from-context",
+            strategy="replace_query",
+            replacement_query="presenter source photograph product",
+            rationale="Use the route's concrete source-search direction.",
+        ),
+        task_id=task.task_id,
+    )
+
+    assert error == ""
+    assert bound is not None
+    assert bound.task_id == task.task_id
+    assert bound.strategy == "replace_query"
 
 
 def test_runtime_binding_rewrites_long_source_text_to_visible_property() -> None:

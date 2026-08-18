@@ -119,6 +119,7 @@ from src.orchestrator.task_store import (
     apply_reflection,
     apply_target_planning,
     archive_recall_available,
+    bind_route_local_replan_runtime_ids,
     bind_discrepancy_decision_runtime_ids,
     claim_owned_visual_evidence_requirements,
     discrepancy_decision_checkpoint_reason,
@@ -2406,9 +2407,31 @@ class Orchestrator:
                 )
         self._record_stage_steps(state, steps)
         if parsed is None:
-            raise RuntimeError(
-                "image-only route-local replan did not produce valid structured output"
+            fallback = RouteLocalReplanOutput(
+                task_id=task_id,
+                strategy="stop_route",
+                rationale=(
+                    "Route-local replan did not produce an admissible structured "
+                    "output; close only this route and preserve the remaining "
+                    "investigation routes."
+                ),
             )
+            record = apply_route_local_replan(
+                investigation,
+                fallback,
+                trigger=trigger,
+                source_access_policy=self.source_access_policy,
+            )
+            self._sync_image_only_state(state, investigation)
+            return record.accepted_strategy != "rejected"
+        parsed, binding_error = bind_route_local_replan_runtime_ids(
+            investigation,
+            parsed,
+            task_id=task_id,
+        )
+        if parsed is None:
+            self._sync_image_only_state(state, investigation)
+            return False
         record = apply_route_local_replan(
             investigation,
             parsed,
@@ -2744,8 +2767,13 @@ class Orchestrator:
         trigger: str,
         source_access_policy: Optional[SourceAccessPolicy] = None,
     ) -> tuple[bool, str]:
-        if parsed.task_id != task_id:
-            return False, "route-local replan must update the supplied task_id"
+        parsed, binding_error = bind_route_local_replan_runtime_ids(
+            investigation,
+            parsed,
+            task_id=task_id,
+        )
+        if parsed is None:
+            return False, binding_error
         candidate = investigation.model_copy(deep=True)
         record = apply_route_local_replan(
             candidate,
