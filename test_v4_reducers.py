@@ -2646,6 +2646,61 @@ def test_visual_reinspection_binding_ignores_neutral_indirect_source_titles() ->
     }
 
 
+def test_runtime_binding_rebinds_stale_visual_claim_when_candidate_is_unique() -> None:
+    state = _planned_state()
+    evidence = _append_evidence(state)
+
+    bound, error = bind_discrepancy_decision_runtime_ids(
+        state,
+        DiscrepancyDecisionProposalOutput(
+            visual_reinspection=VisualReinspectionProposal(
+                claim_id="claim-from-an-older-checkpoint",
+                reason="relation",
+                scope="relation",
+                question="Does the source-grounded relation appear in the image?",
+                expected_property="presenter holding a microphone",
+                candidate_discriminators=_microphone_discriminators(),
+            ),
+            rationale="The model echoed a stale claim ID.",
+        ),
+        reviewed_evidence_ids=[evidence.evidence_id],
+    )
+
+    assert error == ""
+    assert bound is not None
+    assert bound.visual_reinspection is not None
+    assert bound.visual_reinspection.anchor_fact_ids == (
+        state.image_claims[0].anchor_fact_ids
+    )
+    assert bound.visual_reinspection.grounding_evidence_ids == [
+        evidence.evidence_id
+    ]
+
+
+def test_runtime_binding_drops_visual_request_without_runtime_candidate() -> None:
+    state = _planned_state()
+
+    bound, error = bind_discrepancy_decision_runtime_ids(
+        state,
+        DiscrepancyDecisionProposalOutput(
+            visual_reinspection=VisualReinspectionProposal(
+                claim_id=state.image_claims[0].claim_id,
+                reason="text",
+                scope="scene",
+                question="Does the foreground platform have a wooden finish?",
+                expected_property="visible wooden platform texture",
+            ),
+            rationale="There is no reviewed Evidence to ground this check yet.",
+        ),
+        reviewed_evidence_ids=[],
+    )
+
+    assert error == ""
+    assert bound is not None
+    assert bound.visual_reinspection is None
+    assert bound.verdict_proposal == "continue"
+
+
 def test_runtime_binding_rewrites_long_source_text_to_visible_property() -> None:
     state = _planned_state()
     evidence = _append_evidence(state)

@@ -614,20 +614,27 @@ def bind_discrepancy_decision_runtime_ids(
         None,
     )
     if not isinstance(binding, Mapping):
-        eligible_claim_ids = [
-            str(candidate.get("claim_id"))
+        valid_candidates = [
+            candidate
             for candidate in candidates
             if isinstance(candidate, Mapping) and candidate.get("claim_id")
         ]
-        return None, (
-            f"visual_reinspection claim_id {proposal.claim_id!r} is not an eligible "
-            "runtime visual reinspection candidate"
-            + (
-                "; choose one of " + ", ".join(eligible_claim_ids)
-                if eligible_claim_ids
-                else ""
-            )
-        )
+        if len(valid_candidates) == 1:
+            # Smaller policies may echo a stale Claim ID from an earlier
+            # checkpoint even though the current reviewed Evidence leaves one
+            # unambiguous runtime candidate.  The candidate is derived from
+            # current task/evidence ownership, so rebinding here is safe and
+            # avoids spending the whole correction budget on an ID mismatch.
+            binding = valid_candidates[0]
+        else:
+            # With no candidate (for example at a strategy boundary before any
+            # Evidence is reviewed), or with multiple candidates, silently
+            # guessing would attach the pixel check to the wrong Claim.  Drop
+            # only this optional visual request and preserve the non-terminal
+            # Decision; the next route/checkpoint can propose it again with
+            # current runtime candidates.
+            payload["visual_reinspection"] = None
+            return DiscrepancyDecisionOutput.model_validate(payload), ""
     evidence_by_id = {item.evidence_id: item for item in state.evidence}
     claim_by_id = {claim.claim_id: claim for claim in state.image_claims}
     claim = claim_by_id.get(str(binding["claim_id"]))
