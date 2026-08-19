@@ -480,6 +480,16 @@ class StageRunner:
             )
 
             content = (response.text or "").strip()
+            history_content = content
+            if (
+                int(llm_metadata.get("response_content_chars", 0) or 0) == 0
+                and int(llm_metadata.get("response_reasoning_chars", 0) or 0) > 0
+            ):
+                # A reasoning-only Qwen response is an internal diagnostic
+                # candidate, not assistant-visible conversation history.
+                # Keep it archived in the runtime ledger, but do not replay
+                # truncated hidden reasoning into a direct-schema correction.
+                history_content = ""
             if not content:
                 step.action_type = "format_error"
                 step.thought = "(empty response)"
@@ -759,7 +769,7 @@ class StageRunner:
                 )
                 step.metadata["rejection_reason"] = rejection_reason
                 self._attach_invalid_response_preview(step, content)
-                history.append({"role": "assistant", "content": content})
+                history.append({"role": "assistant", "content": history_content})
                 history.append(
                     {
                         "role": "user",
@@ -781,7 +791,7 @@ class StageRunner:
             step.action_type = "format_error"
             self._attach_invalid_response_preview(step, content)
             steps.append(step)
-            history.append({"role": "assistant", "content": content})
+            history.append({"role": "assistant", "content": history_content})
             history.append(
                 {
                     "role": "user",

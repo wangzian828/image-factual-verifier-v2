@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 import httpx
+import pytest
 from pydantic import BaseModel, Field
 
 from src.orchestrator.llm_backend import APIBackend, LLMResponse
@@ -968,6 +969,85 @@ def test_qwen_reasoning_is_archived_but_not_reintroduced(
     )
 
 
+def test_qwen_reasoning_only_candidate_switches_to_direct_schema_correction(
+    tmp_path: Path,
+) -> None:
+    first_raw = {
+        "choices": [
+            {
+                "finish_reason": "length",
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "reasoning_content": "The reasoning budget ended before JSON.",
+                },
+            }
+        ],
+        "usage": {"prompt_tokens": 11, "completion_tokens": 32},
+    }
+    second_output = {"answer": "direct correction"}
+    second_raw = {
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "message": {
+                    "role": "assistant",
+                    "content": json.dumps(second_output),
+                },
+            }
+        ],
+        "usage": {"prompt_tokens": 13, "completion_tokens": 7},
+    }
+    backend = QwenFakeBackend(
+        [
+            LLMResponse(
+                text=first_raw["choices"][0]["message"]["reasoning_content"],
+                prompt_tokens=11,
+                completion_tokens=32,
+                raw=first_raw,
+            ),
+            LLMResponse(
+                text=json.dumps(second_output),
+                prompt_tokens=13,
+                completion_tokens=7,
+                raw=second_raw,
+            ),
+        ]
+    )
+    runner = StageRunner(
+        llm=backend,
+        system_prompt="Return the structured result.",
+        tools=[],
+        output_schema=AnswerOutput,
+        max_rounds=2,
+        stage_name="image_only_discrepancy_decision",
+        runtime_store=CaseRuntimeStore(
+            tmp_path,
+            case_id="reasoning-correction-case",
+            attempt_id="attempt",
+        ),
+        generation_config={
+            "enable_thinking": True,
+            "thinking_token_budget": 1024,
+        },
+    )
+
+    parsed, steps = asyncio.run(runner.run("Return one JSON object."))
+
+    assert parsed == AnswerOutput(answer="direct correction")
+    assert len(backend.requests) == 2
+    assert backend.requests[0]["generation_config"]["enable_thinking"] is True
+    assert backend.requests[1]["generation_config"] == {
+        "enable_thinking": False
+    }
+    assert steps[0].action_type == "format_error"
+    assert all(
+        "The reasoning budget ended before JSON."
+        not in json.dumps(request["messages"], ensure_ascii=False)
+        for request in backend.requests
+    )
+
+
 def test_qwen_native_tool_call_wins_over_reasoning_and_blank_content() -> None:
     choice = {
         "message": {
@@ -1018,6 +1098,109 @@ def test_qwen_reasoning_fallback_is_limited_to_schema_bound_requests() -> None:
     ) == '{"answer":"carriage"}'
 
 
+def test_qwen_strict_transformers_accepts_reasoning_only_structured_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: Dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content.decode("utf-8")))
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "finish_reason": "length",
+                        "message": {
+                            "role": "assistant",
+                            "content": "",
+                            "reasoning_content": (
+                                '{"answer":"candidate from reasoning"}'
+                            ),
+                        },
+                    }
+                ],
+                "usage": {"prompt_tokens": 7, "completion_tokens": 11},
+            },
+        )
+
+    monkeypatch.setenv("QWEN_LOCAL_STRICT_CHAT_COMPLETIONS", "1")
+
+    async def run() -> LLMResponse:
+        backend = APIBackend(
+            provider="qwen_local",
+            model_name="Qwen3.5-9B",
+            max_retries=0,
+        )
+        backend._shared_client = httpx.AsyncClient(
+            transport=httpx.MockTransport(handler),
+        )
+        try:
+            return await backend.get_response(
+                [{"role": "user", "content": "Return one JSON object."}],
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {"name": "answer"},
+                },
+                generation_config={
+                    "enable_thinking": True,
+                    "thinking_token_budget": 1024,
+                },
+            )
+        finally:
+            await backend.aclose()
+
+    response = asyncio.run(run())
+
+    assert response.text == '{"answer":"candidate from reasoning"}'
+    assert "response_format" not in captured
+    assert captured["chat_template_kwargs"] == {"enable_thinking": True}
+
+
+def test_qwen_empty_response_error_includes_wire_diagnostics() -> None:
+    async def run() -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "finish_reason": "length",
+                            "message": {
+                                "role": "assistant",
+                                "content": "",
+                            },
+                        }
+                    ]
+                },
+            )
+
+        backend = APIBackend(
+            provider="qwen_local",
+            model_name="Qwen3.5-9B",
+            max_retries=0,
+        )
+        backend._shared_client = httpx.AsyncClient(
+            transport=httpx.MockTransport(handler),
+        )
+        try:
+            with pytest.raises(
+                RuntimeError,
+                match=(
+                    r"choices=1.*finish_reason=length.*content_chars=0"
+                    r".*reasoning_chars=0"
+                ),
+            ):
+                await backend.get_response(
+                    [{"role": "user", "content": "Return text."}],
+                    generation_config={"enable_thinking": False},
+                )
+        finally:
+            await backend.aclose()
+
+    asyncio.run(run())
+
+
 def test_qwen_http_error_preserves_bounded_provider_detail() -> None:
     async def run() -> None:
         def handler(request: httpx.Request) -> httpx.Response:
@@ -1043,7 +1226,5 @@ def test_qwen_http_error_preserves_bounded_provider_detail() -> None:
                 )
         finally:
             await backend.aclose()
-
-    import pytest
 
     asyncio.run(run())

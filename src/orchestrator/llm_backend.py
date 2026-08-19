@@ -211,6 +211,18 @@ class APIBackend(LLMBackend):
         if response_format and not strict_qwen_chat:
             body["response_format"] = response_format
         generation_config = kwargs.get("generation_config")
+        # The official Transformers server may reject/ignore response_format
+        # while still returning a reasoning-only assistant message for a
+        # schema-bound request.  StageRunner can validate that candidate and
+        # switch to its bounded direct-schema correction path.  Do not enable
+        # this for ordinary free-form or tool-bearing turns: reasoning is not
+        # an executable action.
+        reasoning_fallback_requested = bool(response_format) or (
+            self.provider == "qwen_local"
+            and not tools
+            and isinstance(generation_config, dict)
+            and bool(generation_config.get("enable_thinking"))
+        )
 
         # For models with internal reasoning (gpt-5.5, o1), give enough space
         # for both reasoning and content output.
@@ -293,21 +305,27 @@ class APIBackend(LLMBackend):
                 choice = data["choices"][0]
                 text = self._extract_chat_completion_text(
                     choice,
-                    allow_reasoning_fallback=bool(response_format),
+                    allow_reasoning_fallback=reasoning_fallback_requested,
                 )
                 if not text.strip():
                     # Qwen/vLLM can occasionally return a successful HTTP
-                    # response containing only hidden reasoning or an empty
-                    # choice. Treat that as a bounded transient at the wire
-                    # boundary, just like an empty body; do not turn it into an
-                    # Agent engineering error before StageRunner can continue.
+                    # response containing an empty choice. Retry it as a
+                    # transient at the wire boundary, then fail with bounded
+                    # response diagnostics. A reasoning-only structured turn
+                    # has already been returned above so StageRunner can apply
+                    # its semantic/direct-schema correction path.
                     if attempt + 1 < attempts:
                         last_error = RuntimeError(
                             "Chat Completions returned an empty model response."
                         )
                         await asyncio.sleep(2 * (attempt + 1))
                         continue
-                    raise RuntimeError("Chat Completions returned an empty model response.")
+                    raise RuntimeError(
+                        self._empty_chat_response_detail(
+                            data,
+                            reasoning_fallback_requested=reasoning_fallback_requested,
+                        )
+                    )
 
                 usage = data.get("usage", {})
 
@@ -343,6 +361,32 @@ class APIBackend(LLMBackend):
                 raise
 
         raise last_error or RuntimeError("All retries exhausted")
+
+    @staticmethod
+    def _empty_chat_response_detail(
+        payload: Dict[str, Any],
+        *,
+        reasoning_fallback_requested: bool,
+    ) -> str:
+        """Describe a successful-but-unusable chat response without its body."""
+
+        choices = payload.get("choices")
+        choice_count = len(choices) if isinstance(choices, list) else 0
+        choice = choices[0] if choice_count and isinstance(choices[0], dict) else {}
+        message = choice.get("message") if isinstance(choice.get("message"), dict) else {}
+        content = message.get("content")
+        reasoning = message.get("reasoning_content")
+        if not isinstance(reasoning, str):
+            reasoning = message.get("reasoning")
+        content_chars = len(content) if isinstance(content, str) else 0
+        reasoning_chars = len(reasoning) if isinstance(reasoning, str) else 0
+        finish_reason = str(choice.get("finish_reason", "") or "")
+        return (
+            "Chat Completions returned an unusable response: "
+            f"choices={choice_count}, finish_reason={finish_reason or 'unknown'}, "
+            f"content_chars={content_chars}, reasoning_chars={reasoning_chars}, "
+            f"reasoning_fallback_requested={reasoning_fallback_requested}"
+        )
 
     @staticmethod
     def _http_status_error_detail(error: httpx.HTTPStatusError) -> str:
