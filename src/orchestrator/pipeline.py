@@ -2817,53 +2817,40 @@ class Orchestrator:
         source_access_policy: Optional[SourceAccessPolicy] = None,
     ) -> tuple[bool, str]:
         policy = source_access_policy or SourceAccessPolicy()
-        blocked_queries = [
-            query
-            for hypothesis in parsed.search_hypotheses
-            for query in hypothesis.queries
-            if query_policy_violation(
-                query,
-                source_access_policy=policy,
-            )
-        ]
-        blocked_route_text = [
-            value
-            for hypothesis in parsed.search_hypotheses
-            for value in (
+        executable_hypotheses = []
+        for hypothesis in parsed.search_hypotheses:
+            route_values = (
                 hypothesis.statement,
                 hypothesis.expected_information,
                 *hypothesis.queries,
             )
-            if text_targets_verdict_or_media_origin(value)
-        ]
-        blocked_route_focus = [
-            hypothesis.hypothesis_key
-            for hypothesis in parsed.search_hypotheses
-            if hypothesis.route_focus == "media_origin"
-        ]
-        if blocked_queries:
-            return False, (
-                "SearchHypothesis queries must seek underlying facts or sources, "
-                "not a ready-made fact-check verdict or an excluded source. "
-                "Rewrite the blocked queries without changing the ImageClaims."
+            route_is_blocked = (
+                hypothesis.route_focus == "media_origin"
+                or any(
+                    query_policy_violation(
+                        query,
+                        source_access_policy=policy,
+                    )
+                    for query in hypothesis.queries
+                )
+                or any(
+                    text_targets_verdict_or_media_origin(value)
+                    for value in route_values
+                )
             )
-        if blocked_route_focus:
+            if not route_is_blocked:
+                executable_hypotheses.append(hypothesis)
+        if not executable_hypotheses:
             return False, (
-                "SearchHypotheses must declare a factual route_focus. "
-                "media_origin routes about creator, publisher/platform, "
-                "generation method, or publication history are not allowed. "
-                "Rewrite the route to test a depicted entity/event, relation "
-                "value, scene/world constraint, visual consistency, or "
-                "same-capture reference tied to the ImageClaim."
+                "Image Account Planning produced no executable neutral "
+                "investigation route for its target fact."
             )
-        if blocked_route_text:
-            return False, (
-                "SearchHypotheses must stay neutral: recover entity identity, "
-                "event context, relation values, scene/world constraints, or "
-                "same-capture visual references instead of presupposing a "
-                "verdict or media-origin classification. Rewrite the blocked "
-                "route text without changing the ImageClaims."
-            )
+        # A bad optional route is not a reason to discard an otherwise valid
+        # image account.  Remove it before state reduction so it cannot become
+        # a later search action.  The original model output remains recorded in
+        # the rejected-policy trace snapshot; only executable routes enter state.
+        if len(executable_hypotheses) != len(parsed.search_hypotheses):
+            parsed.search_hypotheses = executable_hypotheses
         candidate = investigation.model_copy(deep=True)
         update = apply_image_account_planning(candidate, parsed)
         if not update.get("accepted", False):

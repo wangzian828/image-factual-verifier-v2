@@ -1555,7 +1555,38 @@ class StageRunner:
             self.system_prompt,
         )
         if not self.tools_list:
-            return prompt + "\n\nReturn one JSON object matching the response schema."
+            qwen_schema_hint = ""
+            if (
+                str(getattr(self.llm, "provider", "")).lower()
+                == "qwen_local"
+                and self.output_schema is not None
+            ):
+                # The official Transformers OpenAI server currently ignores
+                # response_format.  Keep the application validator strict, but
+                # place a compact structural copy in the prompt so local Qwen
+                # has the same schema contract as Gemini's guided output.
+                schema = self._lmdeploy_response_schema(
+                    self._normalized_output_schema()
+                )
+                qwen_schema_hint = (
+                    "\n\nQwen local structured-output compatibility:\n"
+                    "The server may ignore response_format. Return only one "
+                    "JSON object and follow this schema exactly. Use the "
+                    "literal enum values and JSON array types shown below; "
+                    "do not invent alternate labels, numeric salience scores, "
+                    "or scalar values where an array is shown.\n"
+                    + json.dumps(
+                        schema,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                    + "\n"
+                )
+            return (
+                prompt
+                + qwen_schema_hint
+                + "\n\nReturn one JSON object matching the response schema."
+            )
         return (
             prompt
             + "\n\nUse native function calls for tools. Return one JSON object "

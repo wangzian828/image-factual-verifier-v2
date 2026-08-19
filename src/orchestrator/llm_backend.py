@@ -240,7 +240,7 @@ class APIBackend(LLMBackend):
         if self.provider in {"qwen_local", "lmdeploy"} and isinstance(
             generation_config, dict
         ):
-            for key in (
+            qwen_generation_fields = (
                 "thinking_token_budget",
                 "temperature",
                 "top_p",
@@ -249,7 +249,25 @@ class APIBackend(LLMBackend):
                 "presence_penalty",
                 "repetition_penalty",
                 "seed",
+            )
+            # The official Transformers OpenAI-compatible server rejects
+            # vLLM-specific Qwen controls as unknown top-level fields. Keep
+            # the existing default for vLLM/LMDeploy, while allowing a
+            # deliberately explicit strict OpenAI mode for such servers.
+            if (
+                self.provider == "qwen_local"
+                and os.getenv("QWEN_LOCAL_STRICT_CHAT_COMPLETIONS", "")
+                .strip()
+                .lower()
+                in {"1", "true", "yes", "on"}
             ):
+                qwen_generation_fields = (
+                    "temperature",
+                    "top_p",
+                    "presence_penalty",
+                    "seed",
+                )
+            for key in qwen_generation_fields:
                 if key in generation_config:
                     body[key] = generation_config[key]
 
