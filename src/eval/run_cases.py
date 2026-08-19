@@ -18,7 +18,10 @@ from src.eval.case_selection import (
     select_samples,
 )
 from src.eval.archive_baseline import write_archive_baseline_metrics
-from src.eval.archive_adapter import load_archive_runtime_input
+from src.eval.archive_adapter import (
+    load_archive_runtime_input,
+    materialize_archive_runtime_rows,
+)
 from src.eval.public_release import load_public_release, resolve_image_path
 from src.eval.release_adapter import image_only_case_from_runtime_row
 from src.eval.result_records import (
@@ -236,7 +239,10 @@ def _workflow_config(args: argparse.Namespace) -> WorkflowConfig:
 
 async def _run_cases(args: argparse.Namespace) -> Dict[str, Any]:
     archive_input = (
-        load_archive_runtime_input(Path(args.archive_root))
+        load_archive_runtime_input(
+            Path(args.archive_root),
+            materialize_image_hashes=False,
+        )
         if getattr(args, "archive_root", None)
         else None
     )
@@ -259,6 +265,7 @@ async def _run_cases(args: argparse.Namespace) -> Dict[str, Any]:
             shard_count=int(getattr(args, "shard_count", 1)),
             shard_index=int(getattr(args, "shard_index", 0)),
         )
+        samples = materialize_archive_runtime_rows(samples)
     else:
         release = load_public_release(benchmark_path)
         samples = [

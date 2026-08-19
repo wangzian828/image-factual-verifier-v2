@@ -6,7 +6,10 @@ from pathlib import Path
 
 import pytest
 
-from src.eval.archive_adapter import load_archive_runtime_input
+from src.eval.archive_adapter import (
+    load_archive_runtime_input,
+    materialize_archive_runtime_rows,
+)
 
 
 def test_archive_adapter_projects_only_minimal_runtime_fields(
@@ -144,3 +147,54 @@ def test_archive_adapter_enforces_runtime_case_id_limit(
 
     with pytest.raises(ValueError, match="runtime case_id limit"):
         load_archive_runtime_input(root)
+
+
+def test_archive_adapter_defers_hashing_until_selected_rows_are_materialized(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "archive"
+    image = root / "artifacts" / "images" / "0001.jpg"
+    image.parent.mkdir(parents=True)
+    image.write_bytes(b"archive-image")
+    (root / "human-review-candidates.jsonl").write_text(
+        json.dumps(
+            {
+                "candidate_id": "candidate:0001",
+                "archive_image_path": "artifacts/images/0001.jpg",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    calls = 0
+    original_sha256 = hashlib.sha256
+
+    def counting_sha256(*args: object, **kwargs: object) -> "hashlib._Hash":
+        nonlocal calls
+        calls += 1
+        return original_sha256(*args, **kwargs)
+
+    monkeypatch.setattr("src.eval.archive_adapter.hashlib.sha256", counting_sha256)
+
+    source = load_archive_runtime_input(root, materialize_image_hashes=False)
+
+    assert source.rows == [
+        {
+            "case_id": "candidate:0001",
+            "image_path": str(image.resolve()),
+        }
+    ]
+    assert calls == 0
+
+    rows = materialize_archive_runtime_rows(source.rows)
+
+    assert rows == [
+        {
+            "case_id": "candidate:0001",
+            "image_path": str(image.resolve()),
+            "image_sha256": original_sha256(b"archive-image").hexdigest(),
+        }
+    ]
+    assert calls == 1

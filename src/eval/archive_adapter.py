@@ -62,7 +62,13 @@ def _runtime_case_id(
     return case_id
 
 
-def _resolve_image(root: Path, value: str, *, line_number: int) -> Path:
+def _resolve_image(
+    root: Path,
+    value: str,
+    *,
+    line_number: int,
+    require_file: bool = True,
+) -> Path:
     relative = Path(value)
     if relative.is_absolute():
         raise ValueError(
@@ -75,7 +81,7 @@ def _resolve_image(root: Path, value: str, *, line_number: int) -> Path:
         raise ValueError(
             f"{CANDIDATE_FILE_NAME} line {line_number} image path escapes archive"
         ) from exc
-    if not resolved.is_file():
+    if require_file and not resolved.is_file():
         raise FileNotFoundError(
             f"{CANDIDATE_FILE_NAME} line {line_number} image does not exist: "
             f"{resolved}"
@@ -119,12 +125,55 @@ def _iter_jsonl(path: Path) -> Iterable[tuple[int, Mapping[str, Any]]]:
             yield line_number, payload
 
 
-def load_archive_runtime_input(archive_root: Path) -> ArchiveRuntimeInput:
+def materialize_archive_runtime_rows(
+    rows: Iterable[Mapping[str, Any]],
+) -> List[Dict[str, str]]:
+    """Add per-image digests only after a selected archive subset is known.
+
+    Historical archives can contain thousands of images.  Callers that first
+    select a small case list should not repeatedly hash every image in the
+    archive before running one batch.  This function preserves the runtime
+    contract by checking each selected image and attaching its exact digest
+    immediately before it becomes an ``ImageOnlyRuntimeCase``.
+    """
+
+    materialized: List[Dict[str, str]] = []
+    for row in rows:
+        case_id = str(row.get("case_id") or "").strip()
+        image_value = str(row.get("image_path") or "").strip()
+        if not case_id or not image_value:
+            raise ValueError(
+                "archive runtime row requires non-empty case_id and image_path"
+            )
+        image_path = Path(image_value).expanduser().resolve()
+        if not image_path.is_file():
+            raise FileNotFoundError(
+                f"selected archive image does not exist: {image_path}"
+            )
+        materialized.append(
+            {
+                "case_id": case_id,
+                "image_path": str(image_path),
+                "image_sha256": _sha256(image_path),
+            }
+        )
+    return materialized
+
+
+def load_archive_runtime_input(
+    archive_root: Path,
+    *,
+    materialize_image_hashes: bool = True,
+) -> ArchiveRuntimeInput:
     """Load candidate rows without modifying or reserializing the archive.
 
     Only the stable archive identity and ``archive_image_path`` are read into the
     runtime projection.  Fields such as ``factual_status``, ``claim_atom``,
     ``evidence``, and source/construction metadata are deliberately not copied.
+
+    ``materialize_image_hashes=False`` is intended for a batch runner that first
+    selects a subset by case ID, then calls ``materialize_archive_runtime_rows``.
+    The default retains the complete runtime-row contract for direct callers.
     """
 
     root = archive_root.expanduser().resolve()
@@ -158,14 +207,19 @@ def load_archive_runtime_input(archive_root: Path) -> ArchiveRuntimeInput:
         if case_id in seen_case_ids:
             raise ValueError(f"duplicate archive candidate_id: {case_id}")
         seen_case_ids.add(case_id)
-        image_path = _resolve_image(root, image_value, line_number=line_number)
-        rows.append(
-            {
-                "case_id": case_id,
-                "image_path": str(image_path),
-                "image_sha256": _sha256(image_path),
-            }
+        image_path = _resolve_image(
+            root,
+            image_value,
+            line_number=line_number,
+            require_file=materialize_image_hashes,
         )
+        runtime_row = {
+            "case_id": case_id,
+            "image_path": str(image_path),
+        }
+        if materialize_image_hashes:
+            runtime_row["image_sha256"] = _sha256(image_path)
+        rows.append(runtime_row)
 
     if not rows:
         raise ValueError(f"archive candidate file is empty: {candidate_path}")
