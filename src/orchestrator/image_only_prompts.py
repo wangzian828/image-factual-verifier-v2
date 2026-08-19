@@ -12,6 +12,10 @@ from src.orchestrator.investigation_models import (
     VerdictBasis,
 )
 from src.orchestrator.task_store import (
+    MAX_SEARCH_HYPOTHESES,
+    MAX_TOOL_ACTIONS,
+    MAX_V4_VISUAL_REINSPECTIONS,
+    TOTAL_TASKS_MAX,
     claim_owned_visual_evidence_requirements,
     discrepancy_visual_reinspection_binding,
     evidence_serves_claim,
@@ -309,6 +313,13 @@ DISCREPANCY_DECISION_SYSTEM_PROMPT = """\
 You are the sparse multimodal Discrepancy Decision checkpoint. Compare reviewed
 Evidence with the image-grounded target fact and image account. Cite Evidence/anchors
 for discrepancies; update hypotheses or request reinspection; use supplied facts.
+
+The supplied ``decision_actionability`` object is a state-derived execution
+contract for this exact checkpoint. Treat its MUST, allowed, and prohibited
+instructions as binding: do not propose an output field marked unavailable, and
+resolve every listed immediate Evidence obligation exactly as directed. It does
+not decide the image fact or replace semantic judgment; it only tells you which
+otherwise-valid state transitions can be accepted now.
 
 Use recorded admissible_stances: neutral Evidence cannot support/refute. For the
 target fact, support means it is true; refute means it is false. A competing value for the same subject-event relation refutes it. Task ownership does not establish semantic coverage; use addressed target facts and allowed visual anchors.
@@ -1134,6 +1145,16 @@ def render_discrepancy_decision_context(
         reviewed_evidence_ids=reviewed,
         evidence_by_id=evidence_by_id,
     )
+    remaining_routes = remaining_claim_hypothesis_routes(state)[:16]
+    decision_actionability = _render_discrepancy_decision_actionability(
+        state,
+        reviewed_evidence_ids=reviewed,
+        trigger=trigger,
+        reviewed_directional_chains=reviewed_directional_chains,
+        visual_evidence_requirements=visual_evidence_requirements,
+        runtime_visual_binding=runtime_visual_binding,
+        remaining_routes=remaining_routes,
+    )
     claims_with_reviewed_visual_evidence = {
         str(claim_id)
         for requirement in visual_evidence_requirements
@@ -1248,6 +1269,7 @@ def render_discrepancy_decision_context(
             "reviewable_claim_ids": list(dict.fromkeys(reviewable_claim_ids)),
             "claim_update_space": claim_update_space,
             "reviewed_directional_chains": reviewed_directional_chains,
+            "decision_actionability": decision_actionability,
             "evidence_to_visual_alignment_candidates": (
                 visual_alignment_candidates[:12]
             ),
@@ -1277,9 +1299,12 @@ def render_discrepancy_decision_context(
                 for route in state.attempted_routes[-24:]
                 if _is_json_object(route)
             ],
-            "remaining_routes": remaining_claim_hypothesis_routes(state)[:16],
+            "remaining_routes": remaining_routes,
             "action_count": state.action_count,
-            "remaining_action_budget": max(0, 24 - state.action_count),
+            "remaining_action_budget": max(
+                0,
+                MAX_TOOL_ACTIONS - state.action_count,
+            ),
             "strategy_state": {
                 "no_substantive_gain_streak": state.no_substantive_gain_streak,
                 "recent_progress": [
@@ -1295,16 +1320,255 @@ def render_discrepancy_decision_context(
             },
             "remaining_hypothesis_budget": max(
                 0,
-                3 - len(state.search_hypotheses),
+                MAX_SEARCH_HYPOTHESES - len(state.search_hypotheses),
             ),
             "remaining_visual_reinspection_budget": max(
                 0,
-                1 - len(state.visual_reinspections),
+                MAX_V4_VISUAL_REINSPECTIONS - len(state.visual_reinspections),
             ),
         },
         ensure_ascii=False,
         separators=(",", ":"),
     )
+
+
+def _render_discrepancy_decision_actionability(
+    state: ImageOnlyInvestigationState,
+    *,
+    reviewed_evidence_ids: Iterable[str],
+    trigger: str,
+    reviewed_directional_chains: List[Dict[str, Any]],
+    visual_evidence_requirements: List[Dict[str, Any]],
+    runtime_visual_binding: Dict[str, Any],
+    remaining_routes: List[str],
+) -> Dict[str, Any]:
+    """Render live Decision constraints without changing reducer semantics."""
+
+    reviewed = list(dict.fromkeys(str(item) for item in reviewed_evidence_ids))
+    evidence_by_id = {item.evidence_id: item for item in state.evidence}
+    fact_by_id = {item.fact_id: item for item in state.facts}
+    core_fact = fact_by_id.get(state.core_verdict_fact_id or "")
+    core_claim_ids = [
+        claim.claim_id
+        for claim in state.image_claims
+        if core_fact is not None and claim.fact_id == core_fact.fact_id
+    ]
+    open_hypotheses = [
+        item
+        for item in state.search_hypotheses
+        if item.status in {"open", "active"}
+    ]
+    hypothesis_slots = max(
+        0,
+        MAX_SEARCH_HYPOTHESES - len(state.search_hypotheses),
+    )
+    task_slots = max(0, TOTAL_TASKS_MAX - len(state.tasks))
+    new_hypothesis_slots = min(hypothesis_slots, task_slots)
+    visual_slots = max(
+        0,
+        MAX_V4_VISUAL_REINSPECTIONS - len(state.visual_reinspections),
+    )
+    action_slots = max(0, MAX_TOOL_ACTIONS - state.action_count)
+    binding_status = str(runtime_visual_binding.get("status", "unavailable"))
+    binding = (
+        runtime_visual_binding.get("binding")
+        if binding_status == "available"
+        else None
+    )
+    visual_reinspection_available = bool(
+        visual_slots
+        and action_slots
+        and task_slots
+        and isinstance(binding, dict)
+    )
+    existing_visual_requests = [
+        {
+            "visual_question_id": item.visual_question_id,
+            "claim_ids": [
+                claim.claim_id
+                for claim in state.image_claims
+                if claim.fact_id == item.fact_id
+            ],
+            "status": item.status,
+            "question": item.request.question,
+            "expected_property": item.request.expected_property,
+        }
+        for item in state.visual_reinspections[-4:]
+    ]
+    visual_obligations = [
+        {
+            "evidence_id": str(requirement["evidence_id"]),
+            "claim_ids": [
+                str(claim_id) for claim_id in requirement["claim_ids"]
+            ],
+            "must_handle_now": True,
+            "legal_handling": [
+                (
+                    "If this Decision updates any listed claim, cite this exact "
+                    "Evidence ID in that ClaimAssessment.selected_evidence_ids "
+                    "or MaterialDiscrepancy.evidence_ids."
+                ),
+                (
+                    "Only if this Decision updates none of the listed claims and "
+                    "the pixel observation does not bear on the current claim or "
+                    "discrepancy, list this exact ID in "
+                    "visual_evidence_disposition.evidence_ids with disposition "
+                    "'irrelevant_to_current_claim_or_discrepancy' and a rationale."
+                ),
+                "Never both cite and dispose this Evidence ID.",
+            ],
+        }
+        for requirement in visual_evidence_requirements
+    ]
+    non_directional_evidence_ids = [
+        evidence_id
+        for evidence_id in reviewed
+        if evidence_id in evidence_by_id
+        and not evidence_is_qualified_for_stance(
+            evidence_by_id[evidence_id],
+            "support",
+        )
+        and not evidence_is_qualified_for_stance(
+            evidence_by_id[evidence_id],
+            "refute",
+        )
+    ]
+    current_decisive_discrepancies = [
+        item
+        for item in state.material_discrepancies
+        if item.materiality == "decisive"
+        and item.status in {"established", "conflicted"}
+    ]
+    established_core_discrepancies = [
+        item.discrepancy_id
+        for item in current_decisive_discrepancies
+        if item.status == "established"
+        and any(claim_id in core_claim_ids for claim_id in item.affected_claim_ids)
+    ]
+    real_blockers: List[str] = []
+    if core_fact is None:
+        real_blockers.append("no runtime core target fact exists")
+    elif core_fact.status != "supported":
+        real_blockers.append(
+            f"core target fact status is {core_fact.status!r}, not 'supported'"
+        )
+    if current_decisive_discrepancies:
+        real_blockers.append(
+            "decisive discrepancy IDs remain: "
+            + ", ".join(
+                item.discrepancy_id for item in current_decisive_discrepancies
+            )
+        )
+    if remaining_routes:
+        real_blockers.append(
+            "open core routes remain: " + ", ".join(remaining_routes)
+        )
+    if visual_slots <= 0:
+        visual_instruction = (
+            "visual_reinspection MUST be null: the visual-reinspection budget "
+            "is exhausted. Do not restate an existing question or discriminator."
+        )
+    elif action_slots <= 0:
+        visual_instruction = (
+            "visual_reinspection MUST be null: no tool-action budget remains to "
+            "execute it."
+        )
+    elif task_slots <= 0:
+        visual_instruction = (
+            "visual_reinspection MUST be null: no task slot remains to execute it."
+        )
+    elif not visual_reinspection_available:
+        visual_instruction = (
+            "visual_reinspection MUST be null at this checkpoint: there is no "
+            "single runtime-authorized unresolved claim/Evidence binding. Do not "
+            "invent a new discriminator."
+        )
+    else:
+        visual_instruction = (
+            "One visual_reinspection is available. It must use the listed "
+            "runtime-authorized binding, introduce a new target-specific "
+            "discriminator, and not repeat an existing inspection topic."
+        )
+
+    return {
+        "checkpoint_rule": (
+            "A qualified-Evidence checkpoint cannot submit an empty continue."
+            if trigger == "qualified_evidence" and reviewed
+            else "Choose an update that is semantically warranted by this checkpoint."
+        ),
+        "new_hypotheses": {
+            "remaining_hypothesis_slots": hypothesis_slots,
+            "remaining_task_slots": task_slots,
+            "max_new_hypotheses_now": new_hypothesis_slots,
+            "instruction": (
+                "new_hypotheses MUST be []: no hypothesis/task capacity remains."
+                if new_hypothesis_slots == 0
+                else (
+                    "You may add at most "
+                    f"{new_hypothesis_slots} genuinely new hypothesis(es); "
+                    "do not duplicate any active route."
+                )
+            ),
+        },
+        "retire_hypotheses": {
+            "allowed_ids": [
+                item.hypothesis_id for item in open_hypotheses
+            ],
+            "instruction": (
+                "Retire only an allowed ID whose route has no material next "
+                "action. Retiring a route is optional; it is not a substitute "
+                "for handling reviewed Evidence."
+            ),
+        },
+        "visual_reinspection": {
+            "remaining_slots": visual_slots,
+            "remaining_action_slots": action_slots,
+            "remaining_task_slots": task_slots,
+            "existing_or_completed_requests": existing_visual_requests,
+            "runtime_binding_status": binding_status,
+            "available_binding": (
+                binding if visual_reinspection_available else None
+            ),
+            "instruction": visual_instruction,
+        },
+        "claim_owned_visual_evidence": visual_obligations,
+        "directional_evidence": {
+            "usable_reviewed_directional_chains": reviewed_directional_chains,
+            "non_directional_evidence_ids": non_directional_evidence_ids,
+            "instruction": (
+                "Evidence listed as non_directional cannot by itself support or "
+                "refute a claim. Support/refute assessments require an owned "
+                "qualified directional Finding -> Evidence chain."
+            ),
+        },
+        "route_and_verdict_gate": {
+            "remaining_core_routes": remaining_routes,
+            "real": {
+                "currently_permitted": not real_blockers,
+                "blocking_conditions": real_blockers,
+                "instruction": (
+                    "real is allowed only when this valid update leaves the core "
+                    "target supported, no decisive discrepancy, and no open core "
+                    "route. Otherwise use continue."
+                ),
+            },
+            "fake": {
+                "existing_established_core_discrepancy_ids": (
+                    established_core_discrepancies
+                ),
+                "instruction": (
+                    "fake is required because an established decisive core "
+                    "discrepancy is already recorded."
+                    if established_core_discrepancies
+                    else (
+                        "fake is allowed only if this valid update establishes a "
+                        "decisive discrepancy affecting the core target fact; "
+                        "otherwise use continue."
+                    )
+                ),
+            },
+        },
+    }
 
 
 def _is_json_object(value: Any) -> bool:

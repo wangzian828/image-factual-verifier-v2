@@ -3066,6 +3066,74 @@ def test_decision_must_consume_claim_owned_visual_evidence_or_explain_irrelevanc
     assert state.discrepancy_decisions[-1].output.visual_evidence_disposition
 
 
+def test_decision_context_makes_live_actionability_constraints_explicit() -> None:
+    state = _planned_state()
+    source, visual = _append_source_visual_conflict_pair(state)
+    claim = state.image_claims[0]
+    base_hypothesis = state.search_hypotheses[0]
+    state.search_hypotheses.extend(
+        [
+            base_hypothesis.model_copy(
+                update={
+                    "hypothesis_id": "hypothesis-extra-one",
+                    "statement": "A distinct identity route remains.",
+                }
+            ),
+            base_hypothesis.model_copy(
+                update={
+                    "hypothesis_id": "hypothesis-extra-two",
+                    "statement": "A distinct event route remains.",
+                }
+            ),
+        ]
+    )
+    context = json.loads(
+        render_discrepancy_decision_context(
+            state,
+            reviewed_evidence_ids=[source.evidence_id, visual.evidence_id],
+            trigger="qualified_evidence",
+        )
+    )
+
+    digest = context["decision_actionability"]
+    assert digest["checkpoint_rule"].startswith(
+        "A qualified-Evidence checkpoint cannot submit an empty continue"
+    )
+    assert digest["new_hypotheses"] == {
+        "remaining_hypothesis_slots": 0,
+        "remaining_task_slots": 10,
+        "max_new_hypotheses_now": 0,
+        "instruction": (
+            "new_hypotheses MUST be []: no hypothesis/task capacity remains."
+        ),
+    }
+    assert digest["retire_hypotheses"]["allowed_ids"] == [
+        base_hypothesis.hypothesis_id,
+        "hypothesis-extra-one",
+        "hypothesis-extra-two",
+    ]
+    assert digest["visual_reinspection"]["remaining_slots"] == 0
+    assert digest["visual_reinspection"]["available_binding"] is None
+    assert "MUST be null" in digest["visual_reinspection"]["instruction"]
+    existing_request = digest["visual_reinspection"][
+        "existing_or_completed_requests"
+    ][0]
+    assert existing_request["claim_ids"] == [claim.claim_id]
+    assert existing_request["expected_property"] == (
+        "the handshake hand is covered by a white glove"
+    )
+    obligation = digest["claim_owned_visual_evidence"][0]
+    assert obligation["evidence_id"] == visual.evidence_id
+    assert obligation["claim_ids"] == [claim.claim_id]
+    assert obligation["must_handle_now"] is True
+    assert "Never both cite and dispose" in obligation["legal_handling"][2]
+    assert digest["directional_evidence"]["non_directional_evidence_ids"] == [
+        visual.evidence_id
+    ]
+    assert digest["route_and_verdict_gate"]["real"]["currently_permitted"] is False
+    assert digest["route_and_verdict_gate"]["real"]["blocking_conditions"]
+
+
 def test_decision_context_requires_claim_owned_crop_visual_evidence() -> None:
     state = _planned_state()
     source, visual = _append_source_visual_conflict_pair(
