@@ -1554,34 +1554,33 @@ class StageRunner:
             "Return exactly one JSON object",
             self.system_prompt,
         )
+        qwen_schema_hint = ""
+        if (
+            str(getattr(self.llm, "provider", "")).lower() == "qwen_local"
+            and self.output_schema is not None
+        ):
+            # The official Transformers OpenAI server currently ignores
+            # response_format. Keep the application validator strict, but
+            # place a compact structural copy in the prompt so local Qwen has
+            # the same schema contract as Gemini's guided output.
+            schema = self._lmdeploy_response_schema(
+                self._normalized_output_schema()
+            )
+            qwen_schema_hint = (
+                "\n\nQwen local structured-output compatibility:\n"
+                "The server may ignore response_format. Return only one JSON "
+                "object and follow this schema exactly. Use the literal enum "
+                "values and JSON array types shown below; do not invent "
+                "alternate labels, numeric salience scores, or scalar values "
+                "where an array is shown.\n"
+                + json.dumps(
+                    schema,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+                + "\n"
+            )
         if not self.tools_list:
-            qwen_schema_hint = ""
-            if (
-                str(getattr(self.llm, "provider", "")).lower()
-                == "qwen_local"
-                and self.output_schema is not None
-            ):
-                # The official Transformers OpenAI server currently ignores
-                # response_format.  Keep the application validator strict, but
-                # place a compact structural copy in the prompt so local Qwen
-                # has the same schema contract as Gemini's guided output.
-                schema = self._lmdeploy_response_schema(
-                    self._normalized_output_schema()
-                )
-                qwen_schema_hint = (
-                    "\n\nQwen local structured-output compatibility:\n"
-                    "The server may ignore response_format. Return only one "
-                    "JSON object and follow this schema exactly. Use the "
-                    "literal enum values and JSON array types shown below; "
-                    "do not invent alternate labels, numeric salience scores, "
-                    "or scalar values where an array is shown.\n"
-                    + json.dumps(
-                        schema,
-                        ensure_ascii=False,
-                        separators=(",", ":"),
-                    )
-                    + "\n"
-                )
             return (
                 prompt
                 + qwen_schema_hint
@@ -1589,12 +1588,26 @@ class StageRunner:
             )
         return (
             prompt
+            + qwen_schema_hint
             + "\n\nUse native function calls for tools. Return one JSON object "
             + "when finished; tool failures are not evidence."
         )
 
     def _openai_response_format(self) -> Optional[Dict[str, Any]]:
         if self.output_schema is None:
+            return None
+        if (
+            str(getattr(self.llm, "provider", "")).lower() == "qwen_local"
+            and os.getenv("QWEN_LOCAL_STRICT_CHAT_COMPLETIONS", "")
+            .strip()
+            .lower()
+            in {"1", "true", "yes", "on"}
+        ):
+            # The official Transformers OpenAI server accepts some schema
+            # requests but can later fail its legacy response-schema path with
+            # a 500 during a correction or forced-output turn.  Local Qwen
+            # receives the compact schema prompt instead, and Pydantic remains
+            # the authoritative output validator.
             return None
         schema = self._normalized_output_schema()
         if str(getattr(self.llm, "provider", "")).lower() in {
