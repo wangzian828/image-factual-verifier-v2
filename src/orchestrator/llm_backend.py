@@ -200,8 +200,15 @@ class APIBackend(LLMBackend):
             body["tools"] = self._openai_tool_schemas(tools)
             body["tool_choice"] = kwargs.get("tool_choice", "auto")
             body["parallel_tool_calls"] = False
+        strict_qwen_chat = (
+            self.provider == "qwen_local"
+            and os.getenv("QWEN_LOCAL_STRICT_CHAT_COMPLETIONS", "")
+            .strip()
+            .lower()
+            in {"1", "true", "yes", "on"}
+        )
         response_format = kwargs.get("response_format")
-        if response_format:
+        if response_format and not strict_qwen_chat:
             body["response_format"] = response_format
         generation_config = kwargs.get("generation_config")
 
@@ -254,13 +261,7 @@ class APIBackend(LLMBackend):
             # vLLM-specific Qwen controls as unknown top-level fields. Keep
             # the existing default for vLLM/LMDeploy, while allowing a
             # deliberately explicit strict OpenAI mode for such servers.
-            if (
-                self.provider == "qwen_local"
-                and os.getenv("QWEN_LOCAL_STRICT_CHAT_COMPLETIONS", "")
-                .strip()
-                .lower()
-                in {"1", "true", "yes", "on"}
-            ):
+            if strict_qwen_chat:
                 qwen_generation_fields = (
                     "temperature",
                     "top_p",
