@@ -219,7 +219,7 @@ class Orchestrator:
                 os.getenv("PERCEPTION_CACHE_VERSION", "perception-v1"),
                 os.getenv(
                     "OCR_CACHE_VERSION",
-                    f"{os.getenv('OCR_BACKEND', 'easyocr').strip().lower()}-v1",
+                    f"{os.getenv('OCR_BACKEND', 'baidu').strip().lower()}-v1",
                 ),
                 self.source_access_policy.cache_partition,
             ]

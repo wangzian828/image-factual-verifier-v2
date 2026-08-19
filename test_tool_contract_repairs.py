@@ -620,6 +620,8 @@ def test_ocr_rejects_reversed_bbox_and_hashes_actual_crop(
 ) -> None:
     from PIL import Image
 
+    monkeypatch.setenv("OCR_BACKEND", "easyocr")
+
     class EmptyReader:
         def readtext(self, _image, **_kwargs):
             return []

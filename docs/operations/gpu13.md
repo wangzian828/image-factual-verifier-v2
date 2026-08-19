@@ -287,12 +287,13 @@ The following were verified through that proxy:
 - Hugging Face HTTPS;
 - Google Drive HTTPS.
 
-OCR is selected explicitly with `OCR_BACKEND`; the default is `easyocr`.
-EasyOCR uses one process-shared CPU reader and serializes calls because a
-reader instance is not assumed to be thread-safe. Baidu uses the general OCR
-API with an in-memory access-token cache. There is no silent backend fallback:
-a missing package, missing credential, failed request, malformed result, or
-runtime exception is an explicit `ocr_with_position` tool failure.
+OCR is selected explicitly with `OCR_BACKEND`; the default is `baidu`.
+Baidu uses the general OCR API with an in-memory access-token cache. EasyOCR
+is an explicit local diagnostic backend only; it uses one process-shared CPU
+reader and serializes calls because a reader instance is not assumed to be
+thread-safe. There is no silent backend fallback: a missing credential, failed
+request, malformed result, or runtime exception is an explicit
+`ocr_with_position` tool failure.
 
 For the local backend:
 

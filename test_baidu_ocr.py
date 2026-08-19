@@ -70,6 +70,12 @@ def _ocr_payload(*, text="Tysons Corner", left=6, top=5):
     }
 
 
+def test_baidu_is_the_default_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("OCR_BACKEND", raising=False)
+
+    assert OCRWithPositionTool()._backend() == "baidu"
+
+
 def test_baidu_client_caches_access_token():
     session = FakeSession(
         [

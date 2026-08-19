@@ -88,7 +88,7 @@ class OCRWithPositionTool(BaseTool):
     use_gpu: Optional[bool] = None
 
     def _backend(self) -> str:
-        value = (self.backend or os.getenv("OCR_BACKEND", "easyocr")).strip().lower()
+        value = (self.backend or os.getenv("OCR_BACKEND", "baidu")).strip().lower()
         aliases = {
             "easyocr": "easyocr",
             "baidu": "baidu",

@@ -22,6 +22,7 @@ def patch_reader(
     monkeypatch: pytest.MonkeyPatch,
     reader: FakeEasyOCRReader,
 ) -> None:
+    monkeypatch.setenv("OCR_BACKEND", "easyocr")
     monkeypatch.setattr(
         OCRWithPositionTool,
         "_get_reader",
