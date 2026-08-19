@@ -33,6 +33,7 @@ from src.orchestrator.investigation_models import (
     VisualReinspectionProposal,
     VisualReinspectionRequest,
     build_discrepancy_decision_output_schema,
+    build_image_account_planning_output_schema,
 )
 from src.orchestrator.discrepancy_coverage import (
     audit_discrepancy_coverage,
@@ -152,6 +153,23 @@ def test_image_account_limits_search_hypotheses_to_three() -> None:
 
     with pytest.raises(ValidationError):
         ImageAccountPlanningOutput.model_validate(payload)
+
+
+def test_planning_schema_constrains_pixel_anchor_ids() -> None:
+    schema = build_image_account_planning_output_schema(
+        anchor_fact_ids=["fact-visible-person"],
+    )
+    payload = _planning_output().model_dump(mode="json")
+
+    parsed = schema.model_validate(payload)
+    assert parsed.image_claims[0].anchor_fact_ids == ["fact-visible-person"]
+
+    payload["image_claims"][0]["anchor_fact_ids"] = ["vf-not-in-workspace"]
+    with pytest.raises(
+        ValidationError,
+        match="Input should be 'fact-visible-person'",
+    ):
+        schema.model_validate(payload)
 
 
 def test_planning_derives_text_search_from_nonempty_queries() -> None:
@@ -491,6 +509,56 @@ def test_decision_exhaustion_fallback_records_reviewed_evidence_only() -> None:
     assert state.claim_assessments[-1].assessment == "insufficient"
     assert state.claim_assessments[-1].evidence_ids == [evidence.evidence_id]
     assert "without inferring support" in state.claim_assessments[-1].rationale
+
+
+def test_visual_consumption_fallback_keeps_all_claim_owned_visual_evidence() -> None:
+    state = _planned_state()
+    source, first_visual = _append_source_visual_conflict_pair(
+        state,
+        link_visual_to_reinspection=False,
+    )
+    first_visual.tool_name = "crop_and_inspect"
+    first_visual.source_family = "visual:crop_and_inspect"
+    first_visual.visual_question_id = None
+    first_visual.visual_scope = None
+    first_visual.visual_answer_status = None
+    second_visual = first_visual.model_copy(
+        update={
+            "evidence_id": "evidence-crop-second",
+            "function_call_id": "call-crop-second",
+            "exact_text": "A second crop confirms the visible plaque text.",
+        }
+    )
+    state.evidence.append(second_visual)
+    claim = state.image_claims[0]
+    reviewed = [
+        source.evidence_id,
+        first_visual.evidence_id,
+        second_visual.evidence_id,
+    ]
+
+    fallback = Orchestrator._resolved_visual_consumption_fallback(
+        state,
+        reviewed_evidence_ids=reviewed,
+        rejected_reason=(
+            "Decision must consume or explicitly disposition claim-owned visual "
+            "Evidence"
+        ),
+    )
+
+    assert fallback is not None
+    assert fallback.claim_assessments[0].claim_id == claim.claim_id
+    assert fallback.claim_assessments[0].selected_evidence_ids == [
+        first_visual.evidence_id,
+        second_visual.evidence_id,
+    ]
+    update = apply_discrepancy_decision(
+        state,
+        fallback,
+        reviewed_evidence_ids=reviewed,
+        trigger="qualified_evidence",
+    )
+    assert update["accepted"] is True, update
 
 
 def test_decision_exhaustion_fallback_does_not_spread_evidence_across_task_claims() -> None:

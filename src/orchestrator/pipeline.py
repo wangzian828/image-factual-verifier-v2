@@ -70,6 +70,7 @@ from src.orchestrator.investigation_models import (
     DiscrepancyJudgment,
     DiscrepancyJudgmentOutput,
     build_discrepancy_decision_output_schema,
+    build_image_account_planning_output_schema,
     ImageAccountPlanningOutput,
     ImageOnlyInvestigationState,
     ImageOnlyJudgment,
@@ -204,7 +205,11 @@ class Orchestrator:
         )
         self.stage_request_timeout_seconds = self._runtime_timeout(
             "AGENT_STAGE_REQUEST_TIMEOUT_SECONDS",
-            900.0 if self.provider == "gemini" else 300.0,
+            (
+                900.0
+                if self.provider in {"gemini", "qwen_local", "lmdeploy"}
+                else 300.0
+            ),
         )
         cache_namespace = os.getenv("TOOL_CACHE_NAMESPACE", "").strip() or "|".join(
             [
@@ -280,7 +285,13 @@ class Orchestrator:
             timeout=float(
                 os.getenv(
                     "AGENT_LLM_REQUEST_TIMEOUT_SECONDS",
-                    "90" if self.provider == "gemini" else "300",
+                    (
+                        "90"
+                        if self.provider == "gemini"
+                        else "900"
+                        if self.provider in {"qwen_local", "lmdeploy"}
+                        else "300"
+                    ),
                 )
             ),
             max_retries=int(
@@ -628,13 +639,20 @@ class Orchestrator:
         """Run standalone v4 Planning and atomically install its claim graph."""
 
         effective_image_path = image_path or state.image_path
+        planning_output_schema = build_image_account_planning_output_schema(
+            anchor_fact_ids=[
+                fact.fact_id
+                for fact in investigation.facts
+                if fact.origin.type in {"input_image", "ocr"}
+            ],
+        )
         runner = StageRunner(
             llm=self.llm,
             system_prompt=self._sp(
                 IMAGE_ONLY_IMAGE_ACCOUNT_PLANNING_PROMPT
             ),
             tools=[],
-            output_schema=ImageAccountPlanningOutput,
+            output_schema=planning_output_schema,
             max_rounds=self._stage_max_rounds("PLANNING", 2),
             image_path=effective_image_path,
             stage_name="image_account_planning",
@@ -1755,33 +1773,40 @@ class Orchestrator:
             investigation,
             reviewed_evidence_ids=reviewed_evidence_ids,
         )
-        assessments: List[ClaimAssessmentProposal] = []
-        seen_claim_ids: set[str] = set()
+        visual_evidence_ids_by_claim: Dict[str, List[str]] = {}
         for requirement in requirements:
             visual_evidence_id = str(requirement["evidence_id"])
             for claim_id in requirement["claim_ids"]:
-                if claim_id in seen_claim_ids:
-                    continue
-                assessments.append(
-                    ClaimAssessmentProposal(
-                        claim_id=claim_id,
-                        assessment="insufficient",
-                        selected_evidence_ids=[visual_evidence_id],
-                        remaining_gap=(
-                            "Claim-owned pixel Evidence was recorded, "
-                            "but no accepted semantic support/refute/discrepancy "
-                            "update survived runtime validation"
-                        ),
-                        rationale=(
-                            "Deterministic fallback after correction exhaustion: "
-                            "consume the claim-owned pixel Evidence conservatively "
-                            "without changing the Claim to supported or refuted."
-                        ),
-                    )
+                selected_ids = visual_evidence_ids_by_claim.setdefault(
+                    claim_id,
+                    [],
                 )
-                seen_claim_ids.add(claim_id)
-                if len(assessments) >= 3:
-                    break
+                if visual_evidence_id not in selected_ids:
+                    selected_ids.append(visual_evidence_id)
+        assessments: List[ClaimAssessmentProposal] = []
+        for claim_id, evidence_ids in visual_evidence_ids_by_claim.items():
+            # The bounded visual-tool budget keeps this under the model field
+            # limit. Fail closed if a future tool change exceeds it, rather
+            # than quietly dropping a claim-owned pixel record.
+            if len(evidence_ids) > 20:
+                return None
+            assessments.append(
+                ClaimAssessmentProposal(
+                    claim_id=claim_id,
+                    assessment="insufficient",
+                    selected_evidence_ids=evidence_ids,
+                    remaining_gap=(
+                        "Claim-owned pixel Evidence was recorded, but no "
+                        "accepted semantic support/refute/discrepancy update "
+                        "survived runtime validation"
+                    ),
+                    rationale=(
+                        "Deterministic fallback after correction exhaustion: "
+                        "consume all claim-owned pixel Evidence conservatively "
+                        "without changing the Claim to supported or refuted."
+                    ),
+                )
+            )
             if len(assessments) >= 3:
                 break
         if not assessments:

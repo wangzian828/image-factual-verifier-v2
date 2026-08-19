@@ -639,9 +639,9 @@ def test_image_account_planning_rejects_policy_query_before_atomic_commit(
 
     assert len(backend.requests) == 2
     assert state.all_steps[0].action_type == "planning_revision"
-    assert "ready-made fact-check verdict" in state.all_steps[0].metadata[
-        "planning_revision_reason"
-    ]
+    assert "no executable neutral investigation route" in state.all_steps[
+        0
+    ].metadata["planning_revision_reason"]
     assert state.all_steps[1].action_type != "planning_revision"
     assert investigation.search_hypotheses[0].queries == [
         "person source capture held object"
@@ -671,9 +671,9 @@ def test_image_account_planning_rejects_media_origin_route_before_commit(
 
     assert len(backend.requests) == 2
     assert state.all_steps[0].action_type == "planning_revision"
-    assert "media_origin" in state.all_steps[0].metadata[
-        "planning_revision_reason"
-    ]
+    assert "no executable neutral investigation route" in state.all_steps[
+        0
+    ].metadata["planning_revision_reason"]
     assert state.all_steps[1].action_type != "planning_revision"
     assert investigation.search_hypotheses[0].queries == [
         "person source capture held object"
@@ -700,9 +700,9 @@ def test_image_account_planning_rejects_publication_context_route_before_commit(
 
     assert len(backend.requests) == 2
     assert state.all_steps[0].action_type == "planning_revision"
-    assert "media_origin" in state.all_steps[0].metadata[
-        "planning_revision_reason"
-    ]
+    assert "no executable neutral investigation route" in state.all_steps[
+        0
+    ].metadata["planning_revision_reason"]
     assert state.all_steps[1].action_type != "planning_revision"
     assert investigation.search_hypotheses[0].queries == [
         "person source capture held object"

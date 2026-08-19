@@ -558,6 +558,49 @@ class ImageAccountPlanningOutput(StrictModel):
         return self
 
 
+def build_image_account_planning_output_schema(
+    *,
+    anchor_fact_ids: List[str],
+) -> type[ImageAccountPlanningOutput]:
+    """Build Planning output with pixel/OCR anchors scoped to this image.
+
+    Planning remains free to choose its target fact and routes. The runtime only
+    narrows ``anchor_fact_ids`` to VisualFact IDs that actually exist in the
+    current perception workspace, preventing a local policy from fabricating a
+    plausible-looking pixel anchor that cannot be reduced.
+    """
+
+    unique_anchor_ids = tuple(
+        dict.fromkeys(str(item) for item in anchor_fact_ids if str(item))
+    )
+    anchor_id_type = (
+        Literal.__getitem__(unique_anchor_ids) if unique_anchor_ids else str
+    )
+    runtime_claim = create_model(
+        "RuntimeImageClaimProposal",
+        __base__=ImageClaimProposal,
+        anchor_fact_ids=(
+            List[anchor_id_type],
+            Field(
+                min_length=1,
+                max_length=12,
+                description=(
+                    "Use only exact pixel/OCR VisualFact IDs from the current "
+                    "planning workspace."
+                ),
+            ),
+        ),
+    )
+    return create_model(
+        "RuntimeImageAccountPlanningOutput",
+        __base__=ImageAccountPlanningOutput,
+        image_claims=(
+            List[runtime_claim],
+            Field(min_length=1, max_length=3),
+        ),
+    )
+
+
 class ImageClaim(StrictModel):
     """Legacy target-fact bookkeeping retained for state/replay compatibility."""
 
