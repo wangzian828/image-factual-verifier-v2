@@ -25,7 +25,10 @@ from src.eval.scoring_release_adapter import (
     adapt_scoring_gold_for_process,
     load_scoring_release,
 )
-from src.trajectory.exporter import export_policy_examples
+from src.trajectory.exporter import (
+    export_trajectory_sft_example,
+    trajectory_policy_step_ids,
+)
 from src.trajectory.perception_exporter import export_perception_example
 from src.trajectory.reference_chain import score_reference_chain_trace
 from src.trajectory.scoring import score_process_trace
@@ -161,7 +164,7 @@ async def _postprocess_run(args: argparse.Namespace) -> Dict[str, Any]:
     process_metrics: List[Dict[str, Any]] = []
     reference_chain_metrics: List[Dict[str, Any]] = []
     trajectory_scores: List[Dict[str, Any]] = []
-    policy_trajectories: List[Dict[str, Any]] = []
+    trajectory_sft: List[Dict[str, Any]] = []
     perception_trajectories: List[Dict[str, Any]] = []
     rollout_members: List[Dict[str, Any]] = []
     post_rollout_rewards: List[Dict[str, Any]] = []
@@ -281,12 +284,16 @@ async def _postprocess_run(args: argparse.Namespace) -> Dict[str, Any]:
         teacher_score["episode_id"] = episode_id
         teacher_score["prompt_group_id"] = prompt_group_id
 
-        strict_failures = audit_trace(
+        audit_report = audit_trace(
             trace_path,
             enforce_source_access_policy=enforce_source_policy,
-        ).failures(strict_scheduler=True)
+        )
+        strict_failures = audit_report.failures(strict_scheduler=True)
+        hard_failures = audit_report.failures(strict_scheduler=False)
         strict_trace_audit_pass = not strict_failures
+        hard_trace_audit_pass = not hard_failures
         metrics["strict_trace_audit_pass"] = strict_trace_audit_pass
+        metrics["hard_trace_audit_pass"] = hard_trace_audit_pass
         metrics["strict_trace_audit_failures"] = [
             asdict(item) for item in strict_failures
         ]
@@ -314,7 +321,7 @@ async def _postprocess_run(args: argparse.Namespace) -> Dict[str, Any]:
         trajectory_scores.append(teacher_score)
 
         try:
-            exported_policy = export_policy_examples(
+            exported_trajectory = export_trajectory_sft_example(
                 trace,
                 source_metadata={
                     "source_run_id": manifest.get("run_id"),
@@ -330,22 +337,34 @@ async def _postprocess_run(args: argparse.Namespace) -> Dict[str, Any]:
         except ValueError as exc:
             metrics["training_eligible"] = False
             reasons = list(metrics.get("training_exclusion_reasons", []) or [])
-            reasons.append(f"policy_export_rejected: {exc}")
+            reasons.append(f"trajectory_sft_export_rejected: {exc}")
             metrics["training_exclusion_reasons"] = list(dict.fromkeys(reasons))
             teacher_score["training_eligible"] = False
             teacher_score["training_exclusion_reasons"] = list(
                 metrics["training_exclusion_reasons"]
             )
-            exported_policy = []
-        policy_trajectories.extend(
-            item.model_dump(mode="json") for item in exported_policy
+            exported_trajectory = None
+        if exported_trajectory is not None:
+            trajectory_sft.append(
+                exported_trajectory.model_dump(mode="json")
+            )
+        policy_step_ids = trajectory_policy_step_ids(
+            trace,
+            episode_id=episode_id,
         )
-        member["training_eligible"] = bool(
+        member["sft_training_eligible"] = bool(
             strict_trace_audit_pass
             and bool(metrics.get("training_eligible", False))
+            and exported_trajectory is not None
             and not member["training_prohibited"]
             and not isinstance(release, ScoringRuntimeRelease)
         )
+        member["rl_reward_eligible"] = bool(
+            not metrics.get("engineering_error", False)
+            and bool(policy_step_ids)
+            and not member["training_prohibited"]
+        )
+        member["training_eligible"] = member["sft_training_eligible"]
         post_rollout_rewards.append(
             {
                 "schema_version": "ifv-post-rollout-deterministic-v1",
@@ -359,8 +378,15 @@ async def _postprocess_run(args: argparse.Namespace) -> Dict[str, Any]:
                     metrics.get("engineering_error", False)
                 ),
                 "strict_trace_audit_pass": bool(strict_trace_audit_pass),
+                "hard_trace_audit_pass": bool(hard_trace_audit_pass),
+                "strict_trace_audit_failure_codes": [
+                    str(item.get("code", ""))
+                    for item in metrics.get("strict_trace_audit_failures", [])
+                    if str(item.get("code", ""))
+                ],
                 "training_prohibited": member["training_prohibited"],
-                "step_ids": [item.step_id for item in exported_policy],
+                "rl_reward_eligible": member["rl_reward_eligible"],
+                "step_ids": policy_step_ids,
                 "process_components": dict(
                     teacher_score.get("components") or {}
                 ),
@@ -371,7 +397,7 @@ async def _postprocess_run(args: argparse.Namespace) -> Dict[str, Any]:
     _write_jsonl(run_dir / "process_metrics.jsonl", process_metrics)
     _write_jsonl(run_dir / "reference_chain_metrics.jsonl", reference_chain_metrics)
     _write_jsonl(run_dir / "trajectory_scores.jsonl", trajectory_scores)
-    _write_jsonl(run_dir / "policy_trajectories.jsonl", policy_trajectories)
+    _write_jsonl(run_dir / "trajectory_sft.jsonl", trajectory_sft)
     _write_jsonl(run_dir / "perception_trajectories.jsonl", perception_trajectories)
     _write_jsonl(run_dir / "rollout_groups.jsonl", rollout_members)
     _write_jsonl(run_dir / "post_rollout_rewards.jsonl", post_rollout_rewards)
@@ -383,7 +409,7 @@ async def _postprocess_run(args: argparse.Namespace) -> Dict[str, Any]:
         "process_metric_rows": len(process_metrics),
         "reference_chain_metric_rows": len(reference_chain_metrics),
         "trajectory_score_rows": len(trajectory_scores),
-        "policy_trajectory_rows": len(policy_trajectories),
+        "trajectory_sft_rows": len(trajectory_sft),
         "perception_trajectory_rows": len(perception_trajectories),
         "rollout_member_rows": len(rollout_members),
         "post_rollout_reward_rows": len(post_rollout_rewards),
@@ -397,7 +423,7 @@ async def _postprocess_run(args: argparse.Namespace) -> Dict[str, Any]:
             "process_metrics": "process_metrics.jsonl",
             "reference_chain_metrics": "reference_chain_metrics.jsonl",
             "trajectory_scores": "trajectory_scores.jsonl",
-            "policy_trajectories": "policy_trajectories.jsonl",
+            "trajectory_sft": "trajectory_sft.jsonl",
             "perception_trajectories": "perception_trajectories.jsonl",
             "rollout_groups": "rollout_groups.jsonl",
             "post_rollout_rewards": "post_rollout_rewards.jsonl",

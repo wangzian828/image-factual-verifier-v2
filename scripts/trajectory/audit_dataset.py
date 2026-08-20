@@ -1,4 +1,4 @@
-"""Strictly audit a derived ifv-policy-v1 dataset before any training."""
+"""Strictly audit a derived full-trajectory SFT dataset before training."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from src.trajectory.exporter import FORBIDDEN_PRIVATE_KEYS
-from src.trajectory.schema import DatasetExample
+from src.trajectory.schema import DatasetTrajectorySFTExample
 
 
 SPLITS = ("train", "validation", "test")
@@ -61,8 +61,8 @@ def audit_dataset(dataset_dir: Path) -> Dict[str, Any]:
         str(row.get("episode_id", "")): row for row in metadata_rows
     }
     errors: List[Dict[str, str]] = []
-    examples: List[DatasetExample] = []
-    step_splits: Dict[str, str] = {}
+    examples: List[DatasetTrajectorySFTExample] = []
+    episode_row_splits: Dict[str, str] = {}
     episode_splits: Dict[str, set[str]] = defaultdict(set)
     family_splits: Dict[str, set[str]] = defaultdict(set)
 
@@ -70,7 +70,7 @@ def audit_dataset(dataset_dir: Path) -> Dict[str, Any]:
         for index, row in enumerate(_load_jsonl(root / f"{split}.jsonl")):
             location = f"{split}.jsonl[{index}]"
             try:
-                example = DatasetExample.model_validate(row)
+                example = DatasetTrajectorySFTExample.model_validate(row)
             except Exception as exc:
                 errors.append(
                     {
@@ -91,26 +91,26 @@ def audit_dataset(dataset_dir: Path) -> Dict[str, Any]:
                         ),
                     }
                 )
-            if example.step_id in step_splits:
+            if example.episode_id in episode_row_splits:
                 errors.append(
                     {
-                        "code": "DUPLICATE_STEP_ID",
+                        "code": "DUPLICATE_EPISODE_ID",
                         "location": location,
                         "message": (
-                            f"{example.step_id} also appears in "
-                            f"{step_splits[example.step_id]}"
+                            f"{example.episode_id} also appears in "
+                            f"{episode_row_splits[example.episode_id]}"
                         ),
                     }
                 )
-            step_splits[example.step_id] = split
+            episode_row_splits[example.episode_id] = split
             episode_splits[example.episode_id].add(split)
             for family in example.source_family_keys:
                 family_splits[family].add(split)
             leaks = list(
                 _private_paths(
                     {
-                        "policy_input": example.policy_input,
-                        "policy_action": example.policy_action,
+                        "messages": example.messages,
+                        "tools": example.tools,
                     }
                 )
             )
@@ -149,20 +149,10 @@ def audit_dataset(dataset_dir: Path) -> Dict[str, Any]:
                     }
                 )
                 continue
-            runtime_ids = {
-                str(item) for item in metadata.get("runtime_ids", []) or []
-            }
-            unknown_refs = sorted(
-                set(example.runtime_observation_refs) - runtime_ids
-            )
-            if unknown_refs:
-                errors.append(
-                    {
-                        "code": "RUNTIME_REFERENCE_UNKNOWN",
-                        "location": location,
-                        "message": ", ".join(unknown_refs),
-                    }
-                )
+            # Full-trajectory rows carry the runtime context in the ordered
+            # messages/tool responses themselves.  The old step-level schema
+            # had a separate runtime_observation_refs field; do not require
+            # that legacy field on one-episode-per-row examples.
 
     for episode_id, splits in sorted(episode_splits.items()):
         if len(splits) > 1:
@@ -198,14 +188,13 @@ def audit_dataset(dataset_dir: Path) -> Dict[str, Any]:
                 "message": "quality-gate-excluded episode appears in a split",
             }
         )
-    example_types = Counter(item.example_type for item in examples)
-    verdicts = Counter(
-        str(item.policy_action.get("verdict", ""))
+    role_counts: Counter[str] = Counter(
+        str(message.get("role", ""))
         for item in examples
-        if item.example_type == "judgment"
+        for message in item.messages
     )
     report = {
-        "schema_version": "ifv-policy-dataset-audit-v1",
+        "schema_version": "ifv-trajectory-sft-dataset-audit-v1",
         "dataset_dir": str(root),
         "passed": not errors,
         "error_count": len(errors),
@@ -216,13 +205,11 @@ def audit_dataset(dataset_dir: Path) -> Dict[str, Any]:
         "split_counts": dict(
             Counter(item.split for item in examples)
         ),
-        "example_type_counts": dict(example_types),
-        "judgment_verdict_counts": dict(verdicts),
-        "invalid_action_count": sum(
-            not item.action_valid for item in examples
-        ),
-        "fatal_boundary_count": sum(
-            item.fatal_boundary for item in examples
+        "message_role_counts": dict(sorted(role_counts.items())),
+        "tool_call_count": sum(item.tool_call_count for item in examples),
+        "longest_token_count_estimate": max(
+            (item.token_count_estimate for item in examples),
+            default=0,
         ),
         "teacher_score_distribution": {
             "count": len(scores),

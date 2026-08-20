@@ -25,6 +25,7 @@ from src.eval.release_adapter import (
     load_runtime_release,
     resolve_runtime_image_path,
 )
+from src.eval.gemini_run_guard import GeminiRunGuard
 from src.eval.scoring_release_adapter import (
     SCORING_PACKAGE_SCHEMA_VERSION,
     ScoringRuntimeRelease,
@@ -35,7 +36,10 @@ from src.eval.scoring_release_adapter import (
 from src.orchestrator.runtime_case import verify_case_image
 from src.orchestrator.source_access import SourceAccessPolicy
 from src.redaction import sanitize_for_persistence
-from src.trajectory.exporter import export_policy_examples
+from src.trajectory.exporter import (
+    export_trajectory_sft_example,
+    trajectory_policy_step_ids,
+)
 from src.trajectory.perception_exporter import export_perception_example
 from src.trajectory.reference_chain import score_reference_chain_trace
 from src.trajectory.scoring import score_process_trace
@@ -707,6 +711,16 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
             "stage_thinking_levels": stage_thinking_levels,
             "qwen_stage_enable_thinking": qwen_stage_thinking,
             "concurrency": max(1, args.concurrency),
+            "gemini_max_inflight_requests": (
+                int(os.getenv("GEMINI_MAX_INFLIGHT_REQUESTS", "4"))
+                if str(config.provider).lower() == "gemini"
+                else None
+            ),
+            "gemini_eval_max_concurrency": (
+                int(os.getenv("GEMINI_EVAL_MAX_CONCURRENCY", "4"))
+                if str(config.provider).lower() == "gemini"
+                else None
+            ),
             "perception_cache_enabled": os.getenv(
                 "PERCEPTION_CACHE_ENABLED",
                 "1",
@@ -747,7 +761,7 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
             "process_metrics": "process_metrics.jsonl",
             "reference_chain_metrics": "reference_chain_metrics.jsonl",
             "trajectory_scores": "trajectory_scores.jsonl",
-            "policy_trajectories": "policy_trajectories.jsonl",
+            "trajectory_sft": "trajectory_sft.jsonl",
             "perception_trajectories": "perception_trajectories.jsonl",
             "rollout_groups": "rollout_groups.jsonl",
             "post_rollout_rewards": "post_rollout_rewards.jsonl",
@@ -755,10 +769,14 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
             "traces": "traces/",
         },
     }
-    _write_json(manifest_path, manifest)
-
-    config.output_dir = str(trace_dir)
+    gemini_guard = GeminiRunGuard.acquire(
+        provider=config.provider,
+        concurrency=max(1, args.concurrency),
+        run_id=manifest["run_id"],
+    )
     try:
+        _write_json(manifest_path, manifest)
+        config.output_dir = str(trace_dir)
         workflow = VerificationWorkflow(config)
         image_paths = [
             str(spec["sample"]["image_path"]) for spec in rollout_specs
@@ -797,7 +815,7 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
         process_metrics: List[Dict[str, Any]] = []
         reference_chain_metrics: List[Dict[str, Any]] = []
         trajectory_scores: List[Dict[str, Any]] = []
-        policy_trajectories: List[Dict[str, Any]] = []
+        trajectory_sft: List[Dict[str, Any]] = []
         perception_trajectories: List[Dict[str, Any]] = []
         rollout_members: List[Dict[str, Any]] = []
         post_rollout_rewards: List[Dict[str, Any]] = []
@@ -881,16 +899,18 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
                 metrics["prompt_group_id"] = spec["prompt_group_id"]
                 teacher_score["episode_id"] = episode_id
                 teacher_score["prompt_group_id"] = spec["prompt_group_id"]
-                strict_failures = audit_trace(
+                audit_report = audit_trace(
                     trace_path,
                     enforce_source_access_policy=bool(
                         explicit_policy and explicit_policy.active
                     ),
-                ).failures(
-                    strict_scheduler=True
                 )
+                strict_failures = audit_report.failures(strict_scheduler=True)
+                hard_failures = audit_report.failures(strict_scheduler=False)
                 strict_trace_audit_pass = not strict_failures
+                hard_trace_audit_pass = not hard_failures
                 metrics["strict_trace_audit_pass"] = strict_trace_audit_pass
+                metrics["hard_trace_audit_pass"] = hard_trace_audit_pass
                 metrics["strict_trace_audit_failures"] = [
                     asdict(item) for item in strict_failures
                 ]
@@ -916,7 +936,7 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
                 reference_chain_metrics.append(reference_score)
                 trajectory_scores.append(teacher_score)
                 try:
-                    exported_policy = export_policy_examples(
+                    exported_trajectory = export_trajectory_sft_example(
                         trace,
                         source_metadata={
                             "source_run_id": manifest["run_id"],
@@ -938,7 +958,7 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
                     reasons = list(
                         metrics.get("training_exclusion_reasons", []) or []
                     )
-                    reasons.append(f"policy_export_rejected: {exc}")
+                    reasons.append(f"trajectory_sft_export_rejected: {exc}")
                     metrics["training_exclusion_reasons"] = list(
                         dict.fromkeys(reasons)
                     )
@@ -946,17 +966,28 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
                     teacher_score["training_exclusion_reasons"] = list(
                         metrics["training_exclusion_reasons"]
                     )
-                    exported_policy = []
-                policy_trajectories.extend(
-                    item.model_dump(mode="json")
-                    for item in exported_policy
+                    exported_trajectory = None
+                if exported_trajectory is not None:
+                    trajectory_sft.append(
+                        exported_trajectory.model_dump(mode="json")
+                    )
+                policy_step_ids = trajectory_policy_step_ids(
+                    trace,
+                    episode_id=episode_id,
                 )
-                member["training_eligible"] = bool(
+                member["sft_training_eligible"] = bool(
                     strict_trace_audit_pass
                     and bool(metrics.get("training_eligible", False))
+                    and exported_trajectory is not None
                     and not member["training_prohibited"]
                     and not isinstance(release, ScoringRuntimeRelease)
                 )
+                member["rl_reward_eligible"] = bool(
+                    not metrics.get("engineering_error", False)
+                    and bool(policy_step_ids)
+                    and not member["training_prohibited"]
+                )
+                member["training_eligible"] = member["sft_training_eligible"]
                 post_rollout_rewards.append(
                     {
                         "schema_version": "ifv-post-rollout-deterministic-v1",
@@ -972,10 +1003,15 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
                         "strict_trace_audit_pass": bool(
                             strict_trace_audit_pass
                         ),
-                        "training_prohibited": member["training_prohibited"],
-                        "step_ids": [
-                            item.step_id for item in exported_policy
+                        "hard_trace_audit_pass": bool(hard_trace_audit_pass),
+                        "strict_trace_audit_failure_codes": [
+                            str(item.get("code", ""))
+                            for item in metrics.get("strict_trace_audit_failures", [])
+                            if str(item.get("code", ""))
                         ],
+                        "training_prohibited": member["training_prohibited"],
+                        "rl_reward_eligible": member["rl_reward_eligible"],
+                        "step_ids": policy_step_ids,
                         "process_components": dict(
                             teacher_score.get("components") or {}
                         ),
@@ -1071,7 +1107,7 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
             reference_chain_metrics,
         )
         _write_jsonl(run_dir / "trajectory_scores.jsonl", trajectory_scores)
-        _write_jsonl(run_dir / "policy_trajectories.jsonl", policy_trajectories)
+        _write_jsonl(run_dir / "trajectory_sft.jsonl", trajectory_sft)
         _write_jsonl(
             run_dir / "perception_trajectories.jsonl",
             perception_trajectories,
@@ -1100,6 +1136,8 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
         manifest["error"] = f"{type(exc).__name__}: {exc}"
         _write_json(manifest_path, manifest)
         raise
+    finally:
+        gemini_guard.release()
 
 
 def main() -> None:

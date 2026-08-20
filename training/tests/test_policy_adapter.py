@@ -10,73 +10,80 @@ from ifv_training.io import write_json, write_jsonl
 from ifv_training.policy import convert_policy_dataset, convert_policy_row
 
 
-def _policy_row(example_type: str) -> dict:
-    action = (
-        {
-            "type": "tool_call",
-            "name": "text_search",
-            "arguments": {
-                "queries": ["museum object official collection"],
-                "question_id": "task-1",
-            },
-        }
-        if example_type == "react"
-        else {"ready": True, "reason": "decisive evidence is resolved"}
-    )
+def _trajectory_row() -> dict:
+    tool_call = {
+        "name": "text_search",
+        "arguments": {
+            "queries": ["museum object official collection"],
+            "question_id": "task-1",
+        },
+    }
     return {
-        "dataset_version": "ifv-policy-dataset-v2",
-        "trajectory_version": "ifv-policy-v1",
-        "tokenizer_id": "utf8-byte-v1",
+        "dataset_version": "ifv-trajectory-sft-dataset-v1",
+        "trajectory_version": "ifv-trajectory-sft-v1",
         "episode_id": "case-1",
-        "step_id": f"case-1:{example_type}:1",
+        "case_id": "case-1",
         "source_run_id": "run-1",
         "runtime_commit": "a" * 40,
         "release_id": "release-1",
         "runtime_contract_version": "ifv-image-only-runtime-v1",
         "process_reference_protocol_version": "protocol-v1",
-        "example_type": example_type,
-        "runtime_observation_refs": [],
-        "policy_input": {
-            "system_instruction": (
-                "Follow the runtime contract.\n\n"
-                "Native Gemini Interactions protocol:\n"
-                "Do not leak this provider wire text."
-            ),
-            "input_payload": "Current public investigation state.",
-            "tools": [
+        "messages": [
+            {
+                "role": "system",
+                "content": "You are the Image Factual Verifier policy model.",
+            },
+            {
+                "role": "user",
+                "content": "Investigate the image and decide the visible fact.",
+            },
+            {
+                "role": "tool_call",
+                "content": json.dumps(tool_call),
+                "loss": True,
+            },
+            {
+                "role": "tool_response",
+                "content": json.dumps(
+                    {
+                        "name": "text_search",
+                        "result": {"status": "ok", "results": []},
+                    }
+                ),
+            },
+            {
+                "role": "assistant",
+                "content": json.dumps(
+                    {"verdict": "real", "reason": "evidence is sufficient"}
+                ),
+                "loss": True,
+            },
+        ],
+        "tools": json.dumps(
+            [
                 {
                     "type": "function",
-                    "name": "text_search",
-                    "description": "Search public pages.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "queries": {
-                                "type": "array",
-                                "items": {"type": "string"},
+                    "function": {
+                        "name": "text_search",
+                        "description": "Search public pages.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "queries": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                },
+                                "question_id": {"type": "string"},
                             },
-                            "question_id": {"type": "string"},
+                            "required": ["queries", "question_id"],
                         },
-                        "required": ["queries", "question_id"],
                     },
                 }
-            ],
-            "response_format": {
-                "type": "json_schema",
-                "schema": {
-                    "type": "object",
-                    "properties": {"ready": {"type": "boolean"}},
-                    "required": ["ready"],
-                },
-            },
-        },
-        "policy_action": action,
-        "policy_input_token_ids": [1],
-        "policy_action_token_ids": [2],
-        "policy_action_loss_mask": [1],
-        "action_valid": True,
-        "terminated": example_type == "judgment",
-        "fatal_boundary": False,
+            ]
+        ),
+        "token_count_estimate": 100,
+        "message_count": 5,
+        "tool_call_count": 1,
         "split": "train",
         "split_group_id": "group-1",
         "source_family_keys": ["domain:example.org"],
@@ -85,64 +92,28 @@ def _policy_row(example_type: str) -> dict:
 
 
 def test_react_uses_ms_swift_native_agent_format() -> None:
-    converted = convert_policy_row(_policy_row("react"))
+    converted = convert_policy_row(_trajectory_row())
 
     assert [message["role"] for message in converted["messages"]] == [
         "system",
         "user",
         "tool_call",
+        "tool_response",
+        "assistant",
     ]
-    assert converted["messages"][-1]["loss"] is True
-    assert json.loads(converted["messages"][-1]["content"]) == {
-        "name": "text_search",
-        "arguments": {
-            "queries": ["museum object official collection"],
-            "question_id": "task-1",
-        },
-    }
+    assert converted["messages"][2]["loss"] is True
+    assert converted["messages"][3].get("loss") is None
+    assert converted["messages"][4]["loss"] is True
+    assert json.loads(converted["messages"][2]["content"])["name"] == "text_search"
     tools = json.loads(converted["tools"])
     assert tools[0]["function"]["name"] == "text_search"
-    assert "Gemini Interactions" not in json.dumps(converted)
+    assert converted["channel"] == "trajectory_sft"
     assert "policy_action_token_ids" not in converted
 
 
-def test_structured_stage_retains_response_contract() -> None:
-    converted = convert_policy_row(_policy_row("reflection"))
-
-    assert [message["role"] for message in converted["messages"]] == [
-        "system",
-        "user",
-        "assistant",
-    ]
-    assert "Required structured output contract" in converted["messages"][1][
-        "content"
-    ]
-    assert json.loads(converted["messages"][-1]["content"])["ready"] is True
-
-
-@pytest.mark.parametrize(
-    "example_type",
-    [
-        "planning",
-        "image_account_planning",
-        "evidence_decision",
-        "discrepancy_decision",
-        "query_concept_extraction",
-        "query_replan",
-        "reflection",
-        "judgment",
-    ],
-)
-def test_v4_structured_stages_are_supported(example_type: str) -> None:
-    converted = convert_policy_row(_policy_row(example_type))
-
-    assert converted["channel"] == example_type
-    assert converted["messages"][-1]["role"] == "assistant"
-
-
 def test_private_fields_are_rejected() -> None:
-    row = _policy_row("react")
-    row["policy_input"]["evaluation_gold"] = {"verdict": "fake"}
+    row = _trajectory_row()
+    row["messages"][1]["evaluation_gold"] = {"verdict": "fake"}
 
     with pytest.raises(ValueError, match="evaluation_gold"):
         convert_policy_row(row)
@@ -156,15 +127,15 @@ def test_dataset_conversion_is_deterministic_and_auditable(
     write_json(
         source / "manifest.json",
         {
-            "dataset_version": "ifv-policy-dataset-v2",
-            "schema_version": "ifv-policy-dataset-manifest-v2",
+            "dataset_version": "ifv-trajectory-sft-dataset-v1",
+            "schema_version": "ifv-trajectory-sft-dataset-manifest-v1",
         },
     )
     rows = [
-        _policy_row("react"),
-        _policy_row("reflection"),
-        _policy_row("evidence_decision"),
-        _policy_row("discrepancy_decision"),
+        _trajectory_row(),
+        {**_trajectory_row(), "episode_id": "case-2", "case_id": "case-2"},
+        {**_trajectory_row(), "episode_id": "case-3", "case_id": "case-3"},
+        {**_trajectory_row(), "episode_id": "case-4", "case_id": "case-4"},
     ]
     write_jsonl(source / "train.jsonl", rows)
     write_jsonl(source / "validation.jsonl", [])
@@ -177,7 +148,7 @@ def test_dataset_conversion_is_deterministic_and_auditable(
     audit = audit_derived_dataset(first)
 
     assert manifest["example_count"] == 4
-    assert manifest["artifacts"]["train_group_decision"]["rows"] == 2
+    assert manifest["artifacts"]["train"]["rows"] == 4
     assert audit["passed"] is True
     for path in first.iterdir():
         assert path.read_bytes() == (second / path.name).read_bytes()
@@ -190,5 +161,5 @@ def test_v1_dataset_is_not_silently_accepted(tmp_path: Path) -> None:
         source / "manifest.json",
         {"dataset_version": "ifv-policy-dataset-v1"},
     )
-    with pytest.raises(ValueError, match="ifv-policy-dataset-v2"):
+    with pytest.raises(ValueError, match="training adapter accepts only"):
         convert_policy_dataset(source, tmp_path / "output")

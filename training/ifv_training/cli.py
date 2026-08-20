@@ -15,6 +15,7 @@ from .checkpoint_io import (
     checkpoint_storage_preflight,
     write_json as write_checkpoint_json,
 )
+from .checkpoint_selection import validate_checkpoints
 from .encode_cache import aggregate_encode_cache_metrics
 from .io import load_json, load_jsonl, write_json, write_jsonl
 from .manifests import (
@@ -180,6 +181,21 @@ def _parser() -> argparse.ArgumentParser:
     training_profile.add_argument("--checkpoint-preflight", type=Path)
     training_profile.add_argument("--checkpoint-io-profile", type=Path)
     training_profile.add_argument("--train-exit-code", type=int)
+
+    checkpoint_validation = subparsers.add_parser("validate-checkpoints")
+    checkpoint_validation.add_argument("--train-log", type=Path, required=True)
+    checkpoint_validation.add_argument(
+        "--checkpoint-root", type=Path, required=True
+    )
+    checkpoint_validation.add_argument("--output", type=Path, required=True)
+    checkpoint_validation.add_argument("--behavior-metrics", type=Path)
+    checkpoint_validation.add_argument("--train-rows", type=int)
+    checkpoint_validation.add_argument("--global-batch", type=int)
+    checkpoint_validation.add_argument(
+        "--selection",
+        choices=("auto", "eval_loss", "behavior"),
+        default="auto",
+    )
 
     encode_cache_report = subparsers.add_parser("encode-cache-report")
     encode_cache_report.add_argument("--metrics-dir", type=Path, required=True)
@@ -349,6 +365,19 @@ def main() -> None:
             checkpoint_io_profile=args.checkpoint_io_profile,
             train_exit_code=args.train_exit_code,
         )
+    elif args.command == "validate-checkpoints":
+        result = validate_checkpoints(
+            train_log=args.train_log,
+            checkpoint_root=args.checkpoint_root,
+            output=args.output,
+            behavior_metrics=args.behavior_metrics,
+            train_rows=args.train_rows,
+            global_batch=args.global_batch,
+            selection=args.selection,
+        )
+        if not result["passed"]:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            raise SystemExit(1)
     elif args.command == "encode-cache-report":
         result = aggregate_encode_cache_metrics(
             args.metrics_dir,

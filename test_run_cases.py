@@ -183,7 +183,7 @@ def test_run_cases_writes_minimal_artifacts_without_private_gold(
         "process_metrics.jsonl",
         "reference_chain_metrics.jsonl",
         "trajectory_scores.jsonl",
-        "policy_trajectories.jsonl",
+        "trajectory_sft.jsonl",
         "perception_trajectories.jsonl",
         "rollout_groups.jsonl",
         "post_rollout_rewards.jsonl",

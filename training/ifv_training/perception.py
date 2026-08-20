@@ -17,7 +17,10 @@ from .io import (
 
 
 OUTPUT_VERSION = "ifv-ms-swift-perception-v1"
-SUPPORTED_ACCEPTED_DATASET_VERSION = "ifv-policy-dataset-v2"
+SUPPORTED_ACCEPTED_DATASET_VERSIONS = {
+    "ifv-policy-dataset-v2",
+    "ifv-trajectory-sft-dataset-v1",
+}
 PERCEPTION_INSTRUCTION = """<image>
 Report only literal, visible image content as one JSON object matching the
 PerceptionReport contract. Include scene_description, image_type, entities with
@@ -68,8 +71,8 @@ def accepted_perception_row(
 ) -> dict[str, Any]:
     """Convert one frozen accepted perception example to ms-swift format."""
 
-    if str(source.get("dataset_version", "")) != (
-        SUPPORTED_ACCEPTED_DATASET_VERSION
+    if str(source.get("dataset_version", "")) not in (
+        SUPPORTED_ACCEPTED_DATASET_VERSIONS
     ):
         raise ValueError("accepted perception row has an unsupported dataset version")
     if str(source.get("split", "")) != expected_split:
@@ -114,10 +117,10 @@ def convert_accepted_perception_dataset(
     """Convert only frozen, three-gate-accepted perception examples."""
 
     source_manifest = load_json(input_dir / "manifest.json")
-    if source_manifest.get("dataset_version") != SUPPORTED_ACCEPTED_DATASET_VERSION:
+    if source_manifest.get("dataset_version") not in SUPPORTED_ACCEPTED_DATASET_VERSIONS:
         raise ValueError(
             "accepted perception adapter requires "
-            f"{SUPPORTED_ACCEPTED_DATASET_VERSION}"
+            f"one of {sorted(SUPPORTED_ACCEPTED_DATASET_VERSIONS)}"
         )
     if source_manifest.get("split_mode") != "frozen_teacher_sft":
         raise ValueError("accepted perception adapter requires a frozen teacher dataset")

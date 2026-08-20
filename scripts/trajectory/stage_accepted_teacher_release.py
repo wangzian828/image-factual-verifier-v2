@@ -23,7 +23,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from src.trajectory.exporter import export_policy_examples
+from src.trajectory.exporter import export_trajectory_sft_example
+from src.trajectory.perception_exporter import export_perception_example
 
 
 SCHEMA_VERSION = "ifv-accepted-teacher-release-v2"
@@ -35,7 +36,6 @@ DETERMINISTIC_FATAL_TEACHER_REASONS = frozenset(
     }
 )
 JSONL_ARTIFACTS = (
-    "perception_trajectories.jsonl",
     "trajectory_scores.jsonl",
     "run_results.jsonl",
     "rollout_groups.jsonl",
@@ -419,7 +419,8 @@ def stage_release(
     selected_rows = []
     selected_by_run: Dict[Path, set[str]] = {}
     selected_cases_by_run: Dict[Path, set[str]] = {}
-    policy_rows: list[Dict[str, Any]] = []
+    trajectory_sft_rows: list[Dict[str, Any]] = []
+    perception_rows: list[Dict[str, Any]] = []
     (output_dir / "eligibility").mkdir(parents=True, exist_ok=True)
     has_semantic_diagnostics = any(
         candidate.get("semantic_path") is not None
@@ -449,14 +450,25 @@ def stage_release(
             )
             is True
         )
-        exported_policy = export_policy_examples(
+        exported_trajectory = export_trajectory_sft_example(
             trace,
             source_metadata=candidate["source_metadata"],
             allow_incomplete_verdict_chain=sft_judge_passed,
         )
-        if not exported_policy:
-            raise ValueError(f"accepted trace exported no policy examples: {case_id}")
-        policy_rows.extend(item.model_dump(mode="json") for item in exported_policy)
+        trajectory_sft_rows.append(exported_trajectory.model_dump(mode="json"))
+        perception_export_error = ""
+        try:
+            exported_perception = export_perception_example(
+                trace,
+                source_metadata=candidate["source_metadata"],
+            )
+        except ValueError as exc:
+            exported_perception = None
+            perception_export_error = str(exc)
+        if exported_perception is not None:
+            perception_rows.append(
+                exported_perception.model_dump(mode="json")
+            )
         selected_rows.append(
             {
                 "case_id": case_id,
@@ -472,10 +484,18 @@ def stage_release(
                 "deterministic_red_flags": candidate["deterministic_red_flags"],
                 "sft_eligibility_artifact_id": candidate["eligibility"].get("artifact_id"),
                 "semantic_reward_artifact_id": candidate["semantic"].get("artifact_id"),
+                "trajectory_sft_rows": 1,
+                "trajectory_token_count_estimate": (
+                    exported_trajectory.token_count_estimate
+                ),
+                "tool_call_count": exported_trajectory.tool_call_count,
+                "perception_example_count": int(exported_perception is not None),
+                "perception_export_error": perception_export_error,
             }
         )
 
-    _write_jsonl(output_dir / "policy_trajectories.jsonl", policy_rows)
+    _write_jsonl(output_dir / "trajectory_sft.jsonl", trajectory_sft_rows)
+    _write_jsonl(output_dir / "perception_trajectories.jsonl", perception_rows)
     for artifact_name in JSONL_ARTIFACTS:
         rows: list[Dict[str, Any]] = []
         for run_dir, episode_ids in selected_by_run.items():
@@ -499,6 +519,12 @@ def stage_release(
             "selected_episodes": "selected_episodes.jsonl",
             "rejected_episodes": "rejected_episodes.jsonl",
             "source_run_kind": "strict-structured-selected",
+            "canonical_training_source": {
+                "trajectory_sft_export": "canonical_trace",
+                "allow_incomplete_verdict_chain": True,
+                "perception_export": "canonical_trace",
+                "legacy_step_policy_export": "disabled",
+            },
         }
     )
     _write_json(output_dir / "run_manifest.json", first_manifest)
@@ -518,6 +544,12 @@ def stage_release(
             "semantic_rewards_dir": (
                 "semantic_rewards" if has_semantic_diagnostics else None
             ),
+        },
+        "canonical_training_source": {
+            "trajectory_sft_export": "canonical_trace",
+            "allow_incomplete_verdict_chain": True,
+            "perception_export": "canonical_trace",
+            "legacy_step_policy_export": "disabled",
         },
     }
     _write_json(output_dir / "accepted_release_manifest.json", manifest)

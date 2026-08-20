@@ -1,4 +1,4 @@
-"""Build a split-safe policy dataset from completed v3 evaluation runs."""
+"""Build a split-safe full-trajectory SFT dataset from completed runs."""
 
 from __future__ import annotations
 
@@ -15,14 +15,17 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from src.trajectory.schema import (
-    DatasetExample,
     DatasetPerceptionExample,
+    DatasetTrajectorySFTExample,
     PerceptionExample,
-    PolicyExample,
+    TrajectorySFTExample,
  )
+from src.trajectory.exporter import export_trajectory_sft_example
 
 
 SPLITS = ("train", "validation", "test")
+ACCEPTED_RELEASE_SCHEMA = "ifv-accepted-teacher-release-v2"
+DEFAULT_SHORT_TRAJECTORY_MAX_TOKENS = 32768
 DETERMINISTIC_FATAL_TEACHER_REASONS = frozenset(
     {
         "incorrect_result",
@@ -189,6 +192,70 @@ def _load_gate_artifacts(
     return result
 
 
+def _load_canonical_accepted_release(
+    path: Path,
+) -> tuple[Path, Dict[str, Dict[str, Any]]]:
+    """Load the one canonical source of frozen teacher examples.
+
+    The accepted release already contains the post-judge policy export.  A
+    frozen dataset export must consume those rows instead of reconstructing
+    policy examples from the original rollout directories, whose historical
+    exports may have used a stricter pre-judge verdict-chain gate.
+    """
+
+    root = path.expanduser().resolve()
+    manifest_path = root / "accepted_release_manifest.json"
+    manifest = _load_json(manifest_path)
+    if manifest.get("schema_version") != ACCEPTED_RELEASE_SCHEMA:
+        raise ValueError(
+            "accepted-release has unsupported schema: "
+            f"{manifest.get('schema_version')!r}"
+        )
+    if not (root / "run_manifest.json").is_file():
+        raise ValueError("accepted-release is missing run_manifest.json")
+    eligibility_dir = root / "eligibility"
+    if not eligibility_dir.is_dir():
+        raise ValueError("accepted-release is missing eligibility/")
+
+    selected_rows = _load_jsonl(root / "selected_episodes.jsonl")
+    selected_by_episode: Dict[str, Dict[str, Any]] = {}
+    selected_cases: set[str] = set()
+    for row in selected_rows:
+        episode_id = str(row.get("episode_id", "")).strip()
+        case_id = str(row.get("case_id", "")).strip()
+        trace_sha256 = str(row.get("source_trace_sha256", "")).strip()
+        if not episode_id or not case_id or not trace_sha256:
+            raise ValueError(
+                "accepted-release selected episode requires "
+                "case_id, episode_id and source_trace_sha256"
+            )
+        if episode_id in selected_by_episode:
+            raise ValueError(
+                f"accepted-release has duplicate episode_id: {episode_id}"
+            )
+        if case_id in selected_cases:
+            raise ValueError(
+                f"accepted-release has duplicate selected case_id: {case_id}"
+            )
+        if row.get("deterministic_hard_gate_pass") is not True:
+            raise ValueError(
+                "accepted-release contains a selected episode without a "
+                f"passing deterministic gate: {episode_id}"
+            )
+        selected_by_episode[episode_id] = row
+        selected_cases.add(case_id)
+
+    expected_count = int(manifest.get("accepted_case_count", -1))
+    if expected_count != len(selected_cases):
+        raise ValueError(
+            "accepted-release accepted_case_count does not match "
+            f"selected episodes: {expected_count} != {len(selected_cases)}"
+        )
+    if not selected_by_episode:
+        raise ValueError("accepted-release selected_episodes.jsonl is empty")
+    return root, selected_by_episode
+
+
 def _deterministic_teacher_quality(score: Mapping[str, Any]) -> Dict[str, Any]:
     if not score:
         return {
@@ -253,9 +320,10 @@ def _assign_split(
 
 
 def export_dataset(
-    run_dirs: Sequence[Path],
+    run_dirs: Sequence[Path] | None,
     output_dir: Path,
     *,
+    accepted_release_path: Path | None = None,
     case_split_path: Path | None = None,
     eligibility_dir: Path | None = None,
     semantic_reward_dir: Path | None = None,
@@ -265,7 +333,29 @@ def export_dataset(
     train_ratio: float = 0.8,
     validation_ratio: float = 0.1,
     seed: str = "ifv-policy-v1",
+    short_max_tokens: int = DEFAULT_SHORT_TRAJECTORY_MAX_TOKENS,
 ) -> Dict[str, Any]:
+    accepted_release: Path | None = None
+    accepted_release_rows: Dict[str, Dict[str, Any]] = {}
+    if accepted_release_path is not None:
+        if run_dirs:
+            raise ValueError(
+                "accepted-release mode cannot be combined with --run-dir"
+            )
+        accepted_release, accepted_release_rows = (
+            _load_canonical_accepted_release(accepted_release_path)
+        )
+        run_dirs = [accepted_release]
+        canonical_eligibility_dir = accepted_release / "eligibility"
+        if eligibility_dir is not None and (
+            eligibility_dir.expanduser().resolve() != canonical_eligibility_dir
+        ):
+            raise ValueError(
+                "accepted-release mode owns its eligibility directory; "
+                "do not pass a second --eligibility-dir"
+            )
+        eligibility_dir = canonical_eligibility_dir
+        require_frozen_gates = True
     if not run_dirs:
         raise ValueError("at least one run directory is required")
     frozen_inputs = (case_split_path, eligibility_dir, semantic_reward_dir)
@@ -283,6 +373,8 @@ def export_dataset(
         raise ValueError("split ratios must be non-negative")
     if train_ratio + validation_ratio >= 1:
         raise ValueError("train_ratio + validation_ratio must be below 1")
+    if short_max_tokens < 1:
+        raise ValueError("short_max_tokens must be positive")
     if output_dir.exists() and any(output_dir.iterdir()):
         raise FileExistsError(
             f"dataset output directory must be new or empty: {output_dir}"
@@ -303,7 +395,7 @@ def export_dataset(
         if semantic_reward_dir is not None
         else {}
     )
-    examples_by_episode: Dict[str, List[PolicyExample]] = defaultdict(list)
+    trajectory_by_episode: Dict[str, TrajectorySFTExample] = {}
     perception_by_episode: Dict[str, PerceptionExample] = {}
     episode_metadata: Dict[str, Dict[str, Any]] = {}
     score_by_episode: Dict[str, Dict[str, Any]] = {}
@@ -327,9 +419,6 @@ def export_dataset(
             ).strip()
             if score_key:
                 score_by_episode[score_key] = dict(row)
-        for row in _load_jsonl(run_dir / "policy_trajectories.jsonl"):
-            example = PolicyExample.model_validate(row)
-            examples_by_episode[example.episode_id].append(example)
         for row in _load_jsonl(run_dir / "perception_trajectories.jsonl"):
             example = PerceptionExample.model_validate(row)
             if example.episode_id in perception_by_episode:
@@ -347,6 +436,50 @@ def export_dataset(
             trace_sha256 = _sha256(trace_path)
             score = score_by_episode.get(episode_id, {})
             deterministic_quality = _deterministic_teacher_quality(score)
+            accepted_release_row = (
+                accepted_release_rows.get(episode_id)
+                if accepted_release is not None
+                else None
+            )
+            if accepted_release is not None:
+                if accepted_release_row is None:
+                    raise ValueError(
+                        "accepted-release trace is not listed as selected: "
+                        f"{episode_id}"
+                    )
+                if str(
+                    accepted_release_row.get("source_trace_sha256", "")
+                ) != trace_sha256:
+                    raise ValueError(
+                        "accepted-release trace SHA-256 mismatch: "
+                        f"{episode_id}"
+                    )
+                score = {
+                    "episode_id": episode_id,
+                    "total": float(
+                        accepted_release_row.get("teacher_score", 0.0)
+                        or 0.0
+                    ),
+                    "training_eligible": True,
+                    "training_exclusion_reasons": [],
+                }
+                deterministic_quality = {
+                    "hard_gate_pass": True,
+                    "fatal_reasons": [
+                        str(item)
+                        for item in accepted_release_row.get(
+                            "deterministic_fatal_reasons", []
+                        )
+                        or []
+                    ],
+                    "red_flags": [
+                        str(item)
+                        for item in accepted_release_row.get(
+                            "deterministic_red_flags", []
+                        )
+                        or []
+                    ],
+                }
             training_eligible = bool(score.get("training_eligible", False))
             eligibility = eligibility_by_episode.get(episode_id, {})
             semantic = semantic_by_episode.get(episode_id, {})
@@ -445,14 +578,46 @@ def export_dataset(
                 "sft_eligibility_artifact_id": eligibility.get("artifact_id"),
                 "semantic_reward_artifact_id": semantic.get("artifact_id"),
             }
+            try:
+                sft_judge_passed = (
+                    _mapping(eligibility.get("gates")).get(
+                        "sft_eligibility_pass"
+                    )
+                    is True
+                )
+                trajectory_by_episode[episode_id] = export_trajectory_sft_example(
+                    trace,
+                    source_metadata={
+                        "source_run_id": manifest.get("run_id"),
+                        "runtime_commit": manifest.get("git_commit"),
+                        "release_id": _mapping(manifest.get("benchmark")).get(
+                            "release_id"
+                        ),
+                        "runtime_contract_version": _mapping(
+                            manifest.get("benchmark")
+                        ).get("runtime_contract_version", ""),
+                        "process_reference_protocol_version": manifest.get(
+                            "process_reference_protocol_version",
+                            "",
+                        ),
+                    },
+                    allow_incomplete_verdict_chain=sft_judge_passed,
+                )
+                episode_metadata[episode_id][
+                    "trajectory_export_error"
+                ] = ""
+                episode_metadata[episode_id][
+                    "trajectory_token_count_estimate"
+                ] = trajectory_by_episode[episode_id].token_count_estimate
+                episode_metadata[episode_id]["tool_call_count"] = (
+                    trajectory_by_episode[episode_id].tool_call_count
+                )
+            except ValueError as exc:
+                episode_metadata[episode_id][
+                    "trajectory_export_error"
+                ] = str(exc)
 
-    candidate_ids = set(examples_by_episode) | set(perception_by_episode)
-    unknown_metadata = sorted(candidate_ids - set(episode_metadata))
-    if unknown_metadata:
-        raise ValueError(
-            "policy examples lack canonical trace metadata: "
-            + ", ".join(unknown_metadata)
-        )
+    all_episodes = sorted(episode_metadata)
 
     if require_frozen_gates:
         missing_split = sorted(
@@ -467,16 +632,15 @@ def export_dataset(
                 "fixed case split lacks teacher cases: "
                 + ", ".join(missing_split[:10])
             )
-    all_episodes = sorted(candidate_ids)
     if require_frozen_gates:
         for episode_id in all_episodes:
             metadata = episode_metadata[episode_id]
-            if not examples_by_episode[episode_id]:
+            if episode_id not in trajectory_by_episode:
                 metadata["training_eligible"] = False
                 metadata["training_exclusion_reasons"] = list(
                     dict.fromkeys(
                         [
-                            "no_exportable_policy_examples",
+                            "no_exportable_trajectory_sft",
                             *metadata["training_exclusion_reasons"],
                         ]
                     )
@@ -540,11 +704,12 @@ def export_dataset(
             episode_id
             for episode_id in all_episodes
             if episode_metadata[episode_id]["training_eligible"]
+            and episode_id in trajectory_by_episode
         ]
     excluded_episode_rows = [
         {
             **episode_metadata[episode_id],
-            "example_count": len(examples_by_episode[episode_id]),
+            "trajectory_sft_rows": int(episode_id in trajectory_by_episode),
             "perception_example_count": int(
                 episode_id in perception_by_episode
             ),
@@ -621,15 +786,20 @@ def export_dataset(
     perception_split_rows: Dict[str, List[Dict[str, Any]]] = {
         split: [] for split in SPLITS
     }
+    long_holdout_rows: List[Dict[str, Any]] = []
     metadata_rows: List[Dict[str, Any]] = []
     accepted_episode_rows: List[Dict[str, Any]] = []
     for episode_id in episodes:
         metadata = episode_metadata[episode_id]
         split = split_by_episode[episode_id]
+        trajectory = trajectory_by_episode[episode_id]
+        is_short = trajectory.token_count_estimate <= short_max_tokens
         accepted_row = {
             **metadata,
             "split": split,
             "split_group_id": group_by_episode[episode_id],
+            "sft_route": "short_sft" if is_short else "long_holdout",
+            "short_max_tokens": short_max_tokens,
         }
         metadata_rows.append(accepted_row)
         accepted_episode_rows.append(
@@ -648,22 +818,31 @@ def export_dataset(
                     "deterministic_fatal_reasons",
                     "deterministic_red_flags",
                     "teacher_score",
+                    "trajectory_token_count_estimate",
+                    "tool_call_count",
+                    "sft_route",
                 )
             }
         )
-        for example in examples_by_episode[episode_id]:
-            dataset_example = DatasetExample(
-                **example.model_dump(mode="json"),
-                split=split,
-                split_group_id=group_by_episode[episode_id],
-                source_family_keys=metadata["source_family_keys"],
-                teacher_score=metadata["teacher_score"],
-            )
-            split_rows[split].append(
-                dataset_example.model_dump(mode="json")
+        dataset_trajectory = DatasetTrajectorySFTExample(
+            **trajectory.model_dump(mode="json"),
+            split=split,
+            split_group_id=group_by_episode[episode_id],
+            source_family_keys=metadata["source_family_keys"],
+            teacher_score=metadata["teacher_score"],
+        ).model_dump(mode="json")
+        if is_short:
+            split_rows[split].append(dataset_trajectory)
+        else:
+            long_holdout_rows.append(
+                {
+                    **dataset_trajectory,
+                    "holdout_reason": "trajectory_exceeds_short_token_budget",
+                    "short_max_tokens": short_max_tokens,
+                }
             )
         perception_example = perception_by_episode.get(episode_id)
-        if perception_example is not None:
+        if perception_example is not None and is_short:
             dataset_perception = DatasetPerceptionExample(
                 **perception_example.model_dump(mode="json"),
                 split=split,
@@ -674,7 +853,7 @@ def export_dataset(
             )
 
     for split, rows in split_rows.items():
-        rows.sort(key=lambda item: (item["episode_id"], item["step_id"]))
+        rows.sort(key=lambda item: item["episode_id"])
         _write_jsonl(output_dir / f"{split}.jsonl", rows)
         perception_rows = perception_split_rows[split]
         perception_rows.sort(key=lambda item: item["episode_id"])
@@ -682,6 +861,8 @@ def export_dataset(
             output_dir / f"perception.{split}.jsonl",
             perception_rows,
         )
+    long_holdout_rows.sort(key=lambda item: item["episode_id"])
+    _write_jsonl(output_dir / "long_holdout.jsonl", long_holdout_rows)
     metadata_rows.sort(key=lambda item: item["episode_id"])
     _write_jsonl(output_dir / "episode_metadata.jsonl", metadata_rows)
     accepted_episode_rows.sort(key=lambda item: item["episode_id"])
@@ -692,14 +873,16 @@ def export_dataset(
         excluded_episode_rows,
     )
     manifest = {
-        "schema_version": "ifv-policy-dataset-manifest-v2",
-        "dataset_version": "ifv-policy-dataset-v2",
-        "trajectory_version": "ifv-policy-v1",
+        "schema_version": "ifv-trajectory-sft-dataset-manifest-v1",
+        "dataset_version": "ifv-trajectory-sft-dataset-v1",
+        "trajectory_version": "ifv-trajectory-sft-v1",
         "perception_version": "ifv-perception-v1",
+        "legacy_step_policy_export": "disabled",
         "split_mode": (
             "frozen_teacher_sft" if require_frozen_gates else "derived"
         ),
         "seed": seed,
+        "short_max_tokens": short_max_tokens,
         "split_ratios": (
             None
             if require_frozen_gates
@@ -722,13 +905,38 @@ def export_dataset(
                 )
                 if semantic_reward_dir is not None
                 else None,
+                "accepted_release": (
+                    {
+                        "path": str(accepted_release),
+                        "manifest_sha256": _sha256(
+                            accepted_release
+                            / "accepted_release_manifest.json"
+                        ),
+                    }
+                    if accepted_release is not None
+                    else None
+                ),
             }
             if require_frozen_gates
             else None
         ),
-        "episode_count": len(episodes),
+        "source_mode": (
+            "canonical_accepted_release"
+            if accepted_release is not None
+            else "rollout_run"
+        ),
+        "episode_count": sum(len(rows) for rows in split_rows.values()),
+        "accepted_episode_count": len(episodes),
+        "long_holdout_episode_count": len(long_holdout_rows),
         "accepted_case_count": len(
             {str(episode_metadata[episode_id]["case_id"]) for episode_id in episodes}
+        ),
+        "short_sft_case_count": len(
+            {
+                str(row["case_id"])
+                for rows in split_rows.values()
+                for row in rows
+            }
         ),
         "candidate_episode_count": len(all_episodes),
         "excluded_episode_count": len(excluded_episode_rows),
@@ -752,6 +960,7 @@ def export_dataset(
             "excluded_episode_metadata": (
                 "excluded_episode_metadata.jsonl"
             ),
+            "long_holdout": "long_holdout.jsonl",
         },
     }
     _write_json(output_dir / "manifest.json", manifest)
@@ -760,7 +969,8 @@ def export_dataset(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--run-dir", action="append", type=Path, required=True)
+    parser.add_argument("--run-dir", action="append", type=Path)
+    parser.add_argument("--accepted-release", type=Path)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--case-split", type=Path)
     parser.add_argument("--eligibility-dir", type=Path)
@@ -770,14 +980,28 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--train-ratio", type=float, default=0.8)
     parser.add_argument("--validation-ratio", type=float, default=0.1)
     parser.add_argument("--seed", default="ifv-policy-v1")
+    parser.add_argument(
+        "--short-max-tokens",
+        type=int,
+        default=DEFAULT_SHORT_TRAJECTORY_MAX_TOKENS,
+        help=(
+            "Maximum estimated tokens for short full-trajectory SFT rows; "
+            "longer accepted episodes are kept in long_holdout.jsonl."
+        ),
+    )
     return parser
 
 
 def main() -> None:
     args = build_parser().parse_args()
+    if bool(args.run_dir) == bool(args.accepted_release):
+        raise SystemExit(
+            "provide exactly one of --run-dir or --accepted-release"
+        )
     result = export_dataset(
         args.run_dir,
         args.output_dir,
+        accepted_release_path=args.accepted_release,
         case_split_path=args.case_split,
         eligibility_dir=args.eligibility_dir,
         semantic_reward_dir=args.semantic_reward_dir,
@@ -786,6 +1010,7 @@ def main() -> None:
         train_ratio=args.train_ratio,
         validation_ratio=args.validation_ratio,
         seed=args.seed,
+        short_max_tokens=args.short_max_tokens,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
 

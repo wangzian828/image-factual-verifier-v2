@@ -86,6 +86,26 @@ def _parse_step(value: Any) -> tuple[int | None, int | None]:
         return None, None
 
 
+def read_training_metric_rows(train_log: Path) -> list[dict[str, Any]]:
+    """Read normalized metric dictionaries from an ms-swift training log."""
+
+    rows: list[dict[str, Any]] = []
+    with train_log.open(encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            metric = _parse_metric_dict(line)
+            if metric is None:
+                continue
+            current_step, max_steps = _parse_step(
+                metric.get("global_step/max_steps")
+            )
+            if current_step is not None:
+                metric["global_step"] = current_step
+            if max_steps is not None:
+                metric["max_steps"] = max_steps
+            rows.append(metric)
+    return rows
+
+
 def _metric_value(row: dict[str, Any], *names: str) -> float | None:
     for name in names:
         value = row.get(name)
@@ -136,6 +156,15 @@ def _int_value(value: str | None, default: int | None = None) -> int | None:
         return default
     try:
         return int(value)
+    except ValueError:
+        return default
+
+
+def _float_value(value: str | None, default: float | None = None) -> float | None:
+    if value is None:
+        return default
+    try:
+        return float(value)
     except ValueError:
         return default
 
@@ -302,6 +331,9 @@ def summarize_training_log(
     eval_loss_values = [
         value for row in metrics if (value := _metric_value(row, "eval_loss")) is not None
     ]
+    epoch_values = [
+        value for row in metrics if (value := _metric_value(row, "epoch")) is not None
+    ]
     steps = [int(row["global_step"]) for row in metrics if isinstance(row.get("global_step"), int)]
     steady_values = speed_values[-steady_window:] if steady_window > 0 else []
     elapsed_values = [
@@ -410,6 +442,9 @@ def summarize_training_log(
     )
 
     max_steps = _int_value(_command_value(launch_command, "max_steps"))
+    num_train_epochs = _float_value(
+        _command_value(launch_command, "num_train_epochs")
+    )
     eval_strategy = _command_value(launch_command, "eval_strategy") or ""
     save_strategy = _command_value(launch_command, "save_strategy") or ""
     validation_required = bool(eval_strategy and eval_strategy.lower() != "no")
@@ -430,11 +465,23 @@ def summarize_training_log(
         _checkpoint_state(path) for path in unique_checkpoint_paths
     ]
     last_step = max(steps) if steps else None
+    last_epoch = max(epoch_values) if epoch_values else None
+    epoch_training_complete = (
+        num_train_epochs is not None
+        and last_step is not None
+        and (
+            (
+                last_epoch is not None
+                and last_epoch >= num_train_epochs - 1e-6
+            )
+            or (end_time_observed and bool(summary_metrics))
+        )
+    )
     training_steps_complete = (
         last_step is not None
         and max_steps is not None
         and last_step >= max_steps
-    )
+    ) or epoch_training_complete
     resume_requested = bool(resume_checkpoint)
     resume_advanced = (
         resume_requested
@@ -567,6 +614,8 @@ def summarize_training_log(
             "observed": steps,
             "last": last_step,
             "configured_max_steps": max_steps,
+            "configured_num_train_epochs": num_train_epochs,
+            "last_observed_epoch": last_epoch,
             "complete": training_steps_complete,
         },
         "speed_seconds_per_step": {

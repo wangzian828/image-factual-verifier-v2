@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, Iterable, List, Mapping, Protocol, Sequence
 
-from src.trajectory.schema import PolicyExample
+from src.trajectory.schema import PolicyExample, TrajectorySFTExample
 from src.orchestrator.evidence_semantics import (
     evidence_direction_is_coherent,
     evidence_is_qualified_for_stance,
@@ -138,6 +138,315 @@ def _example_type(stage: str) -> str | None:
     if stage == "image_only_discrepancy_judgment":
         return "judgment"
     return None
+
+
+def _strip_gemini_wire_instructions(value: str) -> str:
+    marker = "Native Gemini Interactions protocol:"
+    if marker in value:
+        value = value.split(marker, 1)[0]
+    return value.rstrip()
+
+
+def _tool_schema_key(tool: Mapping[str, Any]) -> str:
+    return canonical_json(tool)
+
+
+def _normalize_tool_schema(raw: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw, list):
+        return []
+    result: list[dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, Mapping):
+            continue
+        if isinstance(item.get("function"), Mapping):
+            function = dict(item["function"])
+            name = str(function.get("name", "")).strip()
+            if not name:
+                continue
+            result.append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": name,
+                        "description": str(function.get("description", "")),
+                        "parameters": function.get("parameters", {}),
+                    },
+                }
+            )
+            continue
+        name = str(item.get("name", "")).strip()
+        if not name:
+            continue
+        result.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "description": str(item.get("description", "")),
+                    "parameters": item.get("parameters", {}),
+                },
+            }
+        )
+    return result
+
+
+def _json_or_text(value: str) -> Any:
+    try:
+        return json.loads(value)
+    except Exception:
+        return value
+
+
+def _initial_observation_packet(trace: Mapping[str, Any]) -> str:
+    state = _mapping(trace.get("state"))
+    runtime_case = _mapping(state.get("runtime_case"))
+    observations: list[dict[str, Any]] = []
+    for step in _rows(state.get("all_steps")):
+        if str(step.get("stage", "")) != "perception":
+            continue
+        if str(step.get("action_type", "")) != "tool_call":
+            continue
+        tool_name = str(step.get("tool_name", "")).strip()
+        if tool_name not in {"perceive_scene", "ocr_with_position"}:
+            continue
+        observations.append(
+            {
+                "tool": tool_name,
+                "result": _json_or_text(str(step.get("tool_result", ""))),
+            }
+        )
+    payload = {
+        "case_id": str(runtime_case.get("case_id") or trace.get("image_id") or ""),
+        "image_sha256": str(runtime_case.get("image_sha256", "")),
+        "input_mode": str(trace.get("input_mode") or state.get("input_mode") or ""),
+        "initial_observations": observations,
+    }
+    return (
+        "Image factual verification episode. Use the supplied observations and "
+        "subsequent tool responses as context. Generate only the next policy "
+        "message when it is your turn.\n\n"
+        + canonical_json(payload)
+    )
+
+
+def _stage_user_packet(
+    *,
+    example_type: str,
+    policy_input: Mapping[str, Any],
+) -> str:
+    payload: dict[str, Any] = {
+        "stage": example_type,
+        "stage_instruction": _strip_gemini_wire_instructions(
+            str(policy_input.get("system_instruction", ""))
+        ),
+        "input_payload": policy_input.get("input_payload", ""),
+    }
+    response_format = policy_input.get("response_format")
+    if isinstance(response_format, Mapping) and example_type != "react":
+        payload["required_structured_output_contract"] = dict(response_format)
+    tools = _normalize_tool_schema(policy_input.get("tools"))
+    if tools and example_type == "react":
+        payload["authorized_tool_names"] = [
+            str(tool["function"]["name"]) for tool in tools
+        ]
+    return canonical_json(payload)
+
+
+def _trajectory_candidate_steps(
+    trace: Mapping[str, Any],
+) -> list[tuple[int, Mapping[str, Any], str]]:
+    state = _mapping(trace.get("state"))
+    candidates: list[tuple[int, Mapping[str, Any], str]] = []
+    for index, step in enumerate(_rows(state.get("all_steps"))):
+        if str(step.get("action_type", "")) in {
+            "planning_revision",
+            "format_error",
+            "output_rejected",
+            "policy_replan",
+        }:
+            continue
+        stage = str(step.get("stage", "")).strip()
+        example_type = _example_type(stage)
+        metadata = _mapping(step.get("metadata"))
+        if example_type is None:
+            continue
+        if not isinstance(metadata.get("policy_input"), Mapping):
+            continue
+        if not isinstance(metadata.get("policy_action"), Mapping):
+            continue
+        candidates.append((index, step, example_type))
+    return candidates
+
+
+def trajectory_policy_step_ids(
+    trace: Mapping[str, Any],
+    *,
+    episode_id: str | None = None,
+) -> list[str]:
+    """Return stable internal step IDs without exporting step-level SFT rows.
+
+    RL reward ledgers still need to identify the policy turns in an episode.
+    Those IDs are runtime bookkeeping only; they are deliberately not written
+    to the SFT dataset as one-row-per-step examples.
+    """
+
+    resolved_episode_id = str(
+        episode_id
+        or trace.get("image_id")
+        or _mapping(trace.get("state")).get("image_id")
+        or ""
+    ).strip()
+    if not resolved_episode_id:
+        return []
+    result: list[str] = []
+    for index, step, example_type in _trajectory_candidate_steps(trace):
+        metadata = _mapping(step.get("metadata"))
+        interaction_id = str(metadata.get("interaction_id", "")).strip()
+        result.append(
+            f"{resolved_episode_id}:{example_type}:{interaction_id}"
+            if interaction_id
+            else f"{resolved_episode_id}:{example_type}:{index + 1}"
+        )
+    return result
+
+
+def export_trajectory_sft_example(
+    trace: Mapping[str, Any],
+    *,
+    tokenizer: TokenizerAdapter | None = None,
+    source_metadata: Mapping[str, Any] | None = None,
+    allow_incomplete_verdict_chain: bool = False,
+) -> TrajectorySFTExample:
+    """Export one complete accepted episode as one prefix-preserving SFT row."""
+
+    state = _mapping(trace.get("state"))
+    if str(trace.get("input_mode") or state.get("input_mode") or "") != (
+        "image_only"
+    ):
+        raise ValueError("trajectory SFT exporter accepts image-only traces only")
+    policy_version = str(
+        trace.get("decision_policy_version")
+        or state.get("decision_policy_version")
+        or ""
+    )
+    if policy_version not in {"reinspect-v2", "discrepancy-first-v4"}:
+        raise ValueError("trajectory SFT exporter received an unsupported decision policy")
+    if policy_version == "discrepancy-first-v4":
+        _v4_quality_gate(
+            trace,
+            state,
+            allow_incomplete_verdict_chain=allow_incomplete_verdict_chain,
+        )
+
+    tokenizer = tokenizer or Utf8ByteTokenizer()
+    source_metadata = source_metadata or {}
+    episode_id = str(
+        trace.get("image_id") or state.get("image_id") or ""
+    ).strip()
+    runtime_case = _mapping(state.get("runtime_case"))
+    case_id = str(runtime_case.get("case_id") or episode_id).strip()
+    if not episode_id or not case_id:
+        raise ValueError("canonical trace requires episode and case IDs")
+
+    messages: list[dict[str, Any]] = [
+        {
+            "role": "system",
+            "content": (
+                "<ifv_training_mode>full_trajectory_sft</ifv_training_mode>\n"
+                "You are the Image Factual Verifier policy model. Follow each "
+                "stage packet and generate the next assistant message or tool "
+                "call. Tool responses are observations, not text to imitate."
+            ),
+        },
+        {"role": "user", "content": _initial_observation_packet(trace)},
+    ]
+    tool_schemas: dict[str, dict[str, Any]] = {}
+    tool_call_count = 0
+    for _, step, example_type in _trajectory_candidate_steps(trace):
+        metadata = _mapping(step.get("metadata"))
+        policy_input = dict(_mapping(metadata.get("policy_input")))
+        policy_action = dict(_mapping(metadata.get("policy_action")))
+        _assert_no_private_data(policy_input)
+        _assert_no_private_data(policy_action)
+        for tool_schema in _normalize_tool_schema(policy_input.get("tools")):
+            tool_schemas.setdefault(_tool_schema_key(tool_schema), tool_schema)
+        messages.append(
+            {
+                "role": "user",
+                "content": _stage_user_packet(
+                    example_type=example_type,
+                    policy_input=policy_input,
+                ),
+            }
+        )
+        if example_type == "react":
+            if str(policy_action.get("type", "")) != "tool_call":
+                raise ValueError("react trajectory action must be a tool call")
+            tool_call = {
+                "name": str(policy_action.get("name", "")).strip(),
+                "arguments": dict(_mapping(policy_action.get("arguments"))),
+            }
+            if not tool_call["name"]:
+                raise ValueError("react trajectory action lacks tool name")
+            messages.append(
+                {
+                    "role": "tool_call",
+                    "content": canonical_json(tool_call),
+                    "loss": True,
+                }
+            )
+            tool_call_count += 1
+            tool_result = str(step.get("tool_result", "") or "").strip()
+            if tool_result:
+                messages.append(
+                    {
+                        "role": "tool_response",
+                        "content": canonical_json(
+                            {
+                                "name": tool_call["name"],
+                                "result": _json_or_text(tool_result),
+                            }
+                        ),
+                    }
+                )
+        else:
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": canonical_json(policy_action),
+                    "loss": True,
+                }
+            )
+
+    if len(messages) <= 2:
+        raise ValueError("trajectory SFT export found no supervised policy turns")
+    tools = (
+        canonical_json(list(tool_schemas.values()))
+        if tool_schemas
+        else ""
+    )
+    token_payload = {"messages": messages}
+    if tools:
+        token_payload["tools"] = tools
+    token_count = len(tokenizer.encode(canonical_json(token_payload)))
+    return TrajectorySFTExample(
+        episode_id=episode_id,
+        case_id=case_id,
+        source_run_id=str(source_metadata.get("source_run_id", "")),
+        runtime_commit=str(source_metadata.get("runtime_commit", "")),
+        release_id=str(source_metadata.get("release_id", "")),
+        runtime_contract_version=str(
+            source_metadata.get("runtime_contract_version", "")
+        ),
+        process_reference_protocol_version=str(
+            source_metadata.get("process_reference_protocol_version", "")
+        ),
+        messages=messages,
+        tools=tools,
+        token_count_estimate=token_count,
+        message_count=len(messages),
+        tool_call_count=tool_call_count,
+    )
 
 
 def _v4_claim_has_directional_chain(

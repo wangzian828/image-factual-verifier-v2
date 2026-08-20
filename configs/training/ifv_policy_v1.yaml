@@ -1,5 +1,5 @@
-dataset_version: ifv-policy-dataset-v2
-trajectory_version: ifv-policy-v1
+dataset_version: ifv-trajectory-sft-dataset-v1
+trajectory_version: ifv-trajectory-sft-v1
 tokenizer_adapter: utf8-byte-v1
 split:
   train: 0.8
@@ -26,9 +26,8 @@ quality_gate:
   maximum_unresolved_evidence_conflicts: 0
   preserve_excluded_episode_metadata: true
 training_scope:
-  stage_1: react
-  stage_2: planning_and_react
-  stage_3: reflection
-  stage_4: optional_judgment
-  stage_5: preference_or_rl_after_sft
+  format: one_complete_episode_per_row
+  tool_responses: context_only_loss_mask_zero
+  assistant_and_tool_calls: supervised_targets
+  long_trajectories: long_holdout_jsonl
 training_enabled: false

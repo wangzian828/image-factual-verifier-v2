@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import shutil
 from pathlib import Path
 
 import pytest
@@ -11,7 +12,7 @@ from scripts.trajectory.export_dataset import (
     _cross_case_source_families,
     export_dataset,
 )
-from src.trajectory.exporter import export_policy_examples
+from src.trajectory.exporter import export_trajectory_sft_example
 from src.trajectory.perception_exporter import export_perception_example
 from test_image_only_trajectory import (
     test_scripted_image_only_complete_trajectory,
@@ -48,7 +49,7 @@ def _run_dir(tmp_path: Path) -> Path:
         ),
         encoding="utf-8",
     )
-    examples = export_policy_examples(
+    trajectory = export_trajectory_sft_example(
         trace,
         source_metadata={
             "source_run_id": "run-scripted",
@@ -61,8 +62,8 @@ def _run_dir(tmp_path: Path) -> Path:
         },
     )
     _write_jsonl(
-        run_dir / "policy_trajectories.jsonl",
-        [item.model_dump(mode="json") for item in examples],
+        run_dir / "trajectory_sft.jsonl",
+        [trajectory.model_dump(mode="json")],
     )
     perception = export_perception_example(
         trace,
@@ -98,18 +99,54 @@ def test_dataset_export_is_episode_and_source_family_split_safe(
     run_dir = _run_dir(tmp_path)
     output = tmp_path / "dataset"
 
-    manifest = export_dataset([run_dir], output)
+    manifest = export_dataset(
+        [run_dir],
+        output,
+        short_max_tokens=300_000,
+    )
     report = audit_dataset(output)
 
     assert manifest["episode_count"] == 1
     assert manifest["example_counts"]["train"] + (
         manifest["example_counts"]["validation"]
-    ) + manifest["example_counts"]["test"] == 7
+    ) + manifest["example_counts"]["test"] == 1
     assert report["passed"] is True
-    assert report["example_count"] == 7
+    assert report["example_count"] == 1
     assert report["episode_count"] == 1
     assert sum(manifest["perception_example_counts"].values()) == 1
     assert report["teacher_score_distribution"]["mean"] == 4.75
+
+
+def test_long_trajectory_is_retained_in_holdout_not_short_sft(
+    tmp_path: Path,
+) -> None:
+    run_dir = _run_dir(tmp_path)
+    output = tmp_path / "long-holdout"
+
+    manifest = export_dataset(
+        [run_dir],
+        output,
+        short_max_tokens=1,
+    )
+
+    assert manifest["accepted_episode_count"] == 1
+    assert manifest["long_holdout_episode_count"] == 1
+    assert manifest["short_sft_case_count"] == 0
+    assert all(
+        not (output / f"{split}.jsonl").read_text(encoding="utf-8").strip()
+        for split in ("train", "validation", "test")
+    )
+    holdout = [
+        json.loads(line)
+        for line in (output / "long_holdout.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
+    assert len(holdout) == 1
+    assert holdout[0]["holdout_reason"] == (
+        "trajectory_exceeds_short_token_budget"
+    )
 
 
 def test_cross_case_source_families_exclude_domain_fallbacks() -> None:
@@ -134,7 +171,11 @@ def test_dataset_audit_rejects_private_policy_input(
 ) -> None:
     run_dir = _run_dir(tmp_path)
     output = tmp_path / "dataset"
-    export_dataset([run_dir], output)
+    export_dataset(
+        [run_dir],
+        output,
+        short_max_tokens=300_000,
+    )
     split_path = next(
         path
         for path in (
@@ -149,7 +190,7 @@ def test_dataset_audit_rejects_private_policy_input(
         for line in split_path.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-    rows[0]["policy_input"]["gold"] = {"verdict": "real"}
+    rows[0]["messages"][0]["gold"] = {"verdict": "real"}
     _write_jsonl(split_path, rows)
 
     report = audit_dataset(output)
@@ -244,13 +285,76 @@ def test_frozen_sft_export_uses_structured_gate_without_semantic_reward(
         case_split_path=split,
         eligibility_dir=eligibility,
         minimum_accepted_cases=1,
+        short_max_tokens=300_000,
     )
 
     assert manifest["split_mode"] == "frozen_teacher_sft"
     assert manifest["frozen_inputs"]["semantic_reward_dir"] is None
     assert manifest["accepted_case_count"] == 1
-    assert manifest["example_counts"]["validation"] == 7
+    assert manifest["example_counts"]["validation"] == 1
     assert manifest["example_counts"]["train"] == 0
+
+
+def test_frozen_sft_export_consumes_canonical_accepted_release(
+    tmp_path: Path,
+) -> None:
+    run_dir = _run_dir(tmp_path)
+    split, eligibility = _write_frozen_gate_inputs(tmp_path, run_dir)
+    canonical = tmp_path / "accepted-release"
+    canonical.mkdir()
+    shutil.copy2(run_dir / "run_manifest.json", canonical / "run_manifest.json")
+    shutil.copy2(
+        run_dir / "trajectory_sft.jsonl",
+        canonical / "trajectory_sft.jsonl",
+    )
+    shutil.copy2(
+        run_dir / "perception_trajectories.jsonl",
+        canonical / "perception_trajectories.jsonl",
+    )
+    shutil.copytree(run_dir / "traces", canonical / "traces")
+    shutil.copytree(eligibility, canonical / "eligibility")
+    trace_path = run_dir / "traces" / "case_scripted_v3.json"
+    trace_sha = hashlib.sha256(trace_path.read_bytes()).hexdigest()
+    (canonical / "selected_episodes.jsonl").write_text(
+        json.dumps(
+            {
+                "case_id": "case_scripted_v3",
+                "episode_id": "case_scripted_v3",
+                "source_trace_sha256": trace_sha,
+                "teacher_score": 4.75,
+                "deterministic_hard_gate_pass": True,
+                "deterministic_fatal_reasons": [],
+                "deterministic_red_flags": [],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (canonical / "accepted_release_manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "ifv-accepted-teacher-release-v2",
+                "accepted_case_count": 1,
+                "rejected_case_count": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    output = tmp_path / "canonical-dataset"
+    manifest = export_dataset(
+        [],
+        output,
+        accepted_release_path=canonical,
+        case_split_path=split,
+        minimum_accepted_cases=1,
+    )
+
+    assert manifest["source_mode"] == "canonical_accepted_release"
+    assert manifest["accepted_case_count"] == 1
+    assert manifest["frozen_inputs"]["accepted_release"]["path"] == str(
+        canonical.resolve()
+    )
 
 
 def test_frozen_sft_export_records_nonfatal_deterministic_red_flags(
@@ -279,6 +383,7 @@ def test_frozen_sft_export_records_nonfatal_deterministic_red_flags(
         case_split_path=split,
         eligibility_dir=eligibility,
         minimum_accepted_cases=1,
+        short_max_tokens=300_000,
     )
     metadata = [
         json.loads(line)
@@ -321,6 +426,7 @@ def test_frozen_sft_export_records_protocol_rejections_as_nonfatal_red_flags(
         case_split_path=split,
         eligibility_dir=eligibility,
         minimum_accepted_cases=1,
+        short_max_tokens=300_000,
     )
     metadata = [
         json.loads(line)
@@ -361,6 +467,7 @@ def test_frozen_sft_export_rejects_actual_fatal_deterministic_red_flags(
             case_split_path=split,
             eligibility_dir=eligibility,
             minimum_accepted_cases=1,
+            short_max_tokens=300_000,
         )
 
 

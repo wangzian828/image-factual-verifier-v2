@@ -91,6 +91,42 @@ def test_training_profile_detects_error_signals_and_writes_json(tmp_path: Path) 
     assert persisted["speed_seconds_per_step"]["last"] == 66.17
 
 
+def test_training_profile_accepts_num_train_epochs_schedule(tmp_path: Path) -> None:
+    train_log = tmp_path / "train.log"
+    train_log.write_text(
+        "\n".join(
+            [
+                "Executing: swift sft --num_train_epochs 1 "
+                "--per_device_train_batch_size 1 "
+                "--gradient_accumulation_steps 2",
+                "[INFO:swift] rank: 0, local_rank: 0, world_size: 4",
+                "{'loss': '1.20', 'epoch': '0.5', "
+                "'global_step/max_steps': '1/2', "
+                "'train_speed(s/it)': '20.0'}",
+                "{'loss': '1.00', 'epoch': '1.0', "
+                "'global_step/max_steps': '2/2', "
+                "'train_speed(s/it)': '20.0'}",
+                "{'eval_loss': '0.70', 'epoch': '1.0', "
+                "'global_step/max_steps': '2/2'}",
+                "{'train_runtime': '45.0', 'global_step/max_steps': '2/2'}",
+                "[INFO:swift] End time of running main: 2026-08-17 12:00:00",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = summarize_training_log(
+        train_log,
+        train_exit_code=0,
+    )
+
+    assert result["steps"]["configured_max_steps"] is None
+    assert result["steps"]["configured_num_train_epochs"] == 1.0
+    assert result["steps"]["last_observed_epoch"] == 1.0
+    assert result["steps"]["complete"] is True
+
+
 def test_training_profile_proves_cache_validation_save_resume_and_resources(
     tmp_path: Path,
 ) -> None:

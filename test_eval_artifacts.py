@@ -334,7 +334,7 @@ def test_v03_eval_keeps_gold_post_rollout_and_writes_scorer_predictions(
     assert (run_dir / "process_metrics.jsonl").is_file()
     assert (run_dir / "reference_chain_metrics.jsonl").is_file()
     assert (run_dir / "trajectory_scores.jsonl").is_file()
-    assert (run_dir / "policy_trajectories.jsonl").is_file()
+    assert (run_dir / "trajectory_sft.jsonl").is_file()
     assert (run_dir / "perception_trajectories.jsonl").is_file()
     manifest = json.loads(
         (run_dir / "run_manifest.json").read_text(encoding="utf-8")
@@ -360,6 +360,7 @@ def test_v03_eval_keeps_gold_post_rollout_and_writes_scorer_predictions(
     assert manifest["artifacts"]["reference_chain_metrics"] == (
         "reference_chain_metrics.jsonl"
     )
+    assert manifest["artifacts"]["trajectory_sft"] == "trajectory_sft.jsonl"
     assert manifest["artifacts"]["perception_trajectories"] == (
         "perception_trajectories.jsonl"
     )
@@ -468,7 +469,6 @@ def test_scoring_release_keeps_gold_post_rollout_and_requires_structured_gate(
             failures=lambda **_kwargs: []
         ),
     )
-    monkeypatch.setattr(run_eval, "export_policy_examples", lambda *args, **kwargs: [])
 
     summary = asyncio.run(run_eval._run_eval(_args(benchmark, run_dir)))
 

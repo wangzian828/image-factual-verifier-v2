@@ -204,7 +204,6 @@ def test_run_cases_then_postprocess_splits_runtime_and_gold_steps(
             failures=lambda **_failure_kwargs: []
         ),
     )
-    monkeypatch.setattr(postprocess_run, "export_policy_examples", lambda *_args, **_kwargs: [])
 
     asyncio.run(run_cases._run_cases(_case_args(benchmark, run_dir)))
     assert (run_dir / "run_results.jsonl").is_file()

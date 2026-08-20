@@ -156,10 +156,13 @@ time/call/token accounting, stage timings, trace_path
 process_metrics.jsonl
 reference_chain_metrics.jsonl
 trajectory_scores.jsonl
-policy_trajectories.jsonl
+trajectory_sft.jsonl
 ```
 
 These are post-rollout evaluator/training artifacts. They are never model-visible.
+`trajectory_sft.jsonl` contains one complete episode per row; it is the default SFT
+artifact. The old step-level `policy_trajectories.jsonl` name is legacy-only and is
+not emitted by the current evaluator.
 `reference_chain_metrics.jsonl` contains exactly four metrics: fact recovery recall,
 evidence recovery recall, complete chain recovery recall, and final-basis reference
 precision. It only evaluates the decisive facts and acceptable evidence retained in

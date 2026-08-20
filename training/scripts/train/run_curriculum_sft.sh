@@ -180,7 +180,6 @@ args=(
   --load_from_cache_file "$IFV_LOAD_FROM_CACHE_FILE"
   --tuner_type "$IFV_TUNER_TYPE"
   --torch_dtype "$IFV_TORCH_DTYPE"
-  --max_steps "$IFV_MAX_STEPS"
   --per_device_train_batch_size "$IFV_TRAIN_BATCH_SIZE"
   --per_device_eval_batch_size "$IFV_EVAL_BATCH_SIZE"
   --gradient_accumulation_steps "$IFV_GRADIENT_ACCUMULATION_STEPS"
@@ -206,6 +205,15 @@ args=(
   --dataloader_num_workers "${IFV_DATALOADER_NUM_WORKERS:-2}"
   --report_to tensorboard
 )
+
+if [[ -n "${IFV_NUM_TRAIN_EPOCHS:-}" ]]; then
+  args+=(--num_train_epochs "$IFV_NUM_TRAIN_EPOCHS")
+elif [[ -n "${IFV_MAX_STEPS:-}" ]]; then
+  args+=(--max_steps "$IFV_MAX_STEPS")
+else
+  echo "training profile must set IFV_NUM_TRAIN_EPOCHS or IFV_MAX_STEPS" >&2
+  exit 2
+fi
 
 if [[ "${IFV_GRADIENT_CHECKPOINTING:-true}" == "true" ]]; then
   args+=(--gradient_checkpointing_kwargs '{"use_reentrant": false}')

@@ -92,6 +92,70 @@ class DatasetPerceptionExample(PerceptionExample):
     split_group_id: str = Field(min_length=1, max_length=100)
 
 
+class TrajectorySFTExample(StrictModel):
+    """One complete accepted episode rendered as one Agent SFT conversation."""
+
+    trajectory_version: Literal["ifv-trajectory-sft-v1"] = (
+        "ifv-trajectory-sft-v1"
+    )
+    episode_id: str = Field(min_length=1, max_length=200)
+    case_id: str = Field(min_length=1, max_length=200)
+    source_run_id: str = Field(default="", max_length=300)
+    runtime_commit: str = Field(default="", max_length=100)
+    release_id: str = Field(default="", max_length=300)
+    runtime_contract_version: str = Field(default="", max_length=200)
+    process_reference_protocol_version: str = Field(
+        default="",
+        max_length=200,
+    )
+    messages: List[Dict[str, Any]] = Field(min_length=2)
+    tools: str = ""
+    token_count_estimate: int = Field(ge=1)
+    message_count: int = Field(ge=2)
+    tool_call_count: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def validate_messages(self) -> "TrajectorySFTExample":
+        if self.message_count != len(self.messages):
+            raise ValueError("message_count must match messages length")
+        assistant_targets = 0
+        for index, message in enumerate(self.messages):
+            if not isinstance(message, dict):
+                raise ValueError(f"messages[{index}] must be an object")
+            role = str(message.get("role", ""))
+            if role not in {
+                "system",
+                "user",
+                "assistant",
+                "tool_call",
+                "tool_response",
+                "tool",
+            }:
+                raise ValueError(f"messages[{index}] has unsupported role")
+            content = message.get("content")
+            if not isinstance(content, str) or not content.strip():
+                raise ValueError(f"messages[{index}].content must be non-empty")
+            if role in {"assistant", "tool_call"}:
+                if message.get("loss") is not True:
+                    raise ValueError(
+                        f"messages[{index}] must set loss=true"
+                    )
+                assistant_targets += 1
+        if assistant_targets < 1:
+            raise ValueError("trajectory requires at least one supervised target")
+        return self
+
+
+class DatasetTrajectorySFTExample(TrajectorySFTExample):
+    dataset_version: Literal["ifv-trajectory-sft-dataset-v1"] = (
+        "ifv-trajectory-sft-dataset-v1"
+    )
+    split: Literal["train", "validation", "test"]
+    split_group_id: str = Field(min_length=1, max_length=100)
+    source_family_keys: List[str] = Field(default_factory=list, max_length=100)
+    teacher_score: float = 0.0
+
+
 class VisualReinspectionExample(StrictModel):
     trajectory_version: Literal["ifv-visual-reinspection-v1"] = (
         "ifv-visual-reinspection-v1"
