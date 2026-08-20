@@ -19,6 +19,9 @@ REMOTE_IMAGE_HEADERS = {
     "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
 }
 
+DEFAULT_VISION_TOOL_MAX_LONG_EDGE = 2048
+DEFAULT_VISION_TOOL_JPEG_QUALITY = 92
+
 
 def _guess_mime_from_name(name: str) -> str:
     suffix = Path(name).suffix.lower()
@@ -118,6 +121,32 @@ def controlled_image_to_data_url(
         quality,
     )
     return data_url, dict(metadata)
+
+
+def vision_tool_image_to_data_url(image_input: str) -> str:
+    """Serialize an image for a VLM tool without sending a large local original.
+
+    This keeps more detail than the main policy chain while bounding local
+    uploads to a lightly-compressed JPEG. Remote and inline inputs retain their
+    existing data-URL behavior because they are already provider-facing media.
+    """
+
+    data_url, _ = controlled_image_to_data_url(
+        image_input,
+        max_long_edge=int(
+            os.getenv(
+                "IFV_VISION_TOOL_MAX_LONG_EDGE",
+                str(DEFAULT_VISION_TOOL_MAX_LONG_EDGE),
+            )
+        ),
+        jpeg_quality=int(
+            os.getenv(
+                "IFV_VISION_TOOL_JPEG_QUALITY",
+                str(DEFAULT_VISION_TOOL_JPEG_QUALITY),
+            )
+        ),
+    )
+    return data_url
 
 
 def _resolve_image_edge(value: int | None) -> int:

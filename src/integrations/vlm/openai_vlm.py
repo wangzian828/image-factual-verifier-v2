@@ -22,7 +22,7 @@ from src.integrations.llm.openai_compatible import (
     resolve_model_wire_api,
 )
 from src.integrations.vlm.qwen_vl import parse_json_object
-from src.tools.vision_utils import image_to_data_url
+from src.tools.vision_utils import image_to_data_url, vision_tool_image_to_data_url
 
 
 DEFAULT_JSON_OBJECT_SCHEMA: Dict[str, Any] = {
@@ -291,7 +291,7 @@ class OpenAIVisionClient:
         if image_input.startswith(("http://", "https://")):
             return OpenAIVisionClient._data_url_to_interactions_image(image_input)
 
-        image_url = image_to_data_url(image_input)
+        image_url = vision_tool_image_to_data_url(image_input)
         return OpenAIVisionClient._data_url_to_interactions_image(image_url)
 
     @staticmethod

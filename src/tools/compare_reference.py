@@ -266,7 +266,10 @@ class CompareWithReferenceTool(BaseTool):
                 error["subcalls"] = download_subcalls
                 return error
 
-            from src.tools.vision_utils import image_to_data_url
+            from src.tools.vision_utils import (
+                image_to_data_url,
+                vision_tool_image_to_data_url,
+            )
 
             current_data_url = image_to_data_url(self.image_path)
             deterministic = self._deterministic_exact_match(
@@ -303,10 +306,13 @@ class CompareWithReferenceTool(BaseTool):
                     **deterministic,
                     RUNTIME_METRICS_KEY: {},
                 }
+            vision_current_data_url = vision_tool_image_to_data_url(
+                self.image_path
+            )
             input_payload = [
                 {"type": "text", "text": COMPARE_PROMPT.format(focus=focus)},
                 self._data_url_to_image_content(reference_data_url),
-                self._data_url_to_image_content(current_data_url),
+                self._data_url_to_image_content(vision_current_data_url),
             ]
             schema = normalize_json_schema(
                 COMPARE_RESPONSE_SCHEMA,

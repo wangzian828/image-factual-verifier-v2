@@ -128,7 +128,7 @@ def test_compare_uses_two_interactions_content_images_and_exact_schema(tmp_path:
         "data": "cmVmZXJlbmNl",
     }
     assert current_image["type"] == "image"
-    assert current_image["mime_type"] == "image/png"
+    assert current_image["mime_type"] == "image/jpeg"
     assert current_image["data"]
     assert "image_url" not in json.dumps(request["input_payload"])
 

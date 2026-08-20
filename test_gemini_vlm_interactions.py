@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import tempfile
+from io import BytesIO
 from pathlib import Path
 
 import httpx
@@ -94,8 +96,10 @@ def test_gemini_vlm_uses_interactions(monkeypatch) -> None:
     assert request["body"]["input"][0] == {"type": "text", "text": "Inspect it."}
     image_item = request["body"]["input"][1]
     assert image_item["type"] == "image"
-    assert image_item["mime_type"] == "image/png"
+    assert image_item["mime_type"] == "image/jpeg"
     assert image_item["data"]
+    with Image.open(BytesIO(base64.b64decode(image_item["data"]))) as sent:
+        assert sent.size == (8, 8)
 
 
 def test_gemini_vlm_uses_custom_schema_and_uri(monkeypatch) -> None:

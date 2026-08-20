@@ -272,9 +272,9 @@ class VisualAnomalyTool(BaseTool):
 
         try:
             runtime_metrics: Dict[str, Any] = {}
-            from src.tools.vision_utils import image_to_data_url
+            from src.tools.vision_utils import vision_tool_image_to_data_url
 
-            image_data_url = image_to_data_url(self.image_path)
+            image_data_url = vision_tool_image_to_data_url(self.image_path)
             input_payload = messages_to_input(
                 [
                     {
