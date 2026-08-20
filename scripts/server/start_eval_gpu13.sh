@@ -38,6 +38,9 @@ EOF
 args=("$@")
 output_dir_seen=false
 output_dir=""
+requested_concurrency=1
+explicit_profile=""
+explicit_provider=""
 for ((i = 0; i < ${#args[@]}; i++)); do
     case "${args[i]}" in
         --output-dir)
@@ -59,8 +62,72 @@ for ((i = 0; i < ${#args[@]}; i++)); do
             output_dir_seen=true
             output_dir="${args[i]#--output-dir=}"
             ;;
+        --concurrency)
+            if ((i + 1 >= ${#args[@]})) || [[ -z "${args[i + 1]}" ]]; then
+                echo "--concurrency requires a positive integer" >&2
+                usage
+                exit 2
+            fi
+            requested_concurrency="${args[i + 1]}"
+            ((i += 1))
+            ;;
+        --concurrency=*)
+            requested_concurrency="${args[i]#--concurrency=}"
+            ;;
+        --profile)
+            if ((i + 1 >= ${#args[@]})) || [[ -z "${args[i + 1]}" ]]; then
+                echo "--profile requires a non-empty value" >&2
+                usage
+                exit 2
+            fi
+            explicit_profile="${args[i + 1]}"
+            ((i += 1))
+            ;;
+        --profile=*)
+            explicit_profile="${args[i]#--profile=}"
+            ;;
+        --provider)
+            if ((i + 1 >= ${#args[@]})) || [[ -z "${args[i + 1]}" ]]; then
+                echo "--provider requires a non-empty value" >&2
+                usage
+                exit 2
+            fi
+            explicit_provider="${args[i + 1]}"
+            ((i += 1))
+            ;;
+        --provider=*)
+            explicit_provider="${args[i]#--provider=}"
+            ;;
     esac
 done
+
+if [[ ! "${requested_concurrency}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "--concurrency must be a positive integer" >&2
+    exit 2
+fi
+
+gemini_mode=true
+if [[ -n "${explicit_profile}" ]]; then
+    [[ "${explicit_profile}" == "teacher-gemini" ]] || gemini_mode=false
+elif [[ -n "${explicit_provider}" ]]; then
+    [[ "${explicit_provider,,}" == "gemini" ]] || gemini_mode=false
+fi
+
+gemini_lock_dir=""
+gemini_lock_handoff=false
+release_gemini_lock() {
+    if [[ -z "${gemini_lock_dir}" || ! -d "${gemini_lock_dir}" ]]; then
+        return 0
+    fi
+    rm -f -- "${gemini_lock_dir}/owner.env"
+    rmdir -- "${gemini_lock_dir}" 2>/dev/null || true
+}
+cleanup_startup_lock() {
+    if [[ "${gemini_lock_handoff}" != "true" ]]; then
+        release_gemini_lock
+    fi
+}
+trap cleanup_startup_lock EXIT
 
 if [[ "${output_dir_seen}" != "true" ]]; then
     echo "A formal evaluation requires an explicit --output-dir." >&2
@@ -104,6 +171,79 @@ if [[ -d "${output_dir}" ]] && find "${output_dir}" -mindepth 1 -print -quit | g
     exit 2
 fi
 
+effective_gemini_request_limit=""
+if [[ "${gemini_mode}" == "true" ]]; then
+    gemini_eval_cap="${GEMINI_EVAL_MAX_CONCURRENCY:-4}"
+    if [[ ! "${gemini_eval_cap}" =~ ^[1-9][0-9]*$ ]]; then
+        echo "GEMINI_EVAL_MAX_CONCURRENCY must be a positive integer" >&2
+        exit 2
+    fi
+    if ((requested_concurrency > gemini_eval_cap)); then
+        echo "Gemini rollout concurrency ${requested_concurrency} exceeds the "
+        echo "configured cap ${gemini_eval_cap}. Set --concurrency <= "
+        echo "${gemini_eval_cap}, or raise GEMINI_EVAL_MAX_CONCURRENCY deliberately." >&2
+        exit 2
+    fi
+
+    configured_request_limit="${GEMINI_MAX_INFLIGHT_REQUESTS:-${requested_concurrency}}"
+    if [[ ! "${configured_request_limit}" =~ ^[1-9][0-9]*$ ]]; then
+        echo "GEMINI_MAX_INFLIGHT_REQUESTS must be a positive integer" >&2
+        exit 2
+    fi
+    effective_gemini_request_limit="${configured_request_limit}"
+    if ((effective_gemini_request_limit > gemini_eval_cap)); then
+        effective_gemini_request_limit="${gemini_eval_cap}"
+    fi
+    export GEMINI_MAX_INFLIGHT_REQUESTS="${effective_gemini_request_limit}"
+
+    lock_parent="${IFV_DATA_ROOT}/runs/_locks"
+    gemini_lock_dir="${lock_parent}/gemini-agent-eval.lock"
+    mkdir -p -- "${lock_parent}"
+
+    lock_acquired=false
+    for _lock_attempt in 1 2; do
+        if mkdir -- "${gemini_lock_dir}" 2>/dev/null; then
+            lock_acquired=true
+            break
+        fi
+
+        owner_pid=""
+        if [[ -f "${gemini_lock_dir}/owner.env" ]]; then
+            owner_pid="$(
+                sed -n 's/^owner_pid=//p' "${gemini_lock_dir}/owner.env" \
+                    | head -n 1
+            )"
+        fi
+        if [[ "${owner_pid}" =~ ^[1-9][0-9]*$ ]] \
+            && kill -0 "${owner_pid}" 2>/dev/null; then
+            echo "A Gemini evaluation is already active; refusing a second "
+            echo "launch to avoid provider overload." >&2
+            echo "lock=${gemini_lock_dir}" >&2
+            if [[ -f "${gemini_lock_dir}/owner.env" ]]; then
+                sed 's/^/  /' "${gemini_lock_dir}/owner.env" >&2
+            fi
+            exit 3
+        fi
+
+        # The owner died without running its EXIT trap (for example SIGKILL).
+        # The lock contains only owner.env, so remove that file and retry the
+        # atomic mkdir rather than recursively deleting a computed path.
+        rm -f -- "${gemini_lock_dir}/owner.env"
+        rmdir -- "${gemini_lock_dir}" 2>/dev/null || true
+    done
+    if [[ "${lock_acquired}" != "true" ]]; then
+        echo "Could not acquire the Gemini evaluation lock: ${gemini_lock_dir}" >&2
+        exit 3
+    fi
+    {
+        printf 'owner_pid=%s\n' "$$"
+        printf 'run_id=%s\n' "${run_id}"
+        printf 'requested_concurrency=%s\n' "${requested_concurrency}"
+        printf 'request_limit=%s\n' "${effective_gemini_request_limit}"
+        printf 'created_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    } >"${gemini_lock_dir}/owner.env"
+fi
+
 LOG_DIR="${IFV_DATA_ROOT}/runs/_logs"
 PID_DIR="/tmp/image-factual-verifier-v3"
 JOB_DIR="${IFV_DATA_ROOT}/runs/_jobs"
@@ -133,14 +273,35 @@ log_file="$(mktemp "${LOG_DIR}/eval-${timestamp}-XXXXXX.log")"
 job_name="$(basename -- "${log_file}" .log)"
 pid_file="${PID_DIR}/${job_name}.pid"
 
+if [[ "${gemini_mode}" == "true" ]]; then
+    export IFV_GEMINI_LOCK_DIR="${gemini_lock_dir}"
+fi
 nohup bash "${SCRIPT_DIR}/eval_gpu13_worker.sh" "${job_name}" "$@" \
     </dev/null >>"${log_file}" 2>&1 &
 pid=$!
+
+if [[ "${gemini_mode}" == "true" ]]; then
+    {
+        printf 'owner_pid=%s\n' "${pid}"
+        printf 'run_id=%s\n' "${run_id}"
+        printf 'requested_concurrency=%s\n' "${requested_concurrency}"
+        printf 'request_limit=%s\n' "${effective_gemini_request_limit}"
+        printf 'output_dir=%s\n' "${output_dir}"
+        printf 'log_file=%s\n' "${log_file}"
+        printf 'created_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    } >"${gemini_lock_dir}/owner.env"
+    gemini_lock_handoff=true
+fi
 
 printf 'pid=%s\n' "${pid}"
 printf 'pid_file=%s\n' "${pid_file}"
 printf 'log_file=%s\n' "${log_file}"
 printf 'run_id=%s\n' "${run_id}"
+if [[ "${gemini_mode}" == "true" ]]; then
+    printf 'gemini_rollout_concurrency=%s\n' "${requested_concurrency}"
+    printf 'gemini_request_limit=%s\n' "${effective_gemini_request_limit}"
+    printf 'gemini_lock=%s\n' "${gemini_lock_dir}"
+fi
 printf 'status_command=scripts/server/poll_eval_gpu13.sh %s\n' "${run_id}"
 
 job_record="${JOB_DIR}/${job_name}.env"
@@ -150,4 +311,9 @@ job_record="${JOB_DIR}/${job_name}.env"
     printf 'log_file=%s\n' "${log_file}"
     printf 'pid_file=%s\n' "${pid_file}"
     printf 'pid=%s\n' "${pid}"
+    if [[ "${gemini_mode}" == "true" ]]; then
+        printf 'gemini_rollout_concurrency=%s\n' "${requested_concurrency}"
+        printf 'gemini_request_limit=%s\n' "${effective_gemini_request_limit}"
+        printf 'gemini_lock=%s\n' "${gemini_lock_dir}"
+    fi
 } >"${job_record}"

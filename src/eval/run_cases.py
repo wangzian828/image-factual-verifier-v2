@@ -22,6 +22,7 @@ from src.eval.archive_adapter import (
     load_archive_runtime_input,
     materialize_archive_runtime_rows,
 )
+from src.eval.gemini_run_guard import GeminiRunGuard
 from src.eval.public_release import load_public_release, resolve_image_path
 from src.eval.release_adapter import image_only_case_from_runtime_row
 from src.eval.result_records import (
@@ -369,6 +370,16 @@ async def _run_cases(args: argparse.Namespace) -> Dict[str, Any]:
             "vlm_wire_api": config.vlm_wire_api,
             "timeout_seconds": args.timeout,
             "concurrency": max(1, args.concurrency),
+            "gemini_max_inflight_requests": (
+                int(os.getenv("GEMINI_MAX_INFLIGHT_REQUESTS", "4"))
+                if str(config.provider).lower() == "gemini"
+                else None
+            ),
+            "gemini_eval_max_concurrency": (
+                int(os.getenv("GEMINI_EVAL_MAX_CONCURRENCY", "4"))
+                if str(config.provider).lower() == "gemini"
+                else None
+            ),
             "rollouts_per_case": rollouts_per_case,
             "base_sampling_seed": base_sampling_seed,
         },
@@ -390,9 +401,13 @@ async def _run_cases(args: argparse.Namespace) -> Dict[str, Any]:
             "traces": "traces/",
         },
     }
-    _write_json(manifest_path, manifest)
-
+    gemini_guard = GeminiRunGuard.acquire(
+        provider=config.provider,
+        concurrency=max(1, args.concurrency),
+        run_id=manifest["run_id"],
+    )
     try:
+        _write_json(manifest_path, manifest)
         workflow = VerificationWorkflow(config)
         results = await workflow.run_batch(
             image_paths=[str(spec["sample"]["image_path"]) for spec in rollout_specs],
@@ -476,6 +491,8 @@ async def _run_cases(args: argparse.Namespace) -> Dict[str, Any]:
         manifest["error"] = f"{type(exc).__name__}: {exc}"
         _write_json(manifest_path, manifest)
         raise
+    finally:
+        gemini_guard.release()
 
 
 def main() -> None:

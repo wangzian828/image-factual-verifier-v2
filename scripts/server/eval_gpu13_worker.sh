@@ -17,9 +17,23 @@ fi
 
 pid_file="/tmp/image-factual-verifier-v3/${job_name}.pid"
 child_pid=""
+gemini_lock_dir="${IFV_GEMINI_LOCK_DIR:-}"
 
 cleanup() {
     rm -f -- "${pid_file}"
+    if [[ -n "${gemini_lock_dir}" && -d "${gemini_lock_dir}" ]]; then
+        owner_pid=""
+        if [[ -f "${gemini_lock_dir}/owner.env" ]]; then
+            owner_pid="$(
+                sed -n 's/^owner_pid=//p' "${gemini_lock_dir}/owner.env" \
+                    | head -n 1
+            )"
+        fi
+        if [[ "${owner_pid}" == "$$" ]]; then
+            rm -f -- "${gemini_lock_dir}/owner.env"
+            rmdir -- "${gemini_lock_dir}" 2>/dev/null || true
+        fi
+    fi
 }
 terminate() {
     if [[ -n "${child_pid}" ]] && kill -0 "${child_pid}" 2>/dev/null; then
