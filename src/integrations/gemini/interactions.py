@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import random
+import threading
 from collections.abc import Awaitable, Iterator, Mapping, Sequence
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -69,6 +70,65 @@ class GeminiInteractionsResponseError(GeminiInteractionsError):
     """Successful HTTP response that is not a JSON object."""
 
 
+class GeminiRequestGate:
+    """Process-wide, thread-safe limit for in-flight Gemini HTTP requests.
+
+    Agent rollouts may run on the main asyncio loop while VLM helpers use a
+    persistent background loop.  An asyncio.Semaphore cannot safely coordinate
+    those two loops, so the gate uses a bounded threading semaphore and waits
+    for it without blocking either event loop.
+    """
+
+    def __init__(self, limit: int) -> None:
+        parsed_limit = int(limit)
+        if parsed_limit < 1:
+            raise ValueError("Gemini request gate limit must be at least 1.")
+        self.limit = parsed_limit
+        self._semaphore = threading.BoundedSemaphore(parsed_limit)
+
+    async def __aenter__(self) -> "GeminiRequestGate":
+        while True:
+            acquired = await asyncio.to_thread(
+                self._semaphore.acquire,
+                True,
+                0.25,
+            )
+            if acquired:
+                return self
+            await asyncio.sleep(0)
+
+    async def __aexit__(self, *_: object) -> None:
+        self._semaphore.release()
+
+
+_PROCESS_REQUEST_GATE: Optional[GeminiRequestGate] = None
+_PROCESS_REQUEST_GATE_LOCK = threading.Lock()
+
+
+def process_gemini_request_gate() -> GeminiRequestGate:
+    """Return the process-wide Gemini request gate.
+
+    The environment is intentionally read once, on first use.  The launcher
+    sets ``GEMINI_MAX_INFLIGHT_REQUESTS`` before starting a run, so changing it
+    halfway through a run cannot silently replace a live gate and overbook the
+    provider.
+    """
+
+    global _PROCESS_REQUEST_GATE
+    if _PROCESS_REQUEST_GATE is None:
+        with _PROCESS_REQUEST_GATE_LOCK:
+            if _PROCESS_REQUEST_GATE is None:
+                raw_limit = os.getenv("GEMINI_MAX_INFLIGHT_REQUESTS", "4")
+                try:
+                    limit = int(raw_limit)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(
+                        "GEMINI_MAX_INFLIGHT_REQUESTS must be an integer."
+                    ) from exc
+                _PROCESS_REQUEST_GATE = GeminiRequestGate(limit)
+    return _PROCESS_REQUEST_GATE
+
+
 class GeminiInteractionsClient:
     """Reusable async client for non-streaming Gemini Interactions requests.
 
@@ -86,6 +146,7 @@ class GeminiInteractionsClient:
         retry_jitter: float = 2.0,
         retry_max_delay: float = 60.0,
         client: Optional[httpx.AsyncClient] = None,
+        request_gate: Optional[GeminiRequestGate] = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         random_uniform: Callable[[float, float], float] = random.uniform,
     ) -> None:
@@ -109,6 +170,7 @@ class GeminiInteractionsClient:
         self._random_uniform = random_uniform
         self._client = client or httpx.AsyncClient(timeout=timeout)
         self._owns_client = client is None
+        self._request_gate = request_gate or process_gemini_request_gate()
         self.last_retry_metadata: dict[str, Any] = {
             "retry_attempts": 0,
             "retry_delays": [],
@@ -285,11 +347,12 @@ class GeminiInteractionsClient:
 
         for attempt in range(self.max_retries + 1):
             try:
-                response = await self._client.post(
-                    self.base_url,
-                    headers=headers,
-                    json=dict(payload),
-                )
+                async with self._request_gate:
+                    response = await self._client.post(
+                        self.base_url,
+                        headers=headers,
+                        json=dict(payload),
+                    )
             except httpx.TransportError:
                 if attempt >= self.max_retries:
                     raise

@@ -3,6 +3,7 @@
 from .interactions import (
     DEFAULT_INTERACTIONS_URL,
     RETRYABLE_HTTP_STATUSES,
+    GeminiRequestGate,
     GeminiInteractionsClient,
     GeminiInteractionsError,
     GeminiInteractionsHTTPError,
@@ -28,6 +29,7 @@ from .runtime_metrics import (
 __all__ = [
     "DEFAULT_INTERACTIONS_URL",
     "RETRYABLE_HTTP_STATUSES",
+    "GeminiRequestGate",
     "GeminiInteractionsClient",
     "GeminiInteractionsError",
     "GeminiInteractionsHTTPError",
