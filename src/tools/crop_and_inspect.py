@@ -106,14 +106,25 @@ class CropAndInspectTool(BaseTool):
         return self.client
 
     def call(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        image_path = params["image_input"]
-        bbox = params["bbox"]
-        focus_question = params["focus_question"]
+        image_path = str(params.get("image_input", "")).strip()
+        bbox = params.get("bbox")
+        focus_question = str(params.get("focus_question", "")).strip()
 
-        if not bbox or len(bbox) != 4:
+        if not image_path:
+            return {
+                "status": "error",
+                "error": "image_input is required.",
+            }
+
+        if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
             return {
                 "status": "error",
                 "error": "bbox must be [x1, y1, x2, y2] with 4 normalized values.",
+            }
+        if not focus_question:
+            return {
+                "status": "error",
+                "error": "focus_question is required.",
             }
         try:
             self._validate_bbox(bbox)

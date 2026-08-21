@@ -406,18 +406,38 @@ class OCRWithPositionTool(BaseTool):
         rejected_text_regions: List[Dict[str, Any]] = []
         full_text_parts: List[str] = []
         for index, item in enumerate(payload.get("words_result", [])):
-            region = self._baidu_region(
-                item,
-                index=index,
-                image_width=image_width,
-                image_height=image_height,
-                offset_x=offset_x,
-                offset_y=offset_y,
-                crop_width=crop_width,
-                crop_height=crop_height,
-                upload_width=upload_width,
-                upload_height=upload_height,
-            )
+            try:
+                region = self._baidu_region(
+                    item,
+                    index=index,
+                    image_width=image_width,
+                    image_height=image_height,
+                    offset_x=offset_x,
+                    offset_y=offset_y,
+                    crop_width=crop_width,
+                    crop_height=crop_height,
+                    upload_width=upload_width,
+                    upload_height=upload_height,
+                )
+            except (TypeError, ValueError) as exc:
+                # A provider can return one malformed or out-of-bounds box
+                # alongside otherwise usable OCR.  Keep the OCR call
+                # successful and preserve the rejected item for diagnostics;
+                # perception can still use scene observations and valid text.
+                raw_text = (
+                    str(item.get("words", "")).strip()
+                    if isinstance(item, dict)
+                    else ""
+                )
+                rejected_text_regions.append(
+                    {
+                        "status": "rejected",
+                        "index": index,
+                        "text": raw_text,
+                        "error": str(exc),
+                    }
+                )
+                continue
             if (
                 region["text"].strip()
                 and float(region["confidence"]) >= float(self.min_confidence)

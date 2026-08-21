@@ -1776,7 +1776,13 @@ class StageRunner:
                 runtime_bound = {
                     name
                     for name in self._runtime_bound_visual_fields(tool.name)
-                    if not constrained_fields.get(name)
+                    if (
+                        not constrained_fields.get(name)
+                        and self._runtime_visual_binding_available(
+                            tool.name,
+                            name,
+                        )
+                    )
                 }
                 if runtime_bound:
                     required = [name for name in required if name not in runtime_bound]
@@ -2568,6 +2574,44 @@ class StageRunner:
         if tool_name == "count_objects":
             return {"bbox", "target_object"}
         return set()
+
+    def _runtime_visual_binding_available(
+        self,
+        tool_name: str,
+        field_name: str,
+    ) -> bool:
+        """Return whether a pending visual spec can fill a tool field.
+
+        Visual fields must remain model-required for ordinary investigation
+        tasks.  They become runtime-bound only when a concrete pending
+        visual-question record supplies the corresponding value.
+        """
+
+        pending = self._pending_visual_questions()
+        if not pending:
+            return False
+        if field_name == "bbox":
+            return any(
+                isinstance(item.get("target_bbox"), list)
+                and len(item.get("target_bbox") or []) == 4
+                for item in pending
+            )
+        if field_name == "focus_question":
+            return any(
+                str(item.get("expected_property", "")).strip()
+                for item in pending
+            )
+        if field_name == "target_object":
+            return any(
+                str(item.get("expected_property", "")).strip()
+                for item in pending
+            )
+        if field_name == "reference_url":
+            return any(
+                str(item.get("reference_image_url", "")).strip()
+                for item in pending
+            )
+        return False
 
     def _question_id_error(self, tool_args: Dict[str, Any]) -> str:
         if self.stage_name != "verification":

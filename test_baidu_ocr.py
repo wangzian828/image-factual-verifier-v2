@@ -132,6 +132,50 @@ def test_baidu_ocr_maps_position_and_uses_form_request(tmp_path) -> None:
     assert session.calls[1][1]["timeout"] == (10.0, 120.0)
 
 
+def test_baidu_ocr_skips_one_out_of_bounds_region(tmp_path) -> None:
+    from PIL import Image
+
+    image_path = tmp_path / "baidu-partial.png"
+    Image.new("RGB", (100, 100), "white").save(image_path)
+    payload = {
+        "words_result": [
+            _ocr_payload()["words_result"][0],
+            {
+                "words": "bad box",
+                "location": {
+                    "left": 95,
+                    "top": 5,
+                    "width": 20,
+                    "height": 15,
+                },
+            },
+        ]
+    }
+    session = FakeSession(
+        [
+            FakeResponse({"access_token": "token-partial", "expires_in": 3600}),
+            FakeResponse(payload),
+        ]
+    )
+    client = BaiduOCRClient(
+        api_key="test-key-partial",
+        secret_key="test-secret",
+        session=session,
+    )
+
+    result = OCRWithPositionTool(
+        backend="baidu",
+        baidu_client=client,
+    ).call({"image_input": str(image_path)})
+
+    assert result["status"] == "success"
+    assert result["full_text"] == "Tysons Corner"
+    assert len(result["text_regions"]) == 1
+    assert len(result["rejected_text_regions"]) == 1
+    assert result["rejected_text_regions"][0]["text"] == "bad box"
+    assert "outside the image" in result["rejected_text_regions"][0]["error"]
+
+
 def test_baidu_ocr_retries_read_timeout_and_reports_request_count(monkeypatch):
     monkeypatch.setenv("BAIDU_OCR_MAX_RETRIES", "1")
     monkeypatch.setenv("BAIDU_OCR_RETRY_BACKOFF_SECONDS", "0")

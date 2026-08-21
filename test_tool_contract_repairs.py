@@ -252,6 +252,20 @@ def test_crop_and_inspect_rejects_reversed_or_negative_bbox() -> None:
     assert "bbox" in result["error"]
 
 
+def test_crop_and_inspect_missing_bbox_is_structured_error() -> None:
+    result = CropAndInspectTool(client=object()).call(
+        {
+            "image_input": "unused.png",
+            "focus_question": "What is visible?",
+        }
+    )
+
+    assert result == {
+        "status": "error",
+        "error": "bbox must be [x1, y1, x2, y2] with 4 normalized values.",
+    }
+
+
 def test_crop_and_inspect_requests_observations_without_direct_answer_field() -> None:
     assert "observations" in INSPECT_SCHEMA["properties"]
     assert "answer" not in INSPECT_SCHEMA["properties"]

@@ -1131,6 +1131,35 @@ def test_visual_evidence_tool_requires_claim_selection_for_multi_claim_task() ->
     )
 
 
+def test_crop_and_inspect_keeps_bbox_required_without_pending_visual_binding() -> None:
+    from src.tools.crop_and_inspect import CropAndInspectTool
+
+    runner = StageRunner(
+        llm=NativeFakeBackend([]),
+        system_prompt="Inspect one visual region.",
+        tools=[CropAndInspectTool(client=object())],
+        stage_name="verification",
+        tool_argument_constraints={
+            "crop_and_inspect": {
+                "question_id": ["task-1"],
+            }
+        },
+    )
+    runner.active_question_ids = ["task-1"]
+
+    schema = runner._build_native_tool_schemas()[0]["parameters"]
+
+    assert "bbox" in schema["required"]
+    assert "focus_question" in schema["required"]
+    assert (
+        "Missing required argument(s) for crop_and_inspect: bbox, focus_question"
+        in runner._validate_native_tool_args(
+            "crop_and_inspect",
+            {"question_id": "task-1"},
+        )
+    )
+
+
 def test_visit_route_signature_distinguishes_atomic_claim_targets() -> None:
     from src.orchestrator.route_policy import route_signature
 
