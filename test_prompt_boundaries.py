@@ -6,6 +6,7 @@ from src.orchestrator.image_only_prompts import (
     REACT_SYSTEM_PROMPT,
     TARGET_PLANNING_SYSTEM_PROMPT,
 )
+from src.orchestrator.evidence_policy import neutralize_planning_route_text
 
 
 def test_hot_path_prompts_stay_semantic_and_compact() -> None:
@@ -90,6 +91,14 @@ def test_hot_path_prompts_stay_semantic_and_compact() -> None:
     assert "Do not repeat a prohibited token" in image_account_prompt
     assert "governance framework" in image_account_prompt
     assert "science fund" in image_account_prompt
+    assert (
+        neutralize_planning_route_text("AI Governance Framework")
+        == "Governance Framework"
+    )
+    assert (
+        neutralize_planning_route_text("AI for Science Fund")
+        == "Science Fund"
+    )
     assert "Image clues guide retrieval" in image_account_prompt
     assert "exact source matching is retrieval context" in image_account_prompt
     assert "only tool Evidence establishes a fact" in image_account_prompt

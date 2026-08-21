@@ -118,6 +118,22 @@ def text_targets_verdict_or_media_origin(value: str) -> bool:
     )
 
 
+def neutralize_planning_route_text(value: str) -> str:
+    """Remove prohibited AI-generation wording from a factual route.
+
+    ``AI`` can be part of a legitimate on-image title such as ``AI Governance
+    Framework``.  Planning routes must not carry that token because it is also
+    the marker used to reject generation-method/provenance searches.  Keep the
+    remaining distinctive factual words so the route remains searchable.
+    """
+
+    text = str(value or "")
+    text = re.sub(r"\b(?:ai|a\s+i)\s+for\s+", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\b(?:ai|a\s+i)\b", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s{2,}", " ", text)
+    return text.strip(" \t\r\n-:;,")
+
+
 def goal_has_as_of_constraint(goal: str) -> bool:
     """Return whether a browse goal carries an explicit historical cutoff."""
 

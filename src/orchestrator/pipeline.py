@@ -22,6 +22,7 @@ from src.orchestrator.discrepancy_coverage import (
     compile_discrepancy_verdict_basis,
 )
 from src.orchestrator.evidence_policy import (
+    neutralize_planning_route_text,
     query_policy_violation,
     text_targets_verdict_or_media_origin,
 )
@@ -2842,6 +2843,23 @@ class Orchestrator:
         source_access_policy: Optional[SourceAccessPolicy] = None,
     ) -> tuple[bool, str]:
         policy = source_access_policy or SourceAccessPolicy()
+        parsed.search_hypotheses = [
+            hypothesis.model_copy(
+                update={
+                    "statement": neutralize_planning_route_text(
+                        hypothesis.statement
+                    ),
+                    "expected_information": neutralize_planning_route_text(
+                        hypothesis.expected_information
+                    ),
+                    "queries": [
+                        neutralize_planning_route_text(query)
+                        for query in hypothesis.queries
+                    ],
+                }
+            )
+            for hypothesis in parsed.search_hypotheses
+        ]
         executable_hypotheses = []
         for hypothesis in parsed.search_hypotheses:
             route_values = (
