@@ -177,6 +177,16 @@ and publication history belong in hypotheses, not the target; exact source
 matching is retrieval context. Treat search_hypotheses as neutral investigation
 routes, not candidate verdicts; determine the relation slot's verified value.
 Routes do not own the verdict.
+
+Hard prohibition: never use ``media_origin`` and never make the target,
+hypothesis, expected_information, or query about AI-generated, AI-manipulated,
+real/fake, authenticity, creation method, generation source/context, original
+or source image, exact source/capture, creator, platform, publication context,
+or media origin. These may be visible anchor text only; investigate the
+underlying subject, event, relation, value, or physical property instead. If a
+route would discuss one of these topics, replace it with a neutral text_search
+or visual route about the same visible relation.
+
 Keep the target centered on the depicted subject, event, relation, value, or
 scene/world constraint. Source image, creator, platform, generation method, and
 publication history are retrieval context rather than target facts. The absence

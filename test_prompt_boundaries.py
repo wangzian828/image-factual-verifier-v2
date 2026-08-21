@@ -15,7 +15,7 @@ def test_hot_path_prompts_stay_semantic_and_compact() -> None:
         "target planning": (TARGET_PLANNING_SYSTEM_PROMPT, 1300),
         "image account planning": (
             IMAGE_ACCOUNT_PLANNING_SYSTEM_PROMPT,
-            2900,
+            3500,
         ),
         "discrepancy investigation": (
             DISCREPANCY_REACT_SYSTEM_PROMPT,
@@ -81,6 +81,12 @@ def test_hot_path_prompts_stay_semantic_and_compact() -> None:
     assert "not candidate verdicts" in image_account_prompt
     assert "retrieval context" in image_account_prompt
     assert "determine the relation slot's verified value" in image_account_prompt
+    assert "Hard prohibition" in image_account_prompt
+    assert "never use ``media_origin``" in image_account_prompt
+    assert "AI-generated, AI-manipulated" in image_account_prompt
+    assert "original or source image" in image_account_prompt
+    assert "creator, platform, publication context" in image_account_prompt
+    assert "neutral text_search or visual route" in image_account_prompt
     assert "Image clues guide retrieval" in image_account_prompt
     assert "exact source matching is retrieval context" in image_account_prompt
     assert "only tool Evidence establishes a fact" in image_account_prompt
