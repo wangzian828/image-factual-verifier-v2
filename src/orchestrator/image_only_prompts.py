@@ -186,6 +186,11 @@ or media origin. These may be visible anchor text only; investigate the
 underlying subject, event, relation, value, or physical property instead. If a
 route would discuss one of these topics, replace it with a neutral text_search
 or visual route about the same visible relation.
+Do not repeat a prohibited token inside any hypothesis statement,
+expected_information, or query. If a proper on-image title contains ``AI``,
+omit that token while preserving the remaining distinctive words: write
+``governance framework`` instead of ``AI Governance Framework`` and
+``science fund`` instead of ``AI for Science Fund``.
 
 Keep the target centered on the depicted subject, event, relation, value, or
 scene/world constraint. Source image, creator, platform, generation method, and

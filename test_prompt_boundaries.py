@@ -15,7 +15,7 @@ def test_hot_path_prompts_stay_semantic_and_compact() -> None:
         "target planning": (TARGET_PLANNING_SYSTEM_PROMPT, 1300),
         "image account planning": (
             IMAGE_ACCOUNT_PLANNING_SYSTEM_PROMPT,
-            3500,
+            3900,
         ),
         "discrepancy investigation": (
             DISCREPANCY_REACT_SYSTEM_PROMPT,
@@ -87,6 +87,9 @@ def test_hot_path_prompts_stay_semantic_and_compact() -> None:
     assert "original or source image" in image_account_prompt
     assert "creator, platform, publication context" in image_account_prompt
     assert "neutral text_search or visual route" in image_account_prompt
+    assert "Do not repeat a prohibited token" in image_account_prompt
+    assert "governance framework" in image_account_prompt
+    assert "science fund" in image_account_prompt
     assert "Image clues guide retrieval" in image_account_prompt
     assert "exact source matching is retrieval context" in image_account_prompt
     assert "only tool Evidence establishes a fact" in image_account_prompt
