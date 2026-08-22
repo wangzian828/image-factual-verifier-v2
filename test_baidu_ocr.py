@@ -201,6 +201,28 @@ def test_baidu_ocr_retries_read_timeout_and_reports_request_count(monkeypatch):
     assert len(session.calls) == 2
 
 
+def test_baidu_token_retries_read_timeout(monkeypatch):
+    monkeypatch.setenv("BAIDU_OCR_MAX_RETRIES", "1")
+    monkeypatch.setenv("BAIDU_OCR_RETRY_BACKOFF_SECONDS", "0")
+    session = FakeSession(
+        [
+            requests.ReadTimeout("transient token timeout"),
+            FakeResponse({"access_token": "token-retry", "expires_in": 3600}),
+        ]
+    )
+    client = BaiduOCRClient(
+        api_key="test-key-token-retry",
+        secret_key="test-secret",
+        session=session,
+    )
+
+    token, cache_hit = client.get_access_token()
+
+    assert token == "token-retry"
+    assert cache_hit is False
+    assert len(session.calls) == 2
+
+
 def test_baidu_ocr_records_non_json_gateway_diagnostics():
     session = FakeSession(
         [

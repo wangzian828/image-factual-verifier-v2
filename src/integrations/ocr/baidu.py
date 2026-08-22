@@ -221,34 +221,73 @@ class BaiduOCRClient:
             if cached and cached[1] > now:
                 return cached[0], True
 
-            try:
-                response = self._session().post(
-                    self._token_url(),
-                    params={
-                        "grant_type": "client_credentials",
-                        "client_id": api_key,
-                        "client_secret": secret_key,
-                    },
-                    timeout=self._token_timeout(),
-                )
-            except requests.RequestException as exc:
-                raise BaiduOCRError(
-                    f"Baidu token request failed: {type(exc).__name__}",
-                    request_count=1,
-                ) from exc
+            token_request_count = 0
+            payload: Dict[str, Any]
+            for attempt in range(self._max_retries() + 1):
+                try:
+                    response = self._session().post(
+                        self._token_url(),
+                        params={
+                            "grant_type": "client_credentials",
+                            "client_id": api_key,
+                            "client_secret": secret_key,
+                        },
+                        timeout=self._token_timeout(),
+                    )
+                    token_request_count += 1
+                except (requests.Timeout, requests.ConnectionError) as exc:
+                    token_request_count += 1
+                    if attempt < self._max_retries():
+                        time.sleep(self._retry_backoff(attempt))
+                        continue
+                    raise BaiduOCRError(
+                        f"Baidu token request failed: {type(exc).__name__}",
+                        request_count=token_request_count,
+                    ) from exc
 
-            payload = self._payload(response)
-            if not bool(getattr(response, "ok", False)):
-                raise self._provider_error(
-                    payload,
-                    stage="token request",
-                    status_code=int(getattr(response, "status_code", 0) or 0),
-                )
-            if payload.get("error") or payload.get("error_code"):
-                raise self._provider_error(
-                    payload,
-                    stage="token request",
-                    status_code=int(getattr(response, "status_code", 0) or 0),
+                try:
+                    payload = self._payload(response)
+                except BaiduOCRError as exc:
+                    if exc.retryable and attempt < self._max_retries():
+                        time.sleep(self._retry_backoff(attempt))
+                        continue
+                    raise BaiduOCRError(
+                        str(exc),
+                        request_count=token_request_count,
+                    ) from exc
+
+                status_code = int(getattr(response, "status_code", 0) or 0)
+                if not bool(getattr(response, "ok", False)):
+                    provider_error = self._provider_error(
+                        payload,
+                        stage="token request",
+                        status_code=status_code,
+                    )
+                    if provider_error.retryable and attempt < self._max_retries():
+                        time.sleep(self._retry_backoff(attempt))
+                        continue
+                    raise BaiduOCRError(
+                        str(provider_error),
+                        request_count=token_request_count,
+                    ) from provider_error
+                if payload.get("error") or payload.get("error_code"):
+                    provider_error = self._provider_error(
+                        payload,
+                        stage="token request",
+                        status_code=status_code,
+                    )
+                    if provider_error.retryable and attempt < self._max_retries():
+                        time.sleep(self._retry_backoff(attempt))
+                        continue
+                    raise BaiduOCRError(
+                        str(provider_error),
+                        request_count=token_request_count,
+                    ) from provider_error
+                break
+            else:
+                raise BaiduOCRError(
+                    "Baidu token request retries exhausted",
+                    request_count=token_request_count,
                 )
 
             token = str(payload.get("access_token", "")).strip()
