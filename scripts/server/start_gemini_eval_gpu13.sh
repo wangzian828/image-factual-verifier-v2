@@ -15,10 +15,17 @@ for arg in "$@"; do
     esac
 done
 
-# One Gemini run at a time, and at most four complete rollout episodes by
-# default.  start_eval_gpu13.sh also installs the process-wide request gate and
-# refuses a second active Gemini launch.
-export GEMINI_EVAL_MAX_CONCURRENCY="${GEMINI_EVAL_MAX_CONCURRENCY:-4}"
+# Keep the teacher run bounded by default. These values leave enough room for
+# the observed 80-120s Gemini vision latency without allowing timed-out worker
+# threads to accumulate or retry behind the outer tool deadline. Every value
+# remains explicitly overridable for a controlled canary.
+export GEMINI_EVAL_MAX_CONCURRENCY="${GEMINI_EVAL_MAX_CONCURRENCY:-2}"
+export GEMINI_MAX_INFLIGHT_REQUESTS="${GEMINI_MAX_INFLIGHT_REQUESTS:-2}"
+export IFV_VISION_TOOL_IMAGE_MODE="${IFV_VISION_TOOL_IMAGE_MODE:-original}"
+export GEMINI_VISION_TIMEOUT_SECONDS="${GEMINI_VISION_TIMEOUT_SECONDS:-150}"
+export VLM_TOOL_REQUEST_TIMEOUT_SECONDS="${VLM_TOOL_REQUEST_TIMEOUT_SECONDS:-150}"
+export VLM_TOOL_REQUEST_MAX_RETRIES="${VLM_TOOL_REQUEST_MAX_RETRIES:-0}"
+export AGENT_TOOL_ACTION_TIMEOUT_SECONDS="${AGENT_TOOL_ACTION_TIMEOUT_SECONDS:-210}"
 
 exec "${SCRIPT_DIR}/start_eval_gpu13.sh" \
     --profile teacher-gemini \

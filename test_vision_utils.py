@@ -27,7 +27,23 @@ def test_controlled_image_limits_resolution_and_records_sizes(tmp_path: Path) ->
     assert len(metadata["sha256"]) == 64
 
 
-def test_vision_tool_uses_light_compression(tmp_path: Path) -> None:
+def test_vision_tool_defaults_to_original_wire_path(tmp_path: Path) -> None:
+    path = tmp_path / "large.png"
+    Image.new("RGB", (3000, 1500), color=(30, 60, 90)).save(path)
+
+    data_url = vision_tool_image_to_data_url(str(path))
+
+    assert data_url.startswith("data:image/png;base64,")
+    encoded = data_url.split(",", 1)[1]
+    with Image.open(BytesIO(base64.b64decode(encoded))) as sent:
+        assert sent.size == (3000, 1500)
+
+
+def test_vision_tool_compression_is_explicit_opt_in(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("IFV_VISION_TOOL_IMAGE_MODE", "compressed")
     path = tmp_path / "large.png"
     Image.new("RGB", (3000, 1500), color=(30, 60, 90)).save(path)
 

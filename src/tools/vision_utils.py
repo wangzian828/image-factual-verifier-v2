@@ -21,6 +21,7 @@ REMOTE_IMAGE_HEADERS = {
 
 DEFAULT_VISION_TOOL_MAX_LONG_EDGE = 2048
 DEFAULT_VISION_TOOL_JPEG_QUALITY = 92
+DEFAULT_VISION_TOOL_IMAGE_MODE = "original"
 
 
 def _guess_mime_from_name(name: str) -> str:
@@ -124,12 +125,24 @@ def controlled_image_to_data_url(
 
 
 def vision_tool_image_to_data_url(image_input: str) -> str:
-    """Serialize an image for a VLM tool without sending a large local original.
+    """Serialize an image for a VLM tool.
 
-    This keeps more detail than the main policy chain while bounding local
-    uploads to a lightly-compressed JPEG. Remote and inline inputs retain their
-    existing data-URL behavior because they are already provider-facing media.
+    The default is the historical original-image wire path. The compressed path
+    remains available as an explicit opt-in because provider latency and visual
+    behavior must not change implicitly when an image serializer changes.
     """
+
+    mode = os.getenv(
+        "IFV_VISION_TOOL_IMAGE_MODE",
+        DEFAULT_VISION_TOOL_IMAGE_MODE,
+    ).strip().lower()
+    if mode in {"original", "raw", "direct"}:
+        return image_to_data_url(image_input)
+    if mode not in {"compressed", "jpeg"}:
+        raise ValueError(
+            "IFV_VISION_TOOL_IMAGE_MODE must be one of: "
+            "original, compressed"
+        )
 
     data_url, _ = controlled_image_to_data_url(
         image_input,
