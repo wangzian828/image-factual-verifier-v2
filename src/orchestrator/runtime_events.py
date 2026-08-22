@@ -72,6 +72,54 @@ def _safe_name(value: str) -> str:
     return f"{text[:24]}-{digest}"
 
 
+def _recovery_normalize(value: Any) -> Any:
+    """Normalize tool arguments into a stable, retry-safe cache key."""
+
+    if isinstance(value, Mapping):
+        normalized: Dict[str, Any] = {}
+        for key, item in sorted(value.items(), key=lambda pair: str(pair[0])):
+            # These are model/runtime annotations, not part of the external
+            # request. They can differ when the same action is replayed.
+            if str(key).startswith("__"):
+                continue
+            normalized[str(key)] = _recovery_normalize(item)
+        return normalized
+    if isinstance(value, (list, tuple)):
+        return [_recovery_normalize(item) for item in value]
+    if isinstance(value, str):
+        candidate = Path(value)
+        if candidate.is_file():
+            hasher = hashlib.sha256()
+            with candidate.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    hasher.update(chunk)
+            return {
+                "__file_name__": candidate.name,
+                "__file_sha256__": hasher.hexdigest(),
+            }
+        return value.strip()
+    return value
+
+
+def tool_recovery_key(
+    *,
+    stage: str,
+    tool_name: str,
+    tool_args: Mapping[str, Any],
+) -> str:
+    """Return the stable identity of one external tool request."""
+
+    return sha256_bytes(
+        stable_json_bytes(
+            {
+                "stage": str(stage),
+                "tool_name": str(tool_name),
+                "tool_args": _recovery_normalize(tool_args),
+            }
+        )
+    )
+
+
 def bind_case_runtime_store(store: Optional["CaseRuntimeStore"]):
     """Bind one case store to the current async task and return its reset token."""
 
@@ -170,8 +218,14 @@ class CaseRuntimeStore:
         *,
         case_id: str,
         attempt_id: Optional[str] = None,
+        resume_from: Optional[str | Path] = None,
     ) -> None:
         self.case_id = str(case_id)
+        self.resume_from = (
+            Path(resume_from).expanduser().resolve()
+            if resume_from is not None
+            else None
+        )
         self.attempt_id = attempt_id or (
             datetime.now(timezone.utc).strftime("%H%M%S")
             + "-"
@@ -190,6 +244,7 @@ class CaseRuntimeStore:
         self.artifacts = ContentAddressedArtifactStore(self.root / "artifacts" / "sha256")
         self._event_lock = threading.Lock()
         self._sequence = self._last_sequence()
+        self._recovery_index: Optional[Dict[str, Dict[str, Any]]] = None
         self.context_ledger = ContextLedger(self)
         self.append_event(
             "case_attempt_started",
@@ -197,6 +252,134 @@ class CaseRuntimeStore:
                 "case_id": self.case_id,
                 "attempt_id": self.attempt_id,
             },
+        )
+
+    def reuse_tool_result(
+        self,
+        *,
+        stage: str,
+        tool_name: str,
+        tool_args: Mapping[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        """Reuse one successful tool result from a prior attempt.
+
+        A replay only accepts an archived result whose request identity matches
+        exactly and whose persisted payload still has ``status=success``.
+        Failed, partial, or torn results are deliberately never reused.
+        """
+
+        if self.resume_from is None:
+            return None
+        key = tool_recovery_key(
+            stage=stage,
+            tool_name=tool_name,
+            tool_args=tool_args,
+        )
+        if self._recovery_index is None:
+            self._recovery_index = self._build_recovery_index()
+        candidate = self._recovery_index.get(key)
+        if candidate is None:
+            return None
+
+        source_root = Path(str(candidate["source_root"]))
+        artifact = candidate.get("artifact")
+        if not isinstance(artifact, Mapping):
+            return None
+        try:
+            raw = ContentAddressedArtifactStore(
+                source_root / "artifacts" / "sha256"
+            ).read_bytes(artifact).decode("utf-8")
+            payload = json.loads(raw)
+        except (OSError, UnicodeDecodeError, ValueError, json.JSONDecodeError):
+            return None
+        if not isinstance(payload, Mapping) or payload.get("status") != "success":
+            return None
+
+        self.append_event(
+            "tool_result_reused",
+            {
+                "stage": str(stage),
+                "tool_name": str(tool_name),
+                "recovery_key": key,
+                "source_attempt_id": candidate.get("attempt_id"),
+                "source_runtime_path": source_root.as_posix(),
+                "source_memory_id": candidate.get("memory_id"),
+                "artifact": dict(artifact),
+            },
+        )
+        return {
+            "result": raw,
+            "recovery_key": key,
+            "source_attempt_id": candidate.get("attempt_id"),
+            "source_runtime_path": source_root.as_posix(),
+            "source_memory_id": candidate.get("memory_id"),
+            "artifact": dict(artifact),
+        }
+
+    def _build_recovery_index(self) -> Dict[str, Dict[str, Any]]:
+        index: Dict[str, Dict[str, Any]] = {}
+        for source_root in self._recovery_attempt_roots():
+            archive_path = source_root / "archive" / "items.jsonl"
+            if not archive_path.exists():
+                continue
+            for raw in archive_path.read_bytes().splitlines():
+                try:
+                    item = json.loads(raw.decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    continue
+                if not isinstance(item, Mapping):
+                    continue
+                tool_name = str(item.get("tool_name", "")).strip()
+                stage = str(item.get("stage", "")).strip()
+                tool_args = item.get("tool_args")
+                artifact = item.get("artifact")
+                if not tool_name or not stage or not isinstance(tool_args, Mapping):
+                    continue
+                if not isinstance(artifact, Mapping):
+                    continue
+                key = str(item.get("recovery_key", "")).strip() or tool_recovery_key(
+                    stage=stage,
+                    tool_name=tool_name,
+                    tool_args=tool_args,
+                )
+                # Newer attempts win if the same request was archived more
+                # than once across retries.
+                index[key] = {
+                    "attempt_id": item.get("attempt_id"),
+                    "source_root": source_root.as_posix(),
+                    "memory_id": item.get("memory_id"),
+                    "artifact": dict(artifact),
+                }
+        return index
+
+    def _recovery_attempt_roots(self) -> list[Path]:
+        if self.resume_from is None:
+            return []
+        source = self.resume_from
+        candidates: list[Path] = []
+        if (source / "events.jsonl").is_file():
+            candidates.append(source)
+        for base in (
+            source,
+            source / "runtime",
+            source / "traces" / "runtime",
+        ):
+            case_root = base / _safe_name(self.case_id)
+            if case_root.is_dir():
+                candidates.extend(
+                    path
+                    for path in case_root.iterdir()
+                    if path.is_dir() and (path / "events.jsonl").is_file()
+                )
+        unique = {
+            path.resolve()
+            for path in candidates
+            if path.resolve() != self.root.resolve()
+        }
+        return sorted(
+            unique,
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
         )
 
     @property
@@ -274,6 +457,11 @@ class CaseRuntimeStore:
             "action_index": action_index,
             "tool_name": tool_name,
             "tool_args": dict(tool_args),
+            "recovery_key": tool_recovery_key(
+                stage=stage,
+                tool_name=tool_name,
+                tool_args=tool_args,
+            ),
             "artifact": descriptor,
             "metadata": dict(metadata or {}),
             "created_at": utc_now_iso(),

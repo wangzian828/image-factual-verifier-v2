@@ -62,6 +62,9 @@ class WorkflowConfig:
 
     # Runtime settings
     timeout: float = 1800.0
+    # Optional previous run directory whose completed tool results may be
+    # reused when a case is retried.
+    resume_from: Optional[str] = None
 
     # Output
     output_dir: str = field(default_factory=default_trace_dir)
@@ -158,6 +161,7 @@ class VerificationWorkflow:
         runtime_store = CaseRuntimeStore(
             self.config.output_dir,
             case_id=episode_id,
+            resume_from=self.config.resume_from,
         )
         runtime_token = bind_case_runtime_store(runtime_store)
         try:

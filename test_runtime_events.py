@@ -10,6 +10,20 @@ from src.orchestrator.runtime_events import (
     current_case_runtime_store,
     reset_case_runtime_store,
 )
+from src.orchestrator.stage_runner import StageRunner
+from src.tools.base import BaseTool
+
+
+class _NeverCalledTool(BaseTool):
+    name = "visit"
+    parameters = {
+        "type": "object",
+        "properties": {"url": {"type": "string"}},
+        "required": ["url"],
+    }
+
+    def call(self, params: dict) -> dict:
+        raise AssertionError("the recovered tool must not call the provider")
 
 
 def test_atomic_json_replaces_complete_document(tmp_path: Path) -> None:
@@ -176,3 +190,92 @@ def test_archive_recall_then_exact_read_preserves_raw_result(tmp_path: Path) -> 
 def test_archive_read_rejects_unknown_memory_id(tmp_path: Path) -> None:
     store = CaseRuntimeStore(tmp_path, case_id="archive-case")
     assert store.read_archive_item("memory-missing")["status"] == "error"
+
+
+def test_recovery_reuses_only_successful_archived_tool_results(
+    tmp_path: Path,
+) -> None:
+    source = CaseRuntimeStore(tmp_path, case_id="recoverable-case")
+    successful = json.dumps(
+        {"status": "success", "content": "same capture"},
+        ensure_ascii=False,
+    )
+    source.archive_tool_result(
+        stage="image_only_discrepancy_investigation",
+        action_index=2,
+        tool_name="visit",
+        tool_args={
+            "url": "https://example.org/source",
+            "__question_id": "task-1",
+        },
+        tool_result=successful,
+    )
+    source.archive_tool_result(
+        stage="image_only_discrepancy_investigation",
+        action_index=3,
+        tool_name="text_search",
+        tool_args={"query": "unstable request"},
+        tool_result=json.dumps(
+            {"status": "error", "error": "ReadTimeout"},
+            ensure_ascii=False,
+        ),
+    )
+
+    retry = CaseRuntimeStore(
+        tmp_path,
+        case_id="recoverable-case",
+        resume_from=tmp_path,
+    )
+    reused = retry.reuse_tool_result(
+        stage="image_only_discrepancy_investigation",
+        tool_name="visit",
+        tool_args={"url": "https://example.org/source"},
+    )
+    assert reused is not None
+    assert reused["result"] == successful
+    assert retry.reuse_tool_result(
+        stage="image_only_discrepancy_investigation",
+        tool_name="text_search",
+        tool_args={"query": "unstable request"},
+    ) is None
+    assert any(
+        event["event_type"] == "tool_result_reused"
+        for event in retry.read_events()
+    )
+
+
+def test_stage_runner_uses_recovered_tool_result_without_provider_call(
+    tmp_path: Path,
+) -> None:
+    source = CaseRuntimeStore(tmp_path, case_id="stage-recovery")
+    result = json.dumps({"status": "success", "content": "cached"}, ensure_ascii=False)
+    source.archive_tool_result(
+        stage="verification",
+        action_index=1,
+        tool_name="visit",
+        tool_args={"url": "https://example.org/cached"},
+        tool_result=result,
+    )
+    retry = CaseRuntimeStore(
+        tmp_path,
+        case_id="stage-recovery",
+        resume_from=tmp_path,
+    )
+    runner = StageRunner(
+        llm=object(),
+        system_prompt="",
+        tools=[_NeverCalledTool()],
+        stage_name="verification",
+        runtime_store=retry,
+    )
+
+    serialized, metadata = asyncio.run(
+        runner._execute_tool_uncached(
+            "visit",
+            {"url": "https://example.org/cached"},
+        )
+    )
+
+    assert serialized == result
+    assert metadata["recovery_cache_hit"] is True
+    assert metadata["tool_success"] is True

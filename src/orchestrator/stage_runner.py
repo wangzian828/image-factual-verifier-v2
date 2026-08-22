@@ -3413,6 +3413,63 @@ class StageRunner:
                 **lifecycle,
             }
 
+        if self.runtime_store is not None:
+            recovered = self.runtime_store.reuse_tool_result(
+                stage=self.stage_name,
+                tool_name=tool_name,
+                tool_args=cache_args,
+            )
+            if recovered is not None:
+                recovered_result = str(recovered["result"])
+                recovered_payload, succeeded = parse_tool_result(recovered_result)
+                if succeeded and self.source_access_policy.active:
+                    sanitized, filtered_count = (
+                        self.source_access_policy.sanitize_payload(
+                            recovered_payload
+                        )
+                    )
+                    if sanitized is None:
+                        succeeded = False
+                        recovered_result = json.dumps(
+                            {
+                                "status": "error",
+                                "error": (
+                                    "Recovered tool result blocked by the "
+                                    "active source access policy."
+                                ),
+                            },
+                            ensure_ascii=False,
+                        )
+                    else:
+                        if filtered_count:
+                            sanitized["policy_filtered_count"] = int(
+                                sanitized.get("policy_filtered_count", 0) or 0
+                            ) + filtered_count
+                        recovered_result, succeeded = serialize_tool_result(
+                            sanitized
+                        )
+                return recovered_result, finish_metadata(
+                    "completed" if succeeded else "failed",
+                    {
+                        "cache_hit": True,
+                        "recovery_cache_hit": True,
+                        "recovery_source_attempt_id": recovered.get(
+                            "source_attempt_id"
+                        ),
+                        "recovery_source_memory_id": recovered.get(
+                            "source_memory_id"
+                        ),
+                        "tool_success": succeeded,
+                        "observed_at": datetime.now(timezone.utc).isoformat(),
+                        "duration_ms": round(
+                            (time.perf_counter() - started) * 1000,
+                            2,
+                        ),
+                        "serialized_size": len(recovered_result),
+                    },
+                    error="" if succeeded else "recovered tool result was rejected",
+                )
+
         if self.tool_cache and tool_name in self.cacheable_tools:
             cached = self.tool_cache.get(tool_name, cache_args)
             if cached is not None:

@@ -112,6 +112,14 @@ def _parse_args() -> argparse.Namespace:
         help="New or empty directory for manifest, run results, predictions, and traces.",
     )
     parser.add_argument(
+        "--resume-from",
+        default=None,
+        help=(
+            "Optional previous run directory. Successful tool results from "
+            "that run are reused when retrying the same case."
+        ),
+    )
+    parser.add_argument(
         "--concurrency",
         type=int,
         default=1,
@@ -233,6 +241,7 @@ def _workflow_config(args: argparse.Namespace) -> WorkflowConfig:
         llm_wire_api=getattr(args, "llm_wire_api", None),
         vlm_wire_api=getattr(args, "vlm_wire_api", None),
         timeout=args.timeout,
+        resume_from=getattr(args, "resume_from", None),
         save_traces=True,
         decision_policy_version=AGENT_DECISION_POLICY_VERSION,
     )
@@ -388,6 +397,11 @@ async def _run_cases(args: argparse.Namespace) -> Dict[str, Any]:
             "host": socket.gethostname(),
             "platform": platform.platform(),
             "python": sys.version.split()[0],
+            "resume_from": (
+                str(Path(args.resume_from).expanduser().resolve())
+                if getattr(args, "resume_from", None)
+                else None
+            ),
         },
         "source_access_policy": {
             "active": bool(explicit_policy and explicit_policy.active),

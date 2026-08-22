@@ -2014,6 +2014,7 @@ class Orchestrator:
             "focused_visual_inspection",
             tool_args,
             image_path,
+            stage="image_only_visual_reinspection",
         )
         step = StageStep(
             round=investigation.action_count + 1,
@@ -2558,6 +2559,7 @@ class Orchestrator:
             "focused_visual_inspection",
             tool_args,
             image_path,
+            stage="image_only_final_visual_audit",
         )
         step = StageStep(
             round=1,
@@ -3804,6 +3806,7 @@ class Orchestrator:
                     "perceive_scene",
                     {"image_input": image_path},
                     image_path,
+                    stage="perception",
                 )
                 step = StageStep(
                     round=1,
@@ -3838,11 +3841,13 @@ class Orchestrator:
                         "perceive_scene",
                         {"image_input": image_path},
                         image_path,
+                        stage="perception",
                     ),
                     self._execute_tool(
                         "ocr_with_position",
                         {"image_input": image_path},
                         image_path,
+                        stage="perception",
                     ),
                 )
             )
@@ -4080,6 +4085,8 @@ class Orchestrator:
         tool_name: str,
         args: Dict[str, Any],
         image_path: str,
+        *,
+        stage: str = "",
     ) -> tuple[str, Dict[str, Any]]:
         """Execute one tool with cache-miss single-flight protection."""
 
@@ -4103,14 +4110,22 @@ class Orchestrator:
                     tool_name,
                     args,
                     image_path,
+                    stage=stage,
                 )
-        return await self._execute_tool_uncached(tool_name, args, image_path)
+        return await self._execute_tool_uncached(
+            tool_name,
+            args,
+            image_path,
+            stage=stage,
+        )
 
     async def _execute_tool_uncached(
         self,
         tool_name: str,
         args: Dict[str, Any],
         image_path: str,
+        *,
+        stage: str = "",
     ) -> tuple[str, Dict[str, Any]]:
         tool = self.all_tools[tool_name]
         tool_args = dict(args)
@@ -4122,6 +4137,33 @@ class Orchestrator:
 
         cache_args = self._build_cache_args(tool_name, tool_args, image_path=image_path)
         started = time.perf_counter()
+        runtime_store = current_case_runtime_store()
+        if runtime_store is not None:
+            recovered = runtime_store.reuse_tool_result(
+                stage=stage or "direct_tool",
+                tool_name=tool_name,
+                tool_args=cache_args,
+            )
+            if recovered is not None:
+                recovered_result = str(recovered["result"])
+                _, succeeded = parse_tool_result(recovered_result)
+                return recovered_result, {
+                    "cache_hit": True,
+                    "recovery_cache_hit": True,
+                    "recovery_source_attempt_id": recovered.get(
+                        "source_attempt_id"
+                    ),
+                    "recovery_source_memory_id": recovered.get(
+                        "source_memory_id"
+                    ),
+                    "tool_success": succeeded,
+                    "observed_at": datetime.now(timezone.utc).isoformat(),
+                    "duration_ms": round(
+                        (time.perf_counter() - started) * 1000,
+                        2,
+                    ),
+                    "serialized_size": len(recovered_result),
+                }
         if tool_name in self.cacheable_tools:
             cached = self.tool_cache.get(tool_name, cache_args)
             if cached is not None:
