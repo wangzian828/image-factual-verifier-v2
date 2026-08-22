@@ -11,7 +11,8 @@ import atexit
 import asyncio
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+import threading
+from typing import Any, Callable, Dict, List, Optional
 
 import httpx
 
@@ -46,6 +47,87 @@ class LLMBackend(ABC):
     async def get_response(self, messages: List[Dict[str, Any]], **kwargs) -> LLMResponse:
         """Generate a response given a conversation history."""
         ...
+
+
+@dataclass
+class _AsyncClientGeneration:
+    client: httpx.AsyncClient
+    active_requests: int = 0
+    retired: bool = False
+    close_started: bool = False
+
+
+class _AsyncClientPool:
+    """Swap failed async clients without interrupting healthy requests.
+
+    A single half-closed keep-alive connection can poison an entire shared
+    client.  When one request fails at the transport boundary, retire only
+    that client's generation.  Concurrent requests already using it are
+    allowed to finish; retries acquire the fresh generation.
+    """
+
+    def __init__(
+        self,
+        client_factory: Callable[[], httpx.AsyncClient],
+    ) -> None:
+        self._client_factory = client_factory
+        self._lock = threading.Lock()
+        self._current: Optional[_AsyncClientGeneration] = None
+        self._generations: list[_AsyncClientGeneration] = []
+
+    def acquire(self) -> _AsyncClientGeneration:
+        with self._lock:
+            generation = self._current
+            if generation is None or generation.retired:
+                generation = _AsyncClientGeneration(self._client_factory())
+                self._current = generation
+                self._generations.append(generation)
+            generation.active_requests += 1
+            return generation
+
+    async def retire(self, generation: _AsyncClientGeneration) -> None:
+        client_to_close: Optional[httpx.AsyncClient] = None
+        with self._lock:
+            if not generation.retired:
+                generation.retired = True
+                if self._current is generation:
+                    self._current = None
+            if (
+                generation.retired
+                and generation.active_requests == 0
+                and not generation.close_started
+            ):
+                generation.close_started = True
+                client_to_close = generation.client
+        if client_to_close is not None:
+            await client_to_close.aclose()
+
+    async def release(self, generation: _AsyncClientGeneration) -> None:
+        client_to_close: Optional[httpx.AsyncClient] = None
+        with self._lock:
+            generation.active_requests = max(0, generation.active_requests - 1)
+            if (
+                generation.retired
+                and generation.active_requests == 0
+                and not generation.close_started
+            ):
+                generation.close_started = True
+                client_to_close = generation.client
+        if client_to_close is not None:
+            await client_to_close.aclose()
+
+    async def aclose(self) -> None:
+        with self._lock:
+            generations = list(self._generations)
+            self._current = None
+            for generation in generations:
+                generation.retired = True
+                generation.close_started = True
+            self._generations.clear()
+        await asyncio.gather(
+            *(generation.client.aclose() for generation in generations),
+            return_exceptions=True,
+        )
 
 
 class APIBackend(LLMBackend):
@@ -85,6 +167,7 @@ class APIBackend(LLMBackend):
         self.proxy = proxy or self._resolve_proxy()
         self.extra_body = extra_body or self._resolve_extra_body()
         self._shared_client: Optional[httpx.AsyncClient] = None
+        self._gemini_client_pool: Optional[_AsyncClientPool] = None
         self._client_registered_for_cleanup = False
 
     def _resolve_api_key(self) -> str:
@@ -142,11 +225,18 @@ class APIBackend(LLMBackend):
     def _close_shared_client_sync(self) -> None:
         client = self._shared_client
         self._shared_client = None
-        if client is None:
+        gemini_pool = self._gemini_client_pool
+        self._gemini_client_pool = None
+        if client is None and gemini_pool is None:
             return
         try:
-            import asyncio
-            asyncio.run(client.aclose())
+            async def close_all() -> None:
+                if gemini_pool is not None:
+                    await gemini_pool.aclose()
+                if client is not None:
+                    await client.aclose()
+
+            asyncio.run(close_all())
         except Exception:
             pass
 
@@ -160,6 +250,10 @@ class APIBackend(LLMBackend):
         """Close the shared HTTP client used by this backend."""
         client = self._shared_client
         self._shared_client = None
+        gemini_pool = self._gemini_client_pool
+        self._gemini_client_pool = None
+        if gemini_pool is not None:
+            await gemini_pool.aclose()
         if client is not None:
             await client.aclose()
 
@@ -170,6 +264,34 @@ class APIBackend(LLMBackend):
             "GEMINI_INTERACTIONS_URL",
             "https://generativelanguage.googleapis.com/v1beta/interactions",
         )
+
+    def _get_gemini_client_pool(self) -> _AsyncClientPool:
+        if self._gemini_client_pool is None:
+            self._gemini_client_pool = _AsyncClientPool(
+                lambda: httpx.AsyncClient(**self._client_kwargs())
+            )
+        return self._gemini_client_pool
+
+    async def _post_gemini_request(
+        self,
+        url: str,
+        *,
+        headers: Dict[str, str],
+        json: Any,
+    ) -> httpx.Response:
+        pool = self._get_gemini_client_pool()
+        generation = pool.acquire()
+        try:
+            return await generation.client.post(
+                url,
+                headers=headers,
+                json=json,
+            )
+        except httpx.TransportError:
+            await pool.retire(generation)
+            raise
+        finally:
+            await pool.release(generation)
 
     async def get_response(self, messages: List[Dict[str, Any]], **kwargs) -> LLMResponse:
         """Call the API asynchronously with retry."""
@@ -605,7 +727,7 @@ class APIBackend(LLMBackend):
             retry_max_delay=float(
                 os.getenv("GEMINI_RETRY_MAX_DELAY_SECONDS", "60")
             ),
-            client=self._get_shared_client(),
+            request=self._post_gemini_request,
         )
         payload = await client.create(
             model=self.model_name,

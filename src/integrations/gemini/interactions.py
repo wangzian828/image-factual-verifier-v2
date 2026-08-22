@@ -146,6 +146,9 @@ class GeminiInteractionsClient:
         retry_jitter: float = 2.0,
         retry_max_delay: float = 60.0,
         client: Optional[httpx.AsyncClient] = None,
+        request: Optional[
+            Callable[..., Awaitable[httpx.Response]]
+        ] = None,
         request_gate: Optional[GeminiRequestGate] = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         random_uniform: Callable[[float, float], float] = random.uniform,
@@ -168,8 +171,13 @@ class GeminiInteractionsClient:
         self.retry_max_delay = retry_max_delay
         self._sleep = sleep
         self._random_uniform = random_uniform
-        self._client = client or httpx.AsyncClient(timeout=timeout)
-        self._owns_client = client is None
+        if client is not None and request is not None:
+            raise ValueError("client and request cannot both be provided.")
+        self._client = client or (
+            httpx.AsyncClient(timeout=timeout) if request is None else None
+        )
+        self._request = request or self._client.post  # type: ignore[union-attr]
+        self._owns_client = client is None and request is None
         self._request_gate = request_gate or process_gemini_request_gate()
         self.last_retry_metadata: dict[str, Any] = {
             "retry_attempts": 0,
@@ -348,7 +356,7 @@ class GeminiInteractionsClient:
         for attempt in range(self.max_retries + 1):
             try:
                 async with self._request_gate:
-                    response = await self._client.post(
+                    response = await self._request(
                         self.base_url,
                         headers=headers,
                         json=dict(payload),

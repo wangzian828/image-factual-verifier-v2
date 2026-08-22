@@ -22,6 +22,7 @@ from src.integrations.gemini import (
     extract_text,
     extract_videos,
 )
+from src.orchestrator.llm_backend import APIBackend
 
 
 TEST_API_KEY = "contract-test-key"
@@ -473,6 +474,63 @@ def test_retries_transport_errors(monkeypatch: pytest.MonkeyPatch) -> None:
     }
     assert attempts == 2
     assert delays == [1.25]
+
+
+def test_api_backend_rebuilds_gemini_transport_after_disconnect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", TEST_API_KEY)
+    clients: list[Any] = []
+
+    class FakeAsyncClient:
+        def __init__(self, *, fail: bool) -> None:
+            self.fail = fail
+            self.closed = False
+
+        async def post(self, url: str, *, headers: dict[str, str], json: Any):
+            if self.fail:
+                self.fail = False
+                raise httpx.RemoteProtocolError("stale keep-alive connection")
+            request = httpx.Request("POST", url, headers=headers)
+            return httpx.Response(
+                200,
+                request=request,
+                json={"id": "fresh-transport", "status": "completed"},
+            )
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    def make_client(**_kwargs: Any) -> FakeAsyncClient:
+        client = FakeAsyncClient(fail=not clients)
+        clients.append(client)
+        return client
+
+    monkeypatch.setattr(httpx, "AsyncClient", make_client)
+
+    async def scenario() -> httpx.Response:
+        backend = APIBackend(provider="gemini", max_retries=0)
+        try:
+            with pytest.raises(httpx.RemoteProtocolError):
+                await backend._post_gemini_request(
+                    "https://example.test/interactions",
+                    headers={"content-type": "application/json"},
+                    json={"model": "model"},
+                )
+            return await backend._post_gemini_request(
+                "https://example.test/interactions",
+                headers={"content-type": "application/json"},
+                json={"model": "model"},
+            )
+        finally:
+            await backend.aclose()
+
+    response = run(scenario())
+
+    assert response.json()["id"] == "fresh-transport"
+    assert len(clients) == 2
+    assert clients[0].closed
+    assert clients[1].closed
 
 
 def test_exhausted_http_retry_preserves_response_body(
