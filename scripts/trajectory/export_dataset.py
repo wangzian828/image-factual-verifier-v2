@@ -365,8 +365,8 @@ def export_dataset(
         raise ValueError("frozen SFT export requires --case-split")
     if require_frozen_gates and eligibility_dir is None:
         raise ValueError("frozen SFT export requires --eligibility-dir")
-    if minimum_accepted_cases is not None and minimum_accepted_cases < 1:
-        raise ValueError("minimum_accepted_cases must be at least 1")
+    if minimum_accepted_cases is not None and minimum_accepted_cases < 0:
+        raise ValueError("minimum_accepted_cases must be non-negative")
     if require_frozen_gates and minimum_accepted_cases is None:
         minimum_accepted_cases = 40
     if train_ratio <= 0 or validation_ratio < 0:
