@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import inspect
 import json
 import os
 import time
@@ -321,6 +322,62 @@ class Orchestrator:
             f"Current date: {clock['current_date']} ({clock['timezone']}). "
             "Use this runtime date for time-sensitive judgments instead of model memory.\n\n"
         )
+
+    async def aclose(self) -> None:
+        """Close per-rollout transports and helper runtimes.
+
+        A batch uses one ``Orchestrator`` per isolated rollout.  Several tool
+        wrappers intentionally share a persistent VLM client, Jina reader, and
+        API backend within that rollout.  They are referenced from more than
+        one wrapper, so collect resources by identity and close each exactly
+        once when the rollout completes.
+        """
+
+        child_attributes = (
+            "client",
+            "vlm_client",
+            "vlm_backend",
+            "browse_client",
+            "lens_client",
+            "image_search_client",
+            "visual_search_client",
+            "candidate_reranker",
+            "upload_client",
+            "serper_lens_client",
+            "zhipu_client",
+        )
+        pending: list[Any] = [getattr(self, "llm", None)]
+        pending.extend(getattr(self, "all_tools", {}).values())
+        resources: list[Any] = []
+        seen: set[int] = set()
+        while pending:
+            resource = pending.pop()
+            if resource is None:
+                continue
+            resource_id = id(resource)
+            if resource_id in seen:
+                continue
+            seen.add(resource_id)
+            resources.append(resource)
+            pending.extend(
+                getattr(resource, name, None) for name in child_attributes
+            )
+
+        for resource in resources:
+            async_close = getattr(resource, "aclose", None)
+            sync_close = getattr(resource, "close", None)
+            try:
+                if callable(async_close):
+                    result = async_close()
+                    if inspect.isawaitable(result):
+                        await result
+                elif callable(sync_close):
+                    await asyncio.to_thread(sync_close)
+            except Exception:
+                # Cleanup must not replace a completed rollout's actual result.
+                # The resource's own atexit guard remains a final best-effort
+                # fallback if a provider transport refuses to close here.
+                continue
 
     def _validate_startup_configuration(self) -> None:
         tool_thinking_levels = {

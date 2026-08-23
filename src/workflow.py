@@ -131,6 +131,30 @@ class VerificationWorkflow:
             )
         return self._orchestrator
 
+    async def aclose(self) -> None:
+        """Release resources owned by this workflow's orchestrator.
+
+        ``run_batch`` deliberately creates an isolated child workflow per
+        rollout so mutable investigation state and durable event streams cannot
+        cross-contaminate.  Those children also own persistent HTTP transports
+        and helper threads, so they must be closed as soon as the rollout
+        reaches any terminal outcome rather than waiting for process exit.
+        """
+
+        orchestrator = self._orchestrator
+        self._orchestrator = None
+        if orchestrator is not None:
+            await orchestrator.aclose()
+
+    def _new_batch_child(self, config: WorkflowConfig) -> "VerificationWorkflow":
+        """Construct one isolated rollout child.
+
+        This narrow factory keeps the production isolation contract explicit and
+        makes batch lifecycle tests independent of external providers.
+        """
+
+        return VerificationWorkflow(config)
+
     async def run_single(
         self,
         image_path: str,
@@ -289,12 +313,15 @@ class VerificationWorkflow:
                     # resolved settings with only a distinct sampling seed.
                     child_config = copy.copy(self.config)
                     child_config.sampling_seed = sampling_seed
-                    child = VerificationWorkflow(child_config)
-                    return await child.run_single(
-                        path,
-                        img_id,
-                        runtime_case=runtime_case,
-                    )
+                    child = self._new_batch_child(child_config)
+                    try:
+                        return await child.run_single(
+                            path,
+                            img_id,
+                            runtime_case=runtime_case,
+                        )
+                    finally:
+                        await child.aclose()
                 except Exception as exc:
                     error_result = getattr(exc, "_ifv_result", None)
                     if isinstance(error_result, dict):
