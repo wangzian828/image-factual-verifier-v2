@@ -9,6 +9,7 @@ from src.orchestrator.runtime_events import (
     bind_case_runtime_store,
     current_case_runtime_store,
     reset_case_runtime_store,
+    tool_recovery_key,
 )
 from src.orchestrator.stage_runner import StageRunner
 from src.tools.base import BaseTool
@@ -118,6 +119,24 @@ def test_event_reader_ignores_torn_last_line(tmp_path: Path) -> None:
 
     events = store.read_events()
     assert [event["event_type"] for event in events][-1] == "valid"
+
+
+def test_recovery_key_treats_long_model_text_as_text() -> None:
+    long_claim = (
+        "An academic paper titled 'Multimodal interaction enhancement of "
+        "digital cultural heritage system: user behavior analysis and "
+        "interface reconstruction of the heritage scanning library of the "
+        "palace museum' was published on 12 May 2020 by Linghui Ke, "
+        "Huimin Qin, Jiaao Long, and Pengyu Xiao."
+    )
+
+    key = tool_recovery_key(
+        stage="verification",
+        tool_name="text_search",
+        tool_args={"queries": long_claim},
+    )
+
+    assert len(key) == 64
 
 
 def test_case_runtime_context_is_task_local(tmp_path: Path) -> None:

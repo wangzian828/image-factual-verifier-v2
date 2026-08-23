@@ -88,7 +88,15 @@ def _recovery_normalize(value: Any) -> Any:
         return [_recovery_normalize(item) for item in value]
     if isinstance(value, str):
         candidate = Path(value)
-        if candidate.is_file():
+        # Model-produced strings are often long claims, evidence passages, or
+        # search queries.  ``Path.is_file()`` can raise ``OSError: [Errno 36]
+        # File name too long`` for those strings instead of simply returning
+        # False.  A recovery key must treat such values as ordinary text.
+        try:
+            is_file = candidate.is_file()
+        except OSError:
+            is_file = False
+        if is_file:
             hasher = hashlib.sha256()
             with candidate.open("rb") as handle:
                 for chunk in iter(lambda: handle.read(1024 * 1024), b""):
