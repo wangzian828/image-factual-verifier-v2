@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+from argparse import Namespace
 import json
+from pathlib import Path
 from typing import Any, Dict, List
 
 from src.orchestrator.llm_backend import LLMResponse
+from src.eval import score_sft_eligibility
 from src.eval.score_sft_eligibility import _default_storage_dir
 from src.trajectory.sft_eligibility import (
     SFT_ELIGIBILITY_SYSTEM_PROMPT,
@@ -157,6 +160,129 @@ def test_default_storage_isolated_by_eligibility_output_version(tmp_path: Any) -
     assert v2_storage != v3_storage
     assert v2_storage.name == "teacher-run--sft-eligibility-v2"
     assert v3_storage.name == "teacher-run--sft-eligibility-v3"
+
+
+def test_sft_audit_requeues_only_failed_trace(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    class _AuditReport:
+        def failures(self, *, strict_scheduler: bool) -> list[dict[str, Any]]:
+            assert strict_scheduler is True
+            return []
+
+        def warnings(self, *, strict_scheduler: bool) -> list[dict[str, Any]]:
+            assert strict_scheduler is True
+            return []
+
+    class _Backend:
+        async def aclose(self) -> None:
+            return None
+
+    attempts: Dict[str, int] = {}
+
+    class _Judge:
+        generation_identity = "test-generation"
+
+        async def judge(
+            self,
+            packet: Dict[str, Any],
+            *,
+            image_path: Path | None = None,
+        ) -> tuple[SFTEligibilityJudgment, Dict[str, Any]]:
+            assert image_path is not None
+            case_id = str(packet["case_id"])
+            attempts[case_id] = attempts.get(case_id, 0) + 1
+            if case_id == "case-2" and attempts[case_id] == 1:
+                raise RuntimeError("temporary Gemini 500")
+            return _judgment(), {"calls": []}
+
+    run_dir = tmp_path / "runs" / "eval" / "teacher"
+    trace_dir = run_dir / "traces"
+    trace_dir.mkdir(parents=True)
+    (run_dir / "run_manifest.json").write_text(
+        json.dumps({"status": "completed"}),
+        encoding="utf-8",
+    )
+    image_path = tmp_path / "image.jpg"
+    image_path.write_bytes(b"not-read-by-the-mocked-judge")
+
+    gold_rows: list[dict[str, Any]] = []
+    for case_id in ("case-1", "case-2"):
+        trace = _trace()
+        trace["image_id"] = f"{case_id}--teacher-r000"
+        trace["state"]["image_id"] = trace["image_id"]
+        trace["state"]["runtime_case"]["case_id"] = case_id
+        (trace_dir / f"{case_id}.json").write_text(
+            json.dumps(trace),
+            encoding="utf-8",
+        )
+        gold = _gold()
+        gold["candidate_id"] = case_id
+        gold_rows.append(gold)
+
+    gold_path = tmp_path / "gold.jsonl"
+    gold_path.write_text(
+        "".join(json.dumps(row) + "\n" for row in gold_rows),
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / "eligibility"
+
+    monkeypatch.setattr(score_sft_eligibility, "APIBackend", lambda **_: _Backend())
+    monkeypatch.setattr(
+        score_sft_eligibility,
+        "SFTEligibilityJudge",
+        lambda *_args, **_kwargs: _Judge(),
+    )
+    monkeypatch.setattr(
+        score_sft_eligibility,
+        "_resolve_image_path",
+        lambda *_args, **_kwargs: image_path,
+    )
+    monkeypatch.setattr(score_sft_eligibility, "audit_trace", lambda *_args, **_kwargs: _AuditReport())
+    monkeypatch.setattr(
+        score_sft_eligibility,
+        "stage_release",
+        lambda *_args, **_kwargs: {
+            "accepted_case_count": 2,
+            "rejected_case_count": 0,
+        },
+    )
+
+    summary = asyncio.run(
+        score_sft_eligibility._run(
+            Namespace(
+                run_dir=run_dir,
+                gold=gold_path,
+                output_dir=output_dir,
+                cache_dir=None,
+                image_root=None,
+                storage_dir=tmp_path / "storage",
+                provider="gemini",
+                model="gemini-3.7-flash",
+                max_tokens=4096,
+                provider_retries=0,
+                trace_retries=1,
+                trace_retry_delay=0.0,
+                timeout=180.0,
+                concurrency=2,
+                force=False,
+            )
+        )
+    )
+
+    assert summary["episode_count"] == 2
+    assert attempts == {"case-1": 1, "case-2": 2}
+    errors = [
+        json.loads(line)
+        for line in (output_dir / "sft_eligibility_errors.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line
+    ]
+    assert len(errors) == 1
+    assert errors[0]["case_id"] == "case-2"
+    assert errors[0]["retry_round"] == 0
 
 
 class _MockBackend:
