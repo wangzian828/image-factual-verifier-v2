@@ -49,6 +49,24 @@ def _parse_args() -> argparse.Namespace:
         default=os.getenv("IFV_SFT_ELIGIBILITY_MODEL", "gemini-3.7-flash"),
     )
     parser.add_argument("--max-tokens", type=int, default=4096)
+    parser.add_argument(
+        "--provider-retries",
+        type=int,
+        default=int(os.getenv("SFT_ELIGIBILITY_PROVIDER_RETRIES", "3")),
+        help="Retries for one frozen-judge provider request.",
+    )
+    parser.add_argument(
+        "--trace-retries",
+        type=int,
+        default=int(os.getenv("SFT_ELIGIBILITY_TRACE_RETRIES", "12")),
+        help="Retries for a trace that failed outside the provider request retry loop.",
+    )
+    parser.add_argument(
+        "--trace-retry-delay",
+        type=float,
+        default=float(os.getenv("SFT_ELIGIBILITY_TRACE_RETRY_DELAY", "30")),
+        help="Seconds to wait before retrying failed traces.",
+    )
     parser.add_argument("--timeout", type=float, default=180.0)
     parser.add_argument(
         "--concurrency",
@@ -126,6 +144,35 @@ def _load_cache(path: Path) -> Dict[str, Any] | None:
     return value
 
 
+def _trace_case_id(trace: Mapping[str, Any]) -> str:
+    state = trace.get("state")
+    runtime_case = (
+        state.get("runtime_case")
+        if isinstance(state, Mapping)
+        and isinstance(state.get("runtime_case"), Mapping)
+        else {}
+    )
+    return str(runtime_case.get("case_id", "")).strip()
+
+
+def _batch_error_row(trace_path: Path, exc: Exception) -> Dict[str, Any]:
+    """Return durable diagnostics without turning a provider failure into data."""
+
+    case_id = ""
+    try:
+        trace = _json_object(trace_path)
+        case_id = _trace_case_id(trace)
+    except Exception:
+        pass
+    return {
+        "status": "error",
+        "case_id": case_id,
+        "trace": str(trace_path),
+        "error_type": type(exc).__name__,
+        "error": str(exc),
+    }
+
+
 def _default_storage_dir(run_dir: Path, eligibility_dir: Path) -> Path:
     """Keep independently scored eligibility versions in separate storage roots."""
 
@@ -186,6 +233,12 @@ async def _run(args: argparse.Namespace) -> Dict[str, Any]:
         raise FileNotFoundError(f"no canonical traces under {run_dir / 'traces'}")
     if args.concurrency < 1:
         raise ValueError("--concurrency must be at least 1")
+    if args.provider_retries < 0:
+        raise ValueError("--provider-retries must be non-negative")
+    if args.trace_retries < 0:
+        raise ValueError("--trace-retries must be non-negative")
+    if args.trace_retry_delay < 0:
+        raise ValueError("--trace-retry-delay must be non-negative")
 
     # The completed-manifest check intentionally precedes this private read.
     gold_path = args.gold.expanduser().resolve()
@@ -201,6 +254,7 @@ async def _run(args: argparse.Namespace) -> Dict[str, Any]:
         temperature=0.0,
         max_tokens=args.max_tokens,
         timeout=args.timeout,
+        max_retries=args.provider_retries,
     )
     judge = SFTEligibilityJudge(
         backend,
@@ -217,13 +271,7 @@ async def _run(args: argparse.Namespace) -> Dict[str, Any]:
             if isinstance(trace.get("state"), Mapping)
             else {}
         )
-        runtime_case = (
-            state.get("runtime_case")
-            if isinstance(state, Mapping)
-            and isinstance(state.get("runtime_case"), Mapping)
-            else {}
-        )
-        case_id = str(runtime_case.get("case_id", "")).strip()
+        case_id = _trace_case_id(trace)
         if case_id not in gold:
             raise ValueError(f"private gold lacks trace case_id {case_id!r}")
         image_path = _resolve_image_path(
@@ -288,6 +336,7 @@ async def _run(args: argparse.Namespace) -> Dict[str, Any]:
         artifact_path = output_dir / f"{episode_id}.sft_eligibility.json"
         _write_json(artifact_path, artifact)
         return {
+            "status": "success",
             "case_id": case_id,
             "episode_id": episode_id,
             "artifact": str(artifact_path),
@@ -314,13 +363,68 @@ async def _run(args: argparse.Namespace) -> Dict[str, Any]:
             "from_cache": from_cache,
         }
 
-    rows: list[Dict[str, Any]] = []
+    rows_by_trace: dict[Path, Dict[str, Any]] = {}
+    failures: list[Dict[str, Any]] = []
+
+    async def score_trace_isolated(trace_path: Path) -> Dict[str, Any]:
+        """Keep one provider/network failure from cancelling sibling tasks."""
+
+        try:
+            return await score_trace(trace_path)
+        except Exception as exc:
+            return _batch_error_row(trace_path, exc)
+
+    pending = list(trace_paths)
+    error_history: list[Dict[str, Any]] = []
+    retry_round = 0
     try:
-        rows = list(
-            await asyncio.gather(*(score_trace(path) for path in trace_paths))
-        )
+        while pending:
+            results = await asyncio.gather(
+                *(score_trace_isolated(path) for path in pending)
+            )
+            next_pending: list[Path] = []
+            round_failures: list[Dict[str, Any]] = []
+            for trace_path, result in zip(pending, results):
+                if result.get("status") == "error":
+                    error = dict(result)
+                    error["retry_round"] = retry_round
+                    round_failures.append(error)
+                    error_history.append(error)
+                    next_pending.append(trace_path)
+                else:
+                    rows_by_trace[trace_path] = result
+
+            progress = {
+                "schema_version": "ifv-sft-eligibility-progress-v1",
+                "run_dir": str(run_dir),
+                "episode_count": len(trace_paths),
+                "completed_count": len(rows_by_trace),
+                "pending_count": len(next_pending),
+                "retry_round": retry_round,
+                "failed_case_ids": [
+                    row["case_id"] for row in round_failures if row.get("case_id")
+                ],
+            }
+            _write_json(output_dir / "sft_eligibility_progress.json", progress)
+            _write_jsonl(output_dir / "sft_eligibility_errors.jsonl", error_history)
+
+            if not next_pending:
+                break
+            if retry_round >= args.trace_retries:
+                failures = round_failures
+                raise RuntimeError(
+                    "SFT eligibility audit incomplete after trace retries: "
+                    f"{len(failures)} trace(s) remain; "
+                    f"{len(rows_by_trace)}/{len(trace_paths)} completed."
+                )
+            retry_round += 1
+            if args.trace_retry_delay:
+                await asyncio.sleep(args.trace_retry_delay)
+            pending = next_pending
     finally:
         await backend.aclose()
+
+    rows = [rows_by_trace[path] for path in trace_paths]
 
     accepted = [row for row in rows if row["sft_eligibility_pass"] is True]
     _write_jsonl(output_dir / "accepted_episodes.jsonl", accepted)
