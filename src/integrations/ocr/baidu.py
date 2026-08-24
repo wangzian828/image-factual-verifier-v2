@@ -12,6 +12,12 @@ from typing import Any, Dict, Optional
 
 import requests
 
+from src.integrations.http_sessions import (
+    close_tracked_sessions,
+    get_tracked_session,
+    init_tracked_sessions,
+)
+
 
 DEFAULT_TOKEN_URL = "https://aip.baidubce.com/oauth/2.0/token"
 DEFAULT_OCR_URL = "https://aip.baidubce.com/rest/2.0/ocr/v1/general"
@@ -63,6 +69,10 @@ class BaiduOCRClient:
 
     def _secret_key(self) -> str:
         return (self.secret_key or os.getenv("BAIDU_OCR_SECRET_KEY", "")).strip()
+
+    def __post_init__(self) -> None:
+        self._session_local = threading.local()
+        init_tracked_sessions(self)
 
     def _token_url(self) -> str:
         return (
@@ -135,11 +145,10 @@ class BaiduOCRClient:
     def _session(self) -> Any:
         if self.session is not None:
             return self.session
-        current = getattr(self._session_local, "session", None)
-        if current is None:
-            current = requests.Session()
-            self._session_local.session = current
-        return current
+        return get_tracked_session(self, self._session_local)
+
+    def close(self) -> None:
+        close_tracked_sessions(self)
 
     @staticmethod
     def _payload(response: Any) -> Dict[str, Any]:

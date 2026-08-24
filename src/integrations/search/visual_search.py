@@ -12,6 +12,11 @@ from typing import Any, Dict, List, Optional
 import requests
 
 from src.integrations.search.serper import SerperLensSearchClient
+from src.integrations.http_sessions import (
+    close_tracked_sessions,
+    get_tracked_session,
+    init_tracked_sessions,
+)
 
 
 DEFAULT_TEMP_UPLOAD_URL = "https://litterbox.catbox.moe/resources/internals/api.php"
@@ -100,13 +105,13 @@ class ImageUploadClient:
         self._upload_cache: Dict[str, tuple[float, str, Dict[str, Any]]] = {}
         self._file_hash_cache: Dict[tuple[str, int, int], str] = {}
         self._upload_cache_lock = threading.Lock()
+        init_tracked_sessions(self)
 
     def _get_session(self) -> requests.Session:
-        session = getattr(self._thread_local, "session", None)
-        if session is None:
-            session = requests.Session()
-            self._thread_local.session = session
-        return session
+        return get_tracked_session(self, self._thread_local)
+
+    def close(self) -> None:
+        close_tracked_sessions(self)
 
     def upload(self, image_path: str) -> str:
         path = Path(image_path)
@@ -299,13 +304,13 @@ class ZhipuImageSearchClient:
             self.api_key = os.getenv("ZHIPU_API_KEY", "").strip() or None
         self.endpoint = os.getenv("ZHIPU_IMAGE_SEARCH_URL", self.endpoint).strip() or self.endpoint
         self._thread_local = threading.local()
+        init_tracked_sessions(self)
 
     def _get_session(self) -> requests.Session:
-        session = getattr(self._thread_local, "session", None)
-        if session is None:
-            session = requests.Session()
-            self._thread_local.session = session
-        return session
+        return get_tracked_session(self, self._thread_local)
+
+    def close(self) -> None:
+        close_tracked_sessions(self)
 
     def search(self, image_url: str, *, top_k: int = 5) -> List[Dict[str, Any]]:
         if not self.api_key:

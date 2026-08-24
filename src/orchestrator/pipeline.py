@@ -345,6 +345,7 @@ class Orchestrator:
             "upload_client",
             "serper_lens_client",
             "zhipu_client",
+            "baidu_client",
         )
         pending: list[Any] = [getattr(self, "llm", None)]
         pending.extend(getattr(self, "all_tools", {}).values())

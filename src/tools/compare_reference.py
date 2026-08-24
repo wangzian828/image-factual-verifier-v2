@@ -23,6 +23,11 @@ from src.integrations.gemini import (
     require_minimal_thinking,
     validate_interaction_response,
 )
+from src.integrations.http_sessions import (
+    close_tracked_sessions,
+    get_tracked_session,
+    init_tracked_sessions,
+)
 from src.tools.base import BaseTool
 from src.orchestrator.source_access import SourceAccessPolicy
 
@@ -183,6 +188,10 @@ class CompareWithReferenceTool(BaseTool):
                 minimum=0.0,
             )
         )
+        init_tracked_sessions(self)
+
+    def close(self) -> None:
+        close_tracked_sessions(self)
 
     def set_source_access_policy(self, policy: SourceAccessPolicy) -> None:
         self.source_access_policy = policy
@@ -624,11 +633,11 @@ class CompareWithReferenceTool(BaseTool):
         }
 
     def _get_reference_session(self) -> Any:
-        session = getattr(self._reference_thread_local, "session", None)
-        if session is None:
-            import requests
-
-            session = requests.Session()
+        session = get_tracked_session(
+            self,
+            self._reference_thread_local,
+        )
+        if not getattr(session, "_ifv_reference_headers", False):
             session.headers.update(
                 {
                     "User-Agent": (
@@ -643,7 +652,7 @@ class CompareWithReferenceTool(BaseTool):
                     "Accept-Language": "en-US,en;q=0.8",
                 }
             )
-            self._reference_thread_local.session = session
+            session._ifv_reference_headers = True
         return session
 
     @staticmethod

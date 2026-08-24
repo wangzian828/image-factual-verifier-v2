@@ -51,6 +51,29 @@ def test_orchestrator_aclose_releases_shared_resources_once() -> None:
     assert shared_reader.close_calls == 1
 
 
+def test_orchestrator_aclose_releases_nested_http_clients_once() -> None:
+    upload = _SyncResource()
+    lens = _SyncResource()
+    ocr = _SyncResource()
+    orchestrator = Orchestrator.__new__(Orchestrator)
+    orchestrator.llm = _AsyncResource()
+    orchestrator.all_tools = {
+        "reverse_image_search": SimpleNamespace(
+            visual_search_client=SimpleNamespace(
+                upload_client=upload,
+                serper_lens_client=lens,
+            )
+        ),
+        "ocr_with_position": SimpleNamespace(baidu_client=ocr),
+    }
+
+    run(orchestrator.aclose())
+
+    assert upload.close_calls == 1
+    assert lens.close_calls == 1
+    assert ocr.close_calls == 1
+
+
 def test_run_batch_closes_every_isolated_child() -> None:
     children: list[Any] = []
 

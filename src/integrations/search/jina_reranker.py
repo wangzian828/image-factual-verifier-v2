@@ -7,6 +7,12 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional
 
 import requests
 
+from src.integrations.http_sessions import (
+    close_tracked_sessions,
+    get_tracked_session,
+    init_tracked_sessions,
+)
+
 
 JINA_RERANK_ENDPOINT = "https://api.jina.ai/v1/rerank"
 
@@ -37,13 +43,13 @@ class JinaRerankerClient:
             or "jina-reranker-v3"
         ).strip()
         self._thread_local = threading.local()
+        init_tracked_sessions(self)
 
     def _get_session(self) -> requests.Session:
-        session = getattr(self._thread_local, "session", None)
-        if session is None:
-            session = requests.Session()
-            self._thread_local.session = session
-        return session
+        return get_tracked_session(self, self._thread_local)
+
+    def close(self) -> None:
+        close_tracked_sessions(self)
 
     def rerank(
         self,

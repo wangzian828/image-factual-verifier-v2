@@ -27,6 +27,11 @@ from src.integrations.gemini import (
     require_minimal_thinking,
 )
 from src.integrations.async_runtime import PersistentAsyncRuntime
+from src.integrations.http_sessions import (
+    close_tracked_sessions,
+    get_tracked_session,
+    init_tracked_sessions,
+)
 from src.integrations.llm.openai_compatible import (
     OpenAICompatibleChatClient,
     resolve_model_api_key,
@@ -215,6 +220,7 @@ class JinaReaderClient:
         self._extract_runtime: Optional[PersistentAsyncRuntime] = None
         self._extract_runtime_lock = threading.Lock()
         self._gemini_interactions_client: Optional[GeminiInteractionsClient] = None
+        init_tracked_sessions(self)
         atexit.register(self.close)
 
     def close(self) -> None:
@@ -229,8 +235,11 @@ class JinaReaderClient:
         with self._extract_runtime_lock:
             runtime = self._extract_runtime
             self._extract_runtime = None
-        if runtime is not None:
-            runtime.close(self._close_gemini_client)
+        try:
+            if runtime is not None:
+                runtime.close(self._close_gemini_client)
+        finally:
+            close_tracked_sessions(self)
 
     async def _close_gemini_client(self) -> None:
         client = self._gemini_interactions_client
@@ -258,11 +267,7 @@ class JinaReaderClient:
             raise PermissionError("URL blocked by the active source access policy.")
 
     def _get_session(self) -> requests.Session:
-        session = getattr(self._thread_local, "session", None)
-        if session is None:
-            session = requests.Session()
-            self._thread_local.session = session
-        return session
+        return get_tracked_session(self, self._thread_local)
 
     def visit(
         self,

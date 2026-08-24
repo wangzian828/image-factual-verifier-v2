@@ -20,8 +20,6 @@ from src.tools.base import BaseTool
 _SHARED_READERS: dict[bool, Any] = {}
 _READER_LOCK = threading.RLock()
 _READ_LOCK = threading.Lock()
-_SHARED_BAIDU_CLIENT: Optional[BaiduOCRClient] = None
-_BAIDU_CLIENT_LOCK = threading.RLock()
 
 
 @dataclass
@@ -616,11 +614,19 @@ class OCRWithPositionTool(BaseTool):
     def _get_baidu_client(self) -> BaiduOCRClient:
         if self.baidu_client is not None:
             return self.baidu_client
-        global _SHARED_BAIDU_CLIENT
-        with _BAIDU_CLIENT_LOCK:
-            if _SHARED_BAIDU_CLIENT is None:
-                _SHARED_BAIDU_CLIENT = BaiduOCRClient()
-            return _SHARED_BAIDU_CLIENT
+        # Keep the transport owned by this isolated rollout child.  The OCR
+        # token itself is process-cached, so sharing the requests session is
+        # unnecessary and would make per-case cleanup impossible.
+        self.baidu_client = BaiduOCRClient()
+        return self.baidu_client
+
+    def close(self) -> None:
+        client = self.baidu_client
+        self.baidu_client = None
+        if client is not None:
+            close = getattr(client, "close", None)
+            if callable(close):
+                close()
 
     @staticmethod
     def _baidu_image_bytes(

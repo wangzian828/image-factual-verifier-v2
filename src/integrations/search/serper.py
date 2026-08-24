@@ -8,6 +8,12 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
+from src.integrations.http_sessions import (
+    close_tracked_sessions,
+    get_tracked_session,
+    init_tracked_sessions,
+)
+
 
 SERPER_TEXT_ENDPOINT = "https://google.serper.dev/search"
 SERPER_IMAGE_ENDPOINT = "https://google.serper.dev/images"
@@ -52,13 +58,13 @@ class SerperTextSearchClient:
         if self.api_key is None:
             self.api_key = os.getenv("SERPER_API_KEY") or os.getenv("SERPER_KEY_ID")
         self._thread_local = threading.local()
+        init_tracked_sessions(self)
 
     def _get_session(self) -> requests.Session:
-        session = getattr(self._thread_local, "session", None)
-        if session is None:
-            session = requests.Session()
-            self._thread_local.session = session
-        return session
+        return get_tracked_session(self, self._thread_local)
+
+    def close(self) -> None:
+        close_tracked_sessions(self)
 
     def search(self, query: str, *, top_k: int = 10, gl: Optional[str] = None, hl: Optional[str] = None, time_range: Optional[str] = None) -> Dict[str, Any]:
         if not self.api_key:
@@ -132,13 +138,13 @@ class SerperImageSearchClient:
         if self.api_key is None:
             self.api_key = os.getenv("SERPER_API_KEY") or os.getenv("SERPER_KEY_ID")
         self._thread_local = threading.local()
+        init_tracked_sessions(self)
 
     def _get_session(self) -> requests.Session:
-        session = getattr(self._thread_local, "session", None)
-        if session is None:
-            session = requests.Session()
-            self._thread_local.session = session
-        return session
+        return get_tracked_session(self, self._thread_local)
+
+    def close(self) -> None:
+        close_tracked_sessions(self)
 
     def search(self, query: str, *, top_k: int = 5, gl: Optional[str] = None, hl: Optional[str] = None) -> List[Dict[str, Any]]:
         if not self.api_key:
@@ -198,13 +204,13 @@ class SerperLensSearchClient:
         if self.api_key is None:
             self.api_key = os.getenv("SERPER_API_KEY") or os.getenv("SERPER_KEY_ID")
         self._thread_local = threading.local()
+        init_tracked_sessions(self)
 
     def _get_session(self) -> requests.Session:
-        session = getattr(self._thread_local, "session", None)
-        if session is None:
-            session = requests.Session()
-            self._thread_local.session = session
-        return session
+        return get_tracked_session(self, self._thread_local)
+
+    def close(self) -> None:
+        close_tracked_sessions(self)
 
     def search(self, image_url: str, *, top_k: int = 5) -> List[Dict[str, Any]]:
         if not self.api_key:
