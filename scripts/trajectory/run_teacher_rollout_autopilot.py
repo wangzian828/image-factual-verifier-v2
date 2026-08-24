@@ -462,8 +462,10 @@ def _merge_successful_attempts(
     return merged_dir, manifest
 
 
-def _command_log_path(run_dir: Path) -> Path:
-    return run_dir / "command.log"
+def _attempt_command_log_path(group_dir: Path, attempt_number: int) -> Path:
+    """Keep launcher logs outside the immutable ``run_cases`` output directory."""
+
+    return group_dir / "logs" / f"attempt-{attempt_number:02d}.log"
 
 
 def _run_command(command: Sequence[str], *, cwd: Path, log_path: Path, env: Mapping[str, str]) -> int:
@@ -560,7 +562,7 @@ def _run_engineering_retries(
         returncode = _run_command(
             command,
             cwd=REPO_ROOT,
-            log_path=_command_log_path(attempt_dir),
+            log_path=_attempt_command_log_path(group_dir, attempt_number),
             env=env,
         )
         attempt_payload = {

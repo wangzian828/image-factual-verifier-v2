@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from scripts.trajectory.run_teacher_rollout_autopilot import (
+    _attempt_command_log_path,
     _classify_initial_outcomes,
     _has_early_correct_judgment,
     _read_jsonl,
@@ -123,6 +124,15 @@ def test_prepare_runtime_release_allows_precreated_logs_only(tmp_path: Path) -> 
 
     assert prepared["case_count"] == 1
     assert (output / "preparation.json").is_file()
+
+
+def test_attempt_launcher_log_is_outside_run_cases_output(tmp_path: Path) -> None:
+    group = tmp_path / "rollouts" / "initial"
+    attempt = group / "attempt-01"
+    log = _attempt_command_log_path(group, 1)
+
+    assert log == group / "logs" / "attempt-01.log"
+    assert attempt not in log.parents
 
 
 def test_early_bucket_requires_strict_discrepancy_judgment(tmp_path: Path) -> None:
