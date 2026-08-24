@@ -210,10 +210,18 @@ def prepare_runtime_release(
         return prior
 
     if output_dir.exists() and any(output_dir.iterdir()):
-        raise FileExistsError(
-            "pipeline output must be new/empty or contain preparation.json: "
-            f"{output_dir}"
-        )
+        # Operational launchers commonly create ``logs/`` before handing off
+        # the foreground process.  It contains no data artifact and must not
+        # make a brand-new pipeline output unusable.  Any other pre-existing
+        # entry remains a fail-closed collision.
+        unexpected_entries = [
+            path.name for path in output_dir.iterdir() if path.name != "logs"
+        ]
+        if unexpected_entries:
+            raise FileExistsError(
+                "pipeline output must be new/empty (apart from logs/) or contain "
+                f"preparation.json: {output_dir}; unexpected={unexpected_entries}"
+            )
 
     rows = _read_jsonl(train_manifest)
     if not rows:

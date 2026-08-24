@@ -97,6 +97,32 @@ def test_prepare_runtime_release_projects_only_runtime_fields(tmp_path: Path) ->
     assert prepared["limit"] == 1
 
 
+def test_prepare_runtime_release_allows_precreated_logs_only(tmp_path: Path) -> None:
+    dataset = tmp_path / "unified-dataset"
+    (dataset / "images").mkdir(parents=True)
+    (dataset / "images" / "one.jpg").write_bytes(b"one")
+    train_manifest = dataset / "train-manifest.jsonl"
+    train_manifest.write_text(
+        json.dumps(
+            _manifest_row("case-one", factual_status="refuted", image="images/one.jpg")
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    output = tmp_path / "pipeline"
+    (output / "logs").mkdir(parents=True)
+    (output / "logs" / "launcher.log").write_text("launched\n", encoding="utf-8")
+
+    prepared = prepare_runtime_release(
+        dataset_root=dataset,
+        train_manifest=train_manifest,
+        output_dir=output,
+    )
+
+    assert prepared["case_count"] == 1
+    assert (output / "preparation.json").is_file()
+
+
 def test_early_bucket_requires_strict_discrepancy_judgment(tmp_path: Path) -> None:
     proposal_only = _trace("case-proposal", early_judgment=False)
     explicit_judgment = _trace("case-judgment", early_judgment=True)
