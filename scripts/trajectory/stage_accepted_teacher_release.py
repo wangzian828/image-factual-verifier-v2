@@ -429,7 +429,44 @@ def stage_release(
     if has_semantic_diagnostics:
         (output_dir / "semantic_rewards").mkdir(parents=True, exist_ok=True)
     for case_id, candidate in sorted(selected.items()):
-        selected_by_run.setdefault(candidate["run_dir"], set()).add(candidate["episode_id"])
+        trace = _load_json(candidate["trace_path"])
+        sft_judge_passed = (
+            (candidate["eligibility"].get("gates") or {}).get(
+                "sft_eligibility_pass"
+            )
+            is True
+        )
+        try:
+            exported_trajectory = export_trajectory_sft_example(
+                trace,
+                source_metadata=candidate["source_metadata"],
+                allow_incomplete_verdict_chain=sft_judge_passed,
+            )
+        except ValueError as exc:
+            stored = _stage_rejected_trace(
+                output_dir=output_dir,
+                trace_path=candidate["trace_path"],
+                eligibility_path=candidate["eligibility_path"],
+                trace_sha256=candidate["trace_sha256"],
+            )
+            rejected_rows.append(
+                {
+                    "case_id": case_id,
+                    "episode_id": candidate["episode_id"],
+                    "source_run_id": candidate["run_id"],
+                    "source_trace_sha256": candidate["trace_sha256"],
+                    "rejection_reasons": [
+                        "trajectory_sft_export_failed",
+                        f"trajectory_sft_export_error: {exc}",
+                    ],
+                    **stored,
+                }
+            )
+            continue
+
+        selected_by_run.setdefault(candidate["run_dir"], set()).add(
+            candidate["episode_id"]
+        )
         selected_cases_by_run.setdefault(candidate["run_dir"], set()).add(case_id)
         destination = output_dir / "traces" / f"{candidate['episode_id']}.json"
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -443,18 +480,6 @@ def stage_release(
                 candidate["semantic_path"],
                 output_dir / "semantic_rewards" / candidate["semantic_path"].name,
             )
-        trace = _load_json(candidate["trace_path"])
-        sft_judge_passed = (
-            (candidate["eligibility"].get("gates") or {}).get(
-                "sft_eligibility_pass"
-            )
-            is True
-        )
-        exported_trajectory = export_trajectory_sft_example(
-            trace,
-            source_metadata=candidate["source_metadata"],
-            allow_incomplete_verdict_chain=sft_judge_passed,
-        )
         trajectory_sft_rows.append(exported_trajectory.model_dump(mode="json"))
         perception_export_error = ""
         try:
