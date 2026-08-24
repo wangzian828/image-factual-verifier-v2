@@ -500,6 +500,15 @@ def _judge_namespace(args: argparse.Namespace, package_dir: Path) -> argparse.Na
         provider=args.provider,
         model=args.model,
         max_tokens=args.judge_max_tokens,
+        provider_retries=int(
+            os.getenv("SFT_ELIGIBILITY_PROVIDER_RETRIES", "3")
+        ),
+        trace_retries=int(
+            os.getenv("SFT_ELIGIBILITY_TRACE_RETRIES", "12")
+        ),
+        trace_retry_delay=float(
+            os.getenv("SFT_ELIGIBILITY_TRACE_RETRY_DELAY", "30")
+        ),
         timeout=args.timeout,
         concurrency=args.concurrency,
         force=args.force_judge,
