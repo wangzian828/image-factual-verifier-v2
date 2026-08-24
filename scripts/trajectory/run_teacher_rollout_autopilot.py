@@ -547,6 +547,7 @@ def _run_engineering_retries(
             str(base_seed + attempt_number - 1),
             "--timeout",
             str(timeout),
+            "--skip-preflight-image-hash-verification",
             "--case-list",
             str(case_list_path),
         ]

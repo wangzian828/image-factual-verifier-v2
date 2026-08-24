@@ -20,6 +20,11 @@ metadata.  The autopilot separates it into:
 The Agent receives only the runtime release.  The private projection is not copied
 into the model-visible SFT package.
 
+The projection computes every selected image hash once.  The rollout invocation
+then explicitly skips `run_cases`' otherwise redundant full preflight rehash and
+records `preflight_image_hash_verification=skipped_explicitly` in each run manifest.
+Ordinary `run_cases` calls retain the default full preflight verification.
+
 For each rollout phase, the script writes one immutable `attempt-XX` directory.
 Only terminal `success` + binary-verdict traces are removed from the next pending
 list.  Provider/tool/transport failures are automatically queued into a fresh-seed

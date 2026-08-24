@@ -71,6 +71,7 @@ def _args(
     metadata: Path | None = None,
     case_list: Path | None = None,
     case_id: list[str] | None = None,
+    skip_preflight_image_hash_verification: bool = False,
 ) -> argparse.Namespace:
     return argparse.Namespace(
         benchmark=str(benchmark) if benchmark else None,
@@ -94,6 +95,7 @@ def _args(
         shard_count=1,
         shard_index=0,
         source_access_policy=None,
+        skip_preflight_image_hash_verification=skip_preflight_image_hash_verification,
     )
 
 
@@ -217,6 +219,71 @@ def test_run_cases_writes_minimal_artifacts_without_private_gold(
         "summary": "summary.json",
         "traces": "traces/",
     }
+    assert manifest["execution"]["preflight_image_hash_verification"] == "verified"
+
+
+def test_run_cases_explicitly_skips_redundant_preflight_rehash(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    benchmark = _build_public_release(tmp_path)
+    run_dir = tmp_path / "run"
+
+    class ImageOnlyWorkflow:
+        def __init__(self, config: Any) -> None:
+            self.config = config
+
+        async def run_batch(self, **kwargs: Any) -> list[dict[str, Any]]:
+            trace_dir = Path(self.config.output_dir)
+            trace_dir.mkdir(parents=True, exist_ok=True)
+            episode_id = kwargs["image_ids"][0]
+            (trace_dir / f"{episode_id}.json").write_text(
+                json.dumps(
+                    {
+                        "image_id": episode_id,
+                        "verdict": "fake",
+                        "termination": "success",
+                        "state": {},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            return [
+                {
+                    "image_id": kwargs["runtime_cases"][0].case_id,
+                    "image_path": kwargs["runtime_cases"][0].image_path,
+                    "verdict": "fake",
+                    "confidence": 0.7,
+                    "termination": "success",
+                    "time_taken": 0.1,
+                    "state": {},
+                }
+            ]
+
+    monkeypatch.setattr(run_cases, "VerificationWorkflow", ImageOnlyWorkflow)
+    monkeypatch.setattr(run_cases, "_git_commit", lambda: "d" * 40)
+    monkeypatch.setattr(
+        run_cases,
+        "verify_case_image",
+        lambda *_args: (_ for _ in ()).throw(
+            AssertionError("preflight hash verification must be skipped")
+        ),
+    )
+
+    asyncio.run(
+        run_cases._run_cases(
+            _args(
+                benchmark,
+                run_dir,
+                skip_preflight_image_hash_verification=True,
+            )
+        )
+    )
+
+    manifest = json.loads((run_dir / "run_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["execution"]["preflight_image_hash_verification"] == (
+        "skipped_explicitly"
+    )
 
 
 def test_run_cases_supports_case_list_selection(

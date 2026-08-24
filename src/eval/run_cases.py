@@ -162,6 +162,15 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="Optional evaluator-side source-access policy override.",
     )
+    parser.add_argument(
+        "--skip-preflight-image-hash-verification",
+        action="store_true",
+        help=(
+            "Skip the runner's full preflight image rehash. This is only for a "
+            "caller that has already created and recorded a verified immutable "
+            "runtime projection; the run manifest records the explicit bypass."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -284,8 +293,12 @@ async def _run_cases(args: argparse.Namespace) -> Dict[str, Any]:
         ]
     metadata_by_case = metadata_index(metadata_path)
     runtime_cases = [image_only_case_from_runtime_row(sample) for sample in samples]
-    for runtime_case in runtime_cases:
-        verify_case_image(runtime_case, runtime_case.image_path)
+    skip_preflight_hash_verification = bool(
+        getattr(args, "skip_preflight_image_hash_verification", False)
+    )
+    if not skip_preflight_hash_verification:
+        for runtime_case in runtime_cases:
+            verify_case_image(runtime_case, runtime_case.image_path)
 
     runtime_commit = _git_commit()
     rollouts_per_case = _positive_int(
@@ -401,6 +414,11 @@ async def _run_cases(args: argparse.Namespace) -> Dict[str, Any]:
                 str(Path(args.resume_from).expanduser().resolve())
                 if getattr(args, "resume_from", None)
                 else None
+            ),
+            "preflight_image_hash_verification": (
+                "skipped_explicitly"
+                if skip_preflight_hash_verification
+                else "verified"
             ),
         },
         "source_access_policy": {
