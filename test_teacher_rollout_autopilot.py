@@ -8,6 +8,7 @@ from typing import Any
 from scripts.trajectory.run_teacher_rollout_autopilot import (
     _classify_initial_outcomes,
     _has_early_correct_judgment,
+    _read_jsonl,
     prepare_runtime_release,
 )
 from src.eval.public_release import load_public_release, resolve_image_path
@@ -95,6 +96,7 @@ def test_prepare_runtime_release_projects_only_runtime_fields(tmp_path: Path) ->
     assert "private evidence" not in benchmark.read_text(encoding="utf-8")
     assert prepared["runtime_cases_sha256"] == _sha256(benchmark)
     assert prepared["limit"] == 1
+    assert len(_read_jsonl(Path(str(prepared["private_gold"])))) == 1
 
 
 def test_prepare_runtime_release_allows_precreated_logs_only(tmp_path: Path) -> None:

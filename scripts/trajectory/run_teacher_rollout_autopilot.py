@@ -881,9 +881,8 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         _write_json(state_path, state)
         return state
 
-    all_case_ids = [
-        str(row["case_id"]) for row in _read_jsonl(preparation["private_gold"])
-    ]
+    private_gold_path = Path(str(preparation["private_gold"])).expanduser().resolve()
+    all_case_ids = [str(row["case_id"]) for row in _read_jsonl(private_gold_path)]
     initial_run, initial_manifest = _run_engineering_retries(
         group_name="initial",
         benchmark=Path(preparation["benchmark"]),
@@ -904,7 +903,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
 
     initial_audit = _run_sft_audit(
         run_dir=initial_run,
-        gold=Path(preparation["private_gold"]),
+        gold=private_gold_path,
         pipeline_dir=pipeline_dir,
         label="initial",
         model=args.sft_model,
@@ -915,7 +914,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     classification = _classify_initial_outcomes(
         run_dir=initial_run,
         eligibility_dir=initial_audit,
-        private_gold=Path(preparation["private_gold"]),
+        private_gold=private_gold_path,
         output_dir=pipeline_dir / "classification",
     )
     state["initial"]["sft_eligibility"] = str(initial_audit)
@@ -941,7 +940,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         )
         reroll_audit = _run_sft_audit(
             run_dir=reroll_run,
-            gold=Path(preparation["private_gold"]),
+            gold=private_gold_path,
             pipeline_dir=pipeline_dir,
             label="quality-reroll",
             model=args.sft_model,
