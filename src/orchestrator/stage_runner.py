@@ -1710,14 +1710,23 @@ class StageRunner:
                 else:
                     enum_target = property_schema
                 normalized_allowed_values = list(dict.fromkeys(allowed_values))
-                if len(normalized_allowed_values) <= _MAX_GEMINI_DYNAMIC_ENUM_VALUES:
+                always_plain_dynamic_enum = (
+                    tool.name == "visit" and property_name == "url"
+                )
+                if (
+                    not always_plain_dynamic_enum
+                    and len(normalized_allowed_values)
+                    <= _MAX_GEMINI_DYNAMIC_ENUM_VALUES
+                ):
                     enum_target["enum"] = normalized_allowed_values
                 else:
                     # Gemini Interactions rejects large dynamic enums with a
-                    # generic invalid_argument response. Keep the executable
-                    # route constraint in the deterministic validator, while
-                    # leaving the model a plain string schema and the runtime
-                    # context as the source of the larger candidate set.
+                    # generic invalid_argument response. In particular,
+                    # visit.url is a changing candidate set and can fail even
+                    # below the apparent enum-size threshold. Keep the
+                    # executable route constraint in the deterministic
+                    # validator, while leaving the model a plain string schema
+                    # and the runtime context as the candidate source.
                     enum_target.pop("enum", None)
                     description = str(enum_target.get("description", "")).strip()
                     suffix = (

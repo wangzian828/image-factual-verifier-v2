@@ -957,9 +957,11 @@ def test_native_tool_schema_constrains_array_items() -> None:
 
     schema = runner._build_native_tool_schemas()[0]["parameters"]
 
-    assert schema["properties"]["url"]["items"]["enum"] == [
-        "https://example.org/pending"
-    ]
+    assert schema["properties"]["url"]["items"]["type"] == "string"
+    assert "enum" not in schema["properties"]["url"]["items"]
+    assert "runtime-provided candidates" in (
+        schema["properties"]["url"]["items"]["description"]
+    )
     assert runner._validate_native_tool_args(
         "visit",
             {
