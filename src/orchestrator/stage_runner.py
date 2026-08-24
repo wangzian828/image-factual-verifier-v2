@@ -58,6 +58,7 @@ _CLAIM_SCOPED_EVIDENCE_TOOLS = {
     "crop_and_inspect",
     "ocr_with_position",
 }
+_MAX_GEMINI_DYNAMIC_ENUM_VALUES = 10
 
 
 def _bounded_timeout(
@@ -1705,9 +1706,26 @@ class StageRunner:
                     and "array" in property_type
                 ):
                     property_schema.setdefault("items", {"type": "string"})
-                    property_schema["items"]["enum"] = list(allowed_values)
+                    enum_target = property_schema["items"]
                 else:
-                    property_schema["enum"] = list(allowed_values)
+                    enum_target = property_schema
+                normalized_allowed_values = list(dict.fromkeys(allowed_values))
+                if len(normalized_allowed_values) <= _MAX_GEMINI_DYNAMIC_ENUM_VALUES:
+                    enum_target["enum"] = normalized_allowed_values
+                else:
+                    # Gemini Interactions rejects large dynamic enums with a
+                    # generic invalid_argument response. Keep the executable
+                    # route constraint in the deterministic validator, while
+                    # leaving the model a plain string schema and the runtime
+                    # context as the source of the larger candidate set.
+                    enum_target.pop("enum", None)
+                    description = str(enum_target.get("description", "")).strip()
+                    suffix = (
+                        " Choose from the runtime-provided candidates; "
+                        "the runtime validates membership."
+                    )
+                    if suffix not in description:
+                        enum_target["description"] = (description + suffix).strip()
                 # A runtime constraint represents a concrete executable route,
                 # not a hint.  If the base tool marks that selector optional,
                 # guided decoding may legally omit it and produce a call the
@@ -1845,6 +1863,26 @@ class StageRunner:
             )
             if error:
                 return error
+        for name, allowed_values in (
+            self.tool_argument_constraints.get(tool_name, {}).items()
+        ):
+            if name not in tool_args or not allowed_values:
+                continue
+            allowed = list(dict.fromkeys(allowed_values))
+            value = tool_args[name]
+            if isinstance(value, list):
+                for index, item in enumerate(value):
+                    if item not in allowed:
+                        return (
+                            f"Argument '{name}' for {tool_name}[{index}] "
+                            "must be one of: "
+                            + ", ".join(str(candidate) for candidate in allowed)
+                        )
+            elif value not in allowed:
+                return (
+                    f"Argument '{name}' for {tool_name} must be one of: "
+                    + ", ".join(str(candidate) for candidate in allowed)
+                )
         return ""
 
     @classmethod

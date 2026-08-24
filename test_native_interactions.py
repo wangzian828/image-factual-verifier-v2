@@ -965,14 +965,62 @@ def test_native_tool_schema_constrains_array_items() -> None:
             {
                 "question_id": "q0",
                 "url": ["https://example.org/pending"],
+                "image_claim": "The depicted event occurred as shown.",
+                "retrieval_goal": "Find the source event.",
             },
     ) == ""
     assert "must be one of" in runner._validate_native_tool_args(
         "visit",
-            {
-                "question_id": "q0",
-                "url": ["https://example.org/unowned"],
-            },
+        {
+            "question_id": "q0",
+            "url": ["https://example.org/unowned"],
+            "image_claim": "The depicted event occurred as shown.",
+            "retrieval_goal": "Find the source event.",
+        },
+    )
+
+
+def test_native_tool_schema_drops_large_dynamic_array_enum() -> None:
+    allowed_urls = [
+        f"https://example.org/pending-{index}"
+        for index in range(11)
+    ]
+    runner = StageRunner(
+        llm=NativeFakeBackend([]),
+        system_prompt="Inspect the selected candidate.",
+        tools=[VisitTool()],
+        stage_name="verification",
+        tool_argument_constraints={
+            "visit": {
+                "url": allowed_urls,
+            }
+        },
+    )
+    runner.active_question_ids = ["q0"]
+
+    schema = runner._build_native_tool_schemas()[0]["parameters"]
+    item_schema = schema["properties"]["url"]["items"]
+
+    assert item_schema["type"] == "string"
+    assert "enum" not in item_schema
+    assert "runtime-provided candidates" in item_schema["description"]
+    assert runner._validate_native_tool_args(
+        "visit",
+        {
+            "question_id": "q0",
+            "url": [allowed_urls[-1]],
+            "image_claim": "The depicted event occurred as shown.",
+            "retrieval_goal": "Find the source event.",
+        },
+    ) == ""
+    assert "must be one of" in runner._validate_native_tool_args(
+        "visit",
+        {
+            "question_id": "q0",
+            "url": ["https://example.org/not-allowed"],
+            "image_claim": "The depicted event occurred as shown.",
+            "retrieval_goal": "Find the source event.",
+        },
     )
 
 
