@@ -367,57 +367,62 @@ class GeminiInteractionsClient:
                 retry_delays.append(await self._wait_before_retry(attempt))
                 continue
 
-            if response.status_code in RETRYABLE_HTTP_STATUSES:
-                if attempt < self.max_retries:
+            try:
+                if response.status_code in RETRYABLE_HTTP_STATUSES:
+                    if attempt < self.max_retries:
+                        retry_delays.append(
+                            await self._wait_before_retry(attempt, response=response)
+                        )
+                        continue
+                    raise _http_error(
+                        response,
+                        retry_attempts=attempt,
+                        retry_delays=retry_delays,
+                    )
+
+                bad_request_retry_limit = min(
+                    self.max_retries,
+                    _MAX_RETRYABLE_BAD_REQUEST_RETRIES,
+                )
+                if (
+                    _is_retryable_bad_request(response)
+                    and attempt < bad_request_retry_limit
+                ):
                     retry_delays.append(
                         await self._wait_before_retry(attempt, response=response)
                     )
                     continue
-                raise _http_error(
-                    response,
-                    retry_attempts=attempt,
-                    retry_delays=retry_delays,
-                )
 
-            bad_request_retry_limit = min(
-                self.max_retries,
-                _MAX_RETRYABLE_BAD_REQUEST_RETRIES,
-            )
-            if (
-                _is_retryable_bad_request(response)
-                and attempt < bad_request_retry_limit
-            ):
-                retry_delays.append(
-                    await self._wait_before_retry(attempt, response=response)
-                )
-                continue
+                if not response.is_success:
+                    raise _http_error(
+                        response,
+                        retry_attempts=attempt if retry_delays else 0,
+                        retry_delays=retry_delays,
+                    )
 
-            if not response.is_success:
-                raise _http_error(
-                    response,
-                    retry_attempts=attempt if retry_delays else 0,
-                    retry_delays=retry_delays,
-                )
-
-            try:
-                data = response.json()
-            except ValueError as exc:
-                raise GeminiInteractionsResponseError(
-                    "Gemini Interactions returned HTTP "
-                    f"{response.status_code} with invalid JSON. Response body: "
-                    f"{response.text.strip() or '<empty response body>'}"
-                ) from exc
-            if not isinstance(data, dict):
-                raise GeminiInteractionsResponseError(
-                    "Gemini Interactions returned a non-object JSON payload: "
-                    f"{data!r}"
-                )
-            self.last_retry_metadata = {
-                "retry_attempts": attempt,
-                "retry_delays": list(retry_delays),
-                "retry_backoff_seconds": round(sum(retry_delays), 3),
-            }
-            return data
+                try:
+                    data = response.json()
+                except ValueError as exc:
+                    raise GeminiInteractionsResponseError(
+                        "Gemini Interactions returned HTTP "
+                        f"{response.status_code} with invalid JSON. Response body: "
+                        f"{response.text.strip() or '<empty response body>'}"
+                    ) from exc
+                if not isinstance(data, dict):
+                    raise GeminiInteractionsResponseError(
+                        "Gemini Interactions returned a non-object JSON payload: "
+                        f"{data!r}"
+                    )
+                self.last_retry_metadata = {
+                    "retry_attempts": attempt,
+                    "retry_delays": list(retry_delays),
+                    "retry_backoff_seconds": round(sum(retry_delays), 3),
+                }
+                return data
+            finally:
+                close = getattr(response, "aclose", None)
+                if callable(close):
+                    await close()
 
         raise AssertionError("Retry loop exited unexpectedly.")
 

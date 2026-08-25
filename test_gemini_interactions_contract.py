@@ -119,6 +119,32 @@ def test_create_posts_generic_interaction_contract(
     }
 
 
+def test_create_closes_each_http_response_after_parsing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    set_test_key(monkeypatch)
+    responses: list[httpx.Response] = []
+
+    async def scenario() -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            response = httpx.Response(
+                200,
+                request=request,
+                json={"id": "interaction-close", "status": "completed"},
+            )
+            responses.append(response)
+            return response
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            client = GeminiInteractionsClient(client=http)
+            await client.create(model="model", input="prompt")
+
+    run(scenario())
+
+    assert len(responses) == 1
+    assert responses[0].is_closed
+
+
 def test_create_rejects_unknown_fields_and_mixed_input(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
