@@ -168,6 +168,20 @@ def test_loose_default_remains_gemini() -> None:
     assert config.model_name == "gemini-3.7-flash"
 
 
+def test_gemini_requests_thought_summaries() -> None:
+    orchestrator = Orchestrator.__new__(Orchestrator)
+    orchestrator.provider = "gemini"
+
+    assert orchestrator._stage_generation_config("PLANNING") == {
+        "thinking_level": "high",
+        "thinking_summaries": "auto",
+    }
+    assert orchestrator._stage_generation_config("JUDGMENT") == {
+        "thinking_level": "low",
+        "thinking_summaries": "auto",
+    }
+
+
 def test_local_qwen_planning_reasoning_is_stage_scoped(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

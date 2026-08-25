@@ -2067,10 +2067,17 @@ class StageRunner:
             direct_text = step.get("text")
             if isinstance(direct_text, str) and direct_text.strip():
                 chunks.append(direct_text)
-            for item in step.get("content", []) or []:
-                if isinstance(item, dict) and isinstance(item.get("text"), str):
-                    if item["text"].strip():
-                        chunks.append(item["text"])
+            for field_name in ("summary", "content"):
+                field = step.get(field_name)
+                if isinstance(field, str) and field.strip():
+                    chunks.append(field)
+                    continue
+                if isinstance(field, dict):
+                    field = [field]
+                for item in field or []:
+                    if isinstance(item, dict) and isinstance(item.get("text"), str):
+                        if item["text"].strip():
+                            chunks.append(item["text"])
         return "\n".join(chunks)
 
     def _build_native_function_result(

@@ -201,6 +201,24 @@ def _completed_response() -> Dict[str, Any]:
     }
 
 
+def test_native_thought_summary_is_archived_as_readable_text() -> None:
+    payload = {
+        "steps": [
+            {
+                "type": "thought",
+                "summary": [
+                    {"type": "summary", "text": "先核对图片中的核心事实。"},
+                    {"type": "summary", "text": "再选择独立来源验证。"},
+                ],
+            }
+        ]
+    }
+
+    assert StageRunner._extract_native_thought(payload) == (
+        "先核对图片中的核心事实。\n再选择独立来源验证。"
+    )
+
+
 def test_native_function_call_round_trip() -> None:
     backend = NativeFakeBackend([_function_call_response(), _completed_response()])
     tool = RecordingTool()

@@ -4136,7 +4136,12 @@ class Orchestrator:
                     hashlib.sha256(material).digest()[:4], "big"
                 ) & 0x7FFFFFFF
             return config
-        return {"thinking_level": self._stage_thinking_level(normalized_stage)}
+        return {
+            "thinking_level": self._stage_thinking_level(normalized_stage),
+            # Request the provider-generated summary; the hidden chain of
+            # thought itself is not available through the API.
+            "thinking_summaries": "auto",
+        }
 
     async def _execute_tool(
         self,
