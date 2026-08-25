@@ -28,6 +28,7 @@ from src.integrations.gemini import (
 )
 from src.integrations.async_runtime import PersistentAsyncRuntime
 from src.integrations.http_sessions import (
+    close_response,
     close_tracked_sessions,
     get_tracked_session,
     init_tracked_sessions,
@@ -625,22 +626,30 @@ class JinaReaderClient:
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
 
-        response = self._get_session().get(
-            normalize_reader_url(url),
-            headers=headers,
-            timeout=self.timeout,
-            proxies=self._get_proxies(),
-        )
-        response.raise_for_status()
-        reader_target = str(response.url).replace("https://r.jina.ai/http://", "https://", 1)
-        self._require_url_allowed(reader_target)
-        text = response.text.strip()
-        if not text:
-            raise RuntimeError("Jina returned empty content.")
-        source_match = re.search(r"(?im)^URL Source:\s*(https?://\S+)", text)
-        if source_match:
-            self._require_url_allowed(source_match.group(1).strip())
-        return text
+        response = None
+        try:
+            response = self._get_session().get(
+                normalize_reader_url(url),
+                headers=headers,
+                timeout=self.timeout,
+                proxies=self._get_proxies(),
+            )
+            response.raise_for_status()
+            reader_target = str(response.url).replace(
+                "https://r.jina.ai/http://",
+                "https://",
+                1,
+            )
+            self._require_url_allowed(reader_target)
+            text = response.text.strip()
+            if not text:
+                raise RuntimeError("Jina returned empty content.")
+            source_match = re.search(r"(?im)^URL Source:\s*(https?://\S+)", text)
+            if source_match:
+                self._require_url_allowed(source_match.group(1).strip())
+            return text
+        finally:
+            close_response(response)
 
     def _fetch_direct(self, url: str) -> str:
         normalized_url = self._normalize_url(url)
@@ -653,25 +662,29 @@ class JinaReaderClient:
             "Accept": "text/html,application/xhtml+xml,application/xml,text/plain;q=0.9,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9,zh-CN;q=0.8",
         }
-        response = self._get_session().get(
-            normalized_url,
-            headers=headers,
-            timeout=self.direct_fetch_timeout,
-            proxies=self._get_proxies(),
-        )
-        response.raise_for_status()
-        for redirect in response.history:
-            self._require_url_allowed(str(redirect.url))
-        self._require_url_allowed(str(response.url))
-        content_type = (response.headers.get("content-type") or "").lower()
-        if "text/html" in content_type or self._looks_like_html(response.text):
-            text = self._html_to_text(response.text)
-        else:
-            text = response.text
-        readable = text.strip()
-        if not readable:
-            raise RuntimeError("Direct fetch returned empty readable content.")
-        return readable
+        response = None
+        try:
+            response = self._get_session().get(
+                normalized_url,
+                headers=headers,
+                timeout=self.direct_fetch_timeout,
+                proxies=self._get_proxies(),
+            )
+            response.raise_for_status()
+            for redirect in response.history:
+                self._require_url_allowed(str(redirect.url))
+            self._require_url_allowed(str(response.url))
+            content_type = (response.headers.get("content-type") or "").lower()
+            if "text/html" in content_type or self._looks_like_html(response.text):
+                text = self._html_to_text(response.text)
+            else:
+                text = response.text
+            readable = text.strip()
+            if not readable:
+                raise RuntimeError("Direct fetch returned empty readable content.")
+            return readable
+        finally:
+            close_response(response)
 
     def extract_goal_snippet(self, content: str, goal: str) -> str:
         compact_goal = [token.lower() for token in goal.split() if token.strip()]

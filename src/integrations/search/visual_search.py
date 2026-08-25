@@ -13,6 +13,7 @@ import requests
 
 from src.integrations.search.serper import SerperLensSearchClient
 from src.integrations.http_sessions import (
+    close_response,
     close_tracked_sessions,
     get_tracked_session,
     init_tracked_sessions,
@@ -359,24 +360,28 @@ class ImageUploadClient:
 
     def _upload_via_http(self, path: Path, upload_url: str) -> str:
         proxies = _get_proxies()
-        with path.open("rb") as handle:
-            if "catbox" in upload_url or "litterbox" in upload_url:
-                response = self._get_session().post(
-                    upload_url,
-                    data={"reqtype": "fileupload", "time": "1h"},
-                    files={"fileToUpload": (path.name, handle)},
-                    timeout=self.timeout,
-                    proxies=proxies,
-                )
-            else:
-                response = self._get_session().post(
-                    upload_url,
-                    files={"file": (path.name, handle)},
-                    timeout=self.timeout,
-                    proxies=proxies,
-                )
-        response.raise_for_status()
-        return _extract_response_url(response, upload_url)
+        response = None
+        try:
+            with path.open("rb") as handle:
+                if "catbox" in upload_url or "litterbox" in upload_url:
+                    response = self._get_session().post(
+                        upload_url,
+                        data={"reqtype": "fileupload", "time": "1h"},
+                        files={"fileToUpload": (path.name, handle)},
+                        timeout=self.timeout,
+                        proxies=proxies,
+                    )
+                else:
+                    response = self._get_session().post(
+                        upload_url,
+                        files={"file": (path.name, handle)},
+                        timeout=self.timeout,
+                        proxies=proxies,
+                    )
+            response.raise_for_status()
+            return _extract_response_url(response, upload_url)
+        finally:
+            close_response(response)
 
 
 @dataclass
@@ -415,6 +420,7 @@ class ZhipuImageSearchClient:
 
         last_error: Optional[Exception] = None
         for attempt in range(self.max_retries + 1):
+            response = None
             try:
                 response = self._get_session().post(
                     self.endpoint,
@@ -451,6 +457,8 @@ class ZhipuImageSearchClient:
                 if attempt >= self.max_retries:
                     break
                 time.sleep(1.5 * (attempt + 1))
+            finally:
+                close_response(response)
 
         if last_error is not None:
             raise last_error

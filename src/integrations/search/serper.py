@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 import requests
 
 from src.integrations.http_sessions import (
+    close_response,
     close_tracked_sessions,
     get_tracked_session,
     init_tracked_sessions,
@@ -95,6 +96,7 @@ class SerperTextSearchClient:
     def _post_json(self, payload: Dict[str, Any], headers: Dict[str, str]) -> Dict[str, Any]:
         last_error: Exception | None = None
         for attempt in range(self.max_retries + 1):
+            response = None
             try:
                 response = self._get_session().post(
                     self.endpoint,
@@ -110,6 +112,8 @@ class SerperTextSearchClient:
                 if attempt >= self.max_retries:
                     break
                 time.sleep(1.5 * (attempt + 1))
+            finally:
+                close_response(response)
         if last_error is not None:
             raise last_error
         raise RuntimeError("SerperTextSearchClient failed without a captured exception.")
@@ -162,6 +166,7 @@ class SerperImageSearchClient:
     def _post_json(self, payload: Dict[str, Any], headers: Dict[str, str]) -> Dict[str, Any]:
         last_error: Exception | None = None
         for attempt in range(self.max_retries + 1):
+            response = None
             try:
                 response = self._get_session().post(
                     self.endpoint,
@@ -177,6 +182,8 @@ class SerperImageSearchClient:
                 if attempt >= self.max_retries:
                     break
                 time.sleep(1.5 * (attempt + 1))
+            finally:
+                close_response(response)
         if last_error is not None:
             raise last_error
         raise RuntimeError("SerperImageSearchClient failed without a captured exception.")
@@ -228,6 +235,7 @@ class SerperLensSearchClient:
     def _post_json(self, payload: Dict[str, Any], headers: Dict[str, str]) -> Dict[str, Any]:
         last_error: Exception | None = None
         for attempt in range(self.max_retries + 1):
+            response = None
             try:
                 response = self._get_session().post(
                     self.endpoint,
@@ -243,6 +251,8 @@ class SerperLensSearchClient:
                 if attempt >= self.max_retries:
                     break
                 time.sleep(1.5 * (attempt + 1))
+            finally:
+                close_response(response)
         if last_error is not None:
             raise last_error
         raise RuntimeError("SerperLensSearchClient failed without a captured exception.")

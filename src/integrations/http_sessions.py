@@ -58,3 +58,19 @@ def close_tracked_sessions(owner: Any) -> None:
             session.close()
         except Exception:
             continue
+
+
+def close_response(response: Any) -> None:
+    """Release one requests response independently of its session owner."""
+
+    responses = [response]
+    history = getattr(response, "history", ()) or ()
+    if isinstance(history, (list, tuple)):
+        responses.extend(history)
+    for item in responses:
+        close = getattr(item, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                continue

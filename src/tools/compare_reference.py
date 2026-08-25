@@ -24,6 +24,7 @@ from src.integrations.gemini import (
     validate_interaction_response,
 )
 from src.integrations.http_sessions import (
+    close_response,
     close_tracked_sessions,
     get_tracked_session,
     init_tracked_sessions,
@@ -584,45 +585,48 @@ class CompareWithReferenceTool(BaseTool):
                     )
                 except requests.RequestException:
                     continue
-                self._validate_download_redirects(response)
-                if response.status_code != 200 or not response.content:
-                    continue
-                content_type = response.headers.get(
-                    "content-type",
-                    "",
-                ).split(";", 1)[0].strip().lower()
-                image_mime = (
-                    content_type
-                    if content_type.startswith("image/")
-                    else self._sniff_image_mime(response.content)
-                )
-                if image_mime:
-                    encoded = base64.b64encode(response.content).decode(
-                        "ascii"
+                try:
+                    self._validate_download_redirects(response)
+                    if response.status_code != 200 or not response.content:
+                        continue
+                    content_type = response.headers.get(
+                        "content-type",
+                        "",
+                    ).split(";", 1)[0].strip().lower()
+                    image_mime = (
+                        content_type
+                        if content_type.startswith("image/")
+                        else self._sniff_image_mime(response.content)
                     )
-                    result = {
-                        "data_url": (
-                            f"data:{image_mime};base64,{encoded}"
-                        ),
-                        "resolved_url": str(response.url),
-                        "download_method": (
-                            "direct"
-                            if candidate == url
-                            else "url_or_page_fallback"
-                        ),
-                        "attempted_urls": attempted,
-                    }
-                    self._put_reference_cache(cache_key, result)
-                    return result
-                if "html" not in content_type:
-                    continue
-                html = response.text[:2_000_000]
-                for image_url in self._extract_page_image_urls(
-                    html,
-                    base_url=str(response.url),
-                ):
-                    if image_url not in seen:
-                        pending.append(image_url)
+                    if image_mime:
+                        encoded = base64.b64encode(response.content).decode(
+                            "ascii"
+                        )
+                        result = {
+                            "data_url": (
+                                f"data:{image_mime};base64,{encoded}"
+                            ),
+                            "resolved_url": str(response.url),
+                            "download_method": (
+                                "direct"
+                                if candidate == url
+                                else "url_or_page_fallback"
+                            ),
+                            "attempted_urls": attempted,
+                        }
+                        self._put_reference_cache(cache_key, result)
+                        return result
+                    if "html" not in content_type:
+                        continue
+                    html = response.text[:2_000_000]
+                    for image_url in self._extract_page_image_urls(
+                        html,
+                        base_url=str(response.url),
+                    ):
+                        if image_url not in seen:
+                            pending.append(image_url)
+                finally:
+                    close_response(response)
         except Exception:
             pass
         return {

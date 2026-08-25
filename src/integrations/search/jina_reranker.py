@@ -8,6 +8,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional
 import requests
 
 from src.integrations.http_sessions import (
+    close_response,
     close_tracked_sessions,
     get_tracked_session,
     init_tracked_sessions,
@@ -70,18 +71,22 @@ class JinaRerankerClient:
         }
         if top_n is not None:
             payload["top_n"] = max(1, int(top_n))
-        response = self._get_session().post(
-            self.endpoint,
-            json=payload,
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-            },
-            timeout=self.timeout,
-        )
-        response.raise_for_status()
-        body = response.json()
+        response = None
+        try:
+            response = self._get_session().post(
+                self.endpoint,
+                json=payload,
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                },
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+            body = response.json()
+        finally:
+            close_response(response)
         results = body.get("results")
         if not isinstance(results, list):
             raise RuntimeError("Jina Reranker returned an invalid result list.")

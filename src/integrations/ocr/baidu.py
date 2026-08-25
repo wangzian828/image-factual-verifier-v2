@@ -13,6 +13,7 @@ from typing import Any, Dict, Optional
 import requests
 
 from src.integrations.http_sessions import (
+    close_response,
     close_tracked_sessions,
     get_tracked_session,
     init_tracked_sessions,
@@ -256,6 +257,8 @@ class BaiduOCRClient:
 
                 try:
                     payload = self._payload(response)
+                    status_code = int(getattr(response, "status_code", 0) or 0)
+                    response_ok = bool(getattr(response, "ok", False))
                 except BaiduOCRError as exc:
                     if exc.retryable and attempt < self._max_retries():
                         time.sleep(self._retry_backoff(attempt))
@@ -264,9 +267,9 @@ class BaiduOCRClient:
                         str(exc),
                         request_count=token_request_count,
                     ) from exc
-
-                status_code = int(getattr(response, "status_code", 0) or 0)
-                if not bool(getattr(response, "ok", False)):
+                finally:
+                    close_response(response)
+                if not response_ok:
                     provider_error = self._provider_error(
                         payload,
                         stage="token request",
@@ -378,12 +381,16 @@ class BaiduOCRClient:
 
             try:
                 payload = self._payload(response)
+                response_ok = bool(getattr(response, "ok", False))
+                status_code = int(getattr(response, "status_code", 0) or 0)
             except BaiduOCRError as exc:
                 if exc.retryable and attempt < self._max_retries():
                     time.sleep(self._retry_backoff(attempt))
                     continue
                 raise BaiduOCRError(str(exc), request_count=request_count) from exc
-            if bool(getattr(response, "ok", False)) and not (
+            finally:
+                close_response(response)
+            if response_ok and not (
                 payload.get("error") or payload.get("error_code")
             ):
                 if not isinstance(payload.get("words_result", []), list):
@@ -395,7 +402,7 @@ class BaiduOCRClient:
             provider_error = self._provider_error(
                 payload,
                 stage="OCR request",
-                status_code=int(getattr(response, "status_code", 0) or 0),
+                status_code=status_code,
             )
             if provider_error.retryable and attempt < self._max_retries():
                 time.sleep(self._retry_backoff(attempt))
