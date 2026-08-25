@@ -10,6 +10,7 @@ from scripts.trajectory.run_teacher_rollout_autopilot import (
     _classify_initial_outcomes,
     _has_early_correct_judgment,
     _read_jsonl,
+    _successful_trace_sources,
     prepare_runtime_release,
 )
 from src.eval.public_release import load_public_release, resolve_image_path
@@ -133,6 +134,29 @@ def test_attempt_launcher_log_is_outside_run_cases_output(tmp_path: Path) -> Non
 
     assert log == group / "logs" / "attempt-01.log"
     assert attempt not in log.parents
+
+
+def test_success_scan_keeps_only_trace_metadata(tmp_path: Path) -> None:
+    attempt = tmp_path / "attempt-01"
+    traces = attempt / "traces"
+    traces.mkdir(parents=True)
+    trace = _trace("case-one", early_judgment=True)
+    trace["large_state_payload"] = "x" * 100_000
+    (traces / "episode.json").write_text(
+        json.dumps(trace),
+        encoding="utf-8",
+    )
+
+    selected = _successful_trace_sources([attempt])
+
+    assert selected["case-one"][0] == attempt
+    assert selected["case-one"][1].name == "episode.json"
+    assert selected["case-one"][2] == {
+        "case_id": "case-one",
+        "episode_id": "case-one--teacher-r000",
+        "termination": "success",
+        "verdict": "fake",
+    }
 
 
 def test_early_bucket_requires_strict_discrepancy_judgment(tmp_path: Path) -> None:

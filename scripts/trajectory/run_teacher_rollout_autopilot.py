@@ -339,15 +339,19 @@ def _terminal_success(trace: Mapping[str, Any]) -> bool:
     )
 
 
-def _trace_entries(run_dir: Path) -> dict[str, tuple[Path, dict[str, Any]]]:
-    entries: dict[str, tuple[Path, dict[str, Any]]] = {}
-    for trace_path in sorted((run_dir / "traces").glob("*.json")):
-        trace = _read_json(trace_path)
-        case_id = _trace_case_id(trace)
-        if case_id in entries:
-            raise ValueError(f"duplicate case trace in {run_dir}: {case_id}")
-        entries[case_id] = (trace_path, trace)
-    return entries
+def _trace_paths(run_dir: Path) -> list[Path]:
+    return sorted((run_dir / "traces").glob("*.json"))
+
+
+def _trace_summary(trace: Mapping[str, Any]) -> dict[str, str]:
+    """Keep only metadata needed while scanning historical attempts."""
+
+    return {
+        "case_id": _trace_case_id(trace),
+        "episode_id": _trace_episode_id(trace),
+        "termination": str(trace.get("termination") or ""),
+        "verdict": str(trace.get("verdict") or "").lower(),
+    }
 
 
 def _attempt_dirs(group_dir: Path) -> list[Path]:
@@ -366,11 +370,24 @@ def _attempt_dirs(group_dir: Path) -> list[Path]:
 def _successful_trace_sources(
     attempt_dirs: Sequence[Path],
 ) -> dict[str, tuple[Path, Path, dict[str, Any]]]:
+    """Find successes without retaining every historical trace in memory."""
+
     selected: dict[str, tuple[Path, Path, dict[str, Any]]] = {}
     for attempt_dir in attempt_dirs:
-        for case_id, (trace_path, trace) in _trace_entries(attempt_dir).items():
-            if _terminal_success(trace) and case_id not in selected:
-                selected[case_id] = (attempt_dir, trace_path, trace)
+        seen_in_attempt: set[str] = set()
+        for trace_path in _trace_paths(attempt_dir):
+            trace = _read_json(trace_path)
+            summary = _trace_summary(trace)
+            case_id = summary["case_id"]
+            if case_id in seen_in_attempt:
+                raise ValueError(f"duplicate case trace in {attempt_dir}: {case_id}")
+            seen_in_attempt.add(case_id)
+            if (
+                summary["termination"] == "success"
+                and summary["verdict"] in VALID_VERDICTS
+                and case_id not in selected
+            ):
+                selected[case_id] = (attempt_dir, trace_path, summary)
     return selected
 
 
@@ -411,7 +428,7 @@ def _merge_successful_attempts(
     materialization: dict[str, int] = {"hardlink": 0, "copy": 0}
     provenance: list[dict[str, Any]] = []
     for case_id in sorted(selected):
-        attempt_dir, source_path, trace = selected[case_id]
+        attempt_dir, source_path, summary = selected[case_id]
         destination = trace_root / source_path.name
         if destination.exists():
             raise FileExistsError(f"duplicate merged trace path: {destination}")
@@ -420,11 +437,11 @@ def _merge_successful_attempts(
         provenance.append(
             {
                 "case_id": case_id,
-                "episode_id": _trace_episode_id(trace),
+                "episode_id": summary["episode_id"],
                 "source_attempt": attempt_dir.name,
                 "source_run": str(attempt_dir),
                 "source_trace": str(source_path),
-                "verdict": trace.get("verdict"),
+                "verdict": summary["verdict"],
             }
         )
     manifest = {
@@ -640,7 +657,7 @@ def _run_sft_audit(
     timeout: float,
     maximum_attempts: int,
 ) -> Path:
-    expected_count = len(_trace_entries(run_dir))
+    expected_count = len(_trace_paths(run_dir))
     if expected_count < 1:
         raise ValueError(f"cannot audit empty merged run: {run_dir}")
     eligibility_dir = pipeline_dir / "sft-eligibility" / label
@@ -734,7 +751,13 @@ def _classify_initial_outcomes(
     rejected: list[dict[str, Any]] = []
     reroll_ids: list[str] = []
     seen_reroll: set[str] = set()
-    for case_id, (trace_path, trace) in sorted(_trace_entries(run_dir).items()):
+    seen_case_ids: set[str] = set()
+    for trace_path in _trace_paths(run_dir):
+        trace = _read_json(trace_path)
+        case_id = _trace_case_id(trace)
+        if case_id in seen_case_ids:
+            raise ValueError(f"duplicate case trace in {run_dir}: {case_id}")
+        seen_case_ids.add(case_id)
         expected = gold_by_case.get(case_id)
         if expected is None:
             raise ValueError(f"private gold lacks successful case: {case_id}")
