@@ -874,8 +874,8 @@ def export_dataset(
     )
     manifest = {
         "schema_version": "ifv-trajectory-sft-dataset-manifest-v1",
-        "dataset_version": "ifv-trajectory-sft-dataset-v1",
-        "trajectory_version": "ifv-trajectory-sft-v1",
+        "dataset_version": "ifv-trajectory-sft-dataset-v2",
+        "trajectory_version": "ifv-trajectory-sft-v2",
         "perception_version": "ifv-perception-v1",
         "legacy_step_policy_export": "disabled",
         "split_mode": (

@@ -182,6 +182,25 @@ def test_gemini_requests_thought_summaries() -> None:
     }
 
 
+def test_gemini_stage_output_budgets_are_balanced(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    orchestrator = Orchestrator.__new__(Orchestrator)
+    orchestrator.provider = "gemini"
+
+    assert orchestrator._stage_output_tokens("PLANNING", 8192) == 8192
+    assert orchestrator._stage_output_tokens("VERIFICATION", 8192) == 8192
+    assert orchestrator._stage_output_tokens("EVIDENCE_DECISION", 8192) == 8192
+    assert orchestrator._stage_output_tokens("REFLECTION", 8192) == 8192
+    assert orchestrator._stage_output_tokens("QUERY_CONCEPT_EXTRACTION", 4096) == 4096
+    assert orchestrator._stage_output_tokens("QUERY_REPLAN", 4096) == 4096
+    assert orchestrator._stage_output_tokens("ROUTE_LOCAL_REPLAN", 4096) == 4096
+    assert orchestrator._stage_output_tokens("JUDGMENT", 8192) == 8192
+
+    monkeypatch.setenv("GEMINI_QUERY_REPLAN_MAX_OUTPUT_TOKENS", "6144")
+    assert orchestrator._stage_output_tokens("QUERY_REPLAN", 4096) == 6144
+
+
 def test_local_qwen_planning_reasoning_is_stage_scoped(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

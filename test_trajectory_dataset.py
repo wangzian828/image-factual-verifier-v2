@@ -93,6 +93,51 @@ def _run_dir(tmp_path: Path) -> Path:
     return run_dir
 
 
+def test_trajectory_export_uses_qwen_native_thinking_and_tool_calls(
+    tmp_path: Path,
+) -> None:
+    fixture = tmp_path / "fixture"
+    fixture.mkdir()
+    test_scripted_image_only_complete_trajectory(fixture)
+    trace_path = fixture / "traces" / "case_scripted_v3.json"
+    trace = json.loads(trace_path.read_text(encoding="utf-8"))
+    tool_step = next(
+        step
+        for step in trace["state"]["all_steps"]
+        if (
+            isinstance(step.get("metadata"), dict)
+            and isinstance(step["metadata"].get("policy_action"), dict)
+            and step["metadata"]["policy_action"].get("type") == "tool_call"
+        )
+    )
+    tool_step["thought"] = "先核对这个问题，再调用对应工具。"
+
+    trajectory = export_trajectory_sft_example(trace)
+    messages = trajectory.messages
+    tool_assistant = next(
+        message
+        for message in messages
+        if (
+            message.get("role") == "assistant"
+            and "<tool_call>" in message.get("content", "")
+        )
+    )
+    tool_response = next(
+        message for message in messages if message.get("role") == "tool"
+    )
+
+    assert "<think>\n先核对这个问题，再调用对应工具。\n</think>" in (
+        tool_assistant["content"]
+    )
+    assert "<function=" in tool_assistant["content"]
+    assert "<parameter=" in tool_assistant["content"]
+    assert tool_response["content"]
+    assert all(
+        message.get("role") not in {"tool_call", "tool_response"}
+        for message in messages
+    )
+
+
 def test_dataset_export_is_episode_and_source_family_split_safe(
     tmp_path: Path,
 ) -> None:

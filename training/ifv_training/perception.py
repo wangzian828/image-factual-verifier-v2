@@ -20,6 +20,7 @@ OUTPUT_VERSION = "ifv-ms-swift-perception-v1"
 SUPPORTED_ACCEPTED_DATASET_VERSIONS = {
     "ifv-policy-dataset-v2",
     "ifv-trajectory-sft-dataset-v1",
+    "ifv-trajectory-sft-dataset-v2",
 }
 PERCEPTION_INSTRUCTION = """<image>
 Report only literal, visible image content as one JSON object matching the

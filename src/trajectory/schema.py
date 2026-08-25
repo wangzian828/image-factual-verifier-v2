@@ -95,8 +95,8 @@ class DatasetPerceptionExample(PerceptionExample):
 class TrajectorySFTExample(StrictModel):
     """One complete accepted episode rendered as one Agent SFT conversation."""
 
-    trajectory_version: Literal["ifv-trajectory-sft-v1"] = (
-        "ifv-trajectory-sft-v1"
+    trajectory_version: Literal["ifv-trajectory-sft-v2"] = (
+        "ifv-trajectory-sft-v2"
     )
     episode_id: str = Field(min_length=1, max_length=200)
     case_id: str = Field(min_length=1, max_length=200)
@@ -127,15 +127,13 @@ class TrajectorySFTExample(StrictModel):
                 "system",
                 "user",
                 "assistant",
-                "tool_call",
-                "tool_response",
                 "tool",
             }:
                 raise ValueError(f"messages[{index}] has unsupported role")
             content = message.get("content")
             if not isinstance(content, str) or not content.strip():
                 raise ValueError(f"messages[{index}].content must be non-empty")
-            if role in {"assistant", "tool_call"}:
+            if role == "assistant":
                 if message.get("loss") is not True:
                     raise ValueError(
                         f"messages[{index}] must set loss=true"
@@ -147,8 +145,8 @@ class TrajectorySFTExample(StrictModel):
 
 
 class DatasetTrajectorySFTExample(TrajectorySFTExample):
-    dataset_version: Literal["ifv-trajectory-sft-dataset-v1"] = (
-        "ifv-trajectory-sft-dataset-v1"
+    dataset_version: Literal["ifv-trajectory-sft-dataset-v2"] = (
+        "ifv-trajectory-sft-dataset-v2"
     )
     split: Literal["train", "validation", "test"]
     split_group_id: str = Field(min_length=1, max_length=100)

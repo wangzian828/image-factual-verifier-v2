@@ -197,6 +197,34 @@ def _json_or_text(value: str) -> Any:
         return value
 
 
+def _qwen_parameter_value(value: Any) -> str:
+    if isinstance(value, (Mapping, list)):
+        return json.dumps(value, ensure_ascii=False)
+    return str(value)
+
+
+def _qwen_think_block(thought: str) -> str:
+    return f"<think>\n{thought.strip()}\n</think>"
+
+
+def _qwen_tool_call_block(
+    *,
+    name: str,
+    arguments: Mapping[str, Any],
+) -> str:
+    lines = ["<tool_call>", f"<function={name}>"]
+    for argument_name, argument_value in arguments.items():
+        lines.extend(
+            [
+                f"<parameter={argument_name}>",
+                _qwen_parameter_value(argument_value),
+                "</parameter>",
+            ]
+        )
+    lines.extend(["</function>", "</tool_call>"])
+    return "\n".join(lines)
+
+
 def _initial_observation_packet(trace: Mapping[str, Any]) -> str:
     state = _mapping(trace.get("state"))
     runtime_case = _mapping(state.get("runtime_case"))
@@ -379,6 +407,9 @@ def export_trajectory_sft_example(
                 ),
             }
         )
+        thought = str(step.get("thought", "") or "").strip()
+        if thought:
+            _assert_no_private_data(thought)
         if example_type == "react":
             if str(policy_action.get("type", "")) != "tool_call":
                 raise ValueError("react trajectory action must be a tool call")
@@ -388,32 +419,54 @@ def export_trajectory_sft_example(
             }
             if not tool_call["name"]:
                 raise ValueError("react trajectory action lacks tool name")
+            function_call_id = str(
+                metadata.get("function_call_id", "")
+            ).strip()
             messages.append(
                 {
-                    "role": "tool_call",
-                    "content": canonical_json(tool_call),
+                    "role": "assistant",
+                    "content": (
+                        _qwen_think_block(thought)
+                        + "\n\n"
+                        + _qwen_tool_call_block(
+                            name=tool_call["name"],
+                            arguments=tool_call["arguments"],
+                        )
+                    ),
                     "loss": True,
                 }
             )
             tool_call_count += 1
             tool_result = str(step.get("tool_result", "") or "").strip()
             if tool_result:
+                tool_response: dict[str, Any] = {
+                    "function_call_id": function_call_id,
+                    "tool": tool_call["name"],
+                    "arguments": tool_call["arguments"],
+                    "result": _json_or_text(tool_result),
+                }
+                state_update = metadata.get("investigation_state_update")
+                if isinstance(state_update, Mapping):
+                    _assert_no_private_data(state_update)
+                    tool_response["investigation_state_update"] = dict(
+                        state_update
+                    )
                 messages.append(
                     {
-                        "role": "tool_response",
-                        "content": canonical_json(
-                            {
-                                "name": tool_call["name"],
-                                "result": _json_or_text(tool_result),
-                            }
-                        ),
+                        "role": "tool",
+                        "tool_call_id": function_call_id,
+                        "content": canonical_json(tool_response),
                     }
                 )
         else:
             messages.append(
                 {
                     "role": "assistant",
-                    "content": canonical_json(policy_action),
+                    "content": (
+                        _qwen_think_block(thought)
+                        + "\n\n"
+                        + canonical_json(policy_action)
+                    ),
                     "loss": True,
                 }
             )

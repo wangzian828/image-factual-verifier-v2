@@ -13,12 +13,12 @@ def _audit_message(message: Any, location: str) -> None:
     if not isinstance(message, Mapping):
         raise ValueError(f"{location} must be an object")
     role = str(message.get("role", ""))
-    if role not in {"system", "user", "assistant", "tool_call", "tool_response", "tool"}:
+    if role not in {"system", "user", "assistant", "tool"}:
         raise ValueError(f"{location} has unsupported role {role!r}")
     content = message.get("content")
     if not isinstance(content, str) or not content.strip():
         raise ValueError(f"{location}.content must be a non-empty string")
-    if role in {"assistant", "tool_call"} and message.get("loss") is not True:
+    if role == "assistant" and message.get("loss") is not True:
         raise ValueError(f"{location} must explicitly set loss=true")
 
 

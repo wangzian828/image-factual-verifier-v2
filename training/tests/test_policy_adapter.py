@@ -11,16 +11,13 @@ from ifv_training.policy import convert_policy_dataset, convert_policy_row
 
 
 def _trajectory_row() -> dict:
-    tool_call = {
-        "name": "text_search",
-        "arguments": {
-            "queries": ["museum object official collection"],
-            "question_id": "task-1",
-        },
+    tool_call_arguments = {
+        "queries": ["museum object official collection"],
+        "question_id": "task-1",
     }
     return {
-        "dataset_version": "ifv-trajectory-sft-dataset-v1",
-        "trajectory_version": "ifv-trajectory-sft-v1",
+        "dataset_version": "ifv-trajectory-sft-dataset-v2",
+        "trajectory_version": "ifv-trajectory-sft-v2",
         "episode_id": "case-1",
         "case_id": "case-1",
         "source_run_id": "run-1",
@@ -38,23 +35,41 @@ def _trajectory_row() -> dict:
                 "content": "Investigate the image and decide the visible fact.",
             },
             {
-                "role": "tool_call",
-                "content": json.dumps(tool_call),
+                "role": "assistant",
+                "content": (
+                    "<think>先调用搜索工具核对这个事实。</think>\n\n"
+                    "<tool_call>\n"
+                    "<function=text_search>\n"
+                    "<parameter=queries>\n"
+                    "[\"museum object official collection\"]\n"
+                    "</parameter>\n"
+                    "<parameter=question_id>\n"
+                    "task-1\n"
+                    "</parameter>\n"
+                    "</function>\n"
+                    "</tool_call>"
+                ),
                 "loss": True,
             },
             {
-                "role": "tool_response",
+                "role": "tool",
+                "tool_call_id": "call-1",
                 "content": json.dumps(
                     {
-                        "name": "text_search",
+                        "function_call_id": "call-1",
+                        "tool": "text_search",
+                        "arguments": tool_call_arguments,
                         "result": {"status": "ok", "results": []},
                     }
                 ),
             },
             {
                 "role": "assistant",
-                "content": json.dumps(
-                    {"verdict": "real", "reason": "evidence is sufficient"}
+                "content": (
+                    "<think>证据不足以支持原说法。</think>\n\n"
+                    + json.dumps(
+                        {"verdict": "real", "reason": "evidence is sufficient"}
+                    )
                 ),
                 "loss": True,
             },
@@ -97,17 +112,24 @@ def test_react_uses_ms_swift_native_agent_format() -> None:
     assert [message["role"] for message in converted["messages"]] == [
         "system",
         "user",
-        "tool_call",
-        "tool_response",
+        "assistant",
+        "tool",
         "assistant",
     ]
     assert converted["messages"][2]["loss"] is True
+    assert "<think>先调用搜索工具核对这个事实。</think>" in (
+        converted["messages"][2]["content"]
+    )
+    assert "<function=text_search>" in converted["messages"][2]["content"]
     assert converted["messages"][3].get("loss") is None
     assert converted["messages"][4]["loss"] is True
-    assert json.loads(converted["messages"][2]["content"])["name"] == "text_search"
+    assert "<think>证据不足以支持原说法。</think>" in (
+        converted["messages"][4]["content"]
+    )
     tools = json.loads(converted["tools"])
     assert tools[0]["function"]["name"] == "text_search"
     assert converted["channel"] == "trajectory_sft"
+    assert converted["chat_template_kwargs"]["enable_thinking"] is True
     assert "policy_action_token_ids" not in converted
 
 
@@ -127,7 +149,7 @@ def test_dataset_conversion_is_deterministic_and_auditable(
     write_json(
         source / "manifest.json",
         {
-            "dataset_version": "ifv-trajectory-sft-dataset-v1",
+            "dataset_version": "ifv-trajectory-sft-dataset-v2",
             "schema_version": "ifv-trajectory-sft-dataset-manifest-v1",
         },
     )

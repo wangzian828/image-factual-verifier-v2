@@ -998,7 +998,7 @@ class Orchestrator:
                 ],
                 max_output_tokens=self._stage_output_tokens(
                     "VERIFICATION",
-                    16384,
+                    8192,
                 ),
                 generation_config=self._stage_generation_config("VERIFICATION"),
                 observation_callback=observation_callback,
@@ -2376,7 +2376,7 @@ class Orchestrator:
             ),
             max_output_tokens=self._stage_output_tokens(
                 "QUERY_CONCEPT_EXTRACTION",
-                2048,
+                4096,
             ),
             generation_config=self._stage_generation_config(
                 "QUERY_CONCEPT_EXTRACTION"
@@ -2423,7 +2423,7 @@ class Orchestrator:
                     source_access_policy=self.source_access_policy,
                 )
             ),
-            max_output_tokens=self._stage_output_tokens("QUERY_REPLAN", 2048),
+            max_output_tokens=self._stage_output_tokens("QUERY_REPLAN", 4096),
             generation_config=self._stage_generation_config("QUERY_REPLAN"),
         )
         parsed, steps = await runner.run(
@@ -2494,7 +2494,7 @@ class Orchestrator:
             ),
             max_output_tokens=self._stage_output_tokens(
                 "ROUTE_LOCAL_REPLAN",
-                2048,
+                4096,
             ),
             generation_config=self._stage_generation_config(
                 "ROUTE_LOCAL_REPLAN"

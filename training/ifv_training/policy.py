@@ -15,7 +15,7 @@ from .io import (
 )
 
 
-SUPPORTED_DATASET_VERSION = "ifv-trajectory-sft-dataset-v1"
+SUPPORTED_DATASET_VERSION = "ifv-trajectory-sft-dataset-v2"
 LEGACY_STEP_DATASET_VERSION = "ifv-policy-dataset-v2"
 OUTPUT_VERSION = "ifv-ms-swift-trajectory-sft-v1"
 SPLITS = ("train", "validation", "test")
@@ -39,15 +39,13 @@ def convert_policy_row(row: Mapping[str, Any]) -> dict[str, Any]:
             "system",
             "user",
             "assistant",
-            "tool_call",
-            "tool_response",
             "tool",
         }:
             raise ValueError(f"messages[{index}] has unsupported role {role!r}")
         content = message.get("content")
         if not isinstance(content, str) or not content.strip():
             raise ValueError(f"messages[{index}].content must be non-empty")
-        if role in {"assistant", "tool_call"}:
+        if role == "assistant":
             if message.get("loss") is not True:
                 raise ValueError(f"messages[{index}] must set loss=true")
             supervised_targets += 1
@@ -74,7 +72,7 @@ def convert_policy_row(row: Mapping[str, Any]) -> dict[str, Any]:
     output: dict[str, Any] = {
         "messages": [dict(message) for message in messages],
         "channel": "trajectory_sft",
-        "chat_template_kwargs": {"enable_thinking": False},
+        "chat_template_kwargs": {"enable_thinking": True},
     }
     if isinstance(tools, str) and tools.strip():
         output["tools"] = tools
@@ -87,7 +85,7 @@ def convert_policy_dataset(input_dir: Path, output_dir: Path) -> dict[str, Any]:
     if source_version == LEGACY_STEP_DATASET_VERSION:
         raise ValueError(
             "refusing legacy step-level ifv-policy-dataset-v2; export "
-            "ifv-trajectory-sft-dataset-v1 instead"
+            "ifv-trajectory-sft-dataset-v2 instead"
         )
     if source_version != SUPPORTED_DATASET_VERSION:
         raise ValueError(
