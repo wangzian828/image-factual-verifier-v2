@@ -68,6 +68,18 @@ def close_response(response: Any) -> None:
     if isinstance(history, (list, tuple)):
         responses.extend(history)
     for item in responses:
+        # ``requests.Response.close()`` only closes ``raw`` when the body has
+        # not already been consumed.  With a proxy that half-closes an idle
+        # keep-alive connection, a consumed response can otherwise leave the
+        # underlying socket in CLOSE-WAIT inside urllib3's pool.  Close the
+        # raw transport first, then perform the normal release_conn cleanup.
+        raw = getattr(item, "raw", None)
+        raw_close = getattr(raw, "close", None)
+        if callable(raw_close):
+            try:
+                raw_close()
+            except Exception:
+                pass
         close = getattr(item, "close", None)
         if callable(close):
             try:
