@@ -86,7 +86,18 @@ def _json_object(path: Path) -> Dict[str, Any]:
 
 
 def _jsonl_index(path: Path) -> Dict[str, Dict[str, Any]]:
+    """Index private targets without treating legacy aliases as global IDs.
+
+    ``case_id`` is the canonical identity used by rollout traces.  Some
+    historical/generated pools reuse ``candidate_id`` or ``assignment_id``
+    across distinct canonical cases, so those fields are compatibility
+    aliases only: an alias is indexed when it is unambiguous, and an
+    ambiguous alias is deliberately omitted.  Failing the whole audit on
+    such an alias would prevent every canonical case from being scored.
+    """
     result: Dict[str, Dict[str, Any]] = {}
+    canonical_ids: set[str] = set()
+    alias_rows: Dict[str, list[Dict[str, Any]]] = {}
     for line_number, line in enumerate(
         path.read_text(encoding="utf-8").splitlines(), start=1
     ):
@@ -104,10 +115,22 @@ def _jsonl_index(path: Path) -> Dict[str, Dict[str, Any]]:
             raise ValueError(
                 f"{path}:{line_number} lacks case_id/candidate_id/assignment_id"
             )
+        case_id = str(row.get("case_id", "")).strip()
+        if case_id:
+            if case_id in canonical_ids:
+                raise ValueError(f"duplicate private target case_id: {case_id!r}")
+            canonical_ids.add(case_id)
+            result[case_id] = row
+
         for alias in aliases:
-            if alias in result and result[alias] is not row:
-                raise ValueError(f"duplicate private target alias: {alias!r}")
-            result[alias] = row
+            alias_rows.setdefault(alias, []).append(row)
+
+    # Add only aliases that identify exactly one row.  Canonical case IDs
+    # always win if a legacy alias happens to have the same spelling.
+    for alias, matching_rows in alias_rows.items():
+        if alias in result or len(matching_rows) != 1:
+            continue
+        result[alias] = matching_rows[0]
     return result
 
 

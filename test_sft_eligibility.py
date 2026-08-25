@@ -8,7 +8,7 @@ from typing import Any, Dict, List
 
 from src.orchestrator.llm_backend import LLMResponse
 from src.eval import score_sft_eligibility
-from src.eval.score_sft_eligibility import _default_storage_dir
+from src.eval.score_sft_eligibility import _default_storage_dir, _jsonl_index
 from src.trajectory.sft_eligibility import (
     SFT_ELIGIBILITY_SYSTEM_PROMPT,
     SFTEligibilityJudge,
@@ -160,6 +160,40 @@ def test_default_storage_isolated_by_eligibility_output_version(tmp_path: Any) -
     assert v2_storage != v3_storage
     assert v2_storage.name == "teacher-run--sft-eligibility-v2"
     assert v3_storage.name == "teacher-run--sft-eligibility-v3"
+
+
+def test_private_gold_index_ignores_ambiguous_legacy_aliases(tmp_path: Path) -> None:
+    gold_path = tmp_path / "gold.jsonl"
+    rows = [
+        {
+            "case_id": "canonical-a",
+            "candidate_id": "reused-candidate",
+            "assignment_id": "reused-assignment",
+        },
+        {
+            "case_id": "canonical-b",
+            "candidate_id": "reused-candidate",
+            "assignment_id": "reused-assignment",
+        },
+        {
+            "case_id": "canonical-c",
+            "candidate_id": "unique-candidate",
+            "assignment_id": "unique-assignment",
+        },
+    ]
+    gold_path.write_text(
+        "".join(json.dumps(row) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+
+    indexed = _jsonl_index(gold_path)
+
+    assert indexed["canonical-a"]["case_id"] == "canonical-a"
+    assert indexed["canonical-b"]["case_id"] == "canonical-b"
+    assert "reused-candidate" not in indexed
+    assert "reused-assignment" not in indexed
+    assert indexed["unique-candidate"]["case_id"] == "canonical-c"
+    assert indexed["unique-assignment"]["case_id"] == "canonical-c"
 
 
 def test_sft_audit_requeues_only_failed_trace(
