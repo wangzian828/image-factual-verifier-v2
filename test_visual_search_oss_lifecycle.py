@@ -21,6 +21,29 @@ class _FakeOssSession:
         self.session = _FakeRequestsSession()
 
 
+class _FakeRawResponse:
+    def __init__(self) -> None:
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class _FakeOssResponse:
+    def __init__(self) -> None:
+        self.read_called = False
+        self.response = _FakeRawResponse()
+
+    def read(self) -> bytes:
+        self.read_called = True
+        return b""
+
+
+class _FakePutObjectResult:
+    def __init__(self) -> None:
+        self.resp = _FakeOssResponse()
+
+
 def _install_fake_oss(monkeypatch: Any, captured: dict[str, Any]) -> None:
     http_module = types.ModuleType("oss2.http")
     http_module.Session = _FakeOssSession
@@ -44,9 +67,12 @@ def _install_fake_oss(monkeypatch: Any, captured: dict[str, Any]) -> None:
             captured["bucket_name"] = bucket_name
             captured["session"] = session
 
-        def put_object(self, object_name: str, handle: Any) -> None:
+        def put_object(self, object_name: str, handle: Any) -> _FakePutObjectResult:
             captured["object_name"] = object_name
             captured["payload"] = handle.read()
+            result = _FakePutObjectResult()
+            captured["put_result"] = result
+            return result
 
         def sign_url(
             self,
@@ -85,9 +111,12 @@ def test_oss_upload_uses_owned_session_and_closes_nested_requests_session(
     url = client._upload_to_oss(image_path)
 
     session = captured["session"]
+    put_result = captured["put_result"]
     assert isinstance(session, _FakeOssSession)
     assert url.startswith("https://cdn.example.test/")
     assert session.session.closed is False
+    assert put_result.resp.read_called is True
+    assert put_result.resp.response.closed is True
 
     client.close()
 

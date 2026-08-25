@@ -312,7 +312,8 @@ class ImageUploadClient:
             object_name = f"{key_prefix}/{object_name}"
 
         with path.open("rb") as handle:
-            bucket.put_object(object_name, handle)
+            result = bucket.put_object(object_name, handle)
+        self._release_oss_upload_response(result)
 
         if _env_flag("OSS_USE_SIGNED_URL", True):
             signed_url = bucket.sign_url(
@@ -326,6 +327,35 @@ class ImageUploadClient:
         endpoint_host = endpoint.replace("https://", "").replace("http://", "").rstrip("/")
         scheme = "https" if endpoint.startswith("https://") or not endpoint.startswith("http://") else "http"
         return f"{scheme}://{bucket_name}.{endpoint_host}/{object_name}"
+
+    @staticmethod
+    def _release_oss_upload_response(result: Any) -> None:
+        """Release an oss2 ``put_object`` response as soon as upload completes.
+
+        oss2 sends requests with ``stream=True``.  A successful ``put_object``
+        result retains that response but exposes only metadata needed by this
+        client, so leaving it unread can keep the proxy socket occupied until
+        the whole rollout closes its OSS session.  Read the normally empty
+        response body, then explicitly close its wrapped requests response.
+        Cleanup remains best effort: the upload status has already been
+        validated by oss2 before this point.
+        """
+
+        response = getattr(result, "resp", None)
+        try:
+            read = getattr(response, "read", None)
+            if callable(read):
+                read()
+        except Exception:
+            pass
+        finally:
+            raw_response = getattr(response, "response", None)
+            close = getattr(raw_response, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    pass
 
     def _upload_via_http(self, path: Path, upload_url: str) -> str:
         proxies = _get_proxies()
