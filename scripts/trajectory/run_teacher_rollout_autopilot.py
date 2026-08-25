@@ -525,9 +525,10 @@ def _run_engineering_retries(
         raise ValueError(f"{group_name} target case IDs must be unique")
     _write_case_list(group_dir / "target-case-list.txt", target_ids)
     state_path = group_dir / "engineering-retry-state.json"
+    attempt_dirs = _attempt_dirs(group_dir)
+    successful = _successful_trace_sources(attempt_dirs)
 
     for attempt_number in range(1, maximum_attempts + 1):
-        successful = _successful_trace_sources(_attempt_dirs(group_dir))
         pending = [case_id for case_id in target_ids if case_id not in successful]
         _write_case_list(group_dir / "pending-case-list.txt", pending)
         if not pending:
@@ -594,8 +595,11 @@ def _run_engineering_retries(
             "summary_exists": (attempt_dir / "summary.json").is_file(),
         }
         _write_json(attempt_dir / "autopilot-attempt.json", attempt_payload)
+        attempt_dirs.append(attempt_dir)
+        for case_id, source in _successful_trace_sources([attempt_dir]).items():
+            successful.setdefault(case_id, source)
 
-    selected = _successful_trace_sources(_attempt_dirs(group_dir))
+    selected = successful
     unresolved = [case_id for case_id in target_ids if case_id not in selected]
     retry_state = {
         "schema_version": SCHEMA_VERSION,

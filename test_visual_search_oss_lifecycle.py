@@ -70,6 +70,8 @@ def _install_fake_oss(monkeypatch: Any, captured: dict[str, Any]) -> None:
         def put_object(self, object_name: str, handle: Any) -> _FakePutObjectResult:
             captured["object_name"] = object_name
             captured["payload"] = handle.read()
+            if captured.get("raise_put"):
+                raise RuntimeError("simulated OSS transport failure")
             result = _FakePutObjectResult()
             captured["put_result"] = result
             return result
@@ -136,3 +138,30 @@ def test_oss_session_created_after_close_is_closed_immediately(
         assert "already closed" in str(exc)
     else:
         raise AssertionError("closed upload client accepted a new OSS session")
+
+
+def test_oss_upload_failure_discards_broken_sdk_session(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "image.bin"
+    image_path.write_bytes(b"image")
+    monkeypatch.setenv("OSS_ACCESS_KEY_ID", "id")
+    monkeypatch.setenv("OSS_ACCESS_KEY_SECRET", "secret")
+    monkeypatch.setenv("OSS_ENDPOINT", "https://oss.example.test")
+    monkeypatch.setenv("OSS_BUCKET_NAME", "bucket")
+
+    captured: dict[str, Any] = {"raise_put": True}
+    _install_fake_oss(monkeypatch, captured)
+    client = ImageUploadClient(provider="oss")
+
+    try:
+        client._upload_to_oss(image_path)
+    except RuntimeError as exc:
+        assert "simulated OSS transport failure" in str(exc)
+    else:
+        raise AssertionError("simulated OSS upload unexpectedly succeeded")
+
+    assert captured["session"].session.closed is True
+    assert getattr(client._oss_session_local, "session", None) is None
+    assert client._oss_sessions == []

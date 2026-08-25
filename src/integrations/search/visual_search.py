@@ -166,6 +166,20 @@ class ImageUploadClient:
         self._oss_session_local.session = session
         return session
 
+    def _discard_oss_session(self) -> None:
+        """Drop a broken SDK session after an upload-side transport error."""
+
+        session = getattr(self._oss_session_local, "session", None)
+        self._oss_session_local.session = None
+        if session is None:
+            return
+        with self._oss_session_registry_lock:
+            try:
+                self._oss_sessions.remove(session)
+            except ValueError:
+                pass
+        self._close_oss_session(session)
+
     def upload(self, image_path: str) -> str:
         path = Path(image_path)
         if not path.exists():
@@ -312,8 +326,15 @@ class ImageUploadClient:
         if key_prefix:
             object_name = f"{key_prefix}/{object_name}"
 
-        with path.open("rb") as handle:
-            result = bucket.put_object(object_name, handle)
+        try:
+            with path.open("rb") as handle:
+                result = bucket.put_object(object_name, handle)
+        except Exception:
+            # oss2 consumes a small error body internally and raises before it
+            # returns its response wrapper.  Retire the whole SDK session so a
+            # proxy socket from that failed request cannot remain in its pool.
+            self._discard_oss_session()
+            raise
         self._release_oss_upload_response(result)
 
         if _env_flag("OSS_USE_SIGNED_URL", True):
