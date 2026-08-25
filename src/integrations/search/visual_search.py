@@ -105,6 +105,13 @@ class ImageUploadClient:
         self._upload_cache: Dict[str, tuple[float, str, Dict[str, Any]]] = {}
         self._file_hash_cache: Dict[tuple[str, int, int], str] = {}
         self._upload_cache_lock = threading.Lock()
+        # oss2 creates its own requests.Session when Bucket() is constructed.
+        # Keep one SDK session per worker thread, but own all of them here so
+        # Orchestrator.aclose() can release their proxy sockets at case end.
+        self._oss_session_local = threading.local()
+        self._oss_session_registry_lock = threading.Lock()
+        self._oss_sessions: list[Any] = []
+        self._oss_sessions_closed = False
         init_tracked_sessions(self)
 
     def _get_session(self) -> requests.Session:
@@ -112,6 +119,51 @@ class ImageUploadClient:
 
     def close(self) -> None:
         close_tracked_sessions(self)
+        with self._oss_session_registry_lock:
+            self._oss_sessions_closed = True
+            sessions = list(self._oss_sessions)
+            self._oss_sessions.clear()
+        for session in sessions:
+            self._close_oss_session(session)
+
+    @staticmethod
+    def _close_oss_session(session: Any) -> None:
+        """Close an oss2 session and its nested requests.Session."""
+
+        close = getattr(session, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                return
+            return
+        nested = getattr(session, "session", None)
+        close_nested = getattr(nested, "close", None)
+        if callable(close_nested):
+            try:
+                close_nested()
+            except Exception:
+                pass
+
+    def _get_oss_session(self) -> Any:
+        """Return a thread-owned oss2 session registered for lifecycle cleanup."""
+
+        session = getattr(self._oss_session_local, "session", None)
+        if session is not None:
+            return session
+        try:
+            import oss2  # type: ignore
+        except ImportError as exc:
+            raise RuntimeError("oss2 is required for OSS uploads") from exc
+
+        session = oss2.http.Session()
+        with self._oss_session_registry_lock:
+            if self._oss_sessions_closed:
+                self._close_oss_session(session)
+                raise RuntimeError("Image upload client is already closed.")
+            self._oss_sessions.append(session)
+        self._oss_session_local.session = session
+        return session
 
     def upload(self, image_path: str) -> str:
         path = Path(image_path)
@@ -248,7 +300,12 @@ class ImageUploadClient:
         key_prefix = os.getenv("OSS_KEY_PREFIX", "image-search").strip().strip("/")
 
         auth = oss2.Auth(access_key_id, access_key_secret)
-        bucket = oss2.Bucket(auth, endpoint, bucket_name)
+        bucket = oss2.Bucket(
+            auth,
+            endpoint,
+            bucket_name,
+            session=self._get_oss_session(),
+        )
 
         object_name = f"{uuid.uuid4().hex}_{path.name}"
         if key_prefix:
