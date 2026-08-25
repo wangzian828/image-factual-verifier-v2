@@ -136,6 +136,8 @@ def test_trajectory_export_uses_qwen_native_thinking_and_tool_calls(
         message.get("role") not in {"tool_call", "tool_response"}
         for message in messages
     )
+    roles = [message.get("role") for message in messages]
+    assert all(roles[index] != roles[index + 1] for index in range(len(roles) - 1))
 
 
 def test_dataset_export_is_episode_and_source_family_split_safe(

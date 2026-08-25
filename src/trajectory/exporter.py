@@ -390,7 +390,9 @@ def export_trajectory_sft_example(
     ]
     tool_schemas: dict[str, dict[str, Any]] = {}
     tool_call_count = 0
-    for _, step, example_type in _trajectory_candidate_steps(trace):
+    candidates = _trajectory_candidate_steps(trace)
+    pending_tool_response: dict[str, Any] | None = None
+    for position, (_, step, example_type) in enumerate(candidates):
         metadata = _mapping(step.get("metadata"))
         policy_input = dict(_mapping(metadata.get("policy_input")))
         policy_action = dict(_mapping(metadata.get("policy_action")))
@@ -398,15 +400,26 @@ def export_trajectory_sft_example(
         _assert_no_private_data(policy_action)
         for tool_schema in _normalize_tool_schema(policy_input.get("tools")):
             tool_schemas.setdefault(_tool_schema_key(tool_schema), tool_schema)
-        messages.append(
-            {
-                "role": "user",
-                "content": _stage_user_packet(
-                    example_type=example_type,
-                    policy_input=policy_input,
-                ),
-            }
+        stage_packet = _stage_user_packet(
+            example_type=example_type,
+            policy_input=policy_input,
         )
+        if position == 0:
+            messages[1]["content"] += "\n\n" + stage_packet
+        elif pending_tool_response is not None:
+            pending_tool_response["next_stage_packet"] = stage_packet
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": pending_tool_response.get(
+                        "function_call_id", ""
+                    ),
+                    "content": canonical_json(pending_tool_response),
+                }
+            )
+            pending_tool_response = None
+        else:
+            messages.append({"role": "user", "content": stage_packet})
         thought = str(step.get("thought", "") or "").strip()
         if thought:
             _assert_no_private_data(thought)
@@ -451,13 +464,7 @@ def export_trajectory_sft_example(
                     tool_response["investigation_state_update"] = dict(
                         state_update
                     )
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": function_call_id,
-                        "content": canonical_json(tool_response),
-                    }
-                )
+                pending_tool_response = tool_response
         else:
             messages.append(
                 {
@@ -470,6 +477,9 @@ def export_trajectory_sft_example(
                     "loss": True,
                 }
             )
+
+    if pending_tool_response is not None:
+        raise ValueError("trajectory ended after a tool call without a next policy turn")
 
     if len(messages) <= 2:
         raise ValueError("trajectory SFT export found no supervised policy turns")

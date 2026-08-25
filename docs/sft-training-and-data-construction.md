@@ -114,6 +114,8 @@ assistant
 - ReAct 的 `policy_action` 转成 Qwen 模板的 `<tool_call><function=...>` 文本；
   参数使用 `<parameter=...>`，不使用 `role=tool_call`；
 - 工具结果使用原生 `role=tool`；不使用 `role=tool_response`；
+- 为满足 Qwen/ms-swift 的交替角色要求，工具结果和下一阶段 packet 放在同一个
+  `role=tool` 观察内容中；首个 stage packet 与初始 user 合并，不产生连续 user；
 - Gemini thought 摘要直接写入 assistant `content` 的 `<think>...</think>`；
   这样 ms-swift 会对 thought 和 tool call 一起计算 loss；完整隐藏 CoT 不存在，也不导出；
 - 其他阶段的 `policy_action` 是该阶段结构化 JSON；
