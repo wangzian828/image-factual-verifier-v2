@@ -1,0 +1,515 @@
+"""Assemble verifier-gated PSD repairs and base-pass preservation rows.
+
+This module joins public repair candidates with privileged repair attempts.
+Only a fully verified repair is allowed through, and the emitted student
+prefix always comes from the original no-hint rollout capture.
+"""
+
+from __future__ import annotations
+
+import math
+from collections import Counter, defaultdict
+from pathlib import Path
+from typing import Any, Mapping
+
+from .io import (
+    load_jsonl,
+    require_new_or_empty,
+    sha256_file,
+    write_json,
+    write_jsonl,
+)
+from .psd import TRAINABLE_HINT_LEVELS, audit_hint
+
+
+PSD_REPAIR_SCHEMA_VERSION = "ifv-psd-repair-v1"
+PSD_PRESERVATION_SCHEMA_VERSION = "ifv-psd-preservation-v1"
+PSD_REPAIR_ASSEMBLY_MANIFEST_SCHEMA_VERSION = "ifv-psd-repair-assembly-manifest-v1"
+
+
+def _mapping(value: Any) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}
+
+
+def _text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _required_int_list(value: Any, *, field: str) -> list[int]:
+    if not isinstance(value, list) or not value:
+        raise ValueError(f"{field} must be a non-empty list")
+    result: list[int] = []
+    for index, item in enumerate(value):
+        if isinstance(item, bool):
+            raise ValueError(f"{field}[{index}] must be an integer")
+        try:
+            result.append(int(item))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{field}[{index}] must be an integer") from exc
+    return result
+
+
+def _positive_weight(value: Any, *, field: str) -> float:
+    try:
+        weight = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field} must be numeric") from exc
+    if not math.isfinite(weight) or weight <= 0:
+        raise ValueError(f"{field} must be finite and positive")
+    return weight
+
+
+def _source_trace_sha256(row: Mapping[str, Any]) -> str:
+    return _text(
+        row.get("source_trace_sha256")
+        or _mapping(row.get("source")).get("source_trace_sha256")
+    )
+
+
+def _source_fields(candidate: Mapping[str, Any]) -> dict[str, str]:
+    source = _mapping(candidate.get("source"))
+    return {
+        "source_run_id": _text(
+            candidate.get("source_run_id") or source.get("source_run_id")
+        ),
+        "runtime_commit": _text(
+            candidate.get("runtime_commit") or source.get("runtime_commit")
+        ),
+        "source_trace_sha256": _source_trace_sha256(candidate),
+    }
+
+
+def _candidate_step(candidate: Mapping[str, Any]) -> Mapping[str, Any]:
+    return _mapping(candidate.get("repair_site"))
+
+
+def _candidate_student_prompt_ids(candidate: Mapping[str, Any]) -> list[int]:
+    capture = _mapping(_candidate_step(candidate).get("rollout_token_capture"))
+    if _text(capture.get("status")) != "complete":
+        raise ValueError("candidate rollout_token_capture is not complete")
+    return _required_int_list(
+        capture.get("prompt_token_ids"),
+        field="candidate.rollout_token_capture.prompt_token_ids",
+    )
+
+
+def _attempt_token_ids(
+    attempt: Mapping[str, Any],
+) -> tuple[list[int], list[int]]:
+    capture = _mapping(
+        attempt.get("repair_rollout_token_capture")
+        or attempt.get("rollout_token_capture")
+    )
+    if capture:
+        if _text(capture.get("status")) != "complete":
+            raise ValueError("repair rollout token capture is not complete")
+        teacher_prompt_ids = _required_int_list(
+            capture.get("prompt_token_ids"),
+            field="repair_rollout_token_capture.prompt_token_ids",
+        )
+        completion_ids = _required_int_list(
+            capture.get("completion_token_ids"),
+            field="repair_rollout_token_capture.completion_token_ids",
+        )
+        return teacher_prompt_ids, completion_ids
+    return (
+        _required_int_list(
+            attempt.get("teacher_prompt_ids"),
+            field="teacher_prompt_ids",
+        ),
+        _required_int_list(
+            attempt.get("completion_ids"),
+            field="completion_ids",
+        ),
+    )
+
+
+def _attempt_rejection(
+    *,
+    row_index: int,
+    attempt: Mapping[str, Any],
+    reason: str,
+    candidate_id: str = "",
+) -> dict[str, Any]:
+    return {
+        "row_index": row_index,
+        "candidate_id": candidate_id or _text(attempt.get("candidate_id")),
+        "attempt_id": _text(attempt.get("attempt_id")),
+        "reason": reason,
+    }
+
+
+def _validate_attempt(
+    *,
+    attempt: Mapping[str, Any],
+    candidate: Mapping[str, Any],
+) -> dict[str, Any]:
+    candidate_id = _text(candidate.get("candidate_id"))
+    attempt_id = _text(attempt.get("attempt_id"))
+    if not attempt_id:
+        raise ValueError("attempt_id_missing")
+    if _text(attempt.get("candidate_id")) != candidate_id:
+        raise ValueError("candidate_id_mismatch")
+
+    case_id = _text(candidate.get("case_id"))
+    episode_id = _text(candidate.get("episode_id"))
+    repair_site = _candidate_step(candidate)
+    step_id = _text(repair_site.get("step_id"))
+    source_trace_sha256 = _source_trace_sha256(candidate)
+    if not case_id or not episode_id or not step_id or not source_trace_sha256:
+        raise ValueError("candidate_identity_incomplete")
+    if _text(attempt.get("case_id")) != case_id:
+        raise ValueError("case_id_mismatch")
+    if _text(attempt.get("episode_id")) != episode_id:
+        raise ValueError("episode_id_mismatch")
+    if _text(
+        attempt.get("repair_step_id")
+        or _mapping(attempt.get("repair_site")).get("step_id")
+    ) != step_id:
+        raise ValueError("repair_step_id_mismatch")
+    if _source_trace_sha256(attempt) != source_trace_sha256:
+        raise ValueError("source_trace_sha256_mismatch")
+
+    if attempt.get("accepted") is not True:
+        raise ValueError("attempt_not_accepted")
+    repair_tier = _text(attempt.get("repair_tier") or attempt.get("tier"))
+    if repair_tier != "causal_episode_pass":
+        raise ValueError("repair_tier_not_causal_episode_pass")
+    verification = _mapping(attempt.get("verification"))
+    if verification.get("local_pass") is not True:
+        raise ValueError("verification_local_pass_required")
+    if verification.get("full_episode_pass") is not True:
+        raise ValueError("verification_full_episode_pass_required")
+    if verification.get("strict_trace_audit_pass") is not True:
+        raise ValueError("verification_strict_trace_audit_pass_required")
+
+    hint_record = _mapping(attempt.get("hint_record"))
+    hint = _text(hint_record.get("text") or attempt.get("hint"))
+    raw_level = hint_record.get("level", attempt.get("hint_level"))
+    try:
+        hint_level = int(raw_level)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("hint_level_invalid") from exc
+    if hint_level not in TRAINABLE_HINT_LEVELS:
+        raise ValueError("hint_level_not_trainable")
+    hint_audit = audit_hint(attempt, hint=hint, hint_level=hint_level)
+    if not hint_audit["passed"]:
+        raise ValueError(
+            "hint_audit_failed:" + ",".join(hint_audit["errors"])
+        )
+
+    student_prompt_ids = _candidate_student_prompt_ids(candidate)
+    teacher_prompt_ids, completion_ids = _attempt_token_ids(attempt)
+    if teacher_prompt_ids == student_prompt_ids:
+        raise ValueError("teacher_prompt_equals_student_prompt")
+
+    return {
+        "attempt_id": attempt_id,
+        "hint": hint,
+        "hint_level": hint_level,
+        "hint_audit": hint_audit,
+        "student_prompt_ids": student_prompt_ids,
+        "teacher_prompt_ids": teacher_prompt_ids,
+        "completion_ids": completion_ids,
+        "row_weight": _positive_weight(
+            attempt.get("row_weight", 1.0),
+            field="row_weight",
+        ),
+        "verification": dict(verification),
+    }
+
+
+def _repair_row(
+    *,
+    candidate: Mapping[str, Any],
+    selected: Mapping[str, Any],
+) -> dict[str, Any]:
+    repair_site = _candidate_step(candidate)
+    source = _source_fields(candidate)
+    return {
+        "schema_version": PSD_REPAIR_SCHEMA_VERSION,
+        "candidate_id": _text(candidate.get("candidate_id")),
+        "attempt_id": _text(selected.get("attempt_id")),
+        "class": "verified_privileged_repair",
+        "case_id": _text(candidate.get("case_id")),
+        "episode_id": _text(candidate.get("episode_id")),
+        "repair_step_id": _text(repair_site.get("step_id")),
+        "stage": _text(repair_site.get("stage")),
+        "example_type": _text(repair_site.get("example_type")),
+        "accepted": True,
+        "repair_tier": "causal_episode_pass",
+        "hint": _text(selected.get("hint")),
+        "hint_level": int(selected["hint_level"]),
+        "hint_audit": dict(_mapping(selected.get("hint_audit"))),
+        "student_prompt_ids": list(selected["student_prompt_ids"]),
+        "teacher_prompt_ids": list(selected["teacher_prompt_ids"]),
+        "completion_ids": list(selected["completion_ids"]),
+        "row_weight": float(selected["row_weight"]),
+        "verification": dict(_mapping(selected.get("verification"))),
+        **source,
+    }
+
+
+def _preservation_row(candidate: Mapping[str, Any]) -> dict[str, Any]:
+    if _text(candidate.get("class")) != "base_pass_preserve":
+        raise ValueError("preservation_candidate_class_invalid")
+    if candidate.get("verified_full_task") is not True:
+        raise ValueError("preservation_candidate_not_verified")
+    if candidate.get("strict_trace_audit_pass") is not True:
+        raise ValueError("preservation_strict_trace_audit_required")
+    raw_steps = candidate.get("preservation_steps")
+    if not isinstance(raw_steps, list) or not raw_steps:
+        raise ValueError("preservation_steps_missing")
+
+    steps: list[dict[str, Any]] = []
+    for index, raw_step in enumerate(raw_steps):
+        step = _mapping(raw_step)
+        capture = _mapping(step.get("rollout_token_capture"))
+        if _text(capture.get("status")) != "complete":
+            raise ValueError(
+                f"preservation_step_{index}_token_capture_not_complete"
+            )
+        prompt_ids = _required_int_list(
+            capture.get("prompt_token_ids"),
+            field=f"preservation_steps[{index}].prompt_token_ids",
+        )
+        completion_ids = _required_int_list(
+            capture.get("completion_token_ids"),
+            field=f"preservation_steps[{index}].completion_token_ids",
+        )
+        step_id = _text(step.get("step_id"))
+        if not step_id:
+            raise ValueError(f"preservation_step_{index}_step_id_missing")
+        steps.append(
+            {
+                "step_id": step_id,
+                "stage": _text(step.get("stage")),
+                "example_type": _text(step.get("example_type")),
+                "student_prompt_ids": prompt_ids,
+                "completion_ids": completion_ids,
+            }
+        )
+
+    return {
+        "schema_version": PSD_PRESERVATION_SCHEMA_VERSION,
+        "candidate_id": _text(candidate.get("candidate_id")),
+        "class": "base_pass_preserve",
+        "case_id": _text(candidate.get("case_id")),
+        "episode_id": _text(candidate.get("episode_id")),
+        "verified_full_task": True,
+        "strict_trace_audit_pass": True,
+        "row_weight": _positive_weight(
+            candidate.get("row_weight", 1.0),
+            field="row_weight",
+        ),
+        "preservation_steps": steps,
+        **_source_fields(candidate),
+    }
+
+
+def assemble_psd_repair_package(
+    *,
+    repair_candidates_path: Path,
+    repair_attempts_path: Path,
+    preservation_candidates_path: Path,
+    output_dir: Path,
+) -> dict[str, Any]:
+    """Select the weakest verified repair and materialize preservation rows."""
+
+    require_new_or_empty(output_dir)
+    repair_candidates = load_jsonl(repair_candidates_path)
+    repair_attempts = load_jsonl(repair_attempts_path)
+    preservation_candidates = load_jsonl(preservation_candidates_path)
+
+    candidates_by_id: dict[str, Mapping[str, Any]] = {}
+    for index, candidate in enumerate(repair_candidates):
+        candidate_id = _text(candidate.get("candidate_id"))
+        if not candidate_id:
+            raise ValueError(f"repair candidate row {index} lacks candidate_id")
+        if candidate_id in candidates_by_id:
+            raise ValueError(f"duplicate repair candidate_id: {candidate_id}")
+        candidates_by_id[candidate_id] = candidate
+
+    attempts_by_candidate: dict[str, list[tuple[int, Mapping[str, Any]]]] = defaultdict(list)
+    attempt_rejections: list[dict[str, Any]] = []
+    seen_attempt_ids: set[str] = set()
+    for row_index, attempt in enumerate(repair_attempts):
+        attempt_id = _text(attempt.get("attempt_id"))
+        candidate_id = _text(attempt.get("candidate_id"))
+        if not attempt_id:
+            attempt_rejections.append(
+                _attempt_rejection(
+                    row_index=row_index,
+                    attempt=attempt,
+                    reason="attempt_id_missing",
+                )
+            )
+            continue
+        if attempt_id in seen_attempt_ids:
+            attempt_rejections.append(
+                _attempt_rejection(
+                    row_index=row_index,
+                    attempt=attempt,
+                    reason="duplicate_attempt_id",
+                )
+            )
+            continue
+        seen_attempt_ids.add(attempt_id)
+        if candidate_id not in candidates_by_id:
+            attempt_rejections.append(
+                _attempt_rejection(
+                    row_index=row_index,
+                    attempt=attempt,
+                    reason="candidate_not_found",
+                )
+            )
+            continue
+        attempts_by_candidate[candidate_id].append((row_index, attempt))
+
+    repairs: list[dict[str, Any]] = []
+    unrepaired: list[dict[str, Any]] = []
+    for candidate_id, candidate in candidates_by_id.items():
+        valid: list[tuple[tuple[int, int, str], int, Mapping[str, Any]]] = []
+        candidate_reasons: Counter[str] = Counter()
+        for row_index, attempt in attempts_by_candidate.get(candidate_id, []):
+            try:
+                normalized = _validate_attempt(
+                    attempt=attempt,
+                    candidate=candidate,
+                )
+            except ValueError as exc:
+                reason = str(exc)
+                candidate_reasons[reason] += 1
+                attempt_rejections.append(
+                    _attempt_rejection(
+                        row_index=row_index,
+                        attempt=attempt,
+                        candidate_id=candidate_id,
+                        reason=reason,
+                    )
+                )
+                continue
+            rank = (
+                int(normalized["hint_level"]),
+                len(_text(normalized.get("hint"))),
+                _text(normalized.get("attempt_id")),
+            )
+            valid.append((rank, row_index, normalized))
+
+        if not valid:
+            unrepaired.append(
+                {
+                    "candidate_id": candidate_id,
+                    "case_id": _text(candidate.get("case_id")),
+                    "episode_id": _text(candidate.get("episode_id")),
+                    "repair_step_id": _text(_candidate_step(candidate).get("step_id")),
+                    "reason": (
+                        "no_attempts"
+                        if not attempts_by_candidate.get(candidate_id)
+                        else "no_verified_attempt"
+                    ),
+                    "attempt_reasons": dict(sorted(candidate_reasons.items())),
+                }
+            )
+            continue
+
+        valid.sort(key=lambda item: item[0])
+        _, _, selected = valid[0]
+        repairs.append(_repair_row(candidate=candidate, selected=selected))
+        for _, row_index, normalized in valid[1:]:
+            attempt_rejections.append(
+                {
+                    "row_index": row_index,
+                    "candidate_id": candidate_id,
+                    "attempt_id": _text(normalized.get("attempt_id")),
+                    "reason": "superseded_by_weaker_or_shorter_verified_hint",
+                    "selected_attempt_id": _text(selected.get("attempt_id")),
+                }
+            )
+
+    preservation: list[dict[str, Any]] = []
+    preservation_rejections: list[dict[str, Any]] = []
+    seen_preservation_ids: set[str] = set()
+    for row_index, candidate in enumerate(preservation_candidates):
+        candidate_id = _text(candidate.get("candidate_id"))
+        if not candidate_id:
+            preservation_rejections.append(
+                {
+                    "row_index": row_index,
+                    "reason": "candidate_id_missing",
+                }
+            )
+            continue
+        if candidate_id in seen_preservation_ids:
+            preservation_rejections.append(
+                {
+                    "row_index": row_index,
+                    "candidate_id": candidate_id,
+                    "reason": "duplicate_candidate_id",
+                }
+            )
+            continue
+        seen_preservation_ids.add(candidate_id)
+        try:
+            preservation.append(_preservation_row(candidate))
+        except ValueError as exc:
+            preservation_rejections.append(
+                {
+                    "row_index": row_index,
+                    "candidate_id": candidate_id,
+                    "case_id": _text(candidate.get("case_id")),
+                    "episode_id": _text(candidate.get("episode_id")),
+                    "reason": str(exc),
+                }
+            )
+
+    write_jsonl(output_dir / "repairs.jsonl", repairs)
+    write_jsonl(output_dir / "preservation.jsonl", preservation)
+    write_jsonl(output_dir / "attempt_rejections.jsonl", attempt_rejections)
+    write_jsonl(output_dir / "unrepaired_candidates.jsonl", unrepaired)
+    write_jsonl(
+        output_dir / "preservation_rejections.jsonl",
+        preservation_rejections,
+    )
+
+    selected_levels = Counter(row["hint_level"] for row in repairs)
+    manifest = {
+        "schema_version": PSD_REPAIR_ASSEMBLY_MANIFEST_SCHEMA_VERSION,
+        "source": {
+            "repair_candidates": str(repair_candidates_path),
+            "repair_candidates_sha256": sha256_file(repair_candidates_path),
+            "repair_attempts": str(repair_attempts_path),
+            "repair_attempts_sha256": sha256_file(repair_attempts_path),
+            "preservation_candidates": str(preservation_candidates_path),
+            "preservation_candidates_sha256": sha256_file(
+                preservation_candidates_path
+            ),
+        },
+        "counts": {
+            "repair_candidates": len(repair_candidates),
+            "repair_attempts": len(repair_attempts),
+            "selected_repairs": len(repairs),
+            "unrepaired_candidates": len(unrepaired),
+            "attempt_rejections": len(attempt_rejections),
+            "preservation_candidates": len(preservation_candidates),
+            "preservation_rows": len(preservation),
+            "preservation_rejections": len(preservation_rejections),
+        },
+        "selected_hint_levels": {
+            str(level): count for level, count in sorted(selected_levels.items())
+        },
+        "artifacts": {
+            "repairs": "repairs.jsonl",
+            "preservation": "preservation.jsonl",
+            "attempt_rejections": "attempt_rejections.jsonl",
+            "unrepaired_candidates": "unrepaired_candidates.jsonl",
+            "preservation_rejections": "preservation_rejections.jsonl",
+        },
+        "status": (
+            "ready_for_target_build"
+            if repairs or preservation
+            else "empty"
+        ),
+    }
+    write_json(output_dir / "manifest.json", manifest)
+    return manifest

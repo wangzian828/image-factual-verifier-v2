@@ -27,6 +27,20 @@ def test_sft_launchers_delegate_training_to_ms_swift() -> None:
     assert "train.group-decision.jsonl" in curriculum
 
 
+def test_psd_launcher_uses_ms_swift_external_plugin_not_a_new_trainer() -> None:
+    source = _source("scripts/train/run_psd_topk.sh")
+
+    assert "swift sft" in source
+    assert "--external_plugins" in source
+    assert "ifv_psd_topk_plugin.py" in source
+    assert "--template ifv_psd_topk" in source
+    assert "--loss_type ifv_psd_topk" in source
+    assert "--remove_unused_columns false" in source
+    assert "--padding_free false" in source
+    assert "--sequence_parallel_size 1" in source
+    assert "Trainer" not in source
+
+
 def test_grpo_launcher_uses_framework_gym_reward() -> None:
     source = _source("scripts/rl/run_mock_grpo.sh")
 

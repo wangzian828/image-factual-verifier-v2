@@ -35,6 +35,8 @@ from .psd import (
     materialize_psd_topk_cache,
 )
 from .psd_candidates import build_psd_candidate_package
+from .psd_datums import build_sparse_topk_package
+from .psd_repairs import assemble_psd_repair_package
 from .rewards import (
     build_and_write_ledger,
     build_ledgers_from_run_artifacts,
@@ -186,6 +188,32 @@ def _parser() -> argparse.ArgumentParser:
     psd_topk.add_argument("--cache", type=Path, required=True)
     psd_topk.add_argument("--output-dir", type=Path, required=True)
     psd_topk.add_argument("--topk", type=int, default=20)
+
+    psd_repairs = subparsers.add_parser("assemble-psd-repairs")
+    psd_repairs.add_argument("--repair-candidates", type=Path, required=True)
+    psd_repairs.add_argument("--repair-attempts", type=Path, required=True)
+    psd_repairs.add_argument(
+        "--preservation-candidates",
+        type=Path,
+        required=True,
+    )
+    psd_repairs.add_argument("--output-dir", type=Path, required=True)
+
+    psd_datums = subparsers.add_parser("build-psd-datums")
+    psd_datums.add_argument("--targets", type=Path, required=True)
+    psd_datums.add_argument("--output-dir", type=Path, required=True)
+    psd_datums.add_argument("--topk", type=int, default=20)
+    psd_datums.add_argument(
+        "--max-sequence-length",
+        type=int,
+        default=131_072,
+    )
+    psd_datums.add_argument(
+        "--no-balance-kinds",
+        action="store_false",
+        dest="balance_kinds",
+    )
+    psd_datums.set_defaults(balance_kinds=True)
 
     run_rewards = subparsers.add_parser("build-run-rewards")
     run_rewards.add_argument("--deterministic", type=Path, required=True)
@@ -375,6 +403,21 @@ def main() -> None:
             cache_path=args.cache,
             output_dir=args.output_dir,
             topk=args.topk,
+        )
+    elif args.command == "assemble-psd-repairs":
+        result = assemble_psd_repair_package(
+            repair_candidates_path=args.repair_candidates,
+            repair_attempts_path=args.repair_attempts,
+            preservation_candidates_path=args.preservation_candidates,
+            output_dir=args.output_dir,
+        )
+    elif args.command == "build-psd-datums":
+        result = build_sparse_topk_package(
+            targets_path=args.targets,
+            output_dir=args.output_dir,
+            topk=args.topk,
+            max_sequence_length=args.max_sequence_length,
+            balance_kinds=args.balance_kinds,
         )
     elif args.command == "build-run-rewards":
         semantic_artifacts = []
