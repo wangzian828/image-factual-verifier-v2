@@ -685,8 +685,9 @@ bounded retry window still produces a diagnostic error trace.
 Coverage runs after every accepted action and stops immediately when the one core fact
 and its required evidence gaps resolve. It also stops as `information_saturated` when
 no executable core-gap route remains or when two consecutive action checkpoints make
-no qualified core progress. Open-ended ReAct turns use a 16,384-token output budget;
-Reflection and Judgment use 8,192. Image Account Planning defaults to high thinking;
+no qualified core progress. ReAct turns use an 8,192-token output budget;
+Reflection, Judgment, and Evidence Decision use 8,192; query and route replanning
+use 4,096. Image Account Planning defaults to high thinking;
 its thought tokens are recorded but are not Evidence. Investigation, extraction,
 visual-tool, Decision, and Judgment calls remain low thinking. Interactions failures that exhaust the
 bounded retry window remain hard failures, and the error trace retains completed
