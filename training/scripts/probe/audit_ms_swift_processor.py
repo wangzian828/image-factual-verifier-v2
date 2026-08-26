@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
-LENGTH_CANDIDATES = (4096, 8192, 16384, 32768)
+LENGTH_CANDIDATES = (4096, 8192, 16384, 32768, 65536, 131072)
 
 
 def _rows(path: Path) -> Iterable[tuple[int, dict[str, Any]]]:

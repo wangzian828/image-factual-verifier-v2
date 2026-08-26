@@ -9,6 +9,7 @@ import pytest
 
 from scripts.trajectory.audit_dataset import audit_dataset
 from scripts.trajectory.export_dataset import (
+    UTF8_BYTES_PER_APPROX_TOKEN,
     _cross_case_source_families,
     export_dataset,
 )
@@ -194,6 +195,39 @@ def test_long_trajectory_is_retained_in_holdout_not_short_sft(
     assert holdout[0]["holdout_reason"] == (
         "trajectory_exceeds_short_token_budget"
     )
+
+
+def test_length_gate_uses_approximate_model_tokens(
+    tmp_path: Path,
+) -> None:
+    run_dir = _run_dir(tmp_path)
+    trajectory = json.loads(
+        (run_dir / "trajectory_sft.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()[0]
+    )
+    raw_estimate = int(trajectory["token_count_estimate"])
+    approximate_tokens = (
+        raw_estimate + UTF8_BYTES_PER_APPROX_TOKEN - 1
+    ) // UTF8_BYTES_PER_APPROX_TOKEN
+
+    included_output = tmp_path / "included"
+    included = export_dataset(
+        [run_dir],
+        included_output,
+        short_max_tokens=approximate_tokens,
+    )
+    assert included["short_sft_case_count"] == 1
+    assert included["short_max_tokens_unit"] == "approximate_model_tokens"
+    assert included["token_estimate_unit"] == "utf8_bytes"
+
+    holdout_output = tmp_path / "holdout"
+    holdout = export_dataset(
+        [run_dir],
+        holdout_output,
+        short_max_tokens=max(1, approximate_tokens - 1),
+    )
+    assert holdout["short_sft_case_count"] == 0
 
 
 def test_cross_case_source_families_exclude_domain_fallbacks() -> None:

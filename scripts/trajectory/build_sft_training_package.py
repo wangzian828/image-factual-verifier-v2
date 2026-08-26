@@ -39,7 +39,10 @@ for import_root in (REPO_ROOT, TRAINING_ROOT):
     if str(import_root) not in sys.path:
         sys.path.insert(0, str(import_root))
 
-from scripts.trajectory.export_dataset import export_dataset
+from scripts.trajectory.export_dataset import (
+    DEFAULT_SHORT_TRAJECTORY_MAX_TOKENS,
+    export_dataset,
+)
 from src.eval.score_sft_eligibility import (
     _run as run_sft_eligibility,
 )
@@ -158,23 +161,18 @@ def _build_default_case_split(
 
 
 def _effective_short_max_tokens(release_path: Path, requested: int | None) -> int:
-    """Return a budget that keeps every accepted episode in this package.
+    """Return the formal maximum length for converted training rows.
 
     The canonical exporter calls rows above this budget ``long_holdout`` and
-    excludes them from the converted ms-swift files.  A package produced by
-    this entry point is explicitly the complete accepted SFT result, so its
-    default is to include all accepted rows.  A positive explicit value still
-    allows callers to request the old short/holdout behavior.
+    excludes them from the converted ms-swift files.  A positive explicit
+    value still allows callers to request a narrower short/holdout split.
     """
 
     if requested is not None and requested > 0:
         return requested
-    rows = _load_jsonl(release_path / "selected_episodes.jsonl")
-    estimates = [
-        int(row.get("trajectory_token_count_estimate", 0) or 0)
-        for row in rows
-    ]
-    return max([32768, *estimates]) + 1
+    # Keep the formal admission gate at 128K approximate model tokens.
+    # Episodes above it remain preserved in long_holdout.jsonl.
+    return DEFAULT_SHORT_TRAJECTORY_MAX_TOKENS
 
 
 def _assert_new_or_empty(path: Path) -> None:
@@ -568,7 +566,7 @@ This directory is the complete output of the frozen-teacher SFT pipeline:
 - `ms-swift-policy/`: primary Agent SFT input. Use this directory with the existing `training/scripts/train/run_sft.sh` flow.
 - `ms-swift-perception/`: optional independent perception SFT input.
 
-The policy dataset contains {counts['policy_rows']} complete episode row(s), and the perception dataset contains {counts['perception_rows']} row(s). Each policy row is one complete episode; this package does not use the legacy step-level `policy_trajectories.jsonl` format.
+The policy dataset contains {counts['policy_rows']} complete episode row(s), and the perception dataset contains {counts['perception_rows']} row(s). Each policy row is one complete episode; this package does not use the legacy step-level `policy_trajectories.jsonl` format. Episodes above the 128K approximate-token admission gate remain in `accepted-dataset/long_holdout.jsonl` and are not converted into the direct training files.
 
 ## Reproducibility and audit artifacts
 
@@ -741,8 +739,8 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help=(
-            "optional short-trajectory budget; default includes every accepted "
-            "episode in the converted training files"
+            "optional short-trajectory budget in approximate model tokens; "
+            "default is 131072 and longer episodes remain in long_holdout.jsonl"
         ),
     )
     parser.add_argument(

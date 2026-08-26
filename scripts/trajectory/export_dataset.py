@@ -25,7 +25,10 @@ from src.trajectory.exporter import export_trajectory_sft_example
 
 SPLITS = ("train", "validation", "test")
 ACCEPTED_RELEASE_SCHEMA = "ifv-accepted-teacher-release-v2"
-DEFAULT_SHORT_TRAJECTORY_MAX_TOKENS = 32768
+# The provider-neutral exporter stores a UTF-8 byte estimate.  The admission
+# budget below is expressed in conservative approximate model tokens.
+UTF8_BYTES_PER_APPROX_TOKEN = 4
+DEFAULT_SHORT_TRAJECTORY_MAX_TOKENS = 131072
 DETERMINISTIC_FATAL_TEACHER_REASONS = frozenset(
     {
         "incorrect_result",
@@ -793,13 +796,17 @@ def export_dataset(
         metadata = episode_metadata[episode_id]
         split = split_by_episode[episode_id]
         trajectory = trajectory_by_episode[episode_id]
-        is_short = trajectory.token_count_estimate <= short_max_tokens
+        approximate_tokens = (
+            trajectory.token_count_estimate + UTF8_BYTES_PER_APPROX_TOKEN - 1
+        ) // UTF8_BYTES_PER_APPROX_TOKEN
+        is_short = approximate_tokens <= short_max_tokens
         accepted_row = {
             **metadata,
             "split": split,
             "split_group_id": group_by_episode[episode_id],
             "sft_route": "short_sft" if is_short else "long_holdout",
             "short_max_tokens": short_max_tokens,
+            "trajectory_approx_tokens": approximate_tokens,
         }
         metadata_rows.append(accepted_row)
         accepted_episode_rows.append(
@@ -883,6 +890,8 @@ def export_dataset(
         ),
         "seed": seed,
         "short_max_tokens": short_max_tokens,
+        "short_max_tokens_unit": "approximate_model_tokens",
+        "token_estimate_unit": "utf8_bytes",
         "split_ratios": (
             None
             if require_frozen_gates
