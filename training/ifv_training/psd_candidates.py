@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from collections import Counter
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -91,6 +92,73 @@ def _assert_public(value: Any, *, path: str = "") -> None:
             _assert_public(child, path=f"{path}[{index}]")
 
 
+def _int_list(value: Any) -> list[int]:
+    if not isinstance(value, list) or not value:
+        return []
+    result: list[int] = []
+    for item in value:
+        if isinstance(item, bool):
+            return []
+        try:
+            result.append(int(item))
+        except (TypeError, ValueError):
+            return []
+    return result
+
+
+def _float_list(value: Any) -> list[float]:
+    if not isinstance(value, list) or not value:
+        return []
+    result: list[float] = []
+    for item in value:
+        if isinstance(item, bool):
+            return []
+        try:
+            parsed = float(item)
+        except (TypeError, ValueError):
+            return []
+        if not math.isfinite(parsed):
+            return []
+        result.append(parsed)
+    return result
+
+
+def _policy_token_capture(metadata: Mapping[str, Any]) -> dict[str, Any]:
+    """Keep only a complete numeric Qwen capture for later PSD token binding."""
+
+    raw = metadata.get("policy_token_capture")
+    if not isinstance(raw, Mapping):
+        return {
+            "status": "missing",
+            "missing": ["policy_token_capture"],
+        }
+    prompt_token_ids = _int_list(raw.get("prompt_token_ids"))
+    completion_token_ids = _int_list(raw.get("completion_token_ids"))
+    completion_logprobs = _float_list(raw.get("completion_logprobs"))
+    missing: list[str] = []
+    if _text(raw.get("status")) != "complete":
+        missing.append("capture_status_not_complete")
+    if not prompt_token_ids:
+        missing.append("prompt_token_ids")
+    if not completion_token_ids:
+        missing.append("completion_token_ids")
+    if not completion_logprobs:
+        missing.append("completion_logprobs")
+    elif len(completion_logprobs) != len(completion_token_ids):
+        missing.append("completion_logprob_length_mismatch")
+    if missing:
+        return {
+            "status": "incomplete",
+            "missing": sorted(set(missing)),
+        }
+    return {
+        "status": "complete",
+        "prompt_token_ids": prompt_token_ids,
+        "completion_token_ids": completion_token_ids,
+        "completion_logprobs": completion_logprobs,
+    }
+
+
 def _stable_step_id(
     *,
     episode_id: str,
@@ -151,6 +219,7 @@ def _policy_steps(
                 "protocol_rejected": protocol_rejected,
                 "model_visible": {"policy_input": dict(policy_input)},
                 "observed_policy_action": dict(policy_action),
+                "rollout_token_capture": _policy_token_capture(metadata),
             }
         )
     return projected
@@ -313,6 +382,7 @@ def build_psd_candidate_package(
     repair_candidates: list[dict[str, Any]] = []
     preservation_candidates: list[dict[str, Any]] = []
     engineering_requeue: list[dict[str, Any]] = []
+    token_capture_requeue: list[dict[str, Any]] = []
     rejections: list[dict[str, Any]] = []
     source = _source_metadata(run_manifest)
 
@@ -404,6 +474,23 @@ def build_psd_candidate_package(
             "source_trace_sha256": trace_sha256,
         }
         if classification_correct and strict_audit_pass:
+            incomplete_steps = [
+                step["step_id"]
+                for step in steps
+                if step["rollout_token_capture"]["status"] != "complete"
+            ]
+            if incomplete_steps:
+                token_capture_requeue.append(
+                    {
+                        "schema_version": PSD_CANDIDATE_SCHEMA_VERSION,
+                        "case_id": case_id,
+                        "episode_id": episode_id,
+                        "queue_reason": "missing_policy_token_capture",
+                        "incomplete_step_ids": incomplete_steps,
+                        "source": trace_source,
+                    }
+                )
+                continue
             preservation_candidates.append(
                 {
                     "schema_version": PSD_CANDIDATE_SCHEMA_VERSION,
@@ -433,6 +520,18 @@ def build_psd_candidate_package(
             repair_signal, repair_site = "strict_trace_audit_failure", steps[-1]
         else:
             repair_signal, repair_site = "terminal_outcome_mismatch", steps[-1]
+        if repair_site["rollout_token_capture"]["status"] != "complete":
+            token_capture_requeue.append(
+                {
+                    "schema_version": PSD_CANDIDATE_SCHEMA_VERSION,
+                    "case_id": case_id,
+                    "episode_id": episode_id,
+                    "queue_reason": "missing_policy_token_capture",
+                    "incomplete_step_ids": [repair_site["step_id"]],
+                    "source": trace_source,
+                }
+            )
+            continue
 
         repair_candidates.append(
             {
@@ -472,6 +571,7 @@ def build_psd_candidate_package(
         preservation_candidates,
     )
     write_jsonl(output_dir / "engineering_requeue.jsonl", engineering_requeue)
+    write_jsonl(output_dir / "token_capture_requeue.jsonl", token_capture_requeue)
     write_jsonl(output_dir / "rejections.jsonl", rejections)
     manifest = {
         "schema_version": PSD_CANDIDATE_MANIFEST_SCHEMA_VERSION,
@@ -487,6 +587,7 @@ def build_psd_candidate_package(
             "repair_candidates": len(repair_candidates),
             "preservation_candidates": len(preservation_candidates),
             "engineering_requeue": len(engineering_requeue),
+            "token_capture_requeue": len(token_capture_requeue),
             "rejections": len(rejections),
         },
         "repair_signals": dict(
@@ -500,6 +601,7 @@ def build_psd_candidate_package(
             "repair_candidates": "repair_candidates.jsonl",
             "preservation_candidates": "preservation_candidates.jsonl",
             "engineering_requeue": "engineering_requeue.jsonl",
+            "token_capture_requeue": "token_capture_requeue.jsonl",
             "rejections": "rejections.jsonl",
         },
         "status": (

@@ -25,6 +25,14 @@ def _trace(
     rejected: bool = False,
     private: bool = False,
 ) -> dict:
+    capture = {
+        "schema_version": "ifv-policy-token-capture-v1",
+        "status": "complete",
+        "prompt_token_ids": [10, 11],
+        "completion_token_ids": [12],
+        "completion_logprobs": [-0.1],
+        "missing": [],
+    }
     policy_input: dict[str, object] = {
         "system_instruction": "Decide the next action.",
         "input_payload": {"events": [{"type": "observation", "id": "obs-1"}]},
@@ -39,6 +47,7 @@ def _trace(
             "interaction_id": "planning-1",
             "policy_input": policy_input,
             "policy_action": {"type": "planning", "claims": []},
+            "policy_token_capture": capture,
         },
     }
     judgment = {
@@ -53,6 +62,7 @@ def _trace(
                 "tools": [],
             },
             "policy_action": {"verdict": "real"},
+            "policy_token_capture": capture,
         },
     }
     return {
@@ -162,6 +172,7 @@ def test_build_psd_candidate_package_separates_public_queues(
         "preservation_candidates": 1,
         "engineering_requeue": 1,
         "rejections": 2,
+        "token_capture_requeue": 0,
     }
     repairs = [
         json.loads(line)
@@ -209,3 +220,51 @@ def test_build_psd_candidate_package_separates_public_queues(
         "source_split_forbidden:test",
         "trace_rejected:private/evaluator field in policy snapshot: policy_input.evaluation_gold",
     }
+
+
+def test_build_psd_candidate_package_requeues_old_trace_without_capture(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "run"
+    trace = _trace(case_id="old")
+    for step in trace["state"]["all_steps"]:
+        step["metadata"].pop("policy_token_capture")
+    _write_json(run_dir / "traces" / "episode-old.json", trace)
+    _write_jsonl(
+        run_dir / "rollout_groups.jsonl",
+        [{"episode_id": "episode-old", "trace_path": "traces/episode-old.json"}],
+    )
+    _write_jsonl(
+        run_dir / "post_rollout_rewards.jsonl",
+        [
+            {
+                "case_id": "old",
+                "episode_id": "episode-old",
+                "classification_correct": True,
+                "fatal_engineering_error": False,
+                "strict_trace_audit_pass": True,
+            }
+        ],
+    )
+    train_cases = tmp_path / "train-cases.jsonl"
+    _write_jsonl(train_cases, [{"case_id": "old", "split": "train"}])
+
+    output = tmp_path / "candidates"
+    manifest = build_psd_candidate_package(
+        run_dir=run_dir,
+        train_cases_path=train_cases,
+        output_dir=output,
+    )
+
+    assert manifest["counts"]["preservation_candidates"] == 0
+    assert manifest["counts"]["token_capture_requeue"] == 1
+    queue = json.loads(
+        (output / "token_capture_requeue.jsonl").read_text(
+            encoding="utf-8"
+        ).splitlines()[0]
+    )
+    assert queue["queue_reason"] == "missing_policy_token_capture"
+    assert queue["incomplete_step_ids"] == [
+        "episode-old:planning:planning-1",
+        "episode-old:judgment:judgment-1",
+    ]

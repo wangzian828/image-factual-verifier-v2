@@ -62,6 +62,8 @@ repair proposer 可以看到 private gold；Qwen 部署策略和最终 student p
 - hint 泄漏审计；
 - 从 postprocessed Qwen rollout 的真实 `policy_input` / `policy_action` / `interaction_id`
   建立 repair seed、base-pass preservation、工程错误重跑和拒绝账本；
+- 未保存完整 Qwen token capture 的旧 trace 不可作为 PSD 数据，单独进入
+  `token_capture_requeue`，不能靠重新编码推断成“真实 on-policy prefix”；
 - repair/preservation target 构造；
 - top-k target 结构校验；
 - top-k cache 与 target/token hash 的严格绑定；缓存不完整或错配时不产出可训练
