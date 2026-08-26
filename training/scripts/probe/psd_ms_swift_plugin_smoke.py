@@ -40,7 +40,9 @@ def main() -> None:
     template = template_cls.__new__(template_cls)
     template.padding_free = False
     template.sequence_parallel_size = 1
-    template.tokenizer = SimpleNamespace(pad_token_id=0)
+    template.processor = SimpleNamespace(
+        tokenizer=SimpleNamespace(pad_token_id=0)
+    )
     raw_rows = [
         {
             "input_ids": [1, 2, 3],
