@@ -9,6 +9,9 @@ from .contracts import assert_model_visible
 from .io import load_json, load_jsonl, sha256_file
 
 
+GEMINI_WIRE_PROTOCOL_MARKER = "Native Gemini Interactions protocol:"
+
+
 def _audit_message(message: Any, location: str) -> None:
     if not isinstance(message, Mapping):
         raise ValueError(f"{location} must be an object")
@@ -63,7 +66,10 @@ def audit_derived_dataset(dataset_dir: Path) -> dict[str, Any]:
                             raise FileNotFoundError(
                                 f"{location} image is unavailable: {image}"
                             )
-                if "Gemini Interactions" in json.dumps(row, ensure_ascii=False):
+                if GEMINI_WIRE_PROTOCOL_MARKER in json.dumps(
+                    row,
+                    ensure_ascii=False,
+                ):
                     raise ValueError(
                         f"{location} contains provider wire instructions"
                     )

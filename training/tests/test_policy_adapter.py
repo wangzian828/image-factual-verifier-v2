@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from ifv_training.audit import audit_derived_dataset
-from ifv_training.io import write_json, write_jsonl
+from ifv_training.io import sha256_file, write_json, write_jsonl
 from ifv_training.policy import convert_policy_dataset, convert_policy_row
 
 
@@ -174,6 +174,66 @@ def test_dataset_conversion_is_deterministic_and_auditable(
     assert audit["passed"] is True
     for path in first.iterdir():
         assert path.read_bytes() == (second / path.name).read_bytes()
+
+
+def test_audit_allows_provider_error_observation_but_rejects_wire_prompt(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    write_json(
+        source / "manifest.json",
+        {
+            "dataset_version": "ifv-trajectory-sft-dataset-v2",
+            "schema_version": "ifv-trajectory-sft-dataset-manifest-v1",
+        },
+    )
+    row = _trajectory_row()
+    row["messages"][3]["content"] = json.dumps(
+        {
+            "function_call_id": "call-1",
+            "tool": "text_search",
+            "arguments": {},
+            "result": {
+                "status": "error",
+                "error": (
+                    "Gemini Interactions request failed with HTTP 500; "
+                    "retry later"
+                ),
+            },
+        }
+    )
+    write_jsonl(source / "train.jsonl", [row])
+    write_jsonl(source / "validation.jsonl", [])
+    write_jsonl(source / "test.jsonl", [])
+    output = tmp_path / "output"
+    convert_policy_dataset(source, output)
+
+    assert audit_derived_dataset(output)["passed"] is True
+
+    converted_rows = [
+        json.loads(line)
+        for line in (output / "train.jsonl").read_text(
+            encoding="utf-8"
+        ).splitlines()
+        if line.strip()
+    ]
+    converted_rows[0]["messages"][0]["content"] += (
+        "\nNative Gemini Interactions protocol:\nprovider-only details"
+    )
+    write_jsonl(output / "train.jsonl", converted_rows)
+    manifest_path = output / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["artifacts"]["train"]["sha256"] = sha256_file(
+        output / "train.jsonl"
+    )
+    write_json(manifest_path, manifest)
+
+    audit = audit_derived_dataset(output)
+    assert audit["passed"] is False
+    assert audit["errors"] == [
+        "train.jsonl[0] contains provider wire instructions"
+    ]
 
 
 def test_v1_dataset_is_not_silently_accepted(tmp_path: Path) -> None:
