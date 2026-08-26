@@ -47,6 +47,7 @@ from src.orchestrator.tool_execution import (
     run_tool_with_timeout,
 )
 from src.orchestrator.source_access import SourceAccessPolicy
+from src.orchestrator.source_provenance import canonicalize_url
 from src.tools.base import BaseTool
 from src.tools.vision_utils import controlled_image_to_data_url
 
@@ -1234,6 +1235,12 @@ class StageRunner:
                         tool_name,
                         dict(tool_args),
                     )
+                    native_args, runtime_repairs = (
+                        self._normalize_runtime_tool_args(
+                            tool_name,
+                            native_args,
+                        )
+                    )
                     prepared_args = self._prepare_tool_args(
                         tool_name,
                         dict(native_args),
@@ -1264,6 +1271,8 @@ class StageRunner:
                     )
                     if call_index > 0:
                         step.metadata.pop("llm_duration_ms", None)
+                    if runtime_repairs:
+                        step.metadata["runtime_argument_repairs"] = runtime_repairs
 
                     error_message = ""
                     if tool_name not in self.tools:
@@ -1852,19 +1861,32 @@ class StageRunner:
         tool = self.tools.get(tool_name)
         if tool is None:
             return self._unknown_tool_message(tool_name)
+        validation_args, _ = self._normalize_runtime_tool_args(
+            tool_name,
+            tool_args,
+        )
         schema = next(
             item["parameters"]
             for item in self._build_native_tool_schemas()
             if item["name"] == tool_name
         )
         properties = schema.get("properties", {}) or {}
-        unknown = sorted(set(tool_args) - set(properties))
+        unknown = sorted(set(validation_args) - set(properties))
         if unknown:
             return f"Unknown argument(s) for {tool_name}: {', '.join(unknown)}"
-        missing = [name for name in schema.get("required", []) if name not in tool_args]
+        missing = [
+            name
+            for name in schema.get("required", [])
+            if name not in validation_args
+            and not (
+                tool_name == "crop_and_inspect"
+                and str(validation_args.get("visual_question_id", "")).strip()
+                and name in {"bbox", "focus_question"}
+            )
+        ]
         if missing:
             return f"Missing required argument(s) for {tool_name}: {', '.join(missing)}"
-        for name, value in tool_args.items():
+        for name, value in validation_args.items():
             error = self._validate_schema_value(
                 value,
                 properties.get(name, {}),
@@ -1875,10 +1897,10 @@ class StageRunner:
         for name, allowed_values in (
             self.tool_argument_constraints.get(tool_name, {}).items()
         ):
-            if name not in tool_args or not allowed_values:
+            if name not in validation_args or not allowed_values:
                 continue
             allowed = list(dict.fromkeys(allowed_values))
-            value = tool_args[name]
+            value = validation_args[name]
             if isinstance(value, list):
                 for index, item in enumerate(value):
                     if item not in allowed:
@@ -1893,6 +1915,55 @@ class StageRunner:
                     + ", ".join(str(candidate) for candidate in allowed)
                 )
         return ""
+
+    def _normalize_runtime_tool_args(
+        self,
+        tool_name: str,
+        tool_args: Dict[str, Any],
+    ) -> Tuple[Dict[str, Any], List[Dict[str, str]]]:
+        """Canonicalize harmless model variants of runtime-owned URLs.
+
+        Dynamic visit candidates are runtime-owned, but models may return an
+        equivalent spelling such as a trailing slash. Match only against the
+        existing candidate set; never invent or broaden a URL.
+        """
+
+        normalized = dict(tool_args)
+        if tool_name != "visit":
+            return normalized, []
+        allowed_values = (
+            self.tool_argument_constraints.get("visit", {}).get("url", [])
+        )
+        if not allowed_values or "url" not in normalized:
+            return normalized, []
+        raw_value = normalized.get("url")
+        is_list = isinstance(raw_value, list)
+        values = raw_value if is_list else [raw_value]
+        canonical_allowed = {
+            canonicalize_url(str(candidate)): str(candidate).strip()
+            for candidate in allowed_values
+            if canonicalize_url(str(candidate))
+        }
+        repairs: List[Dict[str, str]] = []
+        output: List[Any] = []
+        for value in values:
+            original = str(value).strip()
+            canonical = canonicalize_url(original)
+            replacement = canonical_allowed.get(canonical, "")
+            if replacement and replacement != original:
+                output.append(replacement)
+                repairs.append(
+                    {
+                        "field": "url",
+                        "from": original,
+                        "to": replacement,
+                        "reason": "canonical_url_equivalence",
+                    }
+                )
+            else:
+                output.append(value)
+        normalized["url"] = output if is_list else output[0]
+        return normalized, repairs
 
     @classmethod
     def _validate_schema_value(

@@ -6,7 +6,10 @@ from src.orchestrator.image_only_prompts import (
     REACT_SYSTEM_PROMPT,
     TARGET_PLANNING_SYSTEM_PROMPT,
 )
-from src.orchestrator.evidence_policy import neutralize_planning_route_text
+from src.orchestrator.evidence_policy import (
+    neutralize_planning_route_text,
+    text_targets_verdict_or_media_origin,
+)
 
 
 def test_hot_path_prompts_stay_semantic_and_compact() -> None:
@@ -89,18 +92,29 @@ def test_hot_path_prompts_stay_semantic_and_compact() -> None:
         image_account_prompt
     )
     assert "AI-generation, manipulation, authenticity" in image_account_prompt
-    assert "source image, exact capture, creator, platform" in image_account_prompt
-    assert "Rewrite such a route around the underlying subject" in (
+    assert "Identity, place, date, creator, platform, publication" in (
         image_account_prompt
     )
-    assert "prohibited token such as ``AI``" in image_account_prompt
+    assert "not target facts or verdict grounds" in image_account_prompt
     assert (
         neutralize_planning_route_text("AI Governance Framework")
-        == "Governance Framework"
+        == "AI Governance Framework"
     )
     assert (
         neutralize_planning_route_text("AI for Science Fund")
-        == "Science Fund"
+        == "AI for Science Fund"
+    )
+    assert not text_targets_verdict_or_media_origin(
+        "Find the original creator and publication date for the depicted event"
+    )
+    assert not text_targets_verdict_or_media_origin(
+        "Find the AI Governance Framework named in the visible title"
+    )
+    assert text_targets_verdict_or_media_origin(
+        "Determine whether the image was AI generated"
+    )
+    assert text_targets_verdict_or_media_origin(
+        "Find a fact check saying the image is fake"
     )
     assert "Return one JSON object matching the response schema" in (
         image_account_prompt

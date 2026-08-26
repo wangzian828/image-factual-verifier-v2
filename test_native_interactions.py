@@ -1000,6 +1000,39 @@ def test_native_tool_schema_constrains_array_items() -> None:
     )
 
 
+def test_native_visit_accepts_equivalent_runtime_url_and_records_repair() -> None:
+    runner = StageRunner(
+        llm=NativeFakeBackend([]),
+        system_prompt="Inspect the selected candidate.",
+        tools=[VisitTool()],
+        stage_name="verification",
+        tool_argument_constraints={
+            "visit": {
+                "url": ["https://example.org/pending"],
+            }
+        },
+    )
+    runner.active_question_ids = ["q0"]
+    args = {
+        "question_id": "q0",
+        "url": ["https://EXAMPLE.org/pending/"],
+        "image_claim": "The depicted event occurred as shown.",
+        "retrieval_goal": "Find the source event.",
+    }
+
+    assert runner._validate_native_tool_args("visit", args) == ""
+    normalized, repairs = runner._normalize_runtime_tool_args("visit", args)
+    assert normalized["url"] == ["https://example.org/pending"]
+    assert repairs == [
+        {
+            "field": "url",
+            "from": "https://EXAMPLE.org/pending/",
+            "to": "https://example.org/pending",
+            "reason": "canonical_url_equivalence",
+        }
+    ]
+
+
 def test_native_tool_schema_drops_large_dynamic_array_enum() -> None:
     allowed_urls = [
         f"https://example.org/pending-{index}"

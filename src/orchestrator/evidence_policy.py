@@ -97,41 +97,40 @@ def query_policy_violation(
 
 
 def text_targets_verdict_or_media_origin(value: str) -> bool:
-    """Detect route text that presupposes verdict/media-origin classification."""
+    """Detect route text that heads toward generation or ready-made verdicts.
+
+    Identity, date, creator, platform, publication, reference-image, and source
+    record terms can be useful retrieval context.  They are blocked here only
+    when the route turns them into an image-generation/authenticity investigation.
+    """
 
     text = re.sub(r"[-_]+", " ", str(value or "").casefold())
     return bool(
         query_targets_fact_check_answer(text)
-        or re.search(r"\b(?:ai|a i|midjourney|dall\s*e|stable\s+diffusion)\b", text)
         or re.search(
-            r"\b(?:ai\s+generated|generated\s+by\s+ai|synthetic|computer\s+generated|digitally\s+generated)\b",
+            r"\b(?:ai\s+generated|generated\s+by\s+ai|computer\s+generated|digitally\s+generated|generative\s+ai)\b",
             text,
         )
         or re.search(
-            r"\b(?:real\s+or\s+fake|fake\s+or\s+real|authenticity|creation\s+method|generation\s+source)\b",
+            r"\b(?:midjourney|dall\s*e|stable\s+diffusion|image\s+generator|generation\s+source|creation\s+method)\b",
             text,
         )
         or re.search(
-            r"\b(?:original\s+creator|publication\s+context|platform\s+of\s+publication|media\s+background|generation\s+context)\b",
+            r"\b(?:real\s+or\s+fake|fake\s+or\s+real|image\s+authenticity|photo\s+authenticity|photograph\s+authenticity|authenticity\s+of\s+(?:the\s+)?image|image\s+generation|photo\s+generation|image\s+manipulation|digitally\s+manipulated)\b",
             text,
         )
     )
 
 
 def neutralize_planning_route_text(value: str) -> str:
-    """Remove prohibited AI-generation wording from a factual route.
+    """Normalize route text without deleting legitimate identity terms.
 
-    ``AI`` can be part of a legitimate on-image title such as ``AI Governance
-    Framework``.  Planning routes must not carry that token because it is also
-    the marker used to reject generation-method/provenance searches.  Keep the
-    remaining distinctive factual words so the route remains searchable.
+    Policy checks run on the resulting text and reject a prohibited route as a
+    whole.  We intentionally do not strip bare ``AI`` or source metadata: those
+    may be part of the subject or useful retrieval context.
     """
 
-    text = str(value or "")
-    text = re.sub(r"\b(?:ai|a\s+i)\s+for\s+", "", text, flags=re.IGNORECASE)
-    text = re.sub(r"\b(?:ai|a\s+i)\b", "", text, flags=re.IGNORECASE)
-    text = re.sub(r"\s{2,}", " ", text)
-    return text.strip(" \t\r\n-:;,")
+    return " ".join(str(value or "").split()).strip(" \t\r\n-:;,")
 
 
 def goal_has_as_of_constraint(goal: str) -> bool:

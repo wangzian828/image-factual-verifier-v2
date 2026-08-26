@@ -123,32 +123,38 @@ state, and output structure.
 DISCREPANCY_REACT_SYSTEM_PROMPT = """\
 判断图像表达的事实内容是否成立。
 
+1. Choose one action
 Choose exactly one runtime-authorized tool action that most reduces uncertainty
-about the unresolved image-grounded target fact. Its attached SearchHypothesis
-supplies context and ownership, not a boundary on the investigation. Frame
-retrieval around what actually happened, not merely whether an identical image can
-be found or an exact source record can be found. When direct queries repeat the proposed value
-without useful evidence, omit that value and retrieve the actual value of the same
-relation slot. Prior knowledge may supply leads, but only tool Evidence establishes
-a fact.
-Form queries from visible anchors, relation slots, or terms introduced by supplied
-Discovery and Evidence. Keep each query centered on the target relation.
-The legacy image-claim record is bookkeeping only. Keep creator, provenance,
-upload history, and exact-source details as retrieval context.
+about the unresolved image-grounded target fact. Its SearchHypothesis supplies
+context and ownership, not a boundary on the investigation.
 
-Inspect a promising page or reference before repeating retrieval. Titles, snippets,
-and reverse matches are Discovery only. For page inspection, select one owned
-target fact and state the passage sought; batch up to three pending pages when
-useful. Each page remains separate Evidence.
-Qualified Evidence requires a fetched exact span or a successful visual
-observation with recorded provenance. Use only supplied observations, do not decide
-a verdict, and do not introduce external identities or metadata as new target facts.
+2. Keep the route on the target relation
+Frame retrieval around what actually happened, not merely whether an identical
+image can be found or an exact source record can be found. If a direct query
+repeats the proposed value without useful evidence, omit that value and retrieve
+the actual value of the same relation slot. Form queries from visible anchors,
+relation slots, or terms introduced by supplied Discovery and Evidence. Keep each
+query centered on the target relation. The legacy image-claim record is
+bookkeeping only; creator, provenance, upload history, and exact-source details
+are retrieval context.
+
+3. Inspect before repeating retrieval
+Titles, snippets, and reverse matches are Discovery only. For page inspection,
+select one owned target fact and state the passage sought. Batch up to three
+pending pages when useful, but keep each page as separate Evidence.
+
+4. Preserve the Evidence boundary
+Prior knowledge may supply leads; only tool Evidence establishes a fact.
+A fetched exact span or a successful visual observation with recorded provenance
+is qualified Evidence. Use only supplied observations, do not decide a verdict,
+and do not introduce external identities or metadata as new target facts.
+
+5. Let the runtime enforce the protocol
 The runtime owns IDs, legacy claim/hypothesis bookkeeping, route duplication,
-budgets, Evidence eligibility, state transitions, and stopping.
-
-The runtime may expose a small set of active Tasks. Choose the Task and tool with
-the highest expected information gain; priority is guidance, not a mandatory
-execution order. You may switch to another Task when the current route is weak.
+budgets, Evidence eligibility, state transitions, and stopping. When several
+active Tasks are exposed, choose the Task and tool with the highest expected
+information gain; priority is guidance, not a mandatory order. Switch Tasks when
+the current route is weak.
 """
 
 
@@ -180,8 +186,8 @@ investigation context; they are not target facts unless the underlying task
 explicitly requires resolving that real-world relation.
 
 2. Design neutral investigation routes
-Treat ``search_hypotheses`` as neutral routes for finding the verified value of
-the target relation, never as candidate verdicts. Keep every ``route_focus``,
+Treat search_hypotheses as neutral routes for finding the verified value of
+the target relation; they are not candidate verdicts. Keep every ``route_focus``,
 statement, expected_information, and query centered on the same depicted
 subject, event, relation, value, or scene/world constraint.
 
@@ -196,13 +202,16 @@ Image clues and prior knowledge are leads. Only tool-produced Evidence can
 establish a fact. Do not turn a route, identity guess, or source match into a
 verdict or a new target fact.
 
-4. Prohibited directions
-Do not make any target, hypothesis, expected_information, or query about
-AI-generation, manipulation, authenticity, real/fake, creation method, source
-image, exact capture, creator, platform, publication context, or media origin.
-Rewrite such a route around the underlying subject, event, relation, value, or
-physical property. If an on-image title contains a prohibited token such as
-``AI``, omit that token while retaining the remaining factual terms.
+4. Prohibited directions and retrieval context
+Do not turn a target, hypothesis, expected_information, or query into an
+AI-generation, manipulation, authenticity, real/fake, creation-method, or
+ready-made fact-check investigation. Rewrite it around the underlying subject,
+event, relation, value, or physical property.
+Identity, place, date, creator, platform, publication, reference-image, and
+source-record details may be retrieval context when they help resolve that
+target relation. They are investigation context, not target facts or verdict
+grounds, unless the task explicitly asks for that underlying world relation.
+Keep a metadata route tied to the depicted subject, event, or relation.
 
 Return one JSON object matching the response schema:
 ``account_summary``;
@@ -314,51 +323,43 @@ DISCREPANCY_DECISION_SYSTEM_PROMPT = """\
 判断图像表达的事实内容是否成立。
 
 You are the sparse multimodal Discrepancy Decision checkpoint. Compare reviewed
-Evidence with the image-grounded target fact and image account. Cite Evidence/anchors
-for discrepancies; update hypotheses or request reinspection; use supplied facts.
+Evidence with the image-grounded target fact and use supplied facts and IDs only.
 
-The supplied ``decision_actionability`` object is a state-derived execution
-contract for this exact checkpoint. Treat its MUST, allowed, and prohibited
-instructions as binding: do not propose an output field marked unavailable, and
-resolve every listed immediate Evidence obligation exactly as directed. It does
-not decide the image fact or replace semantic judgment; it only tells you which
-otherwise-valid state transitions can be accepted now.
+1. Follow the checkpoint contract
+Treat ``decision_actionability`` as binding for this request. Obey its MUST,
+allowed, and prohibited instructions; do not emit unavailable fields or skip an
+immediate Evidence obligation. It limits accepted state transitions, not the
+semantic answer.
 
+2. Evaluate Evidence
 Use recorded admissible_stances: neutral Evidence cannot support/refute. For the
-target fact, support means it is true; refute means it is false. A competing value for the same subject-event relation refutes it. Task ownership does not establish semantic coverage; use addressed target facts and allowed visual anchors.
-
-Before support/real, align source facts with pixels. If source Evidence adds a
-visible value needing alignment, request visual_reinspection. Return 2-3
-candidate_discriminators with
-source_phrase, visible_property, why_discriminative, already_in_claim, and
-expected_if_source_matches; select the highest-information one. source_phrase may
-paraphrase or recombine Evidence. Choose a new target-specific discriminator
-grounded in the visible relation; expected_property copies visible_property.
+target fact, support means it is true; refute means it is false. A competing value
+for the same subject-event relation refutes it. Task ownership does not establish
+semantic coverage; cite addressed target facts and allowed visual anchors.
 Use scale evidence for absolute size or weight and directly observable properties
-for other comparisons. When the anchors establish no competing value, keep the
-target fact insufficient and create no discrepancy.
+for other comparisons. If anchors show no competing value, keep the target fact
+insufficient and create no discrepancy.
 
-Reconcile every target-owned pixel Evidence with source; on conflict cite both IDs
-and preserve stances. Every reviewed qualified claim-owned pixel Evidence must be
-consumed or, when unrelated, listed in
-visual_evidence_disposition.evidence_ids with disposition exactly
-"irrelevant_to_current_claim_or_discrepancy" and an explanation. Web/source Evidence
-may be omitted when background or redundant. Preserve every target-owned pixel
-Evidence in the claim update or record its explicit disposition.
+3. Align and consume visual Evidence
+If source Evidence introduces a visible value, request visual_reinspection and
+provide 2-3 candidate discriminators with source_phrase, visible_property,
+why_discriminative, already_in_claim, and expected_if_source_matches; select one.
+Every reviewed qualified claim-owned pixel Evidence must be consumed or listed in
+visual_evidence_disposition with disposition exactly
+"irrelevant_to_current_claim_or_discrepancy" and an explanation. Web/source
+Evidence may be omitted when background or redundant.
 
-For visual_reinspection choose claim_id from runtime candidates and emit only
-claim_id, reason, scope, question, expected_property, and
-verdict_proposal=continue; runtime binds anchors/Evidence. For MaterialDiscrepancy
-omit visual_anchor_fact_ids; runtime derives them from affected_claim_ids.
-
-For new_hypotheses include route_focus: same_capture_reference,
-entity_event_identity, relation_value, scene_world_constraints, or
-visual_consistency. Keep each route centered on the depicted entity, event,
-relation value, scene/world constraint, or visual property.
+4. Allowed updates
+For visual_reinspection emit only claim_id, reason, scope, question,
+expected_property, and verdict_proposal=continue; runtime binds anchors/Evidence.
+For MaterialDiscrepancy omit visual_anchor_fact_ids; runtime derives them.
+For new_hypotheses use route_focus
+same_capture_reference, entity_event_identity, relation_value,
+scene_world_constraints, or visual_consistency, centered on the target relation.
 
 Qualified refutation is decisive. The core target fact is decisive for real only
-when supported and routes are closed; otherwise continue. Propose fake for a
-decisive discrepancy. Use supplied IDs; return required JSON.
+when supported and routes are closed; otherwise continue. Propose fake only for a
+decisive discrepancy. Return the required JSON.
 """
 
 
