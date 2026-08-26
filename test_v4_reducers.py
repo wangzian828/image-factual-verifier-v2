@@ -121,7 +121,7 @@ def _planning_output() -> ImageAccountPlanningOutput:
 
 def test_image_account_requires_exactly_one_high_salience_claim() -> None:
     payload = _planning_output().model_dump(mode="json")
-    payload["image_claims"].append(
+    payload["target_facts"].append(
         {
             "claim_key": "separate-visible-fragment",
             "statement": "A separate visible label appears in the image.",
@@ -163,13 +163,28 @@ def test_planning_schema_constrains_pixel_anchor_ids() -> None:
 
     parsed = schema.model_validate(payload)
     assert parsed.image_claims[0].anchor_fact_ids == ["fact-visible-person"]
+    planning_properties = schema.model_json_schema()["properties"]
+    assert "target_facts" in planning_properties
+    assert "image_claims" not in planning_properties
 
-    payload["image_claims"][0]["anchor_fact_ids"] = ["vf-not-in-workspace"]
+    payload["target_facts"][0]["anchor_fact_ids"] = ["vf-not-in-workspace"]
     with pytest.raises(
         ValidationError,
         match="Input should be 'fact-visible-person'",
     ):
         schema.model_validate(payload)
+
+
+def test_legacy_image_claims_wire_key_is_read_but_never_serialized() -> None:
+    payload = _planning_output().model_dump(mode="json")
+    payload["image_claims"] = payload.pop("target_facts")
+
+    parsed = ImageAccountPlanningOutput.model_validate(payload)
+
+    assert len(parsed.target_facts) == 1
+    serialized = parsed.model_dump(mode="json")
+    assert "target_facts" in serialized
+    assert "image_claims" not in serialized
 
 
 def test_planning_schema_excludes_media_origin_route() -> None:
@@ -219,7 +234,7 @@ def test_image_account_normalizes_media_wrappers_before_state_commit() -> None:
             "The image asks whether an authentic photograph of the presenter "
             "holding the shown product is being presented."
         ),
-        image_claims=[
+        target_facts=[
             ImageClaimProposal(
                 claim_key="person-product",
                 statement=(

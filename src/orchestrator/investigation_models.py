@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Literal, Optional, Tuple
+from typing import Any, Dict, List, Literal, Mapping, Optional, Tuple
 
 from pydantic import (
+    AliasChoices,
     BaseModel,
     ConfigDict,
     Field,
@@ -38,6 +39,24 @@ class StrictModel(BaseModel):
 
 class FrozenStrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+def target_fact_rows(value: Any) -> List[Mapping[str, Any]]:
+    """Read canonical target facts with compatibility for old trace payloads.
+
+    New traces use ``target_facts``.  ``image_claims`` is accepted only when
+    reading historical JSON; it is never emitted by the current models.
+    """
+
+    if isinstance(value, Mapping):
+        rows = value.get("target_facts")
+        if rows is None:
+            rows = value.get("image_claims")
+    else:
+        rows = value
+    if not isinstance(rows, list):
+        return []
+    return [item for item in rows if isinstance(item, Mapping)]
 
 
 class InvestigationBrief(FrozenStrictModel):
@@ -584,11 +603,12 @@ class SearchHypothesisProposal(StrictModel):
 
 
 class ImageAccountPlanningOutput(StrictModel):
-    """Image target planning with a legacy ``image_claims`` wire field.
+    """Model-facing image target planning output.
 
-    The wire name remains for replay and training-schema compatibility. These
-    rows are semantically image-grounded target-fact bookkeeping, not
-    user-supplied Claims or provenance requirements.
+    ``image_claims`` is accepted only as a legacy input alias so historical
+    traces and old provider responses remain replayable. New schemas and
+    serialized outputs use ``target_facts``. The rows are image-grounded target
+    facts, not provenance records.
     """
 
     account_summary: str = Field(
@@ -599,11 +619,14 @@ class ImageAccountPlanningOutput(StrictModel):
             "resolve; do not state a verdict or provenance conclusion."
         ),
     )
-    image_claims: List[ImageClaimProposal] = Field(
+    target_facts: List[ImageClaimProposal] = Field(
+        validation_alias=AliasChoices("target_facts", "image_claims"),
+        serialization_alias="target_facts",
         min_length=1,
         max_length=3,
         description=(
-            "One to three image-grounded target facts. Exactly one must have "
+            "One to three positive image-grounded target facts. Exactly one "
+            "must have "
             "salience=high; add medium claims only when independently "
             "verdict-changing."
         ),
@@ -619,9 +642,9 @@ class ImageAccountPlanningOutput(StrictModel):
 
     @model_validator(mode="after")
     def validate_references(self) -> "ImageAccountPlanningOutput":
-        claim_keys = [item.claim_key for item in self.image_claims]
+        claim_keys = [item.claim_key for item in self.target_facts]
         if len(claim_keys) != len(set(claim_keys)):
-            raise ValueError("image claim keys must be unique")
+            raise ValueError("target fact keys must be unique")
         hypothesis_keys = [
             item.hypothesis_key for item in self.search_hypotheses
         ]
@@ -629,7 +652,7 @@ class ImageAccountPlanningOutput(StrictModel):
             raise ValueError("search hypothesis keys must be unique")
         high_claims = [
             item.claim_key
-            for item in self.image_claims
+            for item in self.target_facts
             if item.salience == "high"
         ]
         if len(high_claims) != 1:
@@ -638,6 +661,28 @@ class ImageAccountPlanningOutput(StrictModel):
                 "target fact"
             )
         return self
+
+    @property
+    def image_claims(self) -> List[ImageClaimProposal]:
+        """Deprecated Python-level alias for callers predating ``target_facts``."""
+
+        return self.target_facts
+
+    @image_claims.setter
+    def image_claims(self, value: List[ImageClaimProposal]) -> None:
+        self.target_facts = value
+
+    @classmethod
+    def normalize_legacy_input(cls, value: Any) -> Any:
+        """Map the historical wire key before generic required-field checks."""
+
+        if not isinstance(value, dict):
+            return value
+        if "target_facts" in value or "image_claims" not in value:
+            return value
+        normalized = dict(value)
+        normalized["target_facts"] = normalized.pop("image_claims")
+        return normalized
 
 
 def build_image_account_planning_output_schema(
@@ -676,9 +721,14 @@ def build_image_account_planning_output_schema(
     return create_model(
         "RuntimeImageAccountPlanningOutput",
         __base__=ImageAccountPlanningOutput,
-        image_claims=(
+        target_facts=(
             List[runtime_claim],
-            Field(min_length=1, max_length=3),
+            Field(
+                validation_alias=AliasChoices("target_facts", "image_claims"),
+                serialization_alias="target_facts",
+                min_length=1,
+                max_length=3,
+            ),
         ),
     )
 
@@ -1639,7 +1689,12 @@ class ImageOnlyInvestigationState(StrictModel):
         max_length=32,
     )
     image_account_summary: str = Field(default="", max_length=1600)
-    image_claims: List[ImageClaim] = Field(default_factory=list, max_length=3)
+    target_facts: List[ImageClaim] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("target_facts", "image_claims"),
+        serialization_alias="target_facts",
+        max_length=3,
+    )
     search_hypotheses: List[SearchHypothesis] = Field(
         default_factory=list,
         max_length=12,
@@ -1713,6 +1768,16 @@ class ImageOnlyInvestigationState(StrictModel):
         "engineering_error",
     ] = ""
 
+    @property
+    def image_claims(self) -> List[ImageClaim]:
+        """Deprecated runtime alias for the historical state field name."""
+
+        return self.target_facts
+
+    @image_claims.setter
+    def image_claims(self, value: List[ImageClaim]) -> None:
+        self.target_facts = value
+
     @model_validator(mode="after")
     def validate_core_verdict_ownership(
         self,
@@ -1734,8 +1799,8 @@ class ImageOnlyInvestigationState(StrictModel):
         facts = {fact.fact_id for fact in self.facts}
         if len(facts) != len(self.facts):
             raise ValueError("VisualFact IDs must be unique")
-        claims = {claim.claim_id: claim for claim in self.image_claims}
-        if len(claims) != len(self.image_claims):
+        claims = {claim.claim_id: claim for claim in self.target_facts}
+        if len(claims) != len(self.target_facts):
             raise ValueError("ImageClaim IDs must be unique")
         if any(claim.fact_id not in facts for claim in claims.values()):
             raise ValueError("image claims must reference existing VisualFacts")

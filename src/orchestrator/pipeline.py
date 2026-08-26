@@ -1602,7 +1602,7 @@ class Orchestrator:
         before_signature = self._discrepancy_progress_signature(investigation)
         decision_output_schema = build_discrepancy_decision_output_schema(
             claim_ids=[
-                claim.claim_id for claim in investigation.image_claims
+                claim.claim_id for claim in investigation.target_facts
             ],
             evidence_ids=list(reviewed_evidence_ids),
             hypothesis_ids=[
@@ -1912,7 +1912,7 @@ class Orchestrator:
             item.evidence_id: item for item in investigation.evidence
         }
         claim_ids_by_fact: Dict[str, List[str]] = {}
-        for claim in investigation.image_claims:
+        for claim in investigation.target_facts:
             claim_ids_by_fact.setdefault(claim.fact_id, []).append(claim.claim_id)
         claim_evidence_ids: Dict[str, List[str]] = {}
         for evidence_id in reviewed:
@@ -1927,7 +1927,7 @@ class Orchestrator:
         if len(reason) > 420:
             reason = reason[:417].rstrip() + "..."
         assessments: List[ClaimAssessmentProposal] = []
-        for claim in investigation.image_claims:
+        for claim in investigation.target_facts:
             evidence_ids = list(
                 dict.fromkeys(claim_evidence_ids.get(claim.claim_id, []))
             )
@@ -2967,8 +2967,8 @@ class Orchestrator:
                     "Image Account Planning proposed no valid claim graph",
                 )
             )
-        if not candidate.image_claims or not any(
-            claim.salience == "high" for claim in candidate.image_claims
+        if not candidate.target_facts or not any(
+            claim.salience == "high" for claim in candidate.target_facts
         ):
             return False, "Image Account Planning requires a high-salience target fact"
         if candidate.core_verdict_fact_id is not None:
@@ -3175,7 +3175,7 @@ class Orchestrator:
         *,
         task_ids: set[str],
     ) -> Dict[str, str]:
-        claims = {item.claim_id: item for item in investigation.image_claims}
+        claims = {item.claim_id: item for item in investigation.target_facts}
         result: Dict[str, str] = {}
         for task in investigation.tasks:
             if task.task_id not in task_ids:
@@ -3197,7 +3197,7 @@ class Orchestrator:
         *,
         task_ids: set[str],
     ) -> Dict[str, Dict[str, str]]:
-        claims = {item.claim_id: item for item in investigation.image_claims}
+        claims = {item.claim_id: item for item in investigation.target_facts}
         return {
             task.task_id: {
                 claim_id: claims[claim_id].statement
@@ -3549,7 +3549,7 @@ class Orchestrator:
                 investigation,
                 task_ids={task_id},
             )
-            if investigation.image_claims
+            if investigation.target_facts
             else Orchestrator._image_only_tool_argument_constraints(
                 investigation,
                 task_ids={task_id},
@@ -3628,7 +3628,7 @@ class Orchestrator:
                 investigation,
                 task_ids={task_id},
             )
-            if investigation.image_claims
+            if investigation.target_facts
             else remaining_material_routes(
                 investigation,
                 fact_id=investigation.core_verdict_fact_id or "",

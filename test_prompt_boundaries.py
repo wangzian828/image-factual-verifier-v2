@@ -106,7 +106,7 @@ def test_hot_path_prompts_stay_semantic_and_compact() -> None:
         image_account_prompt
     )
     assert "``account_summary``" in image_account_prompt
-    assert "``image_claims``" in image_account_prompt
+    assert "``target_facts``" in image_account_prompt
     assert "``search_hypotheses``" in image_account_prompt
     assert "not a boundary on the investigation" in discrepancy_react_prompt
     assert "Frame retrieval around what actually happened" in discrepancy_react_prompt

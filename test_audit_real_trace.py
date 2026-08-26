@@ -249,7 +249,7 @@ def test_strict_audit_accepts_discrepancy_first_v4_trace(tmp_path: Path) -> None
     report = audit_trace(_v4_trace(tmp_path))
 
     assert not report.failures(strict_scheduler=True)
-    assert report.stats["image_claims"] == 1
+    assert report.stats["target_facts"] == 1
     assert report.stats["material_discrepancies"] == 1
     assert report.stats["v4_actions"] == 2
 

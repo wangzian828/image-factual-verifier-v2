@@ -14,6 +14,7 @@ from src.orchestrator.evidence_semantics import (
 )
 from src.orchestrator.route_policy import semantic_duplicate_count
 from src.orchestrator.tool_result import parse_tool_result
+from src.orchestrator.investigation_models import target_fact_rows
 
 
 FACT_MATCH_THRESHOLD = 0.35
@@ -1048,7 +1049,7 @@ def _score_discrepancy_trace(
     investigation = _mapping(state.get("investigation_state"))
     claims = {
         str(item.get("claim_id", "")): item
-        for item in _rows(investigation.get("image_claims"))
+        for item in target_fact_rows(investigation)
         if str(item.get("claim_id", ""))
     }
     tasks = {

@@ -73,6 +73,11 @@ pixel/OCR `VisualFact` anchors, has `high|medium` salience, and is assessed as
 Claim containing the complete central relation; up to two additional independent
 Claims must be medium.
 
+The canonical Planning/state wire field for these rows is `target_facts`.
+`image_claims` is accepted only while reading historical traces and provider
+responses; current schemas, runtime state serialization, agent context, audit,
+and training packets do not emit that legacy key.
+
 ### SearchHypothesis
 
 A bounded retrieval direction for the image account. Its Planning schema contains

@@ -11,6 +11,7 @@ from src.orchestrator.evidence_semantics import (
     evidence_is_qualified_for_stance,
     required_assessment_stances,
 )
+from src.orchestrator.investigation_models import target_fact_rows
 from src.orchestrator.tool_result import parse_tool_result
 
 
@@ -653,7 +654,7 @@ def _v4_quality_gate(
     investigation = _mapping(state.get("investigation_state"))
     claims = {
         str(item.get("claim_id", "")): item
-        for item in _rows(investigation.get("image_claims"))
+        for item in target_fact_rows(investigation)
         if str(item.get("claim_id", ""))
     }
     hypotheses = {

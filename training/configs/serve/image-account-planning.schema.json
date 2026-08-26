@@ -3,7 +3,7 @@
   "additionalProperties": false,
   "properties": {
     "account_summary": {"type": "string", "minLength": 1, "maxLength": 1600},
-    "image_claims": {
+    "target_facts": {
       "type": "array",
       "minItems": 1,
       "maxItems": 3,
@@ -45,5 +45,5 @@
       }
     }
   },
-  "required": ["account_summary", "image_claims", "search_hypotheses"]
+  "required": ["account_summary", "target_facts", "search_hypotheses"]
 }

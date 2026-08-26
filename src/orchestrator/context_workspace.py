@@ -259,7 +259,7 @@ def build_explicit_workspace(
     fingerprint = _fingerprint(
         {
             "action_count": state.action_count,
-            "claims": [item.model_dump(mode="json") for item in state.image_claims],
+            "claims": [item.model_dump(mode="json") for item in state.target_facts],
             "assessments": [
                 item.model_dump(mode="json") for item in latest_assessments.values()
             ],
@@ -271,7 +271,7 @@ def build_explicit_workspace(
     return ExplicitWorkspace(
         workspace_version=f"ws-{state.action_count:02d}-{fingerprint[:10]}",
         image_account=image_account,
-        claims=[item.model_dump(mode="json") for item in state.image_claims],
+        claims=[item.model_dump(mode="json") for item in state.target_facts],
         latest_assessments=[
             item.model_dump(mode="json") for item in latest_assessments.values()
         ],
@@ -514,7 +514,7 @@ def _protected_context(
     state: ImageOnlyInvestigationState,
     latest_assessments: Mapping[str, Any],
 ) -> ProtectedContext:
-    claim_ids = [item.claim_id for item in state.image_claims if item.salience == "high"]
+    claim_ids = [item.claim_id for item in state.target_facts if item.salience == "high"]
     assessment_ids = [item.assessment_id for item in latest_assessments.values()]
     discrepancy_ids = [
         item.discrepancy_id
@@ -537,7 +537,7 @@ def _protected_context(
         if evidence_is_qualified(evidence) and evidence.stance in {"support", "refute"}:
             if evidence.evidence_id in evidence_ids:
                 continue
-            if any(fact_id in {claim.fact_id for claim in state.image_claims} for fact_id in evidence.fact_ids):
+            if any(fact_id in {claim.fact_id for claim in state.target_facts} for fact_id in evidence.fact_ids):
                 evidence_ids.add(evidence.evidence_id)
     task_ids = [
         item.task_id for item in state.tasks if item.status in {"pending", "active"}

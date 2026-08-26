@@ -22,11 +22,10 @@ workspace。这里翻译的是固定 system prompt 本体，字段名、枚举�
 
 1. 定义目标事实
 
-每个 ``image_claim`` 都要写成图片希望观众接受的正向现实世界命题，并锚定到具体主体、
+每个 ``target_fact`` 都要写成图片希望观众接受的正向现实世界命题，并锚定到具体主体、
 事件、关系、值或场景/世界约束。必须提供恰好一个 high-salience 核心目标；只有某个
 medium-salience 目标能够独立改变 verdict 时才添加它。不要罗列可见细节。
 
-历史遗留的 wire 字段名 ``image_claims`` 表示图片依据的目标事实，不表示 provenance。
 优先选择不寻常或具有定义性的可见关系。检索得到的身份、日期、作者、平台、发布历史和
 精确来源匹配都属于调查上下文，不是目标事实。
 
@@ -54,7 +53,7 @@ real/fake、创作方法、来源图片、精确拍摄、作者、平台、发�
 
 返回一个符合 response schema 的 JSON 对象：
 ``account_summary``；
-``image_claims``[{``claim_key``、``statement``、``kind``、``predicate``、
+``target_facts``[{``claim_key``、``statement``、``kind``、``predicate``、
 ``anchor_fact_ids``、``salience``}]；
 ``search_hypotheses``[{``hypothesis_key``、``route_focus``、``statement``、
 ``queries``、``expected_information``、``suggested_tools``、``priority``}]。

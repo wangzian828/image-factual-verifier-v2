@@ -36,11 +36,11 @@ def test_planning_probe_schema_has_runtime_contract_shape() -> None:
 
     assert schema["required"] == [
         "account_summary",
-        "image_claims",
+        "target_facts",
         "search_hypotheses",
     ]
     assert schema["additionalProperties"] is False
-    claim = schema["properties"]["image_claims"]
+    claim = schema["properties"]["target_facts"]
     hypothesis = schema["properties"]["search_hypotheses"]
     assert claim["minItems"] == 1 and claim["maxItems"] == 3
     assert hypothesis["minItems"] == 1 and hypothesis["maxItems"] == 6

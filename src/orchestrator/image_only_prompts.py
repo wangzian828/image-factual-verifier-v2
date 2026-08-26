@@ -168,16 +168,16 @@ investigation plan. The image supplies observations and leads; define what must
 be checked and how to investigate it, but do not decide the verdict.
 
 1. Define the target facts
-Write each ``image_claim`` as a positive real-world proposition that the image
+Write each ``target_fact`` as a positive real-world proposition that the image
 asks the viewer to accept. Anchor it to a concrete subject, event, relation,
 value, or scene/world constraint. Provide exactly one high-salience central
 target; add a medium-salience target only when it could independently change the
 verdict. Do not inventory visible details.
 
-The legacy wire name ``image_claims`` means image-grounded target facts, not
-provenance. Prefer an unusual or defining visible relation. Retrieved identity,
-date, creator, platform, publication history, and exact-source matching are
-investigation context, not target facts.
+Prefer an unusual or defining visible relation. Retrieved identity, date,
+creator, platform, publication history, and exact-source matching are
+investigation context; they are not target facts unless the underlying task
+explicitly requires resolving that real-world relation.
 
 2. Design neutral investigation routes
 Treat ``search_hypotheses`` as neutral routes for finding the verified value of
@@ -206,7 +206,7 @@ physical property. If an on-image title contains a prohibited token such as
 
 Return one JSON object matching the response schema:
 ``account_summary``;
-``image_claims``[{``claim_key``, ``statement``, ``kind``, ``predicate``,
+``target_facts``[{``claim_key``, ``statement``, ``kind``, ``predicate``,
 ``anchor_fact_ids``, ``salience``}];
 ``search_hypotheses``[{``hypothesis_key``, ``route_focus``, ``statement``,
 ``queries``, ``expected_information``, ``suggested_tools``, ``priority``}].
@@ -844,11 +844,9 @@ def render_discrepancy_react_context(
                     for fact_id in task.fact_ids
                 }
             ],
-            # Legacy aliases remain in the context so historical replay
-            # backends can continue to submit claim_id bookkeeping fields.
-            "image_claims": [
+            "target_facts": [
                 claim.model_dump(mode="json")
-                for claim in state.image_claims
+                for claim in state.target_facts
             ],
             "active_search_hypotheses": [
                 hypothesis.model_dump(mode="json")
@@ -865,7 +863,7 @@ def render_discrepancy_react_context(
                     ],
                     "owned_claims": [
                         state_claim.model_dump(mode="json")
-                        for state_claim in state.image_claims
+                        for state_claim in state.target_facts
                         if state_claim.claim_id in task.claim_ids
                     ],
                     "owned_hypothesis": hypotheses[
@@ -1030,8 +1028,8 @@ def render_image_account_planning_context(
             "visual_fact_anchors": visual_fact_anchors,
             "retrieval_clues": retrieval_clues,
             "planning_limits": {
-                "image_claims": 3,
-                "high_salience_image_claims": 1,
+                "target_facts": 3,
+                "high_salience_target_facts": 1,
                 "search_hypotheses": 3,
                 "candidate_queries_per_hypothesis": 3,
                 "initial_text_search_actions_per_task": 2,
@@ -1060,7 +1058,7 @@ def render_discrepancy_decision_context(
     reviewed = list(dict.fromkeys(str(item) for item in reviewed_evidence_ids))
     evidence_by_id = {item.evidence_id: item for item in state.evidence}
     task_by_id = {item.task_id: item for item in state.tasks}
-    claims_by_id = {item.claim_id: item for item in state.image_claims}
+    claims_by_id = {item.claim_id: item for item in state.target_facts}
     reviewed_set = set(reviewed)
     reviewed_evidence_ownership = []
     reviewable_claim_ids: List[str] = []
@@ -1101,7 +1099,7 @@ def render_discrepancy_decision_context(
             "claim_id": claim.claim_id,
             "allowed_visual_anchor_fact_ids": list(claim.anchor_fact_ids),
         }
-        for claim in state.image_claims
+        for claim in state.target_facts
     ]
     reviewed_directional_chains = []
     for finding in state.findings:
@@ -1244,8 +1242,8 @@ def render_discrepancy_decision_context(
                 },
             },
             "image_account_summary": state.image_account_summary,
-            "image_claims": [
-                item.model_dump(mode="json") for item in state.image_claims
+            "target_facts": [
+                item.model_dump(mode="json") for item in state.target_facts
             ],
             "search_hypotheses": [
                 item.model_dump(mode="json")
@@ -1351,7 +1349,7 @@ def _render_discrepancy_decision_actionability(
     core_fact = fact_by_id.get(state.core_verdict_fact_id or "")
     core_claim_ids = [
         claim.claim_id
-        for claim in state.image_claims
+        for claim in state.target_facts
         if core_fact is not None and claim.fact_id == core_fact.fact_id
     ]
     open_hypotheses = [
@@ -1387,7 +1385,7 @@ def _render_discrepancy_decision_actionability(
             "visual_question_id": item.visual_question_id,
             "claim_ids": [
                 claim.claim_id
-                for claim in state.image_claims
+                for claim in state.target_facts
                 if claim.fact_id == item.fact_id
             ],
             "status": item.status,
@@ -1586,7 +1584,7 @@ def render_discrepancy_judgment_context(
     *,
     final_visual_audit: Any = None,
 ) -> str:
-    claims = {item.claim_id: item for item in state.image_claims}
+    claims = {item.claim_id: item for item in state.target_facts}
     discrepancies = {
         item.discrepancy_id: item for item in state.material_discrepancies
     }
@@ -1978,7 +1976,7 @@ def render_route_local_replan_context(
                     "fact": core.model_dump(mode="json"),
                     "claims": [
                         claim.model_dump(mode="json")
-                        for claim in state.image_claims
+                        for claim in state.target_facts
                         if claim.fact_id == core.fact_id
                     ],
                 }

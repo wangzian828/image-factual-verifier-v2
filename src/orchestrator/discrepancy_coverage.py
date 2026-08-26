@@ -29,7 +29,7 @@ def _core_target_fact(
         return facts[state.core_verdict_fact_id]
     # Compatibility fallback for v4 reducer fixtures and historical replays
     # created before core_verdict_fact_id became the semantic owner.
-    for claim in state.image_claims:
+    for claim in state.target_facts:
         if claim.salience == "high" and claim.fact_id in facts:
             return facts[claim.fact_id]
     return None
@@ -63,7 +63,7 @@ def audit_discrepancy_coverage(
     }
     task_by_id = {item.task_id: item for item in state.tasks}
     coverage_rows: List[ImageClaimCoverage] = []
-    for claim in state.image_claims:
+    for claim in state.target_facts:
         assessment = latest_assessment.get(claim.claim_id)
         claim_route_open = any(
             claim.claim_id in task_by_id[task_id].claim_ids
@@ -208,7 +208,7 @@ def compile_discrepancy_verdict_basis(
         core_fact = _core_target_fact(state)
         core_claims = [
             item
-            for item in state.image_claims
+            for item in state.target_facts
             if core_fact is not None and item.fact_id == core_fact.fact_id
         ]
         claim_ids = [item.claim_id for item in core_claims]
@@ -270,7 +270,7 @@ def compile_discrepancy_verdict_basis(
                 for evidence_id in item.evidence_ids
             )
         )
-        claim_by_id = {item.claim_id: item for item in state.image_claims}
+        claim_by_id = {item.claim_id: item for item in state.target_facts}
         anchor_ids = list(
             dict.fromkeys(
                 anchor_id
@@ -369,7 +369,7 @@ def _directional_verdict_chain(
     candidate_evidence_ids: List[str],
     stance: str,
 ) -> tuple[List[str], List[str]]:
-    claim_by_id = {item.claim_id: item for item in state.image_claims}
+    claim_by_id = {item.claim_id: item for item in state.target_facts}
     task_by_id = {item.task_id: item for item in state.tasks}
     evidence_by_id = {item.evidence_id: item for item in state.evidence}
     selected_evidence_ids: List[str] = []

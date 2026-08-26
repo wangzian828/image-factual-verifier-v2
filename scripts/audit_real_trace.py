@@ -25,6 +25,7 @@ from src.orchestrator.source_access import (  # noqa: E402
 from src.orchestrator.evidence_policy import (  # noqa: E402
     query_targets_fact_check_answer,
 )
+from src.orchestrator.investigation_models import target_fact_rows  # noqa: E402
 from src.orchestrator.evidence_semantics import (  # noqa: E402
     evidence_direction_is_coherent,
     evidence_is_qualified_for_stance,
@@ -1150,7 +1151,7 @@ def _audit_discrepancy_trace(
     discoveries = _rows(investigation.get("discoveries"))
     evidence = _rows(investigation.get("evidence"))
     findings = _rows(investigation.get("findings"))
-    claims = _rows(investigation.get("image_claims"))
+    claims = target_fact_rows(investigation)
     hypotheses = _rows(investigation.get("search_hypotheses"))
     assessments = _rows(investigation.get("claim_assessments"))
     discrepancies = _rows(investigation.get("material_discrepancies"))
@@ -1190,7 +1191,7 @@ def _audit_discrepancy_trace(
     claim_by_id = _unique_index(
         claims,
         id_field="claim_id",
-        location_prefix="state.investigation_state.image_claims",
+        location_prefix="state.investigation_state.target_facts",
         report=report,
     )
     hypothesis_by_id = _unique_index(
@@ -1238,7 +1239,7 @@ def _audit_discrepancy_trace(
             "v4 Image Account requires a high-salience ImageClaim",
         )
     for claim_id, claim in claim_by_id.items():
-        location = _location("state.investigation_state.image_claims", claim_id)
+        location = _location("state.investigation_state.target_facts", claim_id)
         claim_fact_id = str(claim.get("fact_id", "")).strip()
         if claim_fact_id not in fact_by_id:
             _issue(
@@ -1552,7 +1553,7 @@ def _audit_discrepancy_trace(
                 "V4_CLAIM_ASSESSMENT_STATUS_MISMATCH",
                 "ImageClaim status must match its latest ClaimAssessment",
                 location=_location(
-                    "state.investigation_state.image_claims",
+                    "state.investigation_state.target_facts",
                     claim_id,
                 ),
             )
@@ -1904,7 +1905,7 @@ def _audit_discrepancy_trace(
 
     report.stats.update(
         {
-            "image_claims": len(claims),
+            "target_facts": len(claims),
             "search_hypotheses": len(hypotheses),
             "v4_discoveries": len(discoveries),
             "claim_assessments": len(assessments),

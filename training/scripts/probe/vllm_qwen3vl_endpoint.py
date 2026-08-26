@@ -108,7 +108,7 @@ def _structured(
 
 
 def _validate_planning_semantics(value: dict[str, Any]) -> None:
-    claims = value["image_claims"]
+    claims = value["target_facts"]
     hypotheses = value["search_hypotheses"]
     claim_keys = [item["claim_key"] for item in claims]
     hypothesis_keys = [item["hypothesis_key"] for item in hypotheses]

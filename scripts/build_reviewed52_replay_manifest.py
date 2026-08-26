@@ -64,7 +64,7 @@ def _candidate_records(
     state = ImageOnlyInvestigationState.model_validate(state_payload)
     evidence_by_id = {item.evidence_id: item for item in state.evidence}
     task_by_id = {item.task_id: item for item in state.tasks}
-    claim_by_id = {item.claim_id: item for item in state.image_claims}
+    claim_by_id = {item.claim_id: item for item in state.target_facts}
     reviewed_ids = _reviewed_evidence_ids(state)
     rows: list[dict[str, Any]] = []
 

@@ -97,7 +97,7 @@ Exact instruction:
 > Hypotheses do not own the verdict.
 >
 > Output fields: account_summary;
-> image_claims[{claim_key, statement, kind, predicate, anchor_fact_ids, salience}];
+> target_facts[{claim_key, statement, kind, predicate, anchor_fact_ids, salience}];
 > search_hypotheses[{hypothesis_key, statement, queries, expected_information,
 > suggested_tools, priority}].
 

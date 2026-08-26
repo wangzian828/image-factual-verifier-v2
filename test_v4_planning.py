@@ -169,7 +169,7 @@ class ImageAccountPlanningBackend:
             "account_summary": (
                 "The image presents a person visibly holding a product packet."
             ),
-            "image_claims": [
+            "target_facts": [
                 {
                     "claim_key": "person_product_relation",
                     "statement": (
@@ -302,7 +302,7 @@ class PlanningThenReactBackend(ImageAccountPlanningBackend):
             if context is None:
                 raise AssertionError("missing discrepancy Decision context")
             self.last_discrepancy_context = context
-            claim = context["image_claims"][0]
+            claim = context["target_facts"][0]
             evidence = context["reviewed_evidence"][0]
             if (
                 correction_text

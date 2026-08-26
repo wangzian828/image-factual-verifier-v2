@@ -4059,6 +4059,9 @@ class StageRunner:
             return None, "no output schema is configured"
         if not isinstance(output_json, dict):
             return None, "output must be a JSON object"
+        normalizer = getattr(self.output_schema, "normalize_legacy_input", None)
+        if callable(normalizer):
+            output_json = normalizer(output_json)
         missing = missing_required_paths(
             output_json,
             self._normalized_output_schema(),

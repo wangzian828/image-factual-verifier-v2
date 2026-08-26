@@ -22,6 +22,7 @@ from src.integrations.gemini import (
     validate_interaction_response,
 )
 from src.orchestrator.llm_backend import APIBackend, LLMBackend, LLMResponse
+from src.orchestrator.investigation_models import target_fact_rows
 from src.tools.vision_utils import controlled_image_to_data_url
 
 
@@ -339,7 +340,7 @@ def build_semantic_reward_input(
                 str(value) for value in item.get("anchor_fact_ids", [])
             ],
         }
-        for item in _rows(investigation.get("image_claims"))
+        for item in target_fact_rows(investigation)
     ]
     if not claims:
         raise ValueError("semantic reward requires at least one ImageClaim")
@@ -435,7 +436,7 @@ def build_semantic_reward_input(
             or ""
         ),
         "image": image_descriptor,
-        "image_claims": claims,
+        "target_facts": claims,
         "evidence": evidence,
         "findings": findings,
         "claim_assessments": assessments,
@@ -461,7 +462,7 @@ def _trajectory_payload(packet: Mapping[str, Any]) -> Dict[str, Any]:
             for key, value in item.items()
             if key != "recorded_status"
         }
-        for item in _rows(packet.get("image_claims"))
+        for item in target_fact_rows(packet)
     ]
     evidence = [
         {
@@ -473,7 +474,7 @@ def _trajectory_payload(packet: Mapping[str, Any]) -> Dict[str, Any]:
     ]
     return {
         "case_id": packet.get("case_id"),
-        "image_claims": claims,
+        "target_facts": claims,
         "evidence": evidence,
         "investigation_turns": packet.get("investigation_turns", []),
     }
@@ -652,7 +653,7 @@ def semantic_metrics(
 ) -> Dict[str, Any]:
     claim_by_id = {
         str(item.get("claim_id", "")): item
-        for item in _rows(packet.get("image_claims"))
+        for item in target_fact_rows(packet)
     }
     evidence_ids = {
         str(item.get("evidence_id", ""))

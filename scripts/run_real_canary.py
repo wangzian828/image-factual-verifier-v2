@@ -26,6 +26,7 @@ from src.eval.release_adapter import (  # noqa: E402
 )
 from src.workflow import AGENT_DECISION_POLICY_VERSION  # noqa: E402
 from scripts.audit_real_trace import audit_trace, discover_trace_files  # noqa: E402
+from src.orchestrator.investigation_models import target_fact_rows  # noqa: E402
 
 load_project_dotenv(REPO_ROOT)
 
@@ -225,7 +226,7 @@ def _require_real_run_artifacts(
         investigation = _mapping(state.get("investigation_state"))
         if investigation.get("core_verdict_fact_id"):
             raise RuntimeError(f"trace activates a legacy core fact: {path.name}")
-        claims = _rows(investigation.get("image_claims"))
+        claims = target_fact_rows(investigation)
         if not claims or not any(
             claim.get("salience") == "high" for claim in claims
         ):

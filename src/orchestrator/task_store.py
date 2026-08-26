@@ -74,7 +74,7 @@ MAX_CORE_FACT_REFINEMENTS = 1
 MAX_TEXT_SEARCH_CANDIDATES_PER_BATCH = 10
 MAX_REVERSE_SEARCH_CANDIDATES_PER_BATCH = 3
 MAX_VISUAL_REINSPECTIONS = 2
-MAX_IMAGE_CLAIMS = 3
+MAX_TARGET_FACTS = 3
 MAX_SEARCH_HYPOTHESES = 3
 MAX_NEW_HYPOTHESES_PER_DECISION = 3
 MAX_V4_VISUAL_REINSPECTIONS = 1
@@ -200,7 +200,7 @@ def discrepancy_visual_reinspection_binding(
     task_by_id = {item.task_id: item for item in state.tasks}
     reviewed_ids = list(dict.fromkeys(reviewed_evidence_ids))
     candidates: List[Dict[str, Any]] = []
-    for claim in state.image_claims:
+    for claim in state.target_facts:
         if claim.status not in {"open", "unresolved", "conflicted"}:
             continue
         anchor_fact_ids = [
@@ -329,7 +329,7 @@ def claim_owned_visual_evidence_requirements(
         item.evidence_id: item for item in state.evidence
     }
     task_by_id = {item.task_id: item for item in state.tasks}
-    claim_by_id = {item.claim_id: item for item in state.image_claims}
+    claim_by_id = {item.claim_id: item for item in state.target_facts}
     requirements: List[Dict[str, Any]] = []
     for evidence_id in dict.fromkeys(str(item) for item in reviewed_evidence_ids):
         evidence = evidence_by_id.get(evidence_id)
@@ -566,7 +566,7 @@ def bind_discrepancy_decision_runtime_ids(
             payload["visual_evidence_disposition"] = None
     discrepancy = output.material_discrepancy
     if discrepancy is not None:
-        claim_by_id = {claim.claim_id: claim for claim in state.image_claims}
+        claim_by_id = {claim.claim_id: claim for claim in state.target_facts}
         unknown_claim_ids = [
             claim_id
             for claim_id in discrepancy.affected_claim_ids
@@ -636,7 +636,7 @@ def bind_discrepancy_decision_runtime_ids(
             payload["visual_reinspection"] = None
             return DiscrepancyDecisionOutput.model_validate(payload), ""
     evidence_by_id = {item.evidence_id: item for item in state.evidence}
-    claim_by_id = {claim.claim_id: claim for claim in state.image_claims}
+    claim_by_id = {claim.claim_id: claim for claim in state.target_facts}
     claim = claim_by_id.get(str(binding["claim_id"]))
     if claim is None:
         return None, "runtime visual reinspection binding cites an unknown Claim"
@@ -1047,7 +1047,7 @@ def record_tool_observation(
         raise RuntimeError(
             f"image-only tool call {call_id} references unknown task_id={task_id!r}"
         )
-    if state.image_claims and (
+    if state.target_facts and (
         not task.claim_ids
         or (
             task.hypothesis_id is None
@@ -1341,7 +1341,7 @@ def apply_image_account_planning(
                 "statement": _normalize_relation_text(proposal.statement),
             }
         )
-        for proposal in output.image_claims
+        for proposal in output.target_facts
     ]
     normalized_hypotheses = [
         proposal.model_copy(
@@ -1358,7 +1358,7 @@ def apply_image_account_planning(
         )
         for proposal in output.search_hypotheses
     ]
-    if candidate.image_claims or candidate.search_hypotheses:
+    if candidate.target_facts or candidate.search_hypotheses:
         return {
             "accepted": False,
             "rejected_reason": "image account planning has already been applied",
@@ -1367,8 +1367,8 @@ def apply_image_account_planning(
     fact_by_id = {fact.fact_id: fact for fact in candidate.facts}
     if len(candidate.facts) + len(normalized_claims) > 72:
         return {"accepted": False, "rejected_reason": "VisualFact budget exhausted"}
-    if len(normalized_claims) > MAX_IMAGE_CLAIMS:
-        return {"accepted": False, "rejected_reason": "image claim budget exhausted"}
+    if len(normalized_claims) > MAX_TARGET_FACTS:
+        return {"accepted": False, "rejected_reason": "target fact budget exhausted"}
     if (
         len(candidate.search_hypotheses) + len(normalized_hypotheses)
         > MAX_SEARCH_HYPOTHESES
@@ -1468,7 +1468,7 @@ def apply_image_account_planning(
             salience=proposal.salience,
         )
         candidate.facts.append(fact)
-        candidate.image_claims.append(claim)
+        candidate.target_facts.append(claim)
         fact_by_id[fact_id] = fact
         claim_by_key[proposal.claim_key] = claim
         new_fact_ids.append(fact_id)
@@ -1569,7 +1569,7 @@ def _core_target_fact(
         return facts[state.core_verdict_fact_id]
     # Compatibility fallback for v4 reducer fixtures and historical replays
     # created before core_verdict_fact_id became the semantic owner.
-    for claim in state.image_claims:
+    for claim in state.target_facts:
         if claim.salience == "high" and claim.fact_id in facts:
             return facts[claim.fact_id]
     return None
@@ -2285,7 +2285,7 @@ def _discrepancy_contract_errors(
     core_fact = _core_target_fact(state, fact_by_id=fact_by_id)
     core_claim_ids = {
         claim.claim_id
-        for claim in state.image_claims
+        for claim in state.target_facts
         if core_fact is not None and claim.fact_id == core_fact.fact_id
     }
     projected_core_status = core_fact.status if core_fact is not None else ""
@@ -2439,12 +2439,12 @@ def apply_discrepancy_decision(
             "accepted": False,
             "rejected_reason": "no discrepancy decision is allowed after verdict",
         }
-    if not candidate.image_claims:
+    if not candidate.target_facts:
         return {
             "accepted": False,
             "rejected_reason": "image account planning must precede discrepancy decision",
         }
-    claim_by_id = {claim.claim_id: claim for claim in candidate.image_claims}
+    claim_by_id = {claim.claim_id: claim for claim in candidate.target_facts}
     hypothesis_by_id = {
         hypothesis.hypothesis_id: hypothesis
         for hypothesis in candidate.search_hypotheses
@@ -2942,7 +2942,7 @@ def apply_discrepancy_decision(
         # ``insufficient``/``conflicted`` records.
         unresolved_assessment_claim_ids = {
             claim.claim_id
-            for claim in candidate.image_claims
+            for claim in candidate.target_facts
             if claim.status in {"open", "unresolved", "conflicted"}
         }
         unresolved_assessment_claim_ids.update(
@@ -6375,7 +6375,7 @@ def _task_serves_open_route_local_target(
         return core_id in task.fact_ids
     open_claims = [
         item
-        for item in state.image_claims
+        for item in state.target_facts
         if item.status in {"open", "unresolved", "conflicted"}
     ]
     if not open_claims:
@@ -6403,7 +6403,7 @@ def _route_local_target_is_resolved(
             core is not None
             and core.status in {"supported", "refuted", "conflicted"}
         )
-    claims_by_id = {item.claim_id: item for item in state.image_claims}
+    claims_by_id = {item.claim_id: item for item in state.target_facts}
     route_claims = [
         claims_by_id[item]
         for item in task.claim_ids
@@ -6864,7 +6864,7 @@ def _record_evidence_and_findings(
     selected_claim_id = str(tool_args.get("__claim_id", "")).strip()
     claim_fact_by_id = {
         claim.claim_id: claim.fact_id
-        for claim in state.image_claims
+        for claim in state.target_facts
         if claim.claim_id in task.claim_ids
     }
     owned_fact_ids = (
@@ -7296,7 +7296,7 @@ def _refresh_fact_states(state: ImageOnlyInvestigationState) -> None:
             findings_by_fact.setdefault(fact_id, []).append(finding)
     for fact in state.facts:
         claim = next(
-            (item for item in state.image_claims if item.fact_id == fact.fact_id),
+            (item for item in state.target_facts if item.fact_id == fact.fact_id),
             None,
         )
         if fact.fact_id == state.core_verdict_fact_id:
@@ -7736,7 +7736,7 @@ def pending_discrepancy_evidence_ids(
         for decision in state.discrepancy_decisions
         for evidence_id in decision.reviewed_evidence_ids
     }
-    claim_fact_ids = {claim.fact_id for claim in state.image_claims}
+    claim_fact_ids = {claim.fact_id for claim in state.target_facts}
     claim_task_ids = {
         task.task_id
         for task in state.tasks
@@ -7756,7 +7756,7 @@ def discrepancy_decision_evidence_ids(
 ) -> List[str]:
     """Return the bounded new-and-prior Evidence context for a v4 checkpoint."""
 
-    claim_fact_ids = {claim.fact_id for claim in state.image_claims}
+    claim_fact_ids = {claim.fact_id for claim in state.target_facts}
     claim_task_ids = {
         task.task_id
         for task in state.tasks

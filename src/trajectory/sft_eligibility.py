@@ -15,6 +15,7 @@ from typing import Any, Dict, Iterable, List, Literal, Mapping, Sequence
 
 from pydantic import Field
 
+from src.orchestrator.investigation_models import target_fact_rows
 from src.tools.vision_utils import controlled_image_to_data_url
 from src.trajectory.semantic_reward import (
     SemanticRewardJudge,
@@ -562,7 +563,7 @@ def build_sft_eligibility_input(
             "status": str(item.get("status", "")),
             "anchor_fact_ids": _unique(item.get("anchor_fact_ids", []), limit=12),
         }
-        for item in _rows(investigation.get("image_claims"))
+        for item in target_fact_rows(investigation)
         if str(item.get("claim_id", "")).strip()
     ]
     evidence = [
