@@ -625,6 +625,7 @@ def build_package(args: argparse.Namespace) -> dict[str, Any]:
         case_split_path=split_destination,
         minimum_accepted_cases=args.minimum_accepted_cases,
         short_max_tokens=effective_short_max_tokens,
+        export_concurrency=args.export_concurrency,
     )
 
     policy_dir = package_dir / "ms-swift-policy"
@@ -736,6 +737,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--judge-max-tokens", type=int, default=4096)
     parser.add_argument("--timeout", type=float, default=180.0)
     parser.add_argument("--concurrency", type=int, default=1)
+    parser.add_argument(
+        "--export-concurrency",
+        type=int,
+        default=8,
+        help=(
+            "number of concurrent trace-to-SFT exporter workers; this is "
+            "separate from --concurrency, which controls the LLM judge"
+        ),
+    )
     parser.add_argument("--force-judge", action="store_true")
     parser.add_argument("--minimum-accepted-cases", type=int, default=1)
     parser.add_argument(
@@ -779,6 +789,8 @@ def main() -> None:
         raise SystemExit("--minimum-accepted-cases must be non-negative")
     if args.concurrency < 1:
         raise SystemExit("--concurrency must be at least 1")
+    if args.export_concurrency < 1:
+        raise SystemExit("--export-concurrency must be at least 1")
     result = build_package(args)
     print(json.dumps(result, ensure_ascii=False, indent=2))
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
 import json
 import sys
@@ -83,6 +84,30 @@ def _write_jsonl(path: Path, rows: Iterable[Mapping[str, Any]]) -> None:
         "\n".join(lines) + ("\n" if lines else ""),
         encoding="utf-8",
     )
+
+
+def _export_trace_file_job(
+    job: tuple[str, Path, Dict[str, Any], bool],
+) -> tuple[str, TrajectorySFTExample | None, str]:
+    """Export one trace while keeping raw trace data out of the coordinator."""
+
+    episode_id, trace_path, source_metadata, allow_incomplete = job
+    try:
+        trace = _load_json(trace_path)
+        return (
+            episode_id,
+            export_trajectory_sft_example(
+                trace,
+                source_metadata=source_metadata,
+                allow_incomplete_verdict_chain=allow_incomplete,
+            ),
+            "",
+        )
+    except Exception as exc:
+        message = str(exc) or type(exc).__name__
+        if not isinstance(exc, ValueError):
+            message = f"{type(exc).__name__}: {message}"
+        return episode_id, None, message
 
 
 def _sha256(path: Path) -> str:
@@ -340,6 +365,7 @@ def export_dataset(
     validation_ratio: float = 0.1,
     seed: str = "ifv-policy-v1",
     short_max_tokens: int = DEFAULT_SHORT_TRAJECTORY_MAX_TOKENS,
+    export_concurrency: int = 1,
 ) -> Dict[str, Any]:
     accepted_release: Path | None = None
     accepted_release_rows: Dict[str, Dict[str, Any]] = {}
@@ -381,6 +407,8 @@ def export_dataset(
         raise ValueError("train_ratio + validation_ratio must be below 1")
     if short_max_tokens < 1:
         raise ValueError("short_max_tokens must be positive")
+    if export_concurrency < 1:
+        raise ValueError("export_concurrency must be at least 1")
     if output_dir.exists() and any(output_dir.iterdir()):
         raise FileExistsError(
             f"dataset output directory must be new or empty: {output_dir}"
@@ -404,6 +432,9 @@ def export_dataset(
     trajectory_by_episode: Dict[str, TrajectorySFTExample] = {}
     perception_by_episode: Dict[str, PerceptionExample] = {}
     episode_metadata: Dict[str, Dict[str, Any]] = {}
+    export_jobs: Dict[
+        str, tuple[str, Path, Dict[str, Any], bool]
+    ] = {}
     score_by_episode: Dict[str, Dict[str, Any]] = {}
     source_runs: List[Dict[str, Any]] = []
     for raw_run_dir in run_dirs:
@@ -584,44 +615,75 @@ def export_dataset(
                 "sft_eligibility_artifact_id": eligibility.get("artifact_id"),
                 "semantic_reward_artifact_id": semantic.get("artifact_id"),
             }
-            try:
-                sft_judge_passed = (
-                    _mapping(eligibility.get("gates")).get(
-                        "sft_eligibility_pass"
-                    )
-                    is True
+            sft_judge_passed = (
+                _mapping(eligibility.get("gates")).get(
+                    "sft_eligibility_pass"
                 )
-                trajectory_by_episode[episode_id] = export_trajectory_sft_example(
-                    trace,
-                    source_metadata={
-                        "source_run_id": manifest.get("run_id"),
-                        "runtime_commit": manifest.get("git_commit"),
-                        "release_id": _mapping(manifest.get("benchmark")).get(
-                            "release_id"
-                        ),
-                        "runtime_contract_version": _mapping(
-                            manifest.get("benchmark")
-                        ).get("runtime_contract_version", ""),
-                        "process_reference_protocol_version": manifest.get(
-                            "process_reference_protocol_version",
-                            "",
-                        ),
-                    },
-                    allow_incomplete_verdict_chain=sft_judge_passed,
+                is True
+            )
+            export_jobs[episode_id] = (
+                episode_id,
+                trace_path,
+                {
+                    "source_run_id": manifest.get("run_id"),
+                    "runtime_commit": manifest.get("git_commit"),
+                    "release_id": _mapping(manifest.get("benchmark")).get(
+                        "release_id"
+                    ),
+                    "runtime_contract_version": _mapping(
+                        manifest.get("benchmark")
+                    ).get("runtime_contract_version", ""),
+                    "process_reference_protocol_version": manifest.get(
+                        "process_reference_protocol_version",
+                        "",
+                    ),
+                },
+                sft_judge_passed,
+            )
+
+    ordered_jobs = [
+        export_jobs[episode_id]
+        for episode_id in sorted(export_jobs)
+    ]
+    executor: ThreadPoolExecutor | None = None
+    if export_concurrency == 1 or len(ordered_jobs) <= 1:
+        export_results = (
+            _export_trace_file_job(job)
+            for job in ordered_jobs
+        )
+        for episode_id, trajectory, export_error in export_results:
+            metadata = episode_metadata[episode_id]
+            metadata["trajectory_export_error"] = export_error
+            if trajectory is None:
+                continue
+            trajectory_by_episode[episode_id] = trajectory
+            metadata["trajectory_token_count_estimate"] = (
+                trajectory.token_count_estimate
+            )
+            metadata["tool_call_count"] = trajectory.tool_call_count
+    else:
+        executor = ThreadPoolExecutor(
+            max_workers=min(export_concurrency, len(ordered_jobs)),
+            thread_name_prefix="trajectory-export",
+        )
+        futures = {
+            executor.submit(_export_trace_file_job, job): job[0]
+            for job in ordered_jobs
+        }
+        try:
+            for future in as_completed(futures):
+                episode_id, trajectory, export_error = future.result()
+                metadata = episode_metadata[episode_id]
+                metadata["trajectory_export_error"] = export_error
+                if trajectory is None:
+                    continue
+                trajectory_by_episode[episode_id] = trajectory
+                metadata["trajectory_token_count_estimate"] = (
+                    trajectory.token_count_estimate
                 )
-                episode_metadata[episode_id][
-                    "trajectory_export_error"
-                ] = ""
-                episode_metadata[episode_id][
-                    "trajectory_token_count_estimate"
-                ] = trajectory_by_episode[episode_id].token_count_estimate
-                episode_metadata[episode_id]["tool_call_count"] = (
-                    trajectory_by_episode[episode_id].tool_call_count
-                )
-            except ValueError as exc:
-                episode_metadata[episode_id][
-                    "trajectory_export_error"
-                ] = str(exc)
+                metadata["tool_call_count"] = trajectory.tool_call_count
+        finally:
+            executor.shutdown(wait=True)
 
     all_episodes = sorted(episode_metadata)
 
@@ -937,6 +999,7 @@ def export_dataset(
             if accepted_release is not None
             else "rollout_run"
         ),
+        "export_concurrency": export_concurrency,
         "episode_count": sum(len(rows) for rows in split_rows.values()),
         "accepted_episode_count": len(episodes),
         "long_holdout_episode_count": len(long_holdout_rows),
@@ -1001,6 +1064,15 @@ def build_parser() -> argparse.ArgumentParser:
             "longer accepted episodes are kept in long_holdout.jsonl."
         ),
     )
+    parser.add_argument(
+        "--export-concurrency",
+        type=int,
+        default=1,
+        help=(
+            "number of concurrent trace-to-SFT exporter workers; output "
+            "ordering remains stable by episode_id"
+        ),
+    )
     return parser
 
 
@@ -1023,6 +1095,7 @@ def main() -> None:
         validation_ratio=args.validation_ratio,
         seed=args.seed,
         short_max_tokens=args.short_max_tokens,
+        export_concurrency=args.export_concurrency,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
 

@@ -165,6 +165,50 @@ def test_dataset_export_is_episode_and_source_family_split_safe(
     assert report["teacher_score_distribution"]["mean"] == 4.75
 
 
+def test_concurrent_dataset_export_matches_serial_export(
+    tmp_path: Path,
+) -> None:
+    run_dir = _run_dir(tmp_path)
+    serial_output = tmp_path / "serial-dataset"
+    concurrent_output = tmp_path / "concurrent-dataset"
+
+    serial_manifest = export_dataset(
+        [run_dir],
+        serial_output,
+        short_max_tokens=300_000,
+        export_concurrency=1,
+    )
+    concurrent_manifest = export_dataset(
+        [run_dir],
+        concurrent_output,
+        short_max_tokens=300_000,
+        export_concurrency=4,
+    )
+
+    assert serial_manifest["episode_count"] == concurrent_manifest[
+        "episode_count"
+    ]
+    assert serial_manifest["accepted_case_count"] == concurrent_manifest[
+        "accepted_case_count"
+    ]
+    assert concurrent_manifest["export_concurrency"] == 4
+    for filename in (
+        "train.jsonl",
+        "validation.jsonl",
+        "test.jsonl",
+        "perception.train.jsonl",
+        "perception.validation.jsonl",
+        "perception.test.jsonl",
+        "long_holdout.jsonl",
+        "episode_metadata.jsonl",
+        "accepted_episodes.jsonl",
+        "excluded_episode_metadata.jsonl",
+    ):
+        assert (serial_output / filename).read_bytes() == (
+            concurrent_output / filename
+        ).read_bytes()
+
+
 def test_long_trajectory_is_retained_in_holdout_not_short_sft(
     tmp_path: Path,
 ) -> None:
