@@ -262,12 +262,13 @@ def _stage_user_packet(
     example_type: str,
     policy_input: Mapping[str, Any],
 ) -> str:
+    input_payload = _compact_export_input_payload(policy_input.get("input_payload", ""))
     payload: dict[str, Any] = {
         "stage": example_type,
         "stage_instruction": _strip_gemini_wire_instructions(
             str(policy_input.get("system_instruction", ""))
         ),
-        "input_payload": policy_input.get("input_payload", ""),
+        "input_payload": input_payload,
     }
     response_format = policy_input.get("response_format")
     if isinstance(response_format, Mapping) and example_type != "react":
@@ -278,6 +279,76 @@ def _stage_user_packet(
             str(tool["function"]["name"]) for tool in tools
         ]
     return canonical_json(payload)
+
+
+def _stage_control_packet(
+    *,
+    example_type: str,
+    policy_input: Mapping[str, Any],
+) -> str:
+    """Render a small transition control packet for a continued episode.
+
+    The first stage needs its complete input projection because it introduces
+    the case.  After that, the full event history already contains the prior
+    assistant actions, tool observations, and reducer deltas.  Replaying each
+    stage's cumulative runtime packet would therefore duplicate state dozens
+    of times.  Keep only the current stage contract and active tool boundary.
+    """
+
+    payload: dict[str, Any] = {
+        "stage": example_type,
+        "output_mode": (
+            "native_tool_call" if example_type == "react" else "structured_json"
+        ),
+    }
+    instruction = _strip_gemini_wire_instructions(
+        str(policy_input.get("system_instruction", ""))
+    )
+    if instruction:
+        payload["stage_instruction"] = instruction
+    tools = _normalize_tool_schema(policy_input.get("tools"))
+    if example_type == "react":
+        payload["authorized_tool_names"] = [
+            str(tool["function"]["name"]) for tool in tools
+        ]
+    return canonical_json(payload)
+
+
+def _compact_export_input_payload(value: Any) -> Any:
+    """Remove archived workspace snapshots from model-visible SFT packets.
+
+    Runtime stage requests intentionally retain the complete handoff in the
+    canonical trace and context ledger.  The rendered stage-specific input
+    already contains the bounded state projection needed by that stage, so
+    exporting ``runtime_handoff.workspace`` again makes every policy turn carry
+    a second copy of cumulative state.  Keep the handoff metadata and compact
+    projection marker, but never copy the archived full workspace into SFT.
+    """
+
+    if isinstance(value, list):
+        return [_compact_export_input_payload(item) for item in value]
+    if isinstance(value, Mapping):
+        result: dict[str, Any] = {}
+        for key, child in value.items():
+            if key == "runtime_handoff" and isinstance(child, Mapping):
+                handoff = {
+                    str(name): _compact_export_input_payload(item)
+                    for name, item in child.items()
+                    if name != "workspace"
+                }
+                result[str(key)] = handoff
+            else:
+                result[str(key)] = _compact_export_input_payload(child)
+        return result
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except (TypeError, ValueError):
+            return value
+        compacted = _compact_export_input_payload(parsed)
+        if compacted != parsed:
+            return canonical_json(compacted)
+    return value
 
 
 def _trajectory_candidate_steps(
@@ -380,10 +451,12 @@ def export_trajectory_sft_example(
         {
             "role": "system",
             "content": (
-                "<ifv_training_mode>full_trajectory_sft</ifv_training_mode>\n"
+                "<ifv_training_mode>compact_full_trajectory_sft</ifv_training_mode>\n"
                 "You are the Image Factual Verifier policy model. Follow each "
-                "stage packet and generate the next assistant message or tool "
-                "call. Tool responses are observations, not text to imitate."
+                "stage control and generate the next assistant message or tool "
+                "call. Tool responses are observations, not text to imitate. "
+                "The event history and recorded state deltas are the current "
+                "investigation context."
             ),
         },
         {"role": "user", "content": _initial_observation_packet(trace)},
@@ -400,14 +473,23 @@ def export_trajectory_sft_example(
         _assert_no_private_data(policy_action)
         for tool_schema in _normalize_tool_schema(policy_input.get("tools")):
             tool_schemas.setdefault(_tool_schema_key(tool_schema), tool_schema)
-        stage_packet = _stage_user_packet(
+        initial_stage_packet = _stage_user_packet(
+            example_type=example_type,
+            policy_input=policy_input,
+        )
+        stage_control = _stage_control_packet(
             example_type=example_type,
             policy_input=policy_input,
         )
         if position == 0:
-            messages[1]["content"] += "\n\n" + stage_packet
+            messages[1]["content"] += "\n\n" + initial_stage_packet
         elif pending_tool_response is not None:
-            pending_tool_response["next_stage_packet"] = stage_packet
+            # Keep the role sequence expected by the Qwen chat template
+            # (assistant -> tool -> assistant).  The stage boundary is still
+            # carried once in the tool observation.  Do not replay the next
+            # stage's cumulative runtime input: its relevant event deltas have
+            # already been appended to the transcript.
+            pending_tool_response["next_stage_control"] = stage_control
             messages.append(
                 {
                     "role": "tool",
@@ -419,7 +501,7 @@ def export_trajectory_sft_example(
             )
             pending_tool_response = None
         else:
-            messages.append({"role": "user", "content": stage_packet})
+            messages.append({"role": "user", "content": stage_control})
         thought = str(step.get("thought", "") or "").strip()
         if thought:
             _assert_no_private_data(thought)

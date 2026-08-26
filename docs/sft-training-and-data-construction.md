@@ -72,8 +72,8 @@ LLM judge 检查：
 当前主 policy SFT 使用完整 episode：每个最终选中的 case 对应一行数据。完整轨迹仍然是
 归档、审计和 RL 的原始来源；同一 case 的工程重试和质量 reroll 不会覆盖原轨迹。
 
-当前 Qwen 原生格式版本为 `ifv-trajectory-sft-dataset-v2`；旧的自定义
-`role=tool_call/tool_response` 数据不再作为默认训练输入。
+当前外层数据集格式为 `ifv-trajectory-sft-dataset-v2`，完整 episode 的渲染版本为
+`ifv-trajectory-sft-v3`；旧的自定义 `role=tool_call/tool_response` 数据不再作为默认训练输入。
 
 search agent 也常见另一种格式：从完整轨迹按决策点派生多条
 `历史上下文 → 下一步动作` 样本。两者都属于 Agent SFT；本项目当前默认使用前者，今后
@@ -91,17 +91,17 @@ search agent 也常见另一种格式：从完整轨迹按决策点派生多条
 system
   固定训练规则和角色说明
 user
-  初始 Perception/OCR 结果、case 标识和公开图片信息
-user
-  当前 stage packet：阶段、任务、workspace、可用工具或输出 schema
+  初始 Perception/OCR 结果、case 标识、公开图片信息和首个完整 stage packet
 assistant
   非 ReAct：`<think>Gemini thought 摘要</think>` + 结构化 JSON
 assistant
   ReAct：`<think>Gemini thought 摘要</think>` + Qwen 原生 `<tool_call>` 模板文本
 tool
-  工具真实返回的观察结果
+  工具真实返回的观察结果、reducer 状态增量和下一阶段控制信息
+assistant
+  下一次模型输出
 user
-  程序归并后的新 workspace 和下一阶段 packet
+  非工具阶段切换时的下一阶段控制信息
 assistant
   下一次模型输出
 ...直到 Judgment 和结束
@@ -110,12 +110,15 @@ assistant
 实际导出规则：
 
 - 从 trace 提取初始 `perceive_scene` 和 `ocr_with_position` 结果；
-- 每个 policy turn 的 `policy_input` 压缩成该轮 stage packet；
+- 首个 policy turn 保留完整、已压缩的 stage packet；它负责把 case 引入 episode；
+- 后续 turn 不再重复序列化累计 workspace、完整 `input_payload` 或 response schema；
+  只保留 `stage`、阶段指令、输出模式和 ReAct 可用工具名。当前状态由此前 assistant
+  动作、真实 tool observation 和 `investigation_state_update` 增量共同构成；
 - ReAct 的 `policy_action` 转成 Qwen 模板的 `<tool_call><function=...>` 文本；
   参数使用 `<parameter=...>`，不使用 `role=tool_call`；
 - 工具结果使用原生 `role=tool`；不使用 `role=tool_response`；
-- 为满足 Qwen/ms-swift 的交替角色要求，工具结果和下一阶段 packet 放在同一个
-  `role=tool` 观察内容中；首个 stage packet 与初始 user 合并，不产生连续 user；
+- 为满足 Qwen/ms-swift 的交替角色要求，工具结果和下一阶段控制信息放在同一个
+  `role=tool` 观察内容中；首个完整 stage packet 与初始 user 合并，不产生连续 user；
 - Gemini thought 摘要直接写入 assistant `content` 的 `<think>...</think>`；
   这样 ms-swift 会对 thought 和 tool call 一起计算 loss；完整隐藏 CoT 不存在，也不导出；
 - 其他阶段的 `policy_action` 是该阶段结构化 JSON；
@@ -123,7 +126,12 @@ assistant
 - `tools` 字段记录该行使用的工具 schema；
 - 不把原始 trace JSON、evaluator-private 字段或程序内部日志整体塞进训练上下文。
 
-因此模型看到的是运行时真正依赖的状态交接，而不是事后才知道的答案或完整内部日志。
+完整 canonical trace、stage handoff shadow 和原始工具结果都不删除，仍是审计、回放和 RL
+的来源。v3 删除的是 SFT 对话中反复复制的同一份状态快照，不是删除真实事件、工具观察或
+状态变化；因此仍是完整 episode，而不是截断轨迹。
+
+上下文膨胀的实测与运行时修复边界见
+[context-management-and-sft-compaction.md](context-management-and-sft-compaction.md)。
 
 ### 5.3 哪些内容计算 loss
 

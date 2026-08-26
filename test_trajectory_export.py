@@ -3,7 +3,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from src.trajectory.exporter import export_policy_examples
+from src.trajectory.exporter import (
+    _stage_control_packet,
+    _stage_user_packet,
+    export_trajectory_sft_example,
+    export_policy_examples,
+)
 from src.trajectory.perception_exporter import (
     PERCEPTION_INSTRUCTION,
     export_perception_example,
@@ -211,6 +216,72 @@ def test_v4_sft_release_can_allow_incomplete_final_chain_only(
         allow_incomplete_verdict_chain=True,
     )
     assert examples
+
+
+def test_export_stage_packet_drops_archived_workspace_snapshot() -> None:
+    packet = _stage_user_packet(
+        example_type="route_local_replan",
+        policy_input={
+            "input_payload": json.dumps(
+                {
+                    "active_target": {"claim_id": "claim-1"},
+                    "runtime_handoff": {
+                        "workspace_version": "ws-1",
+                        "workspace": {
+                            "claims": [{"claim_id": "claim-1"}],
+                            "recent_discoveries": [{"id": "d-1"}],
+                        },
+                    },
+                },
+                ensure_ascii=False,
+            ),
+        },
+    )
+
+    rendered = json.loads(packet)
+    compact_input = json.loads(rendered["input_payload"])
+
+    assert compact_input["runtime_handoff"]["workspace_version"] == "ws-1"
+    assert "workspace" not in compact_input["runtime_handoff"]
+    assert compact_input["active_target"] == {"claim_id": "claim-1"}
+
+
+def test_stage_control_packet_keeps_contract_without_cumulative_input() -> None:
+    packet = json.loads(
+        _stage_control_packet(
+            example_type="react",
+            policy_input={
+                "system_instruction": "Choose one allowed action.",
+                "input_payload": {"large_cumulative_state": "x" * 10000},
+                "tools": [{"name": "visit"}, {"name": "text_search"}],
+            },
+        )
+    )
+
+    assert packet["stage"] == "react"
+    assert packet["output_mode"] == "native_tool_call"
+    assert packet["authorized_tool_names"] == ["visit", "text_search"]
+    assert "input_payload" not in packet
+
+
+def test_full_trajectory_uses_control_packets_after_initial_context(
+    tmp_path: Path,
+) -> None:
+    exported = export_trajectory_sft_example(_trace(tmp_path))
+
+    assert exported.trajectory_version == "ifv-trajectory-sft-v3"
+    tool_messages = [
+        json.loads(message["content"])
+        for message in exported.messages
+        if message["role"] == "tool"
+    ]
+    assert tool_messages
+    assert all("next_stage_packet" not in item for item in tool_messages)
+    assert all(
+        "input_payload" not in json.loads(item["next_stage_control"])
+        for item in tool_messages
+        if "next_stage_control" in item
+    )
 
 
 def test_v4_process_scorer_uses_discrepancy_alignment_and_stop_quality(

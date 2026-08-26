@@ -202,6 +202,23 @@ def test_complete_stage_requests_keep_only_their_workspace_addendum() -> None:
     assert packet.workspace.attempted_routes
 
 
+def test_stage_owned_contexts_do_not_receive_full_workspace() -> None:
+    packet = build_stage_handoff(
+        _state(),
+        target_stage="image_only_route_local_replan",
+        stage_input={
+            "route_boundary": "candidate_exhausted",
+            "active_target": {"fact_id": "fact-1"},
+        },
+        available_tools=[],
+    )
+
+    rendered = render_stage_request(packet)
+
+    assert '"workspace_projection"' in rendered
+    assert '"workspace": {' not in rendered
+
+
 def test_bounded_judgment_request_omits_general_workspace() -> None:
     packet = build_stage_handoff(
         _state(),

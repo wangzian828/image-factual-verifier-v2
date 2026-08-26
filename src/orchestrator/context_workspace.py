@@ -40,6 +40,18 @@ _MODEL_WORKSPACE_FIELDS_BY_STAGE: dict[str, tuple[str, ...]] = {
         "open_questions",
         "budget",
     ),
+    # These stages already render a bounded, stage-owned projection in
+    # image_only_prompts.py.  The full workspace remains in the canonical
+    # handoff/archive, but sending it again here duplicates the same claims,
+    # facts, routes, discoveries, and evidence in the provider request.
+    "image_only_visual_reinspection": (),
+    "image_only_evidence_decision": (),
+    "image_only_reflection": (),
+    "image_only_query_concept_extraction": (),
+    "image_only_query_replan": (),
+    "image_only_route_local_replan": (),
+    "image_only_planning": (),
+    "image_only_judgment": (),
     # Judgment receives a runtime-compiled bounded basis with all allowed
     # Claims, anchors, Findings and Evidence.  General workspace history must
     # not override or dilute that basis.

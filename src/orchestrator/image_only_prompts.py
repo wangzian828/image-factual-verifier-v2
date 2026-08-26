@@ -1729,7 +1729,7 @@ def render_reflection_context(
             ],
             "findings": [
                 item.model_dump(mode="json")
-                for item in state.findings
+                for item in state.findings[-24:]
             ],
             "recent_discoveries": [
                 item.model_dump(mode="json")
@@ -1748,7 +1748,7 @@ def render_reflection_context(
             ),
             "failures": [
                 item.model_dump(mode="json")
-                for item in state.failures
+                for item in state.failures[-16:]
             ],
             "core_verdict_fact_id": state.core_verdict_fact_id,
             "evidence_gaps": [

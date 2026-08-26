@@ -95,8 +95,11 @@ class DatasetPerceptionExample(PerceptionExample):
 class TrajectorySFTExample(StrictModel):
     """One complete accepted episode rendered as one Agent SFT conversation."""
 
-    trajectory_version: Literal["ifv-trajectory-sft-v2"] = (
-        "ifv-trajectory-sft-v2"
+    trajectory_version: Literal[
+        "ifv-trajectory-sft-v2",
+        "ifv-trajectory-sft-v3",
+    ] = (
+        "ifv-trajectory-sft-v3"
     )
     episode_id: str = Field(min_length=1, max_length=200)
     case_id: str = Field(min_length=1, max_length=200)

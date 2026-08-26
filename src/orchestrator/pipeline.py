@@ -2481,8 +2481,12 @@ class Orchestrator:
             stage_name="image_only_route_local_replan",
             runtime_store=state.runtime_store,
             handoff_state=investigation,
-            attach_image=bool(image_path)
-            and self._main_llm_attaches_image(),
+            # Route-local replanning consumes the bounded image observations
+            # rendered below.  It does not make a new pixel judgment; raw-image
+            # access belongs to perception/planning and focused visual tools.
+            # Re-attaching the original image here needlessly adds media bytes
+            # to an already state-heavy standalone request.
+            attach_image=False,
             output_validator=lambda parsed, _steps: (
                 self._validate_image_only_route_local_replan(
                     investigation,
