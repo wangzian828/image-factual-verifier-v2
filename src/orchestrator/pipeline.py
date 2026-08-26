@@ -1481,7 +1481,7 @@ class Orchestrator:
             should_stop=lambda steps: any(
                 step.action_type == "tool_call" for step in steps
             ),
-            max_output_tokens=self._stage_output_tokens("VERIFICATION", 16384),
+            max_output_tokens=self._stage_output_tokens("VERIFICATION", 8192),
             generation_config=self._stage_generation_config("VERIFICATION"),
             observation_callback=observation_callback,
             question_claims=self._discrepancy_task_claims(
