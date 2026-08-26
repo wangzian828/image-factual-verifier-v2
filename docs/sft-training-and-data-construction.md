@@ -182,7 +182,8 @@ max_length=131072（当前完整轨迹训练上限）
 
 分布式使用已验证的 FSDP2 或 DeepSpeed ZeRO-3 profile。`max_length` 是训练长度，不等于
 在线服务的上下文上限。32K 以上的轨迹可以进入训练；超过 128K 的轨迹保留在
-`long_holdout.jsonl`，不能静默截断或直接送入 processor。
+`long_holdout.jsonl`，不能静默截断或直接送入 processor。最终准入以真实
+Qwen/ms-swift processor 编码结果为准，导出阶段的字节估算只是保守预筛。
 
 ## 8. 代码入口
 

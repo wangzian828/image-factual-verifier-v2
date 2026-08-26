@@ -41,6 +41,7 @@ for import_root in (REPO_ROOT, TRAINING_ROOT):
 
 from scripts.trajectory.export_dataset import (
     DEFAULT_SHORT_TRAJECTORY_MAX_TOKENS,
+    UTF8_BYTES_PER_APPROX_TOKEN,
     export_dataset,
 )
 from src.eval.score_sft_eligibility import (
@@ -201,12 +202,15 @@ def _length_bucket(token_estimate: int | None) -> str:
 
     The exporter currently uses ``Utf8ByteTokenizer``.  Its field is a byte
     count, not a Qwen tokenizer count, so the bucket is intentionally labelled
-    provisional and uses a conservative bytes/4 conversion.
+    provisional and uses a conservative bytes/3 conversion.  The real
+    ms-swift processor audit remains the final length gate.
     """
 
     if token_estimate is None or token_estimate <= 0:
         return "unknown"
-    approximate_tokens = (token_estimate + 3) // 4
+    approximate_tokens = (
+        token_estimate + UTF8_BYTES_PER_APPROX_TOKEN - 1
+    ) // UTF8_BYTES_PER_APPROX_TOKEN
     if approximate_tokens <= 32768:
         return "within_32k_estimate"
     if approximate_tokens <= 131072:

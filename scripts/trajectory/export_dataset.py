@@ -27,7 +27,10 @@ SPLITS = ("train", "validation", "test")
 ACCEPTED_RELEASE_SCHEMA = "ifv-accepted-teacher-release-v2"
 # The provider-neutral exporter stores a UTF-8 byte estimate.  The admission
 # budget below is expressed in conservative approximate model tokens.
-UTF8_BYTES_PER_APPROX_TOKEN = 4
+# Qwen3.5 processor measurements on exported episodes show that bytes/4
+# underestimates the final token count near the 128K boundary.  bytes/3 is a
+# conservative admission estimate; the real processor audit remains final.
+UTF8_BYTES_PER_APPROX_TOKEN = 3
 DEFAULT_SHORT_TRAJECTORY_MAX_TOKENS = 131072
 DETERMINISTIC_FATAL_TEACHER_REASONS = frozenset(
     {
