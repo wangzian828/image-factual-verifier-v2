@@ -99,6 +99,8 @@ def main() -> None:
             enable_dft_loss=False,
             enable_channel_loss=False,
             router_aux_loss_coef=None,
+            # Skip unrelated token-accuracy bookkeeping in the tiny mock.
+            tuner_backend="unsloth",
         ),
         accelerator=FakeAccelerator(),
         label_smoother=None,
