@@ -29,6 +29,12 @@ from .perception import (
 )
 from .policy import convert_policy_dataset
 from .profile import write_training_profile
+from .psd import (
+    audit_psd_hints,
+    build_psd_target_package,
+    materialize_psd_topk_cache,
+)
+from .psd_candidates import build_psd_candidate_package
 from .rewards import (
     build_and_write_ledger,
     build_ledgers_from_run_artifacts,
@@ -158,6 +164,28 @@ def _parser() -> argparse.ArgumentParser:
     grpo_groups.add_argument("--rollout-members", type=Path, required=True)
     grpo_groups.add_argument("--output", type=Path, required=True)
     grpo_groups.add_argument("--minimum-valid-members", type=int, default=2)
+
+    psd_audit = subparsers.add_parser("audit-psd-hints")
+    psd_audit.add_argument("--input", type=Path, required=True)
+    psd_audit.add_argument("--output", type=Path, required=True)
+
+    psd_targets = subparsers.add_parser("build-psd-targets")
+    psd_targets.add_argument("--repairs", type=Path, required=True)
+    psd_targets.add_argument("--preservation", type=Path)
+    psd_targets.add_argument("--output-dir", type=Path, required=True)
+    psd_targets.add_argument("--topk", type=int, default=20)
+    psd_targets.add_argument("--allow-local-only", action="store_true")
+
+    psd_candidates = subparsers.add_parser("build-psd-candidates")
+    psd_candidates.add_argument("--run-dir", type=Path, required=True)
+    psd_candidates.add_argument("--train-cases", type=Path, required=True)
+    psd_candidates.add_argument("--output-dir", type=Path, required=True)
+
+    psd_topk = subparsers.add_parser("materialize-psd-topk")
+    psd_topk.add_argument("--targets", type=Path, required=True)
+    psd_topk.add_argument("--cache", type=Path, required=True)
+    psd_topk.add_argument("--output-dir", type=Path, required=True)
+    psd_topk.add_argument("--topk", type=int, default=20)
 
     run_rewards = subparsers.add_parser("build-run-rewards")
     run_rewards.add_argument("--deterministic", type=Path, required=True)
@@ -325,6 +353,29 @@ def main() -> None:
             minimum_valid_members=args.minimum_valid_members,
         )
         write_jsonl(args.output, result)
+    elif args.command == "audit-psd-hints":
+        result = audit_psd_hints(args.input, args.output)
+    elif args.command == "build-psd-targets":
+        result = build_psd_target_package(
+            repairs_path=args.repairs,
+            preservation_path=args.preservation,
+            output_dir=args.output_dir,
+            topk=args.topk,
+            allow_local_only=args.allow_local_only,
+        )
+    elif args.command == "build-psd-candidates":
+        result = build_psd_candidate_package(
+            run_dir=args.run_dir,
+            train_cases_path=args.train_cases,
+            output_dir=args.output_dir,
+        )
+    elif args.command == "materialize-psd-topk":
+        result = materialize_psd_topk_cache(
+            targets_path=args.targets,
+            cache_path=args.cache,
+            output_dir=args.output_dir,
+            topk=args.topk,
+        )
     elif args.command == "build-run-rewards":
         semantic_artifacts = []
         if args.semantic_artifacts:

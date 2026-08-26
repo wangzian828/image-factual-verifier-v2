@@ -69,7 +69,8 @@ def main() -> None:
             "tools": tools,
             "tool_choice": "required",
             "logprobs": True,
-            "top_logprobs": 0,
+            "top_logprobs": 20,
+            "prompt_logprobs": 20,
             "return_token_ids": True,
         },
     )
@@ -84,6 +85,16 @@ def main() -> None:
     logprobs = choice.get("logprobs")
     if isinstance(logprobs, dict):
         logprobs = logprobs.get("content") or logprobs.get("token_logprobs")
+    prompt_logprobs = (
+        body.get("prompt_logprobs")
+        if isinstance(body, dict)
+        else None
+    )
+    if isinstance(prompt_logprobs, dict):
+        prompt_logprobs = (
+            prompt_logprobs.get("content")
+            or prompt_logprobs.get("token_logprobs")
+        )
     result = {
         "schema_version": "ifv-rl-serving-compatibility-v1",
         "python": sys.version,
@@ -115,6 +126,7 @@ def main() -> None:
             "token_logprob_lengths_match": bool(gen_tokens)
             and bool(logprobs)
             and len(gen_tokens) == len(logprobs),
+            "prompt_top20_logprobs": bool(prompt_logprobs),
         },
         "response_excerpt": body,
     }
@@ -124,6 +136,7 @@ def main() -> None:
         "completion_token_ids",
         "completion_logprobs",
         "token_logprob_lengths_match",
+        "prompt_top20_logprobs",
     )
     result["passed"] = completion["status"] == 200 and all(
         result["checks"][key] for key in required

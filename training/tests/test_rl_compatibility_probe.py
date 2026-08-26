@@ -14,8 +14,11 @@ def test_rl_probe_requires_tools_token_ids_logprobs_and_length_alignment() -> No
     assert '"tool_choice": "required"' in source
     assert '"return_token_ids": True' in source
     assert '"logprobs": True' in source
+    assert '"top_logprobs": 20' in source
+    assert '"prompt_logprobs": 20' in source
     assert '"prompt_token_ids"' in source
     assert '"completion_token_ids"' in source
     assert '"completion_logprobs"' in source
     assert '"token_logprob_lengths_match"' in source
+    assert '"prompt_top20_logprobs"' in source
     assert "raise SystemExit(1)" in source

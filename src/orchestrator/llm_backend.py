@@ -12,7 +12,7 @@ import asyncio
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 import threading
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Mapping, Optional
 
 import httpx
 
@@ -38,6 +38,82 @@ class LLMResponse:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     raw: Optional[Dict[str, Any]] = None
+
+
+POLICY_TOKEN_CAPTURE_SCHEMA_VERSION = "ifv-policy-token-capture-v1"
+
+
+def _int_token_ids(value: Any) -> list[int]:
+    if not isinstance(value, list):
+        return []
+    token_ids: list[int] = []
+    for item in value:
+        if isinstance(item, bool):
+            return []
+        try:
+            token_ids.append(int(item))
+        except (TypeError, ValueError):
+            return []
+    return token_ids
+
+
+def _completion_logprob_values(value: Any) -> list[float]:
+    if isinstance(value, Mapping):
+        for key in ("content", "token_logprobs"):
+            if key in value:
+                return _completion_logprob_values(value[key])
+        return []
+    if not isinstance(value, list):
+        return []
+    result: list[float] = []
+    for item in value:
+        raw_value = item.get("logprob") if isinstance(item, Mapping) else item
+        if isinstance(raw_value, bool):
+            return []
+        try:
+            result.append(float(raw_value))
+        except (TypeError, ValueError):
+            return []
+    return result
+
+
+def extract_policy_token_capture(payload: Mapping[str, Any]) -> Dict[str, Any]:
+    """Extract a fail-closed numeric token record from a Qwen server response."""
+
+    choices = payload.get("choices")
+    choice = (
+        choices[0]
+        if isinstance(choices, list) and choices and isinstance(choices[0], Mapping)
+        else {}
+    )
+    message = choice.get("message") if isinstance(choice, Mapping) else {}
+    message = message if isinstance(message, Mapping) else {}
+    prompt_token_ids = _int_token_ids(payload.get("prompt_token_ids"))
+    completion_token_ids = _int_token_ids(
+        message.get("gen_tokens")
+        or choice.get("token_ids")
+        or message.get("token_ids")
+    )
+    completion_logprobs = _completion_logprob_values(
+        choice.get("logprobs") if isinstance(choice, Mapping) else None
+    )
+    missing: list[str] = []
+    if not prompt_token_ids:
+        missing.append("prompt_token_ids")
+    if not completion_token_ids:
+        missing.append("completion_token_ids")
+    if not completion_logprobs:
+        missing.append("completion_logprobs")
+    elif len(completion_logprobs) != len(completion_token_ids):
+        missing.append("completion_logprob_length_mismatch")
+    return {
+        "schema_version": POLICY_TOKEN_CAPTURE_SCHEMA_VERSION,
+        "status": "complete" if not missing else "incomplete",
+        "prompt_token_ids": prompt_token_ids,
+        "completion_token_ids": completion_token_ids,
+        "completion_logprobs": completion_logprobs,
+        "missing": missing,
+    }
 
 
 class LLMBackend(ABC):
@@ -332,6 +408,19 @@ class APIBackend(LLMBackend):
         response_format = kwargs.get("response_format")
         if response_format and not strict_qwen_chat:
             body["response_format"] = response_format
+        if kwargs.get("capture_policy_tokens"):
+            if self.provider not in {"qwen_local", "lmdeploy"}:
+                raise ValueError(
+                    "policy token capture is only supported for local "
+                    "Qwen-compatible chat completions"
+                )
+            body.update(
+                {
+                    "return_token_ids": True,
+                    "logprobs": True,
+                    "top_logprobs": 0,
+                }
+            )
         generation_config = kwargs.get("generation_config")
         # The official Transformers server may reject/ignore response_format
         # while still returning a reasoning-only assistant message for a

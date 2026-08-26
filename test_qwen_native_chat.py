@@ -9,7 +9,11 @@ import httpx
 import pytest
 from pydantic import BaseModel, Field
 
-from src.orchestrator.llm_backend import APIBackend, LLMResponse
+from src.orchestrator.llm_backend import (
+    APIBackend,
+    LLMResponse,
+    extract_policy_token_capture,
+)
 from src.orchestrator.runtime_events import CaseRuntimeStore
 from src.orchestrator.stage_runner import StageRunner, StageStep
 from src.tools.base import BaseTool
@@ -906,6 +910,110 @@ def test_qwen35_forwards_budget_and_sampling_controls() -> None:
     assert captured["top_p"] == 0.95
     assert captured["top_k"] == 20
     assert captured["presence_penalty"] == 1.5
+
+
+def test_qwen_policy_token_capture_forwards_and_validates_native_tokens() -> None:
+    captured: Dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content.decode("utf-8")))
+        return httpx.Response(
+            200,
+            json={
+                "prompt_token_ids": [1, 2, 3],
+                "choices": [
+                    {
+                        "message": {
+                            "content": '{"answer":"ok"}',
+                            "gen_tokens": [4, 5],
+                        },
+                        "token_ids": [4, 5],
+                        "logprobs": {
+                            "content": [
+                                {"token": "{", "logprob": -0.1},
+                                {"token": "}", "logprob": -0.2},
+                            ]
+                        },
+                    }
+                ],
+                "usage": {"prompt_tokens": 3, "completion_tokens": 2},
+            },
+        )
+
+    async def run() -> LLMResponse:
+        backend = APIBackend(
+            provider="qwen_local",
+            model_name="ifv-qwen3.5-9b-vllm",
+            max_retries=0,
+        )
+        backend._shared_client = httpx.AsyncClient(
+            transport=httpx.MockTransport(handler),
+        )
+        try:
+            return await backend.get_response(
+                [{"role": "user", "content": "Return JSON."}],
+                capture_policy_tokens=True,
+            )
+        finally:
+            await backend.aclose()
+
+    response = asyncio.run(run())
+
+    assert captured["return_token_ids"] is True
+    assert captured["logprobs"] is True
+    assert captured["top_logprobs"] == 0
+    assert extract_policy_token_capture(response.raw or {}) == {
+        "schema_version": "ifv-policy-token-capture-v1",
+        "status": "complete",
+        "prompt_token_ids": [1, 2, 3],
+        "completion_token_ids": [4, 5],
+        "completion_logprobs": [-0.1, -0.2],
+        "missing": [],
+    }
+
+
+def test_qwen_stage_archives_requested_policy_token_capture(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("IFV_CAPTURE_POLICY_TOKENS", "1")
+    raw = {
+        "prompt_token_ids": [10, 11],
+        "choices": [
+            {
+                "message": {
+                    "content": '{"answer":"ceremonial coach"}',
+                    "gen_tokens": [12],
+                },
+                "logprobs": {"content": [{"logprob": -0.2}]},
+            }
+        ],
+    }
+    backend = QwenFakeBackend(
+        [
+            LLMResponse(
+                text='{"answer":"ceremonial coach"}',
+                prompt_tokens=2,
+                completion_tokens=1,
+                raw=raw,
+            )
+        ]
+    )
+    runner = StageRunner(
+        llm=backend,
+        system_prompt="Return the structured result.",
+        tools=[],
+        output_schema=AnswerOutput,
+        max_rounds=1,
+        stage_name="image_only_judgment",
+        attach_image=False,
+    )
+
+    parsed, steps = asyncio.run(runner.run("Return one JSON object."))
+
+    assert parsed == AnswerOutput(answer="ceremonial coach")
+    assert backend.requests[0]["capture_policy_tokens"] is True
+    assert steps[0].metadata["policy_token_capture"]["status"] == "complete"
+    assert steps[0].metadata["policy_token_capture"]["completion_token_ids"] == [12]
 
 
 def test_qwen_reasoning_is_archived_but_not_reintroduced(

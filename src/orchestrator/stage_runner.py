@@ -26,7 +26,11 @@ from src.integrations.gemini import (
     take_runtime_metrics,
 )
 from src.orchestrator.evidence_policy import query_policy_violation
-from src.orchestrator.llm_backend import LLMBackend, LLMResponse
+from src.orchestrator.llm_backend import (
+    LLMBackend,
+    LLMResponse,
+    extract_policy_token_capture,
+)
 from src.orchestrator.route_policy import routes_semantically_equivalent
 from src.orchestrator.runtime_events import CaseRuntimeStore
 from src.orchestrator.context_workspace import (
@@ -3142,6 +3146,15 @@ class StageRunner:
             == "chat_completions"
         )
 
+    @staticmethod
+    def _policy_token_capture_enabled() -> bool:
+        return os.getenv("IFV_CAPTURE_POLICY_TOKENS", "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+
     def _recent_recalled_materials(self) -> List[Dict[str, Any]]:
         materials: List[Dict[str, Any]] = []
         for step in self.prior_steps:
@@ -3227,6 +3240,8 @@ class StageRunner:
             elif self.output_schema is not None:
                 response_format = self._openai_response_format()
                 request_kwargs["response_format"] = response_format
+            if self._policy_token_capture_enabled():
+                request_kwargs["capture_policy_tokens"] = True
         request_id = ""
         effective_lifecycle_kind = lifecycle_kind.strip() or (
             "tool_roundtrip"
@@ -3340,7 +3355,7 @@ class StageRunner:
                 },
             )
         self._last_context_request_id = request_id
-        return response, {
+        metadata = {
             "llm_duration_ms": duration_ms,
             "context_request_id": request_id,
             "parent_context_request_id": effective_parent_request_id,
@@ -3351,6 +3366,9 @@ class StageRunner:
             "response_reasoning_chars": response_reasoning_chars,
             "reasoning_artifact": reasoning_artifact,
         }
+        if request_kwargs.get("capture_policy_tokens"):
+            metadata["policy_token_capture"] = extract_policy_token_capture(raw)
+        return response, metadata
 
     async def _create_interaction(self, **kwargs: Any) -> Dict[str, Any]:
         """Apply one wall-clock deadline to every native Gemini request."""
