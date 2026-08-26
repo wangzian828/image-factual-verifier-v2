@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from pathlib import Path
 
 import torch
 
@@ -39,3 +40,17 @@ def test_sparse_topk_cross_entropy_has_expected_value_and_gradient() -> None:
 def test_ms_swift_plugin_contract_constants_are_stable() -> None:
     assert PSD_MS_SWIFT_TEMPLATE == "ifv_psd_topk"
     assert PSD_MS_SWIFT_LOSS == "ifv_psd_topk"
+
+
+def test_ms_swift_plugin_smoke_exercises_template_collator_and_trainer_bridge() -> None:
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "scripts"
+        / "probe"
+        / "psd_ms_swift_plugin_smoke.py"
+    ).read_text(encoding="utf-8")
+
+    assert "runpy.run_path" in source
+    assert "template.data_collator" in source
+    assert "Seq2SeqTrainer.compute_loss" in source
+    assert "loss.backward()" in source
