@@ -172,6 +172,22 @@ def test_planning_schema_constrains_pixel_anchor_ids() -> None:
         schema.model_validate(payload)
 
 
+def test_planning_schema_excludes_media_origin_route() -> None:
+    schema = ImageAccountPlanningOutput.model_json_schema()
+    route_schema = schema["$defs"]["SearchHypothesisProposal"]["properties"][
+        "route_focus"
+    ]
+
+    assert "media_origin" not in route_schema["enum"]
+    assert set(route_schema["enum"]) == {
+        "same_capture_reference",
+        "entity_event_identity",
+        "relation_value",
+        "scene_world_constraints",
+        "visual_consistency",
+    }
+
+
 def test_planning_derives_text_search_from_nonempty_queries() -> None:
     payload = _planning_output().model_dump(mode="json")
     payload["search_hypotheses"][0]["suggested_tools"] = [

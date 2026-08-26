@@ -70,27 +70,30 @@ def test_hot_path_prompts_stay_semantic_and_compact() -> None:
     assert "stance" not in EXTRACT_SCHEMA["properties"]
     assert "runtime owns task state" in react_prompt
     assert "validates grounding" in planning_prompt
-    assert "do not own the verdict" in image_account_prompt
-    assert "search_hypotheses as neutral investigation routes" in image_account_prompt
-    assert "one high-salience image-grounded target fact" in image_account_prompt
-    assert "visible world relation" in image_account_prompt
-    assert "independently verdict-changing" in image_account_prompt
-    assert "a defining factual relation may be more useful" in image_account_prompt
-    assert "Do not inventory details" in image_account_prompt
-    assert "positive world proposition" in image_account_prompt
-    assert "neutral investigation routes" in image_account_prompt
+    assert "do not decide the verdict" in image_account_prompt
+    assert "1. Define the target facts" in image_account_prompt
+    assert "2. Design neutral investigation routes" in image_account_prompt
+    assert "3. Keep the factual boundary" in image_account_prompt
+    assert "4. Prohibited directions" in image_account_prompt
+    assert "search_hypotheses as neutral routes" in image_account_prompt
+    assert "exactly one high-salience central target" in image_account_prompt
+    assert "independently change the verdict" in image_account_prompt
+    assert "Do not inventory visible details" in image_account_prompt
+    assert "positive real-world proposition" in image_account_prompt
     assert "not candidate verdicts" in image_account_prompt
-    assert "retrieval context" in image_account_prompt
-    assert "determine the relation slot's verified value" in image_account_prompt
-    assert "Hard prohibition" in image_account_prompt
-    assert "never use ``media_origin``" in image_account_prompt
-    assert "AI-generated, AI-manipulated" in image_account_prompt
-    assert "original or source image" in image_account_prompt
-    assert "creator, platform, publication context" in image_account_prompt
-    assert "neutral text_search or visual route" in image_account_prompt
-    assert "Do not repeat a prohibited token" in image_account_prompt
-    assert "governance framework" in image_account_prompt
-    assert "science fund" in image_account_prompt
+    assert "investigation context, not target facts" in image_account_prompt
+    assert "Every hypothesis must expose an executable first-hop route" in (
+        image_account_prompt
+    )
+    assert "Only tool-produced Evidence can establish a fact" in (
+        image_account_prompt
+    )
+    assert "AI-generation, manipulation, authenticity" in image_account_prompt
+    assert "source image, exact capture, creator, platform" in image_account_prompt
+    assert "Rewrite such a route around the underlying subject" in (
+        image_account_prompt
+    )
+    assert "prohibited token such as ``AI``" in image_account_prompt
     assert (
         neutralize_planning_route_text("AI Governance Framework")
         == "Governance Framework"
@@ -99,14 +102,12 @@ def test_hot_path_prompts_stay_semantic_and_compact() -> None:
         neutralize_planning_route_text("AI for Science Fund")
         == "Science Fund"
     )
-    assert "Image clues guide retrieval" in image_account_prompt
-    assert "exact source matching is retrieval context" in image_account_prompt
-    assert "only tool Evidence establishes a fact" in image_account_prompt
-    assert "Generic example" in image_account_prompt
-    assert "smallest positive proposition" in image_account_prompt
-    assert "same subject and relation" in image_account_prompt
-    assert "media-origin focus is rewritten as a factual focus" in image_account_prompt
-    assert "Output: account_summary" in image_account_prompt
+    assert "Return one JSON object matching the response schema" in (
+        image_account_prompt
+    )
+    assert "``account_summary``" in image_account_prompt
+    assert "``image_claims``" in image_account_prompt
+    assert "``search_hypotheses``" in image_account_prompt
     assert "not a boundary on the investigation" in discrepancy_react_prompt
     assert "Frame retrieval around what actually happened" in discrepancy_react_prompt
     assert "actual value of the same relation slot" in discrepancy_react_prompt

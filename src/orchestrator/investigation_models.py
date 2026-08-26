@@ -23,6 +23,14 @@ RouteFocus = Literal[
     "media_origin",
 ]
 
+PlanningRouteFocus = Literal[
+    "same_capture_reference",
+    "entity_event_identity",
+    "relation_value",
+    "scene_world_constraints",
+    "visual_consistency",
+]
+
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -445,12 +453,53 @@ class ImageClaimProposal(StrictModel):
         min_length=1,
         max_length=80,
         pattern=r"^[a-z0-9][a-z0-9_-]*$",
+        description=(
+            "Stable lowercase key for this image-grounded target fact; "
+            "use a distinct key for each claim."
+        ),
     )
-    statement: str = Field(min_length=1, max_length=1200)
-    kind: Literal["attribute", "relation", "internal_consistency", "text_claim"]
-    predicate: str = Field(min_length=1, max_length=100)
-    anchor_fact_ids: List[str] = Field(min_length=1, max_length=12)
-    salience: Literal["high", "medium"] = "high"
+    statement: str = Field(
+        min_length=1,
+        max_length=1200,
+        description=(
+            "Positive, atomic real-world proposition expressed by the image, "
+            "grounded in a concrete subject and relation or value."
+        ),
+    )
+    kind: Literal[
+        "attribute",
+        "relation",
+        "internal_consistency",
+        "text_claim",
+    ] = Field(
+        description=(
+            "Semantic kind of the image-grounded proposition: an attribute, "
+            "relation, internal consistency condition, or visible text claim."
+        ),
+    )
+    predicate: str = Field(
+        min_length=1,
+        max_length=100,
+        description=(
+            "Short atomic predicate naming the relation or property asserted "
+            "by the claim."
+        ),
+    )
+    anchor_fact_ids: List[str] = Field(
+        min_length=1,
+        max_length=12,
+        description=(
+            "Exact VisualFact IDs from the current image/OCR planning context "
+            "that visibly ground this claim."
+        ),
+    )
+    salience: Literal["high", "medium"] = Field(
+        default="high",
+        description=(
+            "Importance of the target. Exactly one claim must be high-salience; "
+            "medium claims are optional and must be independently verdict-changing."
+        ),
+    )
 
 
 class SearchHypothesisProposal(StrictModel):
@@ -458,20 +507,22 @@ class SearchHypothesisProposal(StrictModel):
         min_length=1,
         max_length=80,
         pattern=r"^[a-z0-9][a-z0-9_-]*$",
-    )
-    route_focus: RouteFocus = Field(
         description=(
-            "Primary reason this route exists. Keep it centered on a depicted "
-            "entity, event, relation value, scene/world constraint, or visible "
-            "image property."
+            "Stable lowercase key for a distinct neutral investigation route."
+        ),
+    )
+    route_focus: PlanningRouteFocus = Field(
+        description=(
+            "Primary reason this route exists. Use a depicted entity, event, "
+            "relation value, scene/world constraint, or visible image property."
         ),
     )
     statement: str = Field(
         min_length=1,
         max_length=1200,
         description=(
-            "Neutral answer-seeking investigation route about the source, entity, "
-            "event, relation, or value, grounded in the target fact."
+            "Neutral answer-seeking route for determining the underlying value "
+            "of the target relation; it is not a verdict or provenance claim."
         ),
     )
     queries: List[str] = Field(
@@ -479,15 +530,15 @@ class SearchHypothesisProposal(StrictModel):
         max_length=3,
         description=(
             "Neutral alternative query formulations built from visible anchors "
-            "and relation terms, not a guaranteed execution queue."
+            "and relation terms; not a guaranteed execution queue."
         ),
     )
     expected_information: str = Field(
         min_length=1,
         max_length=800,
         description=(
-            "The underlying source or relation facts the route should recover, "
-            "without presupposing the final verdict."
+            "Underlying subject, event, relation, or value the route should "
+            "recover, without presupposing the final verdict."
         ),
     )
     suggested_tools: List[
@@ -501,8 +552,20 @@ class SearchHypothesisProposal(StrictModel):
             "crop_and_inspect",
             "ocr_with_position",
         ]
-    ] = Field(min_length=1, max_length=4)
-    priority: int = Field(default=1, ge=1, le=3)
+    ] = Field(
+        min_length=1,
+        max_length=4,
+        description=(
+            "Tools suitable for the first hop or later inspection in this "
+            "route; include at least one executable first-hop capability."
+        ),
+    )
+    priority: int = Field(
+        default=1,
+        ge=1,
+        le=3,
+        description="Relative route priority from 1 (highest) to 3.",
+    )
 
     @model_validator(mode="after")
     def validate_first_hop(self) -> "SearchHypothesisProposal":
@@ -528,11 +591,30 @@ class ImageAccountPlanningOutput(StrictModel):
     user-supplied Claims or provenance requirements.
     """
 
-    account_summary: str = Field(min_length=1, max_length=1600)
-    image_claims: List[ImageClaimProposal] = Field(min_length=1, max_length=3)
+    account_summary: str = Field(
+        min_length=1,
+        max_length=1600,
+        description=(
+            "Short summary of the image-grounded facts the investigation must "
+            "resolve; do not state a verdict or provenance conclusion."
+        ),
+    )
+    image_claims: List[ImageClaimProposal] = Field(
+        min_length=1,
+        max_length=3,
+        description=(
+            "One to three image-grounded target facts. Exactly one must have "
+            "salience=high; add medium claims only when independently "
+            "verdict-changing."
+        ),
+    )
     search_hypotheses: List[SearchHypothesisProposal] = Field(
         min_length=1,
         max_length=3,
+        description=(
+            "One to three distinct neutral investigation routes. At least one "
+            "must provide an executable first hop."
+        ),
     )
 
     @model_validator(mode="after")
