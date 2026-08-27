@@ -98,6 +98,15 @@ def _parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--agent-decision-policy-version",
+        choices=["discrepancy-first-v4", "unified-react-v1"],
+        default=AGENT_DECISION_POLICY_VERSION,
+        help=(
+            "Agent orchestration policy. The default remains the stable v4 "
+            "path; unified-react-v1 must use a separate run directory."
+        ),
+    )
+    parser.add_argument(
         "--llm-wire-api",
         default=None,
         choices=["interactions", "responses", "chat_completions"],
@@ -563,7 +572,11 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
         vlm_wire_api=getattr(args, "vlm_wire_api", None),
         timeout=args.timeout,
         save_traces=True,
-        decision_policy_version=AGENT_DECISION_POLICY_VERSION,
+        decision_policy_version=getattr(
+            args,
+            "agent_decision_policy_version",
+            AGENT_DECISION_POLICY_VERSION,
+        ),
     )
     rollout_specs = _rollout_specs(
         samples,
