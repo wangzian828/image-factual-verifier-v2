@@ -535,6 +535,92 @@ def test_unified_outer_react_correction_is_not_a_strict_failure(
     assert report.stats["successful_protocol_corrections"] == 1
 
 
+def test_strict_audit_accepts_route_independent_visual_child_task(
+    tmp_path: Path,
+) -> None:
+    trace_path = _unified_trace(tmp_path)
+    trace = json.loads(trace_path.read_text(encoding="utf-8"))
+    investigation = trace["state"]["investigation_state"]
+    investigation["tasks"].append(
+        {
+            "task_id": "task-unified-visual-child",
+            "fact_ids": ["vf-target-unified"],
+            "claim_ids": ["claim-unified"],
+            "hypothesis_id": None,
+            "parent_task_id": "task-unified",
+            "origin_ids": ["vf-target-unified", "claim-unified"],
+            "status": "exhausted",
+        }
+    )
+    trace_path.write_text(
+        json.dumps(trace, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    report = audit_trace(trace_path)
+
+    assert not report.failures(strict_scheduler=True)
+
+
+def test_strict_audit_accepts_optional_terminal_reflection(
+    tmp_path: Path,
+) -> None:
+    trace_path = _unified_trace(tmp_path)
+    trace = json.loads(trace_path.read_text(encoding="utf-8"))
+    steps = trace["state"]["all_steps"]
+    template = json.loads(json.dumps(steps[2]))
+    previous_interaction = "interaction-search"
+    extra_actions = []
+    for index in range(2, 5):
+        action = json.loads(json.dumps(template))
+        interaction_id = f"interaction-extra-{index}"
+        function_call_id = f"call-extra-{index}"
+        action["metadata"]["interaction_id"] = interaction_id
+        action["metadata"]["previous_interaction_id"] = previous_interaction
+        action["metadata"]["function_call_id"] = function_call_id
+        action["metadata"]["policy_action"]["arguments"] = {
+            "task_id": "task-unified",
+            "queries": f"Riverfest bridge {index}",
+        }
+        action["tool_args"] = dict(action["metadata"]["policy_action"]["arguments"])
+        delta = action["metadata"]["unified_react_delta"]
+        delta["action_id"] = function_call_id
+        delta["interaction_id"] = interaction_id
+        delta["function_call_id"] = function_call_id
+        delta["validated_arguments"] = dict(action["tool_args"])
+        delta["accepted_investigation_intent"] = None
+        delta["state_update"] = {"accepted": True}
+        extra_actions.append(action)
+        previous_interaction = interaction_id
+    reflection = {
+        "stage": "unified_reflection",
+        "action_type": "output",
+        "tokens": {"thought": 0},
+        "metadata": {
+            "native_interactions": True,
+            "interaction_id": "interaction-terminal-reflection",
+            "previous_interaction_id": None,
+            "interaction_lifecycle_kind": "standalone_request",
+        },
+    }
+    steps[3:3] = [*extra_actions, reflection]
+    investigation = trace["state"]["investigation_state"]
+    investigation["action_count"] = 4
+    investigation["stop_reason"] = "information_saturated"
+    investigation["discrepancy_coverage_audits"][0].update(
+        {"action_count": 4, "stop_reason": "information_saturated"}
+    )
+    trace_path.write_text(
+        json.dumps(trace, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    report = audit_trace(trace_path)
+
+    assert not report.failures(strict_scheduler=True)
+    assert report.stats["unified_react_reflections"] == 1
+
+
 def test_strict_audit_accepts_discrepancy_first_v4_trace(tmp_path: Path) -> None:
     report = audit_trace(_v4_trace(tmp_path))
 

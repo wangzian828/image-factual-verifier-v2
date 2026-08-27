@@ -690,6 +690,10 @@ class Orchestrator:
                     )
                     if not investigation.stop_reason:
                         investigation.stop_reason = "information_saturated"
+                        audit_discrepancy_coverage(
+                            investigation,
+                            decision_checkpoint=True,
+                        )
                     break
 
                 observation_update: Dict[str, Any] = {}

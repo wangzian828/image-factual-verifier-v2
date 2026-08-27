@@ -3613,7 +3613,7 @@ def _audit_unified_react_trace(
             }
             - set(target_by_claim)
         )
-        hypothesis_id = str(task.get("hypothesis_id", "")).strip()
+        hypothesis_id = str(task.get("hypothesis_id") or "").strip()
         if unknown_facts:
             _issue(
                 report,
@@ -3628,11 +3628,22 @@ def _audit_unified_react_trace(
                 "task references unknown claims: " + ", ".join(unknown_claims),
                 location=location,
             )
-        if hypothesis_id not in hypothesis_by_id:
+        if hypothesis_id and hypothesis_id not in hypothesis_by_id:
             _issue(
                 report,
                 "UNIFIED_TASK_HYPOTHESIS_UNKNOWN",
                 f"task references unknown route {hypothesis_id!r}",
+                location=location,
+            )
+        parent_id = str(task.get("parent_task_id", "") or "").strip()
+        if not hypothesis_id and parent_id not in task_by_id:
+            _issue(
+                report,
+                "UNIFIED_TASK_PARENT_UNKNOWN",
+                (
+                    "a route-independent unified task must be a child of an "
+                    "existing route task"
+                ),
                 location=location,
             )
         unknown_origins = sorted(
@@ -3879,17 +3890,33 @@ def _audit_unified_react_trace(
         else action_count
     )
     expected_reflections = list(range(4, required_limit + 1, 4))
+    allowed_reflection_counts = set(expected_reflections)
+    if terminal_stop and action_count > 0 and action_count % 4 == 0:
+        # A final Reflection at the same boundary may be what establishes the
+        # terminal global state.  Earlier four-action checkpoints remain
+        # mandatory, but this terminal one is optional.
+        allowed_reflection_counts.add(action_count)
+    missing_reflections = [
+        count for count in expected_reflections if count not in reflection_counts
+    ]
+    unexpected_reflections = [
+        count
+        for count in reflection_counts
+        if count not in allowed_reflection_counts
+    ]
     if (
         invalid_reflections
         or len(reflection_counts) != len(set(reflection_counts))
-        or sorted(reflection_counts) != expected_reflections
+        or missing_reflections
+        or unexpected_reflections
     ):
         _issue(
             report,
             "UNIFIED_REACT_REFLECTION_CADENCE_INVALID",
             (
                 "unified Reflection is only allowed at non-terminal four-action "
-                f"boundaries; expected={expected_reflections}, got={reflection_counts}"
+                "boundaries, with an optional terminal reflection; "
+                f"expected={expected_reflections}, got={reflection_counts}"
             ),
             location="state.all_steps",
         )
