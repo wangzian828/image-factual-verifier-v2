@@ -276,6 +276,61 @@ def test_unified_tool_adapter_never_forwards_runtime_intent() -> None:
     assert delegate.received == {"payload": "visible to provider"}
 
 
+def test_stop_route_is_rejected_before_control_tool_execution() -> None:
+    state, case, _steps = _bootstrap_state()
+    anchor_id = state.facts[0].fact_id
+    search_step = _step(
+        tool_name="text_search",
+        tool_args={
+            "queries": "Riverfest red bridge",
+            "investigation_intent": {
+                "target_fact": {
+                    "statement": (
+                        "The pictured bridge is associated with the Riverfest event."
+                    ),
+                    "kind": "relation",
+                    "predicate": "depicts_relation",
+                    "anchor_fact_ids": [anchor_id],
+                },
+                "route": {
+                    "route_focus": "entity_event_identity",
+                    "expected_information": "Whether the event uses this bridge.",
+                    "priority": 1,
+                },
+            },
+        },
+        tool_result={
+            "status": "success",
+            "queries": [
+                {
+                    "query": "Riverfest red bridge",
+                    "results": [
+                        {
+                            "url": "https://example.test/riverfest",
+                            "title": "Riverfest",
+                            "snippet": "An event page.",
+                        }
+                    ],
+                    "provider": "fixture",
+                }
+            ],
+        },
+        call_id="search-with-page",
+    )
+    reduce_unified_react_action(state, step=search_step, runtime_case=case)
+
+    reason = validate_unified_react_action(
+        state,
+        tool_name="stop_route",
+        tool_args={
+            "task_id": state.tasks[0].task_id,
+            "rationale": "No further work is needed.",
+        },
+    )
+
+    assert "pending page or reference inspection candidates" in reason
+
+
 def test_unified_export_uses_qwen_think_and_tool_call_and_rejects_missing_thought() -> None:
     state, case, bootstrap_steps = _bootstrap_state()
     anchor_id = state.facts[0].fact_id
