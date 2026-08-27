@@ -891,6 +891,10 @@ class Orchestrator:
             )
         if not investigation.stop_reason:
             investigation.stop_reason = "information_saturated"
+            audit_discrepancy_coverage(
+                investigation,
+                decision_checkpoint=True,
+            )
         compiled_verdict, basis = compile_discrepancy_verdict_basis(
             investigation,
             policy_rule_id=UNIFIED_REACT_POLICY_VERSION,

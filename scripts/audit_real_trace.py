@@ -3326,6 +3326,17 @@ def _audit_unified_react_interaction_chains(
                     "Reflection, Decision, and Judgment must be standalone requests",
                     location=location,
                 )
+        elif lifecycle == "protocol_correction":
+            if not parent or parent not in seen_ids:
+                _issue(
+                    report,
+                    "UNIFIED_CORRECTION_PARENT_INVALID",
+                    (
+                        "unified protocol correction must name an earlier "
+                        "native interaction in the same trace"
+                    ),
+                    location=location,
+                )
         else:
             _issue(
                 report,

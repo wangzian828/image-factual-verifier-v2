@@ -112,6 +112,16 @@ def audit_discrepancy_coverage(
                 "routes close."
             ),
         }[state.proposed_verdict]
+    elif state.stop_reason == "information_saturated":
+        # The orchestrator reaches this state only after its dynamic unified
+        # tool schema is empty.  Keep an explicit terminal Coverage record so
+        # the canonical trace explains why a bounded final Judgment is legal,
+        # even when a stale semantic gap remains in the last Decision output.
+        stop_reason = "information_saturated"
+        reason = (
+            "No executable policy tool remains after the final Decision "
+            "checkpoint; investigation ended at the bounded saturation boundary."
+        )
     elif state.action_count >= MAX_TOOL_ACTIONS:
         stop_reason = "hard_budget_exhausted"
         reason = "The action budget ended before v4 verdict preconditions closed."

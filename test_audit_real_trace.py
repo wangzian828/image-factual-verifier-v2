@@ -535,6 +535,32 @@ def test_unified_outer_react_correction_is_not_a_strict_failure(
     assert report.stats["successful_protocol_corrections"] == 1
 
 
+def test_unified_decision_protocol_correction_is_not_a_strict_failure(
+    tmp_path: Path,
+) -> None:
+    trace_path = _unified_trace(tmp_path)
+    trace = json.loads(trace_path.read_text(encoding="utf-8"))
+    decision = trace["state"]["all_steps"][3]
+    decision["action_type"] = "output_rejected"
+    decision["metadata"]["rejection_reason"] = "needs qualified Evidence"
+    correction = json.loads(json.dumps(decision))
+    correction["action_type"] = "output"
+    correction["metadata"].pop("rejection_reason")
+    correction["metadata"]["interaction_id"] = "interaction-decision-correction"
+    correction["metadata"]["previous_interaction_id"] = "interaction-decision"
+    correction["metadata"]["interaction_lifecycle_kind"] = "protocol_correction"
+    trace["state"]["all_steps"].insert(4, correction)
+    trace_path.write_text(
+        json.dumps(trace, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    report = audit_trace(trace_path)
+
+    assert not report.failures(strict_scheduler=True)
+    assert report.stats["successful_protocol_corrections"] == 1
+
+
 def test_strict_audit_accepts_route_independent_visual_child_task(
     tmp_path: Path,
 ) -> None:
