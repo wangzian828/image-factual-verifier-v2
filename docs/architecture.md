@@ -1,267 +1,46 @@
-# Visual Fact Discrepancy Agent v4 Architecture
+# 当前架构：unified-react-v1
 
-## Supported runtime
+## 1. 结构
 
-The default input is the immutable data-pipeline v0.3 `image_only` contract with
-`decision_policy_version=reinspect-v2`:
-
-```text
-case_id + image_path + image_sha256
+```mermaid
+flowchart TD
+    A[图片 + 公开 case 字段] --> B[空 workspace]
+    B --> C[统一 ReAct]
+    C --> C1[模型选择 perceive_scene 或 OCR]
+    C1 --> C2[模型选择调查工具]
+    C2 --> C3[工具结果]
+    C3 --> D[Reducer 写入 state delta]
+    D --> C
+    C --> E[低频 Reflection]
+    C --> F[低频 Discrepancy Decision]
+    E --> C
+    F --> C
+    C --> G[Judgment]
+    G --> H[canonical trace / SFT / RL]
 ```
 
-The release field identifies the data protocol only. `run_eval` does not pass it
-through as an Agent selector. The v4 Agent and every canonical runtime trace use
-`decision_policy_version=discrepancy-first-v4`; run manifests record the release
-policy under `benchmark` and the effective Agent policy under `agent`.
+## 2. 职责边界
 
-The tagged v3 implementation is frozen at `runtime-v3-final-20260717`. Legacy
-schemas and reducers remain temporarily for deterministic historical replay; they
-are not the v4 semantic path.
+| 部件 | 负责 | 不负责 |
+| --- | --- | --- |
+| 主策略模型 | thought、下一工具、工具参数 | 直接改 state、读取 gold、制造 Evidence |
+| 视觉工具/VLM | 场景、OCR、裁剪、比较等观察 | 最终 verdict |
+| Orchestrator/Reducer | 工具白名单、ID、预算、去重、state delta、终止 | 用规则替模型猜标签 |
+| 外部检索工具 | 返回搜索/网页/图像观察 | 直接写 Agent state |
 
-## End-to-end control flow
+## 3. 状态管理
 
-```text
-hash-verified original image
-  -> Gemini literal scene perception || positioned OCR
-  -> deterministic visual facts and retrieval anchors
-  -> standalone Image Account Planning (controlled original-image view)
-       1-3 ImageClaims
-       independently planned, bounded SearchHypotheses
-  -> case/hypothesis-owned ReAct action
-  -> deterministic Discovery / Evidence / Failure reduction
-  -> sparse multimodal Discrepancy Decision
-       ClaimAssessment
-       optional MaterialDiscrepancy
-       bounded hypothesis updates
-       optional one focused visual reinspection
-       continue | fake | real proposal
-  -> deterministic discrepancy Coverage and minimal verdict basis
-  -> constrained v4 Judgment
-```
+工具返回后，Reducer 写入 `Discovery`、`Evidence`、`Failure` 和不可变 state delta。下一轮只
+接收当前紧凑 workspace，不重复携带每一轮的完整累计 workspace。完整原始请求、响应和状态仍
+保存在 canonical archive 供审计。
 
-Planning, every Discrepancy Decision, and Judgment are independent requests built
-from an explicit, versioned workspace handoff. One ReAct action may use
-`previous_interaction_id` only to complete its native
-`function_call -> function_result -> output` protocol. No hidden Interaction history
-crosses an action or stage boundary. Tool-internal model calls are independent
-observations and cannot mutate semantic state.
+`target_facts` 是当前字段，表示图片要求核查的正向现实事实；它不是 provenance 字段，也不
+使用 `image_claims` 作为别名。
 
-Scene perception and positioned OCR are launched concurrently because both consume
-only the immutable input image; their trace records are archived and merged in a
-fixed scene-then-OCR order. Deterministic perception results may be shared across
-rollouts through the versioned process/disk cache, while Planning, Decision, and
-Judgment remain uncached.
+## 4. 两种图片 API 模式
 
-The local Qwen Chat Completions transport has no provider Interaction ID, so the
-runtime records equivalent request ancestry itself. Context manifests distinguish
-`standalone_request`, `tool_roundtrip`, and `protocol_correction`; only a correction
-may set `parent_request_id` to the rejected request. The strict auditor follows this
-chain transitively. A rejection is recovered only by an accepted same-stage output.
-If v4 ReAct exhausts route-selection corrections, a deterministic boundary must
-explicitly name the rejected request IDs; audit reports a bounded-fallback warning,
-and training export still excludes the episode.
+- `direct_multimodal`：主策略请求直接带图；适合需要主模型直接观察的实验。
+- `separate_vlm`：图片只给视觉工具/VLM，主策略只接收结构化观察、Evidence 和 state delta；
+  当前生产 teacher rollout 使用这一边界。
 
-## State ownership
-
-### ImageClaim
-
-A positive real-world proposition communicated by visible pixels or reliable
-embedded text. It records what the image asks the viewer to believe, not merely the
-meta-fact that a caption, post, or advertisement contains the assertion. It cites
-pixel/OCR `VisualFact` anchors, has `high|medium` salience, and is assessed as
-`open|supported|refuted|conflicted|unresolved`. Planning produces exactly one high
-Claim containing the complete central relation; up to two additional independent
-Claims must be medium.
-
-The canonical Planning/state wire field for these rows is `target_facts`.
-`image_claims` is accepted only while reading historical traces and provider
-responses; current schemas, runtime state serialization, agent context, audit,
-and training packets do not emit that legacy key.
-
-### SearchHypothesis
-
-A bounded retrieval direction for the image account. Its Planning schema contains
-no Claim key: the route may ask for the actual underlying value instead of repeating
-the depicted value. After Planning, the reducer attaches the route to the current
-account Claims only as broad bookkeeping for provenance, budgets, Evidence review,
-and stopping. That attachment does not establish support or refutation. The
-Discrepancy Decision must still select the affected ImageClaim and prove the
-directional Finding/Evidence chain. A hypothesis never owns a verdict.
-Planning must provide at least one route with an executable first hop; the runtime
-does not constrain the route's factual angle. Any explicit planned web query must
-include `text_search` in that Hypothesis so the query is executable rather than dead
-context.
-Planned queries must also pass the active SourceAccessPolicy before the Planning
-object is atomically committed. The runtime rejects the whole object for correction;
-it does not rewrite or partially install the model's query list. The same policy is
-rechecked immediately before search execution. At the provider boundary, active
-policies also remove URL-bearing rows from search and reverse-search responses
-before titles, snippets, aggregates, or candidate URLs enter the workspace. Known
-fact-check domains are blocked globally for an active evaluation policy; this is
-source-access hygiene, not a fact or verdict rule.
-
-### MaterialDiscrepancy
-
-An image-aware conclusion proposed by Gemini and accepted only when it cites affected
-ImageClaims, their visible anchors, and task-owned qualified Evidence. It is
-`decisive|supporting` and `established|conflicted`.
-
-## Deterministic boundaries
-
-Code owns:
-
-- input/hash validation and evaluator-private isolation;
-- stable IDs, references, task ownership, and atomic state replacement;
-- native tool schemas and one-call-per-action execution;
-- Discovery/Evidence separation and successful-call provenance;
-- duplicate-route, action, hypothesis, decision, and reinspection budgets;
-- sparse checkpoint scheduling, Coverage, verdict preconditions, and strict audit.
-
-Gemini owns:
-
-- the image account and salient ImageClaims;
-- retrieval hypotheses within deterministic bounds;
-- Evidence-to-claim semantic assessment;
-- whether a visually anchored material discrepancy exists;
-- the terminal proposal that deterministic Coverage may accept or reject.
-
-Search titles, snippets, and reverse-image matches are Discovery only. Web Evidence
-requires a fetched exact span, offsets, canonical source, artifact hash, retrieval
-time, directness, relation scope/stance, and successful function-call provenance.
-`retrieval_goal` selects relevant passages; `relation_scope` and `relation_stance`
-are judged only against one model-selected, task-owned `image_claim` whose exact text
-the runtime binds from its Claim ID. Only a same complete relation with supporting or
-contradicting text is directional; partial relations, different instances, and
-background remain neutral context. Each ReAct action exposes one task-scoped route
-family, preventing invalid cross-task URL/Claim combinations. These fields remain in
-the canonical tool result and Evidence ledger. Visual Evidence
-requires a successful focused observation or reference comparison with image hashes
-and provenance. General anomaly opinions are diagnostic only.
-
-Archive recall is optional support for an otherwise executable task, not an
-unbounded route family. It becomes available only after that task has produced
-archived investigation material, is limited to two recall/read cycles per task, and
-`read_evidence` is exposed only for IDs returned by the pending recall.
-
-Final discrepancy Judgment is split into a model-owned output and a runtime-owned
-canonical record. The model returns only `verdict`, `confidence`, and
-`overall_assessment`; deterministic code injects the compiled Claim, discrepancy,
-Finding, Evidence, and unresolved-gap IDs. This prevents a final synthesis call
-from inventing or dropping basis identifiers.
-
-## Verdict rules
-
-- `fake`: at least one established decisive MaterialDiscrepancy affects a
-  high-salience ImageClaim and cites qualified Evidence plus visible anchors.
-  A qualified refutation of such a Claim cannot be downgraded because another
-  Claim remains unresolved.
-- `real`: every high-salience ImageClaim is supported, no decisive discrepancy
-  remains, meaningful high-salience routes are closed, and Gemini proposes real.
-- unresolved or conflicted internal state is retained in the verdict basis. After
-  meaningful routes close or the 24-action cap is reached, bounded Judgment chooses
-  the better-supported binary verdict and reports the unresolved gaps.
-  Its compiled basis always includes every high-salience Claim plus unresolved
-  Claims of any salience, together with their recorded anchors, Evidence, Findings,
-  and an explicit gap explaining why the evidence-determined exit did not fire.
-
-Failure to find a discrepancy is not evidence of reality. Provider/transport
-failure, malformed structured output, lifecycle corruption, required-tool failure,
-and all-tools-failed conditions are engineering errors and end before Judgment.
-Repeated selection of already rejected but otherwise well-formed routes is handled
-only in v4 ReAct: after its bounded correction chain, Runtime records a non-recoverable
-`protocol_error` Failure, blocks that Task, and returns to Discrepancy Decision. It
-does not fabricate Evidence, an action, or a factual conclusion.
-The v4 Discrepancy Decision has a separate no-op `continue` boundary for an
-exhausted schema/semantic correction chain; it preserves the workspace and returns
-to normal route or binary-settlement logic without inventing a state update.
-
-## Stop and budgets
-
-The hard action cap is 24. One accepted native tool call is one action. The v4 loop
-stops immediately after terminal Coverage, before any further search. Normal stops
-are `verdict_determined`, `meaningful_routes_exhausted`, and
-`hard_budget_exhausted`; provider and unrecoverable protocol/runtime failures remain
-`engineering_error`. The explicit v4 route-selection boundary is a scheduler
-checkpoint, not a stop reason: Decision may open a new route or let normal route
-exhaustion/budget logic reach binary Judgment.
-The remaining-route inventory includes only tasks that still own at least one
-`open`, `conflicted`, or `unresolved` ImageClaim. A stale active task attached only
-to supported/refuted Claims cannot keep the investigation alive or trigger a
-no-executable-task error.
-No-gain streaks are diagnostic only. One focused visual reinspection may be
-requested by Discrepancy Decision. New hypotheses are bounded globally and per
-decision; semantically duplicate routes are rejected.
-
-## Audit and training
-
-The strict auditor verifies claim/hypothesis/task ownership, successful Evidence
-calls, ClaimAssessment Evidence scope and direction, reference-comparison stance
-coherence, discrepancy-to-claim anchors, qualified refuting discrepancy Evidence,
-the complete `VisualFact -> Finding -> Evidence -> successful call` verdict chain,
-terminal Coverage, basis/Judgment equality, interaction ancestry, action-count parity,
-and absence of post-verdict actions. For Qwen, protocol-correction ancestry uses
-durable context request IDs rather than invented provider Interaction IDs, including
-multi-hop retries.
-Source-policy violations in canonical state or executed retrieval remain hard audit
-failures. Explicitly rejected, unexecuted model proposals are correction warnings;
-their rejected Planning steps are excluded from policy supervision.
-
-Local student profiles also own their serving endpoint instead of inheriting the
-shared legacy `QWEN_LOCAL_BASE_URL`. `student-qwen3-vl-local` defaults to port 8899;
-`student-qwen3.5-local` defaults to port 8901 and may be overridden only by its
-profile-scoped `QWEN35_LOCAL_BASE_URL`; its model override is likewise isolated as
-`QWEN35_LOCAL_MODEL`. The same resolved endpoint and model are passed to the policy
-backend and every visual tool, preventing split-brain text/vision routing.
-`student-qwen3.5-local-replica-b` independently defaults to port 8902 and model
-`ifv-qwen3.5-9b-replica-b`; it uses only `QWEN35_REPLICA_B_LOCAL_BASE_URL` and
-`QWEN35_REPLICA_B_LOCAL_MODEL`. A rollout selects one profile for its complete
-episode, so independent replicas increase episode throughput without mixing an
-episode's policy and visual calls across servers.
-
-`ifv-policy-v2` exports Image Account Planning, v4 ReAct, Discrepancy Decision, and
-v4 Judgment. The SFT positive-data gate requires classification correctness and a
-decisive, directionally coherent Evidence chain. A rejected intermediate policy turn
-is not an automatic exclusion: the frozen SFT judge receives a compact rejection
-history and classifies the completed behavior as `clean`, `recovered_minor`,
-`degraded_repetition`, or `unresolved`. Clean and materially recovered trajectories
-may enter SFT; repeated blocked behavior and unresolved rejected paths do not. The
-exporter omits rejected policy turns from SFT targets. Frozen teacher export requires
-the frozen LLM `sft_eligibility` gate and uses deterministic trajectory features as
-hard-safety constraints, red-flag diagnostics, and same-case tie-breakers; semantic
-reward artifacts are optional diagnostics only. The pure policy exporter repeats
-these gates and rejects a trace even if upstream score metadata is wrong. RL keeps a
-separate, auditable rule: an engineering-valid but incorrect complete episode remains
-in its same-prompt group with reward zero, rather than being silently removed.
-
-The v2 SFT judge projects the final data-pipeline row into one generic image-level
-fact target. It receives all successful Evidence rows, not only the final basis,
-and may accept a semantically equivalent sub-fact when it decisively establishes
-the same image-level verdict. Claim IDs remain optional lineage references; exact
-Claim wording, relation slots, URLs, original-image recovery, and registered
-decision paths are not SFT gates. Fatal engineering, source-policy, and
-invalid-reference failures remain hard rejections. Intermediate protocol rejections
-are judged as trajectory conduct: repeated or unresolved behavior rejects SFT, while
-a material recovery is a warning. Other audit findings are diagnostics and
-teacher tie-breakers, and no human-review queue is produced.
-
-After all episodes finish, deterministic post-rollout code joins private gold and
-emits one scalar per episode for standard GRPO; it does not implement a custom
-per-turn advantage. A same-prompt group contains fully isolated episodes, each with a
-stable sampling seed and distinct canonical trace. Completed Qwen rollouts may also
-enter the gold-free semantic reward audit described in `docs/rl-semantic-reward.md`,
-but the resulting `ifv-semantic-reward-v2` artifact is diagnostic-only: it records one
-bounded frozen-judge request and may support manual analysis, but it never changes RL
-reward, trainability, SFT eligibility, runtime state, or model-visible inputs.
-
-## Acceptance status
-
-Local deterministic reducers, mocked native Interactions, the complete default
-workflow, strict audit, scoring, and export tests pass. Three frozen historical
-fixtures retain admissible conclusions; the prior Andreea fixture is now a required
-safety rejection because its different-capture Evidence was neutral. The 2026-07-20
-Queen canary produced an evidence-determined `fake`, complete
-claim/discrepancy/Evidence alignment, immediate stopping, and no protocol rejection.
-Its first acceptance command exposed nested runtime artifacts being mistaken for
-canonical traces; trace discovery is now limited to direct `traces/*.json` files.
-Production acceptance still requires the corrected strict audit plus three to four
-heterogeneous canaries. Unit tests alone do not mark v4 complete.
+两种模式共享工具 schema、Reducer 和 trace 格式，不修改成熟工具内部契约。

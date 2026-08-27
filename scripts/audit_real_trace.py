@@ -3240,7 +3240,7 @@ def _audit_unified_react_interaction_chains(
         "unified_react",
         "unified_reflection",
         "unified_discrepancy_decision",
-        "image_only_discrepancy_judgment",
+        "unified_judgment",
     }
     native = [
         (index, step)
@@ -3885,7 +3885,7 @@ def _audit_unified_react_trace(
         ):
             decision_steps += 1
         elif (
-            stage == "image_only_discrepancy_judgment"
+            stage == "unified_judgment"
             and _mapping(step.get("metadata")).get("native_interactions")
         ):
             judgment_steps += 1
@@ -4106,12 +4106,18 @@ def audit_trace(
         or state.get("decision_policy_version")
         or ""
     )
-    if policy_version == "discrepancy-first-v4":
-        _audit_discrepancy_trace(payload, state, steps, report)
-    elif policy_version == UNIFIED_REACT_POLICY_VERSION:
+    if policy_version == UNIFIED_REACT_POLICY_VERSION:
         _audit_unified_react_trace(payload, state, steps, report)
     else:
-        _audit_image_only_trace(payload, state, steps, report)
+        _issue(
+            report,
+            "UNSUPPORTED_POLICY_VERSION",
+            (
+                "current strict audit accepts only "
+                f"{UNIFIED_REACT_POLICY_VERSION}; legacy policy traces are archived"
+            ),
+            location="decision_policy_version",
+        )
     _audit_leaks(
         payload,
         report,

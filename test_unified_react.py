@@ -602,7 +602,7 @@ def test_unified_export_uses_qwen_think_and_tool_call_and_rejects_missing_though
         },
     }
     exported = export_trajectory_sft_example(trace)
-    assert exported.trajectory_version == "ifv-trajectory-sft-v4"
+    assert exported.trajectory_version == "ifv-trajectory-sft-v3"
     assert "<think>" in exported.messages[1]["content"] or any(
         "<think>" in message["content"]
         for message in exported.messages

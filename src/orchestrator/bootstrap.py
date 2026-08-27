@@ -8,13 +8,12 @@ import re
 from typing import Iterable, List
 
 from src.orchestrator.investigation_models import (
-    BootstrapInvestigation,
     FactOrigin,
     InvestigationBrief,
-    ResearchTask,
     RetrievalAnchor,
     VisualEntity,
     VisualFact,
+    VisualBootstrap,
 )
 from src.orchestrator.state import ImageOnlyRuntimeCase, PerceptionReport, TextRegion
 
@@ -103,12 +102,12 @@ def _unique_by_value(
 def build_visual_bootstrap(
     case: ImageOnlyRuntimeCase,
     perception: PerceptionReport,
-) -> BootstrapInvestigation:
+) -> VisualBootstrap:
     """Materialize only image/OCR-grounded state for unified ReAct.
 
-    This deliberately creates no ResearchTask.  The legacy bootstrap still
-    derives its speculative tasks below, while unified ReAct creates its first
-    target, route, and task atomically with the first real investigation action.
+    This deliberately creates no ResearchTask. The unified ReAct loop creates
+    its first target, route, and task atomically with the first real
+    investigation action.
     """
 
     media_type = str(perception.image_type or "photo").strip().lower()
@@ -287,193 +286,9 @@ def build_visual_bootstrap(
         fact_by_anchor[anchor.anchor_id] = text_fact
         relation_fact_by_anchor[anchor.anchor_id] = relation_fact
 
-    return BootstrapInvestigation(
+    return VisualBootstrap(
         brief=brief,
         entities=entities,
         facts=facts,
-        tasks=[],
         retrieval_anchors=anchors,
-        findings=[],
     )
-
-
-def build_bootstrap_investigation(
-    case: ImageOnlyRuntimeCase,
-    perception: PerceptionReport,
-) -> BootstrapInvestigation:
-    """Create the historical visual state plus its speculative v4 tasks."""
-
-    visual = build_visual_bootstrap(case, perception)
-    facts = list(visual.facts)
-    anchors = list(visual.retrieval_anchors)
-    entities = list(visual.entities)
-    entity_by_id = {item.entity_id: item for item in entities}
-
-    def fact_for_anchor(anchor_id: str, predicate: str) -> VisualFact | None:
-        return next(
-            (
-                fact
-                for fact in facts
-                if fact.predicate == predicate and anchor_id in fact.basis_ids
-            ),
-            None,
-        )
-
-    tasks: List[ResearchTask] = []
-    selected_text = sorted(
-        _unique_by_value(
-            anchor for anchor in anchors if anchor.kind == "text"
-        ),
-        key=_text_score,
-        reverse=True,
-    )[:3]
-    quoted_values = [anchor.value.replace('"', "'") for anchor in selected_text]
-    suggested_text_queries: List[str] = []
-    if quoted_values:
-        suggested_text_queries.append(" ".join(quoted_values))
-        suggested_text_queries.extend(f'"{value}"' for value in quoted_values[:2])
-
-    scene_fact = next(
-        (fact for fact in facts if fact.predicate == "appears_to_depict"),
-        None,
-    )
-    if scene_fact is not None:
-        tasks.append(
-            ResearchTask(
-                task_id=_id("task", case.case_id, "scene-relation"),
-                fact_ids=[scene_fact.fact_id],
-                question=(
-                    "Does reliable external evidence support or refute this "
-                    f"image-grounded scene proposition: {scene_fact.statement}"
-                ),
-                purpose=(
-                    "Investigate the central visible subject, place, event, or "
-                    "scene relation. Source metadata may guide retrieval but must "
-                    "not replace the depicted-world question."
-                ),
-                priority=1,
-                origin_ids=list(scene_fact.basis_ids),
-                suggested_tools=[
-                    "reverse_image_search",
-                    "compare_with_reference",
-                    "text_search",
-                    "visit",
-                ],
-                suggested_queries=suggested_text_queries[:3],
-            )
-        )
-
-    if selected_text and scene_fact is None:
-        text_facts = [
-            fact
-            for anchor in selected_text
-            if (fact := fact_for_anchor(anchor.anchor_id, "reads")) is not None
-        ]
-        relation_facts = [
-            fact
-            for anchor in selected_text
-            if (
-                fact := fact_for_anchor(
-                    anchor.anchor_id,
-                    "context_suggested_by_text",
-                )
-            )
-            is not None
-        ]
-        task_facts = [*text_facts, *relation_facts]
-        fact_ids = [fact.fact_id for fact in task_facts][:6]
-        origin_ids = list(
-            dict.fromkeys(
-                origin_id for fact in task_facts for origin_id in fact.basis_ids
-            )
-        )[:12]
-        tasks.append(
-            ResearchTask(
-                task_id=_id("task", case.case_id, "joint-text-context", fact_ids),
-                fact_ids=fact_ids,
-                question=(
-                    "What real-world entity, place, or event is jointly indicated "
-                    "by the visible text anchors "
-                    + ", ".join(f'"{value}"' for value in quoted_values)
-                    + ", and does reliable source context match the depicted scene?"
-                ),
-                purpose=(
-                    "Investigate multiple pixel-grounded text anchors together so "
-                    "partial OCR strings do not become isolated factual targets."
-                ),
-                priority=1,
-                origin_ids=origin_ids,
-                suggested_tools=[
-                    "text_search",
-                    "reverse_image_search",
-                    "compare_with_reference",
-                    "visit",
-                ],
-                suggested_queries=suggested_text_queries[:3],
-            )
-        )
-
-    entity_anchors = sorted(
-        (
-            anchor
-            for anchor in _unique_by_value(anchors)
-            if anchor.kind in {"logo", "entity"}
-            and len("".join(char for char in anchor.value if char.isalnum())) >= 3
-        ),
-        key=lambda item: _entity_score(item, entity_by_id),
-        reverse=True,
-    )
-    for anchor in entity_anchors:
-        if len(tasks) >= 4:
-            break
-        fact = fact_for_anchor(anchor.anchor_id, "visible_in")
-        if fact is None:
-            continue
-        quoted = anchor.value.replace('"', "'")
-        tasks.append(
-            ResearchTask(
-                task_id=_id("task", fact.fact_id, "entity-context"),
-                fact_ids=[fact.fact_id],
-                question=(
-                    f"What verifiable real-world identity or context corresponds "
-                    f'to the visible {anchor.kind} "{quoted}"?'
-                ),
-                purpose=(
-                    "Resolve a salient visual identity without inferring facts that "
-                    "are not present in the pixels."
-                ),
-                priority=2,
-                origin_ids=list(fact.basis_ids),
-                suggested_tools=[
-                    "reverse_image_search",
-                    "compare_with_reference",
-                    "text_search",
-                    "visit",
-                ],
-                suggested_queries=[quoted],
-            )
-        )
-
-    if not tasks and facts:
-        fact = facts[0]
-        tasks.append(
-            ResearchTask(
-                task_id=_id("task", fact.fact_id, "context"),
-                fact_ids=[fact.fact_id],
-                question=(
-                    "What reliable external context can identify the visible scene "
-                    "without assuming an event, place, or person?"
-                ),
-                purpose="Turn an image-grounded observation into a checkable target.",
-                priority=1,
-                origin_ids=list(fact.basis_ids),
-                suggested_tools=[
-                    "reverse_image_search",
-                    "compare_with_reference",
-                    "text_search",
-                    "visit",
-                ],
-            )
-        )
-
-    return visual.model_copy(update={"tasks": tasks[:4]})

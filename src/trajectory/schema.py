@@ -12,13 +12,7 @@ class StrictModel(BaseModel):
 
 
 class PolicyExample(StrictModel):
-    trajectory_version: Literal[
-        "ifv-policy-v1",
-        "ifv-policy-v2",
-        "ifv-policy-v3",
-    ] = (
-        "ifv-policy-v1"
-    )
+    trajectory_version: Literal["ifv-policy-v3"] = "ifv-policy-v3"
     tokenizer_id: str = Field(min_length=1, max_length=200)
     episode_id: str = Field(min_length=1, max_length=200)
     step_id: str = Field(min_length=1, max_length=300)
@@ -31,14 +25,8 @@ class PolicyExample(StrictModel):
         max_length=200,
     )
     example_type: Literal[
-        "planning",
-        "image_account_planning",
         "react",
-        "evidence_decision",
         "discrepancy_decision",
-        "query_concept_extraction",
-        "query_replan",
-        "route_local_replan",
         "reflection",
         "judgment",
     ]
@@ -99,11 +87,7 @@ class DatasetPerceptionExample(PerceptionExample):
 class TrajectorySFTExample(StrictModel):
     """One complete accepted episode rendered as one Agent SFT conversation."""
 
-    trajectory_version: Literal[
-        "ifv-trajectory-sft-v2",
-        "ifv-trajectory-sft-v3",
-        "ifv-trajectory-sft-v4",
-    ] = (
+    trajectory_version: Literal["ifv-trajectory-sft-v3"] = (
         "ifv-trajectory-sft-v3"
     )
     episode_id: str = Field(min_length=1, max_length=200)
@@ -166,11 +150,8 @@ class ActionOnlyTrajectoryExample(TrajectorySFTExample):
 
 
 class DatasetTrajectorySFTExample(TrajectorySFTExample):
-    dataset_version: Literal[
-        "ifv-trajectory-sft-dataset-v2",
-        "ifv-trajectory-sft-dataset-v3",
-    ] = (
-        "ifv-trajectory-sft-dataset-v2"
+    dataset_version: Literal["ifv-trajectory-sft-dataset-v3"] = (
+        "ifv-trajectory-sft-dataset-v3"
     )
     split: Literal["train", "validation", "test"]
     split_group_id: str = Field(min_length=1, max_length=100)

@@ -1,44 +1,18 @@
-# Claude Project Instructions
+# 项目约定
 
-Follow `AGENTS.md` and `docs/architecture.md`.
+遵循 `AGENTS.md`。当前唯一生产 Agent 是 `unified-react-v1`，使用一个统一 ReAct loop：
+每轮 `thought -> 一个 native tool -> observation/state delta`。
 
-This repository supports only v0.3 image-only input:
+状态由 runtime/reducer 管理，模型不直接写 state，不读取 gold。视觉感知和 OCR 是模型可以
+选择的工具；二者完成前不开放外部调查工具。换 query 或调查方向直接进入下一轮 ReAct，不
+新增独立 Replan 请求。
 
-```text
-case_id + image_path + image_sha256
-```
+当前 prompt、上下文和字段分别以以下文件为准：
 
-The runtime is:
+- `src/orchestrator/unified_prompts.py`
+- `src/orchestrator/unified_context.py`
+- `src/orchestrator/investigation_models.py`
+- `src/orchestrator/unified_react.py`
 
-```text
-Gemini perception + configured OCR backend (EasyOCR or Baidu general OCR)
--> deterministic VisualFact/task bootstrap
--> native Interactions ReAct
--> Reflection every four real actions
--> decisive-fact Coverage
--> reinspect-v2 Judgment
-```
-
-Do not restore claim modes, claim-ledger planning, fixed replanning, or
-`reinspect-v1`. `reinspect-v2` is the current v3 verdict-policy identifier.
-
-Evidence must be grounded in successful tool calls. Discovery is never Evidence.
-Every verdict basis must trace through `VisualFact -> Finding -> Evidence -> successful
-tool call`. Provider, protocol, malformed-output, all-tools-failed, and configuration
-failures are engineering errors and must not become `unverifiable`.
-
-Gold and source-access exclusions are evaluator-private. Gold is loaded only after all
-rollouts; blocked sources are filtered before model-visible results.
-
-Use Gemini Interactions end to end, one accepted tool call per action turn, and keep
-credentials environment-only. Canonical JSON is the source trace; HTML is derived.
-
-Before finishing runtime changes:
-
-```powershell
-python -m pytest -q
-python -m compileall -q src scripts
-git diff --check
-```
-
-Only a no-mock real canary plus strict trace audit proves live acceptance.
+修改后先跑 focused tests、compileall 和 `git diff --check`，完成后做真实 Gemini 10 条并发
+10 smoke。凭据只能来自环境变量或未跟踪的本地配置。

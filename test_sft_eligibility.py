@@ -41,7 +41,7 @@ def _trace(*, verdict: str = "fake") -> dict[str, Any]:
                 "image_sha256": "a" * 64,
             },
             "investigation_state": {
-                "image_claims": [
+                "target_facts": [
                     {
                         "claim_id": "claim-1",
                         "statement": "A won the 2026 final.",

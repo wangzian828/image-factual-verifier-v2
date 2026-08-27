@@ -367,11 +367,7 @@ def _duplicate_action_rate(
     routes: List[tuple[str, Mapping[str, Any]]] = []
     for step in steps:
         if (
-            str(step.get("stage", ""))
-            in {
-                "image_only_investigation",
-                "image_only_visual_reinspection",
-            }
+            str(step.get("stage", "")) == "unified_react"
             and str(step.get("action_type", "")) == "tool_call"
         ):
             routes.append(
@@ -527,11 +523,7 @@ def _low_value_action_count(
     count = 0
     for step in steps:
         if (
-            str(step.get("stage", ""))
-            not in {
-                "image_only_investigation",
-                "image_only_visual_reinspection",
-            }
+            str(step.get("stage", "")) != "unified_react"
             or str(step.get("action_type", "")) != "tool_call"
         ):
             continue
@@ -569,7 +561,7 @@ def score_process_trace(
         or state.get("decision_policy_version")
         or ""
     )
-    if policy_version in {"discrepancy-first-v4", "unified-react-v1"}:
+    if policy_version == "unified-react-v1":
         return _score_discrepancy_trace(
             trace,
             gold,
@@ -1324,11 +1316,7 @@ def _score_discrepancy_trace(
     action_steps = [
         item
         for item in steps
-        if str(item.get("stage", ""))
-        in {
-            "image_only_discrepancy_investigation",
-            "image_only_visual_reinspection",
-        }
+        if str(item.get("stage", "")) == "unified_react"
         and str(item.get("action_type", "")) == "tool_call"
     ]
     post_verdict_actions = max(0, len(action_steps) - terminal_action_count)

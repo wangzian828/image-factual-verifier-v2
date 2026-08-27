@@ -120,33 +120,7 @@ def _example_type(stage: str) -> str | None:
         return "reflection"
     if stage == "unified_discrepancy_decision":
         return "discrepancy_decision"
-    if stage in {
-        "image_only_investigation",
-        "image_only_discrepancy_investigation",
-    }:
-        return "react"
-    if stage == "image_only_reflection":
-        return "reflection"
-    if stage == "image_only_judgment":
-        return "judgment"
-    if stage == "image_only_evidence_decision":
-        return "evidence_decision"
-    if stage == "image_only_discrepancy_decision":
-        return "discrepancy_decision"
-    if stage == "image_only_query_concept_extraction":
-        return "query_concept_extraction"
-    if stage == "image_only_query_replan":
-        return "query_replan"
-    if stage == "image_only_route_local_replan":
-        return "route_local_replan"
-    if stage in {
-        "image_only_planning",
-        "image_only_attribution_planning",
-    }:
-        return "planning"
-    if stage == "image_account_planning":
-        return "image_account_planning"
-    if stage == "image_only_discrepancy_judgment":
+    if stage == "unified_judgment":
         return "judgment"
     return None
 
@@ -440,24 +414,13 @@ def export_trajectory_sft_example(
         or state.get("decision_policy_version")
         or ""
     )
-    if policy_version not in {
-        "reinspect-v2",
-        "discrepancy-first-v4",
-        "unified-react-v1",
-    }:
+    if policy_version != "unified-react-v1":
         raise ValueError("trajectory SFT exporter received an unsupported decision policy")
-    if policy_version == "discrepancy-first-v4":
-        _v4_quality_gate(
-            trace,
-            state,
-            allow_incomplete_verdict_chain=allow_incomplete_verdict_chain,
-        )
-    if policy_version == "unified-react-v1":
-        _unified_react_quality_gate(
-            trace,
-            state,
-            require_provider_thought=require_provider_thought,
-        )
+    _unified_react_quality_gate(
+        trace,
+        state,
+        require_provider_thought=require_provider_thought,
+    )
 
     tokenizer = tokenizer or Utf8ByteTokenizer()
     source_metadata = source_metadata or {}
@@ -612,8 +575,6 @@ def export_trajectory_sft_example(
             "ifv-trajectory-action-only-v1"
             if policy_version == "unified-react-v1"
             and not require_provider_thought
-            else "ifv-trajectory-sft-v4"
-            if policy_version == "unified-react-v1"
             else "ifv-trajectory-sft-v3"
         ),
         "episode_id": episode_id,
@@ -988,11 +949,7 @@ def _v4_quality_gate(
     action_steps = [
         item
         for item in _rows(state.get("all_steps"))
-        if str(item.get("stage", ""))
-        in {
-            "image_only_discrepancy_investigation",
-            "image_only_visual_reinspection",
-        }
+        if str(item.get("stage", "")) == "unified_react"
         and str(item.get("action_type", "")) == "tool_call"
     ]
     if len(action_steps) > terminal_actions:
@@ -1019,7 +976,7 @@ def _unified_react_quality_gate(
         raise ValueError(
             "unified-react policy export requires completed scene and OCR bootstrap"
         )
-    legacy_stages = {
+    retired_stages = {
         "perception",
         "image_account_planning",
         "image_only_planning",
@@ -1029,10 +986,11 @@ def _unified_react_quality_gate(
         "image_only_query_replan",
         "image_only_route_local_replan",
         "image_only_evidence_decision",
+        "image_only_discrepancy_judgment",
     }
     steps = _rows(state.get("all_steps"))
-    if any(str(step.get("stage", "")) in legacy_stages for step in steps):
-        raise ValueError("unified-react trace must not contain legacy policy stages")
+    if any(str(step.get("stage", "")) in retired_stages for step in steps):
+        raise ValueError("unified-react trace contains a retired policy stage")
     actions = [
         step
         for step in steps
@@ -1130,20 +1088,9 @@ def export_policy_examples(
         or state.get("decision_policy_version")
         or ""
     )
-    if policy_version not in {
-        "reinspect-v2",
-        "discrepancy-first-v4",
-        "unified-react-v1",
-    }:
+    if policy_version != "unified-react-v1":
         raise ValueError("policy exporter received an unsupported decision policy")
-    if policy_version == "discrepancy-first-v4":
-        _v4_quality_gate(
-            trace,
-            state,
-            allow_incomplete_verdict_chain=allow_incomplete_verdict_chain,
-        )
-    if policy_version == "unified-react-v1":
-        _unified_react_quality_gate(trace, state)
+    _unified_react_quality_gate(trace, state)
 
     tokenizer = tokenizer or Utf8ByteTokenizer()
     source_metadata = source_metadata or {}
@@ -1205,10 +1152,6 @@ def export_policy_examples(
             PolicyExample(
                 trajectory_version=(
                     "ifv-policy-v3"
-                    if policy_version == "unified-react-v1"
-                    else "ifv-policy-v2"
-                    if policy_version == "discrepancy-first-v4"
-                    else "ifv-policy-v1"
                 ),
                 tokenizer_id=tokenizer.tokenizer_id,
                 episode_id=episode_id,

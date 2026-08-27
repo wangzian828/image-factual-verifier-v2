@@ -49,19 +49,10 @@ _REJECTED_ACTION_TYPES = frozenset(
     {"planning_revision", "format_error", "output_rejected", "policy_replan"}
 )
 _STAGE_EXAMPLE_TYPES = {
-    "image_only_investigation": "react",
-    "image_only_discrepancy_investigation": "react",
-    "image_only_reflection": "reflection",
-    "image_only_judgment": "judgment",
-    "image_only_evidence_decision": "evidence_decision",
-    "image_only_discrepancy_decision": "discrepancy_decision",
-    "image_only_query_concept_extraction": "query_concept_extraction",
-    "image_only_query_replan": "query_replan",
-    "image_only_route_local_replan": "route_local_replan",
-    "image_only_planning": "planning",
-    "image_only_attribution_planning": "planning",
-    "image_account_planning": "image_account_planning",
-    "image_only_discrepancy_judgment": "judgment",
+    "unified_react": "react",
+    "unified_reflection": "reflection",
+    "unified_discrepancy_decision": "discrepancy_decision",
+    "unified_judgment": "judgment",
 }
 
 

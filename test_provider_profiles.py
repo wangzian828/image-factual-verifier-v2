@@ -172,11 +172,11 @@ def test_gemini_requests_thought_summaries() -> None:
     orchestrator = Orchestrator.__new__(Orchestrator)
     orchestrator.provider = "gemini"
 
-    assert orchestrator._stage_generation_config("PLANNING") == {
-        "thinking_level": "high",
+    assert orchestrator._stage_generation_config("UNIFIED_REACT") == {
+        "thinking_level": "low",
         "thinking_summaries": "auto",
     }
-    assert orchestrator._stage_generation_config("JUDGMENT") == {
+    assert orchestrator._stage_generation_config("UNIFIED_JUDGMENT") == {
         "thinking_level": "low",
         "thinking_summaries": "auto",
     }
@@ -188,17 +188,19 @@ def test_gemini_stage_output_budgets_are_balanced(
     orchestrator = Orchestrator.__new__(Orchestrator)
     orchestrator.provider = "gemini"
 
-    assert orchestrator._stage_output_tokens("PLANNING", 8192) == 8192
-    assert orchestrator._stage_output_tokens("VERIFICATION", 8192) == 8192
-    assert orchestrator._stage_output_tokens("EVIDENCE_DECISION", 8192) == 8192
-    assert orchestrator._stage_output_tokens("REFLECTION", 8192) == 8192
-    assert orchestrator._stage_output_tokens("QUERY_CONCEPT_EXTRACTION", 4096) == 4096
-    assert orchestrator._stage_output_tokens("QUERY_REPLAN", 4096) == 4096
-    assert orchestrator._stage_output_tokens("ROUTE_LOCAL_REPLAN", 4096) == 4096
-    assert orchestrator._stage_output_tokens("JUDGMENT", 8192) == 8192
+    for stage in (
+        "UNIFIED_REACT",
+        "UNIFIED_REFLECTION",
+        "UNIFIED_DISCREPANCY_DECISION",
+        "UNIFIED_JUDGMENT",
+    ):
+        assert orchestrator._stage_output_tokens(stage, 8192) == 8192
 
-    monkeypatch.setenv("GEMINI_QUERY_REPLAN_MAX_OUTPUT_TOKENS", "6144")
-    assert orchestrator._stage_output_tokens("QUERY_REPLAN", 4096) == 6144
+    monkeypatch.setenv(
+        "GEMINI_UNIFIED_REACT_MAX_OUTPUT_TOKENS",
+        "6144",
+    )
+    assert orchestrator._stage_output_tokens("UNIFIED_REACT", 8192) == 6144
 
 
 def test_local_qwen_planning_reasoning_is_stage_scoped(
@@ -207,15 +209,15 @@ def test_local_qwen_planning_reasoning_is_stage_scoped(
     orchestrator = Orchestrator.__new__(Orchestrator)
     orchestrator.provider = "qwen_local"
 
-    assert orchestrator._stage_generation_config("PLANNING") == {
-        "enable_thinking": False
+    assert orchestrator._stage_generation_config("UNIFIED_REACT") == {
+        "enable_thinking": True
     }
-    assert orchestrator._stage_generation_config("JUDGMENT") == {
+    assert orchestrator._stage_generation_config("UNIFIED_JUDGMENT") == {
         "enable_thinking": True
     }
 
-    monkeypatch.setenv("QWEN_PLANNING_ENABLE_THINKING", "true")
-    assert orchestrator._stage_generation_config("PLANNING") == {
+    monkeypatch.setenv("QWEN_UNIFIED_REACT_ENABLE_THINKING", "true")
+    assert orchestrator._stage_generation_config("UNIFIED_REACT") == {
         "enable_thinking": True
     }
 
@@ -225,7 +227,7 @@ def test_qwen35_uses_hybrid_stage_reasoning_defaults() -> None:
     orchestrator.provider = "qwen_local"
     orchestrator.model_name = "ifv-qwen3.5-9b-vllm"
 
-    assert orchestrator._stage_generation_config("PLANNING") == {
+    assert orchestrator._stage_generation_config("UNIFIED_REACT") == {
         "enable_thinking": True,
         "temperature": 1.0,
         "top_p": 0.95,
@@ -233,25 +235,17 @@ def test_qwen35_uses_hybrid_stage_reasoning_defaults() -> None:
         "min_p": 0.0,
         "presence_penalty": 1.5,
         "repetition_penalty": 1.0,
-        "thinking_token_budget": 1024,
+        "thinking_token_budget": 2048,
     }
-    assert orchestrator._stage_generation_config("EVIDENCE_DECISION")[
+    assert orchestrator._stage_generation_config("UNIFIED_DISCREPANCY_DECISION")[
         "thinking_token_budget"
     ] == 2048
-    assert orchestrator._stage_generation_config("REFLECTION")[
+    assert orchestrator._stage_generation_config("UNIFIED_REFLECTION")[
         "thinking_token_budget"
     ] == 1536
-    for stage in [
-        "VERIFICATION",
-        "QUERY_REPLAN",
-        "QUERY_CONCEPT_EXTRACTION",
-        "JUDGMENT",
-    ]:
-        config = orchestrator._stage_generation_config(stage)
-        assert config["enable_thinking"] is False
-        assert config["temperature"] == 0.7
-        assert config["top_p"] == 0.8
-        assert "thinking_token_budget" not in config
+    judgment = orchestrator._stage_generation_config("UNIFIED_JUDGMENT")
+    assert judgment["enable_thinking"] is True
+    assert judgment["thinking_token_budget"] == 1024
 
 
 def test_local_qwen_verification_has_bounded_tool_call_budget(
@@ -260,12 +254,12 @@ def test_local_qwen_verification_has_bounded_tool_call_budget(
     orchestrator = Orchestrator.__new__(Orchestrator)
     orchestrator.provider = "qwen_local"
 
-    assert orchestrator._stage_output_tokens("VERIFICATION", 16384) == 8192
+    assert orchestrator._stage_output_tokens("UNIFIED_REACT", 8192) == 8192
     orchestrator.model_name = "ifv-qwen3.5-9b-vllm"
-    assert orchestrator._stage_output_tokens("PLANNING", 8192) == 8192
+    assert orchestrator._stage_output_tokens("UNIFIED_REACT", 8192) == 8192
 
-    monkeypatch.setenv("QWEN_VERIFICATION_MAX_OUTPUT_TOKENS", "4096")
-    assert orchestrator._stage_output_tokens("VERIFICATION", 16384) == 4096
+    monkeypatch.setenv("QWEN_UNIFIED_REACT_MAX_OUTPUT_TOKENS", "4096")
+    assert orchestrator._stage_output_tokens("UNIFIED_REACT", 8192) == 4096
 
 
 def test_qwen35_thinking_budget_can_be_overridden(
@@ -274,7 +268,7 @@ def test_qwen35_thinking_budget_can_be_overridden(
     orchestrator = Orchestrator.__new__(Orchestrator)
     orchestrator.provider = "qwen_local"
     orchestrator.model_name = "ifv-qwen3.5-9b-vllm"
-    monkeypatch.setenv("QWEN_PLANNING_THINKING_TOKEN_BUDGET", "768")
-    assert orchestrator._stage_generation_config("PLANNING")[
+    monkeypatch.setenv("QWEN_UNIFIED_REACT_THINKING_TOKEN_BUDGET", "768")
+    assert orchestrator._stage_generation_config("UNIFIED_REACT")[
         "thinking_token_budget"
     ] == 768

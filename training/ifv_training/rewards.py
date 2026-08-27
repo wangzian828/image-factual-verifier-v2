@@ -27,15 +27,10 @@ DEFAULT_COMPONENT_WEIGHTS = {
     "evidence_chain_reward": 0.40,
     "discrepancy_alignment_reward": 0.40,
     "stop_quality_reward": 0.20,
-    "grounded_finding_reward": 0.20,
-    "gap_coverage_reward": 0.20,
-    "bridge_reward": 0.25,
-    "basis_minimality_reward": 0.20,
-    "stop_calibration_reward": 0.15,
 }
 
 SUPPORTED_COMPONENT_WEIGHTS = frozenset(DEFAULT_COMPONENT_WEIGHTS)
-DEFAULT_CORRECT_REWARD_FLOOR = 0.5
+DEFAULT_CORRECT_REWARD_FLOOR = 0.35
 
 
 def _mapping(value: Any, *, location: str) -> Mapping[str, Any]:
@@ -193,9 +188,10 @@ def load_reward_profile(path: Path | None = None) -> dict[str, Any]:
     if path is None:
         return {
             "schema_version": REWARD_PROFILE_SCHEMA_VERSION,
-            "profile_id": "ifv-deterministic-process-v1",
+            "profile_id": "ifv-deterministic-process-v2",
             "correct_reward_floor": DEFAULT_CORRECT_REWARD_FLOOR,
             "weights": dict(DEFAULT_COMPONENT_WEIGHTS),
+            "allow_nonfatal_audit_failures": True,
         }
     profile = load_json(path)
     if profile.get("schema_version") != REWARD_PROFILE_SCHEMA_VERSION:
@@ -207,6 +203,11 @@ def load_reward_profile(path: Path | None = None) -> dict[str, Any]:
         profile.get("correct_reward_floor", DEFAULT_CORRECT_REWARD_FLOOR),
         location="profile.correct_reward_floor",
     )
+    allow_nonfatal_audit_failures = profile.get(
+        "allow_nonfatal_audit_failures", False
+    )
+    if not isinstance(allow_nonfatal_audit_failures, bool):
+        raise ValueError("profile.allow_nonfatal_audit_failures must be boolean")
     raw_weights = _mapping(profile.get("weights"), location="profile.weights")
     weights: dict[str, float] = {}
     for name, value in raw_weights.items():
@@ -222,6 +223,7 @@ def load_reward_profile(path: Path | None = None) -> dict[str, Any]:
         **profile,
         "correct_reward_floor": correct_reward_floor,
         "weights": weights,
+        "allow_nonfatal_audit_failures": allow_nonfatal_audit_failures,
     }
 
 
@@ -255,6 +257,11 @@ def compose_reward_ledger(
         profile.get("correct_reward_floor", DEFAULT_CORRECT_REWARD_FLOOR),
         location="profile.correct_reward_floor",
     )
+    allow_nonfatal_audit_failures = profile.get(
+        "allow_nonfatal_audit_failures", False
+    )
+    if not isinstance(allow_nonfatal_audit_failures, bool):
+        raise ValueError("profile.allow_nonfatal_audit_failures must be boolean")
     rollout = (
         _mapping(
             semantic_artifact.get("rollout"),
@@ -273,6 +280,14 @@ def compose_reward_ledger(
     strict_trace_audit = bool(
         deterministic.get("strict_trace_audit_pass", False)
     )
+    hard_trace_audit = _optional_bool(
+        deterministic.get("hard_trace_audit_pass"),
+        location="deterministic.hard_trace_audit_pass",
+    )
+    if hard_trace_audit is None:
+        # Old post-rollout artifacts only recorded the strict aggregate gate.
+        # Fail closed: a strict failure cannot be assumed non-fatal retroactively.
+        hard_trace_audit = strict_trace_audit
     training_prohibited = bool(
         deterministic.get("training_prohibited", False)
     )
@@ -314,13 +329,21 @@ def compose_reward_ledger(
         sum(value * weight for _, value, weight in weighted_terms)
         / weight_sum
         if weight_sum > 0.0
-        else 1.0
+        else 1.0 if strict_trace_audit else 0.0
     )
-    reward_masked = fatal_mask or not strict_trace_audit
+    audit_accepted_for_reward = bool(
+        strict_trace_audit
+        or (allow_nonfatal_audit_failures and hard_trace_audit)
+    )
+    reward_masked = fatal_mask or not audit_accepted_for_reward
     if reward_masked:
         scalar_reward_value: float | None = None
         if not mask_reason:
-            mask_reason = "strict_trace_audit_failed"
+            mask_reason = (
+                "hard_trace_audit_failed"
+                if not hard_trace_audit
+                else "strict_trace_audit_failed"
+            )
     elif classification_correct is None:
         reward_masked = True
         scalar_reward_value = None
@@ -373,7 +396,7 @@ def compose_reward_ledger(
     )
     ledger_core = {
         "schema_version": REWARD_LEDGER_SCHEMA_VERSION,
-        "reward_policy": "outcome-dominant-deterministic-v1",
+        "reward_policy": "outcome-dominant-deterministic-v2",
         "case_id": case_id,
         "episode_id": episode_id,
         "source_semantic_artifact_id": (
@@ -395,6 +418,7 @@ def compose_reward_ledger(
         "profile": {
             "profile_id": profile.get("profile_id"),
             "correct_reward_floor": correct_reward_floor,
+            "allow_nonfatal_audit_failures": allow_nonfatal_audit_failures,
             "weights": dict(weights),
             "active_weight_sum": weight_sum,
         },
@@ -415,13 +439,20 @@ def compose_reward_ledger(
         },
         "gates": {
             "engineering_valid": engineering_valid,
-            "strict_trace_audit_pass": strict_trace_audit,
             "classification_correct": classification_correct,
             "has_policy_steps": bool(step_ids),
             "training_prohibited": training_prohibited,
+            "strict_trace_audit_pass": strict_trace_audit,
+            "hard_trace_audit_pass": hard_trace_audit,
+            "audit_accepted_for_reward": audit_accepted_for_reward,
+            "rl_reward_eligible": bool(
+                not reward_masked
+                and classification_correct is not None
+                and step_ids
+                and not training_prohibited
+            ),
             "trainable": bool(
-                not fatal_mask
-                and strict_trace_audit
+                not reward_masked
                 and classification_correct is not None
                 and step_ids
                 and not training_prohibited
@@ -629,10 +660,14 @@ def build_standard_grpo_groups(
             gates = {} if ledger is None else _mapping(
                 ledger.get("gates"), location="ledger.gates"
             )
+            source_rl_eligible = source.get(
+                "rl_reward_eligible",
+                source.get("training_eligible", True),
+            )
             valid = bool(
                 ledger is not None
                 and gates.get("trainable")
-                and source.get("training_eligible", True) is not False
+                and source_rl_eligible is not False
                 and source.get("training_prohibited", False) is not True
                 and isinstance(reward, (int, float))
             )

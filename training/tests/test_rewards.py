@@ -136,11 +136,11 @@ def test_correctness_dominates_process_quality() -> None:
     incorrect = _ledger("bad", correct=False, quality=1.0)
     weak_correct = _ledger("good", correct=True, quality=0.0)
     assert incorrect["scalar_reward"] == 0.0
-    assert weak_correct["scalar_reward"] == 0.5
+    assert weak_correct["scalar_reward"] == 0.35
     assert weak_correct["scalar_reward"] > incorrect["scalar_reward"]
 
 
-def test_missing_correctness_or_failed_audit_is_masked() -> None:
+def test_v1_masks_audit_failures_but_v2_keeps_nonfatal_audit_reward() -> None:
     missing = compose_reward_ledger(
         {
             "case_id": "case-reward-1",
@@ -163,6 +163,48 @@ def test_missing_correctness_or_failed_audit_is_masked() -> None:
         },
     )
     assert failed["scalar_reward"] is None
+    assert failed["fatal_mask"]["masked"] is True
+
+    relaxed_profile = {
+        "schema_version": "ifv-rl-reward-profile-v1",
+        "profile_id": "ifv-deterministic-process-v2",
+        "correct_reward_floor": 0.35,
+        "allow_nonfatal_audit_failures": True,
+        "weights": {
+            "evidence_chain_reward": 0.4,
+            "discrepancy_alignment_reward": 0.4,
+            "stop_quality_reward": 0.2,
+        },
+    }
+    nonfatal = compose_reward_ledger(
+        {
+            "case_id": "case-reward-1",
+            "episode_id": "episode-nonfatal",
+            "classification_correct": True,
+            "strict_trace_audit_pass": False,
+            "hard_trace_audit_pass": True,
+            "fatal_engineering_error": False,
+            "step_ids": ["episode-nonfatal:judgment:1"],
+        },
+        profile=relaxed_profile,
+    )
+    assert nonfatal["scalar_reward"] == 0.35
+    assert nonfatal["fatal_mask"]["masked"] is False
+
+    hard_failure = compose_reward_ledger(
+        {
+            "case_id": "case-reward-1",
+            "episode_id": "episode-hard",
+            "classification_correct": True,
+            "strict_trace_audit_pass": False,
+            "hard_trace_audit_pass": False,
+            "fatal_engineering_error": False,
+            "step_ids": ["episode-hard:judgment:1"],
+        },
+        profile=relaxed_profile,
+    )
+    assert hard_failure["scalar_reward"] is None
+    assert hard_failure["fatal_mask"]["reason"] == "hard_trace_audit_failed"
 
 
 def test_invalid_semantic_diagnostic_is_rejected_but_never_masks_reward() -> None:
@@ -300,15 +342,21 @@ def test_run_artifact_join_keeps_incorrect_episode_trainable() -> None:
     ledgers = build_ledgers_from_run_artifacts(
         deterministic_rows=rows,
     )
-    assert [item["scalar_reward"] for item in ledgers] == [0.9375, 0.0]
+    assert [item["scalar_reward"] for item in ledgers] == [0.91875, 0.0]
     assert all(item["gates"]["trainable"] for item in ledgers)
 
 
-def test_v5_profile_is_the_default_trajectory_profile() -> None:
+def test_v2_profile_is_the_default_trajectory_profile() -> None:
     root = Path(__file__).resolve().parents[1]
-    profile = load_reward_profile(root / "configs" / "rl" / "deterministic-process-v1.json")
-    assert profile["profile_id"] == "ifv-deterministic-process-v1"
-    assert profile["correct_reward_floor"] == 0.5
+    profile = load_reward_profile(root / "configs" / "rl" / "deterministic-process-v2.json")
+    assert profile["profile_id"] == "ifv-deterministic-process-v2"
+    assert profile["correct_reward_floor"] == 0.35
     assert profile["weights"]["evidence_chain_reward"] == 0.4
     assert profile["weights"]["discrepancy_alignment_reward"] == 0.4
     assert profile["weights"]["stop_quality_reward"] == 0.2
+    assert profile["allow_nonfatal_audit_failures"] is True
+    assert set(profile["weights"]) == {
+        "evidence_chain_reward",
+        "discrepancy_alignment_reward",
+        "stop_quality_reward",
+    }

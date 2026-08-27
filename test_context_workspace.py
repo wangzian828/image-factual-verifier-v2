@@ -79,7 +79,7 @@ def _state() -> ImageOnlyInvestigationState:
         brief=InvestigationBrief(brief_id="brief-1", case_id="case-1"),
         entities=[entity],
         facts=[fact],
-        image_claims=[claim],
+        target_facts=[claim],
         search_hypotheses=[hypothesis],
         tasks=[task],
         claim_assessments=[assessment],
@@ -161,7 +161,7 @@ def test_budgeter_reports_protected_overflow_without_silent_deletion() -> None:
 def test_initial_planning_request_does_not_duplicate_workspace() -> None:
     packet = build_stage_handoff(
         _state(),
-        target_stage="image_account_planning",
+        target_stage="unified_react",
         stage_input={"bootstrap_tasks": [{"task_id": "task-1"}]},
     )
 
@@ -177,9 +177,9 @@ def test_complete_stage_requests_keep_only_their_workspace_addendum() -> None:
     state = _state()
     packet = build_stage_handoff(
         state,
-        target_stage="verification",
+        target_stage="unified_reflection",
         stage_input={
-            "image_claims": [item.model_dump(mode="json") for item in state.image_claims],
+            "target_facts": [item.model_dump(mode="json") for item in state.target_facts],
             "active_tasks": [item.model_dump(mode="json") for item in state.tasks],
         },
         available_tools=["text_search"],
@@ -194,7 +194,7 @@ def test_complete_stage_requests_keep_only_their_workspace_addendum() -> None:
     rendered = render_stage_request(packet)
 
     assert '"workspace_projection"' in rendered
-    assert '"protected_evidence"' in rendered
+    assert '"protected_evidence"' not in rendered
     assert '"recent_discoveries"' not in rendered
     assert '"attempted_routes"' not in rendered
     # The full workspace remains on the packet for archive/audit and recall.
@@ -205,7 +205,7 @@ def test_complete_stage_requests_keep_only_their_workspace_addendum() -> None:
 def test_stage_owned_contexts_do_not_receive_full_workspace() -> None:
     packet = build_stage_handoff(
         _state(),
-        target_stage="image_only_route_local_replan",
+        target_stage="unified_react",
         stage_input={
             "route_boundary": "candidate_exhausted",
             "active_target": {"fact_id": "fact-1"},
@@ -222,7 +222,7 @@ def test_stage_owned_contexts_do_not_receive_full_workspace() -> None:
 def test_bounded_judgment_request_omits_general_workspace() -> None:
     packet = build_stage_handoff(
         _state(),
-        target_stage="image_only_discrepancy_judgment",
+        target_stage="unified_judgment",
         stage_input={"compiled_verdict": "fake", "compiled_basis": {"claim_ids": ["claim-1"]}},
     )
 

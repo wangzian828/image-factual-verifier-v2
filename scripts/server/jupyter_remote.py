@@ -218,11 +218,22 @@ def execute_code(
     cookies = "; ".join(
         f"{key}={value}" for key, value in session.cookies.get_dict().items()
     )
-    connection = websocket.create_connection(
-        websocket_url(base, f"api/kernels/{kernel_id}/channels"),
-        header=[f"Cookie: {cookies}"],
-        timeout=timeout,
-    )
+    ws_url = websocket_url(base, f"api/kernels/{kernel_id}/channels")
+    ws_host = urlsplit(ws_url).hostname
+    websocket_options: dict[str, object] = {
+        "header": [f"Cookie: {cookies}"],
+        "timeout": timeout,
+    }
+    # websocket-client has historically been inconsistent about honoring
+    # NO_PROXY/no_proxy.  A tunneled Jupyter endpoint is local to this
+    # workstation, so sending its WebSocket handshake through the server's
+    # egress proxy can hang before the 101 response.  Disable proxy lookup
+    # explicitly for loopback targets; external endpoints retain the normal
+    # environment/proxy behavior.
+    if ws_host in {"127.0.0.1", "localhost", "::1"}:
+        websocket_options["http_proxy_host"] = ""
+        websocket_options["http_proxy_port"] = 0
+    connection = websocket.create_connection(ws_url, **websocket_options)
     message_id = str(uuid.uuid4())
     session_id = str(uuid.uuid4())
     connection.send(

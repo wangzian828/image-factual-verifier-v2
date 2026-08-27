@@ -176,7 +176,7 @@ def audit_discrepancy_coverage(
 def compile_discrepancy_verdict_basis(
     state: ImageOnlyInvestigationState,
     *,
-    policy_rule_id: str = "discrepancy-first-v4",
+    policy_rule_id: str = "unified-react-v1",
 ) -> tuple[str, DiscrepancyVerdictBasis]:
     """Compile the smallest admissible v4 claim/discrepancy/Evidence basis."""
 

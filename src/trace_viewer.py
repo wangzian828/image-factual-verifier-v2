@@ -1,4 +1,4 @@
-"""Dependency-free standalone HTML renderer for v3 image-only traces."""
+"""Dependency-free standalone HTML renderer for unified-ReAct traces."""
 from __future__ import annotations
 
 import base64
@@ -29,16 +29,14 @@ def _render_trace_html(trace_data: Dict[str, Any]) -> str:
         judgment = state["judgment"]
     steps = state.get("all_steps", []) if isinstance(state.get("all_steps"), list) else []
     investigation = state.get("investigation_state", {}) if isinstance(state.get("investigation_state"), dict) else {}
-    audits = investigation.get("coverage_audits", []) if isinstance(investigation.get("coverage_audits"), list) else []
+    audits = investigation.get("discrepancy_coverage_audits", []) if isinstance(investigation.get("discrepancy_coverage_audits"), list) else []
     timings = state.get("stage_timings", {}) if isinstance(state.get("stage_timings"), dict) else {}
     token_usage = trace_data.get("token_usage") or state.get("token_usage") or {}
     embedded = _embed_local_image(image_path)
     stage_flow = (
-        '<div class="stage">Perception / OCR</div><span class="arrow">&#8594;</span>'
-        '<div class="stage">VisualFact Bootstrap</div><span class="arrow">&#8594;</span>'
-        '<div class="stage">ReAct</div><span class="arrow">&#8596;</span>'
-        '<div class="stage">Reflection / Coverage</div><span class="arrow">&#8594;</span>'
-        '<div class="stage">reinspect-v2 Judgment</div>'
+        '<div class="stage">Unified ReAct</div><span class="arrow">&#8596;</span>'
+        '<div class="stage">Reflection / Decision</div><span class="arrow">&#8594;</span>'
+        '<div class="stage">unified-react Judgment</div>'
     )
 
     return f"""<!DOCTYPE html>

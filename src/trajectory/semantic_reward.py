@@ -1,4 +1,4 @@
-"""Gold-free semantic reward audit for completed discrepancy-first rollouts.
+"""Gold-free semantic reward audit for completed unified-ReAct rollouts.
 
 The policy has already finished when this module runs.  The frozen judge never
 participates in search and receives neither policy reasoning nor evaluator gold.
@@ -153,32 +153,14 @@ def _project_evidence(item: Mapping[str, Any]) -> Dict[str, Any]:
 def _policy_example_type(stage: str) -> str | None:
     """Keep step IDs byte-for-byte aligned with trajectory.exporter."""
 
-    if stage in {
-        "image_only_investigation",
-        "image_only_discrepancy_investigation",
-    }:
+    if stage == "unified_react":
         return "react"
-    if stage == "image_only_reflection":
+    if stage == "unified_reflection":
         return "reflection"
-    if stage in {
-        "image_only_judgment",
-        "image_only_discrepancy_judgment",
-    }:
-        return "judgment"
-    if stage == "image_only_evidence_decision":
-        return "evidence_decision"
-    if stage == "image_only_discrepancy_decision":
+    if stage == "unified_discrepancy_decision":
         return "discrepancy_decision"
-    if stage == "image_only_query_concept_extraction":
-        return "query_concept_extraction"
-    if stage == "image_only_query_replan":
-        return "query_replan"
-    if stage == "image_only_route_local_replan":
-        return "route_local_replan"
-    if stage in {"image_only_planning", "image_only_attribution_planning"}:
-        return "planning"
-    if stage == "image_account_planning":
-        return "image_account_planning"
+    if stage == "unified_judgment":
+        return "judgment"
     return None
 
 
@@ -258,10 +240,7 @@ def _project_investigation_turns(
         if action_type in {"format_error", "output_rejected", "policy_replan"}:
             continue
         stage = str(step.get("stage", ""))
-        if stage in {
-            "image_only_judgment",
-            "image_only_discrepancy_judgment",
-        }:
+        if stage == "unified_judgment":
             continue
         metadata = _mapping(step.get("metadata"))
         policy_action = metadata.get("policy_action")
@@ -343,7 +322,7 @@ def build_semantic_reward_input(
         for item in target_fact_rows(investigation)
     ]
     if not claims:
-        raise ValueError("semantic reward requires at least one ImageClaim")
+        raise ValueError("semantic reward requires at least one target fact")
 
     evidence = [
         _project_evidence(item)

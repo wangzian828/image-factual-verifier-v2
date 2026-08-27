@@ -989,9 +989,7 @@ def export_dataset(
             else "ifv-trajectory-sft-dataset-v2"
         ),
         "trajectory_version": (
-            "ifv-trajectory-sft-v4"
-            if decision_policy_version == "unified-react-v1"
-            else "ifv-trajectory-sft-v3"
+            "ifv-trajectory-sft-v3"
         ),
         "decision_policy_version": decision_policy_version,
         "perception_version": "ifv-perception-v1",

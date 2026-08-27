@@ -4378,7 +4378,10 @@ class StageRunner:
             "Return one corrected complete JSON object. Change only the fields "
             "needed to satisfy this feedback; do not invent IDs or state. "
         )
-        if self.stage_name == "image_only_discrepancy_decision":
+        if self.stage_name in {
+            "unified_discrepancy_decision",
+            "image_only_discrepancy_decision",
+        }:
             message += (
                 "A non-terminal continue proposal remains valid; do not force "
                 "real or fake merely because this is a retry. Omit any Claim "

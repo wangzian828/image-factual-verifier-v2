@@ -32,3 +32,6 @@ build/
 /test_mock_result.json
 /test_mock_result.html
 /test_real_result.json
+
+# Ad-hoc local diagnostics must not be collected as pytest modules
+/.tmp_*

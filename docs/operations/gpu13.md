@@ -101,6 +101,237 @@ The Python runtime loads that dotenv file without overriding explicitly supplied
 process variables. The wrapper exports only the file path; it does not print or copy
 credential values. Use mode `600` for this file.
 
+### 当前统一数据集与教师 rollout（2026-08-25）
+
+当前唯一可用于教师 rollout 的统一数据集是：
+
+```text
+/gsdata/home/wza/image-factual-verifier-v2-data/datasets/route-aware-hrc-stage2-10563-final-organized-20260824-r2/unified-dataset
+```
+
+总账与隔离边界：
+
+- 总记录：10,174；
+- `test-manifest.jsonl`：1,684 条，禁止进入 teacher rollout、SFT 或 RL；
+- `train-manifest.jsonl`：8,490 条，是当前教师自动链的唯一输入；
+- 图片均已存在；7,972 条有生图 prompt，2,202 条网页图等不需要 prompt。
+
+当前正式教师自动链目录为：
+
+```text
+/gsdata/home/wza/image-factual-verifier-v2-data/generated/teacher-rollouts/gemini37-r2-train8490-p10-20260824
+```
+
+目录名中的 `p10` 是最初创建时的命名，不代表现在的实际并发。以
+`pipeline-state.json` 和运行中的命令行为准：2026-08-25 已确认 rollout 并发为
+24、SFT judge 并发为 10。当前代码提交为 `75e7181`。
+
+自动链已完成一次完整 runtime/private-gold 投影与图片 SHA-256 校验；每次
+`attempt-XX` 调用都显式跳过重复的 `run_cases` 全量图片预检。不要把这一优化复制到
+普通手工 `run_cases` 命令中，除非该命令使用的正是已经验证过的同一投影。
+
+当前全量任务只能通过
+`scripts/trajectory/run_teacher_rollout_autopilot.py` 恢复。它会从不可变的已有
+attempt 中收集成功 trace，只运行未完成或工程失败的 case；成功 case 不会被重跑。
+完整链路、质量桶与 reroll 规则见
+[`../teacher-rollout-autopilot.md`](../teacher-rollout-autopilot.md)。
+
+检查任务是否真的在运行：
+
+```bash
+RUN=/gsdata/home/wza/image-factual-verifier-v2-data/generated/teacher-rollouts/gemini37-r2-train8490-p10-20260824
+
+cat "$RUN/pipeline-state.json"
+ps -eo pid,ppid,etime,args | grep -E '[r]un_teacher_rollout_autopilot|[s]rc\.eval\.run_cases'
+find "$RUN/rollouts/initial" -type f -path '*/attempt-*/traces/*.json' | wc -l
+ss -tan state close-wait | tail -n +2 | wc -l
+```
+
+恢复扫描期间只有 autopilot 进程、但暂时没有 `run_cases` 子进程是正常的。只要扫描完成，
+它会新建后续 attempt 和 case list。`CLOSE-WAIT` 短暂存在不等于故障；重点是它是否随
+完成 trace 数持续无界增长。相关生命周期事故和修复记录见：
+
+- [`2026-08-23-gemini-rollout-resource-lifecycle.md`](2026-08-23-gemini-rollout-resource-lifecycle.md)
+- [`2026-08-24-close-wait-session-leak-followup.md`](2026-08-24-close-wait-session-leak-followup.md)
+
+### 历史：1051 条 archive 训练池与重跑（2026-08-23）
+
+下列内容记录的是 2026-08-23 的 1051 条 archive 训练池和针对 archive 的排障，
+不是当前 8,490 条统一训练集的正式输入。
+
+The registered training pool for that historical teacher rollout was:
+
+```text
+/gsdata/home/wza/image-factual-verifier-v2-data/training/remaining-after-qwen35-route-balanced-bacc68p7-1687-20260821-r6
+```
+
+It contains 1051 training cases. The associated test set is
+`test_sets/qwen35-route-balanced-bacc68p7-1687-20260821-r6` and must not be used
+as rollout input.
+
+The pool metadata records the logical archive source
+`/gsdata/home/wza/image-factual-verifier-data-pipeline-data/archives/route-aware-hrc-final-3000-20260816`.
+That exact directory is not materialized on gpu-13. The physical archive for this
+3000-case source is:
+
+```text
+/gsdata/home/wza/image-factual-verifier-data-pipeline-data/archives/history/2026-08-17/route-aware-hrc-final-3000-20260816
+```
+
+The physical archive has 2800 candidate rows and 3000 archived images. Before a
+rollout, select the case IDs from the training pool and verify that every selected
+`archive_source_version_id` exists in `human-review-candidates.jsonl` and that its
+`archive_image_path` exists under `artifacts/images/`. Do not substitute the
+`route-aware-hrc-stage2-10563-20260821-baseline7583-v4-full` archive: it is a
+different aggregate archive, even though it contains related upstream records.
+
+The rollout must receive only the archive adapter's runtime projection. For the
+post-rollout frozen SFT judge, build a separate private adapter from the matching
+candidate rows, adding `case_id=archive_source_version_id` as the judge key.
+That adapter may contain factual status, claims, and evidence, but it must never
+be passed to the Agent or copied into model-visible training rows.
+
+Important selection detail: `src.eval.run_cases` validates every ID supplied by
+`--case-list` before applying `--limit`. Therefore, when running a bounded prefix
+such as the first 100 training cases, first materialize a temporary case list
+containing exactly those 100 IDs. Passing the full 1051-case list together with
+`--limit 100` still validates all 1051 IDs and can fail before any rollout starts.
+
+### Historical archive rollout entrypoint (重要)
+
+历史 archive 重跑必须使用 `src.eval.run_cases --archive-root`，不能使用
+`scripts/server/start_gemini_eval_gpu13.sh`。后者内部固定启动
+`python -m src.eval.run_eval`，只接受 v0.3 release 的 `--benchmark`，不接受
+`--archive-root`。把 archive 参数传给该 wrapper 会出现两种容易误判的现象：
+启动器先打印 PID/run_id，但后台进程随后在 argparse 阶段以状态码 2 退出；
+不会生成 `traces/*.json`，也不会发出 Gemini 请求。
+
+正确的 archive 启动方式是直接调用 `run_gpu13.sh`，并让 archive runner 自己
+获取 Gemini 全机锁：
+
+```bash
+cd /gs/home/wza/projects/image-factual-verifier-v2-worktrees/gpu13-canary-20260804-plan-relaxation-01
+source scripts/server/gpu13_env.sh
+export GEMINI_EVAL_MAX_CONCURRENCY=16
+export GEMINI_MAX_INFLIGHT_REQUESTS=16
+run_id="archive-rerun-$(date -u +%Y%m%dT%H%M%SZ)"
+scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
+  python -m src.eval.run_cases \
+  --archive-root /path/to/archive \
+  --output-dir "$IFV_DATA_ROOT/runs/eval/$run_id" \
+  --profile teacher-gemini \
+  --concurrency 4 \
+  --rollouts-per-case 1 \
+  --base-sampling-seed 982451653 \
+  --timeout 1800 \
+  --case-id <case-id-1> \
+  --case-id <case-id-2>
+```
+
+`start_gemini_eval_gpu13.sh` 仍然适用于 v0.3 release 的正式后台评测：
+
+```bash
+scripts/server/start_gemini_eval_gpu13.sh \
+  --benchmark "$IFV_DATA_ROOT/releases/<release-id>/runtime_input/cases.jsonl" \
+  --output-dir "$IFV_DATA_ROOT/runs/eval/<run-id>" \
+  --concurrency 4
+```
+
+两类输入不得混用。启动前先做入口检查：
+
+```bash
+case "$INPUT_MODE" in
+  archive)  test -f "$ARCHIVE_ROOT/human-review-candidates.jsonl" ;;
+  release)  test -f "$RELEASE_ROOT/manifest.json" && \
+            test -f "$RELEASE_ROOT/runtime_input/cases.jsonl" ;;
+esac
+```
+
+后台启动器打印 PID 只代表 shell 已经 fork，不能代表 rollout 已开始。实际运行
+必须同时检查：
+
+```bash
+test -f "$RUN_DIR/run_manifest.json"
+find "$RUN_DIR/traces" -maxdepth 1 -type f -name '*.json' | wc -l
+test -f "$RUN_DIR/summary.json" && cat "$RUN_DIR/summary.json"
+tail -n 80 "$LOG_FILE"
+```
+
+判定规则：
+
+- 只有 `traces/*.json` 数量开始增加，才算进入实际 rollout；
+- 只有 `summary.json` 存在且 `num_errors` 已确认，才算批次结束；
+- `run_manifest.json` 缺失或后台日志包含 `run_eval.py: error` / `exit_status=2`，
+  归类为启动参数错误，不归类为 Gemini/API 失败；
+- `Lmod` 关于 `gnu12` 与 `gnu9` 的提示来自 conda/module 环境初始化。它本身
+  不是 rollout 结果；仍需继续检查 Python 进程、trace、summary 和最终退出码。
+
+2026-08-23 实际排查记录：对 6 条被 SFT LLM judge 拒绝的 archive case 重跑时，
+前两次误用了 `start_gemini_eval_gpu13.sh --archive-root`，后台分别在参数解析
+阶段退出，没有生成 trace，也没有消耗 Gemini 请求。第三次改为
+`src.eval.run_cases --archive-root`，使用全新 sampling seed 和独立 output 目录，
+并发 4；该任务的正确 run id 是
+`gemini-sft-retry6-seed982451653-20260823`。旧的失败目录/日志不得当作 rollout
+失败样本，后续比较只读取正确 archive runner 生成的 trace。
+
+该批次中 case `...:0006:baseline_historical_generated_drain-generated-no-prototype-0000`
+首轮因 `perceive_scene` 的 Gemini HTTP 504 产生工程错误。单独使用正确的
+archive runner、并发 1、VLM timeout 180 秒、`VLM_TOOL_REQUEST_MAX_RETRIES=3`
+重跑后成功：
+
+```text
+run_id=gemini-sft-retry0006-seed982451653-r1-20260823
+termination=success
+verdict=fake
+engineering_error=0
+llm_api_calls=41
+tool_calls=16
+time_taken_sec=372.33
+```
+
+这次对照证明该 504 是可恢复的外部视觉请求失败，不应直接归类为轨迹质量失败；
+但重跑后的完整轨迹仍必须重新经过 frozen SFT LLM judge，不能只依据最终 verdict
+判定可训练。
+
+该 6-case 重跑的完整配对结果如下。5 条首轮成功轨迹先统一经过
+`score_sft_eligibility.py`，随后 0006 的工程错误单独修复重跑并再次经过同一
+LLM judge：
+
+```text
+case 0001  rollout=fake  judge=pass
+case 0002  rollout=fake  judge=pass
+case 0003  rollout=real  judge=reject
+case 0005  rollout=real  judge=reject
+case 0006  rollout=fake  judge=pass  # 首轮 perceive_scene 504，重试后恢复
+case 0010  rollout=real  judge=reject
+```
+
+因此新 seed 的 6 条重跑结果是：
+
+```text
+最终有效轨迹：6/6
+正确 verdict：3/6
+frozen SFT LLM judge 通过：3/6
+仍拒绝：3/6
+最终工程错误：0
+```
+
+重跑 judge 产物：
+
+```text
+5-case judge:
+/gsdata/home/wza/image-factual-verifier-v2-data/runs/eval/sft-eligibility-gemini-sft-retry6-seed982451653-20260823
+
+0006 judge:
+/gsdata/home/wza/image-factual-verifier-v2-data/runs/eval/sft-eligibility-gemini-sft-retry0006-seed982451653-r1-20260823
+```
+
+结论：换 sampling seed 确实能产生不同轨迹，并且本批次把 0006 从工程错误恢复为
+可用轨迹；但对模型本身判断能力的改善不是稳定的，3 条错误 verdict 仍被 judge
+正确拒绝。因此“重新 roll”可以作为保留轨迹、提高正样本产率的策略，但不能替代
+SFT LLM judge；生产流程应保留每个 case 的多个独立 rollout，再按 judge 结果和质量
+桶选择训练候选。
+
 ## Verified Topology
 
 Verified on 2026-07-11:
@@ -649,26 +880,26 @@ scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
   --limit 2
 ```
 
-Only after the canary passes should all 20 cases be launched with
-`scripts/server/start_eval_gpu13.sh`.
+Only after the canary passes should the larger teacher rollout be launched with
+the autopilot. The current Agent is `unified-react-v1`; it has one ReAct loop and
+does not run standalone Planning, Query Replan, or Route Replan requests.
 
-The v3 runtime allows at most 24 real tool actions. Initial target Planning chooses
-the evidence target, and ReAct selects the first tool route; there is no fixed initial
-reverse-image call. Structured Reflection runs after accepted actions 4, 8, 12, 16,
-20, and 24.
+The runtime allows at most 24 accepted tool actions. At the beginning, Gemini
+chooses `perceive_scene` or `ocr_with_position`; after both observations exist, it
+chooses the first investigation tool and supplies the runtime-only
+`investigation_intent`. Every later turn is one thought plus one native tool call.
+Reflection and Discrepancy Decision are sparse runtime checkpoints, followed by
+one Judgment request.
 
-In `direct_multimodal` mode, Target Planning uploads the original image once as
-the root of the stored Gemini Interactions main chain. In `separate_vlm` mode,
-the VLM owns the image calls: Planning, ReAct, Evidence Decision, Reflection,
-route-local replan, and Judgment receive structured state only, while the final
-VLM audit provides the last pixel observations before Judgment. ReAct, Evidence
-Decision, Reflection, and Judgment continue through `previous_interaction_id`;
-they do not upload the same image again.
-Query Concept Extraction, Query Replan, OCR, webpage extraction, and tool-internal
-Gemini calls remain separate. If a tool action ends at a deterministic segment
-boundary, its pending `function_result` is submitted with the next main-chain
-`user_input` step. Trace snapshots store a `runtime_image` reference, not image
-base64.
+In `direct_multimodal` mode, the main Gemini request may receive the image. In
+`separate_vlm` mode, the visual tools receive the image and the policy model
+receives structured observations only. Both modes use the same dynamic tool schema,
+reducer, state delta, and trace contract. Mature visual/search/browse tool
+implementations remain unchanged.
+
+Trace snapshots store a `runtime_image` reference, not image base64. A tool action
+uses a short native `function_call -> function_result` round trip; completed
+actions are not replayed as a growing provider-side interaction chain.
 Gemini main-chain requests use a 90-second per-attempt HTTP timeout, twelve retries,
 and a 900-second outer stage deadline by default. Retry delays grow exponentially,
 include jitter, and honor provider `Retry-After` or `google.rpc.RetryInfo` hints up
@@ -682,14 +913,13 @@ Configure them with `AGENT_LLM_REQUEST_TIMEOUT_SECONDS`,
 per-image budget: a transient 429 continues the same stored Interaction instead of
 discarding completed Agent actions, while a provider outage that exceeds the
 bounded retry window still produces a diagnostic error trace.
-Coverage runs after every accepted action and stops immediately when the one core fact
-and its required evidence gaps resolve. It also stops as `information_saturated` when
-no executable core-gap route remains or when two consecutive action checkpoints make
-no qualified core progress. ReAct turns use an 8,192-token output budget;
-Reflection, Judgment, and Evidence Decision use 8,192; query and route replanning
-use 4,096. Image Account Planning defaults to high thinking;
-its thought tokens are recorded but are not Evidence. Investigation, extraction,
-visual-tool, Decision, and Judgment calls remain low thinking. Interactions failures that exhaust the
+Coverage runs after every accepted action and stops when the target fact and its
+required evidence gaps resolve, meaningful routes are exhausted, or the 24-action
+budget is reached. The four active policy stages default to an 8,192-token output
+budget and low Gemini thinking. Qwen policy runs can enable visible thinking for
+`unified_react`, `unified_reflection`, `unified_discrepancy_decision`, and
+`unified_judgment`; the exported ReAct target remains `<think>` plus one native
+tool call. Interactions failures that exhaust the
 bounded retry window remain hard failures, and the error trace retains completed
 calls and retry diagnostics. Evaluation also rejects queries that
 explicitly target policy-excluded fact-check domains before Serper.

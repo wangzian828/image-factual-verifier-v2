@@ -34,14 +34,14 @@ def _manifest_row(case_id: str, *, factual_status: str, image: str) -> dict[str,
 def _trace(case_id: str, *, early_judgment: bool) -> dict[str, Any]:
     steps: list[dict[str, Any]] = [
         {
-            "stage": "image_only_discrepancy_decision",
+            "stage": "unified_discrepancy_decision",
             "output": {"verdict_proposal": "fake"},
         }
     ]
     if early_judgment:
         steps.append(
             {
-                "stage": "image_only_discrepancy_judgment",
+                "stage": "unified_judgment",
                 "output": {"verdict": "fake"},
             }
         )

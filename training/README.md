@@ -25,7 +25,7 @@ cd training
 ifv-training build-run-rewards `
   --deterministic D:\runs\qwen-g4\post_rollout_rewards.jsonl `
   --rollout-members D:\runs\qwen-g4\rollout_groups.jsonl `
-  --profile configs\rl\deterministic-process-v1.json `
+  --profile configs\rl\deterministic-process-v2.json `
   --ledger-output D:\runs\qwen-g4\reward_ledgers.jsonl `
   --group-output D:\runs\qwen-g4\grpo_groups.jsonl
 ```
@@ -33,9 +33,9 @@ ifv-training build-run-rewards `
 Reward policy:
 
 ```text
-engineering error / strict audit failure / missing correctness -> mask
-wrong verdict                                                  -> 0.0
-correct verdict                                                -> 0.5 + 0.5 * deterministic process quality
+engineering error / hard audit failure / missing correctness -> mask
+wrong verdict                                               -> 0.0
+correct verdict                                             -> 0.35 + 0.65 * deterministic process quality
 ```
 
 Every episode receives one scalar reward. rLLM / veRL handles standard same-prompt

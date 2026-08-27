@@ -11,7 +11,6 @@ from src.orchestrator.investigation_models import (
     DiscrepancyJudgment,
     Finding,
     ImageOnlyInvestigationState,
-    ImageOnlyJudgment,
     InvestigationBrief,
     ResearchTask,
     RetrievalAnchor,
@@ -80,7 +79,7 @@ class VerificationState:
     image_id: str = ""
     runtime_case: Optional[ImageOnlyRuntimeCase] = None
     input_mode: str = "image_only"
-    decision_policy_version: str = "discrepancy-first-v4"
+    decision_policy_version: str = "unified-react-v1"
     investigation_state: Optional[ImageOnlyInvestigationState] = None
     investigation_brief: Optional[InvestigationBrief] = None
     visual_entities: List[VisualEntity] = field(default_factory=list)
@@ -90,7 +89,7 @@ class VerificationState:
     retrieval_anchors: List[RetrievalAnchor] = field(default_factory=list)
     perception: Optional[PerceptionReport] = None
     final_visual_audit: Optional[Dict[str, Any]] = None
-    judgment: Optional[ImageOnlyJudgment | DiscrepancyJudgment] = None
+    judgment: Optional[DiscrepancyJudgment] = None
     all_steps: List[Any] = field(default_factory=list)
     stage_timings: Dict[str, float] = field(default_factory=dict)
     total_tool_calls: int = 0

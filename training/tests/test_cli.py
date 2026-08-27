@@ -67,7 +67,7 @@ def test_build_run_rewards_cli_executes_real_branch(
         "--rollout-members",
         str(tmp_path / "members.jsonl"),
         "--profile",
-        str(root / "configs" / "rl" / "deterministic-process-v1.json"),
+        str(root / "configs" / "rl" / "deterministic-process-v2.json"),
         "--ledger-output",
         str(tmp_path / "ledgers.jsonl"),
         "--group-output",

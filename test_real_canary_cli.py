@@ -16,6 +16,7 @@ def test_explicit_canary_cases_are_forwarded_in_order() -> None:
         output_dir="run",
         model="gemini-3.5-flash",
         limit=2,
+        concurrency=10,
         case_id=["case_refuted", "case_supported"],
         source_access_policy=None,
     )
@@ -92,8 +93,8 @@ def _write_v4_canary_artifacts(
     tmp_path,
     *,
     data_policy: str = "reinspect-v2",
-    agent_policy: str = "discrepancy-first-v4",
-    trace_policy: str = "discrepancy-first-v4",
+    agent_policy: str = "unified-react-v1",
+    trace_policy: str = "unified-react-v1",
     decision_mode: str = "evidence_determined",
 ) -> None:
     (tmp_path / "traces").mkdir()
@@ -150,7 +151,7 @@ def _write_v4_canary_artifacts(
                             if decision_mode == "evidence_determined"
                             else "meaningful_routes_exhausted"
                         ),
-                        "image_claims": [
+                        "target_facts": [
                             {"claim_id": "claim-v4", "salience": "high"}
                         ],
                     },
@@ -173,7 +174,7 @@ def _write_v4_canary_artifacts(
     )
 
 
-def test_real_canary_accepts_discrepancy_first_v4_artifacts(
+def test_real_canary_accepts_unified_react_artifacts(
     tmp_path,
     monkeypatch,
 ) -> None:
@@ -188,7 +189,7 @@ def test_real_canary_accepts_discrepancy_first_v4_artifacts(
 
     assert result["passed"] is True
     assert result["data_pipeline_decision_policy_version"] == "reinspect-v2"
-    assert result["agent_decision_policy_version"] == "discrepancy-first-v4"
+    assert result["agent_decision_policy_version"] == "unified-react-v1"
     assert result["successful_tools"] == ["text_search", "visit"]
 
 
@@ -248,7 +249,7 @@ def test_real_canary_rejects_agent_policy_mismatch(
         lambda path: SimpleNamespace(failures=lambda strict_scheduler: []),
     )
 
-    with pytest.raises(RuntimeError, match="discrepancy-first-v4"):
+    with pytest.raises(RuntimeError, match="unified-react-v1"):
         run_real_canary._require_real_run_artifacts(tmp_path)
 
 
@@ -258,7 +259,7 @@ def test_real_canary_rejects_data_pipeline_policy_mismatch(
 ) -> None:
     _write_v4_canary_artifacts(
         tmp_path,
-        data_policy="discrepancy-first-v4",
+        data_policy="unified-react-v1",
     )
     monkeypatch.setattr(
         run_real_canary,

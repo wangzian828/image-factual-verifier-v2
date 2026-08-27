@@ -98,11 +98,10 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--agent-decision-policy-version",
-        choices=["discrepancy-first-v4", "unified-react-v1"],
+        choices=["unified-react-v1"],
         default=AGENT_DECISION_POLICY_VERSION,
         help=(
-            "Agent orchestration policy. The default remains the stable v4 "
-            "path; unified-react-v1 must use a new output directory."
+            "Agent orchestration policy. The current runtime uses unified-react-v1."
         ),
     )
     parser.add_argument(

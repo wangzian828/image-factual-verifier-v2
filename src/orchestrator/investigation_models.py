@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Any, Dict, List, Literal, Mapping, Optional, Tuple
 
 from pydantic import (
-    AliasChoices,
     BaseModel,
     ConfigDict,
     Field,
@@ -96,16 +95,10 @@ class InvestigationIntent(StrictModel):
 
 
 def target_fact_rows(value: Any) -> List[Mapping[str, Any]]:
-    """Read canonical target facts with compatibility for old trace payloads.
-
-    New traces use ``target_facts``.  ``image_claims`` is accepted only when
-    reading historical JSON; it is never emitted by the current models.
-    """
+    """Read the canonical target-fact rows from a runtime payload."""
 
     if isinstance(value, Mapping):
         rows = value.get("target_facts")
-        if rows is None:
-            rows = value.get("image_claims")
     else:
         rows = value
     if not isinstance(rows, list):
@@ -679,13 +672,7 @@ class SearchHypothesisProposal(StrictModel):
 
 
 class ImageAccountPlanningOutput(StrictModel):
-    """Model-facing image target planning output.
-
-    ``image_claims`` is accepted only as a legacy input alias so historical
-    traces and old provider responses remain replayable. New schemas and
-    serialized outputs use ``target_facts``. The rows are image-grounded target
-    facts, not provenance records.
-    """
+    """Internal projection used to install the first unified-ReAct route."""
 
     account_summary: str = Field(
         min_length=1,
@@ -696,8 +683,6 @@ class ImageAccountPlanningOutput(StrictModel):
         ),
     )
     target_facts: List[ImageClaimProposal] = Field(
-        validation_alias=AliasChoices("target_facts", "image_claims"),
-        serialization_alias="target_facts",
         min_length=1,
         max_length=3,
         description=(
@@ -738,29 +723,6 @@ class ImageAccountPlanningOutput(StrictModel):
             )
         return self
 
-    @property
-    def image_claims(self) -> List[ImageClaimProposal]:
-        """Deprecated Python-level alias for callers predating ``target_facts``."""
-
-        return self.target_facts
-
-    @image_claims.setter
-    def image_claims(self, value: List[ImageClaimProposal]) -> None:
-        self.target_facts = value
-
-    @classmethod
-    def normalize_legacy_input(cls, value: Any) -> Any:
-        """Map the historical wire key before generic required-field checks."""
-
-        if not isinstance(value, dict):
-            return value
-        if "target_facts" in value or "image_claims" not in value:
-            return value
-        normalized = dict(value)
-        normalized["target_facts"] = normalized.pop("image_claims")
-        return normalized
-
-
 def build_image_account_planning_output_schema(
     *,
     anchor_fact_ids: List[str],
@@ -800,8 +762,6 @@ def build_image_account_planning_output_schema(
         target_facts=(
             List[runtime_claim],
             Field(
-                validation_alias=AliasChoices("target_facts", "image_claims"),
-                serialization_alias="target_facts",
                 min_length=1,
                 max_length=3,
             ),
@@ -810,7 +770,7 @@ def build_image_account_planning_output_schema(
 
 
 class ImageClaim(StrictModel):
-    """Legacy target-fact bookkeeping retained for state/replay compatibility."""
+    """Canonical image-grounded target fact used by the investigation state."""
 
     claim_id: str = Field(min_length=1, max_length=100)
     fact_id: str = Field(min_length=1, max_length=100)
@@ -1452,10 +1412,7 @@ class DiscrepancyCoverageAudit(StrictModel):
 
 
 class DiscrepancyVerdictBasis(StrictModel):
-    policy_rule_id: Literal[
-        "discrepancy-first-v4",
-        "unified-react-v1",
-    ] = "discrepancy-first-v4"
+    policy_rule_id: Literal["unified-react-v1"] = "unified-react-v1"
     decision_mode: Literal[
         "evidence_determined",
         "bounded_binary_judgment",
@@ -1497,10 +1454,7 @@ class DiscrepancyJudgmentOutput(StrictModel):
 class DiscrepancyJudgment(StrictModel):
     verdict: Literal["real", "fake"]
     confidence: float = Field(ge=0.0, le=1.0)
-    policy_rule_id: Literal[
-        "discrepancy-first-v4",
-        "unified-react-v1",
-    ] = "discrepancy-first-v4"
+    policy_rule_id: Literal["unified-react-v1"] = "unified-react-v1"
     selected_claim_ids: List[str] = Field(default_factory=list, max_length=3)
     selected_discrepancy_ids: List[str] = Field(default_factory=list, max_length=12)
     selected_visual_anchor_fact_ids: List[str] = Field(
@@ -1829,8 +1783,6 @@ class ImageOnlyInvestigationState(StrictModel):
     image_account_summary: str = Field(default="", max_length=1600)
     target_facts: List[ImageClaim] = Field(
         default_factory=list,
-        validation_alias=AliasChoices("target_facts", "image_claims"),
-        serialization_alias="target_facts",
         max_length=3,
     )
     search_hypotheses: List[SearchHypothesis] = Field(
@@ -1912,16 +1864,6 @@ class ImageOnlyInvestigationState(StrictModel):
         "hard_budget_exhausted",
         "engineering_error",
     ] = ""
-
-    @property
-    def image_claims(self) -> List[ImageClaim]:
-        """Deprecated runtime alias for the historical state field name."""
-
-        return self.target_facts
-
-    @image_claims.setter
-    def image_claims(self, value: List[ImageClaim]) -> None:
-        self.target_facts = value
 
     @model_validator(mode="after")
     def validate_core_verdict_ownership(
@@ -2080,16 +2022,16 @@ class ImageOnlyInvestigationState(StrictModel):
         return self
 
 
-class BootstrapInvestigation(StrictModel):
+class VisualBootstrap(StrictModel):
+    """Image/OCR observations materialized before investigation starts."""
+
     brief: InvestigationBrief
     entities: List[VisualEntity] = Field(default_factory=list, max_length=32)
     facts: List[VisualFact] = Field(default_factory=list, max_length=48)
-    tasks: List[ResearchTask] = Field(default_factory=list, max_length=4)
     retrieval_anchors: List[RetrievalAnchor] = Field(
         default_factory=list,
         max_length=32,
     )
-    findings: List[Finding] = Field(default_factory=list)
 
     @field_validator("retrieval_anchors", mode="before")
     @classmethod
@@ -2097,3 +2039,8 @@ class BootstrapInvestigation(StrictModel):
         if isinstance(value, list):
             return value[:32]
         return value
+
+
+# Kept only so old reducer helper annotations can still be imported while the
+# active runtime uses the narrower VisualBootstrap contract.
+BootstrapInvestigation = VisualBootstrap

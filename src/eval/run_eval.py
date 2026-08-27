@@ -48,6 +48,12 @@ from scripts.audit_real_trace import audit_trace
 
 RUN_SCHEMA_VERSION = "ifv-eval-run-v2"
 ROLLOUT_MEMBER_SCHEMA_VERSION = "ifv-rollout-group-member-v1"
+ACTIVE_POLICY_STAGES = (
+    "UNIFIED_REACT",
+    "UNIFIED_REFLECTION",
+    "UNIFIED_DISCREPANCY_DECISION",
+    "UNIFIED_JUDGMENT",
+)
 
 
 def _parse_args() -> argparse.Namespace:
@@ -99,11 +105,10 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--agent-decision-policy-version",
-        choices=["discrepancy-first-v4", "unified-react-v1"],
+        choices=["unified-react-v1"],
         default=AGENT_DECISION_POLICY_VERSION,
         help=(
-            "Agent orchestration policy. The default remains the stable v4 "
-            "path; unified-react-v1 must use a separate run directory."
+            "Agent orchestration policy. The current runtime uses unified-react-v1."
         ),
     )
     parser.add_argument(
@@ -220,6 +225,35 @@ def _positive_int(value: Any, *, name: str) -> int:
     if parsed < 1:
         raise ValueError(f"{name} must be at least 1")
     return parsed
+
+
+def _qwen_stage_thinking_config(
+    *,
+    provider: str,
+    model_name: str,
+) -> Dict[str, str]:
+    """Record the actual Qwen thinking switch used by the runtime.
+
+    Gemini stage settings are irrelevant for local Qwen serving. For the
+    active unified stages, Qwen3.5 and Qwen3-VL both default to visible
+    thinking in ``Orchestrator._stage_generation_config``; an explicit
+    environment override remains authoritative.
+    """
+
+    active_provider = str(provider).strip().lower()
+    local_qwen = active_provider in {"qwen_local", "lmdeploy"}
+    result: Dict[str, str] = {}
+    for stage in ACTIVE_POLICY_STAGES:
+        raw = os.getenv(
+            f"QWEN_{stage}_ENABLE_THINKING",
+            "true" if local_qwen else "false",
+        ).strip().lower()
+        if raw not in {"true", "false"}:
+            raise ValueError(
+                f"QWEN_{stage}_ENABLE_THINKING must be true or false."
+            )
+        result[stage.lower()] = raw
+    return result
 
 
 def _now_iso() -> str:
@@ -601,54 +635,17 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
         raise FileExistsError(
             f"Evaluation output directory must be new or empty: {run_dir}"
         )
-    verification_max_output_tokens = _positive_int(
-        os.getenv("GEMINI_VERIFICATION_MAX_OUTPUT_TOKENS", "16384"),
-        name="verification max output tokens",
-    )
-    verification_final_max_output_tokens = _positive_int(
-        os.getenv("GEMINI_VERIFICATION_FINAL_MAX_OUTPUT_TOKENS", "32768"),
-        name="verification final max output tokens",
-    )
     stage_thinking_levels = {
         stage.lower(): os.getenv(
             f"GEMINI_{stage}_THINKING_LEVEL",
-            (
-                "high"
-                if stage == "PLANNING"
-                else os.getenv("GEMINI_AGENT_THINKING_LEVEL", "low")
-            ),
+            os.getenv("GEMINI_AGENT_THINKING_LEVEL", "low"),
         ).strip().lower()
-        for stage in ("PLANNING", "VERIFICATION", "REFLECTION", "JUDGMENT")
+        for stage in ACTIVE_POLICY_STAGES
     }
-    verification_final_thinking_level = os.getenv(
-        "GEMINI_VERIFICATION_FINAL_THINKING_LEVEL",
-        stage_thinking_levels["verification"],
-    ).strip().lower()
-    qwen_stage_thinking = {
-        stage.lower(): os.getenv(
-            f"QWEN_{stage}_ENABLE_THINKING",
-            (
-                "true"
-                if stage
-                in {
-                    "PLANNING",
-                    "EVIDENCE_DECISION",
-                    "REFLECTION",
-                    "JUDGMENT",
-                }
-                else "false"
-            ),
-        ).strip().lower()
-        for stage in (
-            "PLANNING",
-            "VERIFICATION",
-            "EVIDENCE_DECISION",
-            "REFLECTION",
-            "QUERY_CONCEPT_EXTRACTION",
-            "QUERY_REPLAN",
-            "JUDGMENT",
-        )
-    }
+    qwen_stage_thinking = _qwen_stage_thinking_config(
+        provider=str(config.provider),
+        model_name=str(config.model_name),
+    )
     explicit_policy = (
         SourceAccessPolicy.load(args.source_access_policy)
         if args.source_access_policy
@@ -714,13 +711,6 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
             "max_tool_actions": 24,
             "reflection_interval": 4,
             "max_reflections": 6,
-            "verification_max_output_tokens": verification_max_output_tokens,
-            "verification_final_max_output_tokens": (
-                verification_final_max_output_tokens
-            ),
-            "verification_final_thinking_level": (
-                verification_final_thinking_level
-            ),
             "stage_thinking_levels": stage_thinking_levels,
             "qwen_stage_enable_thinking": qwen_stage_thinking,
             "concurrency": max(1, args.concurrency),

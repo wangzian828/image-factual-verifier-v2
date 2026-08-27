@@ -301,7 +301,7 @@ def _command(args: argparse.Namespace) -> list[str]:
         "--image-access-mode",
         getattr(args, "image_access_mode", "direct_multimodal"),
         "--concurrency",
-        "1",
+        str(getattr(args, "concurrency", 1)),
         "--limit",
         str(effective_limit),
     ]
@@ -319,6 +319,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--benchmark", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--limit", type=int, default=2)
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=1,
+        help="Concurrent complete Gemini rollout episodes.",
+    )
     parser.add_argument(
         "--image-access-mode",
         choices=["direct_multimodal", "separate_vlm"],
@@ -342,6 +348,8 @@ def main(argv: Iterable[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.limit < 1:
         raise ValueError("--limit must be at least 1")
+    if args.concurrency < 1:
+        raise ValueError("--concurrency must be at least 1")
     requested_case_ids = list(args.case_id or [])
     if len(requested_case_ids) != len(set(requested_case_ids)):
         raise ValueError("--case-id values must be unique")

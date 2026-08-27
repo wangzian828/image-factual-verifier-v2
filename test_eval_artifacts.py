@@ -234,7 +234,7 @@ def test_v03_eval_keeps_gold_post_rollout_and_writes_scorer_predictions(
     class ImageOnlyWorkflow:
         def __init__(self, config: Any) -> None:
             self.config = config
-            assert config.decision_policy_version == "discrepancy-first-v4"
+            assert config.decision_policy_version == "unified-react-v1"
 
         async def run_batch(self, **kwargs: Any) -> list[dict[str, Any]]:
             nonlocal rollout_finished
@@ -255,13 +255,13 @@ def test_v03_eval_keeps_gold_post_rollout_and_writes_scorer_predictions(
                     {
                         "image_id": episode_id,
                         "input_mode": "image_only",
-                        "decision_policy_version": "discrepancy-first-v4",
+                        "decision_policy_version": "unified-react-v1",
                         "verdict": "real",
                         "termination": "success",
                         "state": {
                             "image_id": episode_id,
                             "input_mode": "image_only",
-                            "decision_policy_version": "discrepancy-first-v4",
+                            "decision_policy_version": "unified-react-v1",
                             "runtime_case": case.model_dump(),
                             "investigation_state": {
                                 "facts": [],
@@ -346,13 +346,16 @@ def test_v03_eval_keeps_gold_post_rollout_and_writes_scorer_predictions(
         "reinspect-v2"
     )
     assert manifest["agent"]["decision_policy_version"] == (
-        "discrepancy-first-v4"
+        "unified-react-v1"
     )
-    assert manifest["agent"]["stage_thinking_levels"]["planning"] == "high"
-    assert manifest["agent"]["qwen_stage_enable_thinking"]["planning"] == "true"
-    assert manifest["agent"]["qwen_stage_enable_thinking"]["verification"] == "false"
-    assert manifest["agent"]["qwen_stage_enable_thinking"]["query_replan"] == "false"
-    assert manifest["agent"]["qwen_stage_enable_thinking"]["judgment"] == "true"
+    assert manifest["agent"]["stage_thinking_levels"]["unified_react"] == "low"
+    assert manifest["agent"]["stage_thinking_levels"][
+        "unified_discrepancy_decision"
+    ] == "low"
+    assert manifest["agent"]["qwen_stage_enable_thinking"]["unified_react"] == "false"
+    assert manifest["agent"]["qwen_stage_enable_thinking"][
+        "unified_judgment"
+    ] == "false"
     assert manifest["benchmark"]["evaluation_gold"]["sha256"] == _sha256(gold)
     assert manifest["source_access_policy"]["active"] is False
     assert manifest["artifacts"]["run_results"] == "run_results.jsonl"
@@ -393,7 +396,7 @@ def test_scoring_release_keeps_gold_post_rollout_and_requires_structured_gate(
                 json.dumps(
                     {
                         "image_id": episode_id,
-                        "decision_policy_version": "discrepancy-first-v4",
+                        "decision_policy_version": "unified-react-v1",
                         "verdict": "real",
                         "termination": "success",
                         "state": {
@@ -402,7 +405,7 @@ def test_scoring_release_keeps_gold_post_rollout_and_requires_structured_gate(
                             "runtime_case": case.model_dump(),
                             "all_steps": [],
                             "investigation_state": {
-                                "image_claims": [],
+                                "target_facts": [],
                                 "evidence": [],
                                 "findings": [],
                             },

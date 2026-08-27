@@ -725,7 +725,7 @@ def _has_early_correct_judgment(trace: Mapping[str, Any], expected: str) -> bool
     for step in steps:
         if not isinstance(step, Mapping):
             continue
-        if step.get("stage") != "image_only_discrepancy_judgment":
+        if step.get("stage") != "unified_judgment":
             continue
         output = step.get("output")
         verdict = str(output.get("verdict") if isinstance(output, Mapping) else "").lower()

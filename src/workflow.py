@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Image-only v4 workflow: the single entry point for factual investigation.
+"""Unified ReAct image-only workflow: the single entry point for factual investigation.
 
 Usage:
     from src.workflow import VerificationWorkflow, WorkflowConfig
@@ -36,7 +36,7 @@ from src.redaction import sanitize_for_persistence
 from src.storage import default_trace_dir
 
 
-AGENT_DECISION_POLICY_VERSION = "discrepancy-first-v4"
+AGENT_DECISION_POLICY_VERSION = "unified-react-v1"
 
 
 @dataclass
@@ -100,6 +100,11 @@ class WorkflowConfig:
                 "image_access_mode must be 'direct_multimodal' or 'separate_vlm'"
             )
         self.image_access_mode = configured_image_access_mode  # type: ignore[assignment]
+        if self.decision_policy_version != AGENT_DECISION_POLICY_VERSION:
+            raise ValueError(
+                "Only the unified-react-v1 agent policy is supported by the "
+                "current workflow."
+            )
 
 
 class VerificationWorkflow:
@@ -162,7 +167,7 @@ class VerificationWorkflow:
         *,
         runtime_case: Optional[ImageOnlyRuntimeCase] = None,
     ) -> Dict[str, Any]:
-        """Run one v3 image-only investigation.
+        """Run one unified-ReAct image-only investigation.
 
         Non-image-only runtime inputs are intentionally unsupported. When no case is
         supplied, the workflow constructs the three-field public case locally.
@@ -177,7 +182,7 @@ class VerificationWorkflow:
             image_path = resolved_image_path
         elif not isinstance(runtime_case, ImageOnlyRuntimeCase):
             raise TypeError(
-                "v3 accepts ImageOnlyRuntimeCase only"
+                "unified-react-v1 accepts ImageOnlyRuntimeCase only"
             )
 
         episode_id = image_id or runtime_case.case_id
@@ -194,8 +199,7 @@ class VerificationWorkflow:
                 "decision_policy_version": self.config.decision_policy_version,
             }
             # The public single-rollout path keeps case_id and episode_id equal.
-            # Omitting the redundant keyword preserves frozen historical runners
-            # while derived multi-rollout IDs still reach the v4 orchestrator.
+            # The public single-rollout path keeps case_id and episode_id equal.
             if episode_id != runtime_case.case_id:
                 run_kwargs["episode_id"] = episode_id
             result = await orchestrator.run(

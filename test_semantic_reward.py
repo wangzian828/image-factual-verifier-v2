@@ -21,7 +21,7 @@ from src.trajectory.semantic_reward import (
 def _trace() -> dict[str, Any]:
     return {
         "image_id": "case-1--group--r000",
-        "decision_policy_version": "discrepancy-first-v4",
+        "decision_policy_version": "unified-react-v1",
         "verdict": "fake",
         "termination": "success",
         "verdict_basis": {"evidence_ids": ["evidence-1"]},
@@ -62,7 +62,7 @@ def _trace() -> dict[str, Any]:
                         "source_ids": ["evidence-1"],
                     }
                 ],
-                "image_claims": [
+                "target_facts": [
                     {
                         "claim_id": "claim-1",
                         "statement": "The pictured relation is factual.",

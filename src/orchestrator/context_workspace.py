@@ -1,4 +1,4 @@
-"""Explicit workspace and stage handoff projections for discrepancy-first v4."""
+"""Explicit compact workspace projections for the unified ReAct runtime."""
 from __future__ import annotations
 
 import hashlib
@@ -18,50 +18,15 @@ WORKSPACE_SCHEMA_VERSION = "ifv-explicit-workspace-v1"
 MODEL_WORKSPACE_PROJECTION_VERSION = "ifv-model-workspace-projection-v1"
 
 
-# These stages already compile a complete, stage-owned input projection in
-# image_only_prompts.py.  Re-sending the general workspace made the local Qwen
-# request carry two copies of the same Claims, routes, Discoveries and Evidence.
-# Keep only material that is intentionally absent from the stage projection and
-# may be needed to continue a bounded investigation.
+# Each active stage owns an explicit model-visible projection. Re-sending the
+# complete workspace would make a request carry duplicate claims, routes,
+# discoveries, and Evidence. Keep only material intentionally absent from that
+# stage projection.
 _MODEL_WORKSPACE_FIELDS_BY_STAGE: dict[str, tuple[str, ...]] = {
-    "verification": (
-        "protected_findings",
-        "protected_evidence",
-        "recalled_materials",
-        "visual_reinspections",
-        "open_questions",
-        "budget",
-    ),
-    # The unified ReAct renderer supplies its own compact current-turn packet.
-    # Re-sending the full canonical workspace here would defeat the new
-    # action/observation context boundary.
     "unified_react": (),
     "unified_reflection": (),
     "unified_discrepancy_decision": (),
-    "image_only_discrepancy_decision": (
-        "protected_findings",
-        "protected_evidence",
-        "recalled_materials",
-        "visual_reinspections",
-        "open_questions",
-        "budget",
-    ),
-    # These stages already render a bounded, stage-owned projection in
-    # image_only_prompts.py.  The full workspace remains in the canonical
-    # handoff/archive, but sending it again here duplicates the same claims,
-    # facts, routes, discoveries, and evidence in the provider request.
-    "image_only_visual_reinspection": (),
-    "image_only_evidence_decision": (),
-    "image_only_reflection": (),
-    "image_only_query_concept_extraction": (),
-    "image_only_query_replan": (),
-    "image_only_route_local_replan": (),
-    "image_only_planning": (),
-    "image_only_judgment": (),
-    # Judgment receives a runtime-compiled bounded basis with all allowed
-    # Claims, anchors, Findings and Evidence.  General workspace history must
-    # not override or dilute that basis.
-    "image_only_discrepancy_judgment": (),
+    "unified_judgment": (),
 }
 
 
@@ -144,17 +109,11 @@ class ContextBudgetResult(StrictModel):
 
 
 STAGE_OBJECTIVES = {
-    "image_account_planning": "建立图像当前表达的主要事实命题和可调查假设。",
+    "unified_react": "选择并执行当前最有价值的一个工具动作。",
+    "unified_reflection": "检查全局调查是否仍有值得继续的缺口。",
+    "unified_discrepancy_decision": "根据已记录证据更新事实状态和结论边界。",
+    "unified_judgment": "依据运行时编译的裁决材料输出最终结论。",
     "verification": "选择一个最有价值且未重复的调查动作。",
-    "image_only_discrepancy_decision": "结合新增材料更新命题、冲突、图像重检或结论方向。",
-    "image_only_reflection": "检查全局调查缺口并决定继续、换路、回读、重检或结算。",
-    "image_only_discrepancy_judgment": "依据完整裁决材料给出最终事实结论。",
-    "image_only_evidence_decision": "判断新增材料对当前事实状态产生的影响。",
-    "image_only_judgment": "依据裁决材料输出最终结论。",
-    "image_only_query_concept_extraction": "从新增证据提取可用于下一步调查的概念。",
-    "image_only_query_replan": "基于证据生成一个非重复的新调查查询。",
-    "image_only_route_local_replan": "在路线边界自由调整查询、视觉核查或停止当前路线。",
-    "image_only_planning": "建立初始可核查事实目标。",
 }
 
 
@@ -416,8 +375,13 @@ def render_stage_request(packet: StageHandoffPacket) -> str:
         }
         if projection:
             runtime_handoff["workspace"] = projection
-    elif packet.target_stage != "image_account_planning":
-        runtime_handoff["workspace"] = packet.workspace.model_dump(mode="json")
+    else:
+        runtime_handoff["workspace_projection"] = {
+            "schema_version": MODEL_WORKSPACE_PROJECTION_VERSION,
+            "mode": "stage_minimal",
+            "included_fields": [],
+            "full_workspace_archived": True,
+        }
     payload = {
         **dict(stage_input),
         "runtime_handoff": runtime_handoff,

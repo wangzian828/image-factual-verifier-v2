@@ -41,17 +41,21 @@ def _trace(
     if private:
         policy_input["evaluation_gold"] = {"expected_verdict": "fake"}
     planning = {
-        "stage": "image_only_planning",
-        "action_type": "llm_response",
+        "stage": "unified_react",
+        "action_type": "tool_call",
         "metadata": {
-            "interaction_id": "planning-1",
+            "interaction_id": "react-1",
             "policy_input": policy_input,
-            "policy_action": {"type": "planning", "claims": []},
+            "policy_action": {
+                "type": "tool_call",
+                "name": "perceive_scene",
+                "arguments": {"image_input": "case.jpg"},
+            },
             "policy_token_capture": capture,
         },
     }
     judgment = {
-        "stage": "image_only_discrepancy_judgment",
+        "stage": "unified_judgment",
         "action_type": "output_rejected" if rejected else "llm_response",
         "metadata": {
             "interaction_id": "judgment-1",
@@ -265,6 +269,6 @@ def test_build_psd_candidate_package_requeues_old_trace_without_capture(
     )
     assert queue["queue_reason"] == "missing_policy_token_capture"
     assert queue["incomplete_step_ids"] == [
-        "episode-old:planning:planning-1",
+        "episode-old:react:react-1",
         "episode-old:judgment:judgment-1",
     ]

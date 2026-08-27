@@ -1,0 +1,11 @@
+{
+  "schema_version": "ifv-rl-reward-profile-v1",
+  "profile_id": "ifv-deterministic-process-v2",
+  "correct_reward_floor": 0.35,
+  "allow_nonfatal_audit_failures": true,
+  "weights": {
+    "evidence_chain_reward": 0.4,
+    "discrepancy_alignment_reward": 0.4,
+    "stop_quality_reward": 0.2
+  }
+}
