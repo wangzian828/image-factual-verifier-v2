@@ -828,9 +828,12 @@ class Orchestrator:
                         "unified ReAct did not complete one accepted action"
                     )
                 if investigation.stop_reason == "engineering_error":
-                    raise RuntimeError(
-                        "a required visual bootstrap tool failed"
-                    )
+                    if observation_update.get("fatal_engineering_error"):
+                        raise RuntimeError(
+                            "unified ReAct encountered a fatal tool result "
+                            "contract error"
+                        )
+                    raise RuntimeError("a required visual bootstrap tool failed")
                 if not investigation.target_facts:
                     continue
 

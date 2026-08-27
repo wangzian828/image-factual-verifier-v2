@@ -1362,6 +1362,7 @@ def record_tool_observation(
     recalled_candidate_ids: List[str] = []
     read_memory_ids: List[str] = []
     memory_action_error = ""
+    fatal_engineering_error = False
 
     if tool_name == "recall_evidence":
         if succeeded:
@@ -1429,20 +1430,33 @@ def record_tool_observation(
                 )
             )
     else:
+        failure_message = str(data.get("error", "tool call failed"))
+        failure_code = _failure_code(
+            failure_message,
+            tool_name=tool_name,
+            metadata=metadata,
+        )
+        fatal_engineering_error = _is_fatal_tool_failure(failure_code)
         failure_ids.append(
             _append_failure(
                 state,
                 task,
                 call_id=call_id,
                 tool_name=tool_name,
-                code=_failure_code(
-                    str(data.get("error", "")),
-                    metadata=metadata,
+                code=failure_code,
+                message=failure_message,
+                recoverable=(
+                    tool_name != "focused_visual_inspection"
+                    and not fatal_engineering_error
                 ),
-                message=str(data.get("error", "tool call failed")),
-                recoverable=tool_name != "focused_visual_inspection",
             )
         )
+        if fatal_engineering_error:
+            # A provider result that violates the mature tool's response
+            # contract is not an external route failure.  Do not let a
+            # malformed comparison result continue into later Decisions or
+            # training exports.
+            state.stop_reason = "engineering_error"
 
     route_payload = route_signature(tool_name, tool_args)
     route_payload["function_call_id"] = call_id
@@ -1543,6 +1557,7 @@ def record_tool_observation(
                 if fact.fact_id in task.fact_ids
             },
             "visual_view_artifacts": list(visual_reinspection.view_artifacts),
+            "fatal_engineering_error": fatal_engineering_error,
         }
 
     _refresh_fact_states(state)
@@ -1596,6 +1611,7 @@ def record_tool_observation(
             for fact in state.facts
             if fact.fact_id in task.fact_ids
         },
+        "fatal_engineering_error": fatal_engineering_error,
     }
 
 
@@ -7720,9 +7736,11 @@ def _append_failure(
 def _failure_code(
     message: str,
     *,
+    tool_name: str = "",
     metadata: Mapping[str, Any] | None = None,
 ) -> str:
     lowered = str(message or "").lower()
+    tool_name = str(tool_name or "").strip().lower()
     metadata = metadata or {}
     exception_name = str(metadata.get("tool_exception", "")).casefold()
     if any(
@@ -7768,6 +7786,35 @@ def _failure_code(
         )
     ):
         return "provider_unavailable"
+    if tool_name == "compare_with_reference" and any(
+        token in lowered
+        for token in (
+            "comparison output",
+            "edit_evidence_strength must be",
+            "edit_evidence_present must match",
+            "same capture requires same_subject_or_scene",
+            "same capture and different original capture",
+        )
+    ):
+        return "malformed_result"
+    if tool_name in {"visit", "compare_with_reference"} and any(
+        token in lowered
+        for token in (
+            "ssl",
+            "tls",
+            "record layer failure",
+            "connection reset",
+            "connection aborted",
+            "connection refused",
+            "failed to establish a new connection",
+            "temporary failure in name resolution",
+            "name or service not known",
+            "dns",
+            "proxyerror",
+            "read timed out",
+        )
+    ):
+        return "access_limited"
     if any(
         token in lowered
         for token in ("blocked", "access", "captcha", "download")
@@ -7792,6 +7839,12 @@ def _failure_code(
     if any(token in lowered for token in ("argument", "unknown", "schema")):
         return "protocol_error"
     return "tool_error"
+
+
+def _is_fatal_tool_failure(code: str) -> bool:
+    """Return whether a failed tool result invalidates the whole episode."""
+
+    return str(code or "").strip() == "malformed_result"
 
 
 def _is_empty_result(tool_name: str, data: Mapping[str, Any]) -> bool:

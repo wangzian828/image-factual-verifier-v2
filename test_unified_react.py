@@ -22,6 +22,7 @@ from src.orchestrator.unified_react import (
     reduce_visual_bootstrap_action,
     validate_unified_react_action,
 )
+from src.orchestrator.task_store import _failure_code
 from src.tools.base import BaseTool
 from src.trajectory.exporter import (
     export_trajectory_action_only_example,
@@ -240,6 +241,123 @@ def test_first_real_action_creates_target_and_route_only_after_bootstrap() -> No
     assert step.tool_args["task_id"] == state.tasks[0].task_id
     assert "investigation_intent" in step.tool_args
     assert update["created_target_fact_ids"]
+
+
+def test_external_fetch_failures_use_existing_recoverable_failure_categories() -> None:
+    assert (
+        _failure_code(
+            "RuntimeError: Configured Jina page fetch failed: "
+            "[SSL] record layer failure (_ssl.c:2590)",
+            tool_name="visit",
+        )
+        == "access_limited"
+    )
+    assert (
+        _failure_code(
+            "Page visit was blocked by security verification: captcha",
+            tool_name="visit",
+        )
+        == "access_limited"
+    )
+    assert (
+        _failure_code(
+            "Reference image access failed for https://example.test/image.jpg",
+            tool_name="compare_with_reference",
+        )
+        == "access_limited"
+    )
+
+
+def test_compare_contract_failure_is_fatal_but_external_failure_is_not() -> None:
+    state, case, _steps = _bootstrap_state()
+    anchor_id = state.facts[0].fact_id
+    intent = {
+        "target_fact": {
+            "statement": "The pictured bridge is associated with the Riverfest event.",
+            "kind": "relation",
+            "predicate": "depicts_relation",
+            "anchor_fact_ids": [anchor_id],
+        },
+        "route": {
+            "route_focus": "entity_event_identity",
+            "expected_information": "Whether public event information connects Riverfest to the pictured bridge.",
+            "priority": 1,
+        },
+    }
+    first_step = _step(
+        tool_name="text_search",
+        tool_args={
+            "queries": "Riverfest red bridge",
+            "investigation_intent": intent,
+        },
+        tool_result={
+            "status": "success",
+            "queries": [
+                {
+                    "query": "Riverfest red bridge",
+                    "results": [
+                        {
+                            "url": "https://example.test/riverfest",
+                            "title": "Riverfest",
+                            "snippet": "An event page.",
+                        }
+                    ],
+                    "provider": "fixture",
+                }
+            ],
+        },
+        call_id="search-for-failure-test",
+    )
+    reduce_unified_react_action(state, step=first_step, runtime_case=case)
+    task_id = state.tasks[0].task_id
+
+    external_step = _step(
+        tool_name="visit",
+        tool_args={
+            "task_id": task_id,
+            "url": ["https://example.test/blocked"],
+        },
+        tool_result={
+            "status": "error",
+            "error": "Page visit was blocked by security verification: captcha",
+        },
+        call_id="external-failure",
+    )
+    external_update = reduce_unified_react_action(
+        state,
+        step=external_step,
+        runtime_case=case,
+    )
+    assert state.stop_reason == ""
+    assert external_update["fatal_engineering_error"] is False
+    assert state.failures[-1].code == "access_limited"
+    assert state.failures[-1].recoverable is True
+    assert json.loads(state.attempted_routes[-1])["outcome"] == "failed"
+
+    compare_step = _step(
+        tool_name="compare_with_reference",
+        tool_args={
+            "task_id": task_id,
+            "reference_url": "https://example.test/reference.jpg",
+        },
+        tool_result={
+            "status": "error",
+            "error": (
+                "Gemini Interactions comparison failed: ValueError: "
+                "edit_evidence_strength must be 'none' without edit evidence"
+            ),
+        },
+        call_id="malformed-compare",
+    )
+    compare_update = reduce_unified_react_action(
+        state,
+        step=compare_step,
+        runtime_case=case,
+    )
+    assert state.stop_reason == "engineering_error"
+    assert compare_update["fatal_engineering_error"] is True
+    assert state.failures[-1].code == "malformed_result"
+    assert state.failures[-1].recoverable is False
 
 
 class _RecordingTool(BaseTool):
