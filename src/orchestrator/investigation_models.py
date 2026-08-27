@@ -2087,7 +2087,7 @@ class BootstrapInvestigation(StrictModel):
     tasks: List[ResearchTask] = Field(default_factory=list, max_length=4)
     retrieval_anchors: List[RetrievalAnchor] = Field(
         default_factory=list,
-        max_length=24,
+        max_length=32,
     )
     findings: List[Finding] = Field(default_factory=list)
 
@@ -2095,5 +2095,5 @@ class BootstrapInvestigation(StrictModel):
     @classmethod
     def truncate_retrieval_anchors(cls, value: Any) -> Any:
         if isinstance(value, list):
-            return value[:24]
+            return value[:32]
         return value

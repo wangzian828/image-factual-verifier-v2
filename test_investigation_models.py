@@ -7,14 +7,14 @@ from src.orchestrator.investigation_models import (
 )
 
 
-def test_bootstrap_investigation_truncates_excess_retrieval_anchors() -> None:
+def test_bootstrap_investigation_keeps_anchor_graph_up_to_state_limit() -> None:
     anchors = [
         RetrievalAnchor(
             anchor_id=f"anchor-{index:02d}",
             kind="text",
             value=f"query {index}",
         ).model_dump()
-        for index in range(25)
+        for index in range(33)
     ]
 
     bootstrap = BootstrapInvestigation(
@@ -22,5 +22,5 @@ def test_bootstrap_investigation_truncates_excess_retrieval_anchors() -> None:
         retrieval_anchors=anchors,
     )
 
-    assert len(bootstrap.retrieval_anchors) == 24
-    assert bootstrap.retrieval_anchors[-1].anchor_id == "anchor-23"
+    assert len(bootstrap.retrieval_anchors) == 32
+    assert bootstrap.retrieval_anchors[-1].anchor_id == "anchor-31"

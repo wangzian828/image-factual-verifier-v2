@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
-from copy import deepcopy
+from copy import copy, deepcopy
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, Mapping, Sequence
 
@@ -67,8 +67,10 @@ def _investigation_intent_tool_schema() -> dict[str, Any]:
                     "statement": {
                         "type": "string",
                         "description": (
-                            "Positive atomic real-world proposition the image "
-                            "asks the viewer to accept."
+                            "Positive atomic real-world proposition conveyed by "
+                            "the image. State the depicted subject, event, "
+                            "relation, or value; do not phrase an AI-generation, "
+                            "manipulation, real/fake, or provenance question."
                         ),
                     },
                     "kind": {
@@ -163,11 +165,37 @@ def available_unified_react_tool_names(
 
     routes = remaining_claim_hypothesis_routes(state)
     names = list(dict.fromkeys(route.split(":", 1)[0] for route in routes))
-    if any(
-        task.status in {"active", "pending"} for task in state.tasks
-    ) and not state.pending_archive_read_ids:
+    if _stoppable_task_ids(state):
         names.append("stop_route")
     return list(dict.fromkeys(names))
+
+
+def _stoppable_task_ids(
+    state: ImageOnlyInvestigationState,
+) -> tuple[str, ...]:
+    """Return only route IDs that the control reducer can close now.
+
+    ``stop_route`` is exposed through a dynamic native schema.  Giving Gemini a
+    task that still has a pending page or reference candidate guarantees a
+    rejected turn, so use the reducer itself as the single source of truth when
+    constructing that schema.
+    """
+
+    if state.pending_archive_read_ids:
+        return ()
+    task_ids: list[str] = []
+    for task in state.tasks:
+        if task.status not in {"active", "pending"}:
+            continue
+        preflight = apply_unified_stop_route(
+            state.model_copy(deep=True),
+            task_id=task.task_id,
+            rationale="Schema preflight only; no state is persisted.",
+            function_call_id="stop-route-schema-preflight",
+        )
+        if preflight.get("accepted", False):
+            task_ids.append(task.task_id)
+    return tuple(task_ids)
 
 
 def _task_ids_for_tool(
@@ -230,6 +258,7 @@ class UnifiedReactToolAdapter(BaseTool):
     delegate: BaseTool = field(repr=False)
     task_ids: tuple[str, ...] = ()
     require_initial_intent: bool = False
+    image_path: str = ""
     name: str = ""
     description: str = ""
     parameters: Dict[str, Any] = field(default_factory=dict)
@@ -252,18 +281,35 @@ class UnifiedReactToolAdapter(BaseTool):
             and not str(key).startswith("__unified_")
         }
 
+    def _bound_delegate(self) -> BaseTool:
+        """Bind image-path tools to this request without mutating shared tools.
+
+        ``StageRunner`` owns one adapter per case and writes ``image_path`` on
+        it.  Mature comparison/anomaly tools keep their input image as an
+        instance attribute, so forwarding through the adapter must preserve that
+        contract.  A shallow copy makes the mutable path request-local while
+        intentionally sharing the delegate's existing clients and caches.
+        """
+
+        if not self.image_path or not hasattr(self.delegate, "image_path"):
+            return self.delegate
+        bound = copy(self.delegate)
+        bound.image_path = self.image_path
+        return bound
+
     def call(self, params: Dict[str, Any]) -> Any:
-        return self.delegate.call(self._provider_args(params))
+        return self._bound_delegate().call(self._provider_args(params))
 
     async def call_async(self, params: Dict[str, Any]) -> Any:
-        call_async = getattr(self.delegate, "call_async", None)
+        delegate = self._bound_delegate()
+        call_async = getattr(delegate, "call_async", None)
         provider_args = self._provider_args(params)
         if callable(call_async):
             result = call_async(provider_args)
             if inspect.isawaitable(result):
                 return await result
             return result
-        return await asyncio.to_thread(self.delegate.call, provider_args)
+        return await asyncio.to_thread(delegate.call, provider_args)
 
     def set_source_access_policy(self, policy: Any) -> None:
         setter = getattr(self.delegate, "set_source_access_policy", None)
@@ -335,11 +381,7 @@ def build_unified_react_tools(
 
     for name in names:
         if name == "stop_route":
-            task_ids = tuple(
-                task.task_id
-                for task in state.tasks
-                if task.status in {"active", "pending"}
-            )
+            task_ids = _stoppable_task_ids(state)
             if task_ids:
                 control = StopRouteTool()
                 control.parameters = _base_parameters(

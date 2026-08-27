@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any, Dict
 
@@ -11,6 +12,7 @@ from src.orchestrator.state import (
     PerceptionReport,
     TextRegion,
 )
+from src.orchestrator.bootstrap import build_visual_bootstrap
 from src.orchestrator.stage_runner import StageStep
 from src.orchestrator.unified_react import (
     UnifiedReactToolAdapter,
@@ -276,6 +278,34 @@ def test_unified_tool_adapter_never_forwards_runtime_intent() -> None:
     assert delegate.received == {"payload": "visible to provider"}
 
 
+class _ImagePathRecordingTool(BaseTool):
+    name = "image_path_fixture"
+    description = "fixture"
+    parameters = {"type": "object", "properties": {}}
+
+    def __init__(self) -> None:
+        self.image_path = ""
+        self.received_paths: list[str] = []
+
+    def call(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        self.received_paths.append(self.image_path)
+        return {"status": "success", "params": dict(params)}
+
+    async def call_async(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        self.received_paths.append(self.image_path)
+        return {"status": "success", "params": dict(params)}
+
+
+def test_unified_tool_adapter_binds_image_path_without_mutating_shared_tool() -> None:
+    delegate = _ImagePathRecordingTool()
+    adapter = UnifiedReactToolAdapter(delegate=delegate, image_path="case-a.jpg")
+
+    asyncio.run(adapter.call_async({}))
+
+    assert delegate.received_paths == ["case-a.jpg"]
+    assert delegate.image_path == ""
+
+
 def test_stop_route_is_rejected_before_control_tool_execution() -> None:
     state, case, _steps = _bootstrap_state()
     anchor_id = state.facts[0].fact_id
@@ -328,7 +358,48 @@ def test_stop_route_is_rejected_before_control_tool_execution() -> None:
         },
     )
 
-    assert "pending page or reference inspection candidates" in reason
+    assert reason == "stop_route is not available in the current unified-ReAct state"
+    assert "stop_route" not in available_unified_react_tool_names(state)
+
+
+def test_visual_bootstrap_keeps_all_fact_anchor_dependencies() -> None:
+    case = _case()
+    perception = PerceptionReport(
+        entities=[
+            Entity(
+                name=f"object {index}",
+                entity_type="object",
+                bbox=[0.01 * index, 0.1, 0.3, 0.4],
+                confidence=0.9,
+            )
+            for index in range(8)
+        ],
+        scene_description="A crowded event display.",
+        text_regions=[
+            TextRegion(
+                text=f"VISIBLE TEXT {index}",
+                bbox_quad=[
+                    [0.1, 0.1],
+                    [0.2, 0.1],
+                    [0.2, 0.2],
+                    [0.1, 0.2],
+                ],
+                confidence=0.95,
+                language="en",
+            )
+            for index in range(16)
+        ],
+    )
+
+    bootstrap = build_visual_bootstrap(case, perception)
+    anchor_ids = {item.anchor_id for item in bootstrap.retrieval_anchors}
+    entity_ids = {item.entity_id for item in bootstrap.entities}
+
+    assert len(bootstrap.retrieval_anchors) == 25
+    for fact in bootstrap.facts:
+        assert set(fact.basis_ids) <= anchor_ids | entity_ids | {
+            item.fact_id for item in bootstrap.facts
+        }
 
 
 def test_unified_export_uses_qwen_think_and_tool_call_and_rejects_missing_thought() -> None:

@@ -245,6 +245,296 @@ def _v4_trace(tmp_path: Path) -> Path:
     return path
 
 
+def _unified_trace(tmp_path: Path) -> Path:
+    claim_id = "claim-unified"
+    hypothesis_id = "hypothesis-unified"
+    task_id = "task-unified"
+    anchor_fact_id = "vf-anchor-unified"
+    target_fact_id = "vf-target-unified"
+    basis = {
+        "policy_rule_id": "unified-react-v1",
+        "decision_mode": "bounded_binary_judgment",
+        "verdict_target": "The pictured bridge is part of the Riverfest event.",
+        "claim_ids": [claim_id],
+        "discrepancy_ids": [],
+        "visual_anchor_fact_ids": [anchor_fact_id],
+        "finding_ids": [],
+        "evidence_ids": [],
+        "unresolved_gaps": ["No reviewed webpage Evidence was available."],
+    }
+    judgment = {
+        "policy_rule_id": "unified-react-v1",
+        "verdict": "real",
+        "confidence": 0.7,
+        "selected_claim_ids": [claim_id],
+        "selected_discrepancy_ids": [],
+        "selected_visual_anchor_fact_ids": [anchor_fact_id],
+        "selected_finding_ids": [],
+        "selected_evidence_ids": [],
+        "overall_assessment": "The bounded visual basis supports the depicted relation.",
+        "unresolved_gaps": ["No reviewed webpage Evidence was available."],
+    }
+    intent = {
+        "target_fact": {
+            "statement": "The pictured bridge is part of the Riverfest event.",
+            "kind": "relation",
+            "predicate": "depicts_event_relation",
+            "anchor_fact_ids": [anchor_fact_id],
+        },
+        "route": {
+            "route_focus": "entity_event_identity",
+            "expected_information": "Whether Riverfest is associated with this bridge.",
+            "priority": 1,
+        },
+    }
+
+    def action(
+        *,
+        interaction_id: str,
+        parent_id: str | None,
+        function_call_id: str,
+        tool_name: str,
+        tool_args: dict,
+        state_update: dict,
+        accepted_intent: dict | None = None,
+    ) -> dict:
+        return {
+            "stage": "unified_react",
+            "action_type": "tool_call",
+            "tool_name": tool_name,
+            "tool_args": tool_args,
+            "tool_result": json.dumps({"status": "success"}),
+            "tokens": {"thought": 0},
+            "metadata": {
+                "native_interactions": True,
+                "interaction_id": interaction_id,
+                "previous_interaction_id": parent_id,
+                "interaction_lifecycle_kind": "tool_roundtrip",
+                "function_call_id": function_call_id,
+                "tool_success": True,
+                "policy_action": {
+                    "type": "tool_call",
+                    "name": tool_name,
+                    "arguments": tool_args,
+                },
+                "unified_react_delta": {
+                    "schema_version": "ifv-unified-react-delta-v1",
+                    "action_id": function_call_id,
+                    "interaction_id": interaction_id,
+                    "function_call_id": function_call_id,
+                    "tool_name": tool_name,
+                    "validated_arguments": tool_args,
+                    "accepted_investigation_intent": accepted_intent,
+                    "state_update": state_update,
+                },
+            },
+        }
+
+    steps = [
+        action(
+            interaction_id="interaction-scene",
+            parent_id=None,
+            function_call_id="call-scene",
+            tool_name="perceive_scene",
+            tool_args={},
+            state_update={"accepted": True, "phase": "visual_bootstrap"},
+        ),
+        action(
+            interaction_id="interaction-ocr",
+            parent_id="interaction-scene",
+            function_call_id="call-ocr",
+            tool_name="ocr_with_position",
+            tool_args={},
+            state_update={"accepted": True, "phase": "visual_bootstrap"},
+        ),
+        action(
+            interaction_id="interaction-search",
+            parent_id="interaction-ocr",
+            function_call_id="call-search",
+            tool_name="text_search",
+            tool_args={"task_id": task_id, "queries": "Riverfest bridge"},
+            accepted_intent=intent,
+            state_update={
+                "accepted": True,
+                "initial_intent": intent,
+                "created_target_fact_ids": [target_fact_id],
+                "created_task_ids": [task_id],
+            },
+        ),
+        {
+            "stage": "unified_discrepancy_decision",
+            "action_type": "output",
+            "tokens": {"thought": 0},
+            "metadata": {
+                "native_interactions": True,
+                "interaction_id": "interaction-decision",
+                "previous_interaction_id": None,
+                "interaction_lifecycle_kind": "standalone_request",
+            },
+        },
+        {
+            "stage": "image_only_discrepancy_judgment",
+            "action_type": "output",
+            "tokens": {"thought": 0},
+            "metadata": {
+                "native_interactions": True,
+                "interaction_id": "interaction-judgment",
+                "previous_interaction_id": None,
+                "interaction_lifecycle_kind": "standalone_request",
+            },
+        },
+    ]
+    investigation = {
+        "brief": {"brief_id": "brief-unified", "case_id": "case-unified"},
+        "entities": [],
+        "facts": [
+            {
+                "fact_id": anchor_fact_id,
+                "basis_ids": [],
+                "origin": {"type": "input_image", "origin_ids": []},
+            },
+            {
+                "fact_id": target_fact_id,
+                "basis_ids": [anchor_fact_id],
+                "origin": {"type": "input_image", "origin_ids": [anchor_fact_id]},
+            },
+        ],
+        "target_facts": [
+            {
+                "claim_id": claim_id,
+                "fact_id": target_fact_id,
+                "anchor_fact_ids": [anchor_fact_id],
+                "task_ids": [task_id],
+            }
+        ],
+        "search_hypotheses": [
+            {
+                "hypothesis_id": hypothesis_id,
+                "claim_ids": [claim_id],
+                "task_id": task_id,
+            }
+        ],
+        "tasks": [
+            {
+                "task_id": task_id,
+                "fact_ids": [target_fact_id],
+                "claim_ids": [claim_id],
+                "hypothesis_id": hypothesis_id,
+                "origin_ids": [claim_id, hypothesis_id, target_fact_id],
+                "status": "exhausted",
+            }
+        ],
+        "retrieval_anchors": [],
+        "discoveries": [],
+        "evidence": [],
+        "findings": [],
+        "failures": [],
+        "discrepancy_coverage_audits": [
+            {
+                "audit_id": "coverage-unified",
+                "action_count": 1,
+                "complete": False,
+                "stop_reason": "meaningful_routes_exhausted",
+            }
+        ],
+        "unified_react_bootstrap_tools_completed": [
+            "perceive_scene",
+            "ocr_with_position",
+        ],
+        "unified_react_bootstrap_failures": [],
+        "action_count": 1,
+        "stop_reason": "meaningful_routes_exhausted",
+        "discrepancy_verdict_basis": basis,
+    }
+    trace = {
+        "image_id": "case-unified",
+        "input_mode": "image_only",
+        "decision_policy_version": "unified-react-v1",
+        "verdict": "real",
+        "verdict_basis": basis,
+        "judgment": judgment,
+        "termination": "success",
+        "token_usage": {"thought": 0},
+        "state": {
+            "image_id": "case-unified",
+            "input_mode": "image_only",
+            "decision_policy_version": "unified-react-v1",
+            "termination": "success",
+            "token_usage": {"thought": 0},
+            "all_steps": steps,
+            "investigation_state": investigation,
+            "judgment": judgment,
+        },
+    }
+    path = tmp_path / "unified-trace.json"
+    path.write_text(json.dumps(trace, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
+
+
+def test_strict_audit_accepts_unified_react_trace(tmp_path: Path) -> None:
+    report = audit_trace(_unified_trace(tmp_path))
+
+    assert not report.failures(strict_scheduler=True)
+    assert report.stats["unified_react_actions"] == 1
+    assert report.stats["unified_react_target_facts"] == 1
+    assert report.stats["unified_tool_roundtrips"] == 3
+
+
+def test_strict_audit_rejects_unified_trace_without_reducer_delta(
+    tmp_path: Path,
+) -> None:
+    trace_path = _unified_trace(tmp_path)
+    trace = json.loads(trace_path.read_text(encoding="utf-8"))
+    del trace["state"]["all_steps"][2]["metadata"]["unified_react_delta"]
+    trace_path.write_text(
+        json.dumps(trace, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    report = audit_trace(trace_path)
+
+    assert "UNIFIED_REACT_DELTA_MISSING" in {
+        issue.code for issue in report.failures(strict_scheduler=True)
+    }
+
+
+def test_unified_outer_react_correction_is_not_a_strict_failure(
+    tmp_path: Path,
+) -> None:
+    trace_path = _unified_trace(tmp_path)
+    trace = json.loads(trace_path.read_text(encoding="utf-8"))
+    rejected = {
+        "stage": "unified_react",
+        "action_type": "format_error",
+        "tool_name": "stop_route",
+        "tool_args": {"task_id": "task-unified", "rationale": "too early"},
+        "tool_result": json.dumps(
+            {"status": "error", "error": "route still has a pending candidate"}
+        ),
+        "tokens": {"thought": 0},
+        "metadata": {
+            "native_interactions": True,
+            "interaction_id": "interaction-rejected",
+            "previous_interaction_id": "interaction-ocr",
+            "interaction_lifecycle_kind": "tool_roundtrip",
+            "function_call_id": "call-rejected",
+        },
+    }
+    trace["state"]["all_steps"].insert(2, rejected)
+    trace["state"]["all_steps"][3]["metadata"]["previous_interaction_id"] = (
+        "interaction-rejected"
+    )
+    trace_path.write_text(
+        json.dumps(trace, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    report = audit_trace(trace_path)
+
+    assert not report.failures(strict_scheduler=True)
+    assert report.stats["successful_protocol_corrections"] == 1
+
+
 def test_strict_audit_accepts_discrepancy_first_v4_trace(tmp_path: Path) -> None:
     report = audit_trace(_v4_trace(tmp_path))
 
