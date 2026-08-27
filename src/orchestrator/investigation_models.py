@@ -41,6 +41,60 @@ class FrozenStrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
+class InvestigationTargetIntent(StrictModel):
+    """Target fact carried by the first real unified-ReAct investigation action."""
+
+    statement: str = Field(
+        min_length=1,
+        max_length=1200,
+        description=(
+            "Positive, atomic real-world proposition expressed by the image. "
+            "It must be grounded by the supplied visual/OCR anchor fact IDs."
+        ),
+    )
+    kind: Literal[
+        "attribute",
+        "relation",
+        "internal_consistency",
+        "text_claim",
+    ]
+    predicate: str = Field(
+        min_length=1,
+        max_length=100,
+        description="Short name for the image-grounded relation or property.",
+    )
+    anchor_fact_ids: List[str] = Field(
+        min_length=1,
+        max_length=12,
+        description=(
+            "Existing VisualFact IDs produced by perceive_scene or "
+            "ocr_with_position that visibly ground this target."
+        ),
+    )
+
+
+class InvestigationRouteIntent(StrictModel):
+    """Initial route carried by the first real unified-ReAct action."""
+
+    route_focus: PlanningRouteFocus
+    expected_information: str = Field(
+        min_length=1,
+        max_length=800,
+        description=(
+            "Concrete underlying subject, event, relation, value, or visual "
+            "property this actual tool action is intended to recover."
+        ),
+    )
+    priority: int = Field(default=1, ge=1, le=3)
+
+
+class InvestigationIntent(StrictModel):
+    """Orchestrator-only action intent; never forwarded to a provider tool."""
+
+    target_fact: InvestigationTargetIntent
+    route: InvestigationRouteIntent
+
+
 def target_fact_rows(value: Any) -> List[Mapping[str, Any]]:
     """Read canonical target facts with compatibility for old trace payloads.
 
@@ -374,6 +428,14 @@ class InvestigationFailure(StrictModel):
     message: str = Field(min_length=1, max_length=4000)
 
 
+class UnifiedReactBootstrapFailure(StrictModel):
+    """Failure before a task exists in the empty unified-ReAct workspace."""
+
+    tool_name: Literal["perceive_scene", "ocr_with_position"]
+    function_call_id: str = Field(min_length=1, max_length=200)
+    message: str = Field(min_length=1, max_length=4000)
+
+
 class TaskUpdate(StrictModel):
     task_id: str = Field(min_length=1, max_length=100)
     priority: Optional[int] = Field(default=None, ge=1, le=3)
@@ -395,6 +457,19 @@ class ReflectionOutput(StrictModel):
     expected_information: str = Field(default="", max_length=800)
     strategy_rationale: str = Field(default="", max_length=1200)
     ready_to_finish: bool = False
+
+
+class UnifiedReflectionOutput(StrictModel):
+    """Low-frequency global strategy check for unified-react-v1.
+
+    It cannot create routes, queries, Evidence, Findings, or verdicts.  The
+    normal ReAct loop remains the sole source of the next concrete tool action.
+    """
+
+    global_assessment: str = Field(min_length=1, max_length=1200)
+    remaining_gaps: List[str] = Field(default_factory=list, max_length=6)
+    recommended_focus: str = Field(default="", max_length=800)
+    continue_investigation: bool = True
 
 
 class QueryConcept(StrictModel):
@@ -569,6 +644,7 @@ class SearchHypothesisProposal(StrictModel):
             "check_consistency",
             "analyze_visual_anomalies",
             "crop_and_inspect",
+            "focused_visual_inspection",
             "ocr_with_position",
         ]
     ] = Field(
@@ -978,6 +1054,7 @@ class NewSearchHypothesis(StrictModel):
             "check_consistency",
             "analyze_visual_anomalies",
             "crop_and_inspect",
+            "focused_visual_inspection",
             "ocr_with_position",
         ]
     ] = Field(min_length=1, max_length=4)
@@ -1098,11 +1175,38 @@ class DiscrepancyDecisionProposalOutput(DiscrepancyDecisionOutput):
         return self
 
 
+class UnifiedDiscrepancyDecisionProposalOutput(
+    DiscrepancyDecisionProposalOutput
+):
+    """Unified-ReAct Decision may assess state but may not plan a new route."""
+
+    new_hypotheses: List[NewSearchHypothesis] = Field(
+        default_factory=list,
+        max_length=0,
+        description=(
+            "Always empty for unified-react-v1. The next concrete ReAct action "
+            "is the only place to change investigation direction."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def validate_no_new_hypotheses(
+        self,
+    ) -> "UnifiedDiscrepancyDecisionProposalOutput":
+        if self.new_hypotheses:
+            raise ValueError(
+                "unified-react-v1 Discrepancy Decision must not create "
+                "new_hypotheses"
+            )
+        return self
+
+
 def build_discrepancy_decision_output_schema(
     *,
     claim_ids: List[str],
     evidence_ids: List[str],
     hypothesis_ids: List[str],
+    allow_new_hypotheses: bool = True,
 ) -> type[DiscrepancyDecisionProposalOutput]:
     """Build a per-checkpoint schema with runtime-owned ID choices.
 
@@ -1204,9 +1308,14 @@ def build_discrepancy_decision_output_schema(
             ),
         ),
     )
+    proposal_base = (
+        DiscrepancyDecisionProposalOutput
+        if allow_new_hypotheses
+        else UnifiedDiscrepancyDecisionProposalOutput
+    )
     return create_model(
         "RuntimeDiscrepancyDecisionProposalOutput",
-        __base__=DiscrepancyDecisionProposalOutput,
+        __base__=proposal_base,
         claim_assessments=(
             List[runtime_claim_assessment],
             Field(default_factory=list, max_length=3),
@@ -1228,7 +1337,16 @@ def build_discrepancy_decision_output_schema(
         ),
         new_hypotheses=(
             List[runtime_hypothesis],
-            Field(default_factory=list, max_length=3),
+            Field(
+                default_factory=list,
+                max_length=3 if allow_new_hypotheses else 0,
+                description=(
+                    "A unified-react-v1 Decision must return an empty list; "
+                    "only a later ReAct tool action can change direction."
+                    if not allow_new_hypotheses
+                    else ""
+                ),
+            ),
         ),
         visual_reinspection=(
             Optional[runtime_visual_reinspection],
@@ -1334,7 +1452,10 @@ class DiscrepancyCoverageAudit(StrictModel):
 
 
 class DiscrepancyVerdictBasis(StrictModel):
-    policy_rule_id: Literal["discrepancy-first-v4"] = "discrepancy-first-v4"
+    policy_rule_id: Literal[
+        "discrepancy-first-v4",
+        "unified-react-v1",
+    ] = "discrepancy-first-v4"
     decision_mode: Literal[
         "evidence_determined",
         "bounded_binary_judgment",
@@ -1376,7 +1497,10 @@ class DiscrepancyJudgmentOutput(StrictModel):
 class DiscrepancyJudgment(StrictModel):
     verdict: Literal["real", "fake"]
     confidence: float = Field(ge=0.0, le=1.0)
-    policy_rule_id: Literal["discrepancy-first-v4"] = "discrepancy-first-v4"
+    policy_rule_id: Literal[
+        "discrepancy-first-v4",
+        "unified-react-v1",
+    ] = "discrepancy-first-v4"
     selected_claim_ids: List[str] = Field(default_factory=list, max_length=3)
     selected_discrepancy_ids: List[str] = Field(default_factory=list, max_length=12)
     selected_visual_anchor_fact_ids: List[str] = Field(
@@ -1475,8 +1599,22 @@ class EvidenceDecisionRecord(StrictModel):
 
 
 class InvestigationSegmentOutput(StrictModel):
-    segment_summary: str = Field(default="", max_length=1200)
-    ready_for_reflection: bool = True
+    """Runtime-only boundary object for one ReAct action segment.
+
+    When a tool is available, the policy is asked to make the tool call directly;
+    it is not asked to author this object. The runner creates it after an accepted
+    tool call or a deterministic protocol boundary.
+    """
+
+    segment_summary: str = Field(
+        default="",
+        max_length=1200,
+        description="Runtime-generated summary of the completed action boundary.",
+    )
+    ready_for_reflection: bool = Field(
+        default=True,
+        description="Runtime marker; not a policy-selected scheduling decision.",
+    )
 
 
 class ReflectionRecord(StrictModel):
@@ -1739,6 +1877,13 @@ class ImageOnlyInvestigationState(StrictModel):
     read_archive_memory_ids: List[str] = Field(
         default_factory=list,
         max_length=120,
+    )
+    unified_react_bootstrap_tools_completed: List[
+        Literal["perceive_scene", "ocr_with_position"]
+    ] = Field(default_factory=list, max_length=2)
+    unified_react_bootstrap_failures: List[UnifiedReactBootstrapFailure] = Field(
+        default_factory=list,
+        max_length=2,
     )
     pending_archive_read_ids: List[str] = Field(
         default_factory=list,

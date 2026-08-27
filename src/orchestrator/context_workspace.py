@@ -32,6 +32,12 @@ _MODEL_WORKSPACE_FIELDS_BY_STAGE: dict[str, tuple[str, ...]] = {
         "open_questions",
         "budget",
     ),
+    # The unified ReAct renderer supplies its own compact current-turn packet.
+    # Re-sending the full canonical workspace here would defeat the new
+    # action/observation context boundary.
+    "unified_react": (),
+    "unified_reflection": (),
+    "unified_discrepancy_decision": (),
     "image_only_discrepancy_decision": (
         "protected_findings",
         "protected_evidence",

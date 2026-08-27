@@ -38,6 +38,15 @@ from src.orchestrator.progress_control import (
 )
 from src.orchestrator.image_only_prompts import (
     DISCREPANCY_REACT_SYSTEM_PROMPT as IMAGE_ONLY_DISCREPANCY_REACT_PROMPT,
+    DISCREPANCY_REACT_PROMPT_VERSION,
+    UNIFIED_REACT_PROMPT_VERSION,
+    UNIFIED_REACT_SYSTEM_PROMPT,
+    UNIFIED_REFLECTION_PROMPT_VERSION,
+    UNIFIED_REFLECTION_SYSTEM_PROMPT,
+    UNIFIED_DISCREPANCY_DECISION_PROMPT_VERSION,
+    UNIFIED_DISCREPANCY_DECISION_SYSTEM_PROMPT,
+    UNIFIED_DISCREPANCY_JUDGMENT_PROMPT_VERSION,
+    UNIFIED_DISCREPANCY_JUDGMENT_SYSTEM_PROMPT,
     DISCREPANCY_DECISION_SYSTEM_PROMPT as IMAGE_ONLY_DISCREPANCY_DECISION_PROMPT,
     DISCREPANCY_JUDGMENT_SYSTEM_PROMPT as IMAGE_ONLY_DISCREPANCY_JUDGMENT_PROMPT,
     EVIDENCE_DECISION_SYSTEM_PROMPT as IMAGE_ONLY_EVIDENCE_DECISION_PROMPT,
@@ -55,6 +64,8 @@ from src.orchestrator.image_only_prompts import (
     render_discrepancy_judgment_context as render_image_only_discrepancy_judgment_context,
     render_image_account_planning_context as render_image_only_image_account_planning_context,
     render_judgment_context as render_image_only_judgment_context,
+    render_unified_react_context,
+    render_unified_reflection_context,
     render_query_concept_extraction_context as render_image_only_query_concept_extraction_context,
     render_query_replan_context as render_image_only_query_replan_context,
     render_route_local_replan_context as render_image_only_route_local_replan_context,
@@ -80,6 +91,7 @@ from src.orchestrator.investigation_models import (
     QueryConceptExtractionOutput,
     QueryReplanOutput,
     ReflectionOutput,
+    UnifiedReflectionOutput,
     RouteLocalReplanOutput,
     TargetPlanningOutput,
 )
@@ -110,6 +122,15 @@ from src.orchestrator.tool_registry import (
     build_stage_tools,
 )
 from src.orchestrator.tool_result import parse_tool_result, serialize_tool_result
+from src.orchestrator.unified_react import (
+    UNIFIED_REACT_POLICY_VERSION,
+    build_unified_react_tools,
+    new_unified_react_state,
+    reduce_unified_react_action,
+    reduce_visual_bootstrap_action,
+    unified_react_delta,
+    validate_unified_react_action,
+)
 from src.orchestrator.task_store import (
     MAX_REFLECTIONS,
     MAX_TOOL_ACTIONS,
@@ -485,78 +506,95 @@ class Orchestrator:
         self.last_state = state
         started = time.time()
         try:
-            if decision_policy_version != "discrepancy-first-v4":
+            if decision_policy_version not in {
+                "discrepancy-first-v4",
+                UNIFIED_REACT_POLICY_VERSION,
+            }:
                 raise RuntimeError(
-                    "the public runtime requires decision_policy_version="
-                    "discrepancy-first-v4"
+                    "unsupported decision_policy_version="
+                    f"{decision_policy_version!r}; supported versions are "
+                    f"'discrepancy-first-v4' and "
+                    f"{UNIFIED_REACT_POLICY_VERSION!r}"
                 )
-            self._validate_image_only_bootstrap_configuration()
-            state.perception = await self._run_perception(state, image_path)
-            bootstrap = build_bootstrap_investigation(
-                runtime_case,
-                state.perception,
-            )
-            investigation = state_from_bootstrap(bootstrap)
-            state.investigation_state = investigation
-            self._sync_image_only_state(state, investigation)
-            planning_started = time.perf_counter()
-            try:
-                await self._run_image_account_planning(
-                    state,
+            if decision_policy_version == UNIFIED_REACT_POLICY_VERSION:
+                (
                     investigation,
-                    image_path=image_path,
-                    interaction_session=None,
-                )
-            finally:
-                state.stage_timings["planning"] = round(
-                    time.perf_counter() - planning_started,
-                    2,
-                )
-
-            investigation_started = time.perf_counter()
-            try:
-                await self._run_discrepancy_investigation(
-                    state,
-                    investigation,
-                    image_path,
-                    runtime_case,
-                )
-            finally:
-                state.stage_timings["investigation"] = round(
-                    time.perf_counter() - investigation_started,
-                    2,
-                )
-            self._require_successful_discrepancy_investigation(state)
-            compiled_verdict, basis = compile_discrepancy_verdict_basis(
-                investigation
-            )
-            final_visual_audit = None
-            if self._uses_separate_vlm():
-                final_visual_audit = await self._run_final_visual_audit(
-                    state,
-                    investigation,
-                    compiled_verdict=compiled_verdict,
-                    basis=basis,
-                    image_path=image_path,
-                )
-            judgment_started = time.perf_counter()
-            try:
-                judgment = await self._run_discrepancy_judgment(
-                    state,
-                    investigation,
-                    compiled_verdict,
+                    judgment,
                     basis,
+                    final_visual_audit,
+                ) = await self._run_unified_react_policy(
+                    state,
                     image_path=image_path,
-                    final_visual_audit=final_visual_audit,
-                    interaction_session=None,
+                    runtime_case=runtime_case,
                 )
-            finally:
-                state.stage_timings["judgment"] = round(
-                    time.perf_counter() - judgment_started,
-                    2,
+            else:
+                self._validate_image_only_bootstrap_configuration()
+                state.perception = await self._run_perception(state, image_path)
+                bootstrap = build_bootstrap_investigation(
+                    runtime_case,
+                    state.perception,
                 )
-            investigation.discrepancy_judgment = judgment
-            state.judgment = judgment  # type: ignore[assignment]
+                investigation = state_from_bootstrap(bootstrap)
+                state.investigation_state = investigation
+                self._sync_image_only_state(state, investigation)
+                planning_started = time.perf_counter()
+                try:
+                    await self._run_image_account_planning(
+                        state,
+                        investigation,
+                        image_path=image_path,
+                        interaction_session=None,
+                    )
+                finally:
+                    state.stage_timings["planning"] = round(
+                        time.perf_counter() - planning_started,
+                        2,
+                    )
+
+                investigation_started = time.perf_counter()
+                try:
+                    await self._run_discrepancy_investigation(
+                        state,
+                        investigation,
+                        image_path,
+                        runtime_case,
+                    )
+                finally:
+                    state.stage_timings["investigation"] = round(
+                        time.perf_counter() - investigation_started,
+                        2,
+                    )
+                self._require_successful_discrepancy_investigation(state)
+                compiled_verdict, basis = compile_discrepancy_verdict_basis(
+                    investigation
+                )
+                final_visual_audit = None
+                if self._uses_separate_vlm():
+                    final_visual_audit = await self._run_final_visual_audit(
+                        state,
+                        investigation,
+                        compiled_verdict=compiled_verdict,
+                        basis=basis,
+                        image_path=image_path,
+                    )
+                judgment_started = time.perf_counter()
+                try:
+                    judgment = await self._run_discrepancy_judgment(
+                        state,
+                        investigation,
+                        compiled_verdict,
+                        basis,
+                        image_path=image_path,
+                        final_visual_audit=final_visual_audit,
+                        interaction_session=None,
+                    )
+                finally:
+                    state.stage_timings["judgment"] = round(
+                        time.perf_counter() - judgment_started,
+                        2,
+                    )
+                investigation.discrepancy_judgment = judgment
+                state.judgment = judgment  # type: ignore[assignment]
             state.termination = "success"
             self._sync_image_only_state(state, investigation)
         except Exception as exc:
@@ -590,6 +628,348 @@ class Orchestrator:
             "llm_api_calls": state.llm_api_calls,
             "error": None,
         }
+
+    async def _run_unified_react_policy(
+        self,
+        state: VerificationState,
+        *,
+        image_path: str,
+        runtime_case: ImageOnlyRuntimeCase,
+    ) -> tuple[
+        ImageOnlyInvestigationState,
+        DiscrepancyJudgment,
+        Any,
+        Optional[Dict[str, Any]],
+    ]:
+        """Run the clean unified-react-v1 path from an empty workspace.
+
+        The v4 flow remains below as a separate compatibility implementation.
+        This method intentionally does not call its fixed perception, Planning,
+        query-replan, route-replan, or Evidence Decision entry points.
+        """
+
+        self._validate_image_only_bootstrap_configuration()
+        investigation = new_unified_react_state(runtime_case)
+        state.investigation_state = investigation
+        state.perception = PerceptionReport(scene_description="")
+        self._sync_image_only_state(state, investigation)
+        started = time.time()
+        interaction_session = InteractionSession()
+        last_reflection_action = 0
+
+        try:
+            while not investigation.stop_reason:
+                self._check_timeout(started, state)
+                if investigation.action_count >= MAX_TOOL_ACTIONS and investigation.target_facts:
+                    await self._run_unified_discrepancy_decision(
+                        state,
+                        investigation,
+                        trigger="before_unresolved",
+                    )
+                    audit_discrepancy_coverage(
+                        investigation,
+                        decision_checkpoint=True,
+                    )
+                    break
+
+                tools = build_unified_react_tools(investigation, self.all_tools)
+                if not tools:
+                    if not investigation.target_facts:
+                        raise RuntimeError(
+                            "unified ReAct has no available tool before the "
+                            "initial investigation action"
+                        )
+                    await self._run_unified_discrepancy_decision(
+                        state,
+                        investigation,
+                        trigger="before_unresolved",
+                    )
+                    audit_discrepancy_coverage(
+                        investigation,
+                        decision_checkpoint=True,
+                    )
+                    if not investigation.stop_reason:
+                        investigation.stop_reason = "information_saturated"
+                    break
+
+                observation_update: Dict[str, Any] = {}
+
+                def observation_callback(
+                    step: StageStep,
+                    _steps: List[StageStep],
+                ) -> Dict[str, Any]:
+                    nonlocal observation_update
+                    tool_name = str(step.tool_name).strip()
+                    if tool_name == "perceive_scene":
+                        scene = self._parse_perception_result(step.tool_result)
+                        prior = state.perception or PerceptionReport(
+                            scene_description=""
+                        )
+                        state.perception = PerceptionReport(
+                            entities=scene.entities,
+                            text_regions=list(prior.text_regions),
+                            scene_description=scene.scene_description,
+                            image_type=scene.image_type,
+                        )
+                        update = reduce_visual_bootstrap_action(
+                            investigation,
+                            step=step,
+                            runtime_case=runtime_case,
+                            perception=state.perception,
+                        )
+                    elif tool_name == "ocr_with_position" and not (
+                        set(investigation.unified_react_bootstrap_tools_completed)
+                        == {"perceive_scene", "ocr_with_position"}
+                    ):
+                        state.perception = self._merge_ocr(
+                            state.perception or PerceptionReport(
+                                scene_description=""
+                            ),
+                            step.tool_result,
+                        )
+                        update = reduce_visual_bootstrap_action(
+                            investigation,
+                            step=step,
+                            runtime_case=runtime_case,
+                            perception=state.perception,
+                        )
+                    else:
+                        update = reduce_unified_react_action(
+                            investigation,
+                            step=step,
+                            runtime_case=runtime_case,
+                            source_access_policy=self.source_access_policy,
+                        )
+                    if not update.get("accepted", False):
+                        raise RuntimeError(
+                            "unified ReAct reducer rejected an executed action: "
+                            + str(update.get("rejected_reason", update))
+                        )
+                    delta = unified_react_delta(step=step, update=update)
+                    step.metadata["unified_react_delta"] = delta
+                    step.metadata["investigation_state_update"] = delta
+                    observation_update = update
+                    self._sync_image_only_state(state, investigation)
+                    return delta
+
+                runner = StageRunner(
+                    llm=self.llm,
+                    system_prompt=self._sp(UNIFIED_REACT_SYSTEM_PROMPT),
+                    prompt_version=UNIFIED_REACT_PROMPT_VERSION,
+                    tools=tools,
+                    output_schema=InvestigationSegmentOutput,
+                    max_rounds=1,
+                    image_path=image_path,
+                    stage_name="unified_react",
+                    runtime_store=state.runtime_store,
+                    handoff_state=investigation,
+                    attach_image=False,
+                    prior_steps=[
+                        step
+                        for step in state.all_steps
+                        if getattr(step, "stage_name", "") == "unified_react"
+                    ],
+                    tool_cache=self.tool_cache,
+                    cacheable_tools=list(self.cacheable_tools),
+                    tool_call_limits=self.verification_tool_limits,
+                    min_tool_calls=1,
+                    should_stop=lambda steps: any(
+                        item.action_type == "tool_call" for item in steps
+                    ),
+                    max_output_tokens=self._stage_output_tokens(
+                        "UNIFIED_REACT",
+                        8192,
+                    ),
+                    generation_config=self._stage_generation_config(
+                        "UNIFIED_REACT"
+                    ),
+                    observation_callback=observation_callback,
+                    source_access_policy=self.source_access_policy,
+                    visual_call_validator=lambda tool_name, tool_args: (
+                        validate_unified_react_action(
+                            investigation,
+                            tool_name=tool_name,
+                            tool_args=tool_args,
+                            source_access_policy=self.source_access_policy,
+                        )
+                    ),
+                    max_protocol_corrections=4,
+                    max_tool_calls_per_turn=1,
+                    force_tool_each_round=True,
+                    protocol_exhaustion_boundary=True,
+                    interaction_session=interaction_session,
+                    stop_output_factory=lambda: InvestigationSegmentOutput(
+                        segment_summary=(
+                            "The unified-ReAct action selection correction "
+                            "budget was exhausted."
+                        ),
+                        ready_for_reflection=True,
+                    ),
+                    request_timeout_seconds=self.stage_request_timeout_seconds,
+                    tool_timeout_seconds=self.tool_action_timeout_seconds,
+                )
+                try:
+                    parsed, steps = await runner.run(
+                        render_unified_react_context(investigation)
+                    )
+                except Exception as exc:
+                    self._record_stage_steps(
+                        state,
+                        list(getattr(exc, "stage_steps", []) or []),
+                    )
+                    raise
+                self._record_stage_steps(state, steps)
+                if parsed is None or not observation_update:
+                    raise RuntimeError(
+                        "unified ReAct did not complete one accepted action"
+                    )
+                if investigation.stop_reason == "engineering_error":
+                    raise RuntimeError(
+                        "a required visual bootstrap tool failed"
+                    )
+                if not investigation.target_facts:
+                    continue
+
+                decision_trigger = discrepancy_decision_checkpoint_reason(
+                    investigation,
+                    update=observation_update,
+                )
+                if not decision_trigger and not remaining_claim_hypothesis_routes(
+                    investigation
+                ):
+                    decision_trigger = "before_unresolved"
+                if decision_trigger:
+                    await self._run_unified_discrepancy_decision(
+                        state,
+                        investigation,
+                        trigger=decision_trigger,
+                    )
+                    audit_discrepancy_coverage(
+                        investigation,
+                        decision_checkpoint=True,
+                    )
+                else:
+                    audit_discrepancy_coverage(investigation)
+
+                if investigation.stop_reason:
+                    break
+                if (
+                    investigation.action_count
+                    and investigation.action_count % REFLECTION_INTERVAL == 0
+                    and investigation.action_count != last_reflection_action
+                ):
+                    await self._run_unified_global_reflection(
+                        state,
+                        investigation,
+                    )
+                    last_reflection_action = investigation.action_count
+                    self._sync_image_only_state(state, investigation)
+        finally:
+            state.stage_timings["unified_react"] = round(
+                time.time() - started,
+                2,
+            )
+
+        if not investigation.target_facts:
+            raise RuntimeError(
+                "unified ReAct completed visual bootstrap without an "
+                "investigation target"
+            )
+        if not investigation.stop_reason:
+            await self._run_unified_discrepancy_decision(
+                state,
+                investigation,
+                trigger="before_unresolved",
+            )
+            audit_discrepancy_coverage(
+                investigation,
+                decision_checkpoint=True,
+            )
+        if not investigation.stop_reason:
+            investigation.stop_reason = "information_saturated"
+        compiled_verdict, basis = compile_discrepancy_verdict_basis(
+            investigation,
+            policy_rule_id=UNIFIED_REACT_POLICY_VERSION,
+        )
+        judgment_started = time.perf_counter()
+        try:
+            judgment = await self._run_discrepancy_judgment(
+                state,
+                investigation,
+                compiled_verdict,
+                basis,
+                image_path=image_path,
+                final_visual_audit=None,
+                interaction_session=None,
+                attach_image=False,
+                policy_rule_id=UNIFIED_REACT_POLICY_VERSION,
+                system_prompt=UNIFIED_DISCREPANCY_JUDGMENT_SYSTEM_PROMPT,
+                prompt_version=UNIFIED_DISCREPANCY_JUDGMENT_PROMPT_VERSION,
+            )
+        finally:
+            state.stage_timings["judgment"] = round(
+                time.perf_counter() - judgment_started,
+                2,
+            )
+        investigation.discrepancy_judgment = judgment
+        state.judgment = judgment
+        self._sync_image_only_state(state, investigation)
+        return investigation, judgment, basis, None
+
+    async def _run_unified_global_reflection(
+        self,
+        state: VerificationState,
+        investigation: ImageOnlyInvestigationState,
+    ) -> UnifiedReflectionOutput:
+        """Record one low-frequency global strategy review without route mutation."""
+
+        runner = StageRunner(
+            llm=self.llm,
+            system_prompt=self._sp(UNIFIED_REFLECTION_SYSTEM_PROMPT),
+            prompt_version=UNIFIED_REFLECTION_PROMPT_VERSION,
+            tools=[],
+            output_schema=UnifiedReflectionOutput,
+            max_rounds=2,
+            stage_name="unified_reflection",
+            runtime_store=state.runtime_store,
+            handoff_state=investigation,
+            attach_image=False,
+            max_output_tokens=self._stage_output_tokens("REFLECTION", 8192),
+            generation_config=self._stage_generation_config("REFLECTION"),
+            request_timeout_seconds=self.stage_request_timeout_seconds,
+        )
+        parsed, steps = await runner.run(
+            render_unified_reflection_context(investigation)
+        )
+        self._record_stage_steps(state, steps)
+        if parsed is None:
+            raise RuntimeError(
+                "unified global Reflection did not produce valid structured output"
+            )
+        return parsed
+
+    async def _run_unified_discrepancy_decision(
+        self,
+        state: VerificationState,
+        investigation: ImageOnlyInvestigationState,
+        *,
+        trigger: str,
+    ) -> Dict[str, Any]:
+        """Run the one semantic Evidence checkpoint retained by unified ReAct."""
+
+        return await self._run_discrepancy_decision(
+            state,
+            investigation,
+            reviewed_evidence_ids=discrepancy_decision_evidence_ids(
+                investigation
+            ),
+            trigger=trigger,
+            interaction_session=None,
+            stage_name="unified_discrepancy_decision",
+            system_prompt=UNIFIED_DISCREPANCY_DECISION_SYSTEM_PROMPT,
+            prompt_version=UNIFIED_DISCREPANCY_DECISION_PROMPT_VERSION,
+            allow_new_hypotheses=False,
+        )
 
     def _validate_image_only_bootstrap_configuration(self) -> None:
         """Validate only providers exercised by the Phase-B bootstrap."""
@@ -1442,6 +1822,7 @@ class Orchestrator:
         runner = StageRunner(
             llm=self.llm,
             system_prompt=self._sp(IMAGE_ONLY_DISCREPANCY_REACT_PROMPT),
+            prompt_version=DISCREPANCY_REACT_PROMPT_VERSION,
             tools=[
                 tool
                 for tool in build_stage_tools("verification", self.all_tools)
@@ -1596,6 +1977,10 @@ class Orchestrator:
         reviewed_evidence_ids: Sequence[str],
         trigger: str,
         interaction_session: InteractionSession,
+        stage_name: str = "image_only_discrepancy_decision",
+        system_prompt: str = IMAGE_ONLY_DISCREPANCY_DECISION_PROMPT,
+        prompt_version: str = "",
+        allow_new_hypotheses: bool = True,
     ) -> Dict[str, Any]:
         """Run and atomically apply one sparse v4 multimodal checkpoint."""
 
@@ -1609,15 +1994,16 @@ class Orchestrator:
                 hypothesis.hypothesis_id
                 for hypothesis in investigation.search_hypotheses
             ],
+            allow_new_hypotheses=allow_new_hypotheses,
         )
 
         runner = StageRunner(
             llm=self.llm,
-            system_prompt=self._sp(IMAGE_ONLY_DISCREPANCY_DECISION_PROMPT),
+            system_prompt=self._sp(system_prompt),
             tools=[],
             output_schema=decision_output_schema,
             max_rounds=3,
-            stage_name="image_only_discrepancy_decision",
+            stage_name=stage_name,
             runtime_store=state.runtime_store,
             handoff_state=investigation,
             attach_image=False,
@@ -1629,6 +2015,7 @@ class Orchestrator:
                     reviewed_evidence_ids=reviewed_evidence_ids,
                     trigger=trigger,
                     source_access_policy=self.source_access_policy,
+                    allow_new_hypotheses=allow_new_hypotheses,
                 )
             ),
             max_output_tokens=self._stage_output_tokens(
@@ -1637,7 +2024,7 @@ class Orchestrator:
             ),
             generation_config=self._stage_generation_config("EVIDENCE_DECISION"),
             protocol_exhaustion_boundary=True,
-            stop_output_factory=lambda: DiscrepancyDecisionProposalOutput(
+            stop_output_factory=lambda: decision_output_schema(
                 verdict_proposal="continue",
                 rationale=(
                     "No atomic Decision update was accepted; continue with the "
@@ -1645,12 +2032,14 @@ class Orchestrator:
                 ),
             ),
             request_timeout_seconds=self.stage_request_timeout_seconds,
+            prompt_version=prompt_version or f"{stage_name}-v1",
         )
         parsed, steps = await runner.run(
             render_image_only_discrepancy_decision_context(
                 investigation,
                 reviewed_evidence_ids=reviewed_evidence_ids,
                 trigger=trigger,
+                allow_new_hypotheses=allow_new_hypotheses,
             )
         )
         self._record_stage_steps(state, steps)
@@ -2744,10 +3133,14 @@ class Orchestrator:
         image_path: str,
         final_visual_audit: Optional[Dict[str, Any]] = None,
         interaction_session: InteractionSession,
+        attach_image: Optional[bool] = None,
+        policy_rule_id: str = "discrepancy-first-v4",
+        system_prompt: str = IMAGE_ONLY_DISCREPANCY_JUDGMENT_PROMPT,
+        prompt_version: str = "",
     ) -> DiscrepancyJudgment:
         runner = StageRunner(
             llm=self.llm,
-            system_prompt=self._sp(IMAGE_ONLY_DISCREPANCY_JUDGMENT_PROMPT),
+            system_prompt=self._sp(system_prompt),
             tools=[],
             output_schema=DiscrepancyJudgmentOutput,
             max_rounds=1,
@@ -2755,7 +3148,11 @@ class Orchestrator:
             stage_name="image_only_discrepancy_judgment",
             runtime_store=state.runtime_store,
             handoff_state=investigation,
-            attach_image=bool(image_path) and self._main_llm_attaches_image(),
+            attach_image=(
+                bool(image_path) and self._main_llm_attaches_image()
+                if attach_image is None
+                else bool(attach_image)
+            ),
             interaction_session=interaction_session,
             output_validator=lambda parsed, _steps: (
                 self._validate_discrepancy_judgment(
@@ -2767,6 +3164,7 @@ class Orchestrator:
             max_output_tokens=self._stage_output_tokens("JUDGMENT", 8192),
             generation_config=self._stage_generation_config("JUDGMENT"),
             request_timeout_seconds=self.stage_request_timeout_seconds,
+            prompt_version=prompt_version or f"{policy_rule_id}-judgment-v1",
         )
         parsed, steps = await runner.run(
             render_image_only_discrepancy_judgment_context(
@@ -2774,6 +3172,11 @@ class Orchestrator:
                 compiled_verdict,
                 basis,
                 final_visual_audit=final_visual_audit,
+                image_is_attached=(
+                    bool(image_path) and self._main_llm_attaches_image()
+                    if attach_image is None
+                    else bool(attach_image)
+                ),
             )
         )
         self._record_stage_steps(state, steps)
@@ -2787,6 +3190,7 @@ class Orchestrator:
         return DiscrepancyJudgment(
             verdict=parsed.verdict,
             confidence=parsed.confidence,
+            policy_rule_id=policy_rule_id,
             overall_assessment=parsed.overall_assessment,
             selected_claim_ids=list(basis.claim_ids),
             selected_discrepancy_ids=list(basis.discrepancy_ids),
@@ -2983,7 +3387,13 @@ class Orchestrator:
         reviewed_evidence_ids: Sequence[str],
         trigger: str,
         source_access_policy: Optional[SourceAccessPolicy] = None,
+        allow_new_hypotheses: bool = True,
     ) -> tuple[bool, str]:
+        if not allow_new_hypotheses and parsed.new_hypotheses:
+            return False, (
+                "unified-react-v1 Discrepancy Decision must not create "
+                "new_hypotheses"
+            )
         bound, binding_error = bind_discrepancy_decision_runtime_ids(
             investigation,
             parsed,

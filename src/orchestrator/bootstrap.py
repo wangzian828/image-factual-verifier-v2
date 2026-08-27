@@ -100,11 +100,16 @@ def _unique_by_value(
     return result
 
 
-def build_bootstrap_investigation(
+def build_visual_bootstrap(
     case: ImageOnlyRuntimeCase,
     perception: PerceptionReport,
 ) -> BootstrapInvestigation:
-    """Create low-commitment, image-grounded facts and initial tasks."""
+    """Materialize only image/OCR-grounded state for unified ReAct.
+
+    This deliberately creates no ResearchTask.  The legacy bootstrap still
+    derives its speculative tasks below, while unified ReAct creates its first
+    target, route, and task atomically with the first real investigation action.
+    """
 
     media_type = str(perception.image_type or "photo").strip().lower()
     if media_type not in {
@@ -282,24 +287,51 @@ def build_bootstrap_investigation(
         fact_by_anchor[anchor.anchor_id] = text_fact
         relation_fact_by_anchor[anchor.anchor_id] = relation_fact
 
-    tasks: List[ResearchTask] = []
+    return BootstrapInvestigation(
+        brief=brief,
+        entities=entities,
+        facts=facts,
+        tasks=[],
+        retrieval_anchors=anchors,
+        findings=[],
+    )
 
-    ranked_text = sorted(
-        _unique_by_value(text_anchors),
+
+def build_bootstrap_investigation(
+    case: ImageOnlyRuntimeCase,
+    perception: PerceptionReport,
+) -> BootstrapInvestigation:
+    """Create the historical visual state plus its speculative v4 tasks."""
+
+    visual = build_visual_bootstrap(case, perception)
+    facts = list(visual.facts)
+    anchors = list(visual.retrieval_anchors)
+    entities = list(visual.entities)
+    entity_by_id = {item.entity_id: item for item in entities}
+
+    def fact_for_anchor(anchor_id: str, predicate: str) -> VisualFact | None:
+        return next(
+            (
+                fact
+                for fact in facts
+                if fact.predicate == predicate and anchor_id in fact.basis_ids
+            ),
+            None,
+        )
+
+    tasks: List[ResearchTask] = []
+    selected_text = sorted(
+        _unique_by_value(
+            anchor for anchor in anchors if anchor.kind == "text"
+        ),
         key=_text_score,
         reverse=True,
-    )
-    selected_text = ranked_text[:3]
-    quoted_values = [
-        anchor.value.replace('"', "'")
-        for anchor in selected_text
-    ]
+    )[:3]
+    quoted_values = [anchor.value.replace('"', "'") for anchor in selected_text]
     suggested_text_queries: List[str] = []
     if quoted_values:
         suggested_text_queries.append(" ".join(quoted_values))
-        suggested_text_queries.extend(
-            f'"{value}"' for value in quoted_values[:2]
-        )
+        suggested_text_queries.extend(f'"{value}"' for value in quoted_values[:2])
 
     scene_fact = next(
         (fact for fact in facts if fact.predicate == "appears_to_depict"),
@@ -332,24 +364,27 @@ def build_bootstrap_investigation(
         )
 
     if selected_text and scene_fact is None:
-        text_facts: List[VisualFact] = []
-        relation_facts: List[VisualFact] = []
-        for anchor in selected_text:
-            fact = fact_by_anchor.get(anchor.anchor_id)
-            relation_fact = relation_fact_by_anchor.get(anchor.anchor_id)
-            if fact is not None:
-                text_facts.append(fact)
-            if relation_fact is not None:
-                relation_facts.append(relation_fact)
-        fact_ids = [
-            fact.fact_id
-            for fact in [*text_facts, *relation_facts]
-        ][:6]
+        text_facts = [
+            fact
+            for anchor in selected_text
+            if (fact := fact_for_anchor(anchor.anchor_id, "reads")) is not None
+        ]
+        relation_facts = [
+            fact
+            for anchor in selected_text
+            if (
+                fact := fact_for_anchor(
+                    anchor.anchor_id,
+                    "context_suggested_by_text",
+                )
+            )
+            is not None
+        ]
+        task_facts = [*text_facts, *relation_facts]
+        fact_ids = [fact.fact_id for fact in task_facts][:6]
         origin_ids = list(
             dict.fromkeys(
-                origin_id
-                for fact in [*text_facts, *relation_facts]
-                for origin_id in fact.basis_ids
+                origin_id for fact in task_facts for origin_id in fact.basis_ids
             )
         )[:12]
         tasks.append(
@@ -391,7 +426,7 @@ def build_bootstrap_investigation(
     for anchor in entity_anchors:
         if len(tasks) >= 4:
             break
-        fact = fact_by_anchor.get(anchor.anchor_id)
+        fact = fact_for_anchor(anchor.anchor_id, "visible_in")
         if fact is None:
             continue
         quoted = anchor.value.replace('"', "'")
@@ -400,8 +435,8 @@ def build_bootstrap_investigation(
                 task_id=_id("task", fact.fact_id, "entity-context"),
                 fact_ids=[fact.fact_id],
                 question=(
-                    f'What verifiable real-world identity or context corresponds to '
-                    f'the visible {anchor.kind} "{quoted}"?'
+                    f"What verifiable real-world identity or context corresponds "
+                    f'to the visible {anchor.kind} "{quoted}"?'
                 ),
                 purpose=(
                     "Resolve a salient visual identity without inferring facts that "
@@ -441,11 +476,4 @@ def build_bootstrap_investigation(
             )
         )
 
-    return BootstrapInvestigation(
-        brief=brief,
-        entities=entities,
-        facts=facts,
-        tasks=tasks[:4],
-        retrieval_anchors=anchors,
-        findings=[],
-    )
+    return visual.model_copy(update={"tasks": tasks[:4]})

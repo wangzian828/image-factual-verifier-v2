@@ -569,7 +569,7 @@ def score_process_trace(
         or state.get("decision_policy_version")
         or ""
     )
-    if policy_version == "discrepancy-first-v4":
+    if policy_version in {"discrepancy-first-v4", "unified-react-v1"}:
         return _score_discrepancy_trace(
             trace,
             gold,

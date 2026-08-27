@@ -23,11 +23,15 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from src.trajectory.exporter import export_trajectory_sft_example
+from src.trajectory.exporter import (
+    export_trajectory_action_only_example,
+    export_trajectory_sft_example,
+    unified_react_training_buckets,
+)
 from src.trajectory.perception_exporter import export_perception_example
 
 
-SCHEMA_VERSION = "ifv-accepted-teacher-release-v2"
+SCHEMA_VERSION = "ifv-accepted-teacher-release-v3"
 DETERMINISTIC_FATAL_TEACHER_REASONS = frozenset(
     {
         "incorrect_result",
@@ -144,6 +148,18 @@ def _eligible(
     eligibility: Mapping[str, Any],
 ) -> bool:
     eligibility_gates = eligibility.get("gates") or {}
+    state = trace.get("state") if isinstance(trace.get("state"), Mapping) else {}
+    policy_version = str(
+        trace.get("decision_policy_version")
+        or state.get("decision_policy_version")
+        or ""
+    )
+    eligibility_policy = str(
+        (eligibility.get("source_trace") or {}).get(
+            "decision_policy_version",
+            "",
+        )
+    )
     return bool(
         str(trace.get("termination", "")) == "success"
         and str(trace.get("verdict", "")) in {"real", "fake"}
@@ -151,6 +167,10 @@ def _eligible(
         and eligibility_gates.get("sft_eligibility_pass") is True
         and str((eligibility.get("source_trace") or {}).get("sha256", ""))
         == trace_sha256
+        and (
+            policy_version != "unified-react-v1"
+            or eligibility_policy == policy_version
+        )
     )
 
 
@@ -174,6 +194,20 @@ def _rejection_reasons(
         reasons.append("sft_judge_rejected")
     if str((eligibility.get("source_trace") or {}).get("sha256", "")) != trace_sha256:
         reasons.append("trace_sha256_mismatch")
+    state = trace.get("state") if isinstance(trace.get("state"), Mapping) else {}
+    trace_policy = str(
+        trace.get("decision_policy_version")
+        or state.get("decision_policy_version")
+        or ""
+    )
+    eligibility_policy = str(
+        (eligibility.get("source_trace") or {}).get(
+            "decision_policy_version",
+            "",
+        )
+    )
+    if trace_policy == "unified-react-v1" and eligibility_policy != trace_policy:
+        reasons.append("decision_policy_version_mismatch")
     metrics = eligibility.get("metrics") or {}
     if metrics.get("fatal_errors"):
         reasons.append("sft_judge_fatal_errors")
@@ -385,6 +419,11 @@ def stage_release(
                     "fatal_reasons"
                 ],
                 "deterministic_red_flags": deterministic_quality["red_flags"],
+                "decision_policy_version": str(
+                    trace.get("decision_policy_version")
+                    or state.get("decision_policy_version")
+                    or ""
+                ),
                 "source_metadata": {
                     "source_run_id": str(manifest.get("run_id", run_dir.name)),
                     "runtime_commit": str(manifest.get("git_commit", "")),
@@ -415,11 +454,23 @@ def stage_release(
         raise ValueError(
             f"accepted too few unique cases: {len(selected)} < {minimum_accepted_cases}"
         )
+    policy_versions = {
+        str(candidate["decision_policy_version"])
+        for candidate in selected.values()
+    }
+    if len(policy_versions) > 1:
+        raise ValueError(
+            "accepted release cannot mix decision_policy_version values: "
+            + ", ".join(sorted(policy_versions))
+        )
+    decision_policy_version = next(iter(policy_versions), "")
 
     selected_rows = []
     selected_by_run: Dict[Path, set[str]] = {}
     selected_cases_by_run: Dict[Path, set[str]] = {}
     trajectory_sft_rows: list[Dict[str, Any]] = []
+    action_only_rows: list[Dict[str, Any]] = []
+    rl_candidate_rows: list[Dict[str, Any]] = []
     perception_rows: list[Dict[str, Any]] = []
     (output_dir / "eligibility").mkdir(parents=True, exist_ok=True)
     has_semantic_diagnostics = any(
@@ -436,11 +487,24 @@ def stage_release(
             )
             is True
         )
+        training_buckets = (
+            unified_react_training_buckets(trace)
+            if candidate["decision_policy_version"] == "unified-react-v1"
+            else ["reasoning_sft"]
+        )
         try:
-            exported_trajectory = export_trajectory_sft_example(
-                trace,
-                source_metadata=candidate["source_metadata"],
-                allow_incomplete_verdict_chain=sft_judge_passed,
+            exported_trajectory = (
+                export_trajectory_sft_example(
+                    trace,
+                    source_metadata=candidate["source_metadata"],
+                    allow_incomplete_verdict_chain=sft_judge_passed,
+                )
+                if "reasoning_sft" in training_buckets
+                else export_trajectory_action_only_example(
+                    trace,
+                    source_metadata=candidate["source_metadata"],
+                    allow_incomplete_verdict_chain=sft_judge_passed,
+                )
             )
         except ValueError as exc:
             stored = _stage_rejected_trace(
@@ -480,7 +544,22 @@ def stage_release(
                 candidate["semantic_path"],
                 output_dir / "semantic_rewards" / candidate["semantic_path"].name,
             )
-        trajectory_sft_rows.append(exported_trajectory.model_dump(mode="json"))
+        if "reasoning_sft" in training_buckets:
+            trajectory_sft_rows.append(exported_trajectory.model_dump(mode="json"))
+        else:
+            action_only_rows.append(exported_trajectory.model_dump(mode="json"))
+        if "rl_candidate" in training_buckets:
+            rl_candidate_rows.append(
+                {
+                    "case_id": case_id,
+                    "episode_id": candidate["episode_id"],
+                    "source_trace_sha256": candidate["trace_sha256"],
+                    "decision_policy_version": candidate[
+                        "decision_policy_version"
+                    ],
+                    "training_buckets": training_buckets,
+                }
+            )
         perception_export_error = ""
         try:
             exported_perception = export_perception_example(
@@ -509,7 +588,9 @@ def stage_release(
                 "deterministic_red_flags": candidate["deterministic_red_flags"],
                 "sft_eligibility_artifact_id": candidate["eligibility"].get("artifact_id"),
                 "semantic_reward_artifact_id": candidate["semantic"].get("artifact_id"),
-                "trajectory_sft_rows": 1,
+                "decision_policy_version": candidate["decision_policy_version"],
+                "training_buckets": training_buckets,
+                "trajectory_sft_rows": int("reasoning_sft" in training_buckets),
                 "trajectory_token_count_estimate": (
                     exported_trajectory.token_count_estimate
                 ),
@@ -520,6 +601,8 @@ def stage_release(
         )
 
     _write_jsonl(output_dir / "trajectory_sft.jsonl", trajectory_sft_rows)
+    _write_jsonl(output_dir / "action_only.jsonl", action_only_rows)
+    _write_jsonl(output_dir / "rl_candidates.jsonl", rl_candidate_rows)
     _write_jsonl(output_dir / "perception_trajectories.jsonl", perception_rows)
     for artifact_name in JSONL_ARTIFACTS:
         rows: list[Dict[str, Any]] = []
@@ -540,12 +623,15 @@ def stage_release(
             "status": "completed",
             "accepted_case_count": len(selected_rows),
             "rejected_case_count": len(rejected_rows),
+            "decision_policy_version": decision_policy_version,
             "accepted_sources": source_manifests,
             "selected_episodes": "selected_episodes.jsonl",
             "rejected_episodes": "rejected_episodes.jsonl",
             "source_run_kind": "strict-structured-selected",
             "canonical_training_source": {
                 "trajectory_sft_export": "canonical_trace",
+                "action_only_export": "canonical_trace",
+                "rl_candidate_manifest": "rl_candidates.jsonl",
                 "allow_incomplete_verdict_chain": True,
                 "perception_export": "canonical_trace",
                 "legacy_step_policy_export": "disabled",
@@ -559,6 +645,7 @@ def stage_release(
         "schema_version": SCHEMA_VERSION,
         "accepted_case_count": len(selected_rows),
         "rejected_case_count": len(rejected_rows),
+        "decision_policy_version": decision_policy_version,
         "sources": source_manifests,
         "artifacts": {
             "run_dir": str(output_dir),
@@ -569,9 +656,14 @@ def stage_release(
             "semantic_rewards_dir": (
                 "semantic_rewards" if has_semantic_diagnostics else None
             ),
+            "trajectory_sft": "trajectory_sft.jsonl",
+            "action_only": "action_only.jsonl",
+            "rl_candidates": "rl_candidates.jsonl",
         },
         "canonical_training_source": {
             "trajectory_sft_export": "canonical_trace",
+            "action_only_export": "canonical_trace",
+            "rl_candidate_manifest": "rl_candidates.jsonl",
             "allow_incomplete_verdict_chain": True,
             "perception_export": "canonical_trace",
             "legacy_step_policy_export": "disabled",

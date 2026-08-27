@@ -29,6 +29,83 @@ from src.orchestrator.source_provenance import classify_source
 from src.orchestrator.source_provenance import canonicalize_url
 
 
+UNIFIED_REACT_PROMPT_VERSION = "unified-react-v1"
+
+
+UNIFIED_REACT_SYSTEM_PROMPT = """\
+判断图像表达的事实内容是否成立。
+
+你是统一 ReAct 主循环。每次请求只完成一个真实动作：先思考下一步，再调用一个当前允许的
+native function。工具结果和 runtime state delta 会成为下一轮上下文。
+
+1. 先完成图像观察
+在 visual_bootstrap 阶段，只能调用当前暴露的 ``perceive_scene`` 或
+``ocr_with_position``。二者都完成前，不得进行网页、反向搜图、参考图或其他调查。
+
+2. 第一次调查必须把意图放在真实动作里
+完成 scene 和 OCR 后，第一次非 bootstrap 工具调用必须包含
+``investigation_intent``。其中 ``target_fact`` 写图片希望观众接受的一个正向、原子、
+现实世界命题，并引用已有的视觉/OCR ``anchor_fact_ids``；``route`` 写本次工具行动实际要
+获取的底层事实。它不是独立 planning JSON，也不是 verdict、AI 生成、篡改、真实性或来源
+调查。不要填写图片路径、内部 ID 以外的虚构状态，runtime 会创建 target、route 与 task。
+
+3. 后续每轮直接选择下一步动作
+换搜索方向就直接调用新的 ``text_search``；换视觉方向就直接调用相应视觉工具；待检查页面或
+参考图优先检查。查询服务于同一目标关系，检索主体、事件、关系、数值或可观察属性，不搜索
+现成事实核查结论。使用 runtime 提供的 ``task_id``、URL、参考图或其他候选值，且不重复已
+尝试路线。
+
+4. 证据和状态边界
+搜索标题、摘要、反向匹配和模型猜测都是线索，不是 Evidence。不要在 thought 或工具参数中
+断言 real/fake、创建 Evidence、修改状态或给出最终裁决。reducer 负责 IDs、状态、预算、
+重复路线、来源策略和工具结果归并。
+
+5. 关闭路线
+只有当前路线确实没有待检查页面/参考图且无有价值下一步时，才调用
+``stop_route(task_id, rationale)``。它只能关闭这一条路线，不得结束整个 case 或产生 verdict。
+
+只调用一个 native function；不要输出普通 JSON、并行调用、独立 Planning、Query Replan、
+Route-local Replan、Evidence Decision、Reflection 或 Judgment。它们由 runtime 在低频边界
+单独触发。
+"""
+
+
+UNIFIED_REFLECTION_PROMPT_VERSION = "unified-react-reflection-v1"
+
+
+UNIFIED_REFLECTION_SYSTEM_PROMPT = """\
+判断图像表达的事实内容是否成立。
+
+你是低频的全局策略检查点，不是下一步工具规划器。根据当前已记录的路线、Evidence、失败和未解决
+缺口，说明调查是否仍有价值以及最重要的全局关注点。
+
+1. 只总结全局策略：识别最重要的未解决缺口和当前路线是否仍有信息增益。
+2. 不写 query，不选择工具，不创建/关闭 route，不创建 Evidence 或 Finding，不修改 target。
+3. 不提出 real/fake 或最终 verdict。是否继续由 runtime 依据路线、预算和证据门槛决定。
+4. 返回一个符合 schema 的 JSON 对象。
+"""
+
+
+UNIFIED_DISCREPANCY_DECISION_PROMPT_VERSION = "unified-react-discrepancy-decision-v1"
+
+
+UNIFIED_DISCREPANCY_DECISION_SYSTEM_PROMPT = """\
+判断图像表达的事实内容是否成立。
+
+你是稀疏的 Discrepancy Decision 检查点。只根据本次提供的已审阅 Evidence、图片锚点和
+runtime actionability 判断它们对既有 target fact 的语义影响。
+
+1. Evidence 只限于提供的精确网页片段或已记录的视觉观察；搜索标题、摘要、URL 和模型猜测
+不是 Evidence。
+2. 为已有 claim 给出支持、反驳、冲突或不足的 assessment；若 Evidence 引入了应当能在原图
+观察到的具体属性，按 runtime contract 请求一次聚焦 visual reinspection。
+3. 只能做必要的受限 refinement，不创建查询、不规划下一工具、不创建新的搜索路线。
+4. 有合格的 decisive discrepancy 才能提出 fake；只有 target 已支持、没有 decisive
+discrepancy 且全部路线关闭时才可以提出 real；否则保持 continue。
+5. 返回一个符合 schema 的 JSON 对象。
+"""
+
+
 REACT_SYSTEM_PROMPT = """\
 判断图像表达的事实内容是否成立。
 
@@ -120,41 +197,44 @@ state, and output structure.
 """
 
 
+DISCREPANCY_REACT_PROMPT_VERSION = "ifv-discrepancy-react-v2"
+
+
 DISCREPANCY_REACT_SYSTEM_PROMPT = """\
 判断图像表达的事实内容是否成立。
 
-1. Choose one action
-Choose exactly one runtime-authorized tool action that most reduces uncertainty
-about the unresolved image-grounded target fact. Its SearchHypothesis supplies
-context and ownership, not a boundary on the investigation.
+You are the ReAct selector for one bounded image-fact turn. This request is for
+one tool call, not a semantic decision or a replan.
 
-2. Keep the route on the target relation
-Frame retrieval around what actually happened, not merely whether an identical
-image can be found or an exact source record can be found. If a direct query
-repeats the proposed value without useful evidence, omit that value and retrieve
-the actual value of the same relation slot. Form queries from visible anchors,
-relation slots, or terms introduced by supplied Discovery and Evidence. Keep each
-query centered on the target relation. The legacy image-claim record is
-bookkeeping only; creator, provenance, upload history, and exact-source details
-are retrieval context.
+1. Select one action
+Choose exactly one active task and invoke exactly one available runtime tool to
+reduce an open evidence gap for its owned target fact. Use only IDs and values in
+the current handoff or tool schema. Task ownership preserves lineage; it is not a
+semantic cage.
 
-3. Inspect before repeating retrieval
-Titles, snippets, and reverse matches are Discovery only. For page inspection,
-select one owned target fact and state the passage sought. Batch up to three
-pending pages when useful, but keep each page as separate Evidence.
+2. Choose the next route
+Prefer inspecting a pending page or reference image before another retrieval. If
+none is useful, choose the remaining route with the highest expected information
+gain. Do not repeat an attempted route, URL, or query for the same task.
 
-4. Preserve the Evidence boundary
-Prior knowledge may supply leads; only tool Evidence establishes a fact.
-A fetched exact span or a successful visual observation with recorded provenance
-is qualified Evidence. Use only supplied observations, do not decide a verdict,
-and do not introduce external identities or metadata as new target facts.
+Text queries seek the underlying subject, event, relation, value, or physical
+property. Identity, place, date, publication, and source details may be tied
+leads, but do not search for a ready-made verdict or fact-check answer. For page
+visits, state the task-owned fact and passage/property to inspect. For visual or
+reference tools, request one concrete observable property. For archive recall/read,
+use only pending IDs.
 
-5. Let the runtime enforce the protocol
-The runtime owns IDs, legacy claim/hypothesis bookkeeping, route duplication,
-budgets, Evidence eligibility, state transitions, and stopping. When several
-active Tasks are exposed, choose the Task and tool with the highest expected
-information gain; priority is guidance, not a mandatory order. Switch Tasks when
-the current route is weak.
+3. Keep the Evidence boundary
+Search results, snippets, reverse matches, and model guesses are leads, not
+Evidence. Do not infer facts, create Evidence, assess claims, or propose
+real/fake. The runtime reduces tool results and owns IDs, provenance, state,
+budgets, duplicate checks, and stopping.
+
+4. Follow the turn protocol
+Return no JSON or explanation before the call. Make one native function call only;
+do not make parallel calls or simulate Reflection, Replan, Decision, or Judgment.
+Those are separate runtime checkpoints, not prerequisites for every action. After
+the tool result, the runtime closes this segment and compiles the next handoff.
 """
 
 
@@ -407,6 +487,26 @@ Return the binary verdict, confidence, concise assessment, and rationale fields.
 The runtime supplies claim, discrepancy, finding, Evidence, and gap identifiers
 from the accepted investigation state. The assessment uses the supplied visible
 content and compiled basis.
+"""
+
+
+UNIFIED_DISCREPANCY_JUDGMENT_PROMPT_VERSION = "unified-react-judgment-v1"
+
+
+UNIFIED_DISCREPANCY_JUDGMENT_SYSTEM_PROMPT = """\
+You are the constrained final synthesizer for unified-react-v1. The original image
+is not attached to this request. Use only the runtime-compiled target, Evidence,
+visual tool observations, and verdict basis.
+
+When compiled_verdict is non-empty, reproduce it exactly and concisely explain the
+provided basis. Do not create facts, cite new IDs, call tools, or revise the result.
+
+When compiled_verdict is empty, make the bounded binary judgment and provide
+terminal_visual_rationale. Its visible property must be supported by the recorded
+visual anchors or visual-tool observations; do not claim to see pixels that were
+not supplied in the context.
+
+Return one JSON object matching the response schema.
 """
 
 
@@ -763,6 +863,174 @@ def render_react_context(state: ImageOnlyInvestigationState) -> str:
     )
 
 
+def render_unified_react_context(
+    state: ImageOnlyInvestigationState,
+) -> str:
+    """Render the compact current turn for the first-class unified ReAct loop."""
+
+    completed = list(state.unified_react_bootstrap_tools_completed)
+    bootstrap_needed = [
+        name
+        for name in ("perceive_scene", "ocr_with_position")
+        if name not in set(completed)
+    ]
+    if bootstrap_needed:
+        return json.dumps(
+            {
+                "phase": "visual_bootstrap",
+                "case_objective": state.brief.objective,
+                "workspace": "empty",
+                "completed_visual_tools": completed,
+                "required_next_visual_tools": bootstrap_needed,
+                "instruction": (
+                    "Select exactly one missing visual bootstrap tool. No "
+                    "external investigation tool is authorized yet."
+                ),
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+
+    visual_facts = [
+        {
+            "fact_id": item.fact_id,
+            "kind": item.kind,
+            "statement": item.statement,
+            "predicate": item.predicate,
+            "origin": item.origin.type,
+            "basis_ids": item.basis_ids,
+        }
+        for item in state.facts
+        if item.origin.type in {"input_image", "ocr"}
+    ][:36]
+    if not state.target_facts:
+        return json.dumps(
+            {
+                "phase": "first_investigation_action",
+                "case_objective": state.brief.objective,
+                "visual_bootstrap_completed": completed,
+                "visual_or_ocr_anchor_facts": visual_facts,
+                "retrieval_anchors": [
+                    item.model_dump(mode="json")
+                    for item in state.retrieval_anchors[:24]
+                ],
+                "first_action_contract": {
+                    "required": "investigation_intent",
+                    "target_fact": (
+                        "one positive image-grounded world relation using existing "
+                        "anchor_fact_ids"
+                    ),
+                    "route": (
+                        "the concrete information this same real tool call will "
+                        "seek; do not write a verdict or provenance investigation"
+                    ),
+                },
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+
+    routes = remaining_claim_hypothesis_routes(state)
+    attempted_routes: list[dict[str, Any]] = []
+    for raw in state.attempted_routes[-20:]:
+        try:
+            item = json.loads(raw)
+        except (TypeError, ValueError):
+            continue
+        if isinstance(item, dict):
+            attempted_routes.append(item)
+    facts = {item.fact_id: item for item in state.facts}
+    return json.dumps(
+        {
+            "phase": "investigation",
+            "image_account_summary": state.image_account_summary,
+            "target_facts": [
+                item.model_dump(mode="json") for item in state.target_facts
+            ],
+            "target_fact_details": [
+                facts[item.fact_id].model_dump(mode="json")
+                for item in state.target_facts
+                if item.fact_id in facts
+            ],
+            "active_routes": [
+                {
+                    **item.model_dump(mode="json"),
+                    "owned_target_facts": [
+                        facts[fact_id].statement
+                        for fact_id in item.fact_ids
+                        if fact_id in facts
+                    ],
+                }
+                for item in state.tasks
+                if item.status in {"active", "pending"}
+            ],
+            "recent_discoveries": [
+                item.model_dump(mode="json")
+                for item in state.discoveries[-12:]
+                if not item.abandoned
+            ],
+            "recent_evidence": [
+                _render_semantic_evidence(item) for item in state.evidence[-12:]
+            ],
+            "recent_failures": [
+                item.model_dump(mode="json") for item in state.failures[-8:]
+            ],
+            "open_gaps": [
+                item.model_dump(mode="json")
+                for item in state.evidence_gaps
+                if item.status == "open"
+            ],
+            "remaining_routes": routes[:16],
+            "attempted_routes": attempted_routes,
+            "action_budget": {
+                "used": state.action_count,
+                "remaining": max(0, MAX_TOOL_ACTIONS - state.action_count),
+            },
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
+def render_unified_reflection_context(
+    state: ImageOnlyInvestigationState,
+) -> str:
+    """Render a bounded global-only strategy view without route planning fields."""
+
+    latest_decision = (
+        state.discrepancy_decisions[-1].model_dump(mode="json")
+        if state.discrepancy_decisions
+        else None
+    )
+    return json.dumps(
+        {
+            "action_count": state.action_count,
+            "target_facts": [
+                item.model_dump(mode="json") for item in state.target_facts
+            ],
+            "active_task_count": sum(
+                item.status in {"active", "pending"} for item in state.tasks
+            ),
+            "remaining_route_count": len(remaining_claim_hypothesis_routes(state)),
+            "open_gaps": [
+                item.model_dump(mode="json")
+                for item in state.evidence_gaps
+                if item.status == "open"
+            ],
+            "recent_evidence": [
+                _render_semantic_evidence(item) for item in state.evidence[-8:]
+            ],
+            "recent_failures": [
+                item.model_dump(mode="json") for item in state.failures[-8:]
+            ],
+            "recent_decision": latest_decision,
+            "no_substantive_gain_streak": state.no_substantive_gain_streak,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
 def render_target_planning_context(
     state: ImageOnlyInvestigationState,
 ) -> str:
@@ -1053,6 +1321,7 @@ def render_discrepancy_decision_context(
     *,
     reviewed_evidence_ids: Iterable[str],
     trigger: str,
+    allow_new_hypotheses: bool = True,
 ) -> str:
     """Render one sparse v4 decision checkpoint from canonical state only."""
 
@@ -1154,6 +1423,7 @@ def render_discrepancy_decision_context(
         visual_evidence_requirements=visual_evidence_requirements,
         runtime_visual_binding=runtime_visual_binding,
         remaining_routes=remaining_routes,
+        allow_new_hypotheses=allow_new_hypotheses,
     )
     claims_with_reviewed_visual_evidence = {
         str(claim_id)
@@ -1341,6 +1611,7 @@ def _render_discrepancy_decision_actionability(
     visual_evidence_requirements: List[Dict[str, Any]],
     runtime_visual_binding: Dict[str, Any],
     remaining_routes: List[str],
+    allow_new_hypotheses: bool,
 ) -> Dict[str, Any]:
     """Render live Decision constraints without changing reducer semantics."""
 
@@ -1497,16 +1768,26 @@ def _render_discrepancy_decision_actionability(
             else "Choose an update that is semantically warranted by this checkpoint."
         ),
         "new_hypotheses": {
-            "remaining_hypothesis_slots": hypothesis_slots,
-            "remaining_task_slots": task_slots,
-            "max_new_hypotheses_now": new_hypothesis_slots,
+            "remaining_hypothesis_slots": (
+                hypothesis_slots if allow_new_hypotheses else 0
+            ),
+            "remaining_task_slots": task_slots if allow_new_hypotheses else 0,
+            "max_new_hypotheses_now": (
+                new_hypothesis_slots if allow_new_hypotheses else 0
+            ),
             "instruction": (
-                "new_hypotheses MUST be []: no hypothesis/task capacity remains."
-                if new_hypothesis_slots == 0
+                "new_hypotheses MUST be []: unified-ReAct changes direction "
+                "only through the next concrete tool action."
+                if not allow_new_hypotheses
                 else (
-                    "You may add at most "
-                    f"{new_hypothesis_slots} genuinely new hypothesis(es); "
-                    "do not duplicate any active route."
+                    "new_hypotheses MUST be []: no hypothesis/task capacity "
+                    "remains."
+                    if new_hypothesis_slots == 0
+                    else (
+                        "You may add at most "
+                        f"{new_hypothesis_slots} genuinely new hypothesis(es); "
+                        "do not duplicate any active route."
+                    )
                 )
             ),
         },
@@ -1584,6 +1865,7 @@ def render_discrepancy_judgment_context(
     basis: Any,
     *,
     final_visual_audit: Any = None,
+    image_is_attached: bool = True,
 ) -> str:
     claims = {item.claim_id: item for item in state.target_facts}
     discrepancies = {
@@ -1611,7 +1893,14 @@ def render_discrepancy_judgment_context(
                 "observations; this judgment request does not include image "
                 "pixels."
                 if isinstance(final_visual_audit, dict)
-                else "The original image is attached to this judgment request."
+                else (
+                    "The original image is attached to this judgment request."
+                    if image_is_attached
+                    else (
+                        "The original image is not attached. Use only recorded "
+                        "visual anchors and visual-tool observations."
+                    )
+                )
             ),
             "terminal_visual_rationale_required": not bool(compiled_verdict),
             "terminal_visual_rationale_contract": (

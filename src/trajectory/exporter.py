@@ -5,7 +5,11 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, Iterable, List, Mapping, Protocol, Sequence
 
-from src.trajectory.schema import PolicyExample, TrajectorySFTExample
+from src.trajectory.schema import (
+    ActionOnlyTrajectoryExample,
+    PolicyExample,
+    TrajectorySFTExample,
+)
 from src.orchestrator.evidence_semantics import (
     evidence_direction_is_coherent,
     evidence_is_qualified_for_stance,
@@ -110,6 +114,12 @@ def _observation_refs(policy_input: Mapping[str, Any]) -> List[str]:
 
 
 def _example_type(stage: str) -> str | None:
+    if stage == "unified_react":
+        return "react"
+    if stage == "unified_reflection":
+        return "reflection"
+    if stage == "unified_discrepancy_decision":
+        return "discrepancy_decision"
     if stage in {
         "image_only_investigation",
         "image_only_discrepancy_investigation",
@@ -231,7 +241,7 @@ def _initial_observation_packet(trace: Mapping[str, Any]) -> str:
     runtime_case = _mapping(state.get("runtime_case"))
     observations: list[dict[str, Any]] = []
     for step in _rows(state.get("all_steps")):
-        if str(step.get("stage", "")) != "perception":
+        if str(step.get("stage", "")) not in {"perception", "unified_react"}:
             continue
         if str(step.get("action_type", "")) != "tool_call":
             continue
@@ -416,7 +426,8 @@ def export_trajectory_sft_example(
     tokenizer: TokenizerAdapter | None = None,
     source_metadata: Mapping[str, Any] | None = None,
     allow_incomplete_verdict_chain: bool = False,
-) -> TrajectorySFTExample:
+    require_provider_thought: bool = True,
+) -> TrajectorySFTExample | ActionOnlyTrajectoryExample:
     """Export one complete accepted episode as one prefix-preserving SFT row."""
 
     state = _mapping(trace.get("state"))
@@ -429,13 +440,23 @@ def export_trajectory_sft_example(
         or state.get("decision_policy_version")
         or ""
     )
-    if policy_version not in {"reinspect-v2", "discrepancy-first-v4"}:
+    if policy_version not in {
+        "reinspect-v2",
+        "discrepancy-first-v4",
+        "unified-react-v1",
+    }:
         raise ValueError("trajectory SFT exporter received an unsupported decision policy")
     if policy_version == "discrepancy-first-v4":
         _v4_quality_gate(
             trace,
             state,
             allow_incomplete_verdict_chain=allow_incomplete_verdict_chain,
+        )
+    if policy_version == "unified-react-v1":
+        _unified_react_quality_gate(
+            trace,
+            state,
+            require_provider_thought=require_provider_thought,
         )
 
     tokenizer = tokenizer or Utf8ByteTokenizer()
@@ -507,6 +528,15 @@ def export_trajectory_sft_example(
         if thought:
             _assert_no_private_data(thought)
         if example_type == "react":
+            if (
+                policy_version == "unified-react-v1"
+                and require_provider_thought
+                and not thought
+            ):
+                raise ValueError(
+                    "unified-react reasoning SFT requires provider-visible "
+                    "thought for every ReAct action"
+                )
             if str(policy_action.get("type", "")) != "tool_call":
                 raise ValueError("react trajectory action must be a tool call")
             tool_call = {
@@ -522,8 +552,11 @@ def export_trajectory_sft_example(
                 {
                     "role": "assistant",
                     "content": (
-                        _qwen_think_block(thought)
-                        + "\n\n"
+                        (
+                            _qwen_think_block(thought) + "\n\n"
+                            if thought
+                            else ""
+                        )
                         + _qwen_tool_call_block(
                             name=tool_call["name"],
                             arguments=tool_call["arguments"],
@@ -553,8 +586,7 @@ def export_trajectory_sft_example(
                 {
                     "role": "assistant",
                     "content": (
-                        _qwen_think_block(thought)
-                        + "\n\n"
+                        (_qwen_think_block(thought) + "\n\n" if thought else "")
                         + canonical_json(policy_action)
                     ),
                     "loss": True,
@@ -575,24 +607,61 @@ def export_trajectory_sft_example(
     if tools:
         token_payload["tools"] = tools
     token_count = len(tokenizer.encode(canonical_json(token_payload)))
-    return TrajectorySFTExample(
-        episode_id=episode_id,
-        case_id=case_id,
-        source_run_id=str(source_metadata.get("source_run_id", "")),
-        runtime_commit=str(source_metadata.get("runtime_commit", "")),
-        release_id=str(source_metadata.get("release_id", "")),
-        runtime_contract_version=str(
+    example_payload = {
+        "trajectory_version": (
+            "ifv-trajectory-action-only-v1"
+            if policy_version == "unified-react-v1"
+            and not require_provider_thought
+            else "ifv-trajectory-sft-v4"
+            if policy_version == "unified-react-v1"
+            else "ifv-trajectory-sft-v3"
+        ),
+        "episode_id": episode_id,
+        "case_id": case_id,
+        "source_run_id": str(source_metadata.get("source_run_id", "")),
+        "runtime_commit": str(source_metadata.get("runtime_commit", "")),
+        "release_id": str(source_metadata.get("release_id", "")),
+        "runtime_contract_version": str(
             source_metadata.get("runtime_contract_version", "")
         ),
-        process_reference_protocol_version=str(
+        "process_reference_protocol_version": str(
             source_metadata.get("process_reference_protocol_version", "")
         ),
-        messages=messages,
-        tools=tools,
-        token_count_estimate=token_count,
-        message_count=len(messages),
-        tool_call_count=tool_call_count,
+        "messages": messages,
+        "tools": tools,
+        "token_count_estimate": token_count,
+        "message_count": len(messages),
+        "tool_call_count": tool_call_count,
+    }
+    if (
+        policy_version == "unified-react-v1"
+        and not require_provider_thought
+    ):
+        return ActionOnlyTrajectoryExample(**example_payload)
+    return TrajectorySFTExample(**example_payload)
+
+
+def export_trajectory_action_only_example(
+    trace: Mapping[str, Any],
+    *,
+    tokenizer: TokenizerAdapter | None = None,
+    source_metadata: Mapping[str, Any] | None = None,
+    allow_incomplete_verdict_chain: bool = False,
+) -> ActionOnlyTrajectoryExample:
+    """Export a unified trace with executable actions but no thought targets."""
+
+    exported = export_trajectory_sft_example(
+        trace,
+        tokenizer=tokenizer,
+        source_metadata=source_metadata,
+        allow_incomplete_verdict_chain=allow_incomplete_verdict_chain,
+        require_provider_thought=False,
     )
+    if not isinstance(exported, ActionOnlyTrajectoryExample):
+        raise ValueError(
+            "action-only export is reserved for unified-react-v1 traces"
+        )
+    return exported
 
 
 def _v4_claim_has_directional_chain(
@@ -930,6 +999,111 @@ def _v4_quality_gate(
         raise ValueError("v4 policy export rejects post-verdict actions")
 
 
+def _unified_react_quality_gate(
+    trace: Mapping[str, Any],
+    state: Mapping[str, Any],
+    *,
+    require_provider_thought: bool = True,
+) -> None:
+    """Reject mixed or non-auditable unified-ReAct episodes before SFT export."""
+
+    if str(trace.get("termination", "")) != "success":
+        raise ValueError("unified-react policy export requires a successful trace")
+    investigation = _mapping(state.get("investigation_state"))
+    completed = {
+        str(item)
+        for item in investigation.get("unified_react_bootstrap_tools_completed", [])
+        or []
+    }
+    if completed != {"perceive_scene", "ocr_with_position"}:
+        raise ValueError(
+            "unified-react policy export requires completed scene and OCR bootstrap"
+        )
+    legacy_stages = {
+        "perception",
+        "image_account_planning",
+        "image_only_planning",
+        "image_only_investigation",
+        "image_only_discrepancy_investigation",
+        "image_only_query_concept_extraction",
+        "image_only_query_replan",
+        "image_only_route_local_replan",
+        "image_only_evidence_decision",
+    }
+    steps = _rows(state.get("all_steps"))
+    if any(str(step.get("stage", "")) in legacy_stages for step in steps):
+        raise ValueError("unified-react trace must not contain legacy policy stages")
+    actions = [
+        step
+        for step in steps
+        if str(step.get("stage", "")) == "unified_react"
+        and str(step.get("action_type", "")) == "tool_call"
+    ]
+    if len(actions) < 3:
+        raise ValueError(
+            "unified-react trace requires scene, OCR, and one investigation action"
+        )
+    action_names = [str(step.get("tool_name", "")).strip() for step in actions]
+    if set(action_names[:2]) != {"perceive_scene", "ocr_with_position"}:
+        raise ValueError(
+            "unified-react trace must begin with model-selected scene/OCR actions"
+        )
+    if any(not _mapping(step.get("metadata")).get("unified_react_delta") for step in actions):
+        raise ValueError(
+            "unified-react trace requires one persisted reducer delta per action"
+        )
+    if require_provider_thought and any(
+        not str(step.get("thought", "") or "").strip() for step in actions
+    ):
+        raise ValueError(
+            "unified-react trace lacks provider-visible thought; route to action-only/RL"
+        )
+    if not target_fact_rows(investigation):
+        raise ValueError("unified-react trace requires a reducer-created target fact")
+    if not _rows(investigation.get("search_hypotheses")):
+        raise ValueError("unified-react trace requires a reducer-created route")
+
+
+def unified_react_training_buckets(
+    trace: Mapping[str, Any],
+) -> list[str]:
+    """Return non-overlapping SFT buckets plus the RL-candidate membership.
+
+    The structural audit is shared.  A trace with missing readable provider
+    thought remains an executable action-only/RL candidate, but it must never
+    enter the reasoning SFT corpus by accident.
+    """
+
+    state = _mapping(trace.get("state"))
+    policy_version = str(
+        trace.get("decision_policy_version")
+        or state.get("decision_policy_version")
+        or ""
+    )
+    if policy_version != "unified-react-v1":
+        raise ValueError(
+            "unified training buckets accept unified-react-v1 traces only"
+        )
+    _unified_react_quality_gate(
+        trace,
+        state,
+        require_provider_thought=False,
+    )
+    actions = [
+        step
+        for step in _rows(state.get("all_steps"))
+        if str(step.get("stage", "")) == "unified_react"
+        and str(step.get("action_type", "")) == "tool_call"
+    ]
+    reasoning_ready = all(
+        str(step.get("thought", "") or "").strip() for step in actions
+    )
+    return [
+        "reasoning_sft" if reasoning_ready else "action_only",
+        "rl_candidate",
+    ]
+
+
 def export_policy_examples(
     trace: Mapping[str, Any],
     *,
@@ -956,7 +1130,11 @@ def export_policy_examples(
         or state.get("decision_policy_version")
         or ""
     )
-    if policy_version not in {"reinspect-v2", "discrepancy-first-v4"}:
+    if policy_version not in {
+        "reinspect-v2",
+        "discrepancy-first-v4",
+        "unified-react-v1",
+    }:
         raise ValueError("policy exporter received an unsupported decision policy")
     if policy_version == "discrepancy-first-v4":
         _v4_quality_gate(
@@ -964,6 +1142,8 @@ def export_policy_examples(
             state,
             allow_incomplete_verdict_chain=allow_incomplete_verdict_chain,
         )
+    if policy_version == "unified-react-v1":
+        _unified_react_quality_gate(trace, state)
 
     tokenizer = tokenizer or Utf8ByteTokenizer()
     source_metadata = source_metadata or {}
@@ -1024,7 +1204,9 @@ def export_policy_examples(
         examples.append(
             PolicyExample(
                 trajectory_version=(
-                    "ifv-policy-v2"
+                    "ifv-policy-v3"
+                    if policy_version == "unified-react-v1"
+                    else "ifv-policy-v2"
                     if policy_version == "discrepancy-first-v4"
                     else "ifv-policy-v1"
                 ),

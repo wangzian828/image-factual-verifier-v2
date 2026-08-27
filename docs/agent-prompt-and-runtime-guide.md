@@ -1,5 +1,9 @@
 # v4 Prompt and Runtime Guide
 
+中文备份见 [agent-prompt-and-runtime-guide-zh.md](agent-prompt-and-runtime-guide-zh.md)。
+代码中的 prompt 常量与 schema 是运行时唯一准则。
+本文件是运行时说明，不是实际 system prompt 原文。
+
 ## Boundary map
 
 | Stage | Semantic owner | Deterministic enforcement |
@@ -53,10 +57,11 @@ should independently establish the underlying real-world facts rather than merel
 look for the value proposed by the image. Prior knowledge may contribute tentative
 SearchHypotheses, but only tool Evidence can establish them.
 
-Image Account Planning uses Gemini `thinking_level=high` by default because it must
-separate the depicted value from the underlying fact to investigate. Its thought
-tokens are recorded in the trace. Investigation, extraction, visual tools, Decision,
-and Judgment remain concise and do not treat hidden reasoning as Evidence.
+Image Account Planning uses Gemini `thinking_level=high` by default and requests
+the provider's `thinking_summaries=auto`. The trace may record the returned thought
+summary and thought-token count; this is not the hidden chain of thought.
+Investigation, extraction, visual tools, Decision, and Judgment remain concise and
+do not treat thought summaries as Evidence.
 
 ## ReAct and native protocol
 
@@ -70,6 +75,10 @@ retrieval. Claim/hypothesis ownership preserves lineage; it is not a semantic ca
 Gemini may choose any useful query angle, including an independent question about
 the underlying real-world fact. Such a query does not change the ImageClaim or
 create Evidence.
+The ReAct policy is not asked to emit a segment-summary JSON object: after one
+accepted tool call, the runtime closes the action segment and compiles the next
+handoff. Reflection, Replan, Decision, and Judgment are separate checkpoints and
+are not required before every tool action.
 
 Archive recall is a bounded aid within an executable task. It is hidden before the
 task creates archived investigation material, permits at most two recall/read cycles

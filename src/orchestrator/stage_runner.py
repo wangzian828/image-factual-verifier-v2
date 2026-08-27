@@ -1553,7 +1553,11 @@ class StageRunner:
             prompt
             + "\n\nNative Gemini Interactions protocol:\n"
             + "- Invoke tools through native function calls. Never write <tool_call> markup.\n"
-            + "- You may invoke multiple independent functions in one turn; every call will be executed and returned.\n"
+            + (
+                "- Invoke at most one function in each action turn.\n"
+                if self.max_tool_calls_per_turn == 1
+                else "- You may invoke multiple independent functions in one turn; every call will be executed and returned.\n"
+            )
             + (
                 f"- Before final output, this segment requires at least "
                 f"{self.min_tool_calls} executable function call(s).\n"

@@ -22,9 +22,12 @@ from src.orchestrator.investigation_models import (
     ImageAccountPlanningOutput,
     ImageClaim,
     ImageOnlyInvestigationState,
+    InvestigationIntent,
     InvestigationDiscovery,
     InvestigationEvidence,
     InvestigationFailure,
+    InvestigationBrief,
+    ImageClaimProposal,
     MaterialDiscrepancy,
     NewSearchHypothesis,
     QueryConceptExtractionOutput,
@@ -36,6 +39,7 @@ from src.orchestrator.investigation_models import (
     RouteLocalReplanOutput,
     RouteLocalReplanRecord,
     SearchHypothesis,
+    SearchHypothesisProposal,
     TargetFactProposal,
     TargetPlanningOutput,
     VisualFact,
@@ -44,7 +48,10 @@ from src.orchestrator.investigation_models import (
     VisualReinspectionRequest,
 )
 from src.orchestrator.evidence_adjudication import assess_fact
-from src.orchestrator.evidence_policy import query_policy_violation
+from src.orchestrator.evidence_policy import (
+    query_policy_violation,
+    text_targets_verdict_or_media_origin,
+)
 from src.orchestrator.evidence_semantics import (
     evidence_is_qualified,
     evidence_is_qualified_for_stance,
@@ -708,6 +715,271 @@ def state_from_bootstrap(
         retrieval_anchors=list(bootstrap.retrieval_anchors),
         findings=list(bootstrap.findings),
     )
+
+
+def build_empty_investigation(
+    *,
+    case_id: str,
+    image_sha256: str,
+) -> ImageOnlyInvestigationState:
+    """Create the empty workspace required by unified-react-v1.
+
+    Visual facts, retrieval anchors, targets, routes, Discoveries, Evidence and
+    Failures are intentionally absent.  The first two model-selected bootstrap
+    actions populate only visual observations; the first later investigation
+    action installs the target and its initial route.
+    """
+
+    return ImageOnlyInvestigationState(
+        brief=InvestigationBrief(
+            brief_id=stable_id("brief", case_id, image_sha256, "unified-react-v1"),
+            case_id=case_id,
+            media_type="unknown",
+        )
+    )
+
+
+def _initial_action_plan(
+    intent: InvestigationIntent,
+    *,
+    tool_name: str,
+    tool_args: Mapping[str, Any],
+) -> ImageAccountPlanningOutput:
+    """Project a first real action intent onto the existing canonical reducer."""
+
+    if tool_name in {
+        "perceive_scene",
+        "ocr_with_position",
+        "stop_route",
+        "recall_evidence",
+        "read_evidence",
+    }:
+        raise ValueError(f"{tool_name} cannot establish an initial investigation")
+    allowed_tools = {
+        "reverse_image_search",
+        "text_search",
+        "visit",
+        "compare_with_reference",
+        "check_consistency",
+        "analyze_visual_anomalies",
+        "crop_and_inspect",
+        "focused_visual_inspection",
+    }
+    if tool_name not in allowed_tools:
+        raise ValueError(f"{tool_name} is not a supported initial investigation tool")
+
+    queries = tool_args.get("queries", [])
+    if isinstance(queries, str):
+        queries = [queries]
+    if not isinstance(queries, list):
+        queries = []
+    normalized_queries = [
+        " ".join(str(item).split())
+        for item in queries
+        if str(item).strip()
+    ][:1]
+    key_material = json.dumps(
+        {
+            "target": intent.target_fact.model_dump(mode="json"),
+            "route": intent.route.model_dump(mode="json"),
+            "tool": tool_name,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    digest = hashlib.sha256(key_material.encode("utf-8")).hexdigest()[:20]
+    return ImageAccountPlanningOutput(
+        account_summary=intent.target_fact.statement,
+        target_facts=[
+            ImageClaimProposal(
+                claim_key=f"initial-{digest}",
+                statement=intent.target_fact.statement,
+                kind=intent.target_fact.kind,
+                predicate=intent.target_fact.predicate,
+                anchor_fact_ids=list(intent.target_fact.anchor_fact_ids),
+                salience="high",
+            )
+        ],
+        search_hypotheses=[
+            SearchHypothesisProposal(
+                hypothesis_key=f"initial-route-{digest}",
+                route_focus=intent.route.route_focus,
+                statement=intent.target_fact.statement,
+                queries=normalized_queries,
+                expected_information=intent.route.expected_information,
+                suggested_tools=[tool_name],
+                priority=intent.route.priority,
+            )
+        ],
+    )
+
+
+def validate_initial_action_intent(
+    state: ImageOnlyInvestigationState,
+    intent: InvestigationIntent,
+    *,
+    tool_name: str,
+    tool_args: Mapping[str, Any],
+    source_access_policy: Any = None,
+) -> str:
+    """Return a non-empty deterministic reason without mutating ``state``."""
+
+    if state.target_facts or state.search_hypotheses or state.tasks:
+        return "initial investigation intent is only allowed before a target exists"
+    if set(state.unified_react_bootstrap_tools_completed) != {
+        "perceive_scene",
+        "ocr_with_position",
+    }:
+        return "both visual bootstrap observations must complete before investigation"
+    try:
+        plan = _initial_action_plan(
+            intent,
+            tool_name=tool_name,
+            tool_args=tool_args,
+        )
+    except ValueError as exc:
+        return str(exc)
+    for value in (
+        intent.target_fact.statement,
+        intent.route.expected_information,
+        *plan.search_hypotheses[0].queries,
+    ):
+        if text_targets_verdict_or_media_origin(value):
+            return (
+                "initial intent must investigate the depicted world relation, "
+                "not AI generation, manipulation, provenance, or a ready-made verdict"
+            )
+    for query in plan.search_hypotheses[0].queries:
+        violation = query_policy_violation(
+            query,
+            source_access_policy=source_access_policy,
+        )
+        if violation:
+            return f"initial action query violates source policy: {violation}"
+    candidate = state.model_copy(deep=True)
+    update = apply_image_account_planning(candidate, plan)
+    if not update.get("accepted", False):
+        return str(update.get("rejected_reason", "initial intent was rejected"))
+    return ""
+
+
+def apply_initial_action_intent(
+    state: ImageOnlyInvestigationState,
+    intent: InvestigationIntent,
+    *,
+    tool_name: str,
+    tool_args: Mapping[str, Any],
+    source_access_policy: Any = None,
+) -> Dict[str, Any]:
+    """Atomically create the target, route and task for a first real action."""
+
+    reason = validate_initial_action_intent(
+        state,
+        intent,
+        tool_name=tool_name,
+        tool_args=tool_args,
+        source_access_policy=source_access_policy,
+    )
+    if reason:
+        return {"accepted": False, "rejected_reason": reason}
+    plan = _initial_action_plan(intent, tool_name=tool_name, tool_args=tool_args)
+    update = apply_image_account_planning(state, plan)
+    if not update.get("accepted", False):
+        return update
+    task_ids = list(update.get("accepted_task_ids", []) or [])
+    if len(task_ids) != 1:
+        return {
+            "accepted": False,
+            "rejected_reason": "initial intent did not create exactly one task",
+        }
+    return {
+        **update,
+        "accepted_intent": intent.model_dump(mode="json"),
+        "task_id": task_ids[0],
+    }
+
+
+def apply_unified_stop_route(
+    state: ImageOnlyInvestigationState,
+    *,
+    task_id: str,
+    rationale: str,
+    function_call_id: str,
+) -> Dict[str, Any]:
+    """Close exactly one route without inventing Evidence or a verdict."""
+
+    candidate = state.model_copy(deep=True)
+    task = _task_by_id(candidate, task_id)
+    if task is None:
+        return {"accepted": False, "rejected_reason": f"unknown task_id={task_id!r}"}
+    if task.status not in {"active", "pending"}:
+        return {
+            "accepted": False,
+            "rejected_reason": "stop_route requires an active or pending task",
+        }
+    attempts = _attempted_routes_by_task(candidate).get(task_id, [])
+    if _pending_inspection_batches(candidate, task, attempts, tool_name="visit") or (
+        _pending_inspection_batches(
+            candidate,
+            task,
+            attempts,
+            tool_name="compare_with_reference",
+        )
+    ):
+        return {
+            "accepted": False,
+            "rejected_reason": (
+                "stop_route cannot close a route with pending page or reference "
+                "inspection candidates"
+            ),
+        }
+    if candidate.action_count >= MAX_TOOL_ACTIONS:
+        return {
+            "accepted": False,
+            "rejected_reason": "image-only tool action budget is exhausted",
+        }
+    task.status = "exhausted"
+    hypothesis = next(
+        (
+            item
+            for item in candidate.search_hypotheses
+            if item.hypothesis_id == task.hypothesis_id
+        ),
+        None,
+    )
+    if hypothesis is not None:
+        hypothesis.status = "exhausted"
+    candidate.action_count += 1
+    candidate.attempted_routes.append(
+        json.dumps(
+            {
+                "tool": "stop_route",
+                "task_id": task_id,
+                "function_call_id": function_call_id,
+                "rationale": " ".join(str(rationale).split())[:1200],
+                "outcome": "route_closed",
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    )
+    try:
+        validated = ImageOnlyInvestigationState.model_validate(
+            candidate.model_dump(mode="json")
+        )
+    except Exception as exc:
+        return {
+            "accepted": False,
+            "rejected_reason": f"invalid stop_route state: {exc}",
+        }
+    _replace_state(state, validated)
+    return {
+        "accepted": True,
+        "task_id": task_id,
+        "task_status": "exhausted",
+        "closed_hypothesis_id": task.hypothesis_id,
+        "action_count": state.action_count,
+    }
 
 
 _CORE_BINDING_PREDICATES = {

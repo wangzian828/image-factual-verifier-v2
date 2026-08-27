@@ -367,6 +367,7 @@ def test_run_cases_reads_archive_without_exposing_candidate_metadata(
         json.dumps(
             {
                 "candidate_id": "candidate:0001",
+                "archive_source_version_id": "archive:source:0001",
                 "archive_image_path": "artifacts/images/0001.jpg",
                 "factual_status": "refuted",
                 "claim_atom": {"private": True},
@@ -391,7 +392,7 @@ def test_run_cases_reads_archive_without_exposing_candidate_metadata(
             (trace_dir / "candidate_0001.json").write_text(
                 json.dumps(
                     {
-                        "image_id": "candidate:0001",
+                        "image_id": "archive:source:0001",
                         "input_mode": "image_only",
                         "verdict": "real",
                         "termination": "success",
@@ -402,7 +403,7 @@ def test_run_cases_reads_archive_without_exposing_candidate_metadata(
             )
             return [
                 {
-                    "image_id": "candidate:0001",
+                    "image_id": "archive:source:0001",
                     "image_path": str(image.resolve()),
                     "verdict": "real",
                     "confidence": 0.5,
@@ -428,7 +429,7 @@ def test_run_cases_reads_archive_without_exposing_candidate_metadata(
     assert summary["num_cases"] == 1
     assert seen == [
         {
-            "case_id": "candidate:0001",
+            "case_id": "archive:source:0001",
             "image_path": str(image.resolve()),
             "image_sha256": _sha256(image),
         }
@@ -439,6 +440,15 @@ def test_run_cases_reads_archive_without_exposing_candidate_metadata(
     assert manifest["benchmark"]["archive_input"] is True
     assert manifest["benchmark"]["archive_id"] == "archive-fixture"
     assert manifest["execution"]["mode"] == "archive_case_run"
+    assert manifest["artifacts"]["baseline_metrics"] == "baseline_metrics.json"
+    assert manifest["artifacts"][
+        "baseline_case_metrics"
+    ] == "baseline_case_metrics.jsonl"
+    baseline = json.loads(
+        (run_dir / "baseline_metrics.json").read_text(encoding="utf-8")
+    )
+    assert baseline["raw_accuracy"] == 0.0
+    assert baseline["valid_only_accuracy"] == 0.0
 
 
 def test_run_cases_rejects_duplicate_metadata(tmp_path: Path) -> None:

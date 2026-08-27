@@ -25,7 +25,12 @@ from src.trajectory.exporter import export_trajectory_sft_example
 
 
 SPLITS = ("train", "validation", "test")
-ACCEPTED_RELEASE_SCHEMA = "ifv-accepted-teacher-release-v2"
+ACCEPTED_RELEASE_SCHEMAS = frozenset(
+    {
+        "ifv-accepted-teacher-release-v2",
+        "ifv-accepted-teacher-release-v3",
+    }
+)
 # The provider-neutral exporter stores a UTF-8 byte estimate.  The admission
 # budget below is expressed in conservative approximate model tokens.
 # Qwen3.5 processor measurements on exported episodes show that bytes/4
@@ -237,7 +242,7 @@ def _load_canonical_accepted_release(
     root = path.expanduser().resolve()
     manifest_path = root / "accepted_release_manifest.json"
     manifest = _load_json(manifest_path)
-    if manifest.get("schema_version") != ACCEPTED_RELEASE_SCHEMA:
+    if manifest.get("schema_version") not in ACCEPTED_RELEASE_SCHEMAS:
         raise ValueError(
             "accepted-release has unsupported schema: "
             f"{manifest.get('schema_version')!r}"
@@ -491,6 +496,15 @@ def export_dataset(
                         "accepted-release trace SHA-256 mismatch: "
                         f"{episode_id}"
                     )
+                buckets = accepted_release_row.get(
+                    "training_buckets",
+                    ["reasoning_sft"],
+                )
+                if (
+                    isinstance(buckets, list)
+                    and "reasoning_sft" not in buckets
+                ):
+                    continue
                 score = {
                     "episode_id": episode_id,
                     "total": float(
@@ -614,6 +628,14 @@ def export_dataset(
                 ),
                 "sft_eligibility_artifact_id": eligibility.get("artifact_id"),
                 "semantic_reward_artifact_id": semantic.get("artifact_id"),
+                "decision_policy_version": str(
+                    trace.get("decision_policy_version")
+                    or _mapping(trace.get("state")).get(
+                        "decision_policy_version",
+                        "",
+                    )
+                    or ""
+                ),
             }
             sft_judge_passed = (
                 _mapping(eligibility.get("gates")).get(
@@ -686,6 +708,16 @@ def export_dataset(
             executor.shutdown(wait=True)
 
     all_episodes = sorted(episode_metadata)
+    policy_versions = {
+        str(metadata["decision_policy_version"])
+        for metadata in episode_metadata.values()
+    }
+    if len(policy_versions) > 1:
+        raise ValueError(
+            "SFT dataset cannot mix decision_policy_version values: "
+            + ", ".join(sorted(policy_versions))
+        )
+    decision_policy_version = next(iter(policy_versions), "")
 
     if require_frozen_gates:
         missing_split = sorted(
@@ -898,6 +930,11 @@ def export_dataset(
         )
         dataset_trajectory = DatasetTrajectorySFTExample(
             **trajectory.model_dump(mode="json"),
+            dataset_version=(
+                "ifv-trajectory-sft-dataset-v3"
+                if decision_policy_version == "unified-react-v1"
+                else "ifv-trajectory-sft-dataset-v2"
+            ),
             split=split,
             split_group_id=group_by_episode[episode_id],
             source_family_keys=metadata["source_family_keys"],
@@ -946,8 +983,17 @@ def export_dataset(
     )
     manifest = {
         "schema_version": "ifv-trajectory-sft-dataset-manifest-v1",
-        "dataset_version": "ifv-trajectory-sft-dataset-v2",
-        "trajectory_version": "ifv-trajectory-sft-v3",
+        "dataset_version": (
+            "ifv-trajectory-sft-dataset-v3"
+            if decision_policy_version == "unified-react-v1"
+            else "ifv-trajectory-sft-dataset-v2"
+        ),
+        "trajectory_version": (
+            "ifv-trajectory-sft-v4"
+            if decision_policy_version == "unified-react-v1"
+            else "ifv-trajectory-sft-v3"
+        ),
+        "decision_policy_version": decision_policy_version,
         "perception_version": "ifv-perception-v1",
         "legacy_step_policy_export": "disabled",
         "split_mode": (

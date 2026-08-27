@@ -12,7 +12,11 @@ class StrictModel(BaseModel):
 
 
 class PolicyExample(StrictModel):
-    trajectory_version: Literal["ifv-policy-v1", "ifv-policy-v2"] = (
+    trajectory_version: Literal[
+        "ifv-policy-v1",
+        "ifv-policy-v2",
+        "ifv-policy-v3",
+    ] = (
         "ifv-policy-v1"
     )
     tokenizer_id: str = Field(min_length=1, max_length=200)
@@ -98,6 +102,7 @@ class TrajectorySFTExample(StrictModel):
     trajectory_version: Literal[
         "ifv-trajectory-sft-v2",
         "ifv-trajectory-sft-v3",
+        "ifv-trajectory-sft-v4",
     ] = (
         "ifv-trajectory-sft-v3"
     )
@@ -147,8 +152,24 @@ class TrajectorySFTExample(StrictModel):
         return self
 
 
+class ActionOnlyTrajectoryExample(TrajectorySFTExample):
+    """A complete executable episode with tool actions but no thought targets.
+
+    This is intentionally a separate artifact from reasoning SFT.  It may be
+    used for action imitation or RL initialization, never silently mixed into
+    the `<think> + tool_call` reasoning corpus.
+    """
+
+    trajectory_version: Literal["ifv-trajectory-action-only-v1"] = (
+        "ifv-trajectory-action-only-v1"
+    )
+
+
 class DatasetTrajectorySFTExample(TrajectorySFTExample):
-    dataset_version: Literal["ifv-trajectory-sft-dataset-v2"] = (
+    dataset_version: Literal[
+        "ifv-trajectory-sft-dataset-v2",
+        "ifv-trajectory-sft-dataset-v3",
+    ] = (
         "ifv-trajectory-sft-dataset-v2"
     )
     split: Literal["train", "validation", "test"]

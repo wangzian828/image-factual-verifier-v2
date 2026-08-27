@@ -122,16 +122,19 @@ def test_hot_path_prompts_stay_semantic_and_compact() -> None:
     assert "``account_summary``" in image_account_prompt
     assert "``target_facts``" in image_account_prompt
     assert "``search_hypotheses``" in image_account_prompt
-    assert "not a boundary on the investigation" in discrepancy_react_prompt
-    assert "Frame retrieval around what actually happened" in discrepancy_react_prompt
-    assert "actual value of the same relation slot" in discrepancy_react_prompt
-    assert "identical image can be found" in discrepancy_react_prompt
-    assert "visible anchors, relation slots" in discrepancy_react_prompt
-    assert "target relation" in discrepancy_react_prompt
-    assert "only tool Evidence establishes a fact" in discrepancy_react_prompt
-    assert "legacy image-claim record is bookkeeping only" in discrepancy_react_prompt
-    assert "select one owned target fact" in discrepancy_react_prompt
-    assert "state the passage sought" in discrepancy_react_prompt
+    assert "one bounded image-fact turn" in discrepancy_react_prompt
+    assert "Choose exactly one active task" in discrepancy_react_prompt
+    assert "invoke exactly one available runtime tool" in discrepancy_react_prompt
+    assert "Task ownership preserves lineage" in discrepancy_react_prompt
+    assert "pending page or reference image" in discrepancy_react_prompt
+    assert "underlying subject, event, relation, value" in discrepancy_react_prompt
+    assert "ready-made verdict or fact-check answer" in discrepancy_react_prompt
+    assert "Search results, snippets, reverse matches" in discrepancy_react_prompt
+    assert "Return no JSON or explanation before the call" in (
+        discrepancy_react_prompt
+    )
+    assert "separate runtime checkpoints" in discrepancy_react_prompt
+    assert "legacy image-claim" not in discrepancy_react_prompt
     assert "reviewed Evidence" in discrepancy_prompt
     assert "recorded admissible_stances" in discrepancy_prompt
     assert "neutral Evidence cannot" in discrepancy_prompt

@@ -621,6 +621,11 @@ def build_sft_eligibility_input(
         "schema_version": SFT_ELIGIBILITY_INPUT_VERSION,
         "case_id": case_id,
         "episode_id": str(trace.get("image_id") or state.get("image_id") or ""),
+        "decision_policy_version": str(
+            trace.get("decision_policy_version")
+            or state.get("decision_policy_version")
+            or ""
+        ),
         "recorded_verdict": str(trace.get("verdict", "")),
         "termination": str(trace.get("termination", "")),
         "image": {
@@ -973,7 +978,12 @@ def build_sft_eligibility_artifact(
         "postprocess_version": SFT_ELIGIBILITY_POSTPROCESS_VERSION,
         "case_id": str(packet.get("case_id", "")),
         "episode_id": str(packet.get("episode_id", "")),
-        "source_trace": {"sha256": trace_sha256},
+        "source_trace": {
+            "sha256": trace_sha256,
+            "decision_policy_version": str(
+                packet.get("decision_policy_version", "")
+            ),
+        },
         "eligibility_input": {
             "schema_version": packet.get("schema_version"),
             "sha256": sha256_json(packet),
