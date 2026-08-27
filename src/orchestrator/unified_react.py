@@ -393,6 +393,19 @@ def validate_unified_react_action(
         task_id = str(tool_args.get("task_id", "")).strip()
         if not task_id:
             return "stop_route requires task_id"
+        dry_run = apply_unified_stop_route(
+            state.model_copy(deep=True),
+            task_id=task_id,
+            rationale=str(tool_args.get("rationale", "")).strip(),
+            function_call_id="stop-route-preflight",
+        )
+        if not dry_run.get("accepted", False):
+            return str(
+                dry_run.get(
+                    "rejected_reason",
+                    "stop_route is not currently permitted",
+                )
+            )
         return ""
 
     task_id = str(tool_args.get("task_id", "")).strip()
