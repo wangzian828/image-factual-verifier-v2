@@ -746,7 +746,13 @@ def _initial_action_plan(
     tool_name: str,
     tool_args: Mapping[str, Any],
 ) -> ImageAccountPlanningOutput:
-    """Project a first real action intent onto the existing canonical reducer."""
+    """Project a first action plus its candidate routes onto the reducer.
+
+    The first real tool call executes only route zero.  The other routes are
+    registered as independent active tasks so the unified ReAct loop can switch
+    to them after the first route produces weak, blocked, or non-decisive
+    material.
+    """
 
     if tool_name in {
         "perceive_scene",
@@ -769,20 +775,22 @@ def _initial_action_plan(
     if tool_name not in allowed_tools:
         raise ValueError(f"{tool_name} is not a supported initial investigation tool")
 
-    queries = tool_args.get("queries", [])
-    if isinstance(queries, str):
-        queries = [queries]
-    if not isinstance(queries, list):
-        queries = []
-    normalized_queries = [
+    routes = list(intent.routes)
+    first_route = routes[0]
+    first_tool_query = tool_args.get("queries", [])
+    if isinstance(first_tool_query, str):
+        first_tool_query = [first_tool_query]
+    if not isinstance(first_tool_query, list):
+        first_tool_query = []
+    first_tool_queries = [
         " ".join(str(item).split())
-        for item in queries
+        for item in first_tool_query
         if str(item).strip()
     ][:1]
     key_material = json.dumps(
         {
             "target": intent.target_fact.model_dump(mode="json"),
-            "route": intent.route.model_dump(mode="json"),
+            "routes": [item.model_dump(mode="json") for item in routes],
             "tool": tool_name,
         },
         ensure_ascii=False,
@@ -803,14 +811,30 @@ def _initial_action_plan(
         ],
         search_hypotheses=[
             SearchHypothesisProposal(
-                hypothesis_key=f"initial-route-{digest}",
-                route_focus=intent.route.route_focus,
-                statement=intent.target_fact.statement,
-                queries=normalized_queries,
-                expected_information=intent.route.expected_information,
-                suggested_tools=[tool_name],
-                priority=intent.route.priority,
+                hypothesis_key=f"initial-route-{digest}-{index + 1}",
+                route_focus=route.route_focus,
+                statement=route.expected_information,
+                queries=(
+                    first_tool_queries
+                    if index == 0 and first_tool_queries
+                    else [
+                        " ".join(str(item).split())
+                        for item in route.queries
+                        if str(item).strip()
+                    ][:3]
+                ),
+                expected_information=route.expected_information,
+                suggested_tools=list(
+                    dict.fromkeys(
+                        [
+                            *route.suggested_tools,
+                            *( [tool_name] if index == 0 else [] ),
+                        ]
+                    )
+                )[:4],
+                priority=route.priority,
             )
+            for index, route in enumerate(routes)
         ],
     )
 
@@ -840,9 +864,21 @@ def validate_initial_action_intent(
         )
     except ValueError as exc:
         return str(exc)
+    if tool_name not in set(intent.routes[0].suggested_tools):
+        return (
+            "the first investigation route must include the actual tool being "
+            "called"
+        )
     for value in (
         intent.target_fact.statement,
-        intent.route.expected_information,
+        *(
+            value
+            for route in intent.routes
+            for value in (
+                route.expected_information,
+                *route.queries,
+            )
+        ),
         *plan.search_hypotheses[0].queries,
     ):
         if text_targets_verdict_or_media_origin(value):
@@ -888,10 +924,10 @@ def apply_initial_action_intent(
     if not update.get("accepted", False):
         return update
     task_ids = list(update.get("accepted_task_ids", []) or [])
-    if len(task_ids) != 1:
+    if not task_ids:
         return {
             "accepted": False,
-            "rejected_reason": "initial intent did not create exactly one task",
+            "rejected_reason": "initial intent did not create any task",
         }
     return {
         **update,
@@ -919,19 +955,12 @@ def apply_unified_stop_route(
             "rejected_reason": "stop_route requires an active or pending task",
         }
     attempts = _attempted_routes_by_task(candidate).get(task_id, [])
-    if _pending_inspection_batches(candidate, task, attempts, tool_name="visit") or (
-        _pending_inspection_batches(
-            candidate,
-            task,
-            attempts,
-            tool_name="compare_with_reference",
-        )
-    ):
+    if _remaining_task_material_routes(candidate, task, attempts):
         return {
             "accepted": False,
             "rejected_reason": (
-                "stop_route cannot close a route with pending page or reference "
-                "inspection candidates"
+                "stop_route cannot close a route with pending candidates or "
+                "another executable material step"
             ),
         }
     if candidate.action_count >= MAX_TOOL_ACTIONS:

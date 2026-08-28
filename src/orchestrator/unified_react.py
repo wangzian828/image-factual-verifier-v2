@@ -58,6 +58,66 @@ _ADAPTER_ONLY_FIELDS = frozenset({"task_id", "investigation_intent"})
 def _investigation_intent_tool_schema() -> dict[str, Any]:
     """Return an inline Gemini-compatible schema without JSON-schema refs."""
 
+    route_schema = {
+        "type": "object",
+        "properties": {
+            "route_focus": {
+                "type": "string",
+                "enum": [
+                    "same_capture_reference",
+                    "entity_event_identity",
+                    "relation_value",
+                    "scene_world_constraints",
+                    "visual_consistency",
+                ],
+            },
+            "expected_information": {
+                "type": "string",
+                "description": (
+                    "Concrete information this route should recover about the "
+                    "same target relation."
+                ),
+            },
+            "queries": {
+                "type": "array",
+                "maxItems": 3,
+                "items": {
+                    "type": "string",
+                    "description": (
+                        "Neutral query for the underlying subject, event, "
+                        "relation, value, or scene property."
+                    ),
+                },
+            },
+            "suggested_tools": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 4,
+                "items": {
+                    "type": "string",
+                    "enum": [
+                        "reverse_image_search",
+                        "text_search",
+                        "visit",
+                        "compare_with_reference",
+                        "check_consistency",
+                        "analyze_visual_anomalies",
+                        "crop_and_inspect",
+                        "focused_visual_inspection",
+                        "ocr_with_position",
+                    ],
+                },
+            },
+            "priority": {"type": "integer", "enum": [1, 2, 3]},
+        },
+        "required": [
+            "route_focus",
+            "expected_information",
+            "suggested_tools",
+            "priority",
+        ],
+        "additionalProperties": False,
+    }
     return {
         "type": "object",
         "properties": {
@@ -97,37 +157,19 @@ def _investigation_intent_tool_schema() -> dict[str, Any]:
                 "required": ["statement", "kind", "predicate", "anchor_fact_ids"],
                 "additionalProperties": False,
             },
-            "route": {
-                "type": "object",
-                "properties": {
-                    "route_focus": {
-                        "type": "string",
-                        "enum": [
-                            "same_capture_reference",
-                            "entity_event_identity",
-                            "relation_value",
-                            "scene_world_constraints",
-                            "visual_consistency",
-                        ],
-                    },
-                    "expected_information": {
-                        "type": "string",
-                        "description": (
-                            "Concrete information this actual tool action should "
-                            "recover."
-                        ),
-                    },
-                    "priority": {"type": "integer", "enum": [1, 2, 3]},
-                },
-                "required": [
-                    "route_focus",
-                    "expected_information",
-                    "priority",
-                ],
-                "additionalProperties": False,
+            "routes": {
+                "type": "array",
+                "minItems": 2,
+                "maxItems": 3,
+                "description": (
+                    "Materially different candidate routes for the same target. "
+                    "The runtime registers all routes and executes only the "
+                    "first route in this tool call."
+                ),
+                "items": route_schema,
             },
         },
-        "required": ["target_fact", "route"],
+        "required": ["target_fact", "routes"],
         "additionalProperties": False,
     }
 
@@ -242,9 +284,10 @@ def _base_parameters(
         properties["investigation_intent"] = _investigation_intent_tool_schema()
         properties["investigation_intent"]["description"] = (
             "Required only for this first non-bootstrap investigation action. "
-            "It states the image-grounded target and the route this real tool "
-            "call begins. The runtime validates and persists it; the provider "
-            "tool never receives this field."
+            "It states one image-grounded target and two or three materially "
+            "different candidate routes. The first route must include this "
+            "actual tool call. The runtime validates and persists all routes, "
+            "while the provider tool never receives this field."
         )
         required.append("investigation_intent")
     parameters["required"] = list(dict.fromkeys(required))

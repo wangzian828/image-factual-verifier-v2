@@ -196,14 +196,27 @@ def test_first_real_action_creates_target_and_route_only_after_bootstrap() -> No
             "predicate": "depicts_relation",
             "anchor_fact_ids": [anchor_id],
         },
-        "route": {
-            "route_focus": "entity_event_identity",
-            "expected_information": (
-                "Whether public event information connects Riverfest to the "
-                "pictured bridge."
-            ),
-            "priority": 1,
-        },
+        "routes": [
+            {
+                "route_focus": "entity_event_identity",
+                "expected_information": (
+                    "Whether public event information connects Riverfest to the "
+                    "pictured bridge."
+                ),
+                "queries": ["Riverfest red bridge"],
+                "suggested_tools": ["text_search", "visit"],
+                "priority": 1,
+            },
+            {
+                "route_focus": "visual_consistency",
+                "expected_information": (
+                    "Whether the bridge structure and visible event text are "
+                    "consistent with the claimed event context."
+                ),
+                "suggested_tools": ["focused_visual_inspection"],
+                "priority": 2,
+            },
+        ],
     }
     step = _step(
         tool_name="text_search",
@@ -236,8 +249,8 @@ def test_first_real_action_creates_target_and_route_only_after_bootstrap() -> No
 
     assert update["accepted"] is True
     assert len(state.target_facts) == 1
-    assert len(state.search_hypotheses) == 1
-    assert len(state.tasks) == 1
+    assert len(state.search_hypotheses) == 2
+    assert len(state.tasks) == 2
     assert step.tool_args["task_id"] == state.tasks[0].task_id
     assert "investigation_intent" in step.tool_args
     assert update["created_target_fact_ids"]
@@ -278,11 +291,21 @@ def test_compare_contract_failure_is_fatal_but_external_failure_is_not() -> None
             "predicate": "depicts_relation",
             "anchor_fact_ids": [anchor_id],
         },
-        "route": {
-            "route_focus": "entity_event_identity",
-            "expected_information": "Whether public event information connects Riverfest to the pictured bridge.",
-            "priority": 1,
-        },
+        "routes": [
+            {
+                "route_focus": "entity_event_identity",
+                "expected_information": "Whether public event information connects Riverfest to the pictured bridge.",
+                "queries": ["Riverfest red bridge"],
+                "suggested_tools": ["text_search", "visit"],
+                "priority": 1,
+            },
+            {
+                "route_focus": "visual_consistency",
+                "expected_information": "Whether the bridge structure and visible event text are consistent with the claimed event context.",
+                "suggested_tools": ["focused_visual_inspection"],
+                "priority": 2,
+            },
+        ],
     }
     first_step = _step(
         tool_name="text_search",
@@ -440,11 +463,21 @@ def test_stop_route_is_rejected_before_control_tool_execution() -> None:
                     "predicate": "depicts_relation",
                     "anchor_fact_ids": [anchor_id],
                 },
-                "route": {
-                    "route_focus": "entity_event_identity",
-                    "expected_information": "Whether the event uses this bridge.",
-                    "priority": 1,
-                },
+                "routes": [
+                    {
+                        "route_focus": "entity_event_identity",
+                        "expected_information": "Whether the event uses this bridge.",
+                        "queries": ["Riverfest red bridge"],
+                        "suggested_tools": ["text_search", "visit"],
+                        "priority": 1,
+                    },
+                    {
+                        "route_focus": "visual_consistency",
+                        "expected_information": "Whether the bridge structure and visible event text are consistent with the claimed event context.",
+                        "suggested_tools": ["focused_visual_inspection"],
+                        "priority": 2,
+                    },
+                ],
             },
         },
         tool_result={
@@ -536,11 +569,21 @@ def test_unified_export_uses_qwen_think_and_tool_call_and_rejects_missing_though
                     "predicate": "depicts_relation",
                     "anchor_fact_ids": [anchor_id],
                 },
-                "route": {
-                    "route_focus": "entity_event_identity",
-                    "expected_information": "Whether the event uses this bridge.",
-                    "priority": 1,
-                },
+                "routes": [
+                    {
+                        "route_focus": "entity_event_identity",
+                        "expected_information": "Whether the event uses this bridge.",
+                        "queries": ["Riverfest red bridge"],
+                        "suggested_tools": ["text_search", "visit"],
+                        "priority": 1,
+                    },
+                    {
+                        "route_focus": "visual_consistency",
+                        "expected_information": "Whether the bridge structure and visible event text are consistent with the claimed event context.",
+                        "suggested_tools": ["focused_visual_inspection"],
+                        "priority": 2,
+                    },
+                ],
             },
         },
         tool_result={

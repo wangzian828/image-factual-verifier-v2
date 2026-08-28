@@ -109,7 +109,16 @@ def render_unified_react_context(state: ImageOnlyInvestigationState) -> str:
                     "one positive image-grounded world relation using existing "
                     "anchor_fact_ids"
                 ),
-                "route": "the concrete information this same tool call will seek",
+                "routes": (
+                    "two or three materially different routes for the same target; "
+                    "routes[0] must include the tool being called, and only routes[0] "
+                    "runs in this turn"
+                ),
+                "route_requirement": (
+                    "Each route must state expected_information and executable "
+                    "suggested_tools. Use queries only for neutral underlying-fact "
+                    "retrieval."
+                ),
             },
         }
         return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))

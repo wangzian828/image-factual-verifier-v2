@@ -23,8 +23,10 @@ IFV 是“策略模型 + 工具 + runtime state”的闭环，不是多个固定
 ```
 
 模型每轮只能调用一个 native tool。Replan 不是独立请求：换 query、换网页、换视觉方向，都
-直接表现为下一轮 ReAct 的新动作。Reflection 只做低频全局检查；Discrepancy Decision 只
-处理已有证据的语义；Judgment 只处理 runtime 编译的最终 basis。
+直接表现为下一轮 ReAct 的新动作。首次调查动作会为同一个 target fact 注册 2–3 条候选
+route/task，但本轮只执行第一条；后续由 ReAct 在未完成路线之间切换。Reflection 只做低频
+全局检查；Discrepancy Decision 只处理已有证据的语义；Judgment 只处理 runtime 编译的最终
+basis。
 
 字段边界：
 

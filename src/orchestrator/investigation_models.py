@@ -31,6 +31,18 @@ PlanningRouteFocus = Literal[
     "visual_consistency",
 ]
 
+InvestigationToolName = Literal[
+    "reverse_image_search",
+    "text_search",
+    "visit",
+    "compare_with_reference",
+    "check_consistency",
+    "analyze_visual_anomalies",
+    "crop_and_inspect",
+    "focused_visual_inspection",
+    "ocr_with_position",
+]
+
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -73,7 +85,7 @@ class InvestigationTargetIntent(StrictModel):
 
 
 class InvestigationRouteIntent(StrictModel):
-    """Initial route carried by the first real unified-ReAct action."""
+    """One candidate route carried by the first real unified-ReAct action."""
 
     route_focus: PlanningRouteFocus
     expected_information: str = Field(
@@ -84,14 +96,52 @@ class InvestigationRouteIntent(StrictModel):
             "property this actual tool action is intended to recover."
         ),
     )
+    queries: List[str] = Field(
+        default_factory=list,
+        max_length=3,
+        description=(
+            "Optional neutral first-hop queries for this route. They must seek "
+            "the underlying subject, event, relation, value, or visual property."
+        ),
+    )
+    suggested_tools: List[InvestigationToolName] = Field(
+        min_length=1,
+        max_length=4,
+        description=(
+            "Executable capabilities for this route. The first route must "
+            "include the tool carrying this intent."
+        ),
+    )
     priority: int = Field(default=1, ge=1, le=3)
 
 
 class InvestigationIntent(StrictModel):
-    """Orchestrator-only action intent; never forwarded to a provider tool."""
+    """Orchestrator-only target plus candidate routes; never forwarded to tools."""
 
     target_fact: InvestigationTargetIntent
-    route: InvestigationRouteIntent
+    routes: List[InvestigationRouteIntent] = Field(
+        min_length=2,
+        max_length=3,
+        description=(
+            "Two or three materially different candidate routes for the same "
+            "target fact. The runtime registers all of them; this action executes "
+            "only the first route."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def validate_distinct_routes(self) -> "InvestigationIntent":
+        signatures = {
+            (
+                item.route_focus,
+                " ".join(item.expected_information.split()).casefold(),
+                tuple(" ".join(query.split()).casefold() for query in item.queries),
+            )
+            for item in self.routes
+        }
+        if len(signatures) != len(self.routes):
+            raise ValueError("initial investigation routes must be materially distinct")
+        return self
 
 
 def target_fact_rows(value: Any) -> List[Mapping[str, Any]]:
@@ -663,6 +713,7 @@ class SearchHypothesisProposal(StrictModel):
             "check_consistency",
             "analyze_visual_anomalies",
             "crop_and_inspect",
+            "focused_visual_inspection",
             "ocr_with_position",
         }:
             raise ValueError(
@@ -1028,6 +1079,7 @@ class NewSearchHypothesis(StrictModel):
             "check_consistency",
             "analyze_visual_anomalies",
             "crop_and_inspect",
+            "focused_visual_inspection",
             "ocr_with_position",
         }:
             raise ValueError(

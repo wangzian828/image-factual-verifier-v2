@@ -1,7 +1,8 @@
 # unified-react-v1 主流程重构记录
 
 日期：2026-08-27
-状态：本地实现完成，等待提交、服务器更新和真实 Gemini smoke。
+状态：主流程已实现；2026-08-28 本地补强首次多路线注册、路线停止条件和 active ReAct prompt，
+等待提交、服务器更新和真实 Gemini smoke。
 
 ## 目标
 
@@ -14,7 +15,7 @@
 空 workspace
   -> ReAct 选择 perceive_scene / ocr_with_position
   -> ReAct 首次调查动作携带 investigation_intent
-  -> reducer 创建 target_facts / route / task
+  -> reducer 创建一个 target_fact 和 2–3 条候选 route/task
   -> ReAct：thought -> 一个 native tool -> observation/state delta
   -> 低频 unified_reflection
   -> 低频 unified_discrepancy_decision
@@ -25,8 +26,8 @@
 
 1. `Orchestrator.run()` 只进入统一 ReAct 主流程；
 2. scene 和 OCR 由模型选择顺序，但依赖未满足前不开放外部工具；
-3. 首个调查动作通过 `investigation_intent` 建立正向 target fact 和路线；
-4. 后续换 query、候选页或视觉方向直接成为下一轮 action；
+3. 首个调查动作通过 `investigation_intent` 建立正向 target fact 和 2–3 条候选路线；
+4. 后续换 query、候选页或视觉方向直接成为下一轮 action；ReAct 可在未完成 route/task 之间切换；
 5. 新增紧凑上下文 renderer，完整 workspace 只在 archive 保存；
 6. prompt、schema、audit、exporter、reward 使用 `unified-react-v1`；
 7. SFT 导出使用 Qwen `<think>` + 原生 `<tool_call>`，无 provider thought 的轨迹进入 action-only；
