@@ -19,8 +19,6 @@ def valid_comparison() -> dict:
         "same_subject_or_scene": True,
         "same_capture_or_near_duplicate": True,
         "likely_different_original_capture": False,
-        "edit_evidence_present": False,
-        "edit_evidence_strength": "none",
         "differences": [
             {
                 "region": "outer edges",
@@ -263,8 +261,6 @@ def test_compare_derives_edit_flag_from_difference_type(tmp_path: Path) -> None:
             "significance": "high",
         }
     ]
-    output["edit_evidence_present"] = True
-    output["edit_evidence_strength"] = "strong"
     backend = FakeBackend(interaction(output))
     tool = make_tool(tmp_path, backend)
 
@@ -273,7 +269,26 @@ def test_compare_derives_edit_flag_from_difference_type(tmp_path: Path) -> None:
     )
 
     assert result["status"] == "success"
+    assert result["edit_evidence_present"] is True
+    assert result["edit_evidence_strength"] == "strong"
     assert result["differences"][0]["is_edit_evidence"] is True
+
+
+def test_compare_rejects_malformed_legacy_edit_summary_without_keyerror(
+    tmp_path: Path,
+) -> None:
+    output = deepcopy(valid_comparison())
+    output["edit_evidence_present"] = "false"
+    backend = FakeBackend(interaction(output))
+    tool = make_tool(tmp_path, backend)
+
+    result = asyncio.run(
+        tool.call_async({"reference_url": "https://example.test/reference.jpg"})
+    )
+
+    assert result["status"] == "error"
+    assert "legacy comparison output field 'edit_evidence_present'" in result["error"]
+    assert "KeyError" not in result["error"]
 
 
 def test_compare_accepts_an_unrelated_reference_image(tmp_path: Path) -> None:

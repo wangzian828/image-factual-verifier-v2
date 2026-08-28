@@ -837,21 +837,30 @@ class CompareWithReferenceTool(BaseTool):
         if extra:
             raise ValueError("comparison output has unexpected fields: " + ", ".join(extra))
 
+        # Only these three booleans are part of the live provider contract.
+        # ``edit_evidence_present`` is derived from typed ``differences`` and
+        # must never be indexed as a required model field.  The old code did
+        # that after removing the field from COMPARE_RESPONSE_SCHEMA, turning
+        # every otherwise valid new-schema response into a KeyError.
         boolean_fields = (
             "same_subject_or_scene",
             "same_capture_or_near_duplicate",
             "likely_different_original_capture",
-            "edit_evidence_present",
         )
         for name in boolean_fields:
             if not isinstance(value[name], bool):
                 raise ValueError(f"comparison output field '{name}' must be boolean")
 
+        raw_edit_present = value.get("edit_evidence_present")
+        if raw_edit_present is not None and not isinstance(raw_edit_present, bool):
+            raise ValueError(
+                "legacy comparison output field 'edit_evidence_present' must be boolean"
+            )
         raw_edit_strength = value.get("edit_evidence_strength")
         if raw_edit_strength is not None and raw_edit_strength not in EDIT_STRENGTHS:
-            # This is a legacy, redundant field. Ignore its value and keep the
-            # canonical result derived from typed differences below.
-            raw_edit_strength = str(raw_edit_strength)
+            raise ValueError(
+                "legacy comparison output field 'edit_evidence_strength' is invalid"
+            )
 
         overall = value["overall_observation"]
         if not isinstance(overall, str) or not overall.strip():
@@ -903,7 +912,6 @@ class CompareWithReferenceTool(BaseTool):
             default="none",
         )
         contract_repairs: list[str] = []
-        raw_edit_present = value.get("edit_evidence_present")
         if raw_edit_present is not None:
             if raw_edit_present != edit_present:
                 contract_repairs.append(
