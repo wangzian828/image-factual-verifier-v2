@@ -30,6 +30,7 @@ from src.integrations.http_sessions import (
     init_tracked_sessions,
 )
 from src.tools.base import BaseTool
+from src.orchestrator.evidence_semantics import derive_edit_evidence_summary
 from src.orchestrator.source_access import SourceAccessPolicy
 
 
@@ -887,8 +888,6 @@ class CompareWithReferenceTool(BaseTool):
         same_subject = value["same_subject_or_scene"]
         same_capture = value["same_capture_or_near_duplicate"]
         different_capture = value["likely_different_original_capture"]
-        edit_items = [item for item in validated_differences if item["type"] in EDIT_DIFFERENCE_TYPES]
-
         # ``edit_evidence_present`` is a derived field: the runtime already
         # defines edit evidence as a difference whose type is addition,
         # removal, or modification.  Asking Gemini to emit the same fact a
@@ -897,19 +896,8 @@ class CompareWithReferenceTool(BaseTool):
         # with a stale ``strength`` value even when there are no edit
         # differences.  Canonicalize this redundant summary instead of
         # turning an otherwise usable comparison into a fatal tool error.
-        edit_present = bool(edit_items)
-        significance_to_strength = {
-            "low": "weak",
-            "medium": "moderate",
-            "high": "strong",
-        }
-        edit_strength = max(
-            (
-                significance_to_strength[item["significance"]]
-                for item in edit_items
-            ),
-            key=("none", "weak", "moderate", "strong").index,
-            default="none",
+        edit_present, edit_strength = derive_edit_evidence_summary(
+            validated_differences
         )
         contract_repairs: list[str] = []
         if raw_edit_present is not None:

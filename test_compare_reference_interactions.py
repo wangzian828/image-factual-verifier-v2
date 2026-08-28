@@ -8,6 +8,7 @@ from pathlib import Path
 from PIL import Image
 
 from src.integrations.gemini import normalize_json_schema
+from src.orchestrator.evidence_semantics import derive_edit_evidence_summary
 from src.tools.compare_reference import (
     COMPARE_RESPONSE_SCHEMA,
     CompareWithReferenceTool,
@@ -289,6 +290,28 @@ def test_compare_rejects_malformed_legacy_edit_summary_without_keyerror(
     assert result["status"] == "error"
     assert "legacy comparison output field 'edit_evidence_present'" in result["error"]
     assert "KeyError" not in result["error"]
+
+
+def test_edit_summary_is_derived_for_replay_even_when_legacy_fields_are_absent() -> None:
+    assert derive_edit_evidence_summary(
+        [
+            {
+                "type": "addition",
+                "significance": "high",
+            }
+        ]
+    ) == (True, "strong")
+    assert derive_edit_evidence_summary(
+        [
+            {
+                "type": "crop",
+                "significance": "high",
+            }
+        ]
+    ) == (False, "none")
+    assert derive_edit_evidence_summary(
+        [{"type": "modification"}]
+    ) == (True, "none")
 
 
 def test_compare_accepts_an_unrelated_reference_image(tmp_path: Path) -> None:

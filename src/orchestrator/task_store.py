@@ -53,6 +53,7 @@ from src.orchestrator.evidence_policy import (
     text_targets_verdict_or_media_origin,
 )
 from src.orchestrator.evidence_semantics import (
+    derive_edit_evidence_summary,
     evidence_is_qualified,
     evidence_is_qualified_for_stance,
     required_assessment_stances,
@@ -7368,7 +7369,9 @@ def _visual_evidence_record(
         different_capture = bool(
             data.get("likely_different_original_capture", False)
         )
-        edit_present = bool(data.get("edit_evidence_present", False))
+        edit_present, _edit_strength = derive_edit_evidence_summary(
+            data.get("differences", [])
+        )
         if not same_subject:
             # An unrelated reference image supplies neither image binding nor a
             # valid alteration baseline. The attempted inspection remains in
@@ -7498,7 +7501,7 @@ def _visual_evidence_record(
             else None
         ),
         edit_evidence_present=(
-            bool(data.get("edit_evidence_present", False))
+            edit_present
             if tool_name == "compare_with_reference"
             else None
         ),

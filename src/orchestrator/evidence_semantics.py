@@ -8,6 +8,13 @@ from typing import Any, Mapping
 
 QUALIFIED_EVIDENCE_QUALITIES = frozenset({"strong", "moderate"})
 _NON_BLOCKING_RISK_FLAGS = frozenset({"user_generated_content"})
+_EDIT_DIFFERENCE_TYPES = frozenset({"addition", "removal", "modification"})
+_EDIT_SIGNIFICANCE_TO_STRENGTH = {
+    "low": "weak",
+    "medium": "moderate",
+    "high": "strong",
+}
+_EDIT_STRENGTH_ORDER = ("none", "weak", "moderate", "strong")
 _SAME_CAPTURE_WORLD_CONTEXT_HINTS = frozenset(
     {
         "attributed",
@@ -78,6 +85,39 @@ def _semantic_tokens(value: str) -> set[str]:
         for token in re.split(r"[^a-z0-9]+", str(value or "").casefold())
         if token
     }
+
+
+def derive_edit_evidence_summary(differences: Any) -> tuple[bool, str]:
+    """Derive the canonical edit summary from typed comparison differences.
+
+    ``edit_evidence_present`` and ``edit_evidence_strength`` are runtime-owned
+    fields.  They must be derived identically when a live tool result is being
+    normalized and when an older trace is replayed into Evidence.  In
+    particular, a missing legacy summary must not silently turn a typed edit
+    difference into ``False``.
+    """
+
+    if not isinstance(differences, (list, tuple)):
+        return False, "none"
+    edit_items = [
+        item
+        for item in differences
+        if isinstance(item, Mapping)
+        and str(item.get("type", "")).strip().lower()
+        in _EDIT_DIFFERENCE_TYPES
+    ]
+    strengths = [
+        _EDIT_SIGNIFICANCE_TO_STRENGTH.get(
+            str(item.get("significance", "")).strip().lower()
+        )
+        for item in edit_items
+    ]
+    strengths = [item for item in strengths if item is not None]
+    return bool(edit_items), max(
+        strengths,
+        key=_EDIT_STRENGTH_ORDER.index,
+        default="none",
+    )
 
 
 def same_capture_can_support_visual_claim(fact: Any) -> bool:
