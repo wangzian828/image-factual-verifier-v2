@@ -116,9 +116,8 @@ def test_compare_uses_two_interactions_content_images_and_exact_schema(tmp_path:
             require_all_properties=True,
         ),
     }
-    assert "edit_evidence_present" not in request["response_format"]["schema"][
-        "properties"
-    ]
+    assert "edit_evidence_present" not in request["response_format"]["schema"]["properties"]
+    assert "edit_evidence_strength" not in request["response_format"]["schema"]["properties"]
     assert [item["type"] for item in request["input_payload"]] == [
         "text",
         "image",
@@ -223,7 +222,7 @@ def test_compare_repairs_edit_present_without_typed_difference(tmp_path: Path) -
     assert result["edit_evidence_strength"] == "none"
     assert result["contract_repairs"] == [
         "edit_evidence_present_derived_from_difference_types",
-        "edit_evidence_strength_forced_to_none_without_edit_difference",
+        "edit_evidence_strength_derived_from_edit_difference_significance",
     ]
 
 
@@ -245,7 +244,8 @@ def test_compare_repairs_redundant_edit_summary_without_failing(tmp_path: Path) 
     assert result["edit_evidence_present"] is False
     assert result["edit_evidence_strength"] == "none"
     assert result["contract_repairs"] == [
-        "edit_evidence_strength_forced_to_none_without_edit_difference"
+        "legacy_edit_evidence_present_ignored",
+        "edit_evidence_strength_derived_from_edit_difference_significance",
     ]
     assert result["raw_edit_evidence_summary"] == {
         "edit_evidence_present": False,

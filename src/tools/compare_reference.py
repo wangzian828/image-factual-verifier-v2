@@ -59,10 +59,6 @@ COMPARE_RESPONSE_SCHEMA: Dict[str, Any] = {
         "same_subject_or_scene": {"type": "boolean"},
         "same_capture_or_near_duplicate": {"type": "boolean"},
         "likely_different_original_capture": {"type": "boolean"},
-        "edit_evidence_strength": {
-            "type": "string",
-            "enum": list(EDIT_STRENGTHS),
-        },
         "differences": {
             "type": "array",
             "maxItems": 20,
@@ -96,13 +92,12 @@ Describe concrete visual relationships and differences only.
 1. Decide whether the images show the same subject, event, object, or scene.
 2. Distinguish the same original capture or a near-duplicate from different original captures.
 3. Use difference type addition, removal, or modification only for directly visible
-   edit evidence. The runtime derives whether edit evidence is present from these
-   difference types; do not invent an edit flag separately.
+   edit evidence. The runtime derives both the edit-evidence flag and its strength
+   from these difference types and their significance; do not output either field.
 4. Treat crop, resizing, compression, lighting, perspective, watermark, occlusion, and
    color shifts as benign unless they clearly alter factual content.
 5. If the images are unrelated, report unrelated content without inferring manipulation.
-6. Keep the edit strength at none when no edit difference is reported, and explain
-   uncertainty in the observation.
+6. Explain uncertainty in the observation rather than guessing manipulation.
 """
 
 SYSTEM_INSTRUCTION = (
@@ -827,11 +822,13 @@ class CompareWithReferenceTool(BaseTool):
             raise ValueError("comparison output must be a JSON object")
 
         expected = set(COMPARE_RESPONSE_SCHEMA["properties"])
-        # Older provider adapters emitted this derived field. Accept it when
-        # replaying such a response, but do not include it in the live Gemini
-        # schema; otherwise the model is asked to repeat a value the runtime
-        # can determine from ``differences``.
-        tolerated_legacy_fields = {"edit_evidence_present"}
+        # Older provider adapters emitted these derived fields. Accept them
+        # when replaying such a response, but do not include them in the live
+        # Gemini schema; both values are determined from ``differences``.
+        tolerated_legacy_fields = {
+            "edit_evidence_present",
+            "edit_evidence_strength",
+        }
         actual = set(value)
         missing = sorted(expected - actual)
         extra = sorted(actual - expected - tolerated_legacy_fields)
@@ -850,9 +847,11 @@ class CompareWithReferenceTool(BaseTool):
             if not isinstance(value[name], bool):
                 raise ValueError(f"comparison output field '{name}' must be boolean")
 
-        edit_strength = value["edit_evidence_strength"]
-        if edit_strength not in EDIT_STRENGTHS:
-            raise ValueError("comparison output has invalid edit_evidence_strength")
+        raw_edit_strength = value.get("edit_evidence_strength")
+        if raw_edit_strength is not None and raw_edit_strength not in EDIT_STRENGTHS:
+            # This is a legacy, redundant field. Ignore its value and keep the
+            # canonical result derived from typed differences below.
+            raw_edit_strength = str(raw_edit_strength)
 
         overall = value["overall_observation"]
         if not isinstance(overall, str) or not overall.strip():
@@ -889,49 +888,41 @@ class CompareWithReferenceTool(BaseTool):
         # with a stale ``strength`` value even when there are no edit
         # differences.  Canonicalize this redundant summary instead of
         # turning an otherwise usable comparison into a fatal tool error.
-        raw_edit_present = value.get("edit_evidence_present")
-        raw_edit_strength = edit_strength
         edit_present = bool(edit_items)
+        significance_to_strength = {
+            "low": "weak",
+            "medium": "moderate",
+            "high": "strong",
+        }
+        edit_strength = max(
+            (
+                significance_to_strength[item["significance"]]
+                for item in edit_items
+            ),
+            key=("none", "weak", "moderate", "strong").index,
+            default="none",
+        )
         contract_repairs: list[str] = []
-        if raw_edit_present is not None and raw_edit_present != edit_present:
-            contract_repairs.append(
-                "edit_evidence_present_derived_from_difference_types"
-            )
-        if not edit_present and edit_strength != "none":
-            edit_strength = "none"
-            contract_repairs.append(
-                "edit_evidence_strength_forced_to_none_without_edit_difference"
-            )
-        elif edit_present and edit_strength == "none":
-            # A typed edit difference is decisive for the presence flag, but
-            # Gemini occasionally omits its strength.  Use the strongest
-            # supplied difference significance as a conservative deterministic
-            # fallback so the result remains internally well-formed.
-            significance_to_strength = {
-                "low": "weak",
-                "medium": "moderate",
-                "high": "strong",
-            }
-            edit_strength = max(
-                (
-                    significance_to_strength[item["significance"]]
-                    for item in edit_items
-                ),
-                key=("none", "weak", "moderate", "strong").index,
-            )
-            contract_repairs.append(
-                "edit_evidence_strength_derived_from_edit_difference_significance"
-            )
+        raw_edit_present = value.get("edit_evidence_present")
+        if raw_edit_present is not None:
+            if raw_edit_present != edit_present:
+                contract_repairs.append(
+                    "edit_evidence_present_derived_from_difference_types"
+                )
+            else:
+                contract_repairs.append("legacy_edit_evidence_present_ignored")
+        if raw_edit_strength is not None:
+            if raw_edit_strength != edit_strength:
+                contract_repairs.append(
+                    "edit_evidence_strength_derived_from_edit_difference_significance"
+                )
+            else:
+                contract_repairs.append("legacy_edit_evidence_strength_ignored")
 
         if same_capture and not same_subject:
             raise ValueError("same capture requires same_subject_or_scene=true")
         if same_capture and different_capture:
             raise ValueError("same capture and different original capture cannot both be true")
-        if edit_present and edit_strength == "none":
-            raise ValueError("edit evidence cannot have strength 'none'")
-        if not edit_present and edit_strength != "none":
-            raise ValueError("edit_evidence_strength must be 'none' without edit evidence")
-
         normalized = {
             "same_subject_or_scene": same_subject,
             "same_capture_or_near_duplicate": same_capture,
