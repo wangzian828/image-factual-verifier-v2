@@ -1419,9 +1419,9 @@ def test_priority_two_can_be_resampled_after_all_required_questions_are_served()
 @pytest.mark.parametrize(
     "blocked_query",
     [
-        "politician joined party fact check",
-        "politician joined party fake news",
-        "politician party claim hoax",
+        "site:factcrescendo.com politician joined party",
+        "site:factcrescendo.com politician joined party fake news",
+        "site:factcrescendo.com politician party claim hoax",
     ],
 )
 def test_evaluation_rejects_fact_check_query_before_search_and_continues(
@@ -1468,7 +1468,7 @@ def test_evaluation_rejects_fact_check_query_before_search_and_continues(
 def test_mixed_search_queries_execute_only_policy_eligible_subset() -> None:
     mixed = _function_call_response()
     mixed["steps"][0]["arguments"]["queries"] = [
-        "politician joined party fake news",
+        "site:factcrescendo.com politician joined party fake news",
         "politician official party statement",
     ]
     completed = _completed_response()
@@ -1498,7 +1498,7 @@ def test_mixed_search_queries_execute_only_policy_eligible_subset() -> None:
         "politician official party statement"
     ]
     assert steps[0].metadata["policy_filtered_query_count"] == 1
-    assert "fake news" not in json.dumps(steps[0].tool_args)
+    assert "factcrescendo.com" not in json.dumps(steps[0].tool_args)
     assert tool.calls == [{"queries": ["politician official party statement"]}]
 
 
