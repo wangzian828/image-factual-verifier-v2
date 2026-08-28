@@ -117,8 +117,6 @@ class SourceAccessPolicy:
             if variant in self.excluded_urls:
                 return False
             hostname = _hostname(variant)
-            if self.active and _fact_check_domain_scope(hostname):
-                return False
             if any(domain_matches(hostname, domain) for domain in self.excluded_domains):
                 return False
         return True
@@ -135,10 +133,6 @@ class SourceAccessPolicy:
                 return domain
             if any(alias in _normalize_query_text(text) for alias in _query_aliases(domain)):
                 return domain
-        normalized = _normalize_query_text(text)
-        for marker in FACT_CHECK_DOMAIN_MARKERS:
-            if any(_contains_query_alias(normalized, alias) for alias in _query_aliases(marker)):
-                return marker
         return ""
 
     def blocked_content_reference(self, value: str) -> str:
@@ -152,10 +146,26 @@ class SourceAccessPolicy:
         for domain in sorted(self.excluded_domains, key=len, reverse=True):
             if any(alias in normalized for alias in _query_aliases(domain)):
                 return domain
-        for marker in FACT_CHECK_DOMAIN_MARKERS:
-            if any(_contains_query_alias(normalized, alias) for alias in _query_aliases(marker)):
-                return marker
         return ""
+
+    def augment_search_query(self, query: str) -> str:
+        """Add provider-side domain exclusions without exposing policy metadata.
+
+        The original query is retained in the tool result.  The augmented query
+        is only sent to the search provider, so the evaluator-side blacklist does
+        not become model-visible trace content.
+        """
+
+        original = str(query or "").strip()
+        if not original or not self.active:
+            return original
+        existing = original.casefold()
+        clauses = [
+            f"-site:{domain}"
+            for domain in sorted(self.excluded_domains)
+            if f"-site:{domain}".casefold() not in existing
+        ]
+        return " ".join([original, *clauses]).strip()
 
     def filter_rows(
         self,
@@ -349,8 +359,6 @@ def _query_aliases(domain: str) -> tuple[str, ...]:
     labels = normalized.split(".")
     aliases: set[str] = set()
     joined = " ".join(labels)
-    if "factcheck" in joined or "fact check" in joined:
-        aliases.add("fact check")
     if "factcrescendo" in joined:
         aliases.add("fact crescendo")
     if "fullfact" in joined:

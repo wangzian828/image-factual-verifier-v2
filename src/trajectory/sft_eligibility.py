@@ -839,6 +839,10 @@ def sft_eligibility_metrics(
         "decision_support": decision_support,
         "retrieval_quality": retrieval_quality,
         "trajectory_conduct": trajectory_conduct,
+        "overclaiming": str(judgment_values.get("overclaiming", "major")),
+        "boundary_assessment": str(
+            judgment_values.get("boundary_assessment", "major_issue")
+        ),
         "decisive_evidence_ids": valid_decisive_ids,
         "selected_evidence_ids": selected_ids,
         "invalid_judge_evidence_ids": invalid_ids,

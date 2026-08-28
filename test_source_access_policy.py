@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from typing import Any
 
 from src.orchestrator.source_access import (
     benchmark_source_access_policy,
@@ -9,6 +10,7 @@ from src.orchestrator.source_access import (
 )
 from src.orchestrator.source_provenance import classify_source
 from src.orchestrator.stage_runner import StageRunner
+from src.integrations.search.serper import SerperTextSearchClient
 from pydantic import ValidationError
 from test_support_models import ToolStageOutput, TruthAptQuestion
 from src.tools.reverse_image_search import ReverseImageSearchTool
@@ -191,18 +193,18 @@ def test_fact_check_subdomain_scope_does_not_block_parent_news_domain() -> None:
     assert policy.allows("https://www.afp.com/primary-report")
 
 
-def test_active_evaluation_policy_blocks_unlisted_known_fact_check_source() -> None:
+def test_policy_does_not_block_unlisted_fact_check_domains() -> None:
     policy = benchmark_source_access_policy(
         ["https://seed.example/hidden-benchmark-answer"]
     )
 
-    assert not policy.allows("https://www.politifact.com/factchecks/example/")
-    assert policy.blocked_query_reference("PolitiFact article about the event")
-    assert policy.blocked_content_reference("PolitiFact reviewed this claim")
+    assert policy.allows("https://www.politifact.com/factchecks/example/")
+    assert policy.blocked_query_reference("PolitiFact article about the event") == ""
+    assert policy.blocked_content_reference("PolitiFact reviewed this claim") == ""
     assert policy.allows("https://independent.example/primary-report")
 
 
-def test_text_search_filters_unlisted_known_fact_check_result() -> None:
+def test_text_search_keeps_result_from_unlisted_fact_check_domain() -> None:
     class MixedSearch:
         def search(self, query: str, **_kwargs):
             return {
@@ -233,10 +235,42 @@ def test_text_search_filters_unlisted_known_fact_check_result() -> None:
 
     response = result["queries"][0]
     assert [item["url"] for item in response["results"]] == [
+        "https://www.politifact.com/factchecks/example/",
         "https://independent.example/primary"
     ]
-    assert response["policy_filtered_count"] == 1
+    assert "policy_filtered_count" not in response
     assert response["answer_box"] is None
+
+
+def test_serper_adds_policy_exclusions_before_provider_call() -> None:
+    policy = _policy()
+    client = SerperTextSearchClient(api_key="test-key")
+    payloads: list[dict[str, Any]] = []
+
+    def fake_post(payload, _headers):
+        payloads.append(payload)
+        return {
+            "organic": [
+                {
+                    "title": "Independent report",
+                    "link": "https://independent.example/report",
+                    "snippet": "Underlying event record.",
+                }
+            ]
+        }
+
+    client._post_json = fake_post  # type: ignore[method-assign]
+    client.set_source_access_policy(policy)
+    try:
+        result = client.search("underlying event record", top_k=1)
+    finally:
+        client.close()
+
+    assert result["query"] == "underlying event record"
+    assert payloads
+    assert payloads[0]["q"].startswith("underlying event record ")
+    assert "-site:factcrescendo.com" in payloads[0]["q"]
+    assert "factcrescendo.com" not in result["results"][0]["url"]
 
 
 def test_text_search_filters_results_and_removes_aggregates() -> None:

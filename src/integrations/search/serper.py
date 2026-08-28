@@ -54,6 +54,7 @@ class SerperTextSearchClient:
     endpoint: str = SERPER_TEXT_ENDPOINT
     timeout: int = 20
     max_retries: int = 2
+    source_access_policy: Any = None
 
     def __post_init__(self) -> None:
         if self.api_key is None:
@@ -67,13 +68,29 @@ class SerperTextSearchClient:
     def close(self) -> None:
         close_tracked_sessions(self)
 
+    def set_source_access_policy(self, policy: Any) -> None:
+        self.source_access_policy = policy
+
     def search(self, query: str, *, top_k: int = 10, gl: Optional[str] = None, hl: Optional[str] = None, time_range: Optional[str] = None) -> Dict[str, Any]:
         if not self.api_key:
             raise RuntimeError("SERPER_API_KEY is not set. Put it in your environment or .env before running search.")
 
-        country = default_gl(query, gl)
-        language = default_hl(query, country, hl)
-        payload = {"q": query, "gl": country, "hl": language, "num": top_k}
+        original_query = str(query or "").strip()
+        if self.source_access_policy is not None:
+            blocked = self.source_access_policy.blocked_query_reference(original_query)
+            if blocked:
+                raise ValueError(
+                    "Search query explicitly targets a source excluded by the active "
+                    "evaluation policy."
+                )
+            provider_query = self.source_access_policy.augment_search_query(
+                original_query
+            )
+        else:
+            provider_query = original_query
+        country = default_gl(original_query, gl)
+        language = default_hl(original_query, country, hl)
+        payload = {"q": provider_query, "gl": country, "hl": language, "num": top_k}
         # time_range: "qdr:d" (day), "qdr:w" (week), "qdr:m" (month), "qdr:y" (year)
         if time_range:
             payload["tbs"] = time_range
@@ -81,9 +98,9 @@ class SerperTextSearchClient:
 
         raw = self._post_json(payload, headers)
         organic = raw.get("organic", [])
-        results = [self._normalize_result(query, item, idx + 1) for idx, item in enumerate(organic[:top_k])]
+        results = [self._normalize_result(original_query, item, idx + 1) for idx, item in enumerate(organic[:top_k])]
         return {
-            "query": query,
+            "query": original_query,
             "provider": "serper",
             "gl": country,
             "hl": language,

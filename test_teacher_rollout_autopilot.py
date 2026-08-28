@@ -7,6 +7,7 @@ from typing import Any
 
 from scripts.trajectory.run_teacher_rollout_autopilot import (
     _attempt_command_log_path,
+    _candidate_trace_sources,
     _classify_initial_outcomes,
     _has_early_correct_judgment,
     _read_jsonl,
@@ -218,3 +219,105 @@ def test_early_bucket_requires_strict_discrepancy_judgment(tmp_path: Path) -> No
         encoding="utf-8"
     )
     assert reroll.splitlines() == ["case-proposal"]
+
+
+def test_candidate_collection_keeps_four_terminal_traces_per_case(tmp_path: Path) -> None:
+    attempt = tmp_path / "attempt-01" / "traces"
+    attempt.mkdir(parents=True)
+    for index in range(4):
+        trace = _trace("case-four", early_judgment=True)
+        trace["image_id"] = f"case-four--r{index:03d}"
+        (attempt / f"{trace['image_id']}.json").write_text(
+            json.dumps(trace),
+            encoding="utf-8",
+        )
+
+    grouped = _candidate_trace_sources([tmp_path / "attempt-01"])
+
+    assert len(grouped["case-four"]) == 4
+    assert [item[2]["episode_id"] for item in grouped["case-four"]] == [
+        "case-four--r000",
+        "case-four--r001",
+        "case-four--r002",
+        "case-four--r003",
+    ]
+
+
+def test_four_candidate_selection_picks_best_and_marks_all_rejected_hard_case(
+    tmp_path: Path,
+) -> None:
+    run = tmp_path / "run"
+    traces = run / "traces"
+    traces.mkdir(parents=True)
+    (run / "run_manifest.json").write_text(
+        json.dumps({"status": "completed"}),
+        encoding="utf-8",
+    )
+    cases = ("case-best", "case-hard")
+    for case_id in cases:
+        for index in range(4):
+            trace = _trace(case_id, early_judgment=True)
+            trace["image_id"] = f"{case_id}--r{index:03d}"
+            (traces / f"{trace['image_id']}.json").write_text(
+                json.dumps(trace),
+                encoding="utf-8",
+            )
+    gold = tmp_path / "private-gold.jsonl"
+    gold.write_text(
+        "".join(
+            json.dumps(
+                {
+                    "case_id": case_id,
+                    "factual_status": "refuted",
+                    "target_claim": "private",
+                }
+            )
+            + "\n"
+            for case_id in cases
+        ),
+        encoding="utf-8",
+    )
+    eligibility = tmp_path / "eligibility"
+    eligibility.mkdir()
+    for case_id in cases:
+        for index in range(4):
+            episode_id = f"{case_id}--r{index:03d}"
+            passed = case_id == "case-best" and index in {1, 2}
+            metrics = {
+                "fact_alignment": "same_image_fact" if passed else "different_fact",
+                "decision_support": "supports_fake" if passed else "insufficient",
+                "retrieval_quality": "effective" if passed else "poor",
+                "trajectory_conduct": "clean" if passed else "unresolved",
+                "overclaiming": "none" if passed else "major",
+                "boundary_assessment": "respected" if passed else "major_issue",
+                "fatal_errors": [] if passed else ["different_image_fact"],
+                "warnings": [],
+            }
+            (eligibility / f"{episode_id}.sft_eligibility.json").write_text(
+                json.dumps(
+                    {
+                        "episode_id": episode_id,
+                        "gates": {"sft_eligibility_pass": passed},
+                        "metrics": metrics,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+    summary = _classify_initial_outcomes(
+        run_dir=run,
+        eligibility_dir=eligibility,
+        private_gold=gold,
+        output_dir=tmp_path / "classification",
+        candidates_per_case=4,
+    )
+
+    selected = _read_jsonl(
+        tmp_path / "classification" / "selected-candidates.jsonl"
+    )
+    hard_cases = _read_jsonl(tmp_path / "classification" / "hard-cases.jsonl")
+    assert summary["selected_case_count"] == 1
+    assert summary["hard_case_count"] == 1
+    assert selected[0]["case_id"] == "case-best"
+    assert selected[0]["episode_id"] in {"case-best--r001", "case-best--r002"}
+    assert hard_cases[0]["case_id"] == "case-hard"

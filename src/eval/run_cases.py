@@ -140,6 +140,14 @@ def _parse_args() -> argparse.Namespace:
         help="Independent complete episodes per case.",
     )
     parser.add_argument(
+        "--episode-namespace",
+        default=None,
+        help=(
+            "Optional namespace added to generated episode IDs. Used by "
+            "candidate collectors when refill runs use one rollout per case."
+        ),
+    )
+    parser.add_argument(
         "--base-sampling-seed",
         type=int,
         default=1729,
@@ -334,6 +342,7 @@ async def _run_cases(args: argparse.Namespace) -> Dict[str, Any]:
         base_sampling_seed=base_sampling_seed,
         policy_revision=runtime_commit,
         model=str(config.model_name),
+        episode_namespace=getattr(args, "episode_namespace", None),
     )
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -415,6 +424,7 @@ async def _run_cases(args: argparse.Namespace) -> Dict[str, Any]:
                 else None
             ),
             "rollouts_per_case": rollouts_per_case,
+            "episode_namespace": getattr(args, "episode_namespace", None),
             "base_sampling_seed": base_sampling_seed,
         },
         "execution": {
@@ -437,6 +447,21 @@ async def _run_cases(args: argparse.Namespace) -> Dict[str, Any]:
             "active": bool(explicit_policy and explicit_policy.active),
             "policy_id": explicit_policy.policy_id if explicit_policy else None,
             "cache_partition": explicit_policy.cache_partition if explicit_policy else None,
+            "path": (
+                str(
+                    Path(args.source_access_policy).expanduser().resolve()
+                    if getattr(args, "source_access_policy", None)
+                    else release.source_access_policy_path
+                )
+                if (
+                    getattr(args, "source_access_policy", None)
+                    or (
+                        release is not None
+                        and release.source_access_policy_path is not None
+                    )
+                )
+                else None
+            ),
         },
         "artifacts": {
             "run_results": "run_results.jsonl",

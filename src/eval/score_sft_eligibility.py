@@ -17,6 +17,7 @@ from scripts.trajectory.stage_accepted_teacher_release import (
 )
 from src.eval.score_semantic_reward import _resolve_image_path
 from src.orchestrator.llm_backend import APIBackend
+from src.orchestrator.source_access import SourceAccessPolicy
 from src.trajectory.semantic_reward import sha256_file
 from src.trajectory.sft_eligibility import (
     SFT_ELIGIBILITY_SCHEMA_VERSION,
@@ -251,6 +252,14 @@ async def _run(args: argparse.Namespace) -> Dict[str, Any]:
     source_policy_active = bool(
         isinstance(source_policy, Mapping) and source_policy.get("active") is True
     )
+    source_policy_object = None
+    if source_policy_active:
+        policy_path = str(source_policy.get("path") or "").strip()
+        if not policy_path:
+            raise ValueError(
+                "active source_access_policy in run manifest lacks policy path"
+            )
+        source_policy_object = SourceAccessPolicy.load(policy_path)
     trace_paths = sorted((run_dir / "traces").glob("*.json"))
     if not trace_paths:
         raise FileNotFoundError(f"no canonical traces under {run_dir / 'traces'}")
@@ -315,6 +324,7 @@ async def _run(args: argparse.Namespace) -> Dict[str, Any]:
         report = audit_trace(
             trace_path,
             enforce_source_access_policy=source_policy_active,
+            source_access_policy=source_policy_object,
         )
         failures = report.failures(strict_scheduler=True)
         warnings = report.warnings(strict_scheduler=True)

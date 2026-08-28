@@ -13,6 +13,7 @@ def rollout_specs(
     base_sampling_seed: int,
     policy_revision: str,
     model: str,
+    episode_namespace: str | None = None,
 ) -> list[Dict[str, Any]]:
     specs: list[Dict[str, Any]] = []
     for sample, runtime_case in zip(samples, runtime_cases):
@@ -42,11 +43,15 @@ def rollout_specs(
                 "big",
             ) & 0x7FFFFFFF
             episode_id = case_id
-            if rollouts_per_case > 1:
+            if rollouts_per_case > 1 or episode_namespace:
                 episode_id = (
-                    f"{case_id[:150]}--{prompt_group_id[3:11]}"
+                    f"{case_id[:140]}--{prompt_group_id[3:11]}"
                     f"--r{rollout_index:03d}"
                 )
+                if episode_namespace:
+                    episode_id = (
+                        f"{episode_namespace}-{episode_id}"
+                    )
             specs.append(
                 {
                     "sample": sample,

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping
 
 from scripts.audit_real_trace import audit_trace
+from src.orchestrator.source_access import SourceAccessPolicy
 from src.orchestrator.llm_backend import APIBackend
 from src.trajectory.semantic_reward import (
     SemanticRewardCache,
@@ -133,6 +134,7 @@ async def _run(args: argparse.Namespace) -> Dict[str, Any]:
         (args.cache_dir or output_dir / "cache").expanduser().resolve()
     )
     source_policy_active = True
+    source_policy_object = None
     if args.run_dir:
         run_manifest = _load_json(
             args.run_dir.expanduser().resolve() / "run_manifest.json"
@@ -141,6 +143,13 @@ async def _run(args: argparse.Namespace) -> Dict[str, Any]:
         source_policy_active = bool(
             isinstance(source_policy, Mapping) and source_policy.get("active") is True
         )
+        if source_policy_active:
+            policy_path = str(source_policy.get("path") or "").strip()
+            if not policy_path:
+                raise ValueError(
+                    "active source_access_policy in run manifest lacks policy path"
+                )
+            source_policy_object = SourceAccessPolicy.load(policy_path)
     backend = APIBackend(
         provider=args.provider,
         model_name=args.model,
@@ -196,6 +205,7 @@ async def _run(args: argparse.Namespace) -> Dict[str, Any]:
                 report = audit_trace(
                     trace_path,
                     enforce_source_access_policy=source_policy_active,
+                    source_access_policy=source_policy_object,
                 )
                 failures = report.failures(strict_scheduler=True)
                 judgment, judge_audit = await judge.judge(

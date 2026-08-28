@@ -142,6 +142,62 @@ def _deterministic_teacher_quality(score: Mapping[str, Any]) -> Dict[str, Any]:
     }
 
 
+def sft_candidate_rank(
+    eligibility: Mapping[str, Any],
+    *,
+    teacher_score: float = 0.0,
+    episode_id: str = "",
+) -> tuple[object, ...]:
+    """Rank candidates after SFT judging, with safety gates before style."""
+
+    metrics = eligibility.get("metrics") or {}
+    gates = eligibility.get("gates") or {}
+    passed = int(gates.get("sft_eligibility_pass") is True)
+    alignment = {
+        "same_image_fact": 2,
+        "compatible_subfact": 1,
+        "different_fact": 0,
+        "unclear": 0,
+    }.get(str(metrics.get("fact_alignment", "")), 0)
+    retrieval = {
+        "effective": 2,
+        "mixed": 1,
+        "poor": 0,
+    }.get(str(metrics.get("retrieval_quality", "")), 0)
+    conduct = {
+        "clean": 2,
+        "recovered_minor": 1,
+        "degraded_repetition": 0,
+        "unresolved": 0,
+    }.get(str(metrics.get("trajectory_conduct", "")), 0)
+    overclaiming = {
+        "none": 2,
+        "minor": 1,
+        "major": 0,
+    }.get(str(metrics.get("overclaiming", "")), 0)
+    boundary = {
+        "respected": 2,
+        "minor_issue": 1,
+        "major_issue": 0,
+    }.get(str(metrics.get("boundary_assessment", "")), 0)
+    warnings = len(metrics.get("warnings") or [])
+    fatal_errors = len(metrics.get("fatal_errors") or [])
+    confidence = int(round(float(metrics.get("confidence", 0.0) or 0.0) * 1000))
+    return (
+        passed,
+        alignment,
+        retrieval,
+        conduct,
+        overclaiming,
+        boundary,
+        -fatal_errors,
+        -warnings,
+        confidence,
+        int(round(float(teacher_score or 0.0) * 1000)),
+        str(episode_id),
+    )
+
+
 def _eligible(
     trace: Mapping[str, Any],
     trace_sha256: str,
@@ -277,6 +333,7 @@ def stage_release(
     output_dir: Path,
     *,
     minimum_accepted_cases: int,
+    selected_episode_ids: set[str] | None = None,
 ) -> Dict[str, Any]:
     if output_dir.exists() and any(output_dir.iterdir()):
         raise FileExistsError(f"output directory must be new or empty: {output_dir}")
@@ -315,6 +372,8 @@ def stage_release(
             episode_id = str(trace.get("image_id", "")).strip()
             if not case_id or not episode_id:
                 raise ValueError(f"trace has no case/episode ID: {trace_path}")
+            if selected_episode_ids is not None and episode_id not in selected_episode_ids:
+                continue
             eligibility_row = eligibility_index.get(episode_id)
             if not eligibility_row:
                 trace_sha256 = _sha256(trace_path)
@@ -438,15 +497,16 @@ def stage_release(
             }
             current = selected.get(case_id)
             if current is None or (
-                -len(candidate["deterministic_red_flags"]),
-                score,
-                candidate["run_id"],
-                episode_id,
-            ) > (
-                -len(current["deterministic_red_flags"]),
-                current["score"],
-                current["run_id"],
-                current["episode_id"],
+                sft_candidate_rank(
+                    candidate["eligibility"],
+                    teacher_score=score,
+                    episode_id=episode_id,
+                )
+                > sft_candidate_rank(
+                    current["eligibility"],
+                    teacher_score=current["score"],
+                    episode_id=current["episode_id"],
+                )
             ):
                 selected[case_id] = candidate
 
@@ -581,6 +641,13 @@ def stage_release(
                 "source_run_dir": str(candidate["run_dir"]),
                 "source_trace_sha256": candidate["trace_sha256"],
                 "teacher_score": candidate["score"],
+                "sft_candidate_rank": list(
+                    sft_candidate_rank(
+                        candidate["eligibility"],
+                        teacher_score=candidate["score"],
+                        episode_id=candidate["episode_id"],
+                    )
+                ),
                 "deterministic_hard_gate_pass": True,
                 "deterministic_fatal_reasons": candidate[
                     "deterministic_fatal_reasons"

@@ -19,6 +19,7 @@ from src.eval.run_artifacts import (
     write_jsonl as _write_jsonl,
 )
 from src.eval.release_adapter import load_runtime_release
+from src.orchestrator.source_access import SourceAccessPolicy
 from src.eval.scoring_release_adapter import (
     SCORING_PACKAGE_SCHEMA_VERSION,
     ScoringRuntimeRelease,
@@ -154,6 +155,11 @@ async def _postprocess_run(args: argparse.Namespace) -> Dict[str, Any]:
     enforce_source_policy = bool(
         isinstance(source_policy, Mapping) and source_policy.get("active")
     )
+    source_policy_object = (
+        SourceAccessPolicy.load(release.artifacts.source_access_policy)
+        if enforce_source_policy and release.artifacts.source_access_policy is not None
+        else None
+    )
     gold_descriptor = _file_descriptor(release.artifacts.evaluation_gold)
     process_metadata: Dict[str, Any] = {"evaluation_gold": gold_descriptor}
     if release.artifacts.process_reference_protocol is not None:
@@ -287,6 +293,7 @@ async def _postprocess_run(args: argparse.Namespace) -> Dict[str, Any]:
         audit_report = audit_trace(
             trace_path,
             enforce_source_access_policy=enforce_source_policy,
+            source_access_policy=source_policy_object,
         )
         strict_failures = audit_report.failures(strict_scheduler=True)
         hard_failures = audit_report.failures(strict_scheduler=False)

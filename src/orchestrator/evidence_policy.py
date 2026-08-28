@@ -87,8 +87,6 @@ def query_policy_violation(
 ) -> str:
     """Return the deterministic reason a search query cannot be accepted."""
 
-    if query_targets_fact_check_answer(value):
-        return "fact-check-oriented query"
     if source_access_policy is not None:
         blocked_reference = source_access_policy.blocked_query_reference(value)
         if blocked_reference:

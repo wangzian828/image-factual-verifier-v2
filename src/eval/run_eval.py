@@ -638,7 +638,11 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
     stage_thinking_levels = {
         stage.lower(): os.getenv(
             f"GEMINI_{stage}_THINKING_LEVEL",
-            os.getenv("GEMINI_AGENT_THINKING_LEVEL", "low"),
+            (
+                "high"
+                if stage == "UNIFIED_REACT"
+                else os.getenv("GEMINI_AGENT_THINKING_LEVEL", "low")
+            ),
         ).strip().lower()
         for stage in ACTIVE_POLICY_STAGES
     }
@@ -907,6 +911,7 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
                     enforce_source_access_policy=bool(
                         explicit_policy and explicit_policy.active
                     ),
+                    source_access_policy=explicit_policy,
                 )
                 strict_failures = audit_report.failures(strict_scheduler=True)
                 hard_failures = audit_report.failures(strict_scheduler=False)

@@ -7,10 +7,11 @@ metadata.  This program deliberately creates two separate projections:
 * ``runtime-release/`` contains only the exact three-field image runtime contract.
 * ``private-gold/`` is used only after a terminal rollout by the frozen SFT judge.
 
-The initial and reroll rollout phases preserve every trace.  Engineering failures
-are retried with a fresh seed without re-running a successful case.  SFT rejection
-is a quality outcome, not an engineering failure, and is handled by the optional
-reroll phase after the initial audit.
+Each case is sampled four times, then every candidate is audited by the frozen
+SFT judge.  The best eligible candidate is selected for training; cases with four
+complete candidates and no eligible candidate are recorded as hard cases.
+Engineering failures are refilled with fresh seeds, while every produced trace is
+retained for provenance and diagnosis.
 
 Run this on gpu-13 through ``scripts/server/run_gpu13.sh``.  It is intentionally
 resumable: the output directory is also the durable state and provenance record.
@@ -34,7 +35,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from scripts.trajectory.stage_accepted_teacher_release import stage_release
+from scripts.trajectory.stage_accepted_teacher_release import (
+    sft_candidate_rank,
+    stage_release,
+)
 from src.eval.release_adapter import (
     DATA_PIPELINE_DECISION_POLICY_VERSION,
     INPUT_MODE,
@@ -172,6 +176,7 @@ def prepare_runtime_release(
     train_manifest: Path,
     output_dir: Path,
     limit: int | None = None,
+    source_access_policy: Path | None = None,
 ) -> dict[str, Any]:
     """Project a train manifest into isolated runtime and private-gold artifacts."""
 
@@ -192,6 +197,14 @@ def prepare_runtime_release(
     gold_path = output_dir / "private-gold" / "private_gold.jsonl"
     preparation_path = output_dir / "preparation.json"
     source_sha256 = _sha256_file(train_manifest)
+    policy_path = (
+        source_access_policy.expanduser().resolve()
+        if source_access_policy is not None
+        else None
+    )
+    if policy_path is not None and not policy_path.is_file():
+        raise FileNotFoundError(f"source access policy does not exist: {policy_path}")
+    policy_sha256 = _sha256_file(policy_path) if policy_path is not None else ""
 
     if limit is not None and limit < 1:
         raise ValueError("limit must be at least 1 when supplied")
@@ -201,6 +214,8 @@ def prepare_runtime_release(
             prior.get("train_manifest") != str(train_manifest)
             or prior.get("train_manifest_sha256") != source_sha256
             or prior.get("limit") != limit
+            or prior.get("source_access_policy") != str(policy_path or "")
+            or prior.get("source_access_policy_sha256") != policy_sha256
         ):
             raise ValueError(
                 "existing pipeline output was prepared from a different train manifest"
@@ -274,6 +289,13 @@ def prepare_runtime_release(
 
     _write_jsonl(benchmark_path, runtime_rows)
     _write_jsonl(gold_path, gold_rows)
+    policy_release_path = None
+    if policy_path is not None:
+        policy_release_path = (
+            release_root / "evaluator_private" / "source_access_policy.json"
+        )
+        policy_release_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(policy_path, policy_release_path)
     _write_json(
         release_root / "manifest.json",
         {
@@ -288,7 +310,15 @@ def prepare_runtime_release(
                 "private_keys_absent": True,
             },
             "artifacts": {"agent_input": "runtime_input/cases.jsonl"},
-            "source_access_policy": {"active": False},
+            "source_access_policy": (
+                {
+                    "active": True,
+                    "path": "evaluator_private/source_access_policy.json",
+                    "sha256": policy_sha256,
+                }
+                if policy_release_path is not None
+                else {"active": False}
+            ),
         },
     )
     payload = {
@@ -304,6 +334,8 @@ def prepare_runtime_release(
         "private_gold": str(gold_path),
         "runtime_cases_sha256": _sha256_file(benchmark_path),
         "private_gold_sha256": _sha256_file(gold_path),
+        "source_access_policy": str(policy_path or ""),
+        "source_access_policy_sha256": policy_sha256,
         "runtime_asset_materialization": materialization,
     }
     _write_json(preparation_path, payload)
@@ -389,6 +421,38 @@ def _successful_trace_sources(
             ):
                 selected[case_id] = (attempt_dir, trace_path, summary)
     return selected
+
+
+def _candidate_trace_sources(
+    attempt_dirs: Sequence[Path],
+) -> dict[str, list[tuple[Path, Path, dict[str, Any]]]]:
+    """Collect terminal-success candidates grouped by case without loading bodies."""
+
+    grouped: dict[str, list[tuple[Path, Path, dict[str, Any]]]] = {}
+    seen_episode_ids: set[str] = set()
+    for attempt_dir in attempt_dirs:
+        seen_in_attempt: set[str] = set()
+        for trace_path in _trace_paths(attempt_dir):
+            trace = _read_json(trace_path)
+            summary = _trace_summary(trace)
+            case_id = summary["case_id"]
+            episode_id = summary["episode_id"]
+            if episode_id in seen_in_attempt:
+                raise ValueError(
+                    f"duplicate episode trace in {attempt_dir}: {episode_id}"
+                )
+            seen_in_attempt.add(episode_id)
+            if not _terminal_success(trace):
+                continue
+            if episode_id in seen_episode_ids:
+                raise ValueError(f"duplicate successful episode_id: {episode_id}")
+            seen_episode_ids.add(episode_id)
+            grouped.setdefault(case_id, []).append(
+                (attempt_dir, trace_path, summary)
+            )
+    for candidates in grouped.values():
+        candidates.sort(key=lambda item: (item[0].name, item[1].name))
+    return grouped
 
 
 def _copy_or_link(source: Path, destination: Path) -> str:
@@ -513,11 +577,14 @@ def _run_engineering_retries(
     base_seed: int,
     timeout: float,
     maximum_attempts: int,
+    candidates_per_case: int = 1,
 ) -> tuple[Path, dict[str, Any]]:
-    """Run only the unresolved engineering cases in each fresh-seed attempt."""
+    """Collect terminal candidates, refilling only missing case slots."""
 
     if maximum_attempts < 1:
         raise ValueError("maximum engineering attempts must be at least 1")
+    if candidates_per_case < 1:
+        raise ValueError("candidates_per_case must be at least 1")
     group_dir = pipeline_dir / "rollouts" / group_name
     group_dir.mkdir(parents=True, exist_ok=True)
     target_ids = list(target_ids)
@@ -526,21 +593,37 @@ def _run_engineering_retries(
     _write_case_list(group_dir / "target-case-list.txt", target_ids)
     state_path = group_dir / "engineering-retry-state.json"
     attempt_dirs = _attempt_dirs(group_dir)
-    successful = _successful_trace_sources(attempt_dirs)
+    next_attempt = 1
+    if attempt_dirs:
+        next_attempt = max(
+            int(path.name.removeprefix("attempt-")) for path in attempt_dirs
+        ) + 1
 
-    for attempt_number in range(1, maximum_attempts + 1):
-        pending = [case_id for case_id in target_ids if case_id not in successful]
+    for _ in range(maximum_attempts):
+        candidate_groups = _candidate_trace_sources(_attempt_dirs(group_dir))
+        pending_by_slots: dict[int, list[str]] = {}
+        for case_id in target_ids:
+            missing = candidates_per_case - len(candidate_groups.get(case_id, []))
+            if missing > 0:
+                pending_by_slots.setdefault(missing, []).append(case_id)
+        pending = [
+            case_id
+            for missing_count in sorted(pending_by_slots)
+            for case_id in pending_by_slots[missing_count]
+        ]
         _write_case_list(group_dir / "pending-case-list.txt", pending)
         if not pending:
             break
+
+        missing_count, batch_case_ids = min(
+            pending_by_slots.items(),
+            key=lambda item: (item[0], item[1][0]),
+        )
+        attempt_number = next_attempt
+        next_attempt += 1
         attempt_dir = group_dir / f"attempt-{attempt_number:02d}"
-        if attempt_dir.exists() and any(attempt_dir.iterdir()):
-            # A previous process may have been interrupted.  Its terminal successes
-            # already leave the pending set; its unresolved members move to a new
-            # output directory rather than overwriting immutable trace artifacts.
-            continue
         case_list_path = group_dir / f"attempt-{attempt_number:02d}-case-list.txt"
-        _write_case_list(case_list_path, pending)
+        _write_case_list(case_list_path, batch_case_ids)
         command = [
             str(REPO_ROOT / "scripts" / "server" / "run_gpu13.sh"),
             "conda",
@@ -560,7 +643,9 @@ def _run_engineering_retries(
             "--concurrency",
             str(rollout_concurrency),
             "--rollouts-per-case",
-            "1",
+            str(missing_count),
+            "--episode-namespace",
+            f"{group_name}-a{attempt_number:02d}-n{missing_count}",
             "--base-sampling-seed",
             str(base_seed + attempt_number - 1),
             "--timeout",
@@ -588,24 +673,30 @@ def _run_engineering_retries(
             "schema_version": SCHEMA_VERSION,
             "group": group_name,
             "attempt": attempt_number,
-            "started_case_count": len(pending),
+            "started_case_count": len(batch_case_ids),
+            "requested_rollouts_per_case": missing_count,
             "base_sampling_seed": base_seed + attempt_number - 1,
             "returncode": returncode,
             "completed_at": _now(),
             "summary_exists": (attempt_dir / "summary.json").is_file(),
         }
         _write_json(attempt_dir / "autopilot-attempt.json", attempt_payload)
-        attempt_dirs.append(attempt_dir)
-        for case_id, source in _successful_trace_sources([attempt_dir]).items():
-            successful.setdefault(case_id, source)
-
-    selected = successful
-    unresolved = [case_id for case_id in target_ids if case_id not in selected]
+        attempt_dirs = _attempt_dirs(group_dir)
+    candidate_groups = _candidate_trace_sources(_attempt_dirs(group_dir))
+    unresolved = [
+        case_id
+        for case_id in target_ids
+        if len(candidate_groups.get(case_id, [])) < candidates_per_case
+    ]
+    complete_case_count = len(target_ids) - len(unresolved)
+    trace_count = sum(len(candidate_groups.get(case_id, [])) for case_id in target_ids)
     retry_state = {
         "schema_version": SCHEMA_VERSION,
         "group": group_name,
         "target_case_count": len(target_ids),
-        "successful_case_count": len(selected),
+        "candidates_per_case": candidates_per_case,
+        "successful_case_count": complete_case_count,
+        "terminal_trace_count": trace_count,
         "unresolved_engineering_case_count": len(unresolved),
         "maximum_attempts": maximum_attempts,
         "attempt_dirs": [str(path) for path in _attempt_dirs(group_dir)],
@@ -613,11 +704,147 @@ def _run_engineering_retries(
     }
     _write_json(state_path, retry_state)
     _write_case_list(group_dir / "unresolved-engineering-case-list.txt", unresolved)
+    if candidates_per_case > 1:
+        return _merge_candidate_attempts(
+            group_dir=group_dir,
+            group_name=group_name,
+            target_ids=target_ids,
+            candidates_per_case=candidates_per_case,
+        )
     return _merge_successful_attempts(
         group_dir=group_dir,
         group_name=group_name,
         target_ids=target_ids,
     )
+
+
+def _merge_candidate_attempts(
+    *,
+    group_dir: Path,
+    group_name: str,
+    target_ids: Sequence[str],
+    candidates_per_case: int,
+) -> tuple[Path, dict[str, Any]]:
+    """Materialize up to N terminal candidates per case without deleting attempts."""
+
+    merged_dir = group_dir / "merged"
+    manifest_path = merged_dir / "run_manifest.json"
+    if manifest_path.is_file():
+        return merged_dir, _read_json(manifest_path)
+    if candidates_per_case < 1:
+        raise ValueError("candidates_per_case must be at least 1")
+    if merged_dir.exists() and any(merged_dir.iterdir()):
+        raise FileExistsError(f"refusing to overwrite partial merged run: {merged_dir}")
+
+    target_set = set(target_ids)
+    attempts = _attempt_dirs(group_dir)
+    grouped = _candidate_trace_sources(attempts)
+    unexpected = sorted(set(grouped) - target_set)
+    if unexpected:
+        raise ValueError(f"{group_name} traces include unexpected case IDs: {unexpected[:3]}")
+
+    selected: list[tuple[str, int, Path, Path, dict[str, Any]]] = []
+    incomplete: list[str] = []
+    overflow: list[dict[str, Any]] = []
+    for case_id in sorted(target_set):
+        candidates = grouped.get(case_id, [])
+        if len(candidates) < candidates_per_case:
+            incomplete.append(case_id)
+        for candidate_index, (attempt_dir, source_path, summary) in enumerate(
+            candidates[:candidates_per_case],
+            start=1,
+        ):
+            selected.append(
+                (case_id, candidate_index, attempt_dir, source_path, summary)
+            )
+        for candidate_index, (attempt_dir, source_path, summary) in enumerate(
+            candidates[candidates_per_case:],
+            start=candidates_per_case + 1,
+        ):
+            overflow.append(
+                {
+                    "case_id": case_id,
+                    "candidate_index": candidate_index,
+                    "source_attempt": attempt_dir.name,
+                    "source_trace": str(source_path),
+                    "episode_id": summary["episode_id"],
+                }
+            )
+
+    trace_root = merged_dir / "traces"
+    trace_root.mkdir(parents=True, exist_ok=True)
+    materialization: dict[str, int] = {"hardlink": 0, "copy": 0}
+    provenance: list[dict[str, Any]] = []
+    for case_id, candidate_index, attempt_dir, source_path, summary in selected:
+        destination = trace_root / source_path.name
+        if destination.exists():
+            raise FileExistsError(f"duplicate merged trace path: {destination}")
+        method = _copy_or_link(source_path, destination)
+        materialization[method] += 1
+        provenance.append(
+            {
+                "case_id": case_id,
+                "candidate_index": candidate_index,
+                "episode_id": summary["episode_id"],
+                "source_attempt": attempt_dir.name,
+                "source_run": str(attempt_dir),
+                "source_trace": str(source_path),
+                "verdict": summary["verdict"],
+            }
+        )
+
+    inherited_manifest: dict[str, Any] = {}
+    for attempt_dir in attempts:
+        candidate_manifest = attempt_dir / "run_manifest.json"
+        if candidate_manifest.is_file():
+            inherited_manifest = _read_json(candidate_manifest)
+            break
+    manifest = {
+        "schema_version": "ifv-merged-teacher-candidates-v1",
+        "run_id": merged_dir.name,
+        "status": "completed" if not incomplete else "completed_with_errors",
+        "started_at": _now(),
+        "completed_at": _now(),
+        "git_commit": inherited_manifest.get("git_commit"),
+        "benchmark": inherited_manifest.get("benchmark"),
+        "agent": inherited_manifest.get("agent"),
+        "source_access_policy": inherited_manifest.get(
+            "source_access_policy",
+            {"active": False},
+        ),
+        "metadata": {
+            "kind": "terminal-success-candidate-merge",
+            "group": group_name,
+            "target_case_count": len(target_ids),
+            "candidates_per_case": candidates_per_case,
+            "merged_trace_count": len(selected),
+            "complete_case_count": len(target_set) - len(incomplete),
+            "incomplete_case_count": len(incomplete),
+            "overflow_success_count": len(overflow),
+            "attempt_dirs": [str(path) for path in attempts],
+            "trace_materialization": materialization,
+        },
+        "result": {
+            "num_cases": len(target_ids),
+            "num_episodes": len(selected),
+            "num_errors": len(incomplete),
+            "status_distribution": {
+                "success": len(selected),
+                "incomplete_case": len(incomplete),
+            },
+        },
+        "artifacts": {
+            "traces": "traces/",
+            "trace_provenance": "trace-provenance.jsonl",
+            "incomplete_cases": "incomplete-case-list.txt",
+            "overflow_successes": "overflow-successes.jsonl",
+        },
+    }
+    _write_jsonl(merged_dir / "trace-provenance.jsonl", provenance)
+    _write_case_list(merged_dir / "incomplete-case-list.txt", incomplete)
+    _write_jsonl(merged_dir / "overflow-successes.jsonl", overflow)
+    _write_json(manifest_path, manifest)
+    return merged_dir, manifest
 
 
 def _sft_artifact_index(eligibility_dir: Path) -> dict[str, dict[str, Any]]:
@@ -740,8 +967,16 @@ def _classify_initial_outcomes(
     eligibility_dir: Path,
     private_gold: Path,
     output_dir: Path,
+    candidates_per_case: int = 1,
 ) -> dict[str, Any]:
-    """Classify strict early evidence and generate the quality-reroll candidates."""
+    """Classify every candidate and select one winner per case.
+
+    With four candidates, quality rerolling is finished inside the case group:
+    all candidates are judged once, the best eligible candidate is selected, and
+    cases without an eligible candidate become hard cases.  The legacy one-
+    candidate mode retains its old reroll list for compatibility with older
+    smoke callers.
+    """
 
     result_path = output_dir / "classification.json"
     if result_path.is_file():
@@ -753,23 +988,24 @@ def _classify_initial_outcomes(
     early: list[dict[str, Any]] = []
     final_only: list[dict[str, Any]] = []
     rejected: list[dict[str, Any]] = []
+    candidates_by_case: dict[str, list[dict[str, Any]]] = {}
     reroll_ids: list[str] = []
-    seen_reroll: set[str] = set()
-    seen_case_ids: set[str] = set()
+    seen_episode_ids: set[str] = set()
     for trace_path in _trace_paths(run_dir):
         trace = _read_json(trace_path)
         case_id = _trace_case_id(trace)
-        if case_id in seen_case_ids:
-            raise ValueError(f"duplicate case trace in {run_dir}: {case_id}")
-        seen_case_ids.add(case_id)
         expected = gold_by_case.get(case_id)
         if expected is None:
             raise ValueError(f"private gold lacks successful case: {case_id}")
         episode_id = _trace_episode_id(trace)
+        if episode_id in seen_episode_ids:
+            raise ValueError(f"duplicate candidate trace in {run_dir}: {episode_id}")
+        seen_episode_ids.add(episode_id)
         artifact = artifacts.get(episode_id)
         if artifact is None:
             raise ValueError(f"SFT audit artifact missing for episode: {episode_id}")
         passed = (artifact.get("gates") or {}).get("sft_eligibility_pass") is True
+        metrics = artifact.get("metrics") or {}
         row = {
             "case_id": case_id,
             "episode_id": episode_id,
@@ -777,6 +1013,20 @@ def _classify_initial_outcomes(
             "expected_verdict": expected,
             "final_verdict": str(trace.get("verdict") or "").lower(),
             "sft_eligibility_pass": passed,
+            "fact_alignment": metrics.get("fact_alignment"),
+            "decision_support": metrics.get("decision_support"),
+            "retrieval_quality": metrics.get("retrieval_quality"),
+            "trajectory_conduct": metrics.get("trajectory_conduct"),
+            "overclaiming": metrics.get("overclaiming"),
+            "boundary_assessment": metrics.get("boundary_assessment"),
+            "fatal_errors": metrics.get("fatal_errors") or [],
+            "warnings": metrics.get("warnings") or [],
+            "candidate_rank": list(
+                sft_candidate_rank(
+                    artifact,
+                    episode_id=episode_id,
+                )
+            ),
         }
         if not passed:
             row["bucket"] = "sft_rejected"
@@ -790,22 +1040,85 @@ def _classify_initial_outcomes(
         else:
             row["bucket"] = "final_only_judgment"
             final_only.append(row)
-        if row["bucket"] != "early_correct_judgment" and case_id not in seen_reroll:
-            seen_reroll.add(case_id)
+        candidates_by_case.setdefault(case_id, []).append(row)
+        if (
+            candidates_per_case == 1
+            and row["bucket"] != "early_correct_judgment"
+            and case_id not in reroll_ids
+        ):
             reroll_ids.append(case_id)
+
+    selected: list[dict[str, Any]] = []
+    hard_cases: list[dict[str, Any]] = []
+    incomplete_cases: list[dict[str, Any]] = []
+    for case_id in sorted(gold_by_case):
+        candidates = candidates_by_case.get(case_id, [])
+        candidates.sort(key=lambda item: tuple(item["candidate_rank"]), reverse=True)
+        eligible = [
+            item for item in candidates if item["sft_eligibility_pass"] is True
+        ]
+        complete_candidate_set = len(candidates) >= candidates_per_case
+        if not complete_candidate_set:
+            incomplete_cases.append(
+                {
+                    "case_id": case_id,
+                    "candidate_count": len(candidates),
+                    "expected_candidate_count": candidates_per_case,
+                    "status": "incomplete_candidate_set",
+                }
+            )
+        if complete_candidate_set and eligible:
+            winner = dict(eligible[0])
+            winner["candidate_count"] = len(candidates)
+            winner["eligible_candidate_count"] = len(eligible)
+            winner["selected_rank"] = 1
+            selected.append(winner)
+        elif complete_candidate_set:
+            hard_cases.append(
+                {
+                    "case_id": case_id,
+                    "expected_verdict": gold_by_case[case_id],
+                    "candidate_count": len(candidates),
+                    "candidate_episode_ids": [
+                        item["episode_id"] for item in candidates
+                    ],
+                    "rejection_reasons": sorted(
+                        {
+                            reason
+                            for item in candidates
+                            for reason in item.get("fatal_errors", [])
+                        }
+                    ),
+                    "status": "hard_case",
+                }
+            )
     output_dir.mkdir(parents=True, exist_ok=True)
     _write_jsonl(output_dir / "early-correct-judgment.jsonl", early)
     _write_jsonl(output_dir / "final-only-judgment.jsonl", final_only)
     _write_jsonl(output_dir / "sft-rejected.jsonl", rejected)
+    _write_jsonl(output_dir / "candidate-outcomes.jsonl", [
+        item
+        for case_candidates in candidates_by_case.values()
+        for item in case_candidates
+    ])
+    _write_jsonl(output_dir / "selected-candidates.jsonl", selected)
+    _write_jsonl(output_dir / "hard-cases.jsonl", hard_cases)
+    _write_jsonl(output_dir / "incomplete-cases.jsonl", incomplete_cases)
     _write_case_list(output_dir / "quality-reroll-case-list.txt", reroll_ids)
     result = {
         "schema_version": SCHEMA_VERSION,
         "source_run": str(run_dir),
         "source_eligibility": str(eligibility_dir),
-        "successful_case_count": len(early) + len(final_only) + len(rejected),
+        "candidates_per_case": candidates_per_case,
+        "case_count": len(gold_by_case),
+        "successful_case_count": len(candidates_by_case),
+        "candidate_count": sum(len(items) for items in candidates_by_case.values()),
         "early_correct_judgment_count": len(early),
         "final_only_judgment_count": len(final_only),
         "sft_rejected_count": len(rejected),
+        "selected_case_count": len(selected),
+        "hard_case_count": len(hard_cases),
+        "incomplete_case_count": len(incomplete_cases),
         "quality_reroll_count": len(reroll_ids),
         "created_at": _now(),
     }
@@ -825,6 +1138,7 @@ def _final_release(
     *,
     pipeline_dir: Path,
     sources: Sequence[tuple[Path, Path]],
+    selected_episode_ids: set[str] | None = None,
 ) -> Path:
     output_dir = pipeline_dir / "accepted-release"
     manifest_path = output_dir / "accepted_release_manifest.json"
@@ -835,6 +1149,7 @@ def _final_release(
         staged_sources,
         output_dir,
         minimum_accepted_cases=1,
+        selected_episode_ids=selected_episode_ids,
     )
     return output_dir
 
@@ -887,6 +1202,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         train_manifest=train_manifest,
         output_dir=pipeline_dir,
         limit=args.limit,
+        source_access_policy=args.source_access_policy,
     )
     state_path = pipeline_dir / "pipeline-state.json"
     state: dict[str, Any] = {
@@ -923,6 +1239,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         base_seed=args.base_seed,
         timeout=args.rollout_timeout,
         maximum_attempts=args.maximum_engineering_attempts,
+        candidates_per_case=args.candidates_per_case,
     )
     state["initial"] = {
         "merged_run": str(initial_run),
@@ -946,6 +1263,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         eligibility_dir=initial_audit,
         private_gold=private_gold_path,
         output_dir=pipeline_dir / "classification",
+        candidates_per_case=args.candidates_per_case,
     )
     state["initial"]["sft_eligibility"] = str(initial_audit)
     state["classification"] = classification
@@ -953,43 +1271,19 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     _write_json(state_path, state)
 
     sources: list[tuple[Path, Path]] = [(initial_run, initial_audit)]
-    reroll_ids = _load_case_list(
-        pipeline_dir / "classification" / "quality-reroll-case-list.txt"
-    )
-    if reroll_ids:
-        reroll_run, reroll_manifest = _run_engineering_retries(
-            group_name="quality-reroll",
-            benchmark=Path(preparation["benchmark"]),
-            pipeline_dir=pipeline_dir,
-            target_ids=reroll_ids,
-            profile=args.rollout_profile,
-            rollout_concurrency=args.rollout_concurrency,
-            base_seed=args.base_seed + 1_000_000,
-            timeout=args.rollout_timeout,
-            maximum_attempts=args.maximum_engineering_attempts,
-        )
-        reroll_audit = _run_sft_audit(
-            run_dir=reroll_run,
-            gold=private_gold_path,
-            pipeline_dir=pipeline_dir,
-            label="quality-reroll",
-            model=args.sft_model,
-            concurrency=args.sft_concurrency,
-            timeout=args.sft_timeout,
-            maximum_attempts=args.maximum_sft_audit_attempts,
-        )
-        state["quality_reroll"] = {
-            "merged_run": str(reroll_run),
-            "sft_eligibility": str(reroll_audit),
-            "unresolved_engineering_case_count": reroll_manifest["result"][
-                "num_errors"
-            ],
-        }
-        sources.append((reroll_run, reroll_audit))
-        state["updated_at"] = _now()
-        _write_json(state_path, state)
 
-    accepted_release = _final_release(pipeline_dir=pipeline_dir, sources=sources)
+    selected_episode_ids = {
+        str(row["episode_id"])
+        for row in _read_jsonl(
+            pipeline_dir / "classification" / "selected-candidates.jsonl"
+        )
+        if str(row.get("episode_id", "")).strip()
+    }
+    accepted_release = _final_release(
+        pipeline_dir=pipeline_dir,
+        sources=sources,
+        selected_episode_ids=selected_episode_ids,
+    )
     package_dir = _build_package(
         pipeline_dir=pipeline_dir,
         accepted_release=accepted_release,
@@ -1012,6 +1306,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument(
+        "--source-access-policy",
+        type=Path,
+        default=(
+            REPO_ROOT
+            / "configs"
+            / "source-access-policy-web-refuted-v3-expanded-20260821.json"
+        ),
+        help="Evaluator-side deny policy copied into the runtime release.",
+    )
+    parser.add_argument(
         "--limit",
         type=int,
         default=None,
@@ -1029,6 +1333,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--sft-model", default="gemini-3.7-flash")
     parser.add_argument("--rollout-concurrency", type=int, default=10)
     parser.add_argument("--sft-concurrency", type=int, default=10)
+    parser.add_argument(
+        "--candidates-per-case",
+        type=int,
+        default=4,
+        help="Complete rollout candidates collected and judged for each case.",
+    )
     parser.add_argument("--base-seed", type=int, default=2026082401)
     parser.add_argument("--rollout-timeout", type=float, default=1800.0)
     parser.add_argument("--sft-timeout", type=float, default=180.0)

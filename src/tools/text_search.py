@@ -58,6 +58,9 @@ class TextSearchTool(BaseTool):
 
     def set_source_access_policy(self, policy: SourceAccessPolicy) -> None:
         self.source_access_policy = policy
+        setter = getattr(self.client, "set_source_access_policy", None)
+        if callable(setter):
+            setter(policy)
 
     def search(
         self,

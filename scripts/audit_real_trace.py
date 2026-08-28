@@ -22,6 +22,7 @@ from src.orchestrator.source_access import (  # noqa: E402
     benchmark_source_access_policy,
     url_variants,
 )
+from src.orchestrator.source_provenance import domain_matches  # noqa: E402
 from src.orchestrator.evidence_policy import (  # noqa: E402
     query_targets_fact_check_answer,
 )
@@ -376,7 +377,22 @@ def _audit_evidence_calls(
 
 
 
-def _fact_check_domain(value: str) -> str:
+def _fact_check_domain(
+    value: str,
+    *,
+    source_access_policy: SourceAccessPolicy | None = None,
+) -> str:
+    if source_access_policy is not None:
+        for variant in url_variants(value):
+            hostname = (urlsplit(variant).hostname or "").lower().rstrip(".")
+            for domain in sorted(
+                source_access_policy.excluded_domains,
+                key=len,
+                reverse=True,
+            ):
+                if domain_matches(hostname, domain):
+                    return domain
+        return ""
     policy = benchmark_source_access_policy(
         [value],
         policy_id="canonical-trace-audit",
@@ -384,7 +400,11 @@ def _fact_check_domain(value: str) -> str:
     return next(iter(sorted(policy.excluded_domains)), "")
 
 
-def _fact_check_query_domain(value: str) -> str:
+def _fact_check_query_domain(
+    value: str,
+    *,
+    source_access_policy: SourceAccessPolicy | None = None,
+) -> str:
     text = unquote(str(value or ""))
     candidates = re.findall(
         r"(?:https?://)?(?:[a-z0-9-]+\.)+[a-z]{2,}(?:/[^\s\"'<>]*)?",
@@ -392,24 +412,38 @@ def _fact_check_query_domain(value: str) -> str:
         flags=re.IGNORECASE,
     )
     for candidate in candidates:
-        if domain := _fact_check_domain(candidate.rstrip(".,;:!?)]}")):
+        if domain := _fact_check_domain(
+            candidate.rstrip(".,;:!?)]}"),
+            source_access_policy=source_access_policy,
+        ):
             return domain
     return ""
 
 
-def _fact_check_embedded_url(value: str) -> str:
+def _fact_check_embedded_url(
+    value: str,
+    *,
+    source_access_policy: SourceAccessPolicy | None = None,
+) -> str:
     urls = re.findall(
         r"https?://[^\s\"'<>]+",
         str(value or ""),
         flags=re.IGNORECASE,
     )
     for url in urls:
-        if domain := _fact_check_domain(url.rstrip(".,;:!?)]}")):
+        if domain := _fact_check_domain(
+            url.rstrip(".,;:!?)]}"),
+            source_access_policy=source_access_policy,
+        ):
             return domain
     return ""
 
 
-def _fact_check_url_query(value: str) -> str:
+def _fact_check_url_query(
+    value: str,
+    *,
+    source_access_policy: SourceAccessPolicy | None = None,
+) -> str:
     for variant in url_variants(value):
         try:
             query = " ".join(
@@ -417,17 +451,28 @@ def _fact_check_url_query(value: str) -> str:
             )
         except ValueError:
             continue
-        if domain := _fact_check_query_reference(query):
+        if domain := _fact_check_query_reference(
+            query,
+            source_access_policy=source_access_policy,
+        ):
             return f"known fact-check domain {domain!r} in URL query"
-        if query_targets_fact_check_answer(query):
+        if source_access_policy is None and query_targets_fact_check_answer(query):
             return "fact-check-oriented URL query"
     return ""
 
 
-def _fact_check_query_reference(value: str) -> str:
+def _fact_check_query_reference(
+    value: str,
+    *,
+    source_access_policy: SourceAccessPolicy | None = None,
+) -> str:
+    policy = source_access_policy or KNOWN_FACT_CHECK_QUERY_POLICY
     return (
-        KNOWN_FACT_CHECK_QUERY_POLICY.blocked_query_reference(value)
-        or _fact_check_query_domain(value)
+        policy.blocked_query_reference(value)
+        or _fact_check_query_domain(
+            value,
+            source_access_policy=source_access_policy,
+        )
     )
 
 
@@ -512,6 +557,7 @@ def _audit_leaks(
     report: TraceReport,
     *,
     enforce_source_access_policy: bool,
+    source_access_policy: SourceAccessPolicy | None = None,
 ) -> None:
     seen: set[tuple[str, str]] = set()
     url_count = 0
@@ -520,9 +566,18 @@ def _audit_leaks(
     for key, raw_value, path in _iter_named_values(trace):
         query_key = _looks_like_query_key(key)
         if enforce_source_access_policy and _looks_like_url_key(key):
-            domain = _fact_check_domain(raw_value) or _fact_check_query_domain(raw_value)
+            domain = _fact_check_domain(
+                raw_value,
+                source_access_policy=source_access_policy,
+            ) or _fact_check_query_domain(
+                raw_value,
+                source_access_policy=source_access_policy,
+            )
         elif enforce_source_access_policy and not query_key:
-            domain = _fact_check_embedded_url(raw_value)
+            domain = _fact_check_embedded_url(
+                raw_value,
+                source_access_policy=source_access_policy,
+            )
         else:
             domain = ""
         if domain:
@@ -537,7 +592,10 @@ def _audit_leaks(
                     location=path,
                 )
         if enforce_source_access_policy and _looks_like_url_key(key) and (
-            url_query_leak := _fact_check_url_query(raw_value)
+            url_query_leak := _fact_check_url_query(
+                raw_value,
+                source_access_policy=source_access_policy,
+            )
         ):
             signature = ("query", path)
             if signature not in seen:
@@ -561,13 +619,16 @@ def _audit_leaks(
                     )
         if query_key:
             query_domain = (
-                _fact_check_query_reference(raw_value)
+                _fact_check_query_reference(
+                    raw_value,
+                    source_access_policy=source_access_policy,
+                )
                 if enforce_source_access_policy
                 else ""
             )
             oriented = (
                 query_targets_fact_check_answer(raw_value)
-                if enforce_source_access_policy
+                if enforce_source_access_policy and source_access_policy is None
                 else False
             )
             if query_domain or oriented:
@@ -4063,6 +4124,7 @@ def audit_trace(
     path: Path,
     *,
     enforce_source_access_policy: bool = True,
+    source_access_policy: SourceAccessPolicy | None = None,
 ) -> TraceReport:
     report = TraceReport(path=str(path))
     try:
@@ -4122,6 +4184,7 @@ def audit_trace(
         payload,
         report,
         enforce_source_access_policy=enforce_source_access_policy,
+        source_access_policy=source_access_policy,
     )
     _audit_rejections(steps, report)
     return report
