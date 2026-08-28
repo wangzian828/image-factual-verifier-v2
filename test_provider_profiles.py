@@ -18,6 +18,16 @@ def test_teacher_profile_is_fixed_to_accepted_gemini_wire() -> None:
     assert settings.llm_wire_api == "interactions"
     assert settings.vlm_wire_api == "interactions"
 
+def test_teacher_gemini36_profile_is_fixed_to_gemini36_wire() -> None:
+    settings = resolve_provider_settings(profile_id="teacher-gemini36", environ={})
+
+    assert settings.provider == "gemini"
+    assert settings.model_name == "gemini-3.6-flash"
+    assert settings.vlm_provider == "gemini"
+    assert settings.vlm_model == "gemini-3.6-flash"
+    assert settings.llm_wire_api == "interactions"
+    assert settings.vlm_wire_api == "interactions"
+
 def test_local_student_profile_uses_qwen_without_gemini_fallback() -> None:
     settings = resolve_provider_settings(
         profile_id="student-qwen3-vl-local",

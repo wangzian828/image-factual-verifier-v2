@@ -43,6 +43,16 @@ PROVIDER_PROFILES = {
         llm_wire_api="interactions",
         vlm_wire_api="interactions",
     ),
+    "teacher-gemini36": ProviderProfile(
+        profile_id="teacher-gemini36",
+        provider="gemini",
+        default_model="gemini-3.6-flash",
+        model_env=None,
+        vlm_provider="gemini",
+        default_vlm_model="gemini-3.6-flash",
+        llm_wire_api="interactions",
+        vlm_wire_api="interactions",
+    ),
     "student-qwen3-vl-local": ProviderProfile(
         profile_id="student-qwen3-vl-local",
         provider="qwen_local",

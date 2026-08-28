@@ -1326,8 +1326,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--rollout-model",
         default="gemini-3.7-flash",
         help=(
-            "recorded expected profile model; teacher-gemini is pinned to "
-            "gemini-3.7-flash by src.provider_profiles"
+            "recorded expected profile model; teacher-gemini and "
+            "teacher-gemini36 are pinned to their provider-profile models"
         ),
     )
     parser.add_argument("--sft-model", default="gemini-3.7-flash")
@@ -1365,13 +1365,15 @@ def main() -> None:
         raise SystemExit(", ".join(invalid) + " must be at least 1")
     if args.limit is not None and args.limit < 1:
         raise SystemExit("--limit must be at least 1 when supplied")
-    if (
-        args.rollout_profile == "teacher-gemini"
-        and args.rollout_model != "gemini-3.7-flash"
-    ):
+    pinned_rollout_models = {
+        "teacher-gemini": "gemini-3.7-flash",
+        "teacher-gemini36": "gemini-3.6-flash",
+    }
+    expected_model = pinned_rollout_models.get(args.rollout_profile)
+    if expected_model is not None and args.rollout_model != expected_model:
         raise SystemExit(
-            "teacher-gemini is pinned to gemini-3.7-flash; do not supply a "
-            "different --rollout-model"
+            f"{args.rollout_profile} is pinned to {expected_model}; do not "
+            "supply a different --rollout-model"
         )
     result = run_pipeline(args)
     print(json.dumps(result, ensure_ascii=False, indent=2))

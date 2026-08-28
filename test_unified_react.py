@@ -17,6 +17,7 @@ from src.orchestrator.stage_runner import StageStep
 from src.orchestrator.unified_react import (
     UnifiedReactToolAdapter,
     available_unified_react_tool_names,
+    build_unified_react_tools,
     new_unified_react_state,
     reduce_unified_react_action,
     reduce_visual_bootstrap_action,
@@ -447,6 +448,24 @@ class _RecordingTool(BaseTool):
         return {"status": "success"}
 
 
+class _CandidateVisitTool(BaseTool):
+    name = "visit"
+    description = "Visit a runtime-selected page."
+    parameters = {
+        "type": "object",
+        "properties": {
+            "url": {
+                "type": ["string", "array"],
+                "items": {"type": "string"},
+            }
+        },
+        "required": ["url"],
+    }
+
+    def call(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        return {"status": "success", "params": dict(params)}
+
+
 def test_unified_tool_adapter_never_forwards_runtime_intent() -> None:
     delegate = _RecordingTool()
     adapter = UnifiedReactToolAdapter(
@@ -490,6 +509,67 @@ def test_unified_tool_adapter_binds_image_path_without_mutating_shared_tool() ->
 
     assert delegate.received_paths == ["case-a.jpg"]
     assert delegate.image_path == ""
+
+
+def test_unified_visit_schema_lists_current_candidates_without_fragile_enum() -> None:
+    state, case, _steps = _bootstrap_state()
+    anchor_id = state.facts[0].fact_id
+    intent = {
+        "target_fact": {
+            "statement": "The pictured bridge is associated with the Riverfest event.",
+            "kind": "relation",
+            "predicate": "depicts_relation",
+            "anchor_fact_ids": [anchor_id],
+        },
+        "routes": [
+            {
+                "route_focus": "entity_event_identity",
+                "expected_information": "Whether the event uses this bridge.",
+                "queries": ["Riverfest red bridge"],
+                "suggested_tools": ["text_search", "visit"],
+                "priority": 1,
+            },
+            {
+                "route_focus": "visual_consistency",
+                "expected_information": "Whether the visible bridge is consistent.",
+                "suggested_tools": ["focused_visual_inspection"],
+                "priority": 2,
+            },
+        ],
+    }
+    search_step = _step(
+        tool_name="text_search",
+        tool_args={
+            "queries": "Riverfest red bridge",
+            "investigation_intent": intent,
+        },
+        tool_result={
+            "status": "success",
+            "queries": [
+                {
+                    "query": "Riverfest red bridge",
+                    "results": [
+                        {
+                            "url": "https://example.test/riverfest",
+                            "title": "Riverfest",
+                            "snippet": "An event page.",
+                        }
+                    ],
+                }
+            ],
+        },
+        call_id="schema-candidate-search",
+    )
+    reduce_unified_react_action(state, step=search_step, runtime_case=case)
+
+    tools = build_unified_react_tools(
+        state,
+        {"visit": _CandidateVisitTool()},
+    )
+    schema = tools[0].parameters["properties"]["url"]
+
+    assert "https://example.test/riverfest" in schema["description"]
+    assert "enum" not in schema
 
 
 def test_stop_route_is_rejected_before_control_tool_execution() -> None:
@@ -556,6 +636,78 @@ def test_stop_route_is_rejected_before_control_tool_execution() -> None:
 
     assert reason == "stop_route is not available in the current unified-ReAct state"
     assert "stop_route" not in available_unified_react_tool_names(state)
+
+
+def test_visit_rejects_stale_runtime_candidate_url() -> None:
+    state, case, _steps = _bootstrap_state()
+    anchor_id = state.facts[0].fact_id
+    intent = {
+        "target_fact": {
+            "statement": "The pictured bridge is associated with the Riverfest event.",
+            "kind": "relation",
+            "predicate": "depicts_relation",
+            "anchor_fact_ids": [anchor_id],
+        },
+        "routes": [
+            {
+                "route_focus": "entity_event_identity",
+                "expected_information": "Whether the event uses this bridge.",
+                "queries": ["Riverfest red bridge"],
+                "suggested_tools": ["text_search", "visit"],
+                "priority": 1,
+            },
+            {
+                "route_focus": "visual_consistency",
+                "expected_information": "Whether the visible bridge and event text are consistent.",
+                "suggested_tools": ["focused_visual_inspection"],
+                "priority": 2,
+            },
+        ],
+    }
+    search_step = _step(
+        tool_name="text_search",
+        tool_args={
+            "queries": "Riverfest red bridge",
+            "investigation_intent": intent,
+        },
+        tool_result={
+            "status": "success",
+            "queries": [
+                {
+                    "query": "Riverfest red bridge",
+                    "results": [
+                        {
+                            "url": "https://example.test/riverfest",
+                            "title": "Riverfest",
+                            "snippet": "An event page.",
+                        }
+                    ],
+                }
+            ],
+        },
+        call_id="candidate-search",
+    )
+    reduce_unified_react_action(state, step=search_step, runtime_case=case)
+    task_id = state.tasks[0].task_id
+
+    reason = validate_unified_react_action(
+        state,
+        tool_name="visit",
+        tool_args={
+            "task_id": task_id,
+            "url": ["https://example.test/stale"],
+        },
+    )
+
+    assert "stale or unavailable url" in reason
+    assert not validate_unified_react_action(
+        state,
+        tool_name="visit",
+        tool_args={
+            "task_id": task_id,
+            "url": ["https://example.test/riverfest/"],
+        },
+    )
 
 
 def test_visual_bootstrap_keeps_all_fact_anchor_dependencies() -> None:

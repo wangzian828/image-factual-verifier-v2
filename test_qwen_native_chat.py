@@ -207,6 +207,33 @@ def test_qwen_reasoning_only_valid_schema_is_accepted_without_direct_retry() -> 
     assert len(backend.requests) == 1
 
 
+def test_qwen_chat_does_not_send_exhausted_tool_schema() -> None:
+    backend = QwenFakeBackend([_output_response()])
+    runner = StageRunner(
+        llm=backend,
+        system_prompt="Return the structured result.",
+        tools=[LookupTool()],
+        output_schema=AnswerOutput,
+        max_rounds=1,
+        stage_name="verification",
+        attach_image=False,
+        tool_call_limits={"lookup_fact": 1},
+        prior_steps=[
+            StageStep(
+                stage_name="verification",
+                action_type="tool_call",
+                tool_name="lookup_fact",
+            )
+        ],
+    )
+
+    parsed, _steps = asyncio.run(runner.run("Inspect the current state."))
+
+    assert parsed == AnswerOutput(answer="ceremonial coach")
+    assert "tools" not in backend.requests[0]
+    assert backend.requests[0]["response_format"]["type"] == "json_schema"
+
+
 def test_qwen_native_function_round_trip_uses_tool_role() -> None:
     backend = QwenFakeBackend([_tool_response(), _output_response()])
     tool = LookupTool()

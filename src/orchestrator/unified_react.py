@@ -27,6 +27,7 @@ from src.orchestrator.route_policy import (
     routes_semantically_equivalent,
 )
 from src.orchestrator.state import ImageOnlyRuntimeCase, PerceptionReport
+from src.orchestrator.source_provenance import canonicalize_url
 from src.orchestrator.task_store import (
     MAX_TOOL_ACTIONS,
     apply_initial_action_intent,
@@ -271,6 +272,55 @@ def _task_ids_for_tool(
     return list(dict.fromkeys(task_ids))
 
 
+def _candidate_urls_for_tool(
+    state: ImageOnlyInvestigationState,
+    *,
+    tool_name: str,
+    task_id: str,
+) -> list[str]:
+    """Return the current runtime-owned URL candidates for one task/tool."""
+
+    if tool_name not in {"visit", "compare_with_reference"}:
+        return []
+    prefix = f"{tool_name}:{task_id}:"
+    candidates: list[str] = []
+    for route in remaining_claim_hypothesis_routes(
+        state,
+        task_ids={task_id},
+    ):
+        if not route.startswith(prefix):
+            continue
+        value = route[len(prefix):].strip()
+        if value and canonicalize_url(value):
+            candidates.append(value)
+    return list(dict.fromkeys(candidates))
+
+
+def _annotate_runtime_url_candidates(
+    tool: BaseTool,
+    *,
+    candidates: Sequence[str],
+) -> None:
+    """Explain dynamic URL ownership without sending a fragile enum."""
+
+    if tool.name not in {"visit", "compare_with_reference"} or not candidates:
+        return
+    property_name = "url" if tool.name == "visit" else "reference_url"
+    properties = tool.parameters.setdefault("properties", {})
+    property_schema = properties.get(property_name)
+    if not isinstance(property_schema, dict):
+        return
+    description = str(property_schema.get("description", "")).strip()
+    candidate_hint = (
+        " Runtime-owned candidates for the active task are: "
+        + "; ".join(candidates[:8])
+        + ". Use only one of these exact candidates; the runtime rejects "
+        "stale or invented URLs."
+    )
+    if candidate_hint not in description:
+        property_schema["description"] = description + candidate_hint
+
+
 def _base_parameters(
     tool: BaseTool,
     *,
@@ -410,10 +460,21 @@ class StopRouteTool(BaseTool):
 def build_unified_react_tools(
     state: ImageOnlyInvestigationState,
     all_tools: Mapping[str, BaseTool],
+    *,
+    excluded_tool_names: Iterable[str] = (),
 ) -> list[BaseTool]:
     """Build a fresh narrow model schema for the current unified-ReAct turn."""
 
-    names = available_unified_react_tool_names(state)
+    excluded = {
+        str(name).strip()
+        for name in excluded_tool_names
+        if str(name).strip()
+    }
+    names = [
+        name
+        for name in available_unified_react_tool_names(state)
+        if name not in excluded
+    ]
     tools: list[BaseTool] = []
     if names == list(_BOOTSTRAP_TOOLS) or (
         not bootstrap_complete(state) and names
@@ -449,12 +510,24 @@ def build_unified_react_tools(
             continue
         task_ids = tuple(_task_ids_for_tool(state, tool_name=name))
         if task_ids:
-            tools.append(
-                UnifiedReactToolAdapter(
-                    delegate=delegate,
-                    task_ids=task_ids,
-                )
+            adapter = UnifiedReactToolAdapter(
+                delegate=delegate,
+                task_ids=task_ids,
             )
+            candidate_urls = [
+                candidate
+                for task_id in task_ids
+                for candidate in _candidate_urls_for_tool(
+                    state,
+                    tool_name=name,
+                    task_id=task_id,
+                )
+            ]
+            _annotate_runtime_url_candidates(
+                adapter,
+                candidates=list(dict.fromkeys(candidate_urls)),
+            )
+            tools.append(adapter)
     return tools
 
 
@@ -513,6 +586,44 @@ def validate_unified_react_action(
         return "tool action must reference one active runtime task_id"
     if tool_name not in _task_tools(state, task_id):
         return f"{tool_name} is not currently executable for task_id={task_id}"
+    if tool_name in {"visit", "compare_with_reference"}:
+        candidate_urls = _candidate_urls_for_tool(
+            state,
+            tool_name=tool_name,
+            task_id=task_id,
+        )
+        argument_name = "url" if tool_name == "visit" else "reference_url"
+        raw_urls = tool_args.get(argument_name, [])
+        if isinstance(raw_urls, str):
+            raw_urls = [raw_urls]
+        if not isinstance(raw_urls, list):
+            raw_urls = []
+        requested_urls = [
+            canonicalize_url(str(value))
+            for value in raw_urls
+            if canonicalize_url(str(value))
+        ]
+        allowed_urls = {
+            canonicalize_url(value)
+            for value in candidate_urls
+            if canonicalize_url(value)
+        }
+        if not requested_urls:
+            return (
+                f"{tool_name} requires one current runtime-owned "
+                f"{argument_name} candidate"
+            )
+        stale = [
+            value
+            for value in requested_urls
+            if value not in allowed_urls
+        ]
+        if stale:
+            return (
+                f"{tool_name} received a stale or unavailable "
+                f"{argument_name}; choose only current candidates: "
+                + ", ".join(candidate_urls[:8])
+            )
     if tool_name == "text_search":
         query = tool_args.get("queries", "")
         if isinstance(query, list):

@@ -521,7 +521,13 @@ class Orchestrator:
                     )
                     break
 
-                tools = build_unified_react_tools(investigation, self.all_tools)
+                tools = build_unified_react_tools(
+                    investigation,
+                    self.all_tools,
+                    excluded_tool_names=self._exhausted_unified_react_tools(
+                        state.all_steps
+                    ),
+                )
                 if not tools:
                     if not investigation.target_facts:
                         raise RuntimeError(
@@ -1498,6 +1504,27 @@ class Orchestrator:
                 ),
             ),
         }
+
+    def _exhausted_unified_react_tools(
+        self,
+        steps: Sequence[Any],
+    ) -> List[str]:
+        """Return hard-exhausted tools before building the next action schema."""
+
+        used: Dict[str, int] = {}
+        for step in steps:
+            if str(getattr(step, "stage_name", "")).strip() != "unified_react":
+                continue
+            if str(getattr(step, "action_type", "")).strip() != "tool_call":
+                continue
+            tool_name = str(getattr(step, "tool_name", "")).strip()
+            if tool_name:
+                used[tool_name] = used.get(tool_name, 0) + 1
+        return [
+            tool_name
+            for tool_name, limit in self.verification_tool_limits.items()
+            if used.get(tool_name, 0) >= int(limit)
+        ]
 
     @staticmethod
     def _sync_image_only_state(

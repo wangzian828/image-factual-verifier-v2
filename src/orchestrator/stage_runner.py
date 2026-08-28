@@ -355,10 +355,12 @@ class StageRunner:
         action_turns = 0
         correction_turns = 0
         request_index = 0
-        correction_only_turns = native_chat and bool(self.tools_list)
+        correction_only_turns = native_chat and bool(
+            self._build_native_tool_schemas(steps=steps)
+        )
         next_lifecycle_kind = (
             "tool_roundtrip"
-            if native_chat and bool(self.tools_list)
+            if correction_only_turns
             else "standalone_request"
         )
         next_parent_context_request_id = ""
@@ -436,7 +438,26 @@ class StageRunner:
         ) < self.max_rounds:
             request_index += 1
             round_num = request_index
-            messages = self._build_round_messages(system_msg, user_msg, history, evidence_so_far)
+            active_tool_schemas = self._build_native_tool_schemas(steps=steps)
+            active_tool_names = {
+                str(item.get("name", "")).strip()
+                for item in active_tool_schemas
+                if str(item.get("name", "")).strip()
+            }
+            if native_chat:
+                system_msg["content"] = self._build_native_chat_system_content(
+                    available_tool_names=active_tool_names,
+                )
+            else:
+                system_msg["content"] = self._build_system_content(
+                    steps=steps,
+                )
+            messages = self._build_round_messages(
+                system_msg,
+                user_msg,
+                history,
+                evidence_so_far,
+            )
             completed_tool_calls = sum(
                 1 for item in steps if item.action_type == "tool_call"
             )
@@ -444,7 +465,7 @@ class StageRunner:
                 messages,
                 require_tool=(
                     native_chat
-                    and bool(self.tools_list)
+                    and bool(active_tool_schemas)
                     and (
                         self.force_tool_each_round
                         or completed_tool_calls < self.min_tool_calls
@@ -453,10 +474,11 @@ class StageRunner:
                 lifecycle_kind=next_lifecycle_kind,
                 parent_context_request_id=next_parent_context_request_id,
                 generation_config=next_generation_config,
+                active_steps=steps,
             )
             next_lifecycle_kind = (
                 "tool_roundtrip"
-                if native_chat and bool(self.tools_list)
+                if native_chat and bool(active_tool_schemas)
                 else "standalone_request"
             )
             next_parent_context_request_id = ""
@@ -471,14 +493,10 @@ class StageRunner:
                     "policy_input": self._policy_input_snapshot(
                         system_instruction=system_msg["content"],
                         input_payload=messages[1:],
-                        tools=(
-                            self._build_native_tool_schemas()
-                            if native_chat and self.tools_list
-                            else []
-                        ),
+                        tools=active_tool_schemas if native_chat else [],
                         response_format=(
                             self._openai_response_format()
-                            if native_chat and not self.tools_list
+                            if native_chat and not active_tool_schemas
                             else None
                         ),
                     ),
@@ -533,6 +551,26 @@ class StageRunner:
                     if request_chat_protocol_correction(
                         step,
                         f"unknown tool {tool_name!r}",
+                    ):
+                        continue
+                    break
+                if tool_name not in active_tool_names:
+                    step.action_type = "format_error"
+                    step.metadata["error_class"] = "protocol_error"
+                    step.metadata["tool_unavailable"] = True
+                    unavailable_message = self._tool_unavailable_message(
+                        tool_name,
+                        active_tool_names,
+                    )
+                    step.metadata["rejection_reason"] = unavailable_message
+                    steps.append(step)
+                    history.append({"role": "assistant", "content": content})
+                    history.append(
+                        {"role": "user", "content": unavailable_message}
+                    )
+                    if request_chat_protocol_correction(
+                        step,
+                        unavailable_message,
                     ):
                         continue
                     break
@@ -602,7 +640,15 @@ class StageRunner:
                     step.metadata["tool_budget_reached"] = True
                     steps.append(step)
                     history.append({"role": "assistant", "content": content})
-                    history.append({"role": "user", "content": self._tool_budget_message(tool_name)})
+                    history.append(
+                        {
+                            "role": "user",
+                            "content": self._tool_budget_message(
+                                tool_name,
+                                steps=steps,
+                            ),
+                        }
+                    )
                     if request_chat_protocol_correction(
                         step,
                         f"{tool_name} budget reached",
@@ -1093,7 +1139,6 @@ class StageRunner:
         evidence_so_far: List[str] = []
         previous_interaction_id = self._session_previous_interaction_id()
         next_input: Any = self._build_session_input(input_context)
-        native_tools = self._build_native_tool_schemas()
         system_suffix = ""
 
         action_turns = 0
@@ -1133,8 +1178,17 @@ class StageRunner:
             request_previous_interaction_id = previous_interaction_id
             started = time.perf_counter()
             self.llm_api_calls += 1
+            native_tools = self._build_native_tool_schemas(steps=steps)
+            active_tool_names = {
+                str(item.get("name", "")).strip()
+                for item in native_tools
+                if str(item.get("name", "")).strip()
+            }
             system_instruction = (
-                self._build_native_system_content() + system_suffix
+                self._build_native_system_content(
+                    available_tool_names=active_tool_names,
+                )
+                + system_suffix
             )
             # Gemini Interactions rejects requests that combine native function
             # tools with a structured ``response_format``. Keep tool-bearing
@@ -1143,8 +1197,12 @@ class StageRunner:
             # uses the exact structured response schema.
             response_format = None
             request_generation_config = dict(self.generation_config)
-            if self.force_tool_each_round or action_turns < self.min_tool_calls:
+            if native_tools and (
+                self.force_tool_each_round or action_turns < self.min_tool_calls
+            ):
                 request_generation_config["tool_choice"] = "any"
+            elif not native_tools:
+                response_format = self._native_response_format()
             try:
                 payload = await self._create_interaction(
                     input_payload=next_input,
@@ -1283,8 +1341,19 @@ class StageRunner:
                         error_message = self._unknown_tool_message(tool_name)
                         step.metadata["invalid_tool_name"] = tool_name
                         step.metadata["error_class"] = "protocol_error"
+                    elif tool_name not in active_tool_names:
+                        error_message = self._tool_unavailable_message(
+                            tool_name,
+                            active_tool_names,
+                        )
+                        step.metadata["tool_unavailable"] = True
+                        step.metadata["error_class"] = "protocol_error"
                     else:
-                        schema_error = self._validate_native_tool_args(tool_name, native_args)
+                        schema_error = self._validate_native_tool_args(
+                            tool_name,
+                            native_args,
+                            steps=steps,
+                        )
                         if schema_error:
                             error_message = schema_error
                             step.metadata["invalid_tool_arguments"] = True
@@ -1309,6 +1378,10 @@ class StageRunner:
 
                     if error_message:
                         step.action_type = "format_error"
+                        step.metadata.setdefault(
+                            "rejection_reason",
+                            error_message,
+                        )
                         step.tool_result = json.dumps(
                             {"status": "error", "error": error_message},
                             ensure_ascii=False,
@@ -1455,12 +1528,17 @@ class StageRunner:
                     "Do not return final output yet. Invoke exactly one available "
                     "function for an active task."
                     if (
-                        self.force_tool_each_round
-                        or action_turns < self.min_tool_calls
+                        native_tools
+                        and (
+                            self.force_tool_each_round
+                            or action_turns < self.min_tool_calls
+                        )
                     )
                     else (
-                        "Return one valid final JSON object, or call one available "
-                        "function."
+                        "Return one valid final JSON object."
+                        if not native_tools
+                        else "Return one valid final JSON object, or call one "
+                        "available function."
                     )
                 )
                 system_suffix = ""
@@ -1493,8 +1571,11 @@ class StageRunner:
                     "completed its required tool action. Do not return output. "
                     "Invoke exactly one available function for an active task."
                     if (
-                        self.force_tool_each_round
-                        or action_turns < self.min_tool_calls
+                        native_tools
+                        and (
+                            self.force_tool_each_round
+                            or action_turns < self.min_tool_calls
+                        )
                     )
                     else (
                         "The output schema was invalid. Return one valid JSON "
@@ -1521,12 +1602,17 @@ class StageRunner:
                 "Do not return final output yet. Invoke exactly one available "
                 "function for an active task."
                 if (
-                    self.force_tool_each_round
-                    or action_turns < self.min_tool_calls
+                    native_tools
+                    and (
+                        self.force_tool_each_round
+                        or action_turns < self.min_tool_calls
+                    )
                 )
                 else (
-                    "Use a native function call, or return exactly one valid final "
-                    "JSON object."
+                    "Return exactly one valid final JSON object."
+                    if not native_tools
+                    else "Use a native function call, or return exactly one valid "
+                    "final JSON object."
                 )
             )
             system_suffix = ""
@@ -1543,16 +1629,39 @@ class StageRunner:
         if steps and not hasattr(exc, "stage_steps"):
             setattr(exc, "stage_steps", list(steps))
 
-    def _build_native_system_content(self) -> str:
+    def _build_native_system_content(
+        self,
+        *,
+        available_tool_names: Optional[Sequence[str]] = None,
+    ) -> str:
         prompt = re.sub(
             r"Return exactly one JSON object inside <output>\.\.\.</output>",
             "Return exactly one JSON object",
             self.system_prompt,
         )
+        if available_tool_names is None:
+            available_tool_names = self._available_tool_names()
+        available = list(dict.fromkeys(
+            str(name).strip()
+            for name in available_tool_names
+            if str(name).strip()
+        ))
+        availability_instruction = (
+            "- The runtime tool list is authoritative. Invoke only a function "
+            "currently present in that list; a tool omitted from the list is "
+            "unavailable and must not be called.\n"
+            f"- Currently executable tools: {', '.join(available)}.\n"
+            if available
+            else (
+                "- No executable tool remains in this segment. Do not call a "
+                "function; return the required JSON object.\n"
+            )
+        )
         return (
             prompt
             + "\n\nNative Gemini Interactions protocol:\n"
             + "- Invoke tools through native function calls. Never write <tool_call> markup.\n"
+            + availability_instruction
             + (
                 "- Invoke at most one function in each action turn.\n"
                 if self.max_tool_calls_per_turn == 1
@@ -1561,14 +1670,14 @@ class StageRunner:
             + (
                 f"- Before final output, this segment requires at least "
                 f"{self.min_tool_calls} executable function call(s).\n"
-                if self.min_tool_calls
+                if self.min_tool_calls and available
                 else ""
             )
             + (
                 "- Every action turn in this segment must invoke exactly one "
                 "function. Final JSON is requested separately after the action "
                 "budget.\n"
-                if self.force_tool_each_round
+                if self.force_tool_each_round and available
                 else ""
             )
             + "- When the investigation is complete, return exactly one JSON object. "
@@ -1576,11 +1685,34 @@ class StageRunner:
             + "- Tool failures are observations to react to, not successful evidence."
         )
 
-    def _build_native_chat_system_content(self) -> str:
+    def _build_native_chat_system_content(
+        self,
+        *,
+        available_tool_names: Optional[Sequence[str]] = None,
+    ) -> str:
         prompt = re.sub(
             r"Return exactly one JSON object inside <output>\.\.\.</output>",
             "Return exactly one JSON object",
             self.system_prompt,
+        )
+        if available_tool_names is None:
+            available_tool_names = self._available_tool_names()
+        available = list(dict.fromkeys(
+            str(name).strip()
+            for name in available_tool_names
+            if str(name).strip()
+        ))
+        availability_instruction = (
+            "\n\nRuntime tool availability:\n"
+            "- Invoke only a tool currently supplied by the runtime. A tool "
+            "omitted from the current request is unavailable; do not call it.\n"
+            f"- Currently executable tools: {', '.join(available)}.\n"
+            if available
+            else (
+                "\n\nRuntime tool availability:\n"
+                "- No executable tool remains. Return the required JSON object "
+                "without a tool call.\n"
+            )
         )
         qwen_schema_hint = ""
         if (
@@ -1608,15 +1740,17 @@ class StageRunner:
                 )
                 + "\n"
             )
-        if not self.tools_list:
+        if not available:
             return (
                 prompt
                 + qwen_schema_hint
+                + availability_instruction
                 + "\n\nReturn one JSON object matching the response schema."
             )
         return (
             prompt
             + qwen_schema_hint
+            + availability_instruction
             + "\n\nUse native function calls for tools. Return one JSON object "
             + "when finished; tool failures are not evidence."
         )
@@ -1703,9 +1837,13 @@ class StageRunner:
             return None
         return calls[0] if isinstance(calls[0], dict) else None
 
-    def _build_native_tool_schemas(self) -> List[Dict[str, Any]]:
+    def _build_native_tool_schemas(
+        self,
+        *,
+        steps: Optional[List[StageStep]] = None,
+    ) -> List[Dict[str, Any]]:
         schemas: List[Dict[str, Any]] = []
-        for tool in self.tools_list:
+        for tool in self._available_tool_objects(steps=steps):
             parameters = deepcopy(tool.parameters or {})
             parameters.setdefault("type", "object")
             properties = parameters.setdefault("properties", {})
@@ -1865,7 +2003,13 @@ class StageRunner:
             normalized.setdefault("items", {"type": "string"})
         return normalized
 
-    def _validate_native_tool_args(self, tool_name: str, tool_args: Dict[str, Any]) -> str:
+    def _validate_native_tool_args(
+        self,
+        tool_name: str,
+        tool_args: Dict[str, Any],
+        *,
+        steps: Optional[List[StageStep]] = None,
+    ) -> str:
         tool = self.tools.get(tool_name)
         if tool is None:
             return self._unknown_tool_message(tool_name)
@@ -1874,10 +2018,18 @@ class StageRunner:
             tool_args,
         )
         schema = next(
-            item["parameters"]
-            for item in self._build_native_tool_schemas()
-            if item["name"] == tool_name
+            (
+                item["parameters"]
+                for item in self._build_native_tool_schemas(steps=steps)
+                if item["name"] == tool_name
+            ),
+            None,
         )
+        if schema is None:
+            return self._tool_unavailable_message(
+                tool_name,
+                self._available_tool_names(steps=steps),
+            )
         properties = schema.get("properties", {}) or {}
         unknown = sorted(set(validation_args) - set(properties))
         if unknown:
@@ -2312,7 +2464,9 @@ class StageRunner:
             forced_input = f"{pending_input}\n\n{directive}" if pending_input else directive
 
         system_instruction = (
-            self._build_native_system_content() + "\n\n" + directive
+            self._build_native_system_content(available_tool_names=[])
+            + "\n\n"
+            + directive
         )
         response_format = self._native_response_format()
         request_input: Any = forced_input
@@ -2530,12 +2684,21 @@ class StageRunner:
             require_all_properties=True,
         )
 
-    def _build_system_content(self) -> str:
-        if not self.tools_list:
+    def _build_system_content(
+        self,
+        *,
+        steps: Optional[List[StageStep]] = None,
+    ) -> str:
+        available_tools = self._available_tool_objects(steps=steps)
+        if not available_tools:
             return self.system_prompt + self._output_format_instructions()
 
         lines = [self.system_prompt, "", "Available tools:"]
-        for tool in self.tools_list:
+        lines.append(
+            "Only the tools listed below are executable in this request; "
+            "omitted tools are unavailable."
+        )
+        for tool in available_tools:
             required = tool.parameters.get("required", [])
             props = list((tool.parameters.get("properties", {}) or {}).keys())
             line = f"- {tool.name}"
@@ -2562,7 +2725,7 @@ class StageRunner:
         if required_question_error:
             suffix = (
                 " No more tool turns remain."
-                if final_attempt and self.tools_list
+                if final_attempt and self._available_tool_names(steps=steps)
                 else " This is the final correction attempt for this stage; a "
                 "non-terminal output remains valid."
                 if final_attempt
@@ -2574,7 +2737,7 @@ class StageRunner:
             if not accepted:
                 suffix = (
                     " No more tool turns remain."
-                    if final_attempt and self.tools_list
+                    if final_attempt and self._available_tool_names(steps=steps)
                     else " This is the final correction attempt for this stage; a "
                     "non-terminal output remains valid."
                     if final_attempt
@@ -3216,6 +3379,7 @@ class StageRunner:
         lifecycle_kind: str = "",
         parent_context_request_id: str = "",
         suppress_tools: bool = False,
+        active_steps: Optional[List[StageStep]] = None,
     ) -> Tuple[LLMResponse, Dict[str, Any]]:
         started = time.perf_counter()
         self.llm_api_calls += 1
@@ -3236,8 +3400,11 @@ class StageRunner:
             )
         response_format: Optional[Dict[str, Any]] = None
         if self._uses_native_chat_completions():
-            if self.tools_list and not suppress_tools:
-                request_kwargs["tools"] = self._build_native_tool_schemas()
+            active_tool_schemas = self._build_native_tool_schemas(
+                steps=active_steps,
+            )
+            if active_tool_schemas and not suppress_tools:
+                request_kwargs["tools"] = active_tool_schemas
                 request_kwargs["tool_choice"] = (
                     "required" if require_tool else "auto"
                 )
@@ -3249,7 +3416,8 @@ class StageRunner:
         request_id = ""
         effective_lifecycle_kind = lifecycle_kind.strip() or (
             "tool_roundtrip"
-            if self._uses_native_chat_completions() and bool(self.tools_list)
+            if self._uses_native_chat_completions()
+            and bool(request_kwargs.get("tools"))
             else "standalone_request"
         )
         effective_parent_request_id = parent_context_request_id.strip() or None
@@ -4461,6 +4629,36 @@ class StageRunner:
                 return True
         return False
 
+    def _available_tool_objects(
+        self,
+        *,
+        steps: Optional[List[StageStep]] = None,
+    ) -> List[BaseTool]:
+        """Return tools that still have runtime budget for this stage.
+
+        A tool budget is a hard runtime capability boundary, not merely a
+        post-hoc validator. Keeping this calculation here makes every provider
+        path use the same source of truth when constructing its tool schema.
+        """
+
+        current_steps = list(steps or [])
+        return [
+            tool
+            for tool in self.tools_list
+            if not self._tool_budget_reached(current_steps, tool.name)
+        ]
+
+    def _available_tool_names(
+        self,
+        *,
+        steps: Optional[List[StageStep]] = None,
+    ) -> List[str]:
+        return [
+            tool.name
+            for tool in self._available_tool_objects(steps=steps)
+            if str(tool.name).strip()
+        ]
+
     def _tool_budget_reached(self, steps: List[StageStep], tool_name: str) -> bool:
         limit = self.tool_call_limits.get(tool_name)
         if limit is None:
@@ -4493,6 +4691,24 @@ class StageRunner:
         available = ", ".join(self.tools.keys()) if self.tools else "(none)"
         return f"Tool '{tool_name}' is not available in this stage. Available tools: {available}"
 
+    def _tool_unavailable_message(
+        self,
+        tool_name: str,
+        available_tool_names: Sequence[str],
+    ) -> str:
+        available = ", ".join(
+            dict.fromkeys(
+                str(name).strip()
+                for name in available_tool_names
+                if str(name).strip()
+            )
+        ) or "(none)"
+        return (
+            f"Tool '{tool_name}' is not currently executable: it is exhausted "
+            "or no longer belongs to the active runtime route. Do not call it "
+            f"again. Available tools: {available}."
+        )
+
     def _duplicate_tool_message(
         self,
         tool_name: str,
@@ -4512,5 +4728,20 @@ class StageRunner:
             "Use a different available tool or materially different arguments."
         )
 
-    def _tool_budget_message(self, tool_name: str) -> str:
-        return f"Tool budget for '{tool_name}' is exhausted. Use another tool or finalize the output."
+    def _tool_budget_message(
+        self,
+        tool_name: str,
+        *,
+        steps: Optional[List[StageStep]] = None,
+    ) -> str:
+        available = self._available_tool_names(steps=steps)
+        suffix = (
+            " Available tools: " + ", ".join(available) + "."
+            if available
+            else " No executable tools remain; return the required JSON object."
+        )
+        return (
+            f"Tool budget for '{tool_name}' is exhausted. Do not call it again; "
+            "use another available tool or finalize the output."
+            + suffix
+        )

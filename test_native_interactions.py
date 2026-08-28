@@ -69,6 +69,27 @@ class RecordingTool(BaseTool):
         }
 
 
+class AlternateRecordingTool(BaseTool):
+    name = "check_consistency"
+    description = "Check one consistency relation."
+    parameters = {
+        "type": "object",
+        "properties": {"relation": {"type": "string"}},
+        "required": ["relation"],
+    }
+
+    def __init__(self):
+        self.calls: List[Dict[str, Any]] = []
+
+    def call(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        self.calls.append(dict(params))
+        return {
+            "status": "success",
+            "consistent": True,
+            "details": "The relation is consistent.",
+        }
+
+
 class VisualInspectTool(BaseTool):
     name = "crop_and_inspect"
     description = "Inspect a visual crop."
@@ -275,6 +296,81 @@ def test_native_function_call_round_trip() -> None:
     assert returned["function_call_id"] == "call-1"
     assert "directly answers" in json.dumps(returned["result"])
     assert "is_error" not in function_result
+
+
+def test_native_tool_schema_hides_a_budget_exhausted_tool() -> None:
+    prior = StageStep(
+        stage_name="verification",
+        action_type="tool_call",
+        tool_name="text_search",
+    )
+    runner = StageRunner(
+        llm=NativeFakeBackend([]),
+        system_prompt="Investigate with tools.",
+        tools=[RecordingTool(), AlternateRecordingTool()],
+        stage_name="verification",
+        tool_call_limits={"text_search": 1},
+        attach_image=False,
+    )
+    runner.prior_steps = [prior]
+
+    schemas = runner._build_native_tool_schemas()
+
+    assert [item["name"] for item in schemas] == ["check_consistency"]
+    assert "text_search" not in json.dumps(schemas)
+
+
+def test_native_correction_rebuilds_tools_after_budget_boundary() -> None:
+    hidden_search = _function_call_response()
+    hidden_search["id"] = "interaction-hidden-search"
+    alternate_call = _function_call_response()
+    alternate_call["id"] = "interaction-alternate"
+    alternate_call["steps"][0]["name"] = "check_consistency"
+    alternate_call["steps"][0]["arguments"] = {
+        "question_id": "q1",
+        "relation": "bridge and river",
+    }
+    completed = _completed_response()
+    completed["id"] = "interaction-after-alternate"
+    backend = NativeFakeBackend([hidden_search, alternate_call, completed])
+    alternate = AlternateRecordingTool()
+    runner = StageRunner(
+        llm=backend,
+        system_prompt="Investigate with tools.",
+        tools=[RecordingTool(), alternate],
+        output_schema=ToolStageOutput,
+        max_rounds=2,
+        stage_name="verification",
+        min_tool_calls=1,
+        tool_call_limits={"text_search": 1},
+        attach_image=False,
+        prior_steps=[
+            StageStep(
+                stage_name="verification",
+                action_type="tool_call",
+                tool_name="text_search",
+            )
+        ],
+        should_stop=lambda steps: any(
+            item.action_type == "tool_call" for item in steps
+        ),
+    )
+
+    parsed, steps = asyncio.run(runner.run("- [q1] verify"))
+
+    assert parsed is not None
+    assert [item["name"] for item in backend.requests[0]["tools"]] == [
+        "check_consistency"
+    ]
+    assert [item["name"] for item in backend.requests[1]["tools"]] == [
+        "check_consistency"
+    ]
+    assert steps[0].action_type == "format_error"
+    assert steps[0].metadata["tool_unavailable"] is True
+    assert steps[0].metadata["rejection_reason"].startswith(
+        "Tool 'text_search' is not currently executable"
+    )
+    assert alternate.calls == [{"relation": "bridge and river"}]
 
 
 def test_native_tool_schema_uses_runtime_owned_task_ids_without_bracket_hints() -> None:
