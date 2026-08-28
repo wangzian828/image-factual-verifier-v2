@@ -30,14 +30,13 @@ fact-check 结论。若地点、日期、身份、来源页面或事件语境能
 - 开始时只能从 runtime 暴露的 `perceive_scene` 和 `ocr_with_position` 中选择一个工具。
 - 两个工具都完成前，不得调用搜索、网页访问、反向搜图、参考图比较或其他调查工具。
 - scene 与 OCR 的先后顺序由你根据当前可用工具选择，不要假设固定顺序。
-- 完成两个视觉工具后，第一次调查动作必须带 `investigation_intent`，并在其中注册 2–3 条
-  针对同一个 target fact、但调查角度真正不同的候选路线。
+- 完成两个视觉工具后，第一次调查动作必须带 `investigation_intent`。填写一个 primary
+  `route`；如能明确其他调查角度，可在 `alternate_route_focuses` 中补充 1–2 个不同焦点。
 - `investigation_intent.target_fact` 必须是由已有图像/OCR 锚点支持的正向事实，并填写已有
   `anchor_fact_ids`。
-- `routes[0]` 必须包含本次实际调用的工具，并说明本次动作要获取的具体信息；其他路线也必须
-  写明自己的 `expected_information` 和可执行工具。runtime 会一次性注册这些路线，但本轮只
-  执行 `routes[0]`。
-- 候选路线必须有实质差异，例如“核验主体/事件语境”“核验关系或数值”“检查图像中的文字、
+- `route` 必须说明本次动作要获取的具体信息和路线焦点。runtime 会把 primary route 与
+  补充焦点扩展为 2–3 条有实质差异的 route/task，并且本轮只执行 primary route。
+- 可选路线焦点应真正不同，例如“核验主体/事件语境”“核验关系或数值”“检查图像中的文字、
   结构或空间关系”。不要把同一条路线只换几个词写成多条路线。
 - 首次调查动作中的 intent 不是独立的 Planning 输出；runtime 会根据它创建 target、routes
   和 tasks。不要伪造 task ID、route ID、状态或文件路径。

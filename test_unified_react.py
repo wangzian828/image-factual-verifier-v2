@@ -256,6 +256,51 @@ def test_first_real_action_creates_target_and_route_only_after_bootstrap() -> No
     assert update["created_target_fact_ids"]
 
 
+def test_compact_provider_intent_expands_to_distinct_routes() -> None:
+    state, case, _steps = _bootstrap_state()
+    anchor_id = state.facts[0].fact_id
+    compact_intent = {
+        "target_fact": {
+            "statement": "The pictured bridge is associated with the Riverfest event.",
+            "kind": "relation",
+            "predicate": "depicts_relation",
+            "anchor_fact_ids": [anchor_id],
+        },
+        "route": {
+            "route_focus": "entity_event_identity",
+            "expected_information": (
+                "Whether public event information connects Riverfest to the pictured bridge."
+            ),
+            "priority": 1,
+        },
+        "alternate_route_focuses": ["visual_consistency"],
+    }
+    step = _step(
+        tool_name="text_search",
+        tool_args={
+            "queries": "Riverfest red bridge",
+            "investigation_intent": compact_intent,
+        },
+        tool_result={
+            "status": "success",
+            "queries": [{"query": "Riverfest red bridge", "results": []}],
+        },
+        call_id="compact-search",
+    )
+
+    assert not validate_unified_react_action(
+        state,
+        tool_name="text_search",
+        tool_args=step.tool_args,
+    )
+    update = reduce_unified_react_action(state, step=step, runtime_case=case)
+
+    assert update["accepted"] is True
+    assert len(state.search_hypotheses) == 3
+    assert len(state.tasks) == 3
+    assert state.search_hypotheses[0].suggested_tools[0] == "text_search"
+
+
 def test_external_fetch_failures_use_existing_recoverable_failure_categories() -> None:
     assert (
         _failure_code(

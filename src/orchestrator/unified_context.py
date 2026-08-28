@@ -109,15 +109,13 @@ def render_unified_react_context(state: ImageOnlyInvestigationState) -> str:
                     "one positive image-grounded world relation using existing "
                     "anchor_fact_ids"
                 ),
-                "routes": (
-                    "two or three materially different routes for the same target; "
-                    "routes[0] must include the tool being called, and only routes[0] "
-                    "runs in this turn"
+                "route": (
+                    "one primary route for this action, with route_focus, "
+                    "expected_information, and priority"
                 ),
-                "route_requirement": (
-                    "Each route must state expected_information and executable "
-                    "suggested_tools. Use queries only for neutral underlying-fact "
-                    "retrieval."
+                "alternate_route_focuses": (
+                    "optional distinct route focuses; runtime expands the primary "
+                    "route into two or three material routes and runs only primary"
                 ),
             },
         }

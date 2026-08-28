@@ -7,8 +7,8 @@
 2. **视觉工具也是工具**：模型先选择 `perceive_scene` 或 `ocr_with_position`，二者完成后
    才开放外部调查工具，顺序不写死。
 3. **首次调查携带 intent**：`investigation_intent.target_fact` 写正向现实事实，引用
-   `anchor_fact_ids`；`routes` 写 2–3 条针对同一事实但角度不同的候选路线。runtime 一次性
-   创建这些 route/task，本轮只执行 `routes[0]`。
+   `anchor_fact_ids`；provider 写一个主 `route`，可选写 `alternate_route_focuses`。runtime
+   将其扩展为 2–3 条候选 route/task，本轮只执行主路线。
 4. **换方向直接换动作**：新 query、新页面、新视觉检查都直接成为下一轮 ReAct action，没
    有独立 Replan 阶段。
 5. **路线不能过早结束**：只有当前 route 的候选和可执行 material step 都耗尽，才能调用

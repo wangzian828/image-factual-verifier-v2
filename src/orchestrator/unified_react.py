@@ -55,8 +55,43 @@ _FIRST_INVESTIGATION_TOOLS = (
 _ADAPTER_ONLY_FIELDS = frozenset({"task_id", "investigation_intent"})
 
 
+def _parse_initial_investigation_intent(
+    raw_intent: Any,
+    *,
+    tool_name: str,
+) -> InvestigationIntent:
+    """Parse compact provider input and bind the actual first tool.
+
+    The canonical model keeps two or three complete route objects.  The
+    provider-facing contract deliberately emits only a primary route, so the
+    model validator expands it before the reducer sees it.  Binding the actual
+    function here also prevents a harmless provider omission from becoming a
+    protocol rejection: the first route is, by definition, the route started
+    by this function call.
+    """
+
+    intent = InvestigationIntent.model_validate(raw_intent)
+    payload = intent.model_dump(mode="python")
+    routes = list(payload.get("routes", []) or [])
+    if not routes:
+        raise ValueError("initial investigation intent has no routes")
+    first = dict(routes[0])
+    first["suggested_tools"] = list(
+        dict.fromkeys([tool_name, *(first.get("suggested_tools", []) or [])])
+    )[:4]
+    routes[0] = first
+    payload["routes"] = routes
+    return InvestigationIntent.model_validate(payload)
+
+
 def _investigation_intent_tool_schema() -> dict[str, Any]:
-    """Return an inline Gemini-compatible schema without JSON-schema refs."""
+    """Return a compact Gemini-compatible schema without JSON-schema refs.
+
+    The runtime stores two or three routes, but the provider only needs to emit
+    one primary route plus optional route-focus hints.  Keeping the wire shape
+    compact avoids invalid-argument failures on Gemini 3.6 while preserving the
+    canonical multi-route state after normalization.
+    """
 
     route_schema = {
         "type": "object",
@@ -78,44 +113,9 @@ def _investigation_intent_tool_schema() -> dict[str, Any]:
                     "same target relation."
                 ),
             },
-            "queries": {
-                "type": "array",
-                "maxItems": 3,
-                "items": {
-                    "type": "string",
-                    "description": (
-                        "Neutral query for the underlying subject, event, "
-                        "relation, value, or scene property."
-                    ),
-                },
-            },
-            "suggested_tools": {
-                "type": "array",
-                "minItems": 1,
-                "maxItems": 4,
-                "items": {
-                    "type": "string",
-                    "enum": [
-                        "reverse_image_search",
-                        "text_search",
-                        "visit",
-                        "compare_with_reference",
-                        "check_consistency",
-                        "analyze_visual_anomalies",
-                        "crop_and_inspect",
-                        "focused_visual_inspection",
-                        "ocr_with_position",
-                    ],
-                },
-            },
             "priority": {"type": "integer", "enum": [1, 2, 3]},
         },
-        "required": [
-            "route_focus",
-            "expected_information",
-            "suggested_tools",
-            "priority",
-        ],
+        "required": ["route_focus", "expected_information", "priority"],
         "additionalProperties": False,
     }
     return {
@@ -157,19 +157,30 @@ def _investigation_intent_tool_schema() -> dict[str, Any]:
                 "required": ["statement", "kind", "predicate", "anchor_fact_ids"],
                 "additionalProperties": False,
             },
-            "routes": {
+            "route": {
+                **route_schema,
+                "description": "PRIMARY route for the first investigation action.",
+            },
+            "alternate_route_focuses": {
                 "type": "array",
-                "minItems": 2,
-                "maxItems": 3,
+                "maxItems": 2,
+                "items": {
+                    "type": "string",
+                    "enum": [
+                        "same_capture_reference",
+                        "entity_event_identity",
+                        "relation_value",
+                        "scene_world_constraints",
+                        "visual_consistency",
+                    ],
+                },
                 "description": (
-                    "Materially different candidate routes for the same target. "
-                    "The runtime registers all routes and executes only the "
-                    "first route in this tool call."
+                    "Optional distinct route focuses. The runtime fills any "
+                    "missing complementary routes."
                 ),
-                "items": route_schema,
             },
         },
-        "required": ["target_fact", "routes"],
+        "required": ["target_fact", "route"],
         "additionalProperties": False,
     }
 
@@ -464,7 +475,10 @@ def validate_unified_react_action(
     if not state.target_facts:
         raw_intent = tool_args.get("investigation_intent")
         try:
-            intent = InvestigationIntent.model_validate(raw_intent)
+            intent = _parse_initial_investigation_intent(
+                raw_intent,
+                tool_name=tool_name,
+            )
         except Exception as exc:
             return f"invalid investigation_intent: {exc}"
         return validate_initial_action_intent(
@@ -642,7 +656,10 @@ def reduce_unified_react_action(
 
     initial_update: dict[str, Any] = {}
     if not state.target_facts:
-        intent = InvestigationIntent.model_validate(tool_args.get("investigation_intent"))
+        intent = _parse_initial_investigation_intent(
+            tool_args.get("investigation_intent"),
+            tool_name=tool_name,
+        )
         initial_update = apply_initial_action_intent(
             state,
             intent,

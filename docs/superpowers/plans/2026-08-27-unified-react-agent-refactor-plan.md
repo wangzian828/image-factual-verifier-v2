@@ -15,7 +15,7 @@
 空 workspace
   -> ReAct 选择 perceive_scene / ocr_with_position
   -> ReAct 首次调查动作携带 investigation_intent
-  -> reducer 创建一个 target_fact 和 2–3 条候选 route/task
+  -> reducer 创建一个 target_fact 和 2–3 条候选 route/task（provider 只提交一个主 route）
   -> ReAct：thought -> 一个 native tool -> observation/state delta
   -> 低频 unified_reflection
   -> 低频 unified_discrepancy_decision

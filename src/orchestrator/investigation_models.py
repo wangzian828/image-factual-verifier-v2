@@ -115,6 +115,61 @@ class InvestigationRouteIntent(StrictModel):
     priority: int = Field(default=1, ge=1, le=3)
 
 
+_INITIAL_ROUTE_FOCUS_ORDER = (
+    "same_capture_reference",
+    "entity_event_identity",
+    "relation_value",
+    "scene_world_constraints",
+    "visual_consistency",
+)
+
+_INITIAL_ROUTE_DEFAULTS: Dict[str, Dict[str, Any]] = {
+    "same_capture_reference": {
+        "expected_information": (
+            "Check whether a qualified reference shows the same image or capture "
+            "and whether its visible subject matches."
+        ),
+        "suggested_tools": [
+            "reverse_image_search",
+            "visit",
+            "compare_with_reference",
+        ],
+    },
+    "entity_event_identity": {
+        "expected_information": (
+            "Verify the identity of the depicted subject or event from qualified "
+            "source text and matching visible details."
+        ),
+        "suggested_tools": ["text_search", "visit"],
+    },
+    "relation_value": {
+        "expected_information": (
+            "Verify the concrete relation, quantity, date, or value expressed by "
+            "the image."
+        ),
+        "suggested_tools": ["text_search", "visit"],
+    },
+    "scene_world_constraints": {
+        "expected_information": (
+            "Verify the depicted place, event setting, or other world constraint "
+            "using qualified source material."
+        ),
+        "suggested_tools": ["text_search", "visit", "check_consistency"],
+    },
+    "visual_consistency": {
+        "expected_information": (
+            "Check a concrete visible property, structure, text, or spatial "
+            "relation that distinguishes the target fact."
+        ),
+        "suggested_tools": [
+            "focused_visual_inspection",
+            "check_consistency",
+            "crop_and_inspect",
+        ],
+    },
+}
+
+
 class InvestigationIntent(StrictModel):
     """Orchestrator-only target plus candidate routes; never forwarded to tools."""
 
@@ -128,6 +183,78 @@ class InvestigationIntent(StrictModel):
             "only the first route."
         ),
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_provider_route_shape(cls, value: Any) -> Any:
+        """Expand the compact provider wire shape into runtime routes.
+
+        Gemini 3.6 is reliable with the historical nested ``route`` object but
+        rejects or fails to generate the larger array-of-objects schema.  Keep
+        the provider contract compact and let the runtime register the same
+        multi-route workspace deterministically.  Native/current callers may
+        still pass the canonical ``routes`` shape directly.
+        """
+
+        if not isinstance(value, Mapping) or "routes" in value:
+            return value
+        primary = value.get("route")
+        if not isinstance(primary, Mapping):
+            return value
+
+        normalized = dict(value)
+        normalized.pop("route", None)
+        raw_alternates = normalized.pop("alternate_route_focuses", [])
+        if isinstance(raw_alternates, str):
+            raw_alternates = [raw_alternates]
+        if not isinstance(raw_alternates, list):
+            raw_alternates = []
+
+        primary_route = dict(primary)
+        primary_focus = str(primary_route.get("route_focus", "")).strip()
+        if primary_focus in _INITIAL_ROUTE_DEFAULTS:
+            defaults = _INITIAL_ROUTE_DEFAULTS[primary_focus]
+            primary_route.setdefault(
+                "expected_information", defaults["expected_information"]
+            )
+            primary_route.setdefault(
+                "suggested_tools", list(defaults["suggested_tools"])
+            )
+        routes: list[Dict[str, Any]] = [primary_route]
+        used_focuses = {primary_focus}
+        for raw_focus in raw_alternates:
+            focus = str(raw_focus).strip()
+            if focus not in _INITIAL_ROUTE_DEFAULTS or focus in used_focuses:
+                continue
+            defaults = _INITIAL_ROUTE_DEFAULTS[focus]
+            routes.append(
+                {
+                    "route_focus": focus,
+                    "expected_information": defaults["expected_information"],
+                    "suggested_tools": list(defaults["suggested_tools"]),
+                    "priority": 2,
+                }
+            )
+            used_focuses.add(focus)
+
+        for focus in _INITIAL_ROUTE_FOCUS_ORDER:
+            if len(routes) >= 3:
+                break
+            if focus in used_focuses:
+                continue
+            defaults = _INITIAL_ROUTE_DEFAULTS[focus]
+            routes.append(
+                {
+                    "route_focus": focus,
+                    "expected_information": defaults["expected_information"],
+                    "suggested_tools": list(defaults["suggested_tools"]),
+                    "priority": 2,
+                }
+            )
+            used_focuses.add(focus)
+
+        normalized["routes"] = routes[:3]
+        return normalized
 
     @model_validator(mode="after")
     def validate_distinct_routes(self) -> "InvestigationIntent":
