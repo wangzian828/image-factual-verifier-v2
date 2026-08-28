@@ -348,7 +348,7 @@ def test_v03_eval_keeps_gold_post_rollout_and_writes_scorer_predictions(
     assert manifest["agent"]["decision_policy_version"] == (
         "unified-react-v1"
     )
-    assert manifest["agent"]["stage_thinking_levels"]["unified_react"] == "high"
+    assert manifest["agent"]["stage_thinking_levels"]["unified_react"] == "low"
     assert manifest["agent"]["stage_thinking_levels"][
         "unified_discrepancy_decision"
     ] == "low"

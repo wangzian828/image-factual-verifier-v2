@@ -173,7 +173,7 @@ def test_gemini_requests_thought_summaries() -> None:
     orchestrator.provider = "gemini"
 
     assert orchestrator._stage_generation_config("UNIFIED_REACT") == {
-        "thinking_level": "high",
+        "thinking_level": "low",
         "thinking_summaries": "auto",
     }
     assert orchestrator._stage_generation_config("UNIFIED_JUDGMENT") == {

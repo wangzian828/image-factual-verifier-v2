@@ -1545,18 +1545,14 @@ class Orchestrator:
     @staticmethod
     def _stage_thinking_level(stage_name: str) -> str:
         normalized_stage = stage_name.strip().upper()
-        default = (
-            "high"
-            if normalized_stage == "UNIFIED_REACT"
-            else os.getenv("GEMINI_AGENT_THINKING_LEVEL", "low")
-        )
+        fallback = os.getenv("GEMINI_AGENT_THINKING_LEVEL", "low")
         value = os.getenv(
             f"GEMINI_{normalized_stage}_THINKING_LEVEL",
-            default,
+            fallback,
         ).strip().lower()
         if value == "minimal":
             value = "low"
-        allowed = {"low", "high"}
+        allowed = {"low"}
         if value not in allowed:
             raise ValueError(
                 f"GEMINI_{normalized_stage}_THINKING_LEVEL must be one of "
