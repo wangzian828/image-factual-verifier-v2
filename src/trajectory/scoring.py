@@ -23,6 +23,9 @@ LABEL_TO_VERDICT = {
     "refuted": "fake",
     "unverifiable": "unverifiable",
 }
+UNIFIED_REACT_BOOTSTRAP_TOOLS = frozenset(
+    {"perceive_scene", "ocr_with_position"}
+)
 
 
 def _mapping(value: Any) -> Mapping[str, Any]:
@@ -1313,11 +1316,19 @@ def _score_discrepancy_trace(
     terminal_action_count = (
         int(terminal[-1].get("action_count", 0) or 0) if terminal else -1
     )
+    # ``ImageOnlyInvestigationState.action_count`` starts at the first
+    # investigation action.  The two model-selected visual bootstrap calls are
+    # still recorded under ``unified_react`` for replay/export, but they do not
+    # advance investigation coverage.  Keep the two counters in the same
+    # coordinate system or every terminal route-exhaustion trace will look like
+    # it performed two actions after determination.
     action_steps = [
         item
         for item in steps
         if str(item.get("stage", "")) == "unified_react"
         and str(item.get("action_type", "")) == "tool_call"
+        and str(item.get("tool_name", "")).strip()
+        not in UNIFIED_REACT_BOOTSTRAP_TOOLS
     ]
     post_verdict_actions = max(0, len(action_steps) - terminal_action_count)
     stop_quality = (
