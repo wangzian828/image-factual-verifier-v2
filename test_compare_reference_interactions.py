@@ -116,6 +116,9 @@ def test_compare_uses_two_interactions_content_images_and_exact_schema(tmp_path:
             require_all_properties=True,
         ),
     }
+    assert "edit_evidence_present" not in request["response_format"]["schema"][
+        "properties"
+    ]
     assert [item["type"] for item in request["input_payload"]] == [
         "text",
         "image",
@@ -204,7 +207,7 @@ def test_compare_rejects_invalid_output_contract(tmp_path: Path) -> None:
     assert result["__runtime_metrics__"]["llm_api_calls"] == 1
 
 
-def test_compare_rejects_inconsistent_edit_summary(tmp_path: Path) -> None:
+def test_compare_repairs_edit_present_without_typed_difference(tmp_path: Path) -> None:
     invalid = deepcopy(valid_comparison())
     invalid["edit_evidence_present"] = True
     invalid["edit_evidence_strength"] = "strong"
@@ -215,8 +218,39 @@ def test_compare_rejects_inconsistent_edit_summary(tmp_path: Path) -> None:
         tool.call_async({"reference_url": "https://example.test/reference.jpg"})
     )
 
-    assert result["status"] == "error"
-    assert "must match differences marked as edit evidence" in result["error"]
+    assert result["status"] == "success"
+    assert result["edit_evidence_present"] is False
+    assert result["edit_evidence_strength"] == "none"
+    assert result["contract_repairs"] == [
+        "edit_evidence_present_derived_from_difference_types",
+        "edit_evidence_strength_forced_to_none_without_edit_difference",
+    ]
+
+
+def test_compare_repairs_redundant_edit_summary_without_failing(tmp_path: Path) -> None:
+    # Gemini has returned this exact shape in a real comparison: no typed edit
+    # difference, but a stale non-none strength.  The edit summary is derived
+    # from differences by the runtime, so this is safe to canonicalize.
+    invalid = deepcopy(valid_comparison())
+    invalid["edit_evidence_present"] = False
+    invalid["edit_evidence_strength"] = "moderate"
+    backend = FakeBackend(interaction(invalid))
+    tool = make_tool(tmp_path, backend)
+
+    result = asyncio.run(
+        tool.call_async({"reference_url": "https://example.test/reference.jpg"})
+    )
+
+    assert result["status"] == "success"
+    assert result["edit_evidence_present"] is False
+    assert result["edit_evidence_strength"] == "none"
+    assert result["contract_repairs"] == [
+        "edit_evidence_strength_forced_to_none_without_edit_difference"
+    ]
+    assert result["raw_edit_evidence_summary"] == {
+        "edit_evidence_present": False,
+        "edit_evidence_strength": "moderate",
+    }
 
 
 def test_compare_derives_edit_flag_from_difference_type(tmp_path: Path) -> None:
