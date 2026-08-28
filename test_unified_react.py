@@ -15,15 +15,20 @@ from src.orchestrator.state import (
 from src.orchestrator.bootstrap import build_visual_bootstrap
 from src.orchestrator.stage_runner import StageStep
 from src.orchestrator.unified_react import (
+    RouteLocalReplanTool,
     UnifiedReactToolAdapter,
     available_unified_react_tool_names,
     build_unified_react_tools,
     new_unified_react_state,
     reduce_unified_react_action,
     reduce_visual_bootstrap_action,
+    route_local_replan_candidate,
     validate_unified_react_action,
 )
-from src.orchestrator.task_store import _failure_code
+from src.orchestrator.task_store import (
+    _failure_code,
+    remaining_claim_hypothesis_routes,
+)
 from src.tools.base import BaseTool
 from src.trajectory.exporter import (
     export_trajectory_action_only_example,
@@ -300,6 +305,110 @@ def test_compact_provider_intent_expands_to_distinct_routes() -> None:
     assert len(state.search_hypotheses) == 3
     assert len(state.tasks) == 3
     assert state.search_hypotheses[0].suggested_tools[0] == "text_search"
+
+
+def test_route_local_replan_is_a_dynamic_react_control_tool() -> None:
+    state, case, _steps = _bootstrap_state()
+    anchor_id = state.facts[0].fact_id
+    intent = {
+        "target_fact": {
+            "statement": "The pictured bridge is associated with the Riverfest event.",
+            "kind": "relation",
+            "predicate": "depicts_relation",
+            "anchor_fact_ids": [anchor_id],
+        },
+        "routes": [
+            {
+                "route_focus": "entity_event_identity",
+                "expected_information": "Whether the event uses this bridge.",
+                "queries": ["Riverfest red bridge"],
+                "suggested_tools": ["text_search"],
+                "priority": 1,
+            },
+            {
+                "route_focus": "visual_consistency",
+                "expected_information": "Whether the bridge structure is consistent.",
+                "suggested_tools": ["focused_visual_inspection"],
+                "priority": 2,
+            },
+        ],
+    }
+    search_step = _step(
+        tool_name="text_search",
+        tool_args={
+            "queries": "Riverfest red bridge",
+            "investigation_intent": intent,
+        },
+        tool_result={
+            "status": "success",
+            "queries": [
+                {
+                    "query": "Riverfest red bridge",
+                    "results": [],
+                }
+            ],
+        },
+        call_id="route-boundary-search",
+    )
+    reduce_unified_react_action(state, step=search_step, runtime_case=case)
+    boundary = route_local_replan_candidate(
+        state,
+        observation_update={
+            "task_id": state.tasks[0].task_id,
+            "created_evidence_ids": [],
+        },
+    )
+
+    assert boundary == (state.tasks[0].task_id, "candidate_exhausted")
+    tools = build_unified_react_tools(
+        state,
+        {"text_search": _RecordingTool()},
+        route_local_replan_boundary=boundary,
+    )
+    assert len(tools) == 1
+    assert isinstance(tools[0], RouteLocalReplanTool)
+    assert [tool.name for tool in tools] == ["route_local_replan"]
+
+    task = state.tasks[0]
+    before_action_count = state.action_count
+    args = {
+        "task_id": task.task_id,
+        "strategy": "replace_query",
+        "replacement_query": "Riverfest bridge event location",
+        "rationale": "The first query returned no candidates; use the same relation with a concrete event term.",
+    }
+    assert not validate_unified_react_action(
+        state,
+        tool_name="route_local_replan",
+        tool_args=args,
+        route_local_replan_boundary=boundary,
+    )
+    control_step = _step(
+        tool_name="route_local_replan",
+        tool_args=args,
+        tool_result={
+            "status": "success",
+            "control": "route_local_replan",
+        },
+        call_id="route-boundary-control",
+    )
+    control_step.metadata["route_local_replan_trigger"] = boundary[1]
+    update = reduce_unified_react_action(
+        state,
+        step=control_step,
+        runtime_case=case,
+    )
+
+    assert update["accepted"] is True
+    assert update["accepted_strategy"] == "replace_query"
+    assert state.action_count == before_action_count
+    assert task.query_replan_count == 1
+    assert task.route_replan_count == 1
+    assert task.suggested_queries == ["Riverfest bridge event location"]
+    assert f"text_search:{task.task_id}" in remaining_claim_hypothesis_routes(
+        state,
+        task_ids={task.task_id},
+    )
 
 
 def test_external_fetch_failures_use_existing_recoverable_failure_categories() -> None:

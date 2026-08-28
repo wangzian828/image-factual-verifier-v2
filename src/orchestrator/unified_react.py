@@ -19,6 +19,7 @@ from src.orchestrator.evidence_policy import query_policy_violation
 from src.orchestrator.investigation_models import (
     ImageOnlyInvestigationState,
     InvestigationIntent,
+    RouteLocalReplanOutput,
     UnifiedReactBootstrapFailure,
 )
 from src.orchestrator.progress_control import record_action_progress
@@ -31,11 +32,14 @@ from src.orchestrator.source_provenance import canonicalize_url
 from src.orchestrator.task_store import (
     MAX_TOOL_ACTIONS,
     apply_initial_action_intent,
+    apply_route_local_replan,
     apply_unified_stop_route,
+    bind_route_local_replan_runtime_ids,
     build_empty_investigation,
     record_tool_observation,
     remaining_claim_hypothesis_routes,
     remaining_root_image_reverse_branches,
+    route_local_replan_candidate,
     validate_initial_action_intent,
 )
 from src.orchestrator.tool_result import parse_tool_result
@@ -54,6 +58,7 @@ _FIRST_INVESTIGATION_TOOLS = (
     "analyze_visual_anomalies",
 )
 _ADAPTER_ONLY_FIELDS = frozenset({"task_id", "investigation_intent"})
+_ROUTE_LOCAL_REPLAN_TOOL = "route_local_replan"
 
 
 def _parse_initial_investigation_intent(
@@ -457,11 +462,90 @@ class StopRouteTool(BaseTool):
         }
 
 
+@dataclass
+class RouteLocalReplanTool(BaseTool):
+    """Runtime-only ReAct control action for one observed route boundary."""
+
+    task_id: str = ""
+    trigger: str = ""
+    name: str = _ROUTE_LOCAL_REPLAN_TOOL
+    description: str = (
+        "Choose the next bounded action for one route after an observed "
+        "retrieval or inspection boundary. This is a route control action, "
+        "not a verdict and not a requirement to change the target."
+    )
+    parameters: Dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        self.parameters = {
+            "type": "object",
+            "properties": {
+                "task_id": {
+                    "type": "string",
+                    "enum": [self.task_id],
+                    "description": (
+                        "Runtime-owned route/task ID for the boundary. Use it "
+                        "exactly as supplied."
+                    ),
+                },
+                "strategy": {
+                    "type": "string",
+                    "enum": [
+                        "replace_query",
+                        "add_visual_route",
+                        "continue",
+                        "stop_route",
+                    ],
+                    "description": (
+                        "Choose replace_query only when the latest material "
+                        "shows that the current search direction is stalled; "
+                        "choose continue when the route remains valid."
+                    ),
+                },
+                "replacement_query": {
+                    "type": "string",
+                    "description": (
+                        "One novel query for the same target relation. Required "
+                        "only for replace_query; do not search for a verdict or "
+                        "media-origin claim."
+                    ),
+                },
+                "visual_focus": {
+                    "type": "string",
+                    "description": (
+                        "One concrete visible property for add_visual_route. "
+                        "Required only for that strategy."
+                    ),
+                },
+                "rationale": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": (
+                        "Briefly explain what the latest result left unresolved "
+                        "and why this route strategy is appropriate."
+                    ),
+                },
+            },
+            "required": ["task_id", "strategy", "rationale"],
+            "additionalProperties": False,
+        }
+
+    def call(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "status": "success",
+            "control": self.name,
+            "task_id": str(params.get("task_id", "")).strip(),
+            "trigger": self.trigger,
+            "strategy": str(params.get("strategy", "")).strip(),
+        }
+
+
 def build_unified_react_tools(
     state: ImageOnlyInvestigationState,
     all_tools: Mapping[str, BaseTool],
     *,
     excluded_tool_names: Iterable[str] = (),
+    route_local_replan_boundary: tuple[str, str] | None = None,
 ) -> list[BaseTool]:
     """Build a fresh narrow model schema for the current unified-ReAct turn."""
 
@@ -493,6 +577,16 @@ def build_unified_react_tools(
             for name in names
             if name in all_tools
         ]
+
+    if route_local_replan_boundary is not None:
+        task_id, trigger = route_local_replan_boundary
+        if task_id and trigger:
+            return [
+                RouteLocalReplanTool(
+                    task_id=task_id,
+                    trigger=trigger,
+                )
+            ]
 
     for name in names:
         if name == "stop_route":
@@ -537,13 +631,50 @@ def validate_unified_react_action(
     tool_name: str,
     tool_args: Mapping[str, Any],
     source_access_policy: Any = None,
+    route_local_replan_boundary: tuple[str, str] | None = None,
 ) -> str:
     """Validate action ownership and route eligibility before a real call."""
 
     allowed = set(available_unified_react_tool_names(state))
+    if route_local_replan_boundary is not None:
+        allowed.add(_ROUTE_LOCAL_REPLAN_TOOL)
     if tool_name not in allowed:
         return f"{tool_name} is not available in the current unified-ReAct state"
     if not bootstrap_complete(state):
+        return ""
+    if tool_name == _ROUTE_LOCAL_REPLAN_TOOL:
+        if route_local_replan_boundary is None:
+            return (
+                "route_local_replan is not available without an observed "
+                "route boundary"
+            )
+        expected_task_id, trigger = route_local_replan_boundary
+        supplied_task_id = str(tool_args.get("task_id", "")).strip()
+        if supplied_task_id != expected_task_id:
+            return (
+                "route_local_replan must use the runtime-selected task_id "
+                f"{expected_task_id}"
+            )
+        try:
+            output = RouteLocalReplanOutput.model_validate(tool_args)
+        except Exception as exc:
+            return f"invalid route_local_replan output: {exc}"
+        bound, binding_error = bind_route_local_replan_runtime_ids(
+            state,
+            output,
+            task_id=expected_task_id,
+        )
+        if bound is None:
+            return binding_error
+        candidate = state.model_copy(deep=True)
+        record = apply_route_local_replan(
+            candidate,
+            bound,
+            trigger=trigger,
+            source_access_policy=source_access_policy,
+        )
+        if record.rejected_reason:
+            return record.rejected_reason
         return ""
     if not state.target_facts:
         raw_intent = tool_args.get("investigation_intent")
@@ -752,6 +883,54 @@ def reduce_unified_react_action(
     call_id = str(metadata.get("function_call_id", "")).strip()
     if tool_name in _BOOTSTRAP_TOOLS:
         raise ValueError("visual bootstrap must use reduce_visual_bootstrap_action")
+    if tool_name == _ROUTE_LOCAL_REPLAN_TOOL:
+        try:
+            output = RouteLocalReplanOutput.model_validate(tool_args)
+        except Exception as exc:
+            return {
+                "accepted": False,
+                "rejected_reason": f"invalid route_local_replan output: {exc}",
+            }
+        task_id = str(tool_args.get("task_id", "")).strip()
+        trigger = str(metadata.get("route_local_replan_trigger", "")).strip()
+        if not trigger:
+            return {
+                "accepted": False,
+                "rejected_reason": (
+                    "route_local_replan is missing its runtime boundary trigger"
+                ),
+            }
+        bound, binding_error = bind_route_local_replan_runtime_ids(
+            state,
+            output,
+            task_id=task_id,
+        )
+        if bound is None:
+            return {
+                "accepted": False,
+                "rejected_reason": binding_error,
+            }
+        record = apply_route_local_replan(
+            state,
+            bound,
+            trigger=trigger,
+            source_access_policy=source_access_policy,
+        )
+        if record.rejected_reason:
+            return {
+                "accepted": False,
+                "rejected_reason": record.rejected_reason,
+                "route_local_replan_record": record.model_dump(mode="json"),
+            }
+        return {
+            "accepted": True,
+            "control": _ROUTE_LOCAL_REPLAN_TOOL,
+            "task_id": bound.task_id,
+            "trigger": trigger,
+            "accepted_strategy": record.accepted_strategy,
+            "accepted_query": record.accepted_query,
+            "next_available_tools": available_unified_react_tool_names(state),
+        }
     if tool_name == "stop_route":
         update = apply_unified_stop_route(
             state,

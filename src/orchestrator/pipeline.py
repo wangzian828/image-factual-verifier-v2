@@ -80,6 +80,7 @@ from src.orchestrator.unified_react import (
     new_unified_react_state,
     reduce_unified_react_action,
     reduce_visual_bootstrap_action,
+    route_local_replan_candidate,
     unified_react_delta,
     validate_unified_react_action,
 )
@@ -505,6 +506,7 @@ class Orchestrator:
         started = time.time()
         interaction_session = InteractionSession()
         last_reflection_action = 0
+        route_local_replan_boundary: tuple[str, str] | None = None
 
         try:
             while not investigation.stop_reason:
@@ -527,6 +529,7 @@ class Orchestrator:
                     excluded_tool_names=self._exhausted_unified_react_tools(
                         state.all_steps
                     ),
+                    route_local_replan_boundary=route_local_replan_boundary,
                 )
                 if not tools:
                     if not investigation.target_facts:
@@ -558,8 +561,28 @@ class Orchestrator:
                     _steps: List[StageStep],
                 ) -> Dict[str, Any]:
                     nonlocal observation_update
+                    nonlocal route_local_replan_boundary
                     tool_name = str(step.tool_name).strip()
-                    if tool_name == "perceive_scene":
+                    if tool_name == "route_local_replan":
+                        if route_local_replan_boundary is None:
+                            update = {
+                                "accepted": False,
+                                "rejected_reason": (
+                                    "route_local_replan was executed without "
+                                    "a pending runtime boundary"
+                                ),
+                            }
+                        else:
+                            step.metadata["route_local_replan_trigger"] = (
+                                route_local_replan_boundary[1]
+                            )
+                            update = reduce_unified_react_action(
+                                investigation,
+                                step=step,
+                                runtime_case=runtime_case,
+                                source_access_policy=self.source_access_policy,
+                            )
+                    elif tool_name == "perceive_scene":
                         scene = self._parse_perception_result(step.tool_result)
                         prior = state.perception or PerceptionReport(
                             scene_description=""
@@ -650,6 +673,9 @@ class Orchestrator:
                             tool_name=tool_name,
                             tool_args=tool_args,
                             source_access_policy=self.source_access_policy,
+                            route_local_replan_boundary=(
+                                route_local_replan_boundary
+                            ),
                         )
                     ),
                     max_protocol_corrections=4,
@@ -669,7 +695,12 @@ class Orchestrator:
                 )
                 try:
                     parsed, steps = await runner.run(
-                        render_unified_react_context(investigation)
+                        render_unified_react_context(
+                            investigation,
+                            route_local_replan_boundary=(
+                                route_local_replan_boundary
+                            ),
+                        )
                     )
                 except Exception as exc:
                     self._record_stage_steps(
@@ -689,6 +720,16 @@ class Orchestrator:
                             "contract error"
                         )
                     raise RuntimeError("a required visual bootstrap tool failed")
+                if (
+                    route_local_replan_boundary is not None
+                    and any(
+                        str(getattr(item, "tool_name", "")).strip()
+                        == "route_local_replan"
+                        and item.action_type == "tool_call"
+                        for item in steps
+                    )
+                ):
+                    route_local_replan_boundary = None
                 if not investigation.target_facts:
                     continue
 
@@ -715,6 +756,10 @@ class Orchestrator:
 
                 if investigation.stop_reason:
                     break
+                route_local_replan_boundary = route_local_replan_candidate(
+                    investigation,
+                    observation_update=observation_update,
+                )
                 if (
                     investigation.action_count
                     and investigation.action_count % REFLECTION_INTERVAL == 0

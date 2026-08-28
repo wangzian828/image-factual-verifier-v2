@@ -32,13 +32,15 @@ def test_active_prompts_are_current_and_semantically_bounded() -> None:
         UNIFIED_DISCREPANCY_DECISION_SYSTEM_PROMPT.split()
     )
     assert "一个持续的调查循环" in react_prompt
-    assert "注册 2–3 条" in react_prompt
+    assert "扩展为 2–3 条" in react_prompt
     assert "相似主体、相似地点、同类商品" in react_prompt
     assert "不能仅凭相似性作为当前图片的证据" in react_prompt
     assert "比较参考图只能回答图像是否相同" in react_prompt
     assert "当前 target 仍是 `unresolved`" in react_prompt
     assert "open_gaps" in react_prompt
     assert "同一条路线只换几个词" in react_prompt
+    assert "route_local_replan" in react_prompt
+    assert "不要求你修改 target" in react_prompt
     assert "合格 Evidence" in decision_prompt
     assert "core target fact is decisive" not in decision_prompt
 

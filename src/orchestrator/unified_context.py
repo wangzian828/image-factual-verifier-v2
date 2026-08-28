@@ -60,7 +60,11 @@ def _attempted_routes(state: ImageOnlyInvestigationState) -> list[dict[str, Any]
     return result
 
 
-def render_unified_react_context(state: ImageOnlyInvestigationState) -> str:
+def render_unified_react_context(
+    state: ImageOnlyInvestigationState,
+    *,
+    route_local_replan_boundary: tuple[str, str] | None = None,
+) -> str:
     """Render only the state needed to choose the next action."""
 
     completed = list(state.unified_react_bootstrap_tools_completed)
@@ -168,6 +172,19 @@ def render_unified_react_context(state: ImageOnlyInvestigationState) -> str:
             "remaining": max(0, MAX_TOOL_ACTIONS - state.action_count),
         },
     }
+    if route_local_replan_boundary is not None:
+        task_id, trigger = route_local_replan_boundary
+        payload["route_local_replan_boundary"] = {
+            "task_id": task_id,
+            "trigger": trigger,
+            "instruction": (
+                "The runtime exposed route_local_replan as the next ReAct "
+                "control action. Decide whether this route should continue, "
+                "use one concrete new query, add one concrete visual route, "
+                "or stop only this route. Do not change the target merely "
+                "because new context appeared."
+            ),
+        }
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
