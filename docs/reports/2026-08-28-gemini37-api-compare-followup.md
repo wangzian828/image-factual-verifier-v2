@@ -9,16 +9,29 @@
 
 ## 代码修复
 
-提交：`a556407`  
+初始修复：`a556407`；最终修复：`404b81d`。  
 分支：`codex/gpu13-canary-20260804-plan-relaxation-01`  
-GPU13 已更新到该提交。
+GPU13 已更新到 `404b81d`。
 
 `compare_with_reference` 现在：
 
 1. 在线 Gemini schema 不再要求输出 `edit_evidence_present` 和 `edit_evidence_strength`。
 2. 两个字段统一由 `differences` 的类型和显著性确定。
-3. 回放旧响应时仍接受旧字段，但会归一化并记录 `contract_repairs`、`raw_edit_evidence_summary`。
-4. 新增回归测试，远端 focused tests 为 11/11 通过。
+3. 回放旧响应时仍接受合法旧字段，但会归一化并记录 `contract_repairs`、`raw_edit_evidence_summary`。
+4. live compare 与旧 trace/reducer 共用同一个派生函数；旧 trace 缺少派生字段时，也会根据 `differences` 恢复编辑证据，不再默认成 `False`。
+5. 新增回归测试，focused tests 为 13/13 通过。
+
+根因是 schema 已删除 `edit_evidence_present`，但校验器仍用 `value[name]` 把它当必填字段读取，导致合法新格式响应触发 `KeyError`。现在模型只输出三个比较布尔值和 typed `differences`，编辑证据及强度完全由 runtime 派生。
+
+## 最终验证
+
+- 本地完整测试：393/393 通过。
+- GPU13 完整测试：393/393 通过。
+- GPU13 最新真实 2-case smoke：2/2 完成，`num_errors=0`。
+- 最新 smoke 中 `compare_with_reference`：3/3 成功，0 个契约错误。
+- 最新 smoke strict audit：2/2 通过，0 个 protocol rejection。
+
+剩余 warning 是外部页面验证码等访问限制，属于外部可用性问题，不是 compare 工程失败；未混入正式 teacher/SFT 数据。
 
 ## 实际 API 检查
 
