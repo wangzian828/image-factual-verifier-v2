@@ -1700,13 +1700,13 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--dataset-root", type=Path, required=True)
+    parser.add_argument("--dataset-root", type=Path)
     parser.add_argument(
         "--train-manifest",
         type=Path,
         help="defaults to <dataset-root>/train-manifest.jsonl",
     )
-    parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--output-dir", type=Path)
     parser.add_argument(
         "--source-access-policy",
         type=Path,
@@ -1768,6 +1768,22 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_parser().parse_args()
+    if args.reroll_from is None:
+        missing = [
+            option
+            for option, value in (
+                ("--dataset-root", args.dataset_root),
+                ("--output-dir", args.output_dir),
+            )
+            if value is None
+        ]
+        if missing:
+            raise SystemExit(", ".join(missing) + " is required")
+    elif args.output_dir is not None or args.dataset_root is not None:
+        raise SystemExit(
+            "--dataset-root and --output-dir are only valid for a new pipeline; "
+            "use --reroll-from for an existing pipeline"
+        )
     numeric_values = {
         "--rollout-concurrency": args.rollout_concurrency,
         "--sft-concurrency": args.sft_concurrency,
