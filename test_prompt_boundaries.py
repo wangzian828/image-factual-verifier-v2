@@ -41,7 +41,12 @@ def test_active_prompts_are_current_and_semantically_bounded() -> None:
     assert "同一条路线只换几个词" in react_prompt
     assert "route_local_replan" in react_prompt
     assert "不要求你修改 target" in react_prompt
+    assert "不能算 `supports_real`" in react_prompt
+    assert "不能因为证据 不足就强行选择任一终局标签" in react_prompt
+    assert "都是 overclaiming" in react_prompt
     assert "合格 Evidence" in decision_prompt
+    assert "不能支持 real" in decision_prompt
+    assert "属于 overclaiming" in decision_prompt
     assert "core target fact is decisive" not in decision_prompt
 
     browse_prompt = " ".join(EXTRACT_PROMPT.split())
