@@ -132,3 +132,40 @@ def test_accepted_perception_conversion_uses_frozen_dataset(
     assert converted["images"] == [str(image.resolve())]
     assert converted["messages"][0]["content"].startswith("<image>")
     assert audit["passed"] is True
+
+
+def test_accepted_perception_conversion_accepts_unified_react_v3(
+    tmp_path: Path,
+) -> None:
+    image = tmp_path / "image.png"
+    Image.new("RGB", (8, 8), color="green").save(image)
+    source = tmp_path / "accepted"
+    source.mkdir()
+    write_json(
+        source / "manifest.json",
+        {
+            "dataset_version": "ifv-trajectory-sft-dataset-v3",
+            "split_mode": "frozen_teacher_sft",
+        },
+    )
+    row = {
+        "dataset_version": "ifv-trajectory-sft-dataset-v3",
+        "episode_id": "case-v3",
+        "image_path": str(image),
+        "image_sha256": sha256_file(image),
+        "instruction": "Report visible content.",
+        "perception_report": {
+            "scene_description": "A green square.",
+            "image_type": "graphic",
+            "entities": [],
+            "text_regions": [],
+        },
+        "split": "train",
+    }
+    write_jsonl(source / "perception.train.jsonl", [row])
+    write_jsonl(source / "perception.validation.jsonl", [])
+    write_jsonl(source / "perception.test.jsonl", [])
+
+    manifest = convert_accepted_perception_dataset(source, tmp_path / "output")
+
+    assert manifest["example_count"] == 1
