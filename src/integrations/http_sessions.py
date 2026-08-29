@@ -9,11 +9,60 @@ sessions so their orchestrator can close them at the end of each case.
 
 from __future__ import annotations
 
+import os
 import threading
 from typing import Any
 
 import requests
 from requests.adapters import HTTPAdapter
+
+
+def _sync_http_limit() -> int:
+    raw = os.environ.get("IFV_SYNC_HTTP_MAX_INFLIGHT", "16").strip()
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 16
+
+
+_SYNC_HTTP_GATE = threading.BoundedSemaphore(_sync_http_limit())
+
+
+class _GatedSession(requests.Session):
+    """requests session that bounds simultaneous synchronous egress calls."""
+
+    def send(self, request: Any, **kwargs: Any) -> requests.Response:
+        self._ifv_http_gate.acquire()
+        released = False
+
+        def release() -> None:
+            nonlocal released
+            if released:
+                return
+            released = True
+            self._ifv_http_gate.release()
+
+        try:
+            response = super().send(request, **kwargs)
+            # Non-streaming requests have already consumed their response body
+            # before ``Session.send`` returns.  Streaming callers retain the
+            # gate until their response is explicitly closed.
+            if not kwargs.get("stream", False):
+                release()
+            else:
+                original_close = response.close
+
+                def close() -> None:
+                    try:
+                        original_close()
+                    finally:
+                        release()
+
+                response.close = close  # type: ignore[method-assign]
+            return response
+        except BaseException:
+            release()
+            raise
 
 
 def _new_session() -> requests.Session:
@@ -26,7 +75,7 @@ def _new_session() -> requests.Session:
     one-shot, while the adapter bounds any transient pool bookkeeping.
     """
 
-    session = requests.Session()
+    session = _GatedSession()
     session.headers.update({"Connection": "close"})
     adapter = HTTPAdapter(
         pool_connections=1,
