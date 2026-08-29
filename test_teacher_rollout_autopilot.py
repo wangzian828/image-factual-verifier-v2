@@ -9,7 +9,9 @@ from scripts.trajectory.run_teacher_rollout_autopilot import (
     _attempt_command_log_path,
     _candidate_trace_sources,
     _classify_initial_outcomes,
+    _build_quality_reroll_summary,
     _has_early_correct_judgment,
+    _quality_reroll_case_ids,
     _read_jsonl,
     _successful_trace_sources,
     prepare_runtime_release,
@@ -236,6 +238,104 @@ def test_early_bucket_requires_strict_discrepancy_judgment(tmp_path: Path) -> No
         encoding="utf-8"
     )
     assert reroll.splitlines() == ["case-proposal"]
+
+
+def test_quality_reroll_queue_contains_only_sft_rejections_and_incomplete_cases(
+    tmp_path: Path,
+) -> None:
+    classification = tmp_path / "classification"
+    classification.mkdir()
+    (classification / "sft-rejected.jsonl").write_text(
+        "\n".join(
+            json.dumps({"case_id": case_id})
+            for case_id in ("case-b", "case-a", "case-b")
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (classification / "incomplete-cases.jsonl").write_text(
+        json.dumps({"case_id": "case-c"}) + "\n",
+        encoding="utf-8",
+    )
+    (classification / "final-only-judgment.jsonl").write_text(
+        json.dumps({"case_id": "case-passed-final-only"}) + "\n",
+        encoding="utf-8",
+    )
+
+    assert _quality_reroll_case_ids(classification) == [
+        "case-a",
+        "case-b",
+        "case-c",
+    ]
+
+
+def test_quality_reroll_summary_selects_one_winner_per_case_across_rounds(
+    tmp_path: Path,
+) -> None:
+    initial = tmp_path / "classification" / "initial"
+    reroll = tmp_path / "classification" / "quality-reroll-01"
+    for directory in (initial, reroll):
+        directory.mkdir(parents=True)
+
+    (initial / "selected-candidates.jsonl").write_text(
+        json.dumps(
+            {
+                "case_id": "case-a",
+                "episode_id": "case-a--r000",
+                "bucket": "early_correct_judgment",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (initial / "sft-rejected.jsonl").write_text(
+        json.dumps(
+            {
+                "case_id": "case-b",
+                "episode_id": "case-b--r000",
+                "expected_verdict": "fake",
+                "rejection_reasons": ["poor_retrieval_quality"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (initial / "incomplete-cases.jsonl").write_text("", encoding="utf-8")
+
+    (reroll / "selected-candidates.jsonl").write_text(
+        json.dumps(
+            {
+                "case_id": "case-b",
+                "episode_id": "case-b--r001",
+                "bucket": "final_only_judgment",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (reroll / "sft-rejected.jsonl").write_text("", encoding="utf-8")
+    (reroll / "incomplete-cases.jsonl").write_text("", encoding="utf-8")
+
+    gold = tmp_path / "private-gold.jsonl"
+    gold.write_text(
+        "\n".join(
+            json.dumps({"case_id": case_id})
+            for case_id in ("case-a", "case-b")
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    summary = _build_quality_reroll_summary(
+        pipeline_dir=tmp_path,
+        private_gold=gold,
+        classification_dirs=[initial, reroll],
+        quality_rounds=[{"round": 1, "selected_case_count": 1}],
+    )
+
+    assert summary["selected_case_count"] == 2
+    assert summary["early_correct_judgment_count"] == 1
+    assert summary["final_only_judgment_count"] == 1
+    assert summary["hard_case_count"] == 0
 
 
 def test_candidate_collection_keeps_four_terminal_traces_per_case(tmp_path: Path) -> None:

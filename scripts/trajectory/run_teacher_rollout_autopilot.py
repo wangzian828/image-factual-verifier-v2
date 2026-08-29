@@ -7,11 +7,15 @@ metadata.  This program deliberately creates two separate projections:
 * ``runtime-release/`` contains only the exact three-field image runtime contract.
 * ``private-gold/`` is used only after a terminal rollout by the frozen SFT judge.
 
-Each case is sampled four times, then every candidate is audited by the frozen
-SFT judge.  The best eligible candidate is selected for training; cases with four
-complete candidates and no eligible candidate are recorded as hard cases.
-Engineering failures are refilled with fresh seeds, while every produced trace is
-retained for provenance and diagnosis.
+The default mode samples each case once, audits it with the frozen SFT judge, and
+then rolls only the cases rejected by that audit for up to three additional
+quality rounds.  The first eligible candidate wins; cases rejected in every
+quality round are recorded as hard cases.  Engineering failures are refilled with
+fresh seeds, while every produced trace is retained for provenance and diagnosis.
+
+``--reroll-from`` can reuse an already completed initial pipeline without rerunning
+its successful initial traces.  This is used to attach the quality-reroll policy
+to historical smoke results.
 
 Run this on gpu-13 through ``scripts/server/run_gpu13.sh``.  It is intentionally
 resumable: the output directory is also the durable state and provenance record.
@@ -110,6 +114,16 @@ def _write_case_list(path: Path, case_ids: Sequence[str]) -> None:
     path.write_text(
         "".join(f"{case_id}\n" for case_id in case_ids),
         encoding="utf-8",
+    )
+
+
+def _case_ids_from_rows(rows: Iterable[Mapping[str, Any]]) -> list[str]:
+    return sorted(
+        {
+            str(row.get("case_id") or row.get("unified_case_id") or "").strip()
+            for row in rows
+            if str(row.get("case_id") or row.get("unified_case_id") or "").strip()
+        }
     )
 
 
@@ -1126,6 +1140,285 @@ def _classify_initial_outcomes(
     return result
 
 
+def _quality_reroll_case_ids(classification_dir: Path) -> list[str]:
+    """Return only cases rejected by SFT, plus cases with no terminal trace."""
+
+    rejected = _case_ids_from_rows(
+        _read_jsonl(classification_dir / "sft-rejected.jsonl")
+    )
+    incomplete_path = classification_dir / "incomplete-cases.jsonl"
+    if incomplete_path.is_file():
+        rejected.extend(_case_ids_from_rows(_read_jsonl(incomplete_path)))
+    return sorted(set(rejected))
+
+
+def _selected_classification_rows(classification_dir: Path) -> list[dict[str, Any]]:
+    path = classification_dir / "selected-candidates.jsonl"
+    return _read_jsonl(path) if path.is_file() else []
+
+
+def _build_quality_reroll_summary(
+    *,
+    pipeline_dir: Path,
+    private_gold: Path,
+    classification_dirs: Sequence[Path],
+    quality_rounds: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Combine one-candidate rounds into the final per-case quality result."""
+
+    gold_case_ids = _case_ids_from_rows(_read_jsonl(private_gold))
+    selected: list[dict[str, Any]] = []
+    selected_case_ids: set[str] = set()
+    for classification_dir in classification_dirs:
+        for row in _selected_classification_rows(classification_dir):
+            case_id = str(row.get("case_id") or "").strip()
+            if not case_id:
+                continue
+            if case_id in selected_case_ids:
+                raise ValueError(
+                    f"quality reroll selected the same case twice: {case_id}"
+                )
+            selected_case_ids.add(case_id)
+            selected.append(row)
+
+    final_rejected: list[dict[str, Any]] = []
+    final_incomplete: list[dict[str, Any]] = []
+    if classification_dirs:
+        last_dir = classification_dirs[-1]
+        rejected_path = last_dir / "sft-rejected.jsonl"
+        incomplete_path = last_dir / "incomplete-cases.jsonl"
+        if rejected_path.is_file():
+            final_rejected = _read_jsonl(rejected_path)
+        if incomplete_path.is_file():
+            final_incomplete = _read_jsonl(incomplete_path)
+
+    hard_by_case: dict[str, dict[str, Any]] = {}
+    for row in final_rejected:
+        case_id = str(row.get("case_id") or "").strip()
+        if case_id:
+            hard_by_case[case_id] = {
+                "case_id": case_id,
+                "expected_verdict": row.get("expected_verdict"),
+                "candidate_episode_ids": [row.get("episode_id")],
+                "rejection_reasons": list(row.get("rejection_reasons") or []),
+                "status": "hard_case",
+            }
+    for row in final_incomplete:
+        case_id = str(row.get("case_id") or "").strip()
+        if case_id:
+            hard_by_case.setdefault(
+                case_id,
+                {
+                    "case_id": case_id,
+                    "expected_verdict": None,
+                    "candidate_episode_ids": [],
+                    "rejection_reasons": ["unresolved_engineering"],
+                    "status": "hard_case",
+                },
+            )
+    for case_id in sorted(set(gold_case_ids) - selected_case_ids):
+        hard_by_case.setdefault(
+            case_id,
+            {
+                "case_id": case_id,
+                "expected_verdict": None,
+                "candidate_episode_ids": [],
+                "rejection_reasons": ["not_selected_after_quality_rerolls"],
+                "status": "hard_case",
+            },
+        )
+
+    early = [
+        row
+        for row in selected
+        if row.get("bucket") == "early_correct_judgment"
+    ]
+    final_only = [
+        row
+        for row in selected
+        if row.get("bucket") == "final_only_judgment"
+    ]
+    result = {
+        "schema_version": SCHEMA_VERSION,
+        "case_count": len(gold_case_ids),
+        "selected_case_count": len(selected),
+        "early_correct_judgment_count": len(early),
+        "final_only_judgment_count": len(final_only),
+        "hard_case_count": len(hard_by_case),
+        "quality_round_count": len(quality_rounds),
+        "quality_rounds": [dict(row) for row in quality_rounds],
+        "created_at": _now(),
+    }
+    output_dir = pipeline_dir / "classification" / "final"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    _write_jsonl(output_dir / "selected-candidates.jsonl", selected)
+    _write_jsonl(output_dir / "early-correct-judgment.jsonl", early)
+    _write_jsonl(output_dir / "final-only-judgment.jsonl", final_only)
+    _write_jsonl(output_dir / "hard-cases.jsonl", hard_by_case.values())
+    _write_json(output_dir / "classification.json", result)
+    return result
+
+
+def _run_quality_rerolls(
+    *,
+    pipeline_dir: Path,
+    preparation: Mapping[str, Any],
+    private_gold: Path,
+    initial_run: Path,
+    initial_audit: Path,
+    initial_classification_dir: Path,
+    profile: str,
+    rollout_concurrency: int,
+    sft_model: str,
+    sft_concurrency: int,
+    rollout_timeout: float,
+    sft_timeout: float,
+    maximum_engineering_attempts: int,
+    maximum_sft_audit_attempts: int,
+    base_seed: int,
+    maximum_rounds: int,
+    state: dict[str, Any],
+    state_path: Path,
+) -> tuple[list[tuple[Path, Path]], dict[str, Any]]:
+    """Reroll only SFT-rejected cases for up to ``maximum_rounds`` rounds."""
+
+    if maximum_rounds < 0:
+        raise ValueError("quality reroll rounds must be non-negative")
+    sources: list[tuple[Path, Path]] = [(initial_run, initial_audit)]
+    classification_dirs = [initial_classification_dir]
+    quality_rounds: list[dict[str, Any]] = []
+    pending = _quality_reroll_case_ids(initial_classification_dir)
+
+    prior_rounds = state.get("quality_rerolls")
+    if isinstance(prior_rounds, list):
+        for item in prior_rounds:
+            if not isinstance(item, Mapping):
+                continue
+            round_number = int(item.get("round", 0) or 0)
+            classification_path = item.get("classification")
+            audit_path = item.get("sft_eligibility")
+            merged_path = item.get("merged_run")
+            if (
+                round_number < 1
+                or not classification_path
+                or not audit_path
+                or not merged_path
+            ):
+                continue
+            classification_dir = Path(str(classification_path))
+            audit_dir = Path(str(audit_path))
+            merged_dir = Path(str(merged_path))
+            if (
+                (classification_dir / "classification.json").is_file()
+                and (audit_dir / "sft_eligibility_summary.json").is_file()
+                and (merged_dir / "run_manifest.json").is_file()
+            ):
+                if merged_dir not in [run for run, _ in sources]:
+                    sources.append((merged_dir, audit_dir))
+                if classification_dir not in classification_dirs:
+                    classification_dirs.append(classification_dir)
+                quality_rounds.append(dict(item))
+                pending = _quality_reroll_case_ids(classification_dir)
+
+    completed_round_numbers = {
+        int(item.get("round", 0) or 0)
+        for item in quality_rounds
+        if isinstance(item, Mapping)
+    }
+    next_round = max(completed_round_numbers, default=0) + 1
+    while pending and next_round <= maximum_rounds:
+        group_name = f"quality-reroll-{next_round:02d}"
+        merged_run, merged_manifest = _run_engineering_retries(
+            group_name=group_name,
+            benchmark=Path(str(preparation["benchmark"])),
+            pipeline_dir=pipeline_dir,
+            target_ids=pending,
+            profile=profile,
+            rollout_concurrency=rollout_concurrency,
+            base_seed=base_seed + next_round,
+            timeout=rollout_timeout,
+            maximum_attempts=maximum_engineering_attempts,
+            candidates_per_case=1,
+        )
+        successful_count = int(merged_manifest["result"]["num_episodes"])
+        round_info: dict[str, Any] = {
+            "round": next_round,
+            "target_case_count": len(pending),
+            "merged_run": str(merged_run),
+            "unresolved_engineering_case_count": int(
+                merged_manifest["result"]["num_errors"]
+            ),
+            "status": "completed",
+        }
+        if successful_count:
+            audit_dir = _run_sft_audit(
+                run_dir=merged_run,
+                gold=private_gold,
+                pipeline_dir=pipeline_dir,
+                label=group_name,
+                model=sft_model,
+                concurrency=sft_concurrency,
+                timeout=sft_timeout,
+                maximum_attempts=maximum_sft_audit_attempts,
+            )
+            classification_dir = pipeline_dir / "classification" / group_name
+            classification = _classify_initial_outcomes(
+                run_dir=merged_run,
+                eligibility_dir=audit_dir,
+                private_gold=private_gold,
+                output_dir=classification_dir,
+                candidates_per_case=1,
+            )
+            sources.append((merged_run, audit_dir))
+            classification_dirs.append(classification_dir)
+            round_info.update(
+                {
+                    "sft_eligibility": str(audit_dir),
+                    "classification": str(classification_dir),
+                    "sft_rejected_count": int(
+                        classification["sft_rejected_count"]
+                    ),
+                    "selected_case_count": int(
+                        classification["selected_case_count"]
+                    ),
+                    "hard_case_count": int(classification["hard_case_count"]),
+                }
+            )
+            pending = _quality_reroll_case_ids(classification_dir)
+        else:
+            round_info.update(
+                {
+                    "sft_eligibility": None,
+                    "classification": None,
+                    "sft_rejected_count": 0,
+                    "selected_case_count": 0,
+                    "hard_case_count": len(pending),
+                }
+            )
+            # Keep unresolved engineering cases queued for the next quality
+            # round, but do not invent an SFT result for them.
+            pending = list(pending)
+
+        quality_rounds.append(round_info)
+        state["quality_rerolls"] = quality_rounds
+        state["updated_at"] = _now()
+        _write_json(state_path, state)
+        next_round += 1
+
+    final_classification = _build_quality_reroll_summary(
+        pipeline_dir=pipeline_dir,
+        private_gold=private_gold,
+        classification_dirs=classification_dirs,
+        quality_rounds=quality_rounds,
+    )
+    final_classification["remaining_quality_reroll_case_count"] = len(pending)
+    _write_json(
+        pipeline_dir / "classification" / "final" / "classification.json",
+        final_classification,
+    )
+    return sources, final_classification
+
+
 def _load_case_list(path: Path) -> list[str]:
     return [
         line.strip()
@@ -1139,8 +1432,9 @@ def _final_release(
     pipeline_dir: Path,
     sources: Sequence[tuple[Path, Path]],
     selected_episode_ids: set[str] | None = None,
+    output_name: str = "accepted-release",
 ) -> Path:
-    output_dir = pipeline_dir / "accepted-release"
+    output_dir = pipeline_dir / output_name
     manifest_path = output_dir / "accepted_release_manifest.json"
     if manifest_path.is_file():
         return output_dir
@@ -1154,8 +1448,13 @@ def _final_release(
     return output_dir
 
 
-def _build_package(*, pipeline_dir: Path, accepted_release: Path) -> Path:
-    package_dir = pipeline_dir / "sft-training-package"
+def _build_package(
+    *,
+    pipeline_dir: Path,
+    accepted_release: Path,
+    output_name: str = "sft-training-package",
+) -> Path:
+    package_dir = pipeline_dir / output_name
     manifest_path = package_dir / "MANIFEST.json"
     if manifest_path.is_file():
         return package_dir
@@ -1187,6 +1486,86 @@ def _build_package(*, pipeline_dir: Path, accepted_release: Path) -> Path:
     if returncode != 0 or not manifest_path.is_file():
         raise RuntimeError(f"SFT package construction failed: {package_dir}")
     return package_dir
+
+
+def _continue_quality_rerolls(args: argparse.Namespace) -> dict[str, Any]:
+    """Attach quality rerolls to a completed initial pipeline."""
+
+    pipeline_dir = args.reroll_from.expanduser().resolve()
+    state_path = pipeline_dir / "pipeline-state.json"
+    if not state_path.is_file():
+        raise FileNotFoundError(f"completed pipeline state does not exist: {state_path}")
+    state = _read_json(state_path)
+    preparation = state.get("prepared")
+    initial = state.get("initial")
+    if not isinstance(preparation, Mapping) or not isinstance(initial, Mapping):
+        raise ValueError(f"pipeline lacks initial preparation state: {pipeline_dir}")
+    private_gold = Path(str(preparation["private_gold"])).expanduser().resolve()
+    initial_run = Path(str(initial["merged_run"])).expanduser().resolve()
+    initial_audit = Path(str(initial["sft_eligibility"])).expanduser().resolve()
+    initial_classification_dir = pipeline_dir / "classification"
+    if not (initial_run / "run_manifest.json").is_file():
+        raise FileNotFoundError(f"initial merged run is missing: {initial_run}")
+    if not (initial_audit / "sft_eligibility_summary.json").is_file():
+        raise FileNotFoundError(f"initial SFT audit is missing: {initial_audit}")
+    if not (initial_classification_dir / "classification.json").is_file():
+        raise FileNotFoundError(
+            f"initial classification is missing: {initial_classification_dir}"
+        )
+
+    state["status"] = "running"
+    state["quality_reroll_config"] = {
+        "maximum_rounds": args.quality_reroll_rounds,
+        "rollout_concurrency": args.rollout_concurrency,
+        "sft_concurrency": args.sft_concurrency,
+    }
+    state["updated_at"] = _now()
+    _write_json(state_path, state)
+    sources, final_classification = _run_quality_rerolls(
+        pipeline_dir=pipeline_dir,
+        preparation=preparation,
+        private_gold=private_gold,
+        initial_run=initial_run,
+        initial_audit=initial_audit,
+        initial_classification_dir=initial_classification_dir,
+        profile=args.rollout_profile,
+        rollout_concurrency=args.rollout_concurrency,
+        sft_model=args.sft_model,
+        sft_concurrency=args.sft_concurrency,
+        rollout_timeout=args.rollout_timeout,
+        sft_timeout=args.sft_timeout,
+        maximum_engineering_attempts=args.maximum_engineering_attempts,
+        maximum_sft_audit_attempts=args.maximum_sft_audit_attempts,
+        base_seed=args.base_seed,
+        maximum_rounds=args.quality_reroll_rounds,
+        state=state,
+        state_path=state_path,
+    )
+    selected_episode_ids = {
+        str(row["episode_id"])
+        for row in _selected_classification_rows(
+            pipeline_dir / "classification" / "final"
+        )
+        if str(row.get("episode_id", "")).strip()
+    }
+    accepted_release = _final_release(
+        pipeline_dir=pipeline_dir,
+        sources=sources,
+        selected_episode_ids=selected_episode_ids,
+        output_name="quality-reroll-release",
+    )
+    package_dir = _build_package(
+        pipeline_dir=pipeline_dir,
+        accepted_release=accepted_release,
+        output_name="quality-reroll-training-package",
+    )
+    state["classification"] = final_classification
+    state["quality_reroll_release"] = str(accepted_release)
+    state["quality_reroll_training_package"] = str(package_dir)
+    state["status"] = "completed"
+    state["updated_at"] = _now()
+    _write_json(state_path, state)
+    return state
 
 
 def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
@@ -1266,16 +1645,39 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         candidates_per_case=args.candidates_per_case,
     )
     state["initial"]["sft_eligibility"] = str(initial_audit)
+    state["initial"]["classification"] = str(pipeline_dir / "classification")
     state["classification"] = classification
     state["updated_at"] = _now()
     _write_json(state_path, state)
 
-    sources: list[tuple[Path, Path]] = [(initial_run, initial_audit)]
+    sources, final_classification = _run_quality_rerolls(
+        pipeline_dir=pipeline_dir,
+        preparation=preparation,
+        private_gold=private_gold_path,
+        initial_run=initial_run,
+        initial_audit=initial_audit,
+        initial_classification_dir=pipeline_dir / "classification",
+        profile=args.rollout_profile,
+        rollout_concurrency=args.rollout_concurrency,
+        sft_model=args.sft_model,
+        sft_concurrency=args.sft_concurrency,
+        rollout_timeout=args.rollout_timeout,
+        sft_timeout=args.sft_timeout,
+        maximum_engineering_attempts=args.maximum_engineering_attempts,
+        maximum_sft_audit_attempts=args.maximum_sft_audit_attempts,
+        base_seed=args.base_seed,
+        maximum_rounds=args.quality_reroll_rounds,
+        state=state,
+        state_path=state_path,
+    )
+    state["classification"] = final_classification
+    state["updated_at"] = _now()
+    _write_json(state_path, state)
 
     selected_episode_ids = {
         str(row["episode_id"])
         for row in _read_jsonl(
-            pipeline_dir / "classification" / "selected-candidates.jsonl"
+            pipeline_dir / "classification" / "final" / "selected-candidates.jsonl"
         )
         if str(row.get("episode_id", "")).strip()
     }
@@ -1336,8 +1738,20 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--candidates-per-case",
         type=int,
-        default=4,
-        help="Complete rollout candidates collected and judged for each case.",
+        default=1,
+        help="Initial candidates per case; quality rerolls always add one candidate.",
+    )
+    parser.add_argument(
+        "--quality-reroll-rounds",
+        type=int,
+        default=3,
+        help="Maximum additional rounds for cases rejected by the previous SFT audit.",
+    )
+    parser.add_argument(
+        "--reroll-from",
+        type=Path,
+        default=None,
+        help="Continue quality rerolls from an existing completed pipeline directory.",
     )
     parser.add_argument("--base-seed", type=int, default=2026082401)
     parser.add_argument("--rollout-timeout", type=float, default=1800.0)
@@ -1365,6 +1779,8 @@ def main() -> None:
         raise SystemExit(", ".join(invalid) + " must be at least 1")
     if args.limit is not None and args.limit < 1:
         raise SystemExit("--limit must be at least 1 when supplied")
+    if args.quality_reroll_rounds < 0:
+        raise SystemExit("--quality-reroll-rounds must be non-negative")
     pinned_rollout_models = {
         "teacher-gemini": "gemini-3.7-flash",
         "teacher-gemini36": "gemini-3.6-flash",
@@ -1375,7 +1791,11 @@ def main() -> None:
             f"{args.rollout_profile} is pinned to {expected_model}; do not "
             "supply a different --rollout-model"
         )
-    result = run_pipeline(args)
+    result = (
+        _continue_quality_rerolls(args)
+        if args.reroll_from is not None
+        else run_pipeline(args)
+    )
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
