@@ -13,6 +13,8 @@ from typing import Any, Callable, Optional
 
 import httpx
 
+from src.integrations.http_transport import provider_httpx_limits
+
 
 DEFAULT_INTERACTIONS_URL = (
     "https://generativelanguage.googleapis.com/v1beta/interactions"
@@ -174,7 +176,14 @@ class GeminiInteractionsClient:
         if client is not None and request is not None:
             raise ValueError("client and request cannot both be provided.")
         self._client = client or (
-            httpx.AsyncClient(timeout=timeout) if request is None else None
+            (
+                httpx.AsyncClient(
+                    timeout=timeout,
+                    limits=provider_httpx_limits(),
+                )
+                if request is None
+                else None
+            )
         )
         self._request = request or self._client.post  # type: ignore[union-attr]
         self._owns_client = client is None and request is None

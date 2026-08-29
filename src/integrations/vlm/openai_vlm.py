@@ -170,34 +170,37 @@ class OpenAIVisionClient:
             timeout=self.timeout,
             max_retries=self.max_retries,
         )
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": user_text},
-                    *[
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": image_to_data_url(image_input)},
-                        }
-                        for image_input in images
+        try:
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": user_text},
+                        *[
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": image_to_data_url(image_input)},
+                            }
+                            for image_input in images
+                        ],
                     ],
-                ],
-            },
-        ]
-        content = chat.create_json_completion(
-            model_name=model_name or self.model_name,
-            max_tokens=effective_max_tokens,
-            temperature=temperature,
-            messages=messages,
-            response_schema=schema,
-            chat_template_kwargs=(
-                {"enable_thinking": False}
-                if self.provider == "qwen_local"
-                else None
-            ),
-        )
+                },
+            ]
+            content = chat.create_json_completion(
+                model_name=model_name or self.model_name,
+                max_tokens=effective_max_tokens,
+                temperature=temperature,
+                messages=messages,
+                response_schema=schema,
+                chat_template_kwargs=(
+                    {"enable_thinking": False}
+                    if self.provider == "qwen_local"
+                    else None
+                ),
+            )
+        finally:
+            chat.close()
         parsed = parse_json_object(content)
         if not parsed:
             raise RuntimeError("Vision model did not return a valid JSON object.")

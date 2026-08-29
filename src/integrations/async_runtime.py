@@ -53,14 +53,31 @@ class PersistentAsyncRuntime:
         if thread is None:
             return
         self._ready.wait()
+        cleanup_error: Optional[BaseException] = None
         if loop is not None and not loop.is_closed():
-            if cleanup_factory is not None:
-                cleanup = cleanup_factory()
-                asyncio.run_coroutine_threadsafe(cleanup, loop).result(timeout=10)
-            loop.call_soon_threadsafe(loop.stop)
+            try:
+                if cleanup_factory is not None:
+                    cleanup = cleanup_factory()
+                    asyncio.run_coroutine_threadsafe(cleanup, loop).result(
+                        timeout=10
+                    )
+            except BaseException as exc:
+                # Even if provider cleanup fails or times out, the loop must
+                # still be stopped.  Otherwise the daemon thread and any
+                # transport it owns survive until process exit.
+                cleanup_error = exc
+            finally:
+                loop.call_soon_threadsafe(loop.stop)
         thread.join(timeout=10)
         if thread.is_alive():
-            raise RuntimeError("Persistent asyncio runtime did not close cleanly.")
+            close_error = RuntimeError(
+                "Persistent asyncio runtime did not close cleanly."
+            )
+            if cleanup_error is not None:
+                close_error.__cause__ = cleanup_error
+            raise close_error
+        if cleanup_error is not None:
+            raise cleanup_error
 
     def _ensure_started(self) -> None:
         with self._lock:

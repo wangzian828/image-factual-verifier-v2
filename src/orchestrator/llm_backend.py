@@ -22,6 +22,7 @@ from src.integrations.gemini import (
     messages_to_input,
     validate_interaction_response,
 )
+from src.integrations.http_transport import provider_httpx_limits
 from src.integrations.llm.openai_compatible import (
     OpenAICompatibleChatClient,
     resolve_model_api_key,
@@ -285,7 +286,10 @@ class APIBackend(LLMBackend):
         return {}
 
     def _client_kwargs(self) -> Dict[str, Any]:
-        client_kwargs: Dict[str, Any] = {"timeout": self.timeout}
+        client_kwargs: Dict[str, Any] = {
+            "timeout": self.timeout,
+            "limits": provider_httpx_limits(),
+        }
         if self.proxy:
             client_kwargs["proxy"] = self.proxy
         else:

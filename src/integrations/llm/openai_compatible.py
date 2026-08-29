@@ -9,6 +9,8 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
+from src.integrations.http_transport import provider_httpx_limits
+
 
 @dataclass
 class OpenAICompatibleChatClient:
@@ -32,18 +34,33 @@ class OpenAICompatibleChatClient:
     def _client_kwargs(self) -> Dict[str, Any]:
         is_local = self.base_url and ("127.0.0.1" in self.base_url or "localhost" in self.base_url)
         if is_local:
-            return {"timeout": self.timeout, "trust_env": False}
+            return {
+                "timeout": self.timeout,
+                "trust_env": False,
+                "limits": provider_httpx_limits(),
+            }
         proxy = (
             os.environ.get("HTTPS_PROXY")
             or os.environ.get("HTTP_PROXY")
             or os.environ.get("https_proxy")
             or os.environ.get("http_proxy")
         )
-        kwargs: Dict[str, Any] = {"timeout": self.timeout}
+        kwargs: Dict[str, Any] = {
+            "timeout": self.timeout,
+            "limits": provider_httpx_limits(),
+        }
         if proxy:
             kwargs["proxy"] = proxy
             kwargs["trust_env"] = True
         return kwargs
+
+    def close(self) -> None:
+        """Close the client owned by the current synchronous worker thread."""
+
+        client = getattr(self._thread_local, "client", None)
+        self._thread_local.client = None
+        if client is not None:
+            client.close()
 
     def _get_client(self) -> httpx.Client:
         client = getattr(self._thread_local, "client", None)
