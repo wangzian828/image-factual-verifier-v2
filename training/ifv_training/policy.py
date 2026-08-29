@@ -15,7 +15,12 @@ from .io import (
 )
 
 
-SUPPORTED_DATASET_VERSION = "ifv-trajectory-sft-dataset-v2"
+SUPPORTED_DATASET_VERSIONS = frozenset(
+    {
+        "ifv-trajectory-sft-dataset-v2",
+        "ifv-trajectory-sft-dataset-v3",
+    }
+)
 LEGACY_STEP_DATASET_VERSION = "ifv-policy-dataset-v2"
 OUTPUT_VERSION = "ifv-ms-swift-trajectory-sft-v1"
 SPLITS = ("train", "validation", "test")
@@ -87,10 +92,10 @@ def convert_policy_dataset(input_dir: Path, output_dir: Path) -> dict[str, Any]:
             "refusing legacy step-level ifv-policy-dataset-v2; export "
             "ifv-trajectory-sft-dataset-v2 instead"
         )
-    if source_version != SUPPORTED_DATASET_VERSION:
+    if source_version not in SUPPORTED_DATASET_VERSIONS:
         raise ValueError(
             "training adapter accepts only "
-            f"{SUPPORTED_DATASET_VERSION}, got "
+            f"{sorted(SUPPORTED_DATASET_VERSIONS)}, got "
             f"{source_version!r}"
         )
     require_new_or_empty(output_dir)

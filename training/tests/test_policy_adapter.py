@@ -176,6 +176,30 @@ def test_dataset_conversion_is_deterministic_and_auditable(
         assert path.read_bytes() == (second / path.name).read_bytes()
 
 
+def test_unified_react_v3_dataset_is_accepted(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    write_json(
+        source / "manifest.json",
+        {
+            "dataset_version": "ifv-trajectory-sft-dataset-v3",
+            "schema_version": "ifv-trajectory-sft-dataset-manifest-v1",
+        },
+    )
+    row = {
+        **_trajectory_row(),
+        "dataset_version": "ifv-trajectory-sft-dataset-v3",
+        "trajectory_version": "ifv-trajectory-sft-v3",
+    }
+    write_jsonl(source / "train.jsonl", [row])
+    write_jsonl(source / "validation.jsonl", [])
+    write_jsonl(source / "test.jsonl", [])
+
+    manifest = convert_policy_dataset(source, tmp_path / "output")
+
+    assert manifest["example_count"] == 1
+
+
 def test_audit_allows_provider_error_observation_but_rejects_wire_prompt(
     tmp_path: Path,
 ) -> None:
