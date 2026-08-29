@@ -36,6 +36,23 @@ from scripts.run_direct_qa_baseline import (
 )
 
 
+PRIVATE_GOLD_FIELDS = (
+    "target_claim",
+    "primary_claim",
+    "claim_atom",
+    "decisive_visual_atom",
+    "automatic_qa",
+    "evidence",
+    "source_url",
+    "assignment_id",
+    "generation_prompt_id",
+    "construction_subroute",
+    "target_subtype",
+    "target_capability_cell",
+    "factual_status",
+)
+
+
 PRIVATE_GOLD_JUDGE_PROMPT = """You are a frozen private-gold auditor for an image factual-verification benchmark.
 
 The candidate answer was produced by a separate model that saw only one image and a public task prompt. You are now given private construction gold and the candidate's JSON answer. Judge whether the candidate identified the intended complete image-level fact and whether its reason genuinely supports its verdict.
@@ -72,6 +89,137 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
                 raise ValueError(f"{path}:{line_number} is not a JSON object")
             rows.append(value)
     return rows
+
+
+def _archive_candidate_key(row: Mapping[str, Any]) -> str:
+    return str(
+        row.get("archive_source_version_id")
+        or row.get("candidate_id")
+        or row.get("case_id")
+        or ""
+    ).strip()
+
+
+def _load_archive_private_gold(
+    archive_root: Path,
+) -> dict[str, dict[str, Any]]:
+    """Load evaluator-private construction rows from an immutable archive."""
+
+    root = archive_root.expanduser().resolve()
+    candidate_path = root / "human-review-candidates.jsonl"
+    if not candidate_path.is_file():
+        raise FileNotFoundError(
+            f"archive private-gold file does not exist: {candidate_path}"
+        )
+    indexed: dict[str, dict[str, Any]] = {}
+    for line_number, row in enumerate(_read_jsonl(candidate_path), start=1):
+        key = _archive_candidate_key(row)
+        if not key:
+            raise ValueError(
+                f"{candidate_path}:{line_number} has no archive identity"
+            )
+        if key in indexed:
+            raise ValueError(f"duplicate archive private-gold key: {key}")
+        indexed[key] = row
+    if not indexed:
+        raise ValueError(f"archive private-gold file is empty: {candidate_path}")
+    return indexed
+
+
+def _load_qa_fallback_gold(
+    row: Mapping[str, Any],
+    *,
+    manifest_root: Path,
+) -> dict[str, Any]:
+    """Read the target atom from the per-image QA artifact when available.
+
+    This is only a last-resort audit fallback.  The historical construction
+    archive remains authoritative because QA does not contain source evidence
+    or the complete claim atom.
+    """
+
+    value = str(row.get("unified_qa_path") or "").strip()
+    if not value:
+        return {}
+    path = Path(value)
+    if path.is_absolute():
+        resolved = path
+    else:
+        resolved = (manifest_root / path).resolve()
+        try:
+            resolved.relative_to(manifest_root.resolve())
+        except ValueError:
+            return {}
+    if not resolved.is_file():
+        return {}
+    try:
+        qa = json.loads(resolved.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(qa, Mapping):
+        return {}
+    semantic = qa.get("semantic_checks")
+    if not isinstance(semantic, Mapping):
+        semantic = {}
+    target_claim = str(qa.get("target_claim") or "").strip()
+    target_atom = str(
+        qa.get("target_visual_atom")
+        or semantic.get("target_visual_atom_observation")
+        or ""
+    ).strip()
+    if not target_claim and not target_atom:
+        return {}
+    return {
+        "target_claim": target_claim,
+        "decisive_visual_atom": target_atom,
+        "automatic_qa": dict(semantic),
+        "_private_gold_source": "unified_qa_fallback",
+    }
+
+
+def _build_private_gold_rows(
+    manifest_rows: Sequence[Mapping[str, Any]],
+    *,
+    archive_root: Path | None,
+    manifest_root: Path,
+) -> list[dict[str, Any]]:
+    """Attach private gold only to the post-hoc evaluator-side rows.
+
+    The public unified manifest intentionally omits construction details for
+    many records.  Merge the matching immutable archive row by
+    ``archive_source_version_id`` before judging.  No merged row is sent to
+    the direct-QA model.
+    """
+
+    archive_index = (
+        _load_archive_private_gold(archive_root)
+        if archive_root is not None
+        else {}
+    )
+    merged_rows: list[dict[str, Any]] = []
+    for source_row in manifest_rows:
+        row = dict(source_row)
+        archive_key = str(row.get("archive_source_version_id") or "").strip()
+        archive_row = archive_index.get(archive_key)
+        if archive_row is not None:
+            for field in PRIVATE_GOLD_FIELDS:
+                current = row.get(field)
+                if current in (None, "", [], {}):
+                    if field in archive_row:
+                        row[field] = archive_row[field]
+            row["_private_gold_source"] = "historical_archive"
+        else:
+            qa_fallback = _load_qa_fallback_gold(
+                row,
+                manifest_root=manifest_root,
+            )
+            for field, value in qa_fallback.items():
+                if row.get(field) in (None, "", [], {}):
+                    row[field] = value
+            if qa_fallback:
+                row["_private_gold_source"] = "unified_qa_fallback"
+        merged_rows.append(row)
+    return merged_rows
 
 
 def _private_gold(row: Mapping[str, Any]) -> dict[str, Any]:
@@ -131,6 +279,7 @@ def _private_gold(row: Mapping[str, Any]) -> dict[str, Any]:
             or source_fact
         )
     )
+    gold["source"] = str(row.get("_private_gold_source") or "manifest").strip()
     return gold
 
 
@@ -285,6 +434,11 @@ async def _audit_one(
 async def _run(args: argparse.Namespace) -> int:
     run_dir = Path(args.run_dir).expanduser().resolve()
     manifest = Path(args.manifest).expanduser().resolve()
+    archive_root = (
+        Path(args.archive_root).expanduser().resolve()
+        if args.archive_root
+        else None
+    )
     output_dir = Path(args.output_dir).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     source_results = run_dir / "results.jsonl"
@@ -292,7 +446,12 @@ async def _run(args: argparse.Namespace) -> int:
         raise FileNotFoundError(source_results)
 
     manifest_rows = _read_jsonl(manifest)
-    gold_by_case = {_case_id(row): row for row in manifest_rows}
+    private_gold_rows = _build_private_gold_rows(
+        manifest_rows,
+        archive_root=archive_root,
+        manifest_root=manifest.parent,
+    )
+    gold_by_case = {_case_id(row): row for row in private_gold_rows}
     results = _read_jsonl(source_results)
     if args.limit > 0:
         results = results[: args.limit]
@@ -366,6 +525,7 @@ async def _run(args: argparse.Namespace) -> int:
             "run_dir": str(run_dir),
             "source_results": str(source_results),
             "manifest": str(manifest),
+            "archive_root": str(archive_root) if archive_root else None,
             "judge_model": args.judge_model,
             "thinking_level": args.thinking_level,
             "thinking_summaries": "auto",
@@ -453,6 +613,7 @@ async def _run(args: argparse.Namespace) -> int:
         "created_at": datetime.now(timezone.utc).isoformat(),
         "run_dir": str(run_dir),
         "manifest": str(manifest),
+        "archive_root": str(archive_root) if archive_root else None,
         "judge_model": args.judge_model,
         "thinking_level": args.thinking_level,
         "concurrency": args.concurrency,
@@ -496,6 +657,13 @@ def main() -> int:
     )
     parser.add_argument("--run-dir", required=True)
     parser.add_argument("--manifest", required=True)
+    parser.add_argument(
+        "--archive-root",
+        help=(
+            "immutable archive containing human-review-candidates.jsonl; "
+            "used to recover sparse private gold after rollout"
+        ),
+    )
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--prompt-file")
     parser.add_argument(
