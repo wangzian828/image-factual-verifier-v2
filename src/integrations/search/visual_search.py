@@ -17,6 +17,7 @@ from src.integrations.http_sessions import (
     close_tracked_sessions,
     get_tracked_session,
     init_tracked_sessions,
+    configure_provider_session,
 )
 
 
@@ -158,6 +159,13 @@ class ImageUploadClient:
             raise RuntimeError("oss2 is required for OSS uploads") from exc
 
         session = oss2.http.Session()
+        # oss2 creates a plain requests.Session internally, bypassing the
+        # rollout-owned sync egress gate. Configure that real session with the
+        # same adapter used by Serper/Jina/OCR. Test doubles that do not expose
+        # the requests Session API are deliberately left untouched.
+        sdk_session = getattr(session, "session", None)
+        if isinstance(sdk_session, requests.Session):
+            configure_provider_session(sdk_session)
         with self._oss_session_registry_lock:
             if self._oss_sessions_closed:
                 self._close_oss_session(session)

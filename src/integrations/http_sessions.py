@@ -28,8 +28,8 @@ def _sync_http_limit() -> int:
 _SYNC_HTTP_GATE = threading.BoundedSemaphore(_sync_http_limit())
 
 
-class _GatedSession(requests.Session):
-    """requests session that bounds simultaneous synchronous egress calls."""
+class _GatedHTTPAdapter(HTTPAdapter):
+    """HTTP adapter that bounds simultaneous synchronous egress calls."""
 
     _ifv_http_gate = _SYNC_HTTP_GATE
 
@@ -46,9 +46,10 @@ class _GatedSession(requests.Session):
 
         try:
             response = super().send(request, **kwargs)
-            # Non-streaming requests have already consumed their response body
-            # before ``Session.send`` returns.  Streaming callers retain the
-            # gate until their response is explicitly closed.
+            # ``HTTPAdapter.send`` returns before a streaming body is read.
+            # OSS uses stream=True, so retain the gate until its response is
+            # explicitly closed. Ordinary requests release after headers; the
+            # enclosing Session.send then consumes the non-streaming body.
             if not kwargs.get("stream", False):
                 release()
             else:
@@ -77,17 +78,34 @@ def _new_session() -> requests.Session:
     one-shot, while the adapter bounds any transient pool bookkeeping.
     """
 
-    session = _GatedSession()
+    session = requests.Session()
     session.headers.update({"Connection": "close"})
-    adapter = HTTPAdapter(
+    session.mount("http://", _new_provider_adapter())
+    session.mount("https://", _new_provider_adapter())
+    return session
+
+
+def _new_provider_adapter() -> HTTPAdapter:
+    return _GatedHTTPAdapter(
         pool_connections=1,
         pool_maxsize=1,
         max_retries=0,
         pool_block=True,
     )
-    session.mount("http://", adapter)
-    session.mount("https://", adapter)
-    return session
+
+
+def configure_provider_session(session: requests.Session) -> None:
+    """Apply the gated one-shot transport policy to an existing session."""
+
+    session.headers.update({"Connection": "close"})
+    session.mount("http://", _new_provider_adapter())
+    session.mount("https://", _new_provider_adapter())
+
+
+def new_provider_session() -> requests.Session:
+    """Create one short-lived, gated session for an SDK-owned request."""
+
+    return _new_session()
 
 
 def init_tracked_sessions(owner: Any) -> None:
