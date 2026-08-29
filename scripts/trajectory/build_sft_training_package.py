@@ -177,8 +177,17 @@ def _effective_short_max_tokens(release_path: Path, requested: int | None) -> in
 
 
 def _assert_new_or_empty(path: Path) -> None:
-    if path.exists() and any(path.iterdir()):
-        raise FileExistsError(f"package output must be new or empty: {path}")
+    if path.exists():
+        unexpected = [
+            child.name
+            for child in path.iterdir()
+            if child.name != "command.log"
+        ]
+        if unexpected:
+            raise FileExistsError(
+                f"package output must be new or contain only command.log: "
+                f"{path}; unexpected={unexpected}"
+            )
     path.mkdir(parents=True, exist_ok=True)
 
 

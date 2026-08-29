@@ -14,6 +14,7 @@ from scripts.trajectory.run_teacher_rollout_autopilot import (
     _successful_trace_sources,
     prepare_runtime_release,
 )
+from scripts.trajectory.build_sft_training_package import _assert_new_or_empty
 from src.eval.public_release import load_public_release, resolve_image_path
 
 
@@ -135,6 +136,22 @@ def test_attempt_launcher_log_is_outside_run_cases_output(tmp_path: Path) -> Non
 
     assert log == group / "logs" / "attempt-01.log"
     assert attempt not in log.parents
+
+
+def test_package_output_allows_autopilot_command_log_only(tmp_path: Path) -> None:
+    output = tmp_path / "sft-training-package"
+    output.mkdir()
+    (output / "command.log").write_text("launcher created this first\n", encoding="utf-8")
+
+    _assert_new_or_empty(output)
+
+    (output / "partial-artifact").write_text("do not reuse\n", encoding="utf-8")
+    try:
+        _assert_new_or_empty(output)
+    except FileExistsError as exc:
+        assert "partial-artifact" in str(exc)
+    else:
+        raise AssertionError("partial package output must be rejected")
 
 
 def test_success_scan_keeps_only_trace_metadata(tmp_path: Path) -> None:
