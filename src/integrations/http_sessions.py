@@ -13,6 +13,30 @@ import threading
 from typing import Any
 
 import requests
+from requests.adapters import HTTPAdapter
+
+
+def _new_session() -> requests.Session:
+    """Create a requests session that cannot retain proxy keep-alives.
+
+    The gpu-13 egress proxy may half-close idle keep-alive sockets while a
+    rollout is still active.  urllib3 can then keep those sockets in its pool
+    until the whole case ends, producing unbounded CLOSE-WAIT growth.  A
+    ``Connection: close`` request header makes every provider response
+    one-shot, while the adapter bounds any transient pool bookkeeping.
+    """
+
+    session = requests.Session()
+    session.headers.update({"Connection": "close"})
+    adapter = HTTPAdapter(
+        pool_connections=1,
+        pool_maxsize=1,
+        max_retries=0,
+        pool_block=True,
+    )
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    return session
 
 
 def init_tracked_sessions(owner: Any) -> None:
@@ -33,7 +57,7 @@ def get_tracked_session(
 
     session = getattr(thread_local, attribute, None)
     if session is None:
-        session = requests.Session()
+        session = _new_session()
         with owner._session_registry_lock:
             if owner._sessions_closed:
                 session.close()
