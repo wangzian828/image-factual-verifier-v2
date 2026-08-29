@@ -31,6 +31,8 @@ _SYNC_HTTP_GATE = threading.BoundedSemaphore(_sync_http_limit())
 class _GatedSession(requests.Session):
     """requests session that bounds simultaneous synchronous egress calls."""
 
+    _ifv_http_gate = _SYNC_HTTP_GATE
+
     def send(self, request: Any, **kwargs: Any) -> requests.Response:
         self._ifv_http_gate.acquire()
         released = False
