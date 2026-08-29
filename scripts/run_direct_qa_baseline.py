@@ -16,6 +16,7 @@ import asyncio
 import base64
 import json
 import mimetypes
+import random
 import sys
 import time
 from collections import Counter
@@ -171,6 +172,45 @@ def _load_rows(manifest: Path, image_root: Path) -> list[dict[str, Any]]:
     return rows
 
 
+def _stratified_sample(
+    rows: Sequence[dict[str, Any]],
+    *,
+    limit: int,
+    field: str,
+    seed: int,
+) -> list[dict[str, Any]]:
+    """Sample rows round-robin across one manifest category field."""
+
+    if limit <= 0 or limit >= len(rows):
+        selected = list(rows)
+        random.Random(seed).shuffle(selected)
+        return selected
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        value = str(row.get(field) or "<empty>").strip() or "<empty>"
+        groups.setdefault(value, []).append(row)
+    rng = random.Random(seed)
+    for group in groups.values():
+        rng.shuffle(group)
+
+    selected: list[dict[str, Any]] = []
+    keys = sorted(groups)
+    while len(selected) < limit:
+        added = False
+        for key in keys:
+            group = groups[key]
+            if not group:
+                continue
+            selected.append(group.pop())
+            added = True
+            if len(selected) >= limit:
+                break
+        if not added:
+            break
+    rng.shuffle(selected)
+    return selected
+
+
 def _load_completed_ids(results_path: Path) -> set[str]:
     if not results_path.is_file():
         return set()
@@ -277,6 +317,7 @@ def _build_summary(
     args: argparse.Namespace,
     manifest: Path,
     output_dir: Path,
+    selection_counts: Mapping[str, int],
 ) -> dict[str, Any]:
     latest: dict[str, Mapping[str, Any]] = {}
     for record in records:
@@ -308,6 +349,11 @@ def _build_summary(
         "output_dir": str(output_dir),
         "input_contract": "image_only",
         "prompt_contract": "shared_direct_qa_prompt",
+        "selection": {
+            "stratify_by": args.stratify_by,
+            "seed": args.seed,
+            "category_counts": dict(selection_counts),
+        },
         "counts": {
             "manifest_rows_selected": len(values),
             "completed": len(completed),
@@ -353,11 +399,22 @@ async def _run(args: argparse.Namespace) -> int:
     if args.case_id:
         wanted = set(args.case_id)
         rows = [row for row in rows if _case_id(row) in wanted]
-    if args.limit > 0:
+    if args.stratify_by:
+        rows = _stratified_sample(
+            rows,
+            limit=args.limit if args.limit > 0 else len(rows),
+            field=args.stratify_by,
+            seed=args.seed,
+        )
+    elif args.limit > 0:
         rows = rows[: args.limit]
     if args.resume:
         completed_ids = _load_completed_ids(results_path)
         rows = [row for row in rows if _case_id(row) not in completed_ids]
+    selection_counts = Counter(
+        str(row.get(args.stratify_by) or "<empty>")
+        for row in rows
+    ) if args.stratify_by else Counter()
 
     schema = {
         "type": "object",
@@ -388,9 +445,12 @@ async def _run(args: argparse.Namespace) -> int:
         "timeout": args.timeout,
         "max_retries": args.max_retries,
         "concurrency": args.concurrency,
+        "stratify_by": args.stratify_by,
+        "seed": args.seed,
         "manifest": str(manifest),
         "image_root": str(image_root),
         "selected_rows": len(rows),
+        "selection_category_counts": dict(selection_counts),
         "input_contract": "image_only",
         "request_fields": ["image", "shared_prompt"],
     }
@@ -456,6 +516,7 @@ async def _run(args: argparse.Namespace) -> int:
         args=args,
         manifest=manifest,
         output_dir=output_dir,
+        selection_counts=selection_counts,
     )
     _write_json(output_dir / "summary.json", summary)
     print(json.dumps(summary, ensure_ascii=False, indent=2))
@@ -481,6 +542,18 @@ def main() -> int:
     parser.add_argument("--max-retries", type=int, default=2)
     parser.add_argument("--concurrency", type=int, default=4)
     parser.add_argument("--limit", type=int, default=0)
+    parser.add_argument(
+        "--stratify-by",
+        choices=(
+            "factual_status",
+            "construction_subroute",
+            "target_route",
+            "target_capability_cell",
+            "production_class",
+        ),
+        help="Round-robin sample evenly across values of this manifest field.",
+    )
+    parser.add_argument("--seed", type=int, default=20260829)
     parser.add_argument("--case-id", action="append")
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
