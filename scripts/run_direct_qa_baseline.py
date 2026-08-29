@@ -35,11 +35,11 @@ from src.integrations.gemini import GeminiInteractionsClient, extract_text
 
 DEFAULT_PROMPT = """You are an Image Factual Verifier.
 
-Given only one image, identify the main real-world fact expressed by the image and judge whether that fact is correct.
+Given only one image, identify the main real-world fact or situation presented by the image and judge whether it is correct.
 
-Judge the complete fact expressed by the image, including important identity, event, time, place, number, or relationship conditions. Do not judge only whether an isolated person, object, logo, or piece of text is visible.
+Consider the image as a whole. You may use visible people, objects, actions, text, numbers, places, times, and relationships as clues, but include only details that the image actually presents. Do not force the image into a more specific event, background, identity, or relationship than it conveys.
 
-The verdict must be based on the complete real-world fact expressed by the image. Visual style, image quality, or apparent AI/editing artifacts are not by themselves proof that the expressed fact is true or false, and must not replace evaluation of the factual content. If the expressed fact itself concerns image generation or editing, evaluate that fact directly.
+The verdict must be based on the fact or situation identified from the image. Visual style, image quality, or apparent AI/editing artifacts are not by themselves proof that the expressed fact is true or false, and must not replace evaluation of the factual content. If the expressed fact itself concerns image generation or editing, evaluate that fact directly.
 
 Output only JSON:
 {
