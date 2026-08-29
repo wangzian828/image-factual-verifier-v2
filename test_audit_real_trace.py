@@ -480,6 +480,65 @@ def test_strict_audit_accepts_unified_react_trace(tmp_path: Path) -> None:
     assert report.stats["unified_tool_roundtrips"] == 3
 
 
+def test_unified_route_local_replan_is_persisted_but_not_budgeted(
+    tmp_path: Path,
+) -> None:
+    trace_path = _unified_trace(tmp_path)
+    trace = json.loads(trace_path.read_text(encoding="utf-8"))
+    steps = trace["state"]["all_steps"]
+    route = json.loads(json.dumps(steps[2]))
+    route["tool_name"] = "route_local_replan"
+    route["tool_args"] = {
+        "task_id": "task-unified",
+        "strategy": "continue",
+        "replacement_query": "",
+        "visual_focus": "",
+        "rationale": "The route remains usable.",
+    }
+    route["tool_result"] = json.dumps(
+        {
+            "status": "success",
+            "control": "route_local_replan",
+            "task_id": "task-unified",
+        }
+    )
+    route["metadata"]["interaction_id"] = "interaction-route-local-replan"
+    route["metadata"]["previous_interaction_id"] = "interaction-search"
+    route["metadata"]["function_call_id"] = "call-route-local-replan"
+    route["metadata"]["route_local_replan_trigger"] = "source_failure"
+    route["metadata"]["policy_action"] = {
+        "type": "tool_call",
+        "name": "route_local_replan",
+        "arguments": dict(route["tool_args"]),
+    }
+    delta = route["metadata"]["unified_react_delta"]
+    delta["action_id"] = "call-route-local-replan"
+    delta["interaction_id"] = "interaction-route-local-replan"
+    delta["function_call_id"] = "call-route-local-replan"
+    delta["tool_name"] = "route_local_replan"
+    delta["validated_arguments"] = dict(route["tool_args"])
+    delta["accepted_investigation_intent"] = None
+    delta["state_update"] = {
+        "accepted": True,
+        "control": "route_local_replan",
+    }
+    steps.insert(3, route)
+    trace_path.write_text(
+        json.dumps(trace, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    report = audit_trace(trace_path)
+    failure_codes = {
+        issue.code for issue in report.failures(strict_scheduler=True)
+    }
+
+    assert "UNIFIED_REACT_ACTION_COUNT_MISMATCH" not in failure_codes
+    assert "UNIFIED_REACT_REFLECTION_CADENCE_INVALID" not in failure_codes
+    assert report.stats["unified_react_actions"] == 1
+    assert report.stats["unified_tool_roundtrips"] == 4
+
+
 def test_strict_audit_rejects_unified_trace_without_reducer_delta(
     tmp_path: Path,
 ) -> None:

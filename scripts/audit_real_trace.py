@@ -27,6 +27,9 @@ from src.orchestrator.evidence_policy import (  # noqa: E402
     query_targets_fact_check_answer,
 )
 from src.orchestrator.investigation_models import target_fact_rows  # noqa: E402
+from src.orchestrator.unified_react import (  # noqa: E402
+    is_unified_react_budget_action,
+)
 from src.orchestrator.evidence_semantics import (  # noqa: E402
     evidence_direction_is_coherent,
     evidence_is_qualified_for_stance,
@@ -3900,15 +3903,19 @@ def _audit_unified_react_trace(
                     location=location,
                 )
 
-    non_bootstrap_actions = actions[2:]
+    budget_actions = [
+        step
+        for _, step in actions
+        if is_unified_react_budget_action(step)
+    ]
     action_count = int(investigation.get("action_count", 0) or 0)
-    if action_count != len(non_bootstrap_actions):
+    if action_count != len(budget_actions):
         _issue(
             report,
             "UNIFIED_REACT_ACTION_COUNT_MISMATCH",
             (
                 f"action_count={action_count}, but trace records "
-                f"{len(non_bootstrap_actions)} accepted investigation actions"
+                f"{len(budget_actions)} accepted investigation actions"
             ),
             location="state.investigation_state.action_count",
         )
@@ -3929,10 +3936,7 @@ def _audit_unified_react_trace(
         if (
             stage == "unified_react"
             and str(step.get("action_type", "")).strip() == "tool_call"
-            and str(step.get("tool_name", "")).strip() not in {
-                "perceive_scene",
-                "ocr_with_position",
-            }
+            and is_unified_react_budget_action(step)
         ):
             current_action_count += 1
         if (

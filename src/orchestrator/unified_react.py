@@ -49,6 +49,7 @@ from src.tools.base import BaseTool
 UNIFIED_REACT_POLICY_VERSION = "unified-react-v1"
 UNIFIED_REACT_STAGE = "unified_react"
 _BOOTSTRAP_TOOLS = ("perceive_scene", "ocr_with_position")
+UNIFIED_REACT_BOOTSTRAP_TOOLS = frozenset(_BOOTSTRAP_TOOLS)
 _FIRST_INVESTIGATION_TOOLS = (
     "text_search",
     "reverse_image_search",
@@ -59,6 +60,27 @@ _FIRST_INVESTIGATION_TOOLS = (
 )
 _ADAPTER_ONLY_FIELDS = frozenset({"task_id", "investigation_intent"})
 _ROUTE_LOCAL_REPLAN_TOOL = "route_local_replan"
+UNIFIED_REACT_FREE_CONTROL_TOOLS = frozenset({_ROUTE_LOCAL_REPLAN_TOOL})
+
+
+def is_unified_react_budget_action(step: Mapping[str, Any]) -> bool:
+    """Return whether a unified-ReAct tool call consumes investigation budget.
+
+    Visual bootstrap calls establish the initial workspace and the route-local
+    replan call only mutates an existing route.  Both are persisted policy
+    actions, but neither advances ``ImageOnlyInvestigationState.action_count``.
+    Keep this predicate shared by runtime-adjacent auditing, scoring, and
+    export code so those consumers use the same action coordinate system.
+    """
+
+    return (
+        str(step.get("stage", "")).strip() == UNIFIED_REACT_STAGE
+        and str(step.get("action_type", "")).strip() == "tool_call"
+        and str(step.get("tool_name", "")).strip()
+        not in UNIFIED_REACT_BOOTSTRAP_TOOLS
+        and str(step.get("tool_name", "")).strip()
+        not in UNIFIED_REACT_FREE_CONTROL_TOOLS
+    )
 
 
 def _parse_initial_investigation_intent(

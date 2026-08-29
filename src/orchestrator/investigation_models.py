@@ -2203,7 +2203,6 @@ class ImageOnlyInvestigationState(StrictModel):
 
 class VisualBootstrap(StrictModel):
     """Image/OCR observations materialized before investigation starts."""
-
     brief: InvestigationBrief
     entities: List[VisualEntity] = Field(default_factory=list, max_length=32)
     facts: List[VisualFact] = Field(default_factory=list, max_length=48)
@@ -2218,8 +2217,3 @@ class VisualBootstrap(StrictModel):
         if isinstance(value, list):
             return value[:32]
         return value
-
-
-# Kept only so old reducer helper annotations can still be imported while the
-# active runtime uses the narrower VisualBootstrap contract.
-BootstrapInvestigation = VisualBootstrap

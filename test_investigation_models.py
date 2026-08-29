@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 from src.orchestrator.investigation_models import (
-    BootstrapInvestigation,
     InvestigationBrief,
     RetrievalAnchor,
+    VisualBootstrap,
 )
 
 
-def test_bootstrap_investigation_keeps_anchor_graph_up_to_state_limit() -> None:
+def test_visual_bootstrap_keeps_anchor_graph_up_to_state_limit() -> None:
     anchors = [
         RetrievalAnchor(
             anchor_id=f"anchor-{index:02d}",
@@ -17,7 +17,7 @@ def test_bootstrap_investigation_keeps_anchor_graph_up_to_state_limit() -> None:
         for index in range(33)
     ]
 
-    bootstrap = BootstrapInvestigation(
+    bootstrap = VisualBootstrap(
         brief=InvestigationBrief(brief_id="brief-1", case_id="case-1"),
         retrieval_anchors=anchors,
     )

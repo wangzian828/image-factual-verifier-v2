@@ -15,6 +15,9 @@ from src.orchestrator.evidence_semantics import (
 from src.orchestrator.route_policy import semantic_duplicate_count
 from src.orchestrator.tool_result import parse_tool_result
 from src.orchestrator.investigation_models import target_fact_rows
+from src.orchestrator.unified_react import (  # noqa: E402
+    is_unified_react_budget_action,
+)
 
 
 FACT_MATCH_THRESHOLD = 0.35
@@ -23,11 +26,6 @@ LABEL_TO_VERDICT = {
     "refuted": "fake",
     "unverifiable": "unverifiable",
 }
-UNIFIED_REACT_BOOTSTRAP_TOOLS = frozenset(
-    {"perceive_scene", "ocr_with_position"}
-)
-
-
 def _mapping(value: Any) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
 
@@ -1325,10 +1323,7 @@ def _score_discrepancy_trace(
     action_steps = [
         item
         for item in steps
-        if str(item.get("stage", "")) == "unified_react"
-        and str(item.get("action_type", "")) == "tool_call"
-        and str(item.get("tool_name", "")).strip()
-        not in UNIFIED_REACT_BOOTSTRAP_TOOLS
+        if is_unified_react_budget_action(item)
     ]
     post_verdict_actions = max(0, len(action_steps) - terminal_action_count)
     stop_quality = (
