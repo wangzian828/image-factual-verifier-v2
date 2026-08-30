@@ -97,8 +97,18 @@ def _latest_records(
 
 def _audit_record_is_terminal(record: Mapping[str, Any]) -> bool:
     status = str(record.get("status") or "").strip()
-    if status in {"completed", "not_auditable"}:
+    if status == "not_auditable":
         return True
+    if status == "completed":
+        # A provider response can arrive successfully while still failing
+        # the structured judge contract.  Such a row must be retried rather
+        # than being mistaken for a completed quality judgment.
+        return str(record.get("quality_bucket") or "").strip() in {
+            "strong",
+            "usable",
+            "rejected",
+            "not_auditable",
+        }
     if (
         str(record.get("error_type") or "").strip() == "ValueError"
         and "source result is not completed"
