@@ -250,6 +250,15 @@ async def _run(args: argparse.Namespace) -> int:
         if args.private_gold_sidecar
         else None
     )
+    if private_gold_sidecar is None and manifest is not None:
+        candidate_sidecar = (
+            manifest.parent
+            / "evaluator_private"
+            / "private-gold-v1"
+            / "train-private-gold.jsonl"
+        )
+        if candidate_sidecar.is_file():
+            private_gold_sidecar = candidate_sidecar
     archive_root = (
         Path(args.archive_root).expanduser().resolve()
         if args.archive_root

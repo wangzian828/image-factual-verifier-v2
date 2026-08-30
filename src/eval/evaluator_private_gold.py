@@ -26,6 +26,7 @@ PRIVATE_GOLD_FIELDS = (
 )
 _IDENTITY_KEYS = (
     "case_id",
+    "unified_case_id",
     "archive_source_version_id",
     "candidate_id",
     "assignment_id",
@@ -43,7 +44,12 @@ def _present(value: Any) -> bool:
 def stable_case_id(row: Mapping[str, Any]) -> str:
     """Return the runtime-compatible primary identity for a dataset row."""
 
-    for key in ("case_id", "archive_source_version_id", "candidate_id"):
+    for key in (
+        "case_id",
+        "unified_case_id",
+        "archive_source_version_id",
+        "candidate_id",
+    ):
         value = _text(row.get(key))
         if value:
             return value

@@ -4,6 +4,7 @@ from src.eval.evaluator_private_gold import (
     build_evaluator_private_gold_records,
     case_alias_rows,
     private_gold_index,
+    stable_case_id,
 )
 
 
@@ -100,3 +101,18 @@ def test_private_sidecar_index_keeps_only_unambiguous_aliases() -> None:
     assert "shared-candidate" not in indexed
     aliases = case_alias_rows(records)
     assert {"alias": "shared-candidate", "case_id": "archive-a"} not in aliases
+
+
+def test_stable_case_id_matches_teacher_rollout_identity() -> None:
+    assert stable_case_id(
+        {
+            "unified_case_id": "unified-case",
+            "candidate_id": "candidate-case",
+        }
+    ) == "unified-case"
+    assert stable_case_id(
+        {
+            "archive_source_version_id": "archive-case",
+            "candidate_id": "candidate-case",
+        }
+    ) == "archive-case"

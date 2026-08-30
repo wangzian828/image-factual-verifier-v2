@@ -50,6 +50,7 @@ from src.eval.release_adapter import (
     RUNTIME_CASE_KEYS,
     RUNTIME_CONTRACT_VERSION,
 )
+from src.eval.evaluator_private_gold import private_gold_index
 
 
 SCHEMA_VERSION = "ifv-teacher-rollout-autopilot-v1"
@@ -280,10 +281,28 @@ def prepare_runtime_release(
     if limit is not None:
         prepared = prepared[:limit]
 
+    sidecar_path = (
+        dataset_root
+        / "evaluator_private"
+        / "private-gold-v1"
+        / "train-private-gold.jsonl"
+    )
+    sidecar_index: dict[str, dict[str, Any]] = {}
+    if sidecar_path.is_file():
+        sidecar_index = private_gold_index(_read_jsonl(sidecar_path))
+
     runtime_rows: list[dict[str, str]] = []
     gold_rows: list[dict[str, Any]] = []
     materialization: dict[str, int] = {"hardlink": 0, "copy": 0, "existing": 0}
     for index, (case_id, private_row, source_image) in enumerate(prepared, start=1):
+        if sidecar_index:
+            sidecar_row = sidecar_index.get(case_id)
+            if sidecar_row is None:
+                raise ValueError(
+                    "training private-gold sidecar lacks runtime case_id: "
+                    f"{case_id}"
+                )
+            private_row = dict(sidecar_row)
         suffix = source_image.suffix.lower() or ".jpg"
         asset_relative = Path("assets") / f"{index:05d}{suffix}"
         destination = release_root / "runtime_input" / asset_relative
@@ -346,6 +365,12 @@ def prepare_runtime_release(
         "runtime_release": str(release_root),
         "benchmark": str(benchmark_path),
         "private_gold": str(gold_path),
+        "private_gold_source": (
+            str(sidecar_path) if sidecar_index else str(train_manifest)
+        ),
+        "private_gold_source_sha256": (
+            _sha256_file(sidecar_path) if sidecar_index else source_sha256
+        ),
         "runtime_cases_sha256": _sha256_file(benchmark_path),
         "private_gold_sha256": _sha256_file(gold_path),
         "source_access_policy": str(policy_path or ""),

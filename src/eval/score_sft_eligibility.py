@@ -32,7 +32,16 @@ from src.trajectory.sft_eligibility import (
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-dir", type=Path, required=True)
-    parser.add_argument("--gold", type=Path, required=True)
+    parser.add_argument(
+        "--gold",
+        type=Path,
+        help="Selected private-gold rows for this run.",
+    )
+    parser.add_argument(
+        "--private-gold-sidecar",
+        type=Path,
+        help="Complete evaluator-private sidecar; preferred for a split.",
+    )
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--cache-dir", type=Path)
     parser.add_argument("--image-root", type=Path)
@@ -273,7 +282,15 @@ async def _run(args: argparse.Namespace) -> Dict[str, Any]:
         raise ValueError("--trace-retry-delay must be non-negative")
 
     # The completed-manifest check intentionally precedes this private read.
-    gold_path = args.gold.expanduser().resolve()
+    private_gold_sidecar = getattr(args, "private_gold_sidecar", None)
+    if args.gold is not None and private_gold_sidecar is not None:
+        raise ValueError("--gold and --private-gold-sidecar are mutually exclusive")
+    if private_gold_sidecar is not None:
+        gold_path = private_gold_sidecar.expanduser().resolve()
+    elif args.gold is not None:
+        gold_path = args.gold.expanduser().resolve()
+    else:
+        raise ValueError("one of --gold or --private-gold-sidecar is required")
     gold = _jsonl_index(gold_path)
     output_dir = args.output_dir.expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)

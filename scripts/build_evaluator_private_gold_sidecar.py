@@ -103,8 +103,18 @@ def main() -> int:
     )
     aliases = case_alias_rows(records)
     output_rows = output_dir / "private-gold.jsonl"
+    output_test_rows = output_dir / "test-private-gold.jsonl"
+    output_train_rows = output_dir / "train-private-gold.jsonl"
     output_aliases = output_dir / "case-alias-index.jsonl"
     _write_jsonl(output_rows, records)
+    _write_jsonl(
+        output_test_rows,
+        [row for row in records if row.get("split") == "test"],
+    )
+    _write_jsonl(
+        output_train_rows,
+        [row for row in records if row.get("split") == "train"],
+    )
     _write_jsonl(output_aliases, aliases)
     summary.update(
         {
@@ -126,6 +136,8 @@ def main() -> int:
             },
             "artifacts": {
                 "private_gold": str(output_rows),
+                "test_private_gold": str(output_test_rows),
+                "train_private_gold": str(output_train_rows),
                 "case_alias_index": str(output_aliases),
             },
         }
@@ -136,7 +148,9 @@ def main() -> int:
         "This directory is evaluator-only. Do not pass it to rollout, SFT export, "
         "RL training, or public benchmark consumers.\n\n"
         "`private-gold.jsonl` contains one complete private target per stable "
-        "runtime case ID across both train and test. `case-alias-index.jsonl` "
+        "runtime case ID across both train and test. The split-specific "
+        "`test-private-gold.jsonl` and `train-private-gold.jsonl` files are the "
+        "default inputs for their respective evaluators. `case-alias-index.jsonl` "
         "contains only aliases that resolve unambiguously. `summary.json` records "
         "source hashes and completeness validation.\n",
         encoding="utf-8",
