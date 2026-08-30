@@ -44,6 +44,41 @@ def _successful_evidence(row: Mapping[str, Any]) -> bool:
     return status not in {"error", "failed", "failure"}
 
 
+def index_private_gold_rows(
+    rows: list[Mapping[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Index unified-dataset private targets by stable and safe aliases.
+
+    Unified manifests commonly omit ``case_id`` while retaining the rollout's
+    stable ``archive_source_version_id``.  Candidate and assignment IDs remain
+    fallback aliases only, because historical pools can reuse them.
+    """
+
+    result: dict[str, dict[str, Any]] = {}
+    alias_rows: dict[str, list[dict[str, Any]]] = {}
+    canonical_keys = ("case_id", "archive_source_version_id")
+    alias_keys = (*canonical_keys, "candidate_id", "assignment_id")
+    for row in rows:
+        item = dict(row)
+        for key in canonical_keys:
+            value = _text(item.get(key), limit=4000)
+            if not value:
+                continue
+            previous = result.get(value)
+            if previous is not None and previous != item:
+                raise ValueError(f"duplicate private target identity: {value!r}")
+            result[value] = item
+        for key in alias_keys:
+            value = _text(item.get(key), limit=4000)
+            if value:
+                alias_rows.setdefault(value, []).append(item)
+
+    for alias, matches in alias_rows.items():
+        if alias not in result and len(matches) == 1:
+            result[alias] = matches[0]
+    return result
+
+
 def _evidence_projection(
     row: Mapping[str, Any],
     *,

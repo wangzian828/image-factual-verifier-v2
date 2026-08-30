@@ -22,7 +22,10 @@ from dotenv import load_dotenv
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 load_dotenv()
 
-from src.eval.agent_private_gold import build_agent_private_gold_candidate
+from src.eval.agent_private_gold import (
+    build_agent_private_gold_candidate,
+    index_private_gold_rows,
+)
 from src.eval.private_gold_metrics import (
     annotate_private_gold_category,
     private_gold_audit_summary,
@@ -253,7 +256,7 @@ async def _run(args: argparse.Namespace) -> int:
         archive_root=archive_root,
         manifest_root=manifest.parent,
     )
-    gold_by_case = {_case_id(row): row for row in private_gold_rows}
+    gold_by_case = index_private_gold_rows(private_gold_rows)
     results = _read_jsonl(results_path)
     if args.limit > 0:
         results = results[: args.limit]

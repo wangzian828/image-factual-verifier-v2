@@ -4,7 +4,10 @@ from typing import Any
 
 import pytest
 
-from src.eval.agent_private_gold import build_agent_private_gold_candidate
+from src.eval.agent_private_gold import (
+    build_agent_private_gold_candidate,
+    index_private_gold_rows,
+)
 from src.orchestrator.investigation_models import (
     DiscrepancyJudgmentOutput,
     DiscrepancyVerdictBasis,
@@ -116,6 +119,25 @@ def test_agent_private_gold_projection_uses_actual_successful_trace_evidence() -
     assert candidate["runtime_evidence_citations"][0]["source_url"].endswith(
         "/final"
     )
+
+
+def test_private_gold_index_uses_archive_identity_and_drops_ambiguous_aliases() -> None:
+    indexed = index_private_gold_rows(
+        [
+            {
+                "archive_source_version_id": "archive-0130",
+                "candidate_id": "reused-candidate",
+            },
+            {
+                "archive_source_version_id": "archive-0131",
+                "candidate_id": "reused-candidate",
+            },
+        ]
+    )
+
+    assert indexed["archive-0130"]["archive_source_version_id"] == "archive-0130"
+    assert indexed["archive-0131"]["archive_source_version_id"] == "archive-0131"
+    assert "reused-candidate" not in indexed
 
 
 def test_unified_judgment_requires_reader_facing_report() -> None:
