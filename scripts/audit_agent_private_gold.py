@@ -23,9 +23,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 load_dotenv()
 
 from src.eval.agent_private_gold import (
+    agent_candidate_answer,
     build_agent_private_gold_candidate,
 )
 from src.eval.evaluator_private_gold import private_gold_index
+from src.eval.private_gold_judge_contract import (
+    PRIVATE_GOLD_JUDGE_PROMPT,
+    PRIVATE_GOLD_JUDGE_RESPONSE_SCHEMA,
+)
 from src.eval.private_gold_metrics import (
     annotate_private_gold_category,
     private_gold_audit_summary,
@@ -44,29 +49,6 @@ from scripts.run_direct_qa_baseline import (
     _resolve_image_path,
     extract_native_thought,
 )
-
-
-AGENT_PRIVATE_GOLD_JUDGE_PROMPT = """You are a frozen private-gold auditor for an image factual-verification benchmark.
-
-You receive an image, evaluator-private construction gold, and a completed Agent trace packet. The private gold is authoritative for the intended image-level fact and expected binary verdict. The Agent report is untrusted prose. Only the supplied successful Evidence records and verdict basis are actual trace evidence; do not credit a report sentence merely because it says a source proved something.
-
-First assess whether the Agent reached the same complete image-level fact. A compatible sub-fact is acceptable only when it decisively settles the same real/fake verdict. Do not accept an easier, broader fact that drops a decisive identity, event, relationship, time, place, number, or other condition.
-
-Then assess the evidence chain actually selected by the trace:
-- decisive: selected successful Evidence directly establishes the necessary relation and supports the recorded verdict;
-- partial: it is relevant and useful but leaves a material part of the target open;
-- not_grounded: no selected successful Evidence supports the factual conclusion;
-- contradictory: selected Evidence conflicts with the recorded conclusion.
-
-Assess the reader-facing report separately. It is faithful only when it accurately summarizes the supplied target, basis, and Evidence without inventing sources, observations, or stronger claims. A missing report is allowed only for historical traces and must be marked missing; it cannot by itself make an otherwise grounded historical trace incorrect.
-
-Set quality_bucket:
-- strong: correct verdict, same_fact or compatible_subfact, and decisive trace evidence. When a fact_check_report is present, it must also be faithful. A missing report on a historical trace does not by itself prevent strong;
-- usable: correct verdict and aligned fact, with partial evidence or a report that is incomplete but not invented;
-- rejected: wrong/different fact, no factual grounding, contradiction, artifact-only reasoning, invented evidence/source, or major overclaiming;
-- not_auditable: private gold or source trace is unavailable.
-
-Do not treat apparent AI generation, editing artifacts, image quality, distorted anatomy, search-result titles, generic lack of results, or an unsupported URL as factual proof. Return only JSON."""
 
 
 def _case_id(row: Mapping[str, Any]) -> str:
@@ -138,17 +120,19 @@ async def _audit_one(
         trace = _read_json(trace_path)
         gold = _private_gold(gold_row)
         candidate = build_agent_private_gold_candidate(trace)
+        candidate_answer = agent_candidate_answer(candidate)
         audit.update(
             {
                 "source_trace_path": str(trace_path),
                 "gold_verdict": gold.get("expected_verdict"),
-                "candidate_verdict": candidate.get("recorded_verdict"),
+                "candidate_verdict": candidate_answer.get("verdict"),
                 "verdict_matches_gold": bool(
                     gold.get("expected_verdict")
-                    and candidate.get("recorded_verdict")
+                    and candidate_answer.get("verdict")
                     == gold.get("expected_verdict")
                 ),
                 "candidate_output": candidate,
+                "candidate_answer": candidate_answer,
                 "private_gold_auditable": gold.get("auditable") is True,
                 "private_gold": gold,
             }
@@ -159,8 +143,8 @@ async def _audit_one(
                     "status": "not_auditable",
                     "quality_bucket": "not_auditable",
                     "private_gold_fact_match": "not_auditable",
-                    "trace_evidence_grounded": "not_auditable",
-                    "report_grounding": "not_auditable",
+                    "fact_alignment": "not_auditable",
+                    "reason_quality": "not_auditable",
                     "explanation": "private gold lacks a usable factual target",
                     "elapsed_seconds": round(time.monotonic() - started, 3),
                 }
@@ -174,7 +158,11 @@ async def _audit_one(
         payload_text = json.dumps(
             {
                 "private_gold": gold,
-                "agent_trace_packet": candidate,
+                "candidate_material": {
+                    "mode": "agent_trace",
+                    "candidate_answer": candidate_answer,
+                    "supporting_trace_material": candidate,
+                },
             },
             ensure_ascii=False,
             indent=2,
@@ -183,7 +171,7 @@ async def _audit_one(
             _image_input(image_path),
             {
                 "type": "text",
-                "text": AGENT_PRIVATE_GOLD_JUDGE_PROMPT
+                "text": PRIVATE_GOLD_JUDGE_PROMPT
                 + "\n\nAUDIT INPUT:\n"
                 + payload_text,
             },
@@ -203,15 +191,9 @@ async def _audit_one(
             audit.update(
                 {
                     "quality_bucket": parsed.get("quality_bucket"),
-                    "private_gold_fact_match": parsed.get(
-                        "private_gold_fact_match"
-                    ),
-                    # Keep the old display key available to generic summaries.
-                    "fact_alignment": parsed.get("private_gold_fact_match"),
-                    "trace_evidence_grounded": parsed.get(
-                        "trace_evidence_grounded"
-                    ),
-                    "report_grounding": parsed.get("report_grounding"),
+                    "fact_alignment": parsed.get("fact_alignment"),
+                    "private_gold_fact_match": parsed.get("fact_alignment"),
+                    "reason_quality": parsed.get("reason_quality"),
                     "failure_modes": parsed.get("failure_modes"),
                     "explanation": parsed.get("explanation"),
                 }
@@ -301,65 +283,10 @@ async def _run(args: argparse.Namespace) -> int:
         selected = set(args.case_id)
         results = [row for row in results if _case_id(row) in selected]
 
-    schema = {
-        "type": "object",
-        "properties": {
-            "quality_bucket": {
-                "type": "string",
-                "enum": ["strong", "usable", "rejected", "not_auditable"],
-            },
-            "private_gold_fact_match": {
-                "type": "string",
-                "enum": [
-                    "same_fact",
-                    "compatible_subfact",
-                    "overgeneralized_subfact",
-                    "different_fact",
-                    "unclear",
-                    "not_auditable",
-                ],
-            },
-            "trace_evidence_grounded": {
-                "type": "string",
-                "enum": [
-                    "decisive",
-                    "partial",
-                    "not_grounded",
-                    "contradictory",
-                    "not_auditable",
-                ],
-            },
-            "report_grounding": {
-                "type": "string",
-                "enum": [
-                    "faithful",
-                    "partially_faithful",
-                    "overclaimed_or_invented",
-                    "missing",
-                    "not_auditable",
-                ],
-            },
-            "failure_modes": {
-                "type": "array",
-                "items": {"type": "string"},
-                "maxItems": 12,
-            },
-            "explanation": {"type": "string"},
-        },
-        "required": [
-            "quality_bucket",
-            "private_gold_fact_match",
-            "trace_evidence_grounded",
-            "report_grounding",
-            "failure_modes",
-            "explanation",
-        ],
-        "additionalProperties": False,
-    }
     response_format = {
         "type": "text",
         "mime_type": "application/json",
-        "schema": schema,
+        "schema": PRIVATE_GOLD_JUDGE_RESPONSE_SCHEMA,
     }
     generation_config = {
         "max_output_tokens": args.max_output_tokens,
@@ -367,13 +294,13 @@ async def _run(args: argparse.Namespace) -> int:
         "thinking_summaries": "auto",
     }
     (output_dir / "prompt.txt").write_text(
-        AGENT_PRIVATE_GOLD_JUDGE_PROMPT + "\n",
+        PRIVATE_GOLD_JUDGE_PROMPT + "\n",
         encoding="utf-8",
     )
     _write_json(
         output_dir / "run-config.json",
         {
-            "schema_version": "ifv-agent-private-gold-audit-config-v1",
+            "schema_version": "ifv-private-gold-audit-config-v2",
             "run_dir": str(run_dir),
             "results_path": str(results_path),
             "manifest": str(manifest) if manifest else None,
@@ -391,10 +318,8 @@ async def _run(args: argparse.Namespace) -> int:
             "judge_input": [
                 "image",
                 "private_construction_gold",
-                "agent_fact_check_report",
-                "actual_trace_verdict_basis",
-                "actual_successful_evidence",
-                "actual_selected_evidence",
+                "candidate_answer",
+                "supporting_trace_material",
             ],
         },
     )
@@ -434,13 +359,8 @@ async def _run(args: argparse.Namespace) -> int:
                             "case_id": record.get("case_id"),
                             "status": record.get("status"),
                             "quality_bucket": record.get("quality_bucket"),
-                            "private_gold_fact_match": record.get(
-                                "private_gold_fact_match"
-                            ),
-                            "trace_evidence_grounded": record.get(
-                                "trace_evidence_grounded"
-                            ),
-                            "report_grounding": record.get("report_grounding"),
+                            "fact_alignment": record.get("fact_alignment"),
+                            "reason_quality": record.get("reason_quality"),
                             "verdict_matches_gold": record.get(
                                 "verdict_matches_gold"
                             ),
@@ -453,7 +373,7 @@ async def _run(args: argparse.Namespace) -> int:
 
     completed = [row for row in records if row.get("status") == "completed"]
     summary = {
-        "schema_version": "ifv-agent-private-gold-audit-v1",
+        "schema_version": "ifv-private-gold-audit-v2",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "run_dir": str(run_dir),
         "manifest": str(manifest) if manifest else None,
@@ -484,19 +404,13 @@ async def _run(args: argparse.Namespace) -> int:
         ),
         "fact_match": dict(
             Counter(
-                str(row.get("private_gold_fact_match") or "unknown")
+                str(row.get("fact_alignment") or "unknown")
                 for row in completed
             )
         ),
-        "trace_evidence_grounded": dict(
+        "reason_quality": dict(
             Counter(
-                str(row.get("trace_evidence_grounded") or "unknown")
-                for row in completed
-            )
-        ),
-        "report_grounding": dict(
-            Counter(
-                str(row.get("report_grounding") or "unknown")
+                str(row.get("reason_quality") or "unknown")
                 for row in completed
             )
         ),
@@ -504,9 +418,7 @@ async def _run(args: argparse.Namespace) -> int:
         "private_gold_audit": private_gold_audit_summary(records),
         "private_gold_category_definition": {
             "correct_point_with_strong_evidence": (
-                "verdict_matches_gold=true and quality_bucket=strong; for Agent "
-                "this requires decisive selected trace Evidence and a faithful "
-                "fact-check report"
+                "verdict_matches_gold=true and quality_bucket=strong"
             ),
             "correct_verdict_insufficient_evidence": (
                 "verdict_matches_gold=true and quality_bucket!=strong"

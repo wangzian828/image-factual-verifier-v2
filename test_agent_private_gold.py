@@ -6,7 +6,12 @@ from typing import Any
 import pytest
 
 from src.eval.agent_private_gold import (
+    agent_candidate_answer,
     build_agent_private_gold_candidate,
+)
+from src.eval.private_gold_judge_contract import (
+    PRIVATE_GOLD_JUDGE_PROMPT,
+    PRIVATE_GOLD_JUDGE_RESPONSE_SCHEMA,
 )
 from src.eval.evaluator_private_gold import private_gold_index
 from src.orchestrator.investigation_models import (
@@ -120,6 +125,22 @@ def test_agent_private_gold_projection_uses_actual_successful_trace_evidence() -
     assert candidate["runtime_evidence_citations"][0]["source_url"].endswith(
         "/final"
     )
+    assert agent_candidate_answer(candidate) == {
+        "core_fact": "The image says A won the final.",
+        "verdict": "fake",
+        "reason": "Fake: the official result names B.\n\n"
+        "The selected official result directly contradicts the displayed winner.\n\n"
+        "Official results name B rather than A.",
+    }
+
+
+def test_agent_and_direct_audits_share_one_judge_contract() -> None:
+    from scripts.audit_direct_qa_baseline import PRIVATE_GOLD_JUDGE_PROMPT as direct_prompt
+    from scripts.audit_agent_private_gold import PRIVATE_GOLD_JUDGE_PROMPT as agent_prompt
+
+    assert direct_prompt == PRIVATE_GOLD_JUDGE_PROMPT
+    assert agent_prompt == PRIVATE_GOLD_JUDGE_PROMPT
+    assert "reason_quality" in PRIVATE_GOLD_JUDGE_RESPONSE_SCHEMA["properties"]
 
 
 def test_private_gold_index_uses_archive_identity_and_drops_ambiguous_aliases() -> None:

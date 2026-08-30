@@ -174,3 +174,25 @@ def build_agent_private_gold_candidate(
         ],
         "rejected_policy_outputs": _rows(state.get("rejection_history"))[:16],
     }
+
+
+def agent_candidate_answer(packet: Mapping[str, Any]) -> dict[str, str]:
+    """Project the Agent terminal packet into the common candidate-answer shape."""
+
+    basis = _mapping(packet.get("verdict_basis"))
+    report = _mapping(packet.get("fact_check_report"))
+    target_facts = _rows(packet.get("selected_target_facts"))
+    core_fact = _text(basis.get("verdict_target"), limit=2400)
+    if not core_fact and target_facts:
+        core_fact = _text(target_facts[0].get("statement"), limit=2400)
+    reason_parts = [
+        _text(report.get("verdict_summary"), limit=2400),
+        _text(report.get("evidence_summary"), limit=2400),
+        _text(packet.get("overall_assessment"), limit=2400),
+    ]
+    reason = "\n\n".join(dict.fromkeys(part for part in reason_parts if part))
+    return {
+        "core_fact": core_fact,
+        "verdict": _text(packet.get("recorded_verdict"), limit=100),
+        "reason": reason,
+    }
