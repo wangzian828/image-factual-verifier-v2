@@ -28,7 +28,7 @@ from src.trajectory.semantic_reward import (
 
 
 SFT_ELIGIBILITY_SCHEMA_VERSION = "ifv-sft-eligibility-v3"
-SFT_ELIGIBILITY_INPUT_VERSION = "ifv-sft-eligibility-input-v7"
+SFT_ELIGIBILITY_INPUT_VERSION = "ifv-sft-eligibility-input-v8"
 SFT_ELIGIBILITY_PROMPT_VERSION = "ifv-sft-private-image-fact-gate-v5"
 SFT_ELIGIBILITY_GENERATION_VERSION = "minimal-thinking-4096-v6"
 SFT_ELIGIBILITY_POSTPROCESS_VERSION = "image-fact-safety-gate-v5"
@@ -72,7 +72,11 @@ SFT_ELIGIBILITY_SYSTEM_PROMPT = (
     "repeats a blocked behavior; or unresolved when the final path still depends "
     "on an unresolved rejected behavior. Rejected turns are not themselves SFT "
     "targets, but their presence is relevant to whether the accepted trajectory "
-    "would teach good behavior."
+    "would teach good behavior. The candidate may include a final reader-facing "
+    "fact_check_report and runtime-owned evidence citations. Treat the report as "
+    "a summary to audit against the supplied Evidence and basis, never as new "
+    "Evidence; a report that invents a source, observation, or stronger fact is "
+    "major overclaiming."
 )
 
 
@@ -554,6 +558,11 @@ def build_sft_eligibility_input(
     basis_claim_ids = _unique(basis.get("claim_ids", []), limit=12)
     basis_evidence_ids = set(_unique(basis.get("evidence_ids", []), limit=40))
     basis_discrepancy_ids = _unique(basis.get("discrepancy_ids", []), limit=12)
+    judgment = _mapping(
+        trace.get("judgment")
+        or state.get("judgment")
+        or investigation.get("discrepancy_judgment")
+    )
 
     claims = [
         {
@@ -633,6 +642,28 @@ def build_sft_eligibility_input(
             "available_to_judge": bool(image_path and image_path.is_file()),
         },
         "candidate": {
+            "recorded_verdict": str(
+                judgment.get("verdict") or trace.get("verdict") or ""
+            ),
+            "final_fact_check_report": _mapping(
+                judgment.get("fact_check_report")
+                or trace.get("fact_check_report")
+            ),
+            "final_evidence_citations": [
+                {
+                    "evidence_id": str(item.get("evidence_id", "")),
+                    "source_url": _text(item.get("source_url"), limit=2000),
+                    "source_family": _text(item.get("source_family"), limit=300),
+                    "evidence_kind": _text(item.get("evidence_kind"), limit=100),
+                    "relation_stance": _text(
+                        item.get("relation_stance"),
+                        limit=100,
+                    ),
+                    "excerpt": _text(item.get("excerpt"), limit=2400),
+                }
+                for item in _rows(judgment.get("evidence_citations"))
+                if str(item.get("evidence_id", "")).strip()
+            ],
             "claims": claims,
             "visual_facts": visual_facts,
             "findings": findings,

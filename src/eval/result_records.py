@@ -43,6 +43,13 @@ def run_result_record(
     verdict_basis = result.get("verdict_basis")
     if verdict_basis is None and isinstance(judgment, Mapping):
         verdict_basis = judgment.get("verdict_basis")
+    fact_check_report = result.get("fact_check_report")
+    evidence_citations = result.get("evidence_citations")
+    if isinstance(judgment, Mapping):
+        if fact_check_report is None:
+            fact_check_report = judgment.get("fact_check_report")
+        if evidence_citations is None:
+            evidence_citations = judgment.get("evidence_citations")
     record: Dict[str, Any] = {
         "case_id": sample.get("case_id"),
         "episode_id": episode_id,
@@ -53,6 +60,8 @@ def run_result_record(
         "verdict": result.get("verdict"),
         "confidence": result.get("confidence"),
         "verdict_basis": verdict_basis,
+        "fact_check_report": fact_check_report,
+        "evidence_citations": evidence_citations,
         "termination": result.get("termination"),
         "time_taken": result.get("time_taken"),
         "total_tool_calls": result.get("total_tool_calls"),

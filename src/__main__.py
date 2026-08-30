@@ -82,6 +82,10 @@ def main():
         f"{result.get('investigation_status', 'unknown')}"
     )
     print(f"Assessment: {result['overall_assessment']}")
+    report = result.get("fact_check_report")
+    if isinstance(report, dict):
+        print(f"Fact-check headline: {report.get('headline', '')}")
+        print(f"Fact-check conclusion: {report.get('verdict_summary', '')}")
     if result.get("verification_layers"):
         print(f"Verification layers: {result['verification_layers']}")
     print(f"Time: {result['time_taken']:.1f}s")

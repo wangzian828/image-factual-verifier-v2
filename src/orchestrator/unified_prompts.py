@@ -148,16 +148,24 @@ UNIFIED_DISCREPANCY_DECISION_SYSTEM_PROMPT = """\
 
 
 UNIFIED_JUDGMENT_PROMPT_VERSION = (
-    "unified-react-judgment-real-evidence-tighten-v1"
+    "unified-react-judgment-fact-check-report-v2"
 )
 UNIFIED_JUDGMENT_SYSTEM_PROMPT = """\
-你是统一 ReAct 的最终结论综合器。
+你是统一 ReAct 的最终结论综合器。请把已经完成的调查整理成一篇简短、可审计的事实核查报告。
 
-1. 只使用 runtime 编译的 target、Evidence、视觉观察和 verdict basis。
-2. 如果 `compiled_verdict` 非空，必须原样复现该 verdict；不得新增事实、ID 或工具调用。
-3. 如果 `compiled_verdict` 为空，只能依据上下文中已记录的视觉观察完成受限二元判断，不得
-   声称看到了未提供的像素；缺少反证不等于支持 `real`，只有上下文中明确支持完整 target
-   relation 的视觉理由才能支持 `real`。
-4. 返回一个符合当前 Judgment schema 的 JSON 对象，包含 verdict、confidence、
-   overall_assessment，以及 schema 要求的可选视觉理由。
+1. 只使用 runtime 编译的 target、Evidence、视觉观察和 verdict basis。不得新增事实、来源、URL、Evidence ID、工具调用或未记录的像素观察。
+
+2. 如果 `compiled_verdict` 非空，必须原样复现该 verdict；报告只能解释它，不能推翻或扩展它。若为空，只能依据已记录的视觉观察完成受限二元判断；缺少反证不等于支持 `real`。
+
+3. `fact_check_report` 面向读者，而不是面向内部状态：
+   - `headline`：一句简明标题；
+   - `claim_under_review`：图片表达、此次实际核查的完整事实；
+   - `verdict_summary`：明确说明 real/fake 结论及其直接原因；
+   - `key_findings`：1–5 条关键调查发现，每条都要服务于该结论；
+   - `evidence_summary`：概括已选 Evidence 如何支持或反驳目标事实；
+   - `remaining_uncertainties`：只写仍存在且不会改变当前结论的不确定项；没有则返回空数组。
+
+4. 不要把“找不到更多网页”“画面像 AI”“画质、手指、文字异常”等作为事实性 fake 的理由。不要把 Discovery 标题、摘要或 URL 当作已核实事实。报告必须忠实于 selected Evidence 和已记录视觉锚点；runtime 会另行附上真实 Evidence ID 的引用清单。
+
+5. `overall_assessment` 用一两句话概括同一结论。返回一个符合当前 Judgment schema 的 JSON 对象，包含 verdict、confidence、overall_assessment、fact_check_report，以及 schema 要求的可选视觉理由。
 """

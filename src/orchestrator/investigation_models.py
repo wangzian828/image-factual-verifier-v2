@@ -1616,6 +1616,37 @@ class TerminalVisualRationale(StrictModel):
     relation_to_verdict: Literal["supports_real", "supports_fake"]
 
 
+class FactCheckReport(StrictModel):
+    """Human-readable, evidence-bounded terminal fact-check report."""
+
+    headline: str = Field(min_length=1, max_length=240)
+    claim_under_review: str = Field(min_length=1, max_length=1600)
+    verdict_summary: str = Field(min_length=1, max_length=1800)
+    key_findings: List[str] = Field(min_length=1, max_length=5)
+    evidence_summary: str = Field(min_length=1, max_length=1800)
+    remaining_uncertainties: List[str] = Field(default_factory=list, max_length=6)
+
+
+class FactCheckEvidenceCitation(StrictModel):
+    """Runtime-owned citation row attached to the fact-check report."""
+
+    evidence_id: str = Field(min_length=1, max_length=100)
+    source_url: str = Field(default="", max_length=4000)
+    source_family: str = Field(min_length=1, max_length=300)
+    evidence_kind: Literal[
+        "web_span",
+        "image_region",
+        "reference_comparison",
+    ]
+    relation_stance: Literal[
+        "supports",
+        "contradicts",
+        "background",
+        "unclear",
+    ]
+    excerpt: str = Field(min_length=1, max_length=2400)
+
+
 class DiscrepancyJudgmentOutput(StrictModel):
     """Model-owned portion of the final binary judgment.
 
@@ -1627,6 +1658,7 @@ class DiscrepancyJudgmentOutput(StrictModel):
     verdict: Literal["real", "fake"]
     confidence: float = Field(ge=0.0, le=1.0)
     overall_assessment: str = Field(min_length=1, max_length=2000)
+    fact_check_report: FactCheckReport
     terminal_visual_rationale: Optional[TerminalVisualRationale] = None
 
 
@@ -1643,6 +1675,11 @@ class DiscrepancyJudgment(StrictModel):
     selected_finding_ids: List[str] = Field(default_factory=list, max_length=20)
     selected_evidence_ids: List[str] = Field(default_factory=list, max_length=40)
     overall_assessment: str = Field(min_length=1, max_length=2000)
+    fact_check_report: Optional[FactCheckReport] = None
+    evidence_citations: List[FactCheckEvidenceCitation] = Field(
+        default_factory=list,
+        max_length=40,
+    )
     terminal_visual_rationale: Optional[TerminalVisualRationale] = None
     unresolved_gaps: List[str] = Field(default_factory=list, max_length=12)
 

@@ -92,9 +92,25 @@ def _render_image(data_url: str) -> str:
 def _render_judgment(judgment: Dict[str, Any], trace: Dict[str, Any]) -> str:
     assessment = judgment.get("overall_assessment", trace.get("overall_assessment", ""))
     basis = trace.get("verdict_basis")
+    report = judgment.get("fact_check_report")
+    citations = judgment.get("evidence_citations")
+    report_html = ""
+    if isinstance(report, dict):
+        report_html = (
+            '<section class="subband"><h3>Fact-check Report</h3>'
+            + f'<h4>{_e(report.get("headline", ""))}</h4>'
+            + f'<p><b>Claim under review:</b> {_e(report.get("claim_under_review", ""))}</p>'
+            + f'<p><b>Conclusion:</b> {_e(report.get("verdict_summary", ""))}</p>'
+            + _list("Key findings", report.get("key_findings"))
+            + f'<p><b>Evidence summary:</b> {_e(report.get("evidence_summary", ""))}</p>'
+            + _list("Remaining uncertainties", report.get("remaining_uncertainties"))
+            + _labeled_json("Evidence citations", citations)
+            + '</section>'
+        )
     return (
         '<section class="band"><h2>Final Judgment</h2>'
         + f'<p>{_e(assessment)}</p>'
+        + report_html
         + _pre(judgment.get("reasoning_chain"))
         + _list("Key Evidence", judgment.get("key_evidence"))
         + _list("Anomalies", judgment.get("anomalies"))

@@ -48,6 +48,27 @@ def _semantic_evidence(item: Any) -> dict[str, Any]:
     }
 
 
+def compile_fact_check_evidence_citations(
+    state: ImageOnlyInvestigationState,
+    basis: Any,
+) -> list[dict[str, Any]]:
+    """Compile terminal report citations from the immutable verdict basis."""
+
+    evidence_by_id = {item.evidence_id: item for item in state.evidence}
+    return [
+        {
+            "evidence_id": evidence_id,
+            "source_url": item.source_url,
+            "source_family": item.source_family,
+            "evidence_kind": item.evidence_kind,
+            "relation_stance": item.relation_stance,
+            "excerpt": item.exact_text[:2400],
+        }
+        for evidence_id in basis.evidence_ids
+        if (item := evidence_by_id.get(evidence_id)) is not None
+    ]
+
+
 def _attempted_routes(state: ImageOnlyInvestigationState) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     for raw in state.attempted_routes[-20:]:
@@ -406,6 +427,25 @@ def render_unified_judgment_context(
             else None
         ),
         "compiled_basis": basis.model_dump(mode="json"),
+        "fact_check_report_contract": {
+            "purpose": (
+                "Write a concise reader-facing fact-check report using only "
+                "the compiled material below."
+            ),
+            "required_sections": [
+                "headline",
+                "claim_under_review",
+                "verdict_summary",
+                "key_findings",
+                "evidence_summary",
+                "remaining_uncertainties",
+            ],
+            "citation_policy": (
+                "Do not invent sources, URLs, Evidence IDs, observations, or "
+                "facts. The runtime attaches the authoritative citation "
+                "inventory from selected Evidence IDs."
+            ),
+        },
         "selected_claims": [
             claims[item].model_dump(mode="json")
             for item in basis.claim_ids

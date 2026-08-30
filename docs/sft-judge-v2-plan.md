@@ -8,19 +8,21 @@ SFT judge 只回答一个问题：
 
 它不要求 teacher 复现构造阶段的 Claim、URL、原图、relation slot 或唯一证据路径。
 
-## Agent 与 Direct QA 的统一评估口径
+## Agent 与 Direct QA 的统一事实口径
 
-Agent 和 Direct QA 都在输出完成后使用同一份 private gold 和同一套 judge 字段，
-不再分别定义“找对点”。三分类只对 `status=completed` 且
-`private_gold_auditable=true` 的记录计算：
+Agent 和 Direct QA 都在输出完成后使用同一份 private gold，统一计算
+`verdict_matches_gold` 与事实命中（同一完整事实或可决定同一结论的兼容子事实）。
+三分类只对 `status=completed` 且 `private_gold_auditable=true` 的记录计算：
 
 1. 找对点且证据充分：`verdict_matches_gold=true` 且 `quality_bucket=strong`；
 2. 判断对但证据不足：`verdict_matches_gold=true` 且质量桶不是 `strong`；
 3. 判断错：`verdict_matches_gold=false`。
 
 工程错误、judge 失败、private gold 不可审计或 judge 输出缺少质量桶，单独计数，
-不塞进以上三类。Agent 的 `evidence_chain_recovery` 等 runtime 过程指标只能作为
-诊断，不能替代 private-gold judge，也不能与 Direct QA 的质量桶直接比较。
+不塞进以上三类。Agent 的 `strong` 必须由实际 selected Evidence、verdict basis 与终局
+报告共同支撑；Direct QA 没有 trace Evidence，其 `strong` 只表示图像直答的答案质量，
+不能解释为“找到了外部证据”。完整契约见
+`docs/agent-fact-check-report-and-private-gold-audit.md`。
 
 共享实现位于 `src/eval/private_gold_metrics.py`；离线统计入口为
 `scripts/summarize_private_gold_audits.py`。

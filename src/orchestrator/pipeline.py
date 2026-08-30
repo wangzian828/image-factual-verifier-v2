@@ -33,6 +33,7 @@ from src.orchestrator.unified_prompts import (
     UNIFIED_REFLECTION_SYSTEM_PROMPT,
 )
 from src.orchestrator.unified_context import (
+    compile_fact_check_evidence_citations,
     render_unified_discrepancy_decision_context,
     render_unified_judgment_context,
     render_unified_react_context,
@@ -469,6 +470,15 @@ class Orchestrator:
             "verdict": judgment.verdict,
             "confidence": judgment.confidence,
             "overall_assessment": judgment.overall_assessment,
+            "fact_check_report": (
+                judgment.fact_check_report.model_dump(mode="json")
+                if judgment.fact_check_report is not None
+                else None
+            ),
+            "evidence_citations": [
+                citation.model_dump(mode="json")
+                for citation in judgment.evidence_citations
+            ],
             "investigation_status": self._investigation_status(investigation),
             "verification_layers": self._verification_layers(investigation),
             "verdict_basis": basis.model_dump(mode="json"),
@@ -1403,6 +1413,11 @@ class Orchestrator:
             confidence=parsed.confidence,
             policy_rule_id=policy_rule_id,
             overall_assessment=parsed.overall_assessment,
+            fact_check_report=parsed.fact_check_report,
+            evidence_citations=compile_fact_check_evidence_citations(
+                investigation,
+                basis,
+            ),
             selected_claim_ids=list(basis.claim_ids),
             selected_discrepancy_ids=list(basis.discrepancy_ids),
             selected_visual_anchor_fact_ids=list(basis.visual_anchor_fact_ids),
@@ -1458,6 +1473,10 @@ class Orchestrator:
         compiled_verdict: str,
         basis: Any,
     ) -> tuple[bool, str]:
+        if parsed.fact_check_report is None:
+            return False, (
+                "unified Judgment must produce a reader-facing fact_check_report"
+            )
         if compiled_verdict and parsed.verdict != compiled_verdict:
             return False, (
                 f"verdict must be {compiled_verdict}, received {parsed.verdict}"
