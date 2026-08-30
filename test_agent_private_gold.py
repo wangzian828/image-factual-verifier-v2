@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -138,6 +139,17 @@ def test_private_gold_index_uses_archive_identity_and_drops_ambiguous_aliases() 
     assert indexed["archive-0130"]["archive_source_version_id"] == "archive-0130"
     assert indexed["archive-0131"]["archive_source_version_id"] == "archive-0131"
     assert "reused-candidate" not in indexed
+
+
+def test_agent_audit_selects_sidecar_from_manifest_split() -> None:
+    from scripts.audit_agent_private_gold import _default_sidecar_for_manifest
+
+    assert _default_sidecar_for_manifest(Path("test-manifest.jsonl")).name == (
+        "test-private-gold.jsonl"
+    )
+    assert _default_sidecar_for_manifest(Path("train-manifest.jsonl")).name == (
+        "train-private-gold.jsonl"
+    )
 
 
 def test_unified_judgment_requires_reader_facing_report() -> None:

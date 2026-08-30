@@ -97,6 +97,16 @@ def _read_json(path: Path) -> dict[str, Any]:
     return dict(value)
 
 
+def _default_sidecar_for_manifest(manifest: Path) -> Path:
+    split = "test" if "test" in manifest.name.casefold() else "train"
+    return (
+        manifest.parent
+        / "evaluator_private"
+        / "private-gold-v1"
+        / f"{split}-private-gold.jsonl"
+    )
+
+
 async def _audit_one(
     result: Mapping[str, Any],
     gold_row: Mapping[str, Any] | None,
@@ -251,12 +261,7 @@ async def _run(args: argparse.Namespace) -> int:
         else None
     )
     if private_gold_sidecar is None and manifest is not None:
-        candidate_sidecar = (
-            manifest.parent
-            / "evaluator_private"
-            / "private-gold-v1"
-            / "train-private-gold.jsonl"
-        )
+        candidate_sidecar = _default_sidecar_for_manifest(manifest)
         if candidate_sidecar.is_file():
             private_gold_sidecar = candidate_sidecar
     archive_root = (
