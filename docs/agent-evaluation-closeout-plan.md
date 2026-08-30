@@ -53,6 +53,7 @@ harness、审计口径或运行配置变更，必须先在第 4 节追加一行�
 | 2026-08-30 21:12 | 已实施：候选 URL 与下载诊断 | `src/tools/reverse_image_search.py`、`src/tools/crop_and_search.py`、`src/tools/compare_reference.py` | 接受合法 HTTP(S) 的无扩展名图片候选，按响应 `Content-Type` 验图；把直接下载、URL 变体、候选页、页面图片提取、HTTP/网络/策略失败写入 subcalls。 | extensionless 与诊断 subcall 单测通过；真实下载回退 smoke 待运行。 | 待提交 |
 | 2026-08-30 21:12 | 已实施：审计输出上限/主分类 | `scripts/audit_direct_qa_baseline.py`、`scripts/audit_agent_private_gold.py`、`src/eval/private_gold_metrics.py` | private-gold judge 默认输出上限升至 8,192；Agent 主三分类改为决定性、落地依据 / 正确但不足 / 错误，旧严格覆盖度仅保留诊断。 | Agent/Direct 分类差异单测通过；真实审计待部署后运行。 | 待提交 |
 | 2026-08-30 21:12 | 已核实：无需重复改 | `src/orchestrator/task_store.py`、`src/tools/compare_reference.py` | 当前代码已有失败/低相关候选的有界 sibling 控制；compare 已从 typed `differences` 派生并保留 `edit_evidence_*` 的原始字段与修复记录。先以真实 smoke 验证，不重复造同类补丁。 | 待真实 smoke 复核。 | 既有代码 |
+| 2026-08-30 21:50 | 待实施：审计去重 | `scripts/audit_direct_qa_baseline.py` | 3.7 direct QA 采用追加式补跑后，审计器直接读取全部 `results.jsonl`，会重复审计同一 case 的旧失败记录和新成功记录；改为按 `case_id` 只取最后一条结果，再进入 judge。 | 新增重复结果回归测试；用 3.7 全量 QA 重新执行一轮干净 private-gold audit。 | 待提交 |
 
 后续每一条 Agent 改动必须记录：修改前行为、修改后行为、为何不改变 private-gold
 隔离/成熟工具契约、对应测试、真实 smoke case、commit 和服务器部署状态。

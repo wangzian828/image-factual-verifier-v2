@@ -521,7 +521,12 @@ async def _run(args: argparse.Namespace) -> int:
         )
         manifest_root = manifest.parent
     gold_by_case = private_gold_index(private_gold_rows)
-    results = _read_jsonl(source_results)
+    # Direct-QA recovery is append-only: a retried case keeps its original
+    # error row and appends the later successful result.  The audit must see
+    # one source result per case, otherwise an old provider error can be
+    # mistaken for a second candidate and contaminate both the judge queue and
+    # the final counts.
+    results = list(_latest_records(_read_jsonl(source_results)).values())
     if args.limit > 0:
         results = results[: args.limit]
     if args.case_id:
