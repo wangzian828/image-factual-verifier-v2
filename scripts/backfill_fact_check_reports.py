@@ -348,10 +348,18 @@ async def _write_one(
 def _completed_ids(path: Path) -> set[str]:
     if not path.is_file():
         return set()
+    # The file is append-only because each retry is persisted immediately.
+    # A case that succeeded once may have a later retry/error record, so using
+    # every historical completed row would incorrectly suppress that case.
+    latest_status: dict[str, str] = {}
+    for row in _read_jsonl(path):
+        case_id = str(row.get("case_id") or "").strip()
+        if case_id:
+            latest_status[case_id] = str(row.get("status") or "").strip()
     return {
-        str(row.get("case_id") or "")
-        for row in _read_jsonl(path)
-        if row.get("status") == "completed" and str(row.get("case_id") or "")
+        case_id
+        for case_id, status in latest_status.items()
+        if status == "completed"
     }
 
 
