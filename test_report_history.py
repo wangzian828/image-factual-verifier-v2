@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from scripts.backfill_fact_check_reports import (
+    _latest_records,
+    _normalize_report_verdict,
+)
+from src.orchestrator.investigation_models import FactCheckReport
 from src.trajectory.report_history import build_full_event_history
 
 
@@ -104,3 +109,34 @@ def test_full_report_history_keeps_every_event_without_replaying_workspace() -> 
     assert history["initial_context"]["stage_instruction"] == "Agent system instruction"
     assert "workspace" not in str(history["initial_context"]["input_payload"])
     assert "policy_input" not in history["chronological_events"][0]
+
+
+def test_posthoc_report_prefixes_the_immutable_verdict_when_missing() -> None:
+    report = FactCheckReport(
+        headline="A headline",
+        claim_under_review="A claim",
+        verdict_summary="The depicted claim is not authentic.",
+        key_findings=["A supported finding."],
+        evidence_summary="A supported evidence summary.",
+    )
+
+    normalized = _normalize_report_verdict(report, verdict="fake")
+
+    assert normalized.verdict_summary == (
+        "Fake: The depicted claim is not authentic."
+    )
+
+
+def test_latest_posthoc_report_record_wins_during_resume() -> None:
+    rows = _latest_records(
+        [
+            {"case_id": "case-a", "status": "error"},
+            {"case_id": "case-b", "status": "completed"},
+            {"case_id": "case-a", "status": "completed"},
+        ]
+    )
+
+    assert {row["case_id"]: row["status"] for row in rows} == {
+        "case-a": "completed",
+        "case-b": "completed",
+    }

@@ -161,8 +161,20 @@ def _validate_report(report: FactCheckReport, *, verdict: str) -> None:
     rendered = json.dumps(report.model_dump(mode="json"), ensure_ascii=False)
     if "http://" in rendered or "https://" in rendered:
         raise ValueError("report must not contain a model-authored URL")
-    if verdict not in report.verdict_summary.casefold():
-        raise ValueError("verdict_summary must state the recorded verdict")
+
+
+def _normalize_report_verdict(
+    report: FactCheckReport,
+    *,
+    verdict: str,
+) -> FactCheckReport:
+    """Make the immutable runtime verdict explicit without changing report facts."""
+
+    if verdict in report.verdict_summary.casefold():
+        return report
+    payload = report.model_dump(mode="json")
+    payload["verdict_summary"] = f"{verdict.title()}: {payload['verdict_summary']}"
+    return FactCheckReport.model_validate(payload)
 
 
 def render_reader_markdown(
@@ -288,6 +300,7 @@ async def _write_one(
             raise ValueError(f"report JSON parse failed: {parse_error}")
         report = FactCheckReport.model_validate(parsed)
         _validate_report(report, verdict=verdict)
+        report = _normalize_report_verdict(report, verdict=verdict)
         native_thought = extract_native_thought(payload)
         record.update(
             {
@@ -340,6 +353,15 @@ def _completed_ids(path: Path) -> set[str]:
         for row in _read_jsonl(path)
         if row.get("status") == "completed" and str(row.get("case_id") or "")
     }
+
+
+def _latest_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    latest: dict[str, dict[str, Any]] = {}
+    for row in records:
+        case_id = str(row.get("case_id") or "").strip()
+        if case_id:
+            latest[case_id] = row
+    return list(latest.values())
 
 
 async def _run(args: argparse.Namespace) -> int:
@@ -445,7 +467,7 @@ async def _run(args: argparse.Namespace) -> int:
                     flush=True,
                 )
 
-    all_records = _read_jsonl(output_path)
+    all_records = _latest_records(_read_jsonl(output_path))
     complete = [row for row in all_records if row.get("status") == "completed"]
     summary = {
         "schema_version": REPORT_SCHEMA_VERSION,
@@ -455,7 +477,9 @@ async def _run(args: argparse.Namespace) -> int:
         "counts": {
             "selected_this_invocation": len(rows),
             "completed_total": len(complete),
-            "errors_total": sum(row.get("status") != "completed" for row in all_records),
+            "errors_total": sum(
+                row.get("status") != "completed" for row in all_records
+            ),
         },
         "history_token_estimate": {
             "min": min(
@@ -493,7 +517,7 @@ def main() -> int:
     parser.add_argument("--timeout", type=float, default=300.0)
     parser.add_argument("--max-retries", type=int, default=3)
     parser.add_argument("--concurrency", type=int, default=8)
-    parser.add_argument("--max-history-tokens", type=int, default=128000)
+    parser.add_argument("--max-history-tokens", type=int, default=256000)
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--case-id", action="append")
     args = parser.parse_args()
