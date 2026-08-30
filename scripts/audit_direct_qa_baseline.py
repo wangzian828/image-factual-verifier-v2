@@ -25,6 +25,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 load_dotenv()
 
 from src.integrations.gemini import GeminiInteractionsClient, extract_text
+from src.eval.private_gold_metrics import (
+    annotate_private_gold_category,
+    private_gold_audit_summary,
+    private_gold_category_counts,
+)
 
 from scripts.run_direct_qa_baseline import (
     _case_id,
@@ -568,7 +573,7 @@ async def _run(args: argparse.Namespace) -> int:
         ]
         with output_path.open("w", encoding="utf-8") as handle:
             for task in asyncio.as_completed(tasks):
-                record = await task
+                record = annotate_private_gold_category(await task)
                 records.append(record)
                 handle.write(json.dumps(record, ensure_ascii=False) + "\n")
                 handle.flush()
@@ -581,6 +586,9 @@ async def _run(args: argparse.Namespace) -> int:
                             "reason_quality": record.get("reason_quality"),
                             "verdict_matches_gold": record.get(
                                 "verdict_matches_gold"
+                            ),
+                            "private_gold_category": record.get(
+                                "private_gold_category"
                             ),
                             "error_type": record.get("error_type"),
                         },
@@ -633,6 +641,17 @@ async def _run(args: argparse.Namespace) -> int:
         },
         "quality_buckets": dict(quality_counts),
         "reason_quality": dict(reason_counts),
+        "private_gold_categories": private_gold_category_counts(records),
+        "private_gold_audit": private_gold_audit_summary(records),
+        "private_gold_category_definition": {
+            "correct_point_with_strong_evidence": (
+                "verdict_matches_gold=true and quality_bucket=strong"
+            ),
+            "correct_verdict_insufficient_evidence": (
+                "verdict_matches_gold=true and quality_bucket!=strong"
+            ),
+            "wrong_verdict": "verdict_matches_gold=false",
+        },
         "audit_results": str(output_path),
         "prompt_file": str(output_dir / "prompt.txt"),
         "config_file": str(output_dir / "run-config.json"),

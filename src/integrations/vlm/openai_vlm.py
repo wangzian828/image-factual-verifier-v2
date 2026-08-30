@@ -200,7 +200,9 @@ class OpenAIVisionClient:
                 ),
             )
         finally:
-            chat.close()
+            close = getattr(chat, "close", None)
+            if callable(close):
+                close()
         parsed = parse_json_object(content)
         if not parsed:
             raise RuntimeError("Vision model did not return a valid JSON object.")
