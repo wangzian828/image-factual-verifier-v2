@@ -214,7 +214,7 @@ def _stratified_sample(
 def _load_completed_ids(results_path: Path) -> set[str]:
     if not results_path.is_file():
         return set()
-    completed: set[str] = set()
+    latest_status: dict[str, str] = {}
     with results_path.open(encoding="utf-8") as handle:
         for line in handle:
             if not line.strip():
@@ -223,9 +223,14 @@ def _load_completed_ids(results_path: Path) -> set[str]:
                 row = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if row.get("status") == "completed" and row.get("case_id"):
-                completed.add(str(row["case_id"]))
-    return completed
+            case_id = str(row.get("case_id") or "").strip()
+            if case_id:
+                latest_status[case_id] = str(row.get("status") or "").strip()
+    return {
+        case_id
+        for case_id, status in latest_status.items()
+        if status == "completed"
+    }
 
 
 async def _run_one(
