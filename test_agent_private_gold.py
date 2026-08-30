@@ -190,6 +190,39 @@ def test_agent_audit_selects_sidecar_from_manifest_split() -> None:
     )
 
 
+def test_agent_report_sidecar_is_an_in_memory_overlay() -> None:
+    from scripts.audit_agent_private_gold import _overlay_report_sidecar
+
+    trace = _trace()
+    trace["judgment"].pop("fact_check_report")
+    original = trace["judgment"].copy()
+    projected, status = _overlay_report_sidecar(
+        trace,
+        {
+            "case_id": "case-article",
+            "report": {
+                "headline": "Backfilled report",
+                "claim_under_review": "The image says A won the final.",
+                "verdict_summary": "Fake: official results name B.",
+                "key_findings": ["The official result names B."],
+                "evidence_summary": "The selected result contradicts A winning.",
+                "remaining_uncertainties": [],
+            },
+            "evidence_citations": [{"evidence_id": "evidence-1"}],
+        },
+    )
+
+    assert status == "applied"
+    assert "fact_check_report" not in trace["judgment"]
+    assert trace["judgment"] == original
+    assert projected["judgment"]["fact_check_report"]["headline"] == (
+        "Backfilled report"
+    )
+    assert projected["judgment"]["evidence_citations"][0]["evidence_id"] == (
+        "evidence-1"
+    )
+
+
 def test_unified_judgment_requires_reader_facing_report() -> None:
     basis = DiscrepancyVerdictBasis(
         decision_mode="evidence_determined",

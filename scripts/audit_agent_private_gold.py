@@ -89,9 +89,51 @@ def _default_sidecar_for_manifest(manifest: Path) -> Path:
     )
 
 
+def _latest_report_records(
+    records: list[Mapping[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    latest: dict[str, dict[str, Any]] = {}
+    for record in records:
+        case_id = _case_id(record)
+        if case_id:
+            latest[case_id] = dict(record)
+    return latest
+
+
+def _overlay_report_sidecar(
+    trace: Mapping[str, Any],
+    report_record: Mapping[str, Any] | None,
+) -> tuple[dict[str, Any], str]:
+    """Overlay a post-hoc report in memory without changing the raw trace."""
+
+    if not report_record:
+        return dict(trace), "missing"
+    report = report_record.get("report")
+    if not isinstance(report, Mapping):
+        return dict(trace), "invalid"
+    projected = dict(trace)
+    judgment_value = projected.get("judgment")
+    judgment = (
+        dict(judgment_value)
+        if isinstance(judgment_value, Mapping)
+        else {}
+    )
+    if not isinstance(judgment.get("fact_check_report"), Mapping):
+        judgment["fact_check_report"] = dict(report)
+    citations = report_record.get("evidence_citations")
+    if (
+        not isinstance(judgment.get("evidence_citations"), list)
+        and isinstance(citations, list)
+    ):
+        judgment["evidence_citations"] = list(citations)
+    projected["judgment"] = judgment
+    return projected, "applied"
+
+
 async def _audit_one(
     result: Mapping[str, Any],
     gold_row: Mapping[str, Any] | None,
+    report_record: Mapping[str, Any] | None,
     *,
     run_dir: Path,
     manifest_root: Path,
@@ -117,7 +159,11 @@ async def _audit_one(
         if str(result.get("status") or "") not in {"success", "completed"}:
             raise ValueError("Agent source result is not successful")
         trace_path = _trace_path(run_dir, result)
-        trace = _read_json(trace_path)
+        raw_trace = _read_json(trace_path)
+        trace, report_sidecar_status = _overlay_report_sidecar(
+            raw_trace,
+            report_record,
+        )
         gold = _private_gold(gold_row)
         candidate = build_agent_private_gold_candidate(trace)
         candidate_answer = agent_candidate_answer(candidate)
@@ -133,6 +179,10 @@ async def _audit_one(
                 ),
                 "candidate_output": candidate,
                 "candidate_answer": candidate_answer,
+                "report_sidecar_status": report_sidecar_status,
+                "report_sidecar_case_id": (
+                    _case_id(report_record) if report_record else None
+                ),
                 "private_gold_auditable": gold.get("auditable") is True,
                 "private_gold": gold,
             }
@@ -288,6 +338,16 @@ async def _run(args: argparse.Namespace) -> int:
     if args.case_id:
         selected = set(args.case_id)
         results = [row for row in results if _case_id(row) in selected]
+    report_by_case: dict[str, dict[str, Any]] = {}
+    report_sidecar_path = (
+        Path(args.report_sidecar).expanduser().resolve()
+        if args.report_sidecar
+        else None
+    )
+    if report_sidecar_path is not None:
+        report_by_case = _latest_report_records(
+            _read_jsonl(report_sidecar_path)
+        )
 
     response_format = {
         "type": "text",
@@ -312,6 +372,9 @@ async def _run(args: argparse.Namespace) -> int:
             "manifest": str(manifest) if manifest else None,
             "private_gold_sidecar": (
                 str(private_gold_sidecar) if private_gold_sidecar else None
+            ),
+            "report_sidecar": (
+                str(report_sidecar_path) if report_sidecar_path else None
             ),
             "archive_root": str(archive_root) if archive_root else None,
             "judge_model": args.judge_model,
@@ -342,6 +405,7 @@ async def _run(args: argparse.Namespace) -> int:
                 _audit_one(
                     result,
                     gold_by_case.get(_case_id(result)),
+                    report_by_case.get(_case_id(result)),
                     run_dir=run_dir,
                     manifest_root=manifest_root,
                     client=client,
@@ -450,6 +514,13 @@ def main() -> int:
     parser.add_argument(
         "--private-gold-sidecar",
         help="Evaluator-private private-gold.jsonl; preferred for unified data.",
+    )
+    parser.add_argument(
+        "--report-sidecar",
+        help=(
+            "Post-hoc fact-check reports.jsonl keyed by case_id; used only "
+            "as an in-memory overlay for historical traces."
+        ),
     )
     parser.add_argument(
         "--results-path",
