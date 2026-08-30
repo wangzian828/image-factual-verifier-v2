@@ -130,8 +130,25 @@ def test_agent_private_gold_projection_uses_actual_successful_trace_evidence() -
         "verdict": "fake",
         "reason": "Fake: the official result names B.\n\n"
         "The selected official result directly contradicts the displayed winner.\n\n"
+        "The result page identifies B as the winner.\n\n"
+        "The official result names B.\n\n"
         "Official results name B rather than A.",
     }
+
+
+def test_agent_candidate_answer_uses_terminal_assessment_before_internal_target() -> None:
+    trace = _trace()
+    trace["judgment"].pop("fact_check_report")
+    trace["verdict_basis"]["verdict_target"] = "A person gave a speech."
+    trace["judgment"]["overall_assessment"] = (
+        "The speech is by Vikas Lakhera at LBSNAA, not Vinod Sharma."
+    )
+
+    answer = agent_candidate_answer(build_agent_private_gold_candidate(trace))
+
+    assert answer["core_fact"] == (
+        "The speech is by Vikas Lakhera at LBSNAA, not Vinod Sharma."
+    )
 
 
 def test_agent_and_direct_audits_share_one_judge_contract() -> None:

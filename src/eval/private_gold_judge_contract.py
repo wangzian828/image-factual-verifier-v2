@@ -26,6 +26,11 @@ is a direct image answer or an Agent trajectory:
    use only the supplied successful/selected evidence and report; do not invent
    sources or credit claims that the material does not support.
 
+`candidate_answer` is the terminal answer being evaluated. Supporting Agent
+material can include internal route or verdict-basis metadata; use it only to
+check the terminal answer's justification, and do not replace the terminal
+answer with an intermediate investigation target.
+
 Set quality_bucket using this shared rule:
 - strong: correct verdict, same_fact or compatible_subfact, and a decisive,
   grounded justification for that complete fact;

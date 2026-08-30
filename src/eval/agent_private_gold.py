@@ -182,12 +182,29 @@ def agent_candidate_answer(packet: Mapping[str, Any]) -> dict[str, str]:
     basis = _mapping(packet.get("verdict_basis"))
     report = _mapping(packet.get("fact_check_report"))
     target_facts = _rows(packet.get("selected_target_facts"))
-    core_fact = _text(basis.get("verdict_target"), limit=2400)
+    findings = _rows(packet.get("selected_findings"))
+    report_findings = report.get("key_findings")
+    if not isinstance(report_findings, list):
+        report_findings = []
+    core_fact = _text(report.get("claim_under_review"), limit=2400)
+    if not core_fact:
+        core_fact = _text(packet.get("overall_assessment"), limit=2400)
+    if not core_fact:
+        core_fact = _text(basis.get("verdict_target"), limit=2400)
     if not core_fact and target_facts:
         core_fact = _text(target_facts[0].get("statement"), limit=2400)
     reason_parts = [
         _text(report.get("verdict_summary"), limit=2400),
         _text(report.get("evidence_summary"), limit=2400),
+        *[
+            _text(item, limit=1200)
+            for item in report_findings
+            if isinstance(item, str)
+        ],
+        *[
+            _text(item.get("summary"), limit=2400)
+            for item in findings
+        ],
         _text(packet.get("overall_assessment"), limit=2400),
     ]
     reason = "\n\n".join(dict.fromkeys(part for part in reason_parts if part))
