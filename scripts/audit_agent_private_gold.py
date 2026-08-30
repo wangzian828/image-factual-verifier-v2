@@ -58,7 +58,7 @@ Then assess the evidence chain actually selected by the trace:
 Assess the reader-facing report separately. It is faithful only when it accurately summarizes the supplied target, basis, and Evidence without inventing sources, observations, or stronger claims. A missing report is allowed only for historical traces and must be marked missing; it cannot by itself make an otherwise grounded historical trace incorrect.
 
 Set quality_bucket:
-- strong: correct verdict, same_fact or compatible_subfact, decisive trace evidence, and a faithful report;
+- strong: correct verdict, same_fact or compatible_subfact, and decisive trace evidence. When a fact_check_report is present, it must also be faithful. A missing report on a historical trace does not by itself prevent strong;
 - usable: correct verdict and aligned fact, with partial evidence or a report that is incomplete but not invented;
 - rejected: wrong/different fact, no factual grounding, contradiction, artifact-only reasoning, invented evidence/source, or major overclaiming;
 - not_auditable: private gold or source trace is unavailable.

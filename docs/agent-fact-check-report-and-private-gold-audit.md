@@ -28,7 +28,8 @@ Agent 额外按真实 trace 审计：
 - `trace_evidence_grounded`：`decisive`、`partial`、`not_grounded` 或
   `contradictory`；
 - `report_grounding`：报告是否忠实于实际 Evidence/basis，是否过度声称或虚构来源；
-- `quality_bucket=strong`：结论正确、事实命中、选中 Evidence 具有决定性，且报告忠实。
+- `quality_bucket=strong`：结论正确、事实命中、选中 Evidence 具有决定性；新 trace 的报告还必须忠实。
+  历史 trace 没有报告字段时，报告状态记为 `missing`，但不会单独否决原始证据链质量。
 
 Direct QA 没有搜索、访问或引用。它的审计仍记录相同的 verdict/事实命中字段，但
 `trace_evidence_grounded=not_available`；其 `quality_bucket` 只描述图像直答的答案质量，
