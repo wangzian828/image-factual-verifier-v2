@@ -24,8 +24,8 @@ load_dotenv()
 
 from src.eval.agent_private_gold import (
     build_agent_private_gold_candidate,
-    index_private_gold_rows,
 )
+from src.eval.evaluator_private_gold import private_gold_index
 from src.eval.private_gold_metrics import (
     annotate_private_gold_category,
     private_gold_audit_summary,
@@ -74,15 +74,17 @@ def _case_id(row: Mapping[str, Any]) -> str:
 
 
 def _trace_path(run_dir: Path, row: Mapping[str, Any]) -> Path:
-    raw = str(row.get("trace_path") or "").strip()
+    source_trace = str(row.get("source_trace_path") or "").strip()
+    raw = source_trace or str(row.get("trace_path") or "").strip()
     if not raw:
         raise ValueError("run result does not name a trace_path")
     path = Path(raw)
     resolved = path.resolve() if path.is_absolute() else (run_dir / path).resolve()
-    try:
-        resolved.relative_to(run_dir)
-    except ValueError:
-        raise ValueError(f"trace_path escapes run directory: {raw}") from None
+    if not source_trace:
+        try:
+            resolved.relative_to(run_dir)
+        except ValueError:
+            raise ValueError(f"trace_path escapes run directory: {raw}") from None
     if not resolved.is_file():
         raise FileNotFoundError(resolved)
     return resolved
@@ -120,7 +122,7 @@ async def _audit_one(
     try:
         if gold_row is None:
             raise ValueError("private gold row is missing")
-        if str(result.get("status") or "") != "success":
+        if str(result.get("status") or "") not in {"success", "completed"}:
             raise ValueError("Agent source result is not successful")
         trace_path = _trace_path(run_dir, result)
         trace = _read_json(trace_path)
@@ -238,7 +240,16 @@ async def _audit_one(
 
 async def _run(args: argparse.Namespace) -> int:
     run_dir = Path(args.run_dir).expanduser().resolve()
-    manifest = Path(args.manifest).expanduser().resolve()
+    manifest = (
+        Path(args.manifest).expanduser().resolve()
+        if args.manifest
+        else None
+    )
+    private_gold_sidecar = (
+        Path(args.private_gold_sidecar).expanduser().resolve()
+        if args.private_gold_sidecar
+        else None
+    )
     archive_root = (
         Path(args.archive_root).expanduser().resolve()
         if args.archive_root
@@ -246,17 +257,29 @@ async def _run(args: argparse.Namespace) -> int:
     )
     output_dir = Path(args.output_dir).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
-    results_path = run_dir / "run_results.jsonl"
+    if private_gold_sidecar is not None:
+        private_gold_rows = _read_jsonl(private_gold_sidecar)
+        manifest_root = run_dir
+    else:
+        if manifest is None:
+            raise ValueError(
+                "provide --private-gold-sidecar or --manifest with --archive-root"
+            )
+        manifest_rows = _read_jsonl(manifest)
+        private_gold_rows = _build_private_gold_rows(
+            manifest_rows,
+            archive_root=archive_root,
+            manifest_root=manifest.parent,
+        )
+        manifest_root = manifest.parent
+    gold_by_case = private_gold_index(private_gold_rows)
+    results_path = (
+        Path(args.results_path).expanduser().resolve()
+        if args.results_path
+        else run_dir / "run_results.jsonl"
+    )
     if not results_path.is_file():
         raise FileNotFoundError(results_path)
-
-    manifest_rows = _read_jsonl(manifest)
-    private_gold_rows = _build_private_gold_rows(
-        manifest_rows,
-        archive_root=archive_root,
-        manifest_root=manifest.parent,
-    )
-    gold_by_case = index_private_gold_rows(private_gold_rows)
     results = _read_jsonl(results_path)
     if args.limit > 0:
         results = results[: args.limit]
@@ -339,7 +362,10 @@ async def _run(args: argparse.Namespace) -> int:
             "schema_version": "ifv-agent-private-gold-audit-config-v1",
             "run_dir": str(run_dir),
             "results_path": str(results_path),
-            "manifest": str(manifest),
+            "manifest": str(manifest) if manifest else None,
+            "private_gold_sidecar": (
+                str(private_gold_sidecar) if private_gold_sidecar else None
+            ),
             "archive_root": str(archive_root) if archive_root else None,
             "judge_model": args.judge_model,
             "thinking_level": args.thinking_level,
@@ -372,7 +398,7 @@ async def _run(args: argparse.Namespace) -> int:
                     result,
                     gold_by_case.get(_case_id(result)),
                     run_dir=run_dir,
-                    manifest_root=manifest.parent,
+                    manifest_root=manifest_root,
                     client=client,
                     judge_model=args.judge_model,
                     response_format=response_format,
@@ -416,7 +442,10 @@ async def _run(args: argparse.Namespace) -> int:
         "schema_version": "ifv-agent-private-gold-audit-v1",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "run_dir": str(run_dir),
-        "manifest": str(manifest),
+        "manifest": str(manifest) if manifest else None,
+        "private_gold_sidecar": (
+            str(private_gold_sidecar) if private_gold_sidecar else None
+        ),
         "archive_root": str(archive_root) if archive_root else None,
         "judge_model": args.judge_model,
         "thinking_level": args.thinking_level,
@@ -484,8 +513,19 @@ def main() -> int:
         description="Audit completed Agent traces with private construction gold."
     )
     parser.add_argument("--run-dir", required=True)
-    parser.add_argument("--manifest", required=True)
+    parser.add_argument("--manifest")
     parser.add_argument("--archive-root")
+    parser.add_argument(
+        "--private-gold-sidecar",
+        help="Evaluator-private private-gold.jsonl; preferred for unified data.",
+    )
+    parser.add_argument(
+        "--results-path",
+        help=(
+            "Optional source result JSONL. Supports a replacement ledger with "
+            "source_trace_path, rather than only <run-dir>/run_results.jsonl."
+        ),
+    )
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--judge-model", default="gemini-3.1-pro-preview")
     parser.add_argument(

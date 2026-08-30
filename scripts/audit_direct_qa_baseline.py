@@ -30,6 +30,7 @@ from src.eval.private_gold_metrics import (
     private_gold_audit_summary,
     private_gold_category_counts,
 )
+from src.eval.evaluator_private_gold import private_gold_index
 
 from scripts.run_direct_qa_baseline import (
     _case_id,
@@ -442,7 +443,16 @@ async def _audit_one(
 
 async def _run(args: argparse.Namespace) -> int:
     run_dir = Path(args.run_dir).expanduser().resolve()
-    manifest = Path(args.manifest).expanduser().resolve()
+    manifest = (
+        Path(args.manifest).expanduser().resolve()
+        if args.manifest
+        else None
+    )
+    private_gold_sidecar = (
+        Path(args.private_gold_sidecar).expanduser().resolve()
+        if args.private_gold_sidecar
+        else None
+    )
     archive_root = (
         Path(args.archive_root).expanduser().resolve()
         if args.archive_root
@@ -454,13 +464,22 @@ async def _run(args: argparse.Namespace) -> int:
     if not source_results.is_file():
         raise FileNotFoundError(source_results)
 
-    manifest_rows = _read_jsonl(manifest)
-    private_gold_rows = _build_private_gold_rows(
-        manifest_rows,
-        archive_root=archive_root,
-        manifest_root=manifest.parent,
-    )
-    gold_by_case = {_case_id(row): row for row in private_gold_rows}
+    if private_gold_sidecar is not None:
+        private_gold_rows = _read_jsonl(private_gold_sidecar)
+        manifest_root = run_dir
+    else:
+        if manifest is None:
+            raise ValueError(
+                "provide --private-gold-sidecar or --manifest with --archive-root"
+            )
+        manifest_rows = _read_jsonl(manifest)
+        private_gold_rows = _build_private_gold_rows(
+            manifest_rows,
+            archive_root=archive_root,
+            manifest_root=manifest.parent,
+        )
+        manifest_root = manifest.parent
+    gold_by_case = private_gold_index(private_gold_rows)
     results = _read_jsonl(source_results)
     if args.limit > 0:
         results = results[: args.limit]
@@ -533,7 +552,10 @@ async def _run(args: argparse.Namespace) -> int:
             "schema_version": "ifv-direct-qa-private-audit-config-v1",
             "run_dir": str(run_dir),
             "source_results": str(source_results),
-            "manifest": str(manifest),
+            "manifest": str(manifest) if manifest else None,
+            "private_gold_sidecar": (
+                str(private_gold_sidecar) if private_gold_sidecar else None
+            ),
             "archive_root": str(archive_root) if archive_root else None,
             "judge_model": args.judge_model,
             "thinking_level": args.thinking_level,
@@ -570,7 +592,7 @@ async def _run(args: argparse.Namespace) -> int:
                     judge_prompt=prompt,
                     response_format=response_format,
                     generation_config=generation_config,
-                    manifest_root=manifest.parent,
+                    manifest_root=manifest_root,
                     semaphore=semaphore,
                 )
             )
@@ -625,7 +647,10 @@ async def _run(args: argparse.Namespace) -> int:
         "schema_version": "ifv-direct-qa-private-audit-v1",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "run_dir": str(run_dir),
-        "manifest": str(manifest),
+        "manifest": str(manifest) if manifest else None,
+        "private_gold_sidecar": (
+            str(private_gold_sidecar) if private_gold_sidecar else None
+        ),
         "archive_root": str(archive_root) if archive_root else None,
         "judge_model": args.judge_model,
         "thinking_level": args.thinking_level,
@@ -689,13 +714,17 @@ def main() -> int:
         description="Audit direct-QA answers with private construction gold."
     )
     parser.add_argument("--run-dir", required=True)
-    parser.add_argument("--manifest", required=True)
+    parser.add_argument("--manifest")
     parser.add_argument(
         "--archive-root",
         help=(
             "immutable archive containing human-review-candidates.jsonl; "
             "used to recover sparse private gold after rollout"
         ),
+    )
+    parser.add_argument(
+        "--private-gold-sidecar",
+        help="Evaluator-private private-gold.jsonl; preferred for unified data.",
     )
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--prompt-file")

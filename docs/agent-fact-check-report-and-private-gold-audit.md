@@ -42,8 +42,7 @@ Direct QA 没有搜索、访问或引用。它的审计仍记录相同的 verdic
 ```powershell
 python scripts/audit_agent_private_gold.py `
   --run-dir <agent-run-dir> `
-  --manifest <test-manifest.jsonl> `
-  --archive-root <private-gold-archive> `
+  --private-gold-sidecar <dataset-root/evaluator_private/private-gold-v1/private-gold.jsonl> `
   --output-dir <audit-output>
 ```
 
@@ -53,3 +52,15 @@ python scripts/audit_agent_private_gold.py `
 
 历史 trace 没有 `fact_check_report` 时，审计会标记 `report_grounding=missing`，但仍可根据
 原始 basis 和成功 Evidence 复审，便于与新 trace 对比。
+
+统一数据集必须先生成 sidecar；它覆盖 test 和 train 的全部 stable runtime case ID：
+
+```powershell
+python scripts/build_evaluator_private_gold_sidecar.py `
+  --dataset-root <unified-dataset> `
+  --archive-root <immutable-archive>
+```
+
+产物只放在 `<unified-dataset>/evaluator_private/private-gold-v1/`，不属于训练或 rollout
+输入。生成器会合并 archive 中缺失的构造字段，验证每条 private target，并输出只包含无歧义
+别名的 `case-alias-index.jsonl`。
