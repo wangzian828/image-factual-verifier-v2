@@ -6,8 +6,8 @@ import pytest
 
 from src.eval.agent_private_gold import (
     build_agent_private_gold_candidate,
-    index_private_gold_rows,
 )
+from src.eval.evaluator_private_gold import private_gold_index
 from src.orchestrator.investigation_models import (
     DiscrepancyJudgmentOutput,
     DiscrepancyVerdictBasis,
@@ -122,7 +122,7 @@ def test_agent_private_gold_projection_uses_actual_successful_trace_evidence() -
 
 
 def test_private_gold_index_uses_archive_identity_and_drops_ambiguous_aliases() -> None:
-    indexed = index_private_gold_rows(
+    indexed = private_gold_index(
         [
             {
                 "archive_source_version_id": "archive-0130",
