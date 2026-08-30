@@ -255,7 +255,13 @@ async def _run(args: argparse.Namespace) -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
     if private_gold_sidecar is not None:
         private_gold_rows = _read_jsonl(private_gold_sidecar)
-        manifest_root = run_dir
+        # Agent trace image paths are rooted at the unified dataset.  The
+        # report/audit output directory is never an image root.
+        manifest_root = (
+            manifest.parent
+            if manifest is not None
+            else private_gold_sidecar.parent.parent.parent
+        )
     else:
         if manifest is None:
             raise ValueError(

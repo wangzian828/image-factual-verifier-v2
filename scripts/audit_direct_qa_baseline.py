@@ -457,7 +457,15 @@ async def _run(args: argparse.Namespace) -> int:
 
     if private_gold_sidecar is not None:
         private_gold_rows = _read_jsonl(private_gold_sidecar)
-        manifest_root = run_dir
+        # The source result's image_path is relative to the unified dataset,
+        # not to the QA output directory.  Keep an explicit manifest as the
+        # authoritative image root; when callers provide only the standard
+        # evaluator-private sidecar, derive its sibling dataset root.
+        manifest_root = (
+            manifest.parent
+            if manifest is not None
+            else private_gold_sidecar.parent.parent.parent
+        )
     else:
         if manifest is None:
             raise ValueError(
