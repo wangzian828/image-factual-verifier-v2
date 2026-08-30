@@ -62,6 +62,14 @@ PRIVATE_GOLD_FIELDS = (
     "factual_status",
 )
 
+RETRYABLE_AUDIT_ERROR_TYPES = {
+    "GeminiInteractionsHTTPError",
+    "GeminiInteractionsResponseError",
+    "ReadTimeout",
+    "SSLError",
+    "TimeoutError",
+}
+
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
@@ -74,6 +82,30 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
                 raise ValueError(f"{path}:{line_number} is not a JSON object")
             rows.append(value)
     return rows
+
+
+def _latest_records(
+    records: Sequence[Mapping[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    latest: dict[str, dict[str, Any]] = {}
+    for record in records:
+        case_id = str(record.get("case_id") or "").strip()
+        if case_id:
+            latest[case_id] = dict(record)
+    return latest
+
+
+def _audit_record_is_terminal(record: Mapping[str, Any]) -> bool:
+    status = str(record.get("status") or "").strip()
+    if status in {"completed", "not_auditable"}:
+        return True
+    if (
+        str(record.get("error_type") or "").strip() == "ValueError"
+        and "source result is not completed"
+        in str(record.get("error") or "")
+    ):
+        return True
+    return False
 
 
 def _archive_candidate_key(row: Mapping[str, Any]) -> str:
@@ -529,9 +561,18 @@ async def _run(args: argparse.Namespace) -> int:
     )
 
     prompt = judge_prompt_for_file(args.prompt_file)
-    semaphore = asyncio.Semaphore(max(1, args.concurrency))
     output_path = output_dir / "audit-results.jsonl"
-    records: list[dict[str, Any]] = []
+    existing_records = _read_jsonl(output_path) if output_path.is_file() else []
+    existing_latest = _latest_records(existing_records)
+    results = [
+        result
+        for result in results
+        if not _audit_record_is_terminal(
+            existing_latest.get(str(result.get("case_id") or ""), {})
+        )
+    ]
+    semaphore = asyncio.Semaphore(max(1, args.concurrency))
+    records: list[dict[str, Any]] = list(existing_records)
     async with GeminiInteractionsClient(
         timeout=args.timeout,
         max_retries=args.max_retries,
@@ -552,7 +593,7 @@ async def _run(args: argparse.Namespace) -> int:
             )
             for result in results
         ]
-        with output_path.open("w", encoding="utf-8") as handle:
+        with output_path.open("a", encoding="utf-8") as handle:
             for task in asyncio.as_completed(tasks):
                 record = annotate_private_gold_category(await task)
                 records.append(record)
@@ -578,7 +619,10 @@ async def _run(args: argparse.Namespace) -> int:
                     flush=True,
                 )
 
-    completed = [row for row in records if row.get("status") == "completed"]
+    latest_records = list(_latest_records(records).values())
+    completed = [
+        row for row in latest_records if row.get("status") == "completed"
+    ]
 
     def judge_value(row: Mapping[str, Any], key: str) -> str:
         direct = row.get(key)
@@ -610,14 +654,17 @@ async def _run(args: argparse.Namespace) -> int:
         "thinking_level": args.thinking_level,
         "concurrency": args.concurrency,
         "counts": {
-            "selected": len(results),
+            "selected": len(latest_records),
+            "selected_this_invocation": len(results),
             "completed": len(completed),
-            "errors": len(records) - len(completed),
+            "errors": len(latest_records) - len(completed),
             "private_gold_auditable": sum(
-                row.get("private_gold_auditable") is True for row in records
+                row.get("private_gold_auditable") is True
+                for row in latest_records
             ),
             "verdict_matches_gold": sum(
-                row.get("verdict_matches_gold") is True for row in records
+                row.get("verdict_matches_gold") is True
+                for row in latest_records
             ),
             "judge_thought_present": sum(
                 row.get("judge_native_thought_chars", 0) > 0 for row in completed
@@ -634,8 +681,8 @@ async def _run(args: argparse.Namespace) -> int:
         "trace_evidence_grounded": {
             "not_available": len(completed),
         },
-        "private_gold_categories": private_gold_category_counts(records),
-        "private_gold_audit": private_gold_audit_summary(records),
+        "private_gold_categories": private_gold_category_counts(latest_records),
+        "private_gold_audit": private_gold_audit_summary(latest_records),
         "private_gold_category_definition": {
             "correct_point_with_strong_evidence": (
                 "verdict_matches_gold=true and quality_bucket=strong"
