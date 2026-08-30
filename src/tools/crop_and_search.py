@@ -590,26 +590,13 @@ class CropAndSearchTool(BaseTool):
 
     @staticmethod
     def _is_image_candidate_url(url: str) -> bool:
+        """Accept opaque provider image endpoints; verify bytes on download."""
+
         try:
             parsed = urlparse(url)
         except Exception:
             return False
-        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-            return False
-        path = parsed.path.lower()
-        image_exts = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg")
-        if any(path.endswith(ext) for ext in image_exts):
-            return True
-        image_hosts = (
-            "imgur.com",
-            "i.imgur.com",
-            "pbs.twimg.com",
-            "upload.wikimedia.org",
-            "gstatic.com",
-            "ggpht.com",
-            "ytimg.com",
-        )
-        return any(host in parsed.netloc.lower() for host in image_hosts)
+        return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
     @staticmethod
     def _merge_region_candidate_urls(regions: List[Dict[str, Any]]) -> List[str]:

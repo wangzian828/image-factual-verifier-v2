@@ -499,6 +499,33 @@ class CompareWithReferenceTool(BaseTool):
     def _download_subcalls(download: Mapping[str, Any]) -> list[Dict[str, Any]]:
         if bool(download.get("cache_hit", False)):
             return []
+        diagnostics = [
+            dict(item)
+            for item in download.get("download_diagnostics", []) or []
+            if isinstance(item, Mapping)
+        ]
+        if diagnostics:
+            return [
+                {
+                    "kind": "reference_download",
+                    "provider": "reference_download",
+                    "status": (
+                        "success"
+                        if item.get("outcome")
+                        in {"image_downloaded", "page_images_extracted"}
+                        else "error"
+                    ),
+                    "request_count": 1,
+                    "stage": str(item.get("stage", "")),
+                    "outcome": str(item.get("outcome", "")),
+                    **(
+                        {"http_status": int(item["http_status"])}
+                        if isinstance(item.get("http_status"), int)
+                        else {}
+                    ),
+                }
+                for item in diagnostics
+            ]
         attempted = [
             str(url).strip()
             for url in download.get("attempted_urls", []) or []
@@ -553,14 +580,22 @@ class CompareWithReferenceTool(BaseTool):
         import requests
 
         attempted: list[str] = []
-        pending = list(self._reference_url_variants(url))
+        diagnostics: list[dict[str, Any]] = []
+        pending = [
+            (
+                candidate,
+                "direct" if candidate == url else "url_variant",
+            )
+            for candidate in self._reference_url_variants(url)
+        ]
         if source_page_url:
-            pending.append(source_page_url)
+            pending.append((source_page_url, "source_page"))
         seen: set[str] = set()
         try:
             client = self._get_reference_session()
             while pending and len(attempted) < 12:
-                candidate = str(pending.pop(0) or "").strip()
+                raw_candidate, stage = pending.pop(0)
+                candidate = str(raw_candidate or "").strip()
                 if not candidate or candidate in seen:
                     continue
                 seen.add(candidate)
@@ -568,6 +603,13 @@ class CompareWithReferenceTool(BaseTool):
                     self.source_access_policy is not None
                     and not self.source_access_policy.allows(candidate)
                 ):
+                    diagnostics.append(
+                        {
+                            "stage": stage,
+                            "url": candidate,
+                            "outcome": "policy_blocked",
+                        }
+                    )
                     continue
                 attempted.append(candidate)
                 headers = {}
@@ -580,11 +622,46 @@ class CompareWithReferenceTool(BaseTool):
                         timeout=30,
                         allow_redirects=True,
                     )
-                except requests.RequestException:
+                except requests.RequestException as exc:
+                    diagnostics.append(
+                        {
+                            "stage": stage,
+                            "url": candidate,
+                            "outcome": "request_error",
+                            "error_type": type(exc).__name__,
+                        }
+                    )
                     continue
                 try:
-                    self._validate_download_redirects(response)
-                    if response.status_code != 200 or not response.content:
+                    try:
+                        self._validate_download_redirects(response)
+                    except PermissionError:
+                        diagnostics.append(
+                            {
+                                "stage": stage,
+                                "url": candidate,
+                                "outcome": "redirect_policy_blocked",
+                            }
+                        )
+                        continue
+                    if response.status_code != 200:
+                        diagnostics.append(
+                            {
+                                "stage": stage,
+                                "url": candidate,
+                                "outcome": "http_error",
+                                "http_status": int(response.status_code),
+                            }
+                        )
+                        continue
+                    if not response.content:
+                        diagnostics.append(
+                            {
+                                "stage": stage,
+                                "url": candidate,
+                                "outcome": "empty_response",
+                            }
+                        )
                         continue
                     content_type = response.headers.get(
                         "content-type",
@@ -604,33 +681,68 @@ class CompareWithReferenceTool(BaseTool):
                                 f"data:{image_mime};base64,{encoded}"
                             ),
                             "resolved_url": str(response.url),
+                            "download_origin": stage,
                             "download_method": (
                                 "direct"
                                 if candidate == url
                                 else "url_or_page_fallback"
                             ),
                             "attempted_urls": attempted,
+                            "download_diagnostics": [
+                                *diagnostics,
+                                {
+                                    "stage": stage,
+                                    "url": candidate,
+                                    "outcome": "image_downloaded",
+                                    "content_type": content_type,
+                                },
+                            ],
                         }
                         self._put_reference_cache(cache_key, result)
                         return result
                     if "html" not in content_type:
+                        diagnostics.append(
+                            {
+                                "stage": stage,
+                                "url": candidate,
+                                "outcome": "not_image_content",
+                                "content_type": content_type,
+                            }
+                        )
                         continue
                     html = response.text[:2_000_000]
-                    for image_url in self._extract_page_image_urls(
+                    page_images = self._extract_page_image_urls(
                         html,
                         base_url=str(response.url),
-                    ):
+                    )
+                    diagnostics.append(
+                        {
+                            "stage": stage,
+                            "url": candidate,
+                            "outcome": "page_images_extracted",
+                            "candidate_count": len(page_images),
+                        }
+                    )
+                    for image_url in page_images:
                         if image_url not in seen:
-                            pending.append(image_url)
+                            pending.append((image_url, "page_image"))
                 finally:
                     close_response(response)
-        except Exception:
-            pass
+        except Exception as exc:
+            diagnostics.append(
+                {
+                    "stage": "download_runtime",
+                    "url": "",
+                    "outcome": "runtime_error",
+                    "error_type": type(exc).__name__,
+                }
+            )
         return {
             "data_url": "",
             "resolved_url": "",
             "download_method": "",
             "attempted_urls": attempted,
+            "download_diagnostics": diagnostics,
         }
 
     def _get_reference_session(self) -> Any:
@@ -678,6 +790,11 @@ class CompareWithReferenceTool(BaseTool):
             cached["attempted_urls"] = list(
                 cached.get("attempted_urls", []) or []
             )
+            cached["download_diagnostics"] = [
+                dict(item)
+                for item in cached.get("download_diagnostics", []) or []
+                if isinstance(item, Mapping)
+            ]
             cached["cache_hit"] = True
             return cached
 
@@ -692,10 +809,13 @@ class CompareWithReferenceTool(BaseTool):
         size = len(data_url.encode("utf-8"))
         if not data_url or size > self._reference_cache_max_bytes:
             return
-        cached = {
-            key: (list(value) if key == "attempted_urls" else value)
-            for key, value in result.items()
-        }
+        cached = dict(result)
+        cached["attempted_urls"] = list(cached.get("attempted_urls", []) or [])
+        cached["download_diagnostics"] = [
+            dict(item)
+            for item in cached.get("download_diagnostics", []) or []
+            if isinstance(item, Mapping)
+        ]
         with self._reference_cache_lock:
             previous = self._reference_cache.pop(cache_key, None)
             if previous is not None:

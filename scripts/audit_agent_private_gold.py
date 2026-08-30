@@ -32,9 +32,9 @@ from src.eval.private_gold_judge_contract import (
     PRIVATE_GOLD_JUDGE_RESPONSE_SCHEMA,
 )
 from src.eval.private_gold_metrics import (
-    annotate_private_gold_category,
-    private_gold_audit_summary,
-    private_gold_category_counts,
+    agent_private_gold_audit_summary,
+    agent_private_gold_category_counts,
+    annotate_agent_private_gold_category,
 )
 from src.integrations.gemini import GeminiInteractionsClient, extract_text
 from scripts.audit_direct_qa_baseline import (
@@ -419,7 +419,7 @@ async def _run(args: argparse.Namespace) -> int:
         ]
         with output_path.open("w", encoding="utf-8") as handle:
             for task in asyncio.as_completed(tasks):
-                record = annotate_private_gold_category(await task)
+                record = annotate_agent_private_gold_category(await task)
                 records.append(record)
                 handle.write(json.dumps(record, ensure_ascii=False) + "\n")
                 handle.flush()
@@ -484,14 +484,16 @@ async def _run(args: argparse.Namespace) -> int:
                 for row in completed
             )
         ),
-        "private_gold_categories": private_gold_category_counts(records),
-        "private_gold_audit": private_gold_audit_summary(records),
+        "private_gold_categories": agent_private_gold_category_counts(records),
+        "private_gold_audit": agent_private_gold_audit_summary(records),
         "private_gold_category_definition": {
             "correct_point_with_strong_evidence": (
-                "verdict_matches_gold=true and quality_bucket=strong"
+                "verdict_matches_gold=true and "
+                "reason_quality=decisive_and_grounded"
             ),
             "correct_verdict_insufficient_evidence": (
-                "verdict_matches_gold=true and quality_bucket!=strong"
+                "verdict_matches_gold=true and "
+                "reason_quality!=decisive_and_grounded"
             ),
             "wrong_verdict": "verdict_matches_gold=false",
         },
@@ -536,7 +538,7 @@ def main() -> int:
         choices=("low", "medium", "high"),
         default="high",
     )
-    parser.add_argument("--max-output-tokens", type=int, default=2048)
+    parser.add_argument("--max-output-tokens", type=int, default=8192)
     parser.add_argument("--timeout", type=float, default=240.0)
     parser.add_argument("--max-retries", type=int, default=2)
     parser.add_argument("--concurrency", type=int, default=4)

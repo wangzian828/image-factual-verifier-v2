@@ -160,6 +160,7 @@ class ReverseImageSearchTool(BaseTool):
             lens_results=lens_results,
             semantic_results=semantic_results,
         )
+        results["candidate_match_status"] = "unverified_candidates"
         if results["reference_image_candidates"]:
             results["reference_image_url"] = results["reference_image_candidates"][0]
         timings["total_ms"] = round((time.perf_counter() - total_t0) * 1000, 2)
@@ -442,23 +443,16 @@ class ReverseImageSearchTool(BaseTool):
 
     @staticmethod
     def _is_image_url(url: str) -> bool:
+        """Keep provider-supplied image endpoints even when their path is opaque.
+
+        Lens and image-search providers commonly return CDN or resize endpoints
+        without a filename extension. They are still only *candidates*; the
+        comparison downloader verifies the actual response content type before
+        accepting bytes as an image.
+        """
+
         try:
             parsed = urlparse(url)
         except Exception:
             return False
-        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-            return False
-        path = parsed.path.lower()
-        image_exts = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg")
-        if any(path.endswith(ext) for ext in image_exts):
-            return True
-        image_hosts = (
-            "imgur.com",
-            "i.imgur.com",
-            "pbs.twimg.com",
-            "upload.wikimedia.org",
-            "gstatic.com",
-            "ggpht.com",
-            "ytimg.com",
-        )
-        return any(host in parsed.netloc.lower() for host in image_hosts)
+        return parsed.scheme in {"http", "https"} and bool(parsed.netloc)

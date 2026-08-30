@@ -323,6 +323,33 @@ def _candidate_urls_for_tool(
     return list(dict.fromkeys(candidates))
 
 
+def _source_pages_by_reference_url(
+    state: ImageOnlyInvestigationState,
+    *,
+    task_ids: Sequence[str],
+) -> dict[str, str]:
+    """Bind reverse-search reference assets to their provider page at runtime.
+
+    A visual-search row can contain both the candidate page and its preview-image
+    URL. The model is allowed to choose the image URL, but it should not have to
+    rediscover the paired page merely to give ``compare_with_reference`` a
+    recovery path. Keep this mapping adapter-local: it is never added to the
+    model-facing schema or to the mature comparison tool's contract.
+    """
+
+    active_tasks = {str(task_id).strip() for task_id in task_ids if task_id}
+    mapping: dict[str, str] = {}
+    for discovery in state.discoveries:
+        if discovery.abandoned or discovery.task_id not in active_tasks:
+            continue
+        reference_key = canonicalize_url(discovery.reference_image_url)
+        source_page_url = str(discovery.candidate_url or "").strip()
+        if not reference_key or not canonicalize_url(source_page_url):
+            continue
+        mapping.setdefault(reference_key, source_page_url)
+    return mapping
+
+
 def _annotate_runtime_url_candidates(
     tool: BaseTool,
     *,
@@ -389,6 +416,7 @@ class UnifiedReactToolAdapter(BaseTool):
     delegate: BaseTool = field(repr=False)
     task_ids: tuple[str, ...] = ()
     require_initial_intent: bool = False
+    reference_source_page_urls: Mapping[str, str] = field(default_factory=dict)
     image_path: str = ""
     name: str = ""
     description: str = ""
@@ -403,14 +431,26 @@ class UnifiedReactToolAdapter(BaseTool):
             require_initial_intent=self.require_initial_intent,
         )
 
-    @staticmethod
-    def _provider_args(params: Mapping[str, Any]) -> dict[str, Any]:
-        return {
+    def _provider_args(self, params: Mapping[str, Any]) -> dict[str, Any]:
+        provider_args = {
             str(key): value
             for key, value in dict(params).items()
             if str(key) not in _ADAPTER_ONLY_FIELDS
             and not str(key).startswith("__unified_")
         }
+        if self.name == "compare_with_reference":
+            reference_key = canonicalize_url(
+                str(provider_args.get("reference_url", ""))
+            )
+            explicit_source_page = str(
+                provider_args.get("source_page_url", "")
+            ).strip()
+            paired_source_page = str(
+                self.reference_source_page_urls.get(reference_key, "")
+            ).strip()
+            if reference_key and not explicit_source_page and paired_source_page:
+                provider_args["source_page_url"] = paired_source_page
+        return provider_args
 
     def _bound_delegate(self) -> BaseTool:
         """Bind image-path tools to this request without mutating shared tools.
@@ -629,6 +669,11 @@ def build_unified_react_tools(
             adapter = UnifiedReactToolAdapter(
                 delegate=delegate,
                 task_ids=task_ids,
+                reference_source_page_urls=(
+                    _source_pages_by_reference_url(state, task_ids=task_ids)
+                    if name == "compare_with_reference"
+                    else {}
+                ),
             )
             candidate_urls = [
                 candidate

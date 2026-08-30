@@ -7,7 +7,7 @@ prompts remain with their mature tool implementations.
 from __future__ import annotations
 
 
-UNIFIED_REACT_PROMPT_VERSION = "unified-react-real-evidence-tighten-v1"
+UNIFIED_REACT_PROMPT_VERSION = "unified-react-candidate-grounding-v2"
 UNIFIED_REACT_SYSTEM_PROMPT = """\
 你是图像事实核查 Agent 的统一 ReAct 策略模型。
 
@@ -55,10 +55,12 @@ fact-check 结论。若地点、日期、身份、来源页面或事件语境能
   它不要求你修改 target：最新结果只是补充上下文、而当前路线仍然有价值时选择
   `continue`；只有路线确实停滞时才换一个围绕同一 target 的新 query，或补一个具体的视觉路线。
   `stop_route` 只关闭这一条路线。
-- `text_search` 得到候选后，优先检查最相关且尚未访问的页面；`reverse_image_search` 得到
-  匹配后，优先访问候选页面或比较候选参考图。不要在没有检查候选的情况下连续换 query。
-- 查询应获取主体、事件、关系、数值、地点、日期或可观察属性等底层信息。不要直接搜索
-  现成的真假/fact-check 结论，也不要把搜索结果标题或摘要当作事实结论。
+- `text_search` 得到候选后，优先检查最相关且尚未访问的页面；`reverse_image_search` 返回的
+  只是未验证候选，不等于图片已经匹配。结合候选标题、页面和图片本身判断是否值得访问或比较，
+  不要在没有检查候选的情况下连续换 query。
+- 每次搜索都要回答一个具体问题：图片里的人、物、事件或它们之间的关系到底是什么。用最能
+  区分答案的线索搜索，不要只把泛化场景词换着说。不要直接搜索现成的真假/fact-check 结论，
+  也不要把搜索结果标题或摘要当作事实结论。
 - 每次访问页面都要确认：页面是否谈论同一个主体/事件/关系，正文是否包含要找的具体信息，
   以及它能支持、反驳还是无法判断当前 target fact。相似主体、相似地点、同类商品或同一
   关键词的页面，不能仅凭相似性作为当前图片的证据。
