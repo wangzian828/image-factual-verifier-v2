@@ -143,7 +143,7 @@ def test_empty_object_cannot_become_default_judgment() -> None:
     assert len(backend.requests) == 2
 
 
-def test_shared_interaction_session_attaches_image_in_each_stage_request(
+def test_shared_interaction_session_reuses_image_from_provider_history(
     tmp_path: Path,
 ) -> None:
     image_path = tmp_path / "image.png"
@@ -198,14 +198,9 @@ def test_shared_interaction_session_attaches_image_in_each_stage_request(
     assert checkpoint_request["previous_interaction_id"] == (
         "planning-interaction"
     )
-    assert [item["type"] for item in checkpoint_request["input_payload"]] == [
-        "text",
-        "image",
-    ]
-    checkpoint_snapshot = (
-        checkpoint_request["input_payload"][1]
-    )
-    assert checkpoint_snapshot["type"] == "image"
+    # The chained Interaction already contains the root image. The next stage
+    # sends only its new text input instead of uploading the same image again.
+    assert checkpoint_request["input_payload"] == "Evidence checkpoint context"
     snapshot = planning_steps[0].metadata["policy_input"]["input_payload"]
     assert snapshot == [
         {"type": "text", "text": "Initial image-grounded planning context"},
