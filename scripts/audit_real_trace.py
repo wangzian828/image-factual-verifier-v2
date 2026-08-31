@@ -30,6 +30,11 @@ from src.orchestrator.investigation_models import target_fact_rows  # noqa: E402
 from src.orchestrator.unified_react import (  # noqa: E402
     is_unified_react_budget_action,
 )
+from src.orchestrator.react_runtime import (  # noqa: E402
+    REACT_RUNTIME_SCHEMA_VERSION,
+    REACT_RUNTIME_TOOLS,
+    is_unified_react_runtime_budget_action,
+)
 from src.orchestrator.evidence_semantics import (  # noqa: E402
     evidence_direction_is_coherent,
     evidence_is_qualified_for_stance,
@@ -3451,6 +3456,13 @@ def _audit_unified_react_trace(
         )
         return
 
+    if (
+        str(investigation.get("schema_version", "")).strip()
+        == REACT_RUNTIME_SCHEMA_VERSION
+    ):
+        _audit_current_react_runtime_trace(trace, state, steps, report)
+        return
+
     collection_names = (
         "entities",
         "facts",
@@ -4122,6 +4134,323 @@ def _audit_unified_react_trace(
         }
     )
     _audit_unified_react_interaction_chains(steps, report)
+
+
+def _audit_current_react_runtime_trace(
+    trace: Mapping[str, Any],
+    state: Mapping[str, Any],
+    steps: Sequence[Mapping[str, Any]],
+    report: TraceReport,
+) -> None:
+    """Audit the active compact ReAct runtime without legacy graph semantics."""
+
+    investigation = _mapping(state.get("investigation_state"))
+    required_lists = (
+        "discoveries",
+        "evidence",
+        "failures",
+        "attempted_queries",
+        "visited_urls",
+        "attempted_actions",
+        "recent_actions",
+        "open_questions",
+    )
+    for name in required_lists:
+        if not isinstance(investigation.get(name), list):
+            _issue(
+                report,
+                "REACT_RUNTIME_COLLECTION_INVALID",
+                f"current ReAct state field {name!r} must be an array",
+                location=f"state.investigation_state.{name}",
+            )
+    if not isinstance(investigation.get("visual_memory"), Mapping):
+        _issue(
+            report,
+            "REACT_RUNTIME_VISUAL_MEMORY_INVALID",
+            "current ReAct state must contain a visual_memory object",
+            location="state.investigation_state.visual_memory",
+        )
+
+    retired_state_fields = {
+        "target_facts",
+        "search_hypotheses",
+        "claim_assessments",
+        "material_discrepancies",
+        "tasks",
+        "findings",
+        "retrieval_anchors",
+        "brief",
+        "core_verdict_fact_id",
+    }
+    present_retired_fields = sorted(
+        field_name for field_name in retired_state_fields if field_name in investigation
+    )
+    if present_retired_fields:
+        _issue(
+            report,
+            "REACT_RUNTIME_LEGACY_STATE",
+            "current ReAct state contains retired graph fields: "
+            + ", ".join(present_retired_fields),
+            location="state.investigation_state",
+        )
+
+    actions = [
+        (index, step)
+        for index, step in enumerate(steps)
+        if str(step.get("stage", "")).strip() == "unified_react"
+        and str(step.get("action_type", "")).strip() == "tool_call"
+    ]
+    if not actions:
+        _issue(
+            report,
+            "REACT_RUNTIME_ACTIONS_MISSING",
+            "current ReAct trace requires at least one accepted tool action",
+            location="state.all_steps",
+        )
+
+    accepted_tool_names = set(REACT_RUNTIME_TOOLS) | {"finish_investigation"}
+    call_ids: set[str] = set()
+    native_interactions: list[tuple[int, Mapping[str, Any]]] = []
+    for index, step in actions:
+        location = _step_label(index, step)
+        tool_name = str(step.get("tool_name", "")).strip()
+        metadata = _mapping(step.get("metadata"))
+        call_id = str(metadata.get("function_call_id", "")).strip()
+        if tool_name not in accepted_tool_names:
+            _issue(
+                report,
+                "REACT_RUNTIME_TOOL_UNKNOWN",
+                f"unknown current ReAct tool {tool_name!r}",
+                location=location,
+            )
+        if not call_id:
+            _issue(
+                report,
+                "REACT_RUNTIME_CALL_ID_MISSING",
+                "accepted current ReAct action lacks function_call_id",
+                location=location,
+            )
+        elif call_id in call_ids:
+            _issue(
+                report,
+                "REACT_RUNTIME_CALL_ID_DUPLICATE",
+                f"duplicate current ReAct function_call_id {call_id!r}",
+                location=location,
+            )
+        call_ids.add(call_id)
+
+        delta = _mapping(
+            metadata.get("react_state_delta")
+            or metadata.get("investigation_state_update")
+        )
+        if not delta.get("accepted", False):
+            _issue(
+                report,
+                "REACT_RUNTIME_DELTA_REJECTED",
+                "accepted current ReAct action has no accepted reducer delta",
+                location=location,
+            )
+        policy_action = _mapping(metadata.get("policy_action"))
+        if (
+            str(policy_action.get("type", "")).strip() != "tool_call"
+            or str(policy_action.get("name", "")).strip() != tool_name
+        ):
+            _issue(
+                report,
+                "REACT_RUNTIME_POLICY_ACTION_MISMATCH",
+                "policy_action must record the same current ReAct tool call",
+                location=location,
+            )
+
+        try:
+            _payload, succeeded = parse_tool_result(str(step.get("tool_result", "")))
+        except Exception as exc:
+            succeeded = False
+            _issue(
+                report,
+                "REACT_RUNTIME_TOOL_RESULT_INVALID",
+                f"cannot parse tool result: {exc}",
+                location=location,
+            )
+        if not succeeded and not delta.get("failure"):
+            _issue(
+                report,
+                "REACT_RUNTIME_FAILURE_NOT_RECORDED",
+                "a failed tool result must produce a reducer failure record",
+                location=location,
+            )
+
+        if _mapping(metadata).get("native_interactions"):
+            native_interactions.append((index, metadata))
+
+    budget_actions = [
+        step
+        for _, step in actions
+        if is_unified_react_runtime_budget_action(step)
+    ]
+    action_count = int(investigation.get("action_count", 0) or 0)
+    if action_count != len(budget_actions):
+        _issue(
+            report,
+            "REACT_RUNTIME_ACTION_COUNT_MISMATCH",
+            (
+                f"action_count={action_count}, but trace records "
+                f"{len(budget_actions)} budgeted ReAct actions"
+            ),
+            location="state.investigation_state.action_count",
+        )
+    if action_count < 0 or action_count > 24:
+        _issue(
+            report,
+            "REACT_RUNTIME_ACTION_BUDGET_INVALID",
+            f"current ReAct action_count must be between 0 and 24, got {action_count}",
+            location="state.investigation_state.action_count",
+        )
+
+    for index, metadata in native_interactions:
+        interaction_id = str(metadata.get("interaction_id", "")).strip()
+        parent_id = str(metadata.get("previous_interaction_id", "") or "").strip()
+        lifecycle = str(
+            metadata.get("interaction_lifecycle_kind", "")
+        ).strip()
+        location = _step_label(index, steps[index])
+        if not interaction_id:
+            _issue(
+                report,
+                "REACT_RUNTIME_INTERACTION_ID_MISSING",
+                "native current ReAct action lacks interaction_id",
+                location=location,
+            )
+        if lifecycle != "tool_roundtrip":
+            _issue(
+                report,
+                "REACT_RUNTIME_INTERACTION_LIFECYCLE_INVALID",
+                "native current ReAct tool action must use tool_roundtrip lifecycle",
+                location=location,
+            )
+        if parent_id:
+            _issue(
+                report,
+                "REACT_RUNTIME_INTERACTION_PARENT_INVALID",
+                (
+                    "each current ReAct action starts a fresh compact request; "
+                    "previous_interaction_id must be empty"
+                ),
+                location=location,
+            )
+
+    judgment_outputs = [
+        (index, step)
+        for index, step in enumerate(steps)
+        if str(step.get("stage", "")).strip() == "unified_judgment"
+        and str(step.get("action_type", "")).strip() == "output"
+    ]
+    if len(judgment_outputs) != 1:
+        _issue(
+            report,
+            "REACT_RUNTIME_JUDGMENT_COUNT_INVALID",
+            f"current ReAct trace must contain exactly one final Judgment, got {len(judgment_outputs)}",
+            location="state.all_steps",
+        )
+
+    basis = _mapping(trace.get("verdict_basis"))
+    if str(basis.get("schema_version", "")).strip() != (
+        "ifv-unified-judgment-basis-v1"
+    ):
+        _issue(
+            report,
+            "REACT_RUNTIME_BASIS_INVALID",
+            "current ReAct verdict basis has an invalid schema_version",
+            location="verdict_basis.schema_version",
+        )
+    if str(basis.get("decision_mode", "")).strip() != "bounded_binary_judgment":
+        _issue(
+            report,
+            "REACT_RUNTIME_DECISION_MODE_INVALID",
+            "current ReAct verdict basis must use bounded_binary_judgment",
+            location="verdict_basis.decision_mode",
+        )
+
+    evidence_ids = {
+        str(item.get("evidence_id", "")).strip()
+        for item in _rows(investigation.get("evidence"))
+        if str(item.get("evidence_id", "")).strip()
+    }
+    selected_evidence_ids = {
+        str(item).strip()
+        for item in basis.get("evidence_ids", []) or []
+        if str(item).strip()
+    }
+    unknown_basis_evidence = sorted(selected_evidence_ids - evidence_ids)
+    if unknown_basis_evidence:
+        _issue(
+            report,
+            "REACT_RUNTIME_BASIS_EVIDENCE_UNKNOWN",
+            "verdict basis references unknown evidence: "
+            + ", ".join(unknown_basis_evidence),
+            location="verdict_basis.evidence_ids",
+        )
+
+    judgment = _mapping(trace.get("judgment") or state.get("judgment"))
+    verdict = str(trace.get("verdict", "")).strip()
+    if verdict not in {"real", "fake"}:
+        _issue(
+            report,
+            "REACT_RUNTIME_VERDICT_INVALID",
+            f"current ReAct verdict must be real or fake, got {verdict!r}",
+            location="verdict",
+        )
+    if str(judgment.get("policy_rule_id", "")).strip() != (
+        UNIFIED_REACT_POLICY_VERSION
+    ):
+        _issue(
+            report,
+            "REACT_RUNTIME_JUDGMENT_POLICY_INVALID",
+            "current ReAct Judgment must use unified-react-v1",
+            location="judgment.policy_rule_id",
+        )
+    if str(judgment.get("verdict", "")).strip() != verdict:
+        _issue(
+            report,
+            "REACT_RUNTIME_JUDGMENT_VERDICT_MISMATCH",
+            "trace verdict and current ReAct Judgment verdict must match",
+            location="judgment.verdict",
+        )
+    judgment_selected_evidence = {
+        str(item).strip()
+        for item in judgment.get("selected_evidence_ids", []) or []
+        if str(item).strip()
+    }
+    if judgment_selected_evidence != selected_evidence_ids:
+        _issue(
+            report,
+            "REACT_RUNTIME_JUDGMENT_BASIS_MISMATCH",
+            "Judgment selected_evidence_ids must equal verdict_basis.evidence_ids",
+            location="judgment.selected_evidence_ids",
+        )
+    if not isinstance(judgment.get("fact_check_report"), Mapping):
+        _issue(
+            report,
+            "REACT_RUNTIME_REPORT_MISSING",
+            "current ReAct Judgment must contain fact_check_report",
+            location="judgment.fact_check_report",
+        )
+
+    report.stats.update(
+        {
+            "unified_react_actions": action_count,
+            "unified_react_target_facts": 0,
+            "unified_react_routes": 0,
+            "unified_react_tasks": 0,
+            "unified_react_reflections": 0,
+            "unified_react_decisions": 0,
+            "react_runtime_discoveries": len(
+                _rows(investigation.get("discoveries"))
+            ),
+            "react_runtime_evidence": len(_rows(investigation.get("evidence"))),
+            "react_runtime_failures": len(_rows(investigation.get("failures"))),
+        }
+    )
 
 
 def audit_trace(

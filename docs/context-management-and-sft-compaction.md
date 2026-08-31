@@ -2,6 +2,11 @@
 
 更新：2026-08-26。
 
+> 历史记录：本页数据来自旧的多阶段 Claim/Task runtime。当前
+> `unified-react-v1` 已改为单一 ReAct 状态；现行边界见
+> [Agent 结构](agent-structure.md) 和
+> [Agent Prompt 与运行时说明](agent-prompt-and-runtime-guide-zh.md)。
+
 ## 结论
 
 两层都有重复，但严重程度不同：

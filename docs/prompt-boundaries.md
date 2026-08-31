@@ -1,28 +1,29 @@
 # Prompt Boundaries
 
+This page describes the active `unified-react-v1` boundary. Older Claim/Task
+rules remain only in dated historical plans and legacy replay code.
+
 Prompts express semantic judgment. The runtime owns mechanical constraints.
 
 | Prompt responsibility | Runtime responsibility |
 |---|---|
-| Select an exact relevant webpage passage and judge its factual relation to a goal. | Validate the passage id, recover the original text and offsets, and enforce source policy. |
-| Choose a useful image-grounded core relation. | Validate fact ids, pixel/OCR grounding, atomicity, query grounding, stable core ownership, and task budgets. |
-| Choose a next investigative action from supplied state. | Enforce active tasks, one action per turn, route deduplication, source access, inspection-before-repeat, and stopping. |
-| Explain a compiled result. | Compile verdicts and evidence bases from immutable state. |
+| Choose the next useful action from the image, task, and compact memory. | Expose only public tool arguments, inject the image, enforce one action per turn, deduplication, source policy, budgets, and stopping. |
+| Interpret inspected page passages and visual observations in thought. | Record the original tool result, classify discoveries/evidence/failures, and persist state deltas. |
+| Write the final reader-facing report and bounded binary judgment. | Compile the final basis from immutable runtime state and preserve trace provenance. |
 
 Do not add a prompt rule merely because a deterministic guard is missing. Add or
 repair the guard in code, then keep the prompt focused on the semantic decision the
 model is uniquely suited to make.
 
-The image defines the account under review and supplies initial clues, not the
-investigation's vocabulary or search boundary. SearchHypotheses and queries may
-independently seek the underlying real-world fact and may use model knowledge to
-propose unverified leads. That knowledge is never Evidence: only recorded tool
-observations can support a ClaimAssessment, MaterialDiscrepancy, or verdict basis.
-The initial Planning schema therefore has no Claim-key field on a SearchHypothesis.
-The reducer registers each initial route against the current image account for
-provenance, budgets, Evidence review, and stopping, but this broad bookkeeping
-attachment is not a semantic conclusion. Discrepancy Decision still has to name the
-affected ImageClaim and cite its directional Finding/Evidence chain.
+The image and fixed task define what is being checked. The policy may change its
+question or search direction as observations arrive; it does not first create a
+Claim/route/task graph. Search results and reverse-image matches are unverified
+leads until a page, image, or visual observation is independently inspected.
+Only the reducer's recorded Evidence can support the final report.
+
+Visual tools are ordinary ReAct actions. Their order is not fixed, and the
+original image is attached again to each direct-multimodal request without being
+duplicated in the text history.
 
 For webpages, lack of mention is insufficient to refute a goal. A model may mark a
 source as refuting only when the selected passage states a proposition incompatible

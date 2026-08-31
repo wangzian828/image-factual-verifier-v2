@@ -881,25 +881,24 @@ scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
 ```
 
 Only after the canary passes should the larger teacher rollout be launched with
-the autopilot. The current Agent is `unified-react-v1`; it has one ReAct loop and
-does not run standalone Planning, Query Replan, or Route Replan requests.
+the autopilot. The current Agent is `unified-react-v1`: one continuous ReAct
+loop followed by one Judgment request. It does not issue standalone Planning,
+Query Replan, Route Replan, Reflection, or Discrepancy Decision requests.
 
-The runtime allows at most 24 accepted tool actions. At the beginning, Gemini
-chooses `perceive_scene` or `ocr_with_position`; after both observations exist, it
-chooses the first investigation tool and supplies the runtime-only
-`investigation_intent`. Every later turn is one thought plus one native tool call.
-Reflection and Discrepancy Decision are sparse runtime checkpoints, followed by
-one Judgment request.
+The runtime allows at most 24 accepted tool actions. All mature visual,
+search, page, comparison, and inspection tools are ordinary ReAct tools from
+the first turn; Gemini chooses which one to call and may choose visual tools
+again later. Every turn is one thought plus one native tool call. The runtime
+owns state, IDs, deduplication, budgets, failures, and termination.
 
-In `direct_multimodal` mode, every unified ReAct, Reflection, Discrepancy
-Decision, and Judgment request receives one temporary controlled image
-attachment. The default is a JPEG with longest edge 1280 and quality 88; the
-image is not appended to text history or persisted as base64. The context ledger
-stores only the externalized media artifact and image metadata. In
-`separate_vlm` mode, the visual tools receive the image and the policy model
-receives structured observations only. Both modes use the same dynamic tool
-schema, reducer, state delta, and trace contract. Mature visual/search/browse
-tool implementations remain unchanged.
+In `direct_multimodal` mode, every ReAct and Judgment request receives one
+temporary controlled image attachment. The default is a JPEG with longest edge
+1280 and quality 88; the image is not appended to text history or persisted as
+base64. The context ledger stores only the externalized media artifact and
+image metadata. In `separate_vlm` mode, visual tools receive the image and the
+policy model receives structured observations only. Both modes use the same
+dynamic tool schema, reducer, state delta, and trace contract. Mature
+visual/search/browse tool implementations remain unchanged.
 
 Trace snapshots store a `runtime_image` reference, not image base64. A tool action
 uses a short native `function_call -> function_result` round trip; completed

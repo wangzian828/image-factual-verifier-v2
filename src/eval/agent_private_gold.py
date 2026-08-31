@@ -56,10 +56,23 @@ def _evidence_projection(
         "successful_call": _successful_evidence(row),
         "tool_name": _text(row.get("tool_name"), limit=100),
         "evidence_kind": _text(row.get("evidence_kind"), limit=100),
-        "source_url": _text(row.get("source_url"), limit=4000),
+        "source_url": _text(
+            row.get("source_url")
+            or row.get("selected_url")
+            or row.get("candidate_url"),
+            limit=4000,
+        ),
         "source_family": _text(row.get("source_family"), limit=300),
         "source_class": _text(row.get("source_class"), limit=100),
-        "exact_text": _text(row.get("exact_text"), limit=2400),
+        "exact_text": _text(
+            row.get("exact_text")
+            or row.get("excerpt")
+            or row.get("evidence")
+            or row.get("summary")
+            or row.get("details")
+            or row.get("description"),
+            limit=2400,
+        ),
         "stance": _text(row.get("stance"), limit=100),
         "quality": _text(row.get("quality"), limit=100),
         "directness": _text(row.get("directness"), limit=100),
@@ -67,6 +80,8 @@ def _evidence_projection(
         "relation_scope": _text(row.get("relation_scope"), limit=100),
         "relation_stance": _text(row.get("relation_stance"), limit=100),
         "visual_answer_status": _text(row.get("visual_answer_status"), limit=100),
+        "evidence_class": _text(row.get("evidence_class"), limit=100),
+        "match_status": _text(row.get("match_status"), limit=100),
     }
 
 
@@ -77,6 +92,10 @@ def build_agent_private_gold_candidate(
 
     state = _mapping(trace.get("state"))
     investigation = _mapping(state.get("investigation_state"))
+    is_unified_react_runtime = (
+        str(investigation.get("schema_version", "")).strip()
+        == "ifv-unified-react-v1"
+    )
     judgment = _mapping(
         trace.get("judgment")
         or state.get("judgment")
@@ -139,8 +158,11 @@ def build_agent_private_gold_candidate(
         for item in _rows(judgment.get("evidence_citations"))
         if _text(item.get("evidence_id"), limit=100)
     ]
-    return {
+    result = {
         "candidate_kind": "agent_trace",
+        "runtime_mode": (
+            "image_grounded_react" if is_unified_react_runtime else "legacy_graph"
+        ),
         "recorded_verdict": _text(
             judgment.get("verdict") or trace.get("verdict"),
             limit=100,
@@ -161,7 +183,11 @@ def build_agent_private_gold_candidate(
             "discrepancy_ids": _ids(basis.get("discrepancy_ids"), limit=12),
             "finding_ids": _ids(basis.get("finding_ids"), limit=20),
             "evidence_ids": _ids(basis.get("evidence_ids"), limit=40),
-            "unresolved_gaps": _ids(basis.get("unresolved_gaps"), limit=12),
+            "unresolved_gaps": _ids(
+                basis.get("unresolved_gaps")
+                or basis.get("open_questions"),
+                limit=12,
+            ),
         },
         "runtime_evidence_citations": citations,
         "selected_evidence": selected_evidence,
@@ -174,6 +200,33 @@ def build_agent_private_gold_candidate(
         ],
         "rejected_policy_outputs": _rows(state.get("rejection_history"))[:16],
     }
+    if is_unified_react_runtime:
+        result["runtime_objective"] = _text(
+            investigation.get("objective"),
+            limit=1200,
+        )
+        result["visual_memory"] = investigation.get("visual_memory", {})
+        result["discoveries"] = _rows(investigation.get("discoveries"))[-40:]
+        result["failures"] = _rows(investigation.get("failures"))[-24:]
+        result["attempted_queries"] = _ids(
+            investigation.get("attempted_queries"),
+            limit=40,
+        )
+        result["visited_urls"] = _ids(
+            investigation.get("visited_urls"),
+            limit=40,
+        )
+        result["recent_actions"] = _rows(investigation.get("recent_actions"))[-12:]
+        result["open_questions"] = _ids(
+            investigation.get("open_questions"),
+            limit=12,
+        )
+        result["action_count"] = int(investigation.get("action_count", 0) or 0)
+        result["stop_reason"] = _text(
+            investigation.get("stop_reason"),
+            limit=100,
+        )
+    return result
 
 
 def agent_candidate_answer(packet: Mapping[str, Any]) -> dict[str, str]:

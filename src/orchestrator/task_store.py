@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, Iterator, List, Mapping, Sequence
 
 from src.orchestrator.investigation_models import (
+    BootstrapInvestigation,
     ClaimAssessment,
     DiscrepancyDecisionProposalOutput,
     DiscrepancyDecisionOutput,
@@ -702,6 +703,21 @@ def next_action_boundary(action_count: int) -> int:
     return min(
         MAX_TOOL_ACTIONS,
         ((current // REFLECTION_INTERVAL) + 1) * REFLECTION_INTERVAL,
+    )
+
+
+def state_from_bootstrap(
+    bootstrap: BootstrapInvestigation,
+) -> ImageOnlyInvestigationState:
+    """Convert an archived bootstrap container for legacy replay only."""
+
+    return ImageOnlyInvestigationState(
+        brief=bootstrap.brief,
+        entities=list(bootstrap.entities),
+        facts=list(bootstrap.facts),
+        tasks=list(bootstrap.tasks),
+        retrieval_anchors=list(bootstrap.retrieval_anchors),
+        findings=list(bootstrap.findings),
     )
 
 

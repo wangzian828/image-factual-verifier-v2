@@ -15,6 +15,7 @@ from src.orchestrator.state import (
     TextRegion,
     VerificationState,
 )
+from src.orchestrator.react_runtime import UnifiedReactState
 
 __all__ = [
     "Entity",
@@ -30,4 +31,5 @@ __all__ = [
     "VerificationState",
     "VisualEntity",
     "VisualFact",
+    "UnifiedReactState",
 ]

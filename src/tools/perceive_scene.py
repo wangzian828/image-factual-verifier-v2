@@ -10,6 +10,18 @@ from src.tools.base import BaseTool
 from src.integrations.gemini import RUNTIME_METRICS_KEY, exception_runtime_metrics
 
 
+TEXT_ROLE_VALUES = (
+    "scene_text",
+    "overlay_text",
+    "watermark",
+    "caption",
+    "identity_label",
+    "claim_text",
+    "unknown",
+    "not_applicable",
+)
+
+
 PERCEIVE_SCENE_PROMPT = """\
 You are the perception module of an image verification system.
 Inspect the image carefully and return exactly one JSON object:
@@ -22,6 +34,7 @@ Inspect the image carefully and return exactly one JSON object:
       "entity_type": "person|object|building|logo|animal|scene_element",
       "bbox": [x_min, y_min, x_max, y_max],
       "confidence": 0.9,
+      "text_role": "scene_text|overlay_text|watermark|caption|identity_label|claim_text|unknown|not_applicable",
       "attributes": {
         "appearance": "literal visible appearance",
         "role_or_action": "literal visible action or role",
@@ -44,6 +57,9 @@ Inspect the image carefully and return exactly one JSON object:
 
 Rules:
 1. Inventory the whole image, listing up to 16 decision-relevant visible entities.
+   List an entity only when you can give it a reliable non-empty bounding box.
+   If a visible entity cannot be localized, mention it in scene_description or
+   uncertainties instead of returning an entity with an empty bbox.
 2. For people, do not assign a proper-name identity from appearance alone;
    use a generic visible descriptor such as "pilot", "man in dark suit", or
    "unidentified person" unless visible text explicitly labels the person.
@@ -55,6 +71,9 @@ Rules:
    "person stands behind podium", or "vehicle is parked beside building".
 5. Include visible logos and text-bearing surfaces, but do not transcribe text;
    a separate OCR stage handles exact visible text.
+   For every text-bearing surface, classify its visible layout role as
+   scene_text, overlay_text, watermark, caption, identity_label, claim_text,
+   or unknown. This is a visual layout classification, not a provenance claim.
 6. Use normalized [x_min, y_min, x_max, y_max] bounding boxes in [0,1].
    If no reliable box is available, use [].
 7. Keep every entity name under 100 characters and every attribute under 300
@@ -97,8 +116,17 @@ PERCEIVE_SCENE_SCHEMA = {
                             "scene_element",
                         ],
                     },
-                    "bbox": {"type": "array", "items": {"type": "number"}, "maxItems": 4},
+                    "bbox": {
+                        "type": "array",
+                        "items": {"type": "number"},
+                        "minItems": 4,
+                        "maxItems": 4,
+                    },
                     "confidence": {"type": "number"},
+                    "text_role": {
+                        "type": "string",
+                        "enum": list(TEXT_ROLE_VALUES),
+                    },
                     "attributes": {
                         "type": "object",
                         "maxProperties": 8,
@@ -108,6 +136,14 @@ PERCEIVE_SCENE_SCHEMA = {
                         },
                     },
                 },
+                "required": [
+                    "name",
+                    "entity_type",
+                    "bbox",
+                    "confidence",
+                    "text_role",
+                    "attributes",
+                ],
             },
         },
         "relations": {
@@ -221,10 +257,11 @@ class PerceiveSceneTool(BaseTool):
                     ),
                 )
             except ValueError as exc:
-                # A model may return one malformed or mixed-scale region while
-                # still producing a useful literal scene report. Never guess or
-                # repair that geometry: retain the entity as an unlocalized
-                # observation and keep every valid sibling bbox.
+                # Never guess a region for an entity that cannot be localized.
+                # Preserve the named literal observation with an empty bbox so
+                # the scene report does not silently lose a visible entity.
+                # Downstream crop/reinspection code must require a non-empty
+                # bbox before using it as a spatial anchor.
                 bbox = []
                 bbox_warnings.append(
                     {
@@ -233,6 +270,11 @@ class PerceiveSceneTool(BaseTool):
                         "error": str(exc),
                     }
                 )
+            text_role = str(
+                ent.get("text_role", "not_applicable")
+            ).strip().lower()
+            if text_role not in TEXT_ROLE_VALUES:
+                text_role = "unknown"
             attributes = {}
             raw_attributes = ent.get("attributes", {})
             if isinstance(raw_attributes, dict):
@@ -248,6 +290,7 @@ class PerceiveSceneTool(BaseTool):
                     "bbox": bbox,
                     "confidence": float(ent.get("confidence", 0.8)),
                     "attributes": attributes,
+                    "text_role": text_role,
                 }
             )
 

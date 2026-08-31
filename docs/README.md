@@ -7,7 +7,7 @@
 
 - [Agent 结构与数据流](agent-structure.md)：在线 Agent、工具、状态所有权、教师轨迹与训练数据链路。
 - [轨迹产物说明](trajectory-artifact-guide.md)：canonical trace、SFT JSONL、索引文件和可读版的区别。
-- [Agent prompt 与运行时说明（中文对照）](agent-prompt-and-runtime-guide-zh.md)：每个语义阶段的职责、输入和约束；[英文说明](agent-prompt-and-runtime-guide.md)。
+- [Agent prompt 与运行时说明（中文对照）](agent-prompt-and-runtime-guide-zh.md)：统一 ReAct、图片上下文和训练导出边界；[英文说明](agent-prompt-and-runtime-guide.md)。
 - [当前主 Agent 实际 system prompt（英文）](active-agent-system-prompts.md)：从 active prompt 源码生成的精确副本。
 - [当前主 Agent system prompt（中文对照）](active-agent-system-prompts-zh.md)：仅供阅读，不会发送给模型。
 - [可恢复教师轨迹自动链](teacher-rollout-autopilot.md)：训练集投影、自动工程重试、SFT 审计、质量重跑与产物。

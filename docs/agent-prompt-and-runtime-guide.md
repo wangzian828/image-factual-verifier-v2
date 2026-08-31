@@ -1,74 +1,71 @@
 # Agent Prompt and Runtime Guide
 
-The active policy is `unified-react-v1`. Runtime prompts are English and are
-defined only in `src/orchestrator/unified_prompts.py`; the exact generated
-copy is [Active Agent System Prompts](active-agent-system-prompts.md).
-The Chinese files are documentation translations, not runtime inputs.
+The active production path is `unified-react-v1`. Runtime policy prompts are
+English and are defined in `src/orchestrator/unified_prompts.py`. The exact
+generated copy is [Active Agent System Prompts](active-agent-system-prompts.md).
+The Chinese files are reading translations, not runtime inputs.
 
-## 1. One unified ReAct loop
+## 1. One ReAct loop
 
-Each policy turn is:
+Each turn is:
 
 ```text
-thought -> exactly one native tool call -> tool observation/state delta
+original image + fixed task + compact memory
+  -> thought
+  -> exactly one public native tool call
+  -> tool observation and reducer state delta
 ```
 
-The model chooses the order of `perceive_scene` and `ocr_with_position`. No
-external investigation tool is exposed until both bootstrap observations are
-complete. The first investigation action carries `investigation_intent`: a
-positive image-grounded `target_fact` and the route information needed by that
-action. Runtime creates the canonical route/task objects and IDs.
+`perceive_scene` and `ocr_with_position` are ordinary tools. The model chooses
+their order and may use visual tools again later. There is no mandatory
+bootstrap sequence, Planning output, Query Replan output, or separate route
+graph in the active runtime.
 
-Changing a query, candidate page, or visual direction is another ReAct action.
-There is no standalone Planning, Query Replan, or Route Replan request. If
-`route_local_replan` is exposed, it is a normal runtime control tool inside the
-same loop.
+Changing a query, page, reverse-image candidate, visual question, or stopping is
+another action in the same loop. The runtime owns IDs, internal tool parameters,
+deduplication, retries, budgets, failures, and state updates.
 
-## 2. Sparse checkpoints
+## 2. Context and image handling
 
-- `unified_reflection` summarizes global gaps and strategy; it does not choose
-  the next tool.
-- `unified_discrepancy_decision` interprets recorded Evidence, Findings, and
-  image anchors; it does not create a new investigation route.
-- `unified_judgment` writes the reader-facing report from the runtime-compiled
-  verdict basis.
+Every direct-multimodal request gets one temporary controlled image attachment.
+The image is not appended to the text history and its base64 is not persisted in
+the trace. The next request receives a bounded projection of:
 
-## 3. State and context
+- the fixed objective;
+- visual memory;
+- unverified discoveries;
+- successful Evidence;
+- external/access and engineering failures;
+- attempted queries, visited URLs, recent actions, open questions and budget.
 
-The runtime owns state, IDs, budgets, deduplication, Evidence writes, and
-termination. Each turn receives a compact workspace projection, recent
-observations, active routes, open gaps, and state deltas. The visual workspace
-also carries bounded entity attributes, visible relations, scene details, and
-pixel-level uncertainties. The complete request/response/state archive remains
-available for audit, but is not copied in full into every policy turn.
+The full request/response archive remains available for audit, but is not
+replayed into every policy turn.
 
-The current default output cap is 8,192 tokens for ReAct, Reflection,
-Discrepancy Decision, and Judgment. It is a completion cap, not a tool timeout.
+## 3. Evidence boundary
 
-## 4. Image API boundaries
+Search results, snippets, titles, URLs, source labels and guesses are leads.
+Only successful visual/OCR observations, valid image comparisons, or inspected
+page passages can support the final report. A similar image or background page
+does not by itself establish the complete image fact.
 
-- `direct_multimodal`: every request of unified ReAct, Reflection, Discrepancy
-  Decision, and Judgment receives one temporary controlled image attachment.
-  The image is compressed with `IFV_IMAGE_MAX_LONG_EDGE` (default `1280`) and
-  `IFV_IMAGE_JPEG_QUALITY` (default `88`). It is not appended to text history
-  or persisted as base64; the runtime ledger externalizes it as media.
-- `separate_vlm`: visual tools/VLM receive the image; the policy receives
-  structured observations and state deltas.
+`finish_investigation` ends the ReAct loop only. Judgment then writes the binary
+label and the reader-facing report. It may have incomplete information; missing
+evidence is uncertainty, not automatic proof of either label.
 
-Both modes share the same dynamic tool schema, reducer, and trace contract.
-Tool-internal prompts and visual tool contracts remain with the mature tool
-implementations.
+## 4. Training export
 
-In `direct_multimodal`, the structured perception report is a compact index,
-not a replacement for the original pixels. The final Judgment remains a
-binary synthesis step: a non-empty runtime verdict is reproduced, while an
-empty one is resolved from the available target, Evidence, visual observations,
-image, and explicit uncertainties.
+The complete episode is exported in Qwen-compatible form:
 
-## 5. Trace files
+```text
+system
+user: task + compact context
+assistant: <think>...</think>
+          <tool_call>...</tool_call>
+tool: result + state delta
+...
+assistant: final report
+```
 
-The canonical trace is one JSON object per completed episode in
-`traces/*.json`. A Qwen SFT export is a derived file:
-`trajectory_sft.jsonl` contains one JSON line per complete episode, with the
-messages and compacted training context. `selection-manifest.jsonl` and
-`manifest.json` describe the export; they are not trajectories.
+The exporter keeps one complete episode, removes repeated cumulative workspace,
+and does not create one training row per action. Missing provider thought is
+classified as action-only/RL material rather than filled with fabricated text.

@@ -27,7 +27,7 @@ from src.tools.vision_utils import controlled_image_to_data_url
 
 
 SEMANTIC_REWARD_SCHEMA_VERSION = "ifv-semantic-reward-v2"
-SEMANTIC_REWARD_INPUT_VERSION = "ifv-semantic-reward-input-v3"
+SEMANTIC_REWARD_INPUT_VERSION = "ifv-semantic-reward-input-v4"
 TRAJECTORY_PROMPT_VERSION = "ifv-semantic-trajectory-blind-v2"
 JUDGE_GENERATION_VERSION = "minimal-thinking-4096-v5"
 SEMANTIC_REWARD_POSTPROCESS_VERSION = "trajectory-semantic-audit-v2"
@@ -65,7 +65,13 @@ class ClaimSemanticReview(_StrictModel):
 
 
 class TrajectorySemanticJudgment(_StrictModel):
-    claim_reviews: List[ClaimSemanticReview] = Field(min_length=1, max_length=3)
+    # Legacy target-graph traces contain one review per ImageClaim.  The active
+    # unified ReAct trace has no model-authored claim graph, so its blind judge
+    # evaluates the episode objective and may legitimately return no rows here.
+    claim_reviews: List[ClaimSemanticReview] = Field(
+        default_factory=list,
+        max_length=3,
+    )
     predicted_verdict: Literal["real", "fake", "unclear"]
     confidence: float = Field(ge=0.0, le=1.0)
     evidence_sufficient: bool
@@ -131,13 +137,26 @@ def sha256_file(path: Path) -> str:
 
 
 def _project_evidence(item: Mapping[str, Any]) -> Dict[str, Any]:
-    exact_text = str(item.get("exact_text") or item.get("evidence") or "").strip()
+    exact_text = str(
+        item.get("exact_text")
+        or item.get("excerpt")
+        or item.get("evidence")
+        or item.get("summary")
+        or item.get("details")
+        or item.get("description")
+        or ""
+    ).strip()
     return {
         "evidence_id": str(item.get("evidence_id", "")),
         "task_id": str(item.get("task_id", "")),
         "fact_ids": [str(value) for value in item.get("fact_ids", [])],
         "evidence_kind": str(item.get("evidence_kind", "")),
-        "source_url": str(item.get("source_url", "")),
+        "source_url": str(
+            item.get("source_url")
+            or item.get("selected_url")
+            or item.get("candidate_url")
+            or ""
+        ),
         "source_family": str(item.get("source_family", "")),
         "source_class": str(item.get("source_class", "unknown")),
         "exact_text": exact_text[:8000],
@@ -146,6 +165,12 @@ def _project_evidence(item: Mapping[str, Any]) -> Dict[str, Any]:
         "quality": str(item.get("quality", "")),
         "directness": str(item.get("directness", "")),
         "claim_binding": str(item.get("claim_binding", "")),
+        "evidence_class": str(item.get("evidence_class", "")),
+        "match_status": str(item.get("match_status", "")),
+        "tool_name": str(item.get("tool_name", "")),
+        "successful_call": bool(
+            item.get("successful_call", item.get("tool_success", True))
+        ),
         "risk_flags": [str(value) for value in item.get("risk_flags", [])],
     }
 
@@ -309,6 +334,10 @@ def build_semantic_reward_input(
 
     state = _mapping(trace.get("state"))
     investigation = _mapping(state.get("investigation_state"))
+    is_unified_react_runtime = (
+        str(investigation.get("schema_version", "")).strip()
+        == "ifv-unified-react-v1"
+    )
     claims = [
         {
             "claim_id": str(item.get("claim_id", "")),
@@ -321,8 +350,8 @@ def build_semantic_reward_input(
         }
         for item in target_fact_rows(investigation)
     ]
-    if not claims:
-        raise ValueError("semantic reward requires at least one target fact")
+    if not is_unified_react_runtime and not claims:
+        raise ValueError("legacy semantic reward requires at least one target fact")
 
     evidence = [
         _project_evidence(item)
@@ -406,7 +435,7 @@ def build_semantic_reward_input(
     case_id = str(runtime_case.get("case_id") or episode_id)
     policy_step_ids = _policy_step_ids(trace, episode_id)
     investigation_turns = _project_investigation_turns(trace, episode_id)
-    return {
+    common = {
         "schema_version": SEMANTIC_REWARD_INPUT_VERSION,
         "case_id": case_id,
         "decision_policy_version": str(
@@ -415,11 +444,7 @@ def build_semantic_reward_input(
             or ""
         ),
         "image": image_descriptor,
-        "target_facts": claims,
         "evidence": evidence,
-        "findings": findings,
-        "claim_assessments": assessments,
-        "material_discrepancies": discrepancies,
         "recorded_verdict": verdict,
         "rollout": {
             "episode_id": episode_id,
@@ -429,12 +454,122 @@ def build_semantic_reward_input(
         "investigation_turns": investigation_turns,
         "verdict_basis": basis,
         "unresolved_gaps": [
-            str(value) for value in basis.get("unresolved_gaps", [])
+            str(value)
+            for value in (
+                basis.get("unresolved_gaps")
+                or basis.get("open_questions")
+                or investigation.get("open_questions")
+                or []
+            )
         ],
     }
+    if is_unified_react_runtime:
+        common.update(
+            {
+                "target_mode": "image_grounded_react",
+                "runtime_objective": str(
+                    investigation.get("objective")
+                    or (
+                        "Verify the factual content expressed by the image and "
+                        "decide whether it should be labeled real or fake."
+                    )
+                )[:1200],
+                "visual_memory": _compact_runtime_value(
+                    investigation.get("visual_memory", {})
+                ),
+                "discoveries": [
+                    _compact_runtime_value(item)
+                    for item in _rows(investigation.get("discoveries"))
+                ][-40:],
+                "failures": [
+                    _compact_runtime_value(item)
+                    for item in _rows(investigation.get("failures"))
+                ][-24:],
+                "attempted_queries": [
+                    str(value)[:1200]
+                    for value in investigation.get("attempted_queries", [])
+                    if str(value).strip()
+                ][-40:],
+                "visited_urls": [
+                    str(value)[:2400]
+                    for value in investigation.get("visited_urls", [])
+                    if str(value).strip()
+                ][-40:],
+                "recent_actions": [
+                    _compact_runtime_value(item)
+                    for item in _rows(investigation.get("recent_actions"))
+                ][-12:],
+                "open_questions": [
+                    str(value)[:800]
+                    for value in investigation.get("open_questions", [])
+                    if str(value).strip()
+                ][-12:],
+                "action_count": int(investigation.get("action_count", 0) or 0),
+                "stop_reason": str(investigation.get("stop_reason", "")),
+            }
+        )
+    else:
+        common.update(
+            {
+                "target_facts": claims,
+                "findings": findings,
+                "claim_assessments": assessments,
+                "material_discrepancies": discrepancies,
+            }
+        )
+    return common
+
+
+def _compact_runtime_value(value: Any) -> Any:
+    """Bound current ReAct state without replaying media or giant payloads."""
+
+    if isinstance(value, Mapping):
+        result: Dict[str, Any] = {}
+        for key, child in list(value.items())[:80]:
+            if str(key).casefold() in {
+                "image_input",
+                "image_url",
+                "data_url",
+                "base64",
+                "raw_html",
+                "html",
+            }:
+                result[str(key)] = "[omitted]"
+            else:
+                result[str(key)] = _compact_runtime_value(child)
+        return result
+    if isinstance(value, list):
+        return [_compact_runtime_value(item) for item in value[:32]]
+    if isinstance(value, str):
+        return value.strip()[:2400]
+    return value
 
 
 def _trajectory_payload(packet: Mapping[str, Any]) -> Dict[str, Any]:
+    if packet.get("target_mode") == "image_grounded_react":
+        return {
+            "case_id": packet.get("case_id"),
+            "target_mode": packet.get("target_mode"),
+            "runtime_objective": packet.get("runtime_objective", ""),
+            "visual_memory": packet.get("visual_memory", {}),
+            "discoveries": packet.get("discoveries", []),
+            "evidence": [
+                {
+                    key: value
+                    for key, value in item.items()
+                    if key not in {"successful_call"}
+                }
+                for item in _rows(packet.get("evidence"))
+            ],
+            "failures": packet.get("failures", []),
+            "attempted_queries": packet.get("attempted_queries", []),
+            "visited_urls": packet.get("visited_urls", []),
+            "recent_actions": packet.get("recent_actions", []),
+            "open_questions": packet.get("open_questions", []),
+            "action_count": packet.get("action_count", 0),
+            "stop_reason": packet.get("stop_reason", ""),
+            "investigation_turns": packet.get("investigation_turns", []),
+        }
     claims = [
         {
             key: value

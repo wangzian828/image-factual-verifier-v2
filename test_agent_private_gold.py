@@ -136,6 +136,56 @@ def test_agent_private_gold_projection_uses_actual_successful_trace_evidence() -
     }
 
 
+def test_agent_private_gold_projection_supports_current_react_memory() -> None:
+    trace = _trace()
+    trace["verdict_basis"] = {
+        "schema_version": "ifv-unified-judgment-basis-v1",
+        "decision_mode": "bounded_binary_judgment",
+        "objective": "Verify the displayed winner.",
+        "evidence_ids": ["evidence-1"],
+        "open_questions": ["The venue was not independently checked."],
+    }
+    trace["state"]["investigation_state"] = {
+        "schema_version": "ifv-unified-react-v1",
+        "case_id": "case-article",
+        "image_sha256": "a" * 64,
+        "objective": "Verify the displayed winner.",
+        "visual_memory": {
+            "scene_description": "A scoreboard shows a final result.",
+            "entities": [{"name": "scoreboard"}],
+        },
+        "discoveries": [{"discovery_id": "discovery-1", "candidate_status": "unverified"}],
+        "evidence": [
+            {
+                "evidence_id": "evidence-1",
+                "tool_name": "visit",
+                "successful_call": True,
+                "evidence_kind": "web_span",
+                "source_url": "https://example.org/final",
+                "excerpt": "B won the final.",
+                "evidence_class": "decision_capable_refute",
+            }
+        ],
+        "failures": [],
+        "attempted_queries": ["final winner official result"],
+        "visited_urls": ["https://example.org/final"],
+        "attempted_actions": [],
+        "recent_actions": [],
+        "open_questions": ["The venue was not independently checked."],
+        "action_count": 1,
+        "stop_reason": "meaningful_routes_exhausted",
+    }
+
+    candidate = build_agent_private_gold_candidate(trace)
+
+    assert candidate["runtime_mode"] == "image_grounded_react"
+    assert candidate["runtime_objective"] == "Verify the displayed winner."
+    assert candidate["selected_evidence"][0]["exact_text"] == "B won the final."
+    assert candidate["open_questions"] == [
+        "The venue was not independently checked."
+    ]
+
+
 def test_agent_candidate_answer_uses_terminal_assessment_before_internal_target() -> None:
     trace = _trace()
     trace["judgment"].pop("fact_check_report")

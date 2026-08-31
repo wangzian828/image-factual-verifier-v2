@@ -335,6 +335,16 @@ class VisualEntity(StrictModel):
     region: Optional[List[float]] = None
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     attributes: Dict[str, str] = Field(default_factory=dict, max_length=8)
+    text_role: Literal[
+        "scene_text",
+        "overlay_text",
+        "watermark",
+        "caption",
+        "identity_label",
+        "claim_text",
+        "unknown",
+        "not_applicable",
+    ] = "not_applicable"
 
     @model_validator(mode="after")
     def validate_region(self) -> "VisualEntity":
@@ -2264,4 +2274,30 @@ class VisualBootstrap(StrictModel):
     def truncate_retrieval_anchors(cls, value: Any) -> Any:
         if isinstance(value, list):
             return value[:40]
+        return value
+
+
+class BootstrapInvestigation(StrictModel):
+    """Legacy bootstrap container used only by archived v3/v4 tests.
+
+    The active ``unified-react-v1`` runtime never constructs this object.  It
+    remains a narrow compatibility boundary for replaying historical traces
+    and must not be imported by the production ReAct path.
+    """
+
+    brief: InvestigationBrief
+    entities: List[VisualEntity] = Field(default_factory=list, max_length=32)
+    facts: List[VisualFact] = Field(default_factory=list, max_length=48)
+    tasks: List[ResearchTask] = Field(default_factory=list, max_length=4)
+    retrieval_anchors: List[RetrievalAnchor] = Field(
+        default_factory=list,
+        max_length=32,
+    )
+    findings: List[Finding] = Field(default_factory=list)
+
+    @field_validator("retrieval_anchors", mode="before")
+    @classmethod
+    def truncate_retrieval_anchors(cls, value: Any) -> Any:
+        if isinstance(value, list):
+            return value[:32]
         return value

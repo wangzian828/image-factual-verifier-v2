@@ -45,6 +45,7 @@ from src.orchestrator.investigation_models import (
     DiscrepancyDecisionOutput,
     DiscrepancyJudgment,
     DiscrepancyJudgmentOutput,
+    FactCheckEvidenceCitation,
     ImageOnlyInvestigationState,
     InvestigationSegmentOutput,
     UnifiedReflectionOutput,
@@ -63,6 +64,7 @@ from src.orchestrator.state import (
     ImageOnlyRuntimeCase,
     PerceptionRelation,
     PerceptionReport,
+    TEXT_ROLE_VALUES,
     TextRegion,
     VerificationState,
 )
@@ -85,6 +87,18 @@ from src.orchestrator.unified_react import (
     route_local_replan_candidate,
     unified_react_delta,
     validate_unified_react_action,
+)
+from src.orchestrator.react_runtime import (
+    UnifiedReactState as RuntimeReactState,
+    MAX_REACT_ACTIONS,
+    build_react_runtime_tools,
+    compile_react_judgment_basis,
+    new_unified_react_runtime_state,
+    reduce_react_action,
+    render_react_judgment_context,
+    render_react_runtime_context,
+    update_react_visual_memory,
+    validate_react_action,
 )
 from src.orchestrator.task_store import (
     MAX_TOOL_ACTIONS,
@@ -447,7 +461,7 @@ class Orchestrator:
                 judgment,
                 basis,
                 final_visual_audit,
-            ) = await self._run_unified_react_policy(
+            ) = await self._run_react_runtime_policy(
                 state,
                 image_path=image_path,
                 runtime_case=runtime_case,
@@ -482,7 +496,11 @@ class Orchestrator:
             ],
             "investigation_status": self._investigation_status(investigation),
             "verification_layers": self._verification_layers(investigation),
-            "verdict_basis": basis.model_dump(mode="json"),
+            "verdict_basis": (
+                basis.model_dump(mode="json")
+                if hasattr(basis, "model_dump")
+                else dict(basis)
+            ),
             "final_visual_audit": final_visual_audit,
             "state": state.to_dict(),
             "termination": state.termination,
@@ -494,6 +512,291 @@ class Orchestrator:
             "llm_api_calls": state.llm_api_calls,
             "error": None,
         }
+
+    async def _run_react_runtime_policy(
+        self,
+        state: VerificationState,
+        *,
+        image_path: str,
+        runtime_case: ImageOnlyRuntimeCase,
+    ) -> tuple[
+        RuntimeReactState,
+        DiscrepancyJudgment,
+        Dict[str, Any],
+        Optional[Dict[str, Any]],
+    ]:
+        """Run the active one-loop ReAct runtime.
+
+        Each policy request receives a fresh compact context and one compressed
+        image attachment.  The provider-side interaction is intentionally not
+        chained across actions; completed actions are persisted in the trace and
+        the reducer supplies only bounded memory to the next request.
+        """
+
+        self._validate_image_only_bootstrap_configuration()
+        investigation = new_unified_react_runtime_state(runtime_case)
+        state.investigation_state = investigation
+        state.perception = PerceptionReport(scene_description="")
+        self._sync_image_only_state(state, investigation)
+        started = time.time()
+
+        while not investigation.stop_reason:
+            self._check_timeout(started, state)
+            if investigation.action_count >= MAX_REACT_ACTIONS:
+                investigation.stop_reason = "hard_budget_exhausted"
+                break
+
+            tools = build_react_runtime_tools(
+                investigation,
+                self.all_tools,
+                image_path=image_path,
+                excluded_tool_names=self._exhausted_unified_react_tools(
+                    state.all_steps
+                ),
+            )
+            if not tools:
+                investigation.stop_reason = "meaningful_routes_exhausted"
+                break
+
+            observation_update: Dict[str, Any] = {}
+
+            def observation_callback(
+                step: StageStep,
+                _steps: List[StageStep],
+            ) -> Dict[str, Any]:
+                nonlocal observation_update
+                tool_name = str(step.tool_name).strip()
+                call_id = str(
+                    (step.metadata or {}).get("function_call_id", "")
+                ).strip()
+                if tool_name == "perceive_scene":
+                    scene = self._parse_perception_result(step.tool_result)
+                    prior = state.perception or PerceptionReport(
+                        scene_description=""
+                    )
+                    state.perception = PerceptionReport(
+                        entities=scene.entities,
+                        relations=scene.relations,
+                        notable_details=scene.notable_details,
+                        uncertainties=scene.uncertainties,
+                        text_regions=list(prior.text_regions),
+                        scene_description=scene.scene_description,
+                        image_type=scene.image_type,
+                    )
+                elif tool_name == "ocr_with_position":
+                    state.perception = self._merge_ocr(
+                        state.perception or PerceptionReport(
+                            scene_description=""
+                        ),
+                        step.tool_result,
+                    )
+                update = reduce_react_action(
+                    investigation,
+                    tool_name=tool_name,
+                    tool_args=dict(step.tool_args or {}),
+                    call_id=call_id or f"action-{investigation.action_count}",
+                    serialized_result=step.tool_result,
+                    perception=state.perception
+                    if tool_name in {"perceive_scene", "ocr_with_position"}
+                    else None,
+                )
+                failure = update.get("failure")
+                if (
+                    isinstance(failure, dict)
+                    and str(failure.get("code", "")) == "engineering_error"
+                ):
+                    update["fatal_engineering_error"] = True
+
+                if not update.get("accepted", False):
+                    raise RuntimeError(
+                        "ReAct reducer rejected an executed action: "
+                        + str(update.get("rejected_reason", update))
+                    )
+                step.metadata["react_state_delta"] = dict(update)
+                step.metadata["investigation_state_update"] = dict(update)
+                observation_update = dict(update)
+                self._sync_image_only_state(state, investigation)
+                return dict(update)
+
+            runner = StageRunner(
+                llm=self.llm,
+                system_prompt=self._sp(UNIFIED_REACT_SYSTEM_PROMPT),
+                prompt_version=UNIFIED_REACT_PROMPT_VERSION,
+                tools=tools,
+                output_schema=InvestigationSegmentOutput,
+                max_rounds=1,
+                image_path=image_path,
+                stage_name="unified_react",
+                runtime_store=state.runtime_store,
+                attach_image=(
+                    bool(image_path) and self._main_llm_attaches_image()
+                ),
+                prior_steps=[
+                    step
+                    for step in state.all_steps
+                    if getattr(step, "stage_name", "") == "unified_react"
+                ],
+                tool_cache=self.tool_cache,
+                cacheable_tools=list(self.cacheable_tools),
+                tool_call_limits=self.verification_tool_limits,
+                min_tool_calls=1,
+                should_stop=lambda steps: any(
+                    item.action_type == "tool_call" for item in steps
+                ),
+                max_output_tokens=self._stage_output_tokens(
+                    "UNIFIED_REACT",
+                    8192,
+                ),
+                generation_config=self._stage_generation_config(
+                    "UNIFIED_REACT"
+                ),
+                observation_callback=observation_callback,
+                source_access_policy=self.source_access_policy,
+                visual_call_validator=lambda tool_name, tool_args: (
+                    validate_react_action(
+                        investigation,
+                        tool_name=tool_name,
+                        tool_args=tool_args,
+                        source_access_policy=self.source_access_policy,
+                    )
+                ),
+                max_protocol_corrections=4,
+                max_tool_calls_per_turn=1,
+                force_tool_each_round=True,
+                protocol_exhaustion_boundary=True,
+                interaction_session=InteractionSession(),
+                stop_output_factory=lambda: InvestigationSegmentOutput(
+                    segment_summary="One ReAct action completed.",
+                    ready_for_reflection=True,
+                ),
+                request_timeout_seconds=self.stage_request_timeout_seconds,
+                tool_timeout_seconds=self.tool_action_timeout_seconds,
+            )
+            try:
+                parsed, steps = await runner.run(
+                    render_react_runtime_context(investigation)
+                )
+            except Exception as exc:
+                self._record_stage_steps(
+                    state,
+                    list(getattr(exc, "stage_steps", []) or []),
+                )
+                raise
+            self._record_stage_steps(state, steps)
+            if parsed is None or not observation_update:
+                raise RuntimeError(
+                    "ReAct did not complete one accepted action"
+                )
+            if observation_update.get("fatal_engineering_error"):
+                investigation.stop_reason = "engineering_error"
+                self._sync_image_only_state(state, investigation)
+                raise RuntimeError(
+                    "ReAct encountered a fatal tool-result contract error"
+                )
+            if investigation.action_count >= MAX_REACT_ACTIONS:
+                investigation.stop_reason = "hard_budget_exhausted"
+                break
+
+        state.stage_timings["unified_react"] = round(time.time() - started, 2)
+        if not investigation.stop_reason:
+            investigation.stop_reason = "meaningful_routes_exhausted"
+        basis = compile_react_judgment_basis(investigation)
+        judgment_started = time.perf_counter()
+        try:
+            judgment = await self._run_react_judgment(
+                state,
+                investigation,
+                basis,
+                image_path=image_path,
+            )
+        finally:
+            state.stage_timings["judgment"] = round(
+                time.perf_counter() - judgment_started,
+                2,
+            )
+        state.judgment = judgment
+        self._sync_image_only_state(state, investigation)
+        return investigation, judgment, basis, None
+
+    async def _run_react_judgment(
+        self,
+        state: VerificationState,
+        investigation: RuntimeReactState,
+        basis: Dict[str, Any],
+        *,
+        image_path: str,
+    ) -> DiscrepancyJudgment:
+        """Run the single terminal binary judgment and report writer."""
+
+        runner = StageRunner(
+            llm=self.llm,
+            system_prompt=self._sp(UNIFIED_JUDGMENT_SYSTEM_PROMPT),
+            prompt_version=UNIFIED_JUDGMENT_PROMPT_VERSION,
+            tools=[],
+            output_schema=DiscrepancyJudgmentOutput,
+            max_rounds=1,
+            image_path=image_path,
+            stage_name="unified_judgment",
+            runtime_store=state.runtime_store,
+            attach_image=(
+                bool(image_path) and self._main_llm_attaches_image()
+            ),
+            max_output_tokens=self._stage_output_tokens(
+                "UNIFIED_JUDGMENT",
+                8192,
+            ),
+            generation_config=self._stage_generation_config(
+                "UNIFIED_JUDGMENT"
+            ),
+            request_timeout_seconds=self.stage_request_timeout_seconds,
+        )
+        parsed, steps = await runner.run(
+            render_react_judgment_context(investigation, basis)
+        )
+        self._record_stage_steps(state, steps)
+        if parsed is None or parsed.fact_check_report is None:
+            raise RuntimeError(
+                "ReAct final Judgment did not produce a valid fact-check report"
+            )
+
+        citations: list[FactCheckEvidenceCitation] = []
+        evidence_rows = {
+            str(item.get("evidence_id", "")): item
+            for item in investigation.evidence
+        }
+        for evidence_id in basis.get("evidence_ids", [])[:40]:
+            row = evidence_rows.get(str(evidence_id))
+            if not row:
+                continue
+            kind = str(row.get("evidence_kind", "")).strip()
+            if kind not in {"web_span", "image_region", "reference_comparison"}:
+                kind = "image_region"
+            evidence_class = str(row.get("evidence_class", "")).strip()
+            relation_stance = {
+                "decision_capable_support": "supports",
+                "decision_capable_refute": "contradicts",
+                "context_only": "background",
+            }.get(evidence_class, "unclear")
+            citations.append(
+                FactCheckEvidenceCitation(
+                    evidence_id=str(evidence_id),
+                    source_url=str(row.get("source_url", ""))[:4000],
+                    source_family=str(row.get("tool_name", "runtime"))[:300],
+                    evidence_kind=kind,
+                    relation_stance=relation_stance,
+                    excerpt=str(row.get("excerpt", "observation"))[:2400],
+                )
+            )
+        return DiscrepancyJudgment(
+            verdict=parsed.verdict,
+            confidence=parsed.confidence,
+            policy_rule_id=UNIFIED_REACT_POLICY_VERSION,
+            overall_assessment=parsed.overall_assessment,
+            fact_check_report=parsed.fact_check_report,
+            evidence_citations=citations,
+            selected_evidence_ids=list(basis.get("evidence_ids", []))[:40],
+            unresolved_gaps=list(basis.get("open_questions", []))[:12],
+        )
 
     async def _run_unified_react_policy(
         self,
@@ -913,7 +1216,7 @@ class Orchestrator:
         )
 
     def _validate_image_only_bootstrap_configuration(self) -> None:
-        """Validate only providers exercised by the Phase-B bootstrap."""
+        """Validate the image tools required by the active ReAct runtime."""
 
         if self.vlm_provider == "gemini" and not (
             os.getenv("GEMINI_API_KEY", "").strip()
@@ -1515,8 +1818,16 @@ class Orchestrator:
 
     @staticmethod
     def _investigation_status(
-        investigation: ImageOnlyInvestigationState,
+        investigation: Any,
     ) -> str:
+        if isinstance(investigation, RuntimeReactState):
+            if investigation.stop_reason == "engineering_error":
+                return "engineering_error"
+            if investigation.stop_reason == "hard_budget_exhausted":
+                return "incomplete_budget_exhausted"
+            if investigation.stop_reason:
+                return "complete"
+            return "incomplete"
         return {
             "coverage_complete": "complete",
             "verdict_determined": "complete",
@@ -1526,8 +1837,31 @@ class Orchestrator:
 
     @staticmethod
     def _verification_layers(
-        investigation: ImageOnlyInvestigationState,
+        investigation: Any,
     ) -> Dict[str, Any]:
+        if isinstance(investigation, RuntimeReactState):
+            return {
+                "visual_observation": {
+                    "status": (
+                        "available"
+                        if investigation.visual_memory
+                        else "not_assessed"
+                    ),
+                    "observation_count": len(
+                        investigation.visual_memory.get("entities", [])
+                    )
+                    + len(investigation.visual_memory.get("text_regions", [])),
+                },
+                "web_investigation": {
+                    "status": (
+                        "available"
+                        if investigation.discoveries or investigation.evidence
+                        else "not_assessed"
+                    ),
+                    "discovery_count": len(investigation.discoveries),
+                    "evidence_count": len(investigation.evidence),
+                },
+            }
         source_facts = [
             fact
             for fact in investigation.facts
@@ -1611,15 +1945,23 @@ class Orchestrator:
     @staticmethod
     def _sync_image_only_state(
         state: VerificationState,
-        investigation: ImageOnlyInvestigationState,
+        investigation: Any,
     ) -> None:
         state.investigation_state = investigation
-        state.investigation_brief = investigation.brief
-        state.visual_entities = list(investigation.entities)
-        state.visual_facts = list(investigation.facts)
-        state.research_tasks = list(investigation.tasks)
-        state.findings = list(investigation.findings)
-        state.retrieval_anchors = list(investigation.retrieval_anchors)
+        if isinstance(investigation, RuntimeReactState):
+            state.investigation_brief = None
+            state.visual_entities = []
+            state.visual_facts = []
+            state.research_tasks = []
+            state.findings = []
+            state.retrieval_anchors = []
+        else:
+            state.investigation_brief = investigation.brief
+            state.visual_entities = list(investigation.entities)
+            state.visual_facts = list(investigation.facts)
+            state.research_tasks = list(investigation.tasks)
+            state.findings = list(investigation.findings)
+            state.retrieval_anchors = list(investigation.retrieval_anchors)
         if state.runtime_store is not None:
             state.runtime_store.write_snapshot(
                 "workspace",
@@ -1972,6 +2314,9 @@ class Orchestrator:
                     bbox=item.get("bbox", []) if isinstance(item.get("bbox"), list) else [],
                     confidence=float(item.get("confidence", 0.0) or 0.0),
                     attributes=item.get("attributes", {}) if isinstance(item.get("attributes"), dict) else {},
+                    text_role=self._normalize_text_role(
+                        item.get("text_role", "not_applicable")
+                    ),
                 )
             )
         relations: List[PerceptionRelation] = []
@@ -2022,6 +2367,10 @@ class Orchestrator:
                 continue
             seen.add(key)
             text_regions.append(normalized)
+        text_regions = [
+            self._attach_text_role(region, report.entities)
+            for region in text_regions
+        ]
         return PerceptionReport(
             entities=report.entities,
             relations=report.relations,
@@ -2051,7 +2400,79 @@ class Orchestrator:
             bbox_quad=bbox_quad,
             confidence=float(item.get("confidence", 0.0) or 0.0),
             language=str(item.get("language", "unknown") or "unknown"),
+            text_role=self._normalize_text_role(
+                item.get("text_role", "unknown"),
+                default="unknown",
+            ),
         )
+
+    @staticmethod
+    def _normalize_text_role(
+        value: Any,
+        *,
+        default: str = "not_applicable",
+    ) -> str:
+        normalized = str(value or default).strip().lower()
+        return normalized if normalized in TEXT_ROLE_VALUES else "unknown"
+
+    @staticmethod
+    def _bbox_from_quad(value: Any) -> Optional[List[float]]:
+        if not isinstance(value, list) or len(value) != 4:
+            return None
+        points: List[tuple[float, float]] = []
+        for point in value:
+            if (
+                not isinstance(point, list)
+                or len(point) != 2
+                or any(
+                    isinstance(item, bool)
+                    or not isinstance(item, (int, float))
+                    for item in point
+                )
+            ):
+                return None
+            points.append((float(point[0]), float(point[1])))
+        xs = [point[0] for point in points]
+        ys = [point[1] for point in points]
+        bbox = [min(xs), min(ys), max(xs), max(ys)]
+        if not (0 <= bbox[0] < bbox[2] <= 1 and 0 <= bbox[1] < bbox[3] <= 1):
+            return None
+        return bbox
+
+    @classmethod
+    def _attach_text_role(
+        cls,
+        region: TextRegion,
+        entities: Sequence[Entity],
+    ) -> TextRegion:
+        if region.text_role != "unknown":
+            return region
+        region_bbox = cls._bbox_from_quad(region.bbox_quad)
+        if region_bbox is None:
+            return region
+        best_role = "unknown"
+        best_overlap = 0.0
+        for entity in entities:
+            role = entity.text_role
+            if role in {"unknown", "not_applicable"} or not entity.bbox:
+                continue
+            x1 = max(region_bbox[0], entity.bbox[0])
+            y1 = max(region_bbox[1], entity.bbox[1])
+            x2 = min(region_bbox[2], entity.bbox[2])
+            y2 = min(region_bbox[3], entity.bbox[3])
+            if x2 <= x1 or y2 <= y1:
+                continue
+            intersection = (x2 - x1) * (y2 - y1)
+            region_area = (region_bbox[2] - region_bbox[0]) * (
+                region_bbox[3] - region_bbox[1]
+            )
+            overlap = intersection / max(region_area, 1e-9)
+            if overlap > best_overlap:
+                best_overlap = overlap
+                best_role = role
+        if best_role == "unknown":
+            return region
+        return region.model_copy(update={"text_role": best_role})
 
     def _record_stage_steps(self, state: VerificationState, steps: Sequence[StageStep]) -> None:
         if not steps:

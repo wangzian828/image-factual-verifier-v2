@@ -1,9 +1,9 @@
 """Private-gold SFT eligibility audit for completed teacher trajectories.
 
-The runtime ImageClaim graph remains the lineage layer.  This module judges the
-more general question that matters for SFT: did the completed trajectory reach
-the right binary decision about the factual content expressed by the image and
-cite decisive, image-relevant Evidence?
+The audit judges whether a complete ReAct trajectory reached the right binary
+decision about the factual content expressed by the image and whether its
+recorded observations and sources are useful for training. It does not require
+the runtime to expose a preconstructed target or route graph.
 """
 
 from __future__ import annotations
@@ -39,9 +39,8 @@ SFT_ELIGIBILITY_SYSTEM_PROMPT = (
     "completed teacher trajectory correctly determined the factual content expressed "
     "by the supplied image and found decisive Evidence for that decision. The "
     "private target describes the image fact and the expected binary verdict. "
-    "Runtime ImageClaims are lineage and bookkeeping, not a mandatory semantic "
-    "target. Do not require the teacher to reproduce the target wording, a specific "
-    "Claim ID, relation slot, URL, original image, source span, or registered "
+    "Do not require the teacher to reproduce the target wording, private-target "
+    "wording, a specific runtime ID, URL, original image, source span, or registered "
     "decision path. Accept a different but clearly image-grounded sub-fact when it "
     "decisively establishes the same image-level verdict. Evidence may be a "
     "successful visual observation, OCR/crop result, source passage, same-image "
@@ -341,6 +340,7 @@ def _successful_evidence(item: Mapping[str, Any]) -> bool:
 def _evidence_text(item: Mapping[str, Any]) -> str:
     return _text(
         item.get("exact_text"),
+        item.get("excerpt"),
         item.get("evidence"),
         item.get("observation"),
         item.get("summary"),
@@ -362,7 +362,12 @@ def _project_candidate_evidence(
         "finding_ids": _unique(item.get("finding_ids", []), limit=12),
         "claim_ids": _unique(item.get("claim_ids", []), limit=12),
         "evidence_kind": str(item.get("evidence_kind", "")),
-        "source_url": str(item.get("source_url", "")),
+        "source_url": str(
+            item.get("source_url")
+            or item.get("selected_url")
+            or item.get("candidate_url")
+            or ""
+        ),
         "source_family": str(item.get("source_family", "")),
         "exact_text": _evidence_text(item),
         "observation": _text(
@@ -376,6 +381,8 @@ def _project_candidate_evidence(
         "claim_binding": str(item.get("claim_binding", "")),
         "relation_scope": str(item.get("relation_scope", "")),
         "relation_stance": str(item.get("relation_stance", "")),
+        "evidence_class": str(item.get("evidence_class", "")),
+        "match_status": str(item.get("match_status", "")),
         "runtime_stance": str(item.get("stance", "")),
         "quality": str(item.get("quality", "")),
         "risk_flags": _unique(item.get("risk_flags", []), limit=12),
@@ -425,7 +432,12 @@ def _retrieval_history(state: Mapping[str, Any]) -> List[Dict[str, Any]]:
             history.append(
                 {
                     "tool": tool_name,
-                    "goal": _text(tool_args.get("goal"), limit=800),
+                    "goal": _text(
+                        tool_args.get("goal"),
+                        tool_args.get("question"),
+                        tool_args.get("context"),
+                        limit=800,
+                    ),
                     "queries": _string_list(
                         tool_args.get("queries", tool_args.get("query", [])),
                         limit=3,
@@ -450,6 +462,8 @@ def _retrieval_history(state: Mapping[str, Any]) -> List[Dict[str, Any]]:
                     "goal": _text(
                         tool_args.get("retrieval_goal"),
                         tool_args.get("goal"),
+                        tool_args.get("question"),
+                        tool_args.get("context"),
                         limit=800,
                     ),
                     "source_urls": source_urls,
@@ -555,9 +569,21 @@ def build_sft_eligibility_input(
             or investigation.get("discrepancy_verdict_basis")
         )
     )
-    basis_claim_ids = _unique(basis.get("claim_ids", []), limit=12)
+    current_runtime = (
+        str(investigation.get("schema_version", "")).strip()
+        == "ifv-unified-react-v1"
+    )
+    basis_claim_ids = (
+        []
+        if current_runtime
+        else _unique(basis.get("claim_ids", []), limit=12)
+    )
     basis_evidence_ids = set(_unique(basis.get("evidence_ids", []), limit=40))
-    basis_discrepancy_ids = _unique(basis.get("discrepancy_ids", []), limit=12)
+    basis_discrepancy_ids = (
+        []
+        if current_runtime
+        else _unique(basis.get("discrepancy_ids", []), limit=12)
+    )
     judgment = _mapping(
         trace.get("judgment")
         or state.get("judgment")
@@ -625,6 +651,54 @@ def build_sft_eligibility_input(
         )
         if str(item.get("fact_id", "")).strip()
     ]
+    if current_runtime:
+        visual_memory = _mapping(investigation.get("visual_memory"))
+        visual_facts = []
+        scene_description = _text(
+            visual_memory.get("scene_description"),
+            limit=1800,
+        )
+        if scene_description:
+            visual_facts.append(
+                {
+                    "fact_id": "visual-memory-scene",
+                    "statement": scene_description,
+                    "source": "perceive_scene",
+                }
+            )
+        for index, item in enumerate(_rows(visual_memory.get("entities"))):
+            name = _text(item.get("name"), limit=400)
+            if name:
+                visual_facts.append(
+                    {
+                        "fact_id": f"visual-memory-entity-{index}",
+                        "statement": name,
+                        "source": "perceive_scene",
+                    }
+                )
+        for index, item in enumerate(_rows(visual_memory.get("relations"))):
+            statement = _text(
+                item.get("description"),
+                limit=800,
+            )
+            if statement:
+                visual_facts.append(
+                    {
+                        "fact_id": f"visual-memory-relation-{index}",
+                        "statement": statement,
+                        "source": "perceive_scene",
+                    }
+                )
+        for index, item in enumerate(_rows(visual_memory.get("text_regions"))):
+            text = _text(item.get("text"), limit=600)
+            if text:
+                visual_facts.append(
+                    {
+                        "fact_id": f"visual-memory-text-{index}",
+                        "statement": text,
+                        "source": "ocr_with_position",
+                    }
+                )
 
     return {
         "schema_version": SFT_ELIGIBILITY_INPUT_VERSION,
@@ -674,8 +748,19 @@ def build_sft_eligibility_input(
             "final_visual_audit": _mapping(state.get("final_visual_audit")),
             "basis_claim_ids": basis_claim_ids,
             "basis_discrepancy_ids": basis_discrepancy_ids,
-            "verdict_target": _text(basis.get("verdict_target"), limit=4000),
-            "unresolved_gaps": _unique(basis.get("unresolved_gaps", []), limit=12),
+            "verdict_target": _text(
+                basis.get("verdict_target"),
+                basis.get("objective") if current_runtime else "",
+                investigation.get("objective") if current_runtime else "",
+                limit=4000,
+            ),
+            "unresolved_gaps": _unique(
+                basis.get("unresolved_gaps")
+                or basis.get("open_questions")
+                or investigation.get("open_questions")
+                or [],
+                limit=12,
+            ),
         },
         "private_target": target,
     }

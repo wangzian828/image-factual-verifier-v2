@@ -9,14 +9,10 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from src.orchestrator.unified_prompts import (
-    UNIFIED_DISCREPANCY_DECISION_PROMPT_VERSION,
-    UNIFIED_DISCREPANCY_DECISION_SYSTEM_PROMPT,
     UNIFIED_JUDGMENT_PROMPT_VERSION,
     UNIFIED_JUDGMENT_SYSTEM_PROMPT,
     UNIFIED_REACT_PROMPT_VERSION,
     UNIFIED_REACT_SYSTEM_PROMPT,
-    UNIFIED_REFLECTION_PROMPT_VERSION,
-    UNIFIED_REFLECTION_SYSTEM_PROMPT,
 )
 
 
@@ -27,16 +23,6 @@ def main() -> None:
             "Unified ReAct",
             UNIFIED_REACT_PROMPT_VERSION,
             UNIFIED_REACT_SYSTEM_PROMPT,
-        ),
-        (
-            "Unified Reflection",
-            UNIFIED_REFLECTION_PROMPT_VERSION,
-            UNIFIED_REFLECTION_SYSTEM_PROMPT,
-        ),
-        (
-            "Unified Discrepancy Decision",
-            UNIFIED_DISCREPANCY_DECISION_PROMPT_VERSION,
-            UNIFIED_DISCREPANCY_DECISION_SYSTEM_PROMPT,
         ),
         (
             "Unified Judgment",

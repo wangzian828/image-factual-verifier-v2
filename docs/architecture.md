@@ -1,48 +1,51 @@
-# 当前架构：unified-react-v1
+# 当前架构：`unified-react-v1`
 
-## 1. 结构
+## 主流程
 
-```mermaid
-flowchart TD
-    A[图片 + 公开 case 字段] --> B[空 workspace]
-    B --> C[统一 ReAct]
-    C --> C1[模型选择 perceive_scene 或 OCR]
-    C1 --> C2[模型选择调查工具]
-    C2 --> C3[工具结果]
-    C3 --> D[Reducer 写入 state delta]
-    D --> C
-    C --> E[低频 Reflection]
-    C --> F[低频 Discrepancy Decision]
-    E --> C
-    F --> C
-    C --> G[Judgment]
-    G --> H[canonical trace / SFT / RL]
+```text
+原图 + 固定任务
+  → 紧凑上下文的 ReAct 请求
+  → thought + 一个工具调用
+  → 工具结果
+  → reducer 写入 state delta
+  → 下一轮 ReAct
+  → finish 或预算结束
+  → Judgment 输出 real/fake 与 fact-check report
 ```
 
-## 2. 职责边界
+视觉工具没有固定顺序，也不是隐藏的独立阶段。每轮请求都会重新附加受控压缩
+原图；文本上下文只携带有限的视觉记忆、候选、证据、失败和近期动作。
+
+## 职责边界
 
 | 部件 | 负责 | 不负责 |
 | --- | --- | --- |
-| 主策略模型 | thought、下一工具、工具参数 | 直接改 state、读取 gold、制造 Evidence |
-| 视觉工具/VLM | 场景、OCR、裁剪、比较等观察 | 最终 verdict |
-| Orchestrator/Reducer | 工具白名单、ID、预算、去重、state delta、终止 | 用规则替模型猜标签 |
-| 外部检索工具 | 返回搜索/网页/图像观察 | 直接写 Agent state |
+| ReAct policy | thought、工具选择、公开参数 | 修改 state、生成 ID、伪造 Evidence |
+| runtime adapter | 隐藏内部参数、注入图片和运行时上下文 | 改写成熟工具语义 |
+| 成熟工具 | 感知、OCR、搜索、网页提取、图像比较、视觉复查 | 最终二分类 |
+| reducer | 校验动作、去重、预算、失败分类、写入 state delta | 用规则替模型猜标签 |
+| Judgment | 综合已记录上下文并写报告 | 新增工具调用或虚构来源 |
 
-## 3. 状态管理
+## 状态与证据
 
-工具返回后，Reducer 写入 `Discovery`、`Evidence`、`Failure` 和不可变 state delta。下一轮只
-接收当前紧凑 workspace，不重复携带每一轮的完整累计 workspace。完整原始请求、响应和状态仍
-保存在 canonical archive 供审计。
+当前 state 使用 `objective`、`visual_memory`、`discoveries`、`evidence`、
+`failures`、查询/URL 历史和预算字段。搜索结果、标题、摘要和反向搜图结果先
+作为 Discovery；只有成功视觉观察、有效比较或已检查页面的具体片段才进入
+Evidence。
 
-`target_facts` 是当前字段，表示图片要求核查的正向现实事实；它不是 provenance 字段，也不
-使用 `image_claims` 作为别名。`perceive_scene` 生成的实体属性、可见关系、场景细节和
-像素不确定性会进入受限的视觉 workspace；它们是原图的结构化索引，不替代原图。
+当前主流程不创建 `target_facts`、`search_hypotheses`、`tasks` 或 Claim
+ownership。旧图状态只用于 legacy trace 回放，不会被 active runtime 调用。
 
-## 4. 两种图片 API 模式
+## 图片 API
 
-- `direct_multimodal`：主策略的每次 ReAct、Reflection、Discrepancy Decision 和 Judgment
-  请求都临时带一份压缩原图；当前主流程用于需要策略模型直接观察的实验。
-- `separate_vlm`：图片只给视觉工具/VLM，主策略只接收结构化观察、Evidence 和 state delta；
-  这是仍保留的独立输入模式。
+- `direct_multimodal`：ReAct 和 Judgment 请求都带一份临时压缩原图。
+- `separate_vlm`：图片只交给视觉工具，policy 使用结构化观察。
 
-两种模式共享工具 schema、Reducer 和 trace 格式，不修改成熟工具内部契约。
+两种模式共用工具契约、reducer 和 trace 记录。压缩图片不进入累计文本历史，
+trace 只保存哈希、尺寸和外部化媒体引用。
+
+## 产物
+
+- canonical trace：完整请求、thought、工具结果、状态增量和最终报告；
+- SFT：一条完整 episode 一条 Qwen 对话，去掉重复 workspace；
+- RL/reward：读取完整轨迹、视觉记忆、调查证据和动作历史，不重新创建 Claim 图。

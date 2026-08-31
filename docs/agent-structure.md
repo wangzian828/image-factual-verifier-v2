@@ -1,83 +1,93 @@
 # Agent 结构
 
-当前生产入口是 `unified-react-v1`。IFV 是“策略模型 + 工具 + runtime state”的闭环，
-不是多个固定顺序、各自独立规划的 Agent。
+当前生产入口是 `unified-react-v1`。主流程只有一个连续的
+image-grounded ReAct loop，状态由 runtime/reducer 管理，成熟工具继续负责
+各自的视觉、检索和网页处理。
 
 ```text
-                 ┌────────────────────────────┐
-图片、case 字段 ─>│ unified-react-v1 policy     │
-                 │ 压缩原图 + thought -> 工具  │
-                 └─────────────┬──────────────┘
-                               │
-                         runtime adapter
-                               │
-       ┌───────────────────────┼───────────────────────┐
-       │                       │                       │
-  视觉工具                 检索工具                控制工具
- scene/OCR/compare      search/visit/read       stop_route
-       │                       │                       │
-       └──────────────> reducer/state delta <──────────┘
-                               │
-                  Reflection / Decision / Judgment
-                               │
-                         canonical trace
+图片 + 固定事实核查任务
+          │
+          ▼
+┌──────────────────────────────┐
+│ unified ReAct policy          │
+│ 每轮：thought → 一个工具调用 │
+│ 每次请求临时附加压缩原图     │
+└──────────────┬───────────────┘
+               │ public tool schema
+               ▼
+┌──────────────────────────────┐
+│ runtime tool adapter         │
+│ 隐藏内部字段，注入图片/上下文 │
+└──────────────┬───────────────┘
+               ▼
+┌──────────────────────────────┐
+│ mature tools                 │
+│ perceive / OCR / search /    │
+│ visit / compare / visual ... │
+└──────────────┬───────────────┘
+               ▼
+┌──────────────────────────────┐
+│ reducer + compact state      │
+│ visual_memory / discoveries  │
+│ evidence / failures / budget │
+└──────────────┬───────────────┘
+               │
+        下一轮 ReAct 或 finish
+               │
+               ▼
+┌──────────────────────────────┐
+│ Judgment                     │
+│ 二分类 + fact-check report   │
+└──────────────┬───────────────┘
+               ▼
+        canonical trace / SFT / RL
 ```
 
-模型每轮只能调用一个 native tool。视觉感知不是隐藏的固定前置步骤，而是 ReAct 可以选择的
-两个 bootstrap 工具；runtime 只规定在两者完成前不开放外部调查工具。
+## 运行规则
 
-首次调查动作携带 `investigation_intent`。它提供一个图像锚定的正向 `target_fact` 和本次
-动作的主路线；runtime 再创建 canonical route/task。后续换 query、换网页、换视觉方向，都
-直接表现为下一轮 ReAct 的新动作。`route_local_replan` 如果被暴露，也是这个循环中的普通
-控制工具，不是独立 Replan 阶段。
+- `perceive_scene` 和 `ocr_with_position` 是普通 ReAct 工具。模型可以先调用
+  任意一个，也可以在后续因新问题再次调用；没有固定 bootstrap 闸门。
+- 每轮只允许一个工具调用。查询、换页面、反向搜图、视觉复查和结束调查，
+  都是同一个循环中的动作。
+- 模型只产生 thought 和公开工具参数。ID、图片路径、工具内部参数、去重、
+  预算、失败记录和 state delta 由 runtime 负责。
+- 每次直接多模态请求都会临时附加同一张受控压缩原图。原图不重复写入文本
+  历史，也不把 base64 写入 trace。
+- `finish_investigation` 只结束调查，不决定 `real/fake`；最终标签和报告由
+  Judgment 收尾。
 
-Reflection 只做低频全局检查；Discrepancy Decision 只解释已经记录的证据；Judgment 只处理
-runtime 编译的最终 basis，并生成读者可读的 fact-check report。
+## 当前状态
 
-图片输入边界：在 `direct_multimodal` 模式下，统一 ReAct、Reflection、
-Discrepancy Decision 和 Judgment 的每次请求都会临时附加一份受控压缩原图。图片不追加到
-累计文本历史，也不写入轨迹或 `policy_input` 的 base64；运行时只记录图片哈希、尺寸、压缩
-大小和 artifact 引用。结构化视觉 workspace 只保存有限数量的实体属性、关系、场景细节和
-不确定性，作为原图的紧凑索引。
+当前 runtime 状态不再建立 Claim/Route/Task 图，核心字段是：
 
-`perceive_scene` 不再只返回一句场景摘要：它最多返回 16 个可见实体、实体属性、最多 16
-条可见关系、场景细节和像素层面的不确定性。Bootstrap 将这些内容物化为绑定实体和
-`VisualFact`，供后续 ReAct 和收尾阶段使用。
+- `objective`：固定事实核查任务；
+- `visual_memory`：场景、实体、属性、关系、OCR 和像素不确定性；
+- `discoveries`：搜索和反向搜图候选，默认是 `unverified`；
+- `evidence`：成功工具结果中可追溯的观察或正文片段；
+- `failures`：工程错误、网络失败和外部页面不可访问记录；
+- `attempted_queries`、`visited_urls`、`attempted_actions`：去重和调查历史；
+- `recent_actions`、`open_questions`、`current_focus`：有限的当前上下文；
+- `action_count`、`no_gain_streak`、`stop_reason`：预算和终止状态。
 
-字段边界：
+旧的 `target_facts`、`search_hypotheses`、`tasks` 等字段只存在于 legacy
+回放/审计代码，不属于当前 ReAct trace。
 
-- `target_facts`：图片传达、需要核查的正向现实事实；
-- `search_hypotheses` / `tasks`：runtime 管理的路线和任务；
-- `discoveries`：检索线索；
-- `evidence`：成功工具结果中可追溯的事实材料；
-- `failures`：访问失败或工具失败记录；
-- `verdict_basis`：最终结论实际引用的对象集合。
+## 训练数据
 
-## 一条 episode 的真实顺序
+`export_trajectory_sft_example()` 将一条完整 episode 导出为一条 Qwen 对话：
 
 ```text
-空 workspace
-  -> ReAct 选择 perceive_scene 或 ocr_with_position
-  -> ReAct 选择另一个视觉工具
-  -> ReAct 首次调查动作 + investigation_intent
-  -> ReAct 在 route/task 之间持续选择工具
-  -> 低频 Reflection / Discrepancy Decision
-  -> runtime 编译 verdict basis
-  -> Judgment + fact_check_report
-  -> canonical trace
+system
+user: task + compact context
+assistant: <think>...</think> + Qwen tool call
+tool: result + state delta
+...
+assistant: final judgment/report
 ```
 
-每次工具返回后，Reducer 写入 state delta；模型不直接写 state。成功观察、Discovery、
-Evidence、Finding、失败和路线状态都由 runtime 记录，模型只产生 thought、工具调用和
-检查点 JSON。
+不把一条 episode 拆成逐步独立样本，也不重复拼接完整 workspace。没有 provider
+实际 thought 文本的轨迹进入 action-only/RL 候选，不伪造思考文本。
 
-## Prompt 与轨迹文件
-
-运行时主 prompt 使用英文，源文件是 `src/orchestrator/unified_prompts.py`。精确备份由
-`scripts/docs/export_active_agent_prompts.py` 生成到 `docs/active-agent-system-prompts.md`；
-中文文件只是阅读对照。
-
-完整 canonical trace 是 `traces/*.json`。Qwen SFT 导出中的
-`trajectory_sft.jsonl` 是一行一个完整 episode；`manifest.json` 和
-`selection-manifest.jsonl` 只是元数据/索引，不是轨迹。人类阅读版可用
-`scripts/trajectory/render_sft_episodes_readable.py` 生成。
+主 prompt 的英文源文件是
+`src/orchestrator/unified_prompts.py`；工具内部 prompt 仍放在各自工具源码中。
+中文 prompt 文件只用于人工阅读。

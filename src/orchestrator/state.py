@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -24,6 +24,28 @@ class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+TEXT_ROLE_VALUES = (
+    "scene_text",
+    "overlay_text",
+    "watermark",
+    "caption",
+    "identity_label",
+    "claim_text",
+    "unknown",
+    "not_applicable",
+)
+TextRole = Literal[
+    "scene_text",
+    "overlay_text",
+    "watermark",
+    "caption",
+    "identity_label",
+    "claim_text",
+    "unknown",
+    "not_applicable",
+]
+
+
 class ImageOnlyRuntimeCase(StrictModel):
     """The complete public v0.3 runtime input."""
 
@@ -40,6 +62,7 @@ class Entity(StrictModel):
     bbox: List[float] = Field(default_factory=list)
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     attributes: Dict[str, str] = Field(default_factory=dict)
+    text_role: TextRole = "not_applicable"
 
     @model_validator(mode="after")
     def validate_bbox(self) -> "Entity":
@@ -60,6 +83,7 @@ class TextRegion(StrictModel):
     bbox_quad: List[List[float]] = Field(default_factory=list)
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     language: str = "unknown"
+    text_role: TextRole = "unknown"
 
 
 class PerceptionRelation(StrictModel):
