@@ -4,6 +4,9 @@
 范围：`unified-react-v1` 当前主路径  
 暂停边界：不启动大规模教师 rollout。
 
+状态：已完成到暂停边界。新版 10 条真实 smoke 已完成并通过工程审计；因整体判断质量
+未相对旧版明显改善，未启动新的 100 条 Agent rollout。
+
 ## 目标
 
 让 Agent 按成熟 search-agent 的方式工作：工具结果进入后续模型上下文，并由同一 episode 的
@@ -62,6 +65,16 @@
 - [x] 合并 session handoff 中的多个 `user_input`。
 - [x] strict audit 改为检查父链和工具结果前递。
 - [x] 增加交互回归测试。
-- [ ] 完成下游导出/审计全量门禁。
-- [ ] 提交并同步服务器。
-- [ ] 完成 10 条真实 smoke 与前后对照。
+- [x] 完成下游导出/审计全量门禁。
+- [x] 提交并同步服务器。
+- [x] 完成 10 条真实 smoke 与前后对照。
+
+## 验收结果
+
+- 当前提交：`62f6b9c`；服务器 checkout 与本地分支一致。
+- 10 条新版 smoke：10/10 terminal success，0 工程错误，strict audit 10/10。
+- InteractionSession、工具结果前递、候选图/视觉图回传和原图不重复写入文本历史均已验证。
+- SFT 分桶：9 条 `reasoning_sft`、1 条 `action_only`、10 条 `rl_candidate`；其中 1 条
+  轨迹估算超过 128K，保留为长轨迹 holdout。
+- 旧版与新版 smoke 的 private-gold 三分类分别为 `1/6/3` 与 `4/1/5`；新版强证据增加，
+  但总正确数下降，因此不启动新版 Agent-100。

@@ -2,7 +2,8 @@
 
 日期：2026-08-31
 
-状态：实施中；已完成入口、会话链路、候选图回传和 Jina 输入边界的第一轮修改
+状态：已完成到人工复核边界；已完成入口、会话链路、候选图回传、Jina 输入边界、
+工具生命周期和下游 SFT 适配。
 
 ## 1. 目标
 
@@ -386,3 +387,14 @@ git diff --check
 - `text_search` / `reverse_image_search` 与参考 Agent 的同类工具使用不同公开名称；
 - bbox、比较字段或工具状态互相矛盾；
 - 旧 Claim/Hypothesis 状态反复膨胀上下文。
+
+## 11. 最终验收记录
+
+- 本地当前 unified-react 相关门禁通过；服务器当前 checkout 定向门禁 103 项通过。
+- 真实 Gemini 3.7 smoke：10/10 完成，0 工程错误，strict trace audit 10/10。
+- 当前提交 `62f6b9c` 只补充 claimless unified-react canary 验收，不改变已 smoke 的
+  ReAct runtime、工具、prompt 或导出逻辑；服务器已用当前 checkout 复核既有 smoke。
+- `trajectory_sft.jsonl` 保留完整 episode 的 canonical 导出；缺少 provider thought 的
+  轨迹进入 `action_only`，不伪造 `<think>`；超出 128K 的轨迹进入 holdout。
+- 新版 10 条 smoke 未达到整体质量改善门槛，因此不启动新的 Agent-100，不启动
+  8,490 条大规模教师 rollout。

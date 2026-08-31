@@ -21,10 +21,11 @@
 - [SFT canonical release 工作流](sft-canonical-release-workflow.md)：从接受的完整教师轨迹到可训练 SFT 数据。
 - [SFT 训练方式与数据筛选构造](sft-training-and-data-construction.md)：审计、分桶、reroll、完整轨迹构造和训练启动边界。
 - [语义奖励说明](rl-semantic-reward.md)：RL 的诊断性语义奖励边界。
+- [Agent 与评测收尾执行计划](agent-evaluation-closeout-plan.md)：本轮重构、验证结果和停止边界。
 
 ## 实验记录
 
-- [Gemini 图像直接事实核查实验记录（测试集 1684 条）](reports/2026-08-30-gemini-direct-qa-experiment-record.md)：100 条对照、全量 direct QA、private-gold 审计与当前补跑状态。
+- [Gemini 图像直接事实核查实验记录（测试集 1684 条）](reports/2026-08-30-gemini-direct-qa-experiment-record.md)：100 条对照、全量 direct QA、private-gold 审计与新版 10 条 Agent smoke。
 
 ## 历史与排障
 

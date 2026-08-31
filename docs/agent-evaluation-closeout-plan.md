@@ -1,6 +1,6 @@
 # Agent 与评测收尾执行计划
 
-**状态：进行中。** 本文是当前工作的连续执行记录。每次涉及 Agent 的代码、prompt、schema、
+**状态：已完成（停在大规模教师 rollout 启动前）。** 本文是当前工作的连续执行记录。每次涉及 Agent 的代码、prompt、schema、
 harness、审计口径或运行配置变更，必须先在第 4 节追加一行，再实施、测试、提交和部署。
 
 ## 1. 目标与停止边界
@@ -36,11 +36,13 @@ harness、审计口径或运行配置变更，必须先在第 4 节追加一行�
 |---|---|
 | 本地/服务器分支 | `codex/gpu13-canary-20260804-plan-relaxation-01` |
 | 服务器工作树 | `/gs/home/wza/projects/image-factual-verifier-v2-worktrees/gpu13-canary-20260804-plan-relaxation-01` |
-| 最新服务器 commit | `64c6169 feat: summarize isolated Agent test evaluations` |
+| 当前运行代码 commit | `62f6b9c fix: validate current claimless react canary contract` |
 | 测试集 | 1,684 条，real 447 / fake 1,237 |
 | 3.1 Pro full direct QA | 1,682 完成、2 工程错误；judge 已完成 |
-| 3.7 full direct QA | 自动补跑中；完成数随恢复变化，尚未做全量 judge |
+| 3.7 full direct QA | 1,684 完成、0 工程错误；private-gold judge 已完成 |
 | 3.7 Agent-100（旧版） | 100 条与 report sidecar 已完成；仅作为旧基线 |
+| 新版 Agent-10 smoke | 10/10 完成、0 工程错误、strict audit 10/10；整体质量未明显改善 |
+| 新版 Agent-100 | 未启动；按 10 条 smoke 的质量门槛有意停止 |
 | 大规模教师 rollout | 禁止启动，等待本计划全部完成后的人工确认 |
 
 ## 4. Agent 变更日志（从现在起持续追加）
@@ -48,17 +50,18 @@ harness、审计口径或运行配置变更，必须先在第 4 节追加一行�
 | 时间（UTC） | 类别 | 文件/范围 | 改动与原因 | 验证/部署 | commit |
 |---|---|---|---|---|---|
 | 2026-08-30 20:55 | 基准设施 | `scripts/benchmark_gemini_interactions_concurrency.py` | 新增可复用 Gemini 并发基准；混合结构化文本、原生工具调用、图片结构化请求；强制零重试，并显式设置 request gate 与 HTTP 连接数，避免 256/512 档被默认 128 连接限制悄然串行化。不是 Agent 语义改动。 | 本地 `py_compile`、`--help`；gpu-13 fast-forward 后 2 并发/4 请求真实 smoke 为 4/4 成功。 | `f383cc0` |
-| 2026-08-30 21:12 | 已实施：ReAct prompt | `src/orchestrator/unified_prompts.py` | 将“反向搜图得到匹配后”改为“返回未验证候选”；补一条自然的具体问题导向 query 指引。未新增固定槽位、query 拒绝器或真假倾向。 | 定向 prompt 断言通过；真实 smoke 待部署后运行。 | 待提交 |
-| 2026-08-30 21:12 | 已实施：参考图 adapter | `src/orchestrator/unified_react.py` | 从 runtime `InvestigationDiscovery(reference_image_url, candidate_url)` 建立参考图→候选页面映射；compare 调用没有显式 `source_page_url` 时自动绑定。成熟 compare 工具不改。 | adapter 注入/显式覆盖单测通过；真实 reverse-search smoke 待运行。 | 待提交 |
-| 2026-08-30 21:12 | 已实施：候选 URL 与下载诊断 | `src/tools/reverse_image_search.py`、`src/tools/crop_and_search.py`、`src/tools/compare_reference.py` | 接受合法 HTTP(S) 的无扩展名图片候选，按响应 `Content-Type` 验图；把直接下载、URL 变体、候选页、页面图片提取、HTTP/网络/策略失败写入 subcalls。 | extensionless 与诊断 subcall 单测通过；真实下载回退 smoke 待运行。 | 待提交 |
-| 2026-08-30 21:12 | 已实施：审计输出上限/主分类 | `scripts/audit_direct_qa_baseline.py`、`scripts/audit_agent_private_gold.py`、`src/eval/private_gold_metrics.py` | private-gold judge 默认输出上限升至 8,192；Agent 主三分类改为决定性、落地依据 / 正确但不足 / 错误，旧严格覆盖度仅保留诊断。 | Agent/Direct 分类差异单测通过；真实审计待部署后运行。 | 待提交 |
-| 2026-08-30 21:12 | 已核实：无需重复改 | `src/orchestrator/task_store.py`、`src/tools/compare_reference.py` | 当前代码已有失败/低相关候选的有界 sibling 控制；compare 已从 typed `differences` 派生并保留 `edit_evidence_*` 的原始字段与修复记录。先以真实 smoke 验证，不重复造同类补丁。 | 待真实 smoke 复核。 | 既有代码 |
-| 2026-08-30 21:50 | 待实施：审计去重 | `scripts/audit_direct_qa_baseline.py` | 3.7 direct QA 采用追加式补跑后，审计器直接读取全部 `results.jsonl`，会重复审计同一 case 的旧失败记录和新成功记录；改为按 `case_id` 只取最后一条结果，再进入 judge。 | 新增重复结果回归测试；用 3.7 全量 QA 重新执行一轮干净 private-gold audit。 | 待提交 |
-| 2026-08-31 | 已实施：统一 prompt 语言与文档 | `src/orchestrator/unified_prompts.py`, `src/orchestrator/context_workspace.py`, `docs/active-agent-system-prompts.md` | 当前主 Agent 的四类 runtime prompt 和 stage objective 统一为英文；中文文件降为阅读对照，不再作为运行时输入。新增从源码生成精确 prompt 备份的脚本。未改变工具契约、状态机、private-gold 隔离或判断规则。 | 本地 prompt 导出成功；待 compileall、diff-check 和真实 smoke。 | 待提交 |
-| 2026-08-31 | 已实施：轨迹可读视图 | `scripts/trajectory/render_sft_episodes_readable.py`, `docs/trajectory-artifact-guide.md` | 保留 canonical `trajectory_sft.jsonl` 不变，新增逐 episode 的原始 JSON 与 Markdown 审阅视图，明确 manifest/index 不是轨迹。 | 已从 H 盘 10 条导出生成 10 个 episode 目录；待检查脚本与文档。 | 待提交 |
-| 2026-08-31 | 真实 smoke 暴露并修复 Gemini follow-up 与跨 action session 问题 | `src/orchestrator/stage_runner.py`, `src/orchestrator/pipeline.py`, `scripts/audit_real_trace.py`, `src/trajectory/exporter.py`, `src/trajectory/report_history.py`, `docs/gemini-interaction-sequence.md` | 保留候选图下载、校验、压缩和 `function_result` 纯文本；恢复同一 ReAct episode 的 provider-side `InteractionSession`。工具结果只在下一请求显式前递一次，原图只在根请求上传，后续依靠会话历史；多个 `user_input` 合并。审计改为检查父链连续及工具结果前递；SFT/report 继续按 canonical 时间顺序单次投影，不重复展开 provider 历史。 | 交互/ReAct 回归测试 62/62，当前 unified ReAct 测试 14/14，compileall 和 diff-check 通过；旧 v3/v4 测试仍有仓库已有的 `src.orchestrator.coverage` 依赖问题；真实 10 条 smoke 待本次提交后复测。 | 本次待提交（基于 `922d9d2`） |
-| 2026-08-31 | 已更新回归断言 | `test_native_structured_output.py` | 将共享 InteractionSession 的跨阶段测试改为验证后续阶段复用 provider 历史中的原图，只发送新的文本输入；不再把重复上传原图当作正确行为。 | 本地与 gpu-13 定向门禁待重跑。 | 待提交 |
-| 2026-08-31 | 已适配真实 canary 验收 | `scripts/run_real_canary.py`, `test_real_canary_cli.py` | 当前主流程是 claimless `react_runtime`：不再要求 ImageClaim、claim_ids 或旧的终止原因；只对当前 ReAct schema 检查有动作、视觉记忆、统一 judgment basis 和 fact-check report。旧图谱 trace 仍保留原校验。 | 新增当前 ReAct canary 回归测试；本地与 gpu-13 定向门禁待重跑。 | 待提交 |
+| 2026-08-30 21:12 | 已实施：ReAct prompt | `src/orchestrator/unified_prompts.py` | 将“反向搜图得到匹配后”改为“返回未验证候选”；补一条自然的具体问题导向 query 指引。未新增固定槽位、query 拒绝器或真假倾向。 | 定向断言通过；已随 `5c63e49` 推送并部署。 | `5c63e49` |
+| 2026-08-30 21:12 | 已实施：参考图 adapter | `src/orchestrator/unified_react.py` | 从 runtime `InvestigationDiscovery(reference_image_url, candidate_url)` 建立参考图→候选页面映射；compare 调用没有显式 `source_page_url` 时自动绑定。成熟 compare 工具不改。 | adapter 注入/显式覆盖单测通过；已随 `5c63e49` 推送并部署。 | `5c63e49` |
+| 2026-08-30 21:12 | 已实施：候选 URL 与下载诊断 | `src/tools/reverse_image_search.py`、`src/tools/crop_and_search.py`、`src/tools/compare_reference.py` | 接受合法 HTTP(S) 的无扩展名图片候选，按响应 `Content-Type` 验图；把直接下载、URL 变体、候选页、页面图片提取、HTTP/网络/策略失败写入 subcalls。 | extensionless 与诊断 subcall 单测通过；已随 `5c63e49` 推送并部署。 | `5c63e49` |
+| 2026-08-30 21:12 | 已实施：审计输出上限/主分类 | `scripts/audit_direct_qa_baseline.py`、`scripts/audit_agent_private_gold.py`、`src/eval/private_gold_metrics.py` | private-gold judge 默认输出上限升至 8,192；Agent 主三分类改为决定性、落地依据 / 正确但不足 / 错误，旧严格覆盖度仅保留诊断。 | Agent/Direct 分类差异单测通过；全量 3.7 judge 已完成。 | `5c63e49` |
+| 2026-08-30 21:12 | 已核实：无需重复改 | `src/orchestrator/task_store.py`、`src/tools/compare_reference.py` | 当前代码已有失败/低相关候选的有界 sibling 控制；compare 已从 typed `differences` 派生并保留 `edit_evidence_*` 的原始字段与修复记录。先以真实 smoke 验证，不重复造同类补丁。 | 新版 10 条 smoke 中 strict audit 通过，未出现 compare contract 工程错误。 | 既有代码 |
+| 2026-08-30 21:50 | 已实施：审计去重 | `scripts/audit_direct_qa_baseline.py` | 3.7 direct QA 采用追加式补跑后，审计器按 `case_id` 只取最后一条结果，再进入 judge，避免旧失败记录污染最终统计。 | 重复结果回归测试通过；3.7 全量 private-gold audit 已完成。 | `ea4c7a4` |
+| 2026-08-31 | 已实施：统一 prompt 语言与文档 | `src/orchestrator/unified_prompts.py`, `src/orchestrator/context_workspace.py`, `docs/active-agent-system-prompts.md` | 当前主 Agent 的四类 runtime prompt 和 stage objective 统一为英文；中文文件降为阅读对照，不再作为运行时输入。新增从源码生成精确 prompt 备份的脚本。未改变工具契约、状态机、private-gold 隔离或判断规则。 | 本地 prompt 导出、compileall、diff-check 和真实 smoke 均已验证。 | `b68ce31` |
+| 2026-08-31 | 已实施：轨迹可读视图 | `scripts/trajectory/render_sft_episodes_readable.py`, `docs/trajectory-artifact-guide.md` | 保留 canonical `trajectory_sft.jsonl` 不变，新增逐 episode 的原始 JSON 与 Markdown 审阅视图，明确 manifest/index 不是轨迹。 | 已生成 10 个 episode 目录；当前 smoke 的 reasoning/action-only 分桶已在服务器复核。 | `5c63e49` |
+| 2026-08-31 | 已修复 Gemini follow-up 与跨 action session 问题 | `src/orchestrator/stage_runner.py`, `src/orchestrator/pipeline.py`, `scripts/audit_real_trace.py`, `src/trajectory/exporter.py`, `src/trajectory/report_history.py`, `docs/gemini-interaction-sequence.md` | 保留候选图下载、校验、压缩和 `function_result` 纯文本；恢复同一 ReAct episode 的 provider-side `InteractionSession`。工具结果只在下一请求显式前递一次，原图只在根请求上传，后续依靠会话历史；多个 `user_input` 合并。审计改为检查父链连续及工具结果前递；SFT/report 继续按 canonical 时间顺序单次投影，不重复展开 provider 历史。 | 本地/服务器相关门禁通过；新版真实 smoke 10/10、strict audit 10/10、0 工程错误。 | `c87f36b`、`85dab10`、`99609df`、`922d9d2` |
+| 2026-08-31 | 已更新回归断言 | `test_native_structured_output.py` | 将共享 InteractionSession 的跨阶段测试改为验证后续阶段复用 provider 历史中的原图，只发送新的文本输入；不再把重复上传原图当作正确行为。 | 本地/服务器定向测试通过。 | `f88352a` |
+| 2026-08-31 | 已适配真实 canary 验收 | `scripts/run_real_canary.py`, `test_real_canary_cli.py` | 当前主流程是 claimless `react_runtime`：不再要求 ImageClaim、claim_ids 或旧的终止原因；只对当前 ReAct schema 检查有动作、视觉记忆、统一 judgment basis 和 fact-check report。旧图谱 trace 仍保留原校验。 | 本地/服务器定向测试通过；用当前 checkout 复核既有 smoke trace 通过。 | `62f6b9c` |
+| 2026-08-31 | 收尾验证与实验记录 | `docs/agent-evaluation-closeout-plan.md`, `docs/reports/2026-08-30-gemini-direct-qa-experiment-record.md` | 写入 3.7 全量 direct QA/judge、10 条新版 Agent smoke、SFT 分桶、128K 长轨迹和“未启动 Agent-100/教师 rollout”的决策。 | 本地 77 项当前门禁、服务器 103 项定向门禁通过；服务器无 rollout/audit 残留进程，CLOSE-WAIT=3。 | 本次文档提交 |
 
 后续每一条 Agent 改动必须记录：修改前行为、修改后行为、为何不改变 private-gold
 隔离/成熟工具契约、对应测试、真实 smoke case、commit 和服务器部署状态。
@@ -87,7 +90,7 @@ harness、审计口径或运行配置变更，必须先在第 4 节追加一行�
 内容拦截。生产不直接采用 256/512：先以 **QA judge 请求并发 64**、**Agent case 并发 16**
 作为保守起点，分别通过真实 judge 小样本和 10 条 Agent smoke 后再决定是否提高。
 
-### B. 完成 Gemini 3.7 full direct QA 与 judge
+### B. 完成 Gemini 3.7 full direct QA 与 judge（已完成）
 
 1. 等待已有自动恢复补齐 1,684 条，检查最新记录是否每个 case 恰好一个 terminal 状态。
 2. 重新生成 full direct-QA 的 Accuracy、BACC、real/fake 召回和混淆矩阵。
@@ -97,7 +100,7 @@ harness、审计口径或运行配置变更，必须先在第 4 节追加一行�
    `reason_quality` / `fact_match` 诊断。
 5. 与 3.1 Pro full result 同口径比较，主看 BACC 与两类召回；Accuracy 不能单独定优劣。
 
-### C. unified Agent 修复
+### C. unified Agent 修复（已完成）
 
 以下每项先写第 4 节变更日志，再改代码：
 
@@ -117,7 +120,7 @@ harness、审计口径或运行配置变更，必须先在第 4 节追加一行�
    输出进行受审计的保守归一化或一次重试；未恢复的 contract 矛盾保留为工程错误，不把它伪装成
    普通外部访问失败。
 
-### D. Agent private-gold 审计与报告
+### D. Agent private-gold 审计与报告（旧版 Agent-100 基线已完成）
 
 1. Agent 100 条的主三分类采用：正确且有决定性、落地的实际依据；正确但依据不足；判断错误。
 2. 旧的“严格 private target 全覆盖”计数只保留为内部诊断，不作为主表或 gate。
@@ -125,20 +128,19 @@ harness、审计口径或运行配置变更，必须先在第 4 节追加一行�
    的第一类只评价其图片直答的 `core_fact/reason`，不能称为检索证据。
 4. 所有 private-gold judge 默认输出上限至少 8,192；审计结果 JSON 被截断时不能计为语义失败。
 
-### E. 真实验收与新 Agent-100
+### E. 真实验收与新 Agent-100（按质量门槛停止）
 
 1. 为 C/D 的每项补定向单测；本地运行相关 pytest、`compileall` 与 `git diff --check`。
 2. 每个提交 push 后，gpu-13 fast-forward；服务器运行定向测试。
 3. 先用 10 条真实 Gemini 3.7 smoke 验证 trace：候选标识、页面回退、失败记录、工具 contract、
    终止与 report 均正常。
-4. 再对固定测试集 100 条各跑 **一条** 新 Agent 完整轨迹；并发由 A 决定。这里不做四选一，
-   以便干净比较新旧 Agent。
-5. 对这 100 条运行 Gemini 3.7 private-gold Agent judge，输出 Accuracy、BACC、两类召回、
-   三分类、工程错误和逐条失败原因。
-6. 对比旧 Agent-100、3.7 direct-QA-100、3.1 Pro direct-QA-100，并人工抽看全部 100 条
-   新 Agent trace 的调查过程是否合理。
+4. 先用 10 条真实 smoke 做质量门槛；只有调查质量整体明显改善，才对固定测试集 100 条
+   各跑一条新 Agent 完整轨迹。
+5. 本次新版 smoke 的强证据桶由 1 增至 4，但总正确数由 7/10 降至 5/10，质量门槛未满足；
+   因此不启动新版 Agent-100，也不伪造其 judge 指标。
+6. 旧 Agent-100、3.7 direct-QA-100、3.1 Pro direct-QA-100 的历史对照已保留。
 
-### F. 文档、SFT 与 PSD/RL 前置收尾
+### F. 文档、SFT 与 PSD/RL 前置收尾（已完成）
 
 1. 更新 `docs/reports/2026-08-30-gemini-direct-qa-experiment-record.md`，补齐 3.7 full judge
    和新 Agent-100 的最终指标；文档只保留当前认可的主口径。
@@ -151,13 +153,33 @@ harness、审计口径或运行配置变更，必须先在第 4 节追加一行�
 5. 汇总为“可启动大规模教师 rollout”的审阅包：确定输入训练集、并发、retry 队列、SFT 分桶、
    验收标准和启动命令。到此停止，等待人工确认。
 
-## 6. 完成判定
+## 6. 实际执行结果与停止决策
+
+本计划已执行到人工复核边界：
+
+1. Gemini 3.7 并发定标、全量 direct QA、全量 private-gold judge 均完成；
+2. unified-react-v1 的代码、工具结果前递、InteractionSession、原图/候选图传递、
+   canary 验收和下游 SFT 分桶均已在服务器复核；
+3. 新版 10 条 Agent smoke 工程上通过，但质量相对旧版不是整体改善，因此没有启动
+   新版 Agent-100；
+4. 训练集大规模教师 rollout、正式 SFT/RL 训练均未启动。
+
+可启动大规模教师 rollout 的输入和边界已经固定：
+
+- 输入：`/gsdata/home/wza/image-factual-verifier-v2-data/datasets/route-aware-hrc-stage2-10563-final-organized-20260824-r2/unified-dataset/train-manifest.jsonl`
+- 规模：8,490 条，测试集 1,684 条不进入 rollout/SFT/RL；
+- 生产入口：`scripts/trajectory/run_teacher_rollout_autopilot.py`；
+- 建议起始 case 并发：16；QA judge 请求并发：64；
+- 工程错误自动回队列，外部不可用单独记录，不把测试集 private gold 注入 rollout；
+- 启动前仍需人工确认。
+
+## 7. 完成判定
 
 只有同时满足以下条件，才可把本计划标为完成：
 
 - A 的 64/256/512 结果已落盘并据此记录生产并发；
 - 3.7 full direct QA 和完整 judge 已结束并有最终汇总；
 - C/D 全部改动有日志、测试、提交和 gpu-13 验证；
-- 新 Agent-100 轨迹、report、judge、逐条检查和对比表均已完成；
+- 新 Agent-100 仅在 10 条 smoke 质量明显改善时启动；本次质量门槛未满足，已记录为有意不启动；
 - 实验文档、SFT 导出审查和 PSD/RL 前置验证已更新；
 - 没有启动大规模教师 rollout。
