@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -237,7 +238,9 @@ def test_current_runtime_trace_passes_current_audit_without_target_graph(
     assert report.stats["unified_react_target_facts"] == 0
 
 
-def test_candidate_reference_images_are_reinjected_as_bounded_multimodal_items() -> None:
+def test_candidate_reference_images_are_reinjected_as_bounded_multimodal_items(
+    monkeypatch,
+) -> None:
     runner = StageRunner(
         llm=object(),
         system_prompt="",
@@ -257,13 +260,27 @@ def test_candidate_reference_images_are_reinjected_as_bounded_multimodal_items()
         }
     )
 
-    items = runner._visual_reinjection_items(
-        "reverse_image_search",
-        result=result,
+    monkeypatch.setattr(
+        StageRunner,
+        "_native_candidate_image_item",
+        staticmethod(
+            lambda url: {
+                "type": "image",
+                "mime_type": "image/jpeg",
+                "data": url.rsplit("/", 1)[-1],
+            }
+        ),
+    )
+
+    items = asyncio.run(
+        runner._visual_reinjection_items(
+            "reverse_image_search",
+            result=result,
+        )
     )
 
     assert items == [
-        {"type": "image", "uri": "https://cdn.example.test/one"},
-        {"type": "image", "uri": "https://cdn.example.test/two"},
-        {"type": "image", "uri": "https://cdn.example.test/three"},
+        {"type": "image", "mime_type": "image/jpeg", "data": "one"},
+        {"type": "image", "mime_type": "image/jpeg", "data": "two"},
+        {"type": "image", "mime_type": "image/jpeg", "data": "three"},
     ]

@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import asyncio
 import hashlib
+import io
 import json
 import os
 import re
@@ -1480,7 +1481,7 @@ class StageRunner:
                         )
                     )
                     follow_up_visual_items.extend(
-                        self._visual_reinjection_items(
+                        await self._visual_reinjection_items(
                             tool_name,
                             result=step.tool_result,
                             state_update=state_update,
@@ -2544,7 +2545,7 @@ class StageRunner:
             return True
         return not succeeded
 
-    def _visual_reinjection_items(
+    async def _visual_reinjection_items(
         self,
         tool_name: str,
         *,
@@ -2580,9 +2581,83 @@ class StageRunner:
                 )
 
         if tool_name in {"reverse_image_search", "crop_and_search"}:
-            for image_url in self._reference_image_candidate_urls(result)[:3]:
-                items.append({"type": "image", "uri": image_url})
+            candidate_urls = self._reference_image_candidate_urls(result)[:3]
+            candidate_items = await asyncio.gather(
+                *(
+                    asyncio.to_thread(
+                        self._native_candidate_image_item,
+                        image_url,
+                    )
+                    for image_url in candidate_urls
+                )
+            )
+            items.extend(
+                item
+                for item in candidate_items
+                if isinstance(item, dict)
+            )
         return items
+
+    @staticmethod
+    def _native_candidate_image_item(
+        image_url: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Download one provider URL and build a bounded native image item.
+
+        Gemini Interactions accepts inline image bytes reliably across the
+        provider URL formats returned by visual search.  The returned URLs
+        are public candidates, not Gemini file resources, so passing them as
+        ``image.uri`` can be rejected as an invalid request.  Validate and
+        compress the downloaded bytes before putting them in the next
+        multimodal turn.  A bad candidate is omitted; the textual search
+        result remains available to the model.
+        """
+
+        from src.tools.vision_utils import image_to_data_url
+
+        try:
+            data_url = image_to_data_url(str(image_url).strip())
+            header, encoded = data_url.split(",", 1)
+            raw_bytes = base64.b64decode(encoded, validate=True)
+            source_mime = header[5:].split(";", 1)[0].strip().lower()
+            if not source_mime.startswith("image/"):
+                return None
+        except Exception:
+            return None
+
+        try:
+            from PIL import Image, ImageOps
+
+            with Image.open(io.BytesIO(raw_bytes)) as opened:
+                image = ImageOps.exif_transpose(opened).convert("RGB")
+                max_edge = max(
+                    256,
+                    int(os.getenv("IFV_IMAGE_MAX_LONG_EDGE", "1280")),
+                )
+                quality = min(
+                    95,
+                    max(55, int(os.getenv("IFV_IMAGE_JPEG_QUALITY", "88"))),
+                )
+                image.thumbnail(
+                    (max_edge, max_edge),
+                    Image.Resampling.LANCZOS,
+                )
+                buffer = io.BytesIO()
+                image.save(
+                    buffer,
+                    format="JPEG",
+                    quality=quality,
+                    optimize=True,
+                )
+                payload = buffer.getvalue()
+        except Exception:
+            return None
+
+        return {
+            "type": "image",
+            "mime_type": "image/jpeg",
+            "data": base64.b64encode(payload).decode("ascii"),
+        }
 
     @staticmethod
     def _reference_image_candidate_urls(result: str) -> List[str]:

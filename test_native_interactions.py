@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import io
 import json
 from pathlib import Path
 from typing import Any, Dict, List
@@ -366,9 +368,23 @@ def test_native_follow_up_request_reinjects_compressed_original_image(
 
 def test_native_follow_up_keeps_candidate_images_outside_function_result(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     image_path = tmp_path / "image.png"
     Image.new("RGB", (32, 24), color=(120, 150, 180)).save(image_path)
+    candidate_path = tmp_path / "candidate.png"
+    Image.new("RGB", (40, 28), color=(180, 90, 60)).save(candidate_path)
+    candidate_data_url = (
+        "data:image/png;base64,"
+        + base64.b64encode(candidate_path.read_bytes()).decode("ascii")
+    )
+    from src.tools import vision_utils
+
+    monkeypatch.setattr(
+        vision_utils,
+        "image_to_data_url",
+        lambda _url: candidate_data_url,
+    )
     function_call = _function_call_response()
     function_call["steps"][0]["name"] = "reverse_image_search"
     function_call["steps"][0]["arguments"] = {
@@ -401,12 +417,15 @@ def test_native_follow_up_keeps_candidate_images_outside_function_result(
     ]
     function_result, visual_input = second_request["input_payload"]
     assert [item["type"] for item in function_result["result"]] == ["text"]
-    assert visual_input["content"][:2] == [
-        {"type": "image", "uri": "https://cdn.example.org/reference-one"},
-        {"type": "image", "uri": "https://cdn.example.org/reference-two"},
-    ]
-    assert visual_input["content"][2]["type"] == "image"
-    assert visual_input["content"][2]["mime_type"] == "image/jpeg"
+    assert len(visual_input["content"]) == 3
+    assert all(
+        item["type"] == "image"
+        and item["mime_type"] == "image/jpeg"
+        and item["data"]
+        for item in visual_input["content"]
+    )
+    assert visual_input["content"][0]["data"] == visual_input["content"][1]["data"]
+    assert visual_input["content"][0]["data"] != visual_input["content"][2]["data"]
 
 
 def test_native_follow_up_merges_existing_user_input_steps(
@@ -461,6 +480,37 @@ def test_native_follow_up_merges_existing_user_input_steps(
     }
     assert payload[1]["content"][2]["type"] == "image"
     assert payload[1]["content"][2]["mime_type"] == "image/jpeg"
+
+
+def test_native_candidate_image_item_is_compressed_inline_data(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "candidate.png"
+    Image.new("RGB", (2400, 1200), color=(40, 90, 140)).save(source)
+    data_url = (
+        "data:image/png;base64,"
+        + base64.b64encode(source.read_bytes()).decode("ascii")
+    )
+
+    from src.tools import vision_utils
+
+    monkeypatch.setattr(
+        vision_utils,
+        "image_to_data_url",
+        lambda _url: data_url,
+    )
+    item = StageRunner._native_candidate_image_item(
+        "https://cdn.example.org/candidate"
+    )
+
+    assert item is not None
+    assert item["type"] == "image"
+    assert item["mime_type"] == "image/jpeg"
+    with Image.open(
+        io.BytesIO(base64.b64decode(item["data"]))
+    ) as compressed:
+        assert max(compressed.size) <= 1280
 
 
 def test_native_tool_schema_hides_a_budget_exhausted_tool() -> None:
