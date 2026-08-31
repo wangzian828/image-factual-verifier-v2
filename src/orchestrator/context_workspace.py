@@ -109,11 +109,15 @@ class ContextBudgetResult(StrictModel):
 
 
 STAGE_OBJECTIVES = {
-    "unified_react": "选择并执行当前最有价值的一个工具动作。",
-    "unified_reflection": "检查全局调查是否仍有值得继续的缺口。",
-    "unified_discrepancy_decision": "根据已记录证据更新事实状态和结论边界。",
-    "unified_judgment": "依据运行时编译的裁决材料输出最终结论。",
-    "verification": "选择一个最有价值且未重复的调查动作。",
+    "unified_react": "Choose and execute the most valuable currently allowed tool action.",
+    "unified_reflection": "Check whether the investigation still has a valuable unresolved gap.",
+    "unified_discrepancy_decision": (
+        "Update factual state and decision boundaries from recorded evidence."
+    ),
+    "unified_judgment": (
+        "Produce the final conclusion from the runtime-compiled judgment material."
+    ),
+    "verification": "Choose one valuable investigation action that has not been repeated.",
 }
 
 
@@ -207,11 +211,17 @@ def build_explicit_workspace(
 
     image_account = {
         "summary": state.image_account_summary,
+        "entities": [
+            item.model_dump(mode="json")
+            for item in state.entities[:16]
+        ],
         "visible_facts": [
             item.model_dump(mode="json")
             for item in state.facts
             if item.origin.type in {"input_image", "ocr"}
         ],
+        "notable_details": list(state.visual_notable_details[:12]),
+        "uncertainties": list(state.visual_uncertainties[:6]),
         "retrieval_anchors": [
             item.model_dump(mode="json") for item in state.retrieval_anchors
         ],
@@ -319,7 +329,7 @@ def build_stage_handoff(
         target_stage=target_stage,
         task_objective=STAGE_OBJECTIVES.get(
             target_stage,
-            "完成当前调查阶段并输出指定结构。",
+            "Complete the current investigation stage and produce the specified structure.",
         ),
         available_tools=sorted(set(str(item) for item in available_tools)),
         output_contract=output_contract,

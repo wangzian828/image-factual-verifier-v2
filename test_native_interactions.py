@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 from typing import Any, Dict, List
 
 import pytest
 from pydantic import BaseModel, Field
+from PIL import Image
 
 from src.orchestrator.investigation_models import (
     DiscrepancyDecisionProposalOutput,
@@ -296,6 +298,48 @@ def test_native_function_call_round_trip() -> None:
     assert returned["function_call_id"] == "call-1"
     assert "directly answers" in json.dumps(returned["result"])
     assert "is_error" not in function_result
+
+
+def test_native_follow_up_request_reinjects_compressed_original_image(
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "image.png"
+    Image.new("RGB", (32, 24), color=(120, 150, 180)).save(image_path)
+    backend = NativeFakeBackend([_function_call_response(), _completed_response()])
+    tool = RecordingTool()
+    runner = StageRunner(
+        llm=backend,
+        system_prompt="Investigate with tools.",
+        tools=[tool],
+        output_schema=ToolStageOutput,
+        max_rounds=2,
+        image_path=str(image_path),
+        stage_name="verification",
+        min_tool_calls=1,
+        attach_image=True,
+    )
+
+    parsed, steps = asyncio.run(
+        runner.run("Inspect the image and verify the active question.")
+    )
+
+    assert parsed is not None
+    assert steps[0].action_type == "tool_call"
+    first_request, second_request = backend.requests
+    assert [item["type"] for item in first_request["input_payload"]] == [
+        "text",
+        "image",
+    ]
+    assert [item["type"] for item in second_request["input_payload"]] == [
+        "function_result",
+        "user_input",
+    ]
+    assert second_request["input_payload"][1]["content"][0]["type"] == "image"
+    assert second_request["input_payload"][1]["content"][0]["mime_type"] == (
+        "image/jpeg"
+    )
+    snapshot = steps[0].metadata["policy_input"]["input_payload"]
+    assert "data" not in json.dumps(snapshot)
 
 
 def test_native_tool_schema_hides_a_budget_exhausted_tool() -> None:

@@ -62,10 +62,23 @@ class TextRegion(StrictModel):
     language: str = "unknown"
 
 
+class PerceptionRelation(StrictModel):
+    """A literal visible relation reported by image perception."""
+
+    subject: str = Field(default="", max_length=160)
+    predicate: str = Field(default="", max_length=160)
+    object: str = Field(default="", max_length=160)
+    description: str = Field(default="", max_length=600)
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+
+
 class PerceptionReport(StrictModel):
     """Merged Gemini perception and deterministic OCR output."""
 
     entities: List[Entity] = Field(default_factory=list)
+    relations: List[PerceptionRelation] = Field(default_factory=list)
+    notable_details: List[str] = Field(default_factory=list, max_length=16)
+    uncertainties: List[str] = Field(default_factory=list, max_length=8)
     text_regions: List[TextRegion] = Field(default_factory=list)
     scene_description: str = ""
     image_type: str = "photo"

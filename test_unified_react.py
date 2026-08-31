@@ -859,6 +859,63 @@ def test_visual_bootstrap_keeps_all_fact_anchor_dependencies() -> None:
         }
 
 
+def test_visual_bootstrap_materializes_attributes_relations_and_limits() -> None:
+    case = _case()
+    perception = PerceptionReport(
+        scene_description=(
+            "A speaker stands behind a podium in front of a blue summit screen. "
+            "Several audience members face the stage."
+        ),
+        entities=[
+            Entity(
+                name="speaker",
+                entity_type="person",
+                bbox=[0.2, 0.1, 0.5, 0.8],
+                confidence=0.94,
+                attributes={
+                    "role_or_action": "speaks behind a podium",
+                    "clothing": "dark suit",
+                },
+            ),
+            Entity(
+                name="podium",
+                entity_type="object",
+                bbox=[0.25, 0.55, 0.55, 0.95],
+                confidence=0.91,
+                attributes={"position": "in front of the speaker"},
+            ),
+        ],
+        relations=[
+            {
+                "subject": "speaker",
+                "predicate": "stands_behind",
+                "object": "podium",
+                "description": "The speaker stands behind the podium.",
+                "confidence": 0.92,
+            }
+        ],
+        notable_details=["Blue summit text is visible on the stage screen."],
+        uncertainties=["The exact identity of the speaker is not visually resolved."],
+    )
+
+    bootstrap = build_visual_bootstrap(case, perception)
+    speaker = next(item for item in bootstrap.entities if item.name == "speaker")
+    assert speaker.attributes["role_or_action"] == "speaks behind a podium"
+    assert any(
+        fact.kind == "relation"
+        and fact.predicate == "stands_behind"
+        and fact.object_entity_id is not None
+        and "speaker stands behind" in fact.statement
+        for fact in bootstrap.facts
+    )
+    assert bootstrap.notable_details == [
+        "Blue summit text is visible on the stage screen."
+    ]
+    assert bootstrap.uncertainties == [
+        "The exact identity of the speaker is not visually resolved."
+    ]
+
+
 def test_unified_export_uses_qwen_think_and_tool_call_and_rejects_missing_thought() -> None:
     state, case, bootstrap_steps = _bootstrap_state()
     anchor_id = state.facts[0].fact_id

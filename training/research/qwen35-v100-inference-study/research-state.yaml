@@ -1,0 +1,60 @@
+project: qwen35-v100-inference-study
+status: paused
+objective: >-
+  Find the fastest reproducible Qwen3.5-9B inference deployment on gpu-07's
+  eight V100-SXM2-32GB GPUs while preserving API behavior and task-output
+  correctness for IFV workloads.
+host:
+  name: gpu-07
+  gpus: 8 x Tesla V100-SXM2-32GB
+  compute_capability: '7.0'
+  driver: '580.105.08'
+  system_cuda_reported_by_nvidia_smi: '13.0'
+constraints:
+  - Preserve the existing model checkpoint; do not infer quality from speed alone.
+  - Use a fresh environment and isolated ports for each serving candidate.
+  - Do not occupy GPUs with a persistent service outside an active experiment.
+  - Verify text, image, structured-output, tool-call, and reasoning behavior before throughput claims.
+  - Record launch arguments, package versions, request shapes, warmup policy, latency, throughput, memory, and failures.
+  - GPU experiments are paused while the paper narrative and benchmark presentation are discussed.
+baselines:
+  - id: transformers-auto-fp16
+    status: retired
+    note: >-
+      Previous service used Transformers 5.14.1, FP16, --device auto, four
+      GPUs, and --no-continuous-batching. It occupied GPUs 4-7 and was stopped
+      before this study.
+candidates:
+  - id: onecat-vllm-1.3.0
+    status: blocked-prebuilt-abi; source-build-under-investigation
+    hypothesis: >-
+      The SM70-specific attention and runtime path will improve V100 prefill
+      and batched decoding over the prior non-batched Transformers service.
+  - id: upstream-vllm-nightly
+    status: rejected-no-sm70-torch-kernel
+    hypothesis: >-
+      The existing CUDA-13 vLLM environment may provide a correctness control
+      or a competing performance baseline if it includes usable SM70 kernels.
+  - id: lmdeploy-0.15
+    status: blocked-sm70-gated-delta-kernel
+    hypothesis: >-
+      The existing LMDeploy environment may provide an alternate V100 path;
+      model and multimodal support must be proven before benchmarking.
+experiment_order:
+  - external evidence and local compatibility preflight
+  - establish a known-good Transformers continuous-batching API baseline
+  - isolate or build a native SM70 kernel path for a higher-throughput engine
+  - single-request latency and correctness tests
+  - controlled concurrency and memory-cap sweeps
+  - TP and replica-layout comparison across all eight GPUs
+  - IFV workload replay and selected deployment profile
+metrics:
+  - time_to_first_token_ms
+  - prefill_tokens_per_second
+  - decode_tokens_per_second
+  - aggregate_tokens_per_second
+  - request_success_rate
+  - p50_p95_end_to_end_latency_ms
+  - peak_gpu_memory_mib
+  - output_contract_pass_rate
+  - IFV_smoke_pass_rate

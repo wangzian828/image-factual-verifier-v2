@@ -97,8 +97,12 @@ def test_reference_download_subcalls_keep_stage_and_failure_detail() -> None:
 
 
 def test_react_prompt_marks_reverse_results_as_unverified_candidates() -> None:
-    assert "未验证候选" in UNIFIED_REACT_SYSTEM_PROMPT
-    assert "每次搜索都要回答一个具体问题" in UNIFIED_REACT_SYSTEM_PROMPT
+    assert "unverified candidates, not proof of a match" in (
+        UNIFIED_REACT_SYSTEM_PROMPT
+    )
+    assert "Each search must answer a concrete question" in (
+        UNIFIED_REACT_SYSTEM_PROMPT
+    )
 
 
 def test_agent_primary_category_uses_evidence_grounding_not_legacy_quality_bucket() -> None:

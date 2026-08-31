@@ -891,11 +891,15 @@ chooses the first investigation tool and supplies the runtime-only
 Reflection and Discrepancy Decision are sparse runtime checkpoints, followed by
 one Judgment request.
 
-In `direct_multimodal` mode, the main Gemini request may receive the image. In
+In `direct_multimodal` mode, every unified ReAct, Reflection, Discrepancy
+Decision, and Judgment request receives one temporary controlled image
+attachment. The default is a JPEG with longest edge 1280 and quality 88; the
+image is not appended to text history or persisted as base64. The context ledger
+stores only the externalized media artifact and image metadata. In
 `separate_vlm` mode, the visual tools receive the image and the policy model
-receives structured observations only. Both modes use the same dynamic tool schema,
-reducer, state delta, and trace contract. Mature visual/search/browse tool
-implementations remain unchanged.
+receives structured observations only. Both modes use the same dynamic tool
+schema, reducer, state delta, and trace contract. Mature visual/search/browse
+tool implementations remain unchanged.
 
 Trace snapshots store a `runtime_image` reference, not image base64. A tool action
 uses a short native `function_call -> function_result` round trip; completed

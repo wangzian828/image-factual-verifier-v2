@@ -14,40 +14,74 @@ PERCEIVE_SCENE_PROMPT = """\
 You are the perception module of an image verification system.
 Inspect the image carefully and return exactly one JSON object:
 {
+  "scene_description": "two to four literal sentences describing the whole visible scene",
+  "image_type": "photo|screenshot|document|illustration|meme",
   "entities": [
     {
       "name": "literal visible label or generic descriptor",
       "entity_type": "person|object|building|logo|animal|scene_element",
       "bbox": [x_min, y_min, x_max, y_max],
+      "confidence": 0.9,
+      "attributes": {
+        "appearance": "literal visible appearance",
+        "role_or_action": "literal visible action or role",
+        "spatial_context": "where this entity is located relative to the scene"
+      }
+    }
+  ],
+  "relations": [
+    {
+      "subject": "entity name",
+      "predicate": "literal visible relation or action",
+      "object": "entity name or scene element",
+      "description": "one literal sentence describing the visible relation",
       "confidence": 0.9
     }
   ],
-  "scene_description": "one-sentence literal description",
-  "image_type": "photo|screenshot|document|illustration|meme"
+  "notable_details": ["other concrete visible detail"],
+  "uncertainties": ["specific detail that the pixels do not resolve"]
 }
 
 Rules:
-1. List at most 8 decision-relevant visible entities.
+1. Inventory the whole image, listing up to 16 decision-relevant visible entities.
 2. For people, do not assign a proper-name identity from appearance alone;
    use a generic visible descriptor such as "pilot", "man in dark suit", or
    "unidentified person" unless visible text explicitly labels the person.
-3. Include visible logos, but do not transcribe text or describe entity attributes;
-   a separate OCR stage handles visible text.
-4. Use normalized [x_min, y_min, x_max, y_max] bounding boxes in [0,1].
+3. For each entity, record concrete visible attributes, actions, roles, and
+   spatial context when they are visible. Do not leave all attributes empty
+   when the image clearly shows them.
+4. Describe visible relations between people, objects, text-bearing surfaces,
+   and scene elements. Use the literal relation, such as "person holds object",
+   "person stands behind podium", or "vehicle is parked beside building".
+5. Include visible logos and text-bearing surfaces, but do not transcribe text;
+   a separate OCR stage handles exact visible text.
+6. Use normalized [x_min, y_min, x_max, y_max] bounding boxes in [0,1].
    If no reliable box is available, use [].
-5. Keep every entity name under 100 characters.
-6. Keep scene_description to one literal, objective sentence under 280 characters.
-7. Do not include explanations, hidden-state reasoning, history, biographies, or
+7. Keep every entity name under 100 characters and every attribute under 300
+   characters.
+8. Keep scene_description to two to four literal, objective sentences under
+   1200 characters. Cover the main subjects, actions, relationships, setting,
+   and decision-relevant visible details.
+9. Keep relations concrete and image-grounded. Do not use relations to infer
+   provenance, authenticity, authorship, or how the image was made.
+10. Use notable_details for concrete details not naturally represented by an
+   entity or relation. Use uncertainties only for genuine pixel ambiguity.
+11. Do not include explanations, hidden-state reasoning, history, biographies, or
    information that is not directly visible in the pixels.
-8. Output JSON only.
+12. Output JSON only.
 """
 
 PERCEIVE_SCENE_SCHEMA = {
     "type": "object",
     "properties": {
+        "scene_description": {"type": "string", "maxLength": 1200},
+        "image_type": {
+            "type": "string",
+            "enum": ["photo", "screenshot", "document", "illustration", "meme"],
+        },
         "entities": {
             "type": "array",
-            "maxItems": 8,
+            "maxItems": 16,
             "items": {
                 "type": "object",
                 "properties": {
@@ -65,13 +99,40 @@ PERCEIVE_SCENE_SCHEMA = {
                     },
                     "bbox": {"type": "array", "items": {"type": "number"}, "maxItems": 4},
                     "confidence": {"type": "number"},
+                    "attributes": {
+                        "type": "object",
+                        "maxProperties": 8,
+                        "additionalProperties": {
+                            "type": "string",
+                            "maxLength": 300,
+                        },
+                    },
                 },
             },
         },
-        "scene_description": {"type": "string", "maxLength": 280},
-        "image_type": {
-            "type": "string",
-            "enum": ["photo", "screenshot", "document", "illustration", "meme"],
+        "relations": {
+            "type": "array",
+            "maxItems": 16,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "subject": {"type": "string", "maxLength": 160},
+                    "predicate": {"type": "string", "maxLength": 160},
+                    "object": {"type": "string", "maxLength": 160},
+                    "description": {"type": "string", "maxLength": 600},
+                    "confidence": {"type": "number"},
+                },
+            },
+        },
+        "notable_details": {
+            "type": "array",
+            "maxItems": 16,
+            "items": {"type": "string", "maxLength": 400},
+        },
+        "uncertainties": {
+            "type": "array",
+            "maxItems": 8,
+            "items": {"type": "string", "maxLength": 400},
         },
     },
 }
@@ -122,9 +183,12 @@ class PerceiveSceneTool(BaseTool):
             client = self._get_client()
             parsed = client.create_image_json(
                 system_prompt=PERCEIVE_SCENE_PROMPT,
-                user_text="Inspect this image and output the structured scene JSON.",
+                user_text=(
+                    "Inspect the complete image, preserve the relationships between "
+                    "the visible entities, and output the structured scene JSON."
+                ),
                 image_input=image_input,
-                max_tokens=2000,
+                max_tokens=4000,
                 model_name=self.model_name,
                 response_schema=PERCEIVE_SCENE_SCHEMA,
             )
@@ -169,23 +233,71 @@ class PerceiveSceneTool(BaseTool):
                         "error": str(exc),
                     }
                 )
+            attributes = {}
+            raw_attributes = ent.get("attributes", {})
+            if isinstance(raw_attributes, dict):
+                for key, value in list(raw_attributes.items())[:8]:
+                    key_text = str(key).strip()[:80]
+                    value_text = " ".join(str(value).split()).strip()[:300]
+                    if key_text and value_text:
+                        attributes[key_text] = value_text
             entities.append(
                 {
                     "name": str(ent.get("name", "")).strip(),
                     "entity_type": str(ent.get("entity_type", "object")).strip(),
                     "bbox": bbox,
                     "confidence": float(ent.get("confidence", 0.8)),
-                    "attributes": {},
+                    "attributes": attributes,
                 }
             )
 
+        relations = []
+        for relation in parsed.get("relations", []):
+            if not isinstance(relation, dict):
+                continue
+            subject = " ".join(str(relation.get("subject", "")).split()).strip()[:160]
+            predicate = " ".join(str(relation.get("predicate", "")).split()).strip()[:160]
+            object_name = " ".join(str(relation.get("object", "")).split()).strip()[:160]
+            description = " ".join(
+                str(relation.get("description", "")).split()
+            ).strip()[:600]
+            if not subject or not predicate or not object_name or not description:
+                continue
+            confidence = relation.get("confidence", 0.0)
+            if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
+                confidence = 0.0
+            relations.append(
+                {
+                    "subject": subject,
+                    "predicate": predicate,
+                    "object": object_name,
+                    "description": description,
+                    "confidence": round(max(0.0, min(1.0, float(confidence))), 4),
+                }
+            )
+
+        notable_details = [
+            " ".join(str(item).split()).strip()[:400]
+            for item in parsed.get("notable_details", [])
+            if " ".join(str(item).split()).strip()
+        ][:16]
+        uncertainties = [
+            " ".join(str(item).split()).strip()[:400]
+            for item in parsed.get("uncertainties", [])
+            if " ".join(str(item).split()).strip()
+        ][:8]
+
         return {
             "status": "success",
-            "entities": entities[:8],
+            "entities": entities[:16],
+            "relations": relations[:16],
+            "notable_details": notable_details,
+            "uncertainties": uncertainties,
             "scene_description": str(parsed.get("scene_description", "")).strip(),
             "image_type": str(parsed.get("image_type", "photo")).strip(),
-            "total_entities": len(entities[:8]),
-            "bbox_warnings": bbox_warnings[:8],
+            "total_entities": len(entities[:16]),
+            "total_relations": len(relations[:16]),
+            "bbox_warnings": bbox_warnings[:16],
             RUNTIME_METRICS_KEY: parsed.get(RUNTIME_METRICS_KEY, {}),
         }
 

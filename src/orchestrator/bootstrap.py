@@ -31,6 +31,63 @@ def _clean_text(value: str, *, limit: int = 300) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()[:limit]
 
 
+def _relation_entity_id(
+    label: str,
+    entities: Iterable[VisualEntity],
+    *,
+    image_entity_id: str,
+) -> str | None:
+    """Resolve a perception relation label to one visible entity deterministically."""
+
+    normalized = _clean_text(label, limit=160).casefold()
+    if not normalized:
+        return None
+    if normalized in {"image", "the image", "scene", "the scene", "background"}:
+        return image_entity_id
+
+    rows = list(entities)
+    exact = [
+        item
+        for item in rows
+        if item.name.casefold() == normalized
+    ]
+    if exact:
+        return exact[0].entity_id
+
+    candidates: list[tuple[int, int, str, VisualEntity]] = []
+    for item in rows:
+        name = item.name.casefold()
+        if normalized in name or name in normalized:
+            candidates.append(
+                (min(len(name), len(normalized)), len(name), item.entity_id, item)
+            )
+    if candidates:
+        candidates.sort(key=lambda value: (value[0], value[1], value[2]), reverse=True)
+        return candidates[0][3].entity_id
+
+    label_tokens = {
+        token
+        for token in re.findall(r"[\w\u3400-\u9fff]+", normalized)
+        if len(token) >= 3
+    }
+    if not label_tokens:
+        return None
+    overlaps: list[tuple[int, int, str, VisualEntity]] = []
+    for item in rows:
+        entity_tokens = {
+            token
+            for token in re.findall(r"[\w\u3400-\u9fff]+", item.name.casefold())
+            if len(token) >= 3
+        }
+        overlap = len(label_tokens & entity_tokens)
+        if overlap:
+            overlaps.append((overlap, len(entity_tokens), item.entity_id, item))
+    if not overlaps:
+        return None
+    overlaps.sort(key=lambda value: (value[0], value[1], value[2]), reverse=True)
+    return overlaps[0][3].entity_id
+
+
 def _quad_region(region: TextRegion) -> List[float] | None:
     points = region.bbox_quad
     if not points or not all(
@@ -143,7 +200,7 @@ def build_visual_bootstrap(
     fact_by_anchor: dict[str, VisualFact] = {}
     relation_fact_by_anchor: dict[str, VisualFact] = {}
 
-    scene = _clean_text(perception.scene_description, limit=500)
+    scene = _clean_text(perception.scene_description, limit=1000)
     if scene:
         scene_fact_id = _id("vf", case.case_id, "scene", scene)
         scene_anchor_id = _id("anchor", case.case_id, "scene", scene)
@@ -160,7 +217,7 @@ def build_visual_bootstrap(
         scene_fact = VisualFact(
             fact_id=scene_fact_id,
             kind="attribute",
-            statement=f"The image appears to depict: {scene}",
+            statement=f"The visible scene is: {scene}",
             subject_entity_id=image_entity.entity_id,
             predicate="appears_to_depict",
             basis_ids=[image_entity.entity_id, scene_anchor_id],
@@ -172,7 +229,7 @@ def build_visual_bootstrap(
         facts.append(scene_fact)
         fact_by_anchor[scene_anchor_id] = scene_fact
 
-    for index, item in enumerate(perception.entities[:8]):
+    for index, item in enumerate(perception.entities[:16]):
         name = _clean_text(item.name)
         if not name:
             continue
@@ -186,6 +243,11 @@ def build_visual_bootstrap(
             name,
             region,
         )
+        attributes = {
+            _clean_text(key, limit=80): _clean_text(value, limit=260)
+            for key, value in item.attributes.items()
+            if _clean_text(key, limit=80) and _clean_text(value, limit=260)
+        }
         entity = VisualEntity(
             entity_id=entity_id,
             name=name,
@@ -194,6 +256,7 @@ def build_visual_bootstrap(
             origin_ids=[case.case_id],
             region=region,
             confidence=float(item.confidence),
+            attributes=dict(list(attributes.items())[:8]),
         )
         entities.append(entity)
         entity_by_id[entity.entity_id] = entity
@@ -207,13 +270,20 @@ def build_visual_bootstrap(
             confidence=entity.confidence,
         )
         anchors.append(anchor)
+        attribute_text = "; ".join(
+            f"{key}: {value}"
+            for key, value in list(attributes.items())[:8]
+        )
+        statement = (
+            f"The image visibly contains {name} "
+            f"(visual type: {entity.entity_type})."
+        )
+        if attribute_text:
+            statement += f" Visible attributes: {attribute_text}."
         visible_fact = VisualFact(
             fact_id=_id("vf", entity_id, "visible"),
             kind="attribute",
-            statement=(
-                f"The image visibly contains {name} "
-                f"(visual type: {entity.entity_type})."
-            ),
+            statement=_clean_text(statement, limit=1150),
             subject_entity_id=entity_id,
             predicate="visible_in",
             object_entity_id=image_entity.entity_id,
@@ -286,9 +356,60 @@ def build_visual_bootstrap(
         fact_by_anchor[anchor.anchor_id] = text_fact
         relation_fact_by_anchor[anchor.anchor_id] = relation_fact
 
+    # Relation rows are kept as image-grounded facts only after all visible
+    # entities and OCR text regions have been materialized.  This lets a
+    # perception label such as "woman" resolve to a richer entity name such as
+    # "woman at podium" without inventing a new object.
+    for index, relation in enumerate(perception.relations[:16]):
+        subject_entity_id = _relation_entity_id(
+            relation.subject,
+            entities,
+            image_entity_id=image_entity.entity_id,
+        )
+        if not subject_entity_id:
+            continue
+        object_entity_id = _relation_entity_id(
+            relation.object,
+            entities,
+            image_entity_id=image_entity.entity_id,
+        )
+        predicate = _clean_text(relation.predicate, limit=100)
+        description = _clean_text(relation.description, limit=1050)
+        if not predicate or not description:
+            continue
+        basis_ids = [subject_entity_id]
+        if object_entity_id and object_entity_id != subject_entity_id:
+            basis_ids.append(object_entity_id)
+        facts.append(
+            VisualFact(
+                fact_id=_id(
+                    "vf",
+                    case.case_id,
+                    "relation",
+                    index,
+                    subject_entity_id,
+                    predicate,
+                    object_entity_id,
+                    description,
+                ),
+                kind="relation",
+                statement=f"Visible relation: {description}",
+                subject_entity_id=subject_entity_id,
+                predicate=predicate,
+                object_entity_id=object_entity_id,
+                basis_ids=basis_ids,
+                origin=FactOrigin(
+                    type="input_image",
+                    origin_ids=basis_ids,
+                ),
+            )
+        )
+
     return VisualBootstrap(
         brief=brief,
         entities=entities,
-        facts=facts,
+        facts=facts[:72],
         retrieval_anchors=anchors,
+        notable_details=list(perception.notable_details[:16]),
+        uncertainties=list(perception.uncertainties[:8]),
     )

@@ -1,7 +1,9 @@
-# 当前 Agent System Prompt 中文备份
+# 当前 Agent System Prompt 中文对照
 
-本文件同步 `src/orchestrator/unified_prompts.py` 的 active policy prompt。工具内部 prompt
-仍保留在各自工具源码中，不在这里重复。
+本文件是 `src/orchestrator/unified_prompts.py` 的中文阅读版，不是运行时实际发送的 prompt。
+运行时使用英文版本；精确英文备份见
+[`active-agent-system-prompts.md`](active-agent-system-prompts.md)。工具内部 prompt 仍保留在
+各自工具源码中，不在这里重复。
 
 ## unified ReAct
 
@@ -140,8 +142,7 @@ fact-check 结论。若地点、日期、身份、来源页面或事件语境能
 
 1. 只使用 runtime 编译的 target、Evidence、视觉观察和 verdict basis。
 2. 如果 `compiled_verdict` 非空，必须原样复现该 verdict；不得新增事实、ID 或工具调用。
-3. 如果 `compiled_verdict` 为空，只能依据上下文中已记录的视觉观察完成受限二元判断，不得
-   声称看到了未提供的像素；缺少反证不等于支持 `real`，只有上下文中明确支持完整 target
-   relation 的视觉理由才能支持 `real`。
+3. 如果 `compiled_verdict` 为空，结合 target、已记录 Evidence、视觉观察、附带原图和未解决
+   缺口完成最后的二元判断；不要把缺口本身当作任一标签的证据，并在 report 中说明重要不确定性。
 4. 返回一个符合当前 Judgment schema 的 JSON 对象，包含 verdict、confidence、
    overall_assessment，以及 schema 要求的可选视觉理由。

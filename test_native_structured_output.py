@@ -143,7 +143,7 @@ def test_empty_object_cannot_become_default_judgment() -> None:
     assert len(backend.requests) == 2
 
 
-def test_shared_interaction_session_attaches_image_once_then_reuses_parent(
+def test_shared_interaction_session_attaches_image_in_each_stage_request(
     tmp_path: Path,
 ) -> None:
     image_path = tmp_path / "image.png"
@@ -178,7 +178,8 @@ def test_shared_interaction_session_attaches_image_once_then_reuses_parent(
         output_schema=StructuredJudgmentOutput,
         max_rounds=1,
         stage_name="checkpoint",
-        attach_image=False,
+        image_path=str(image_path),
+        attach_image=True,
         interaction_session=session,
     )
 
@@ -197,7 +198,14 @@ def test_shared_interaction_session_attaches_image_once_then_reuses_parent(
     assert checkpoint_request["previous_interaction_id"] == (
         "planning-interaction"
     )
-    assert checkpoint_request["input_payload"] == "Evidence checkpoint context"
+    assert [item["type"] for item in checkpoint_request["input_payload"]] == [
+        "text",
+        "image",
+    ]
+    checkpoint_snapshot = (
+        checkpoint_request["input_payload"][1]
+    )
+    assert checkpoint_snapshot["type"] == "image"
     snapshot = planning_steps[0].metadata["policy_input"]["input_payload"]
     assert snapshot == [
         {"type": "text", "text": "Initial image-grounded planning context"},

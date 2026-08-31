@@ -102,14 +102,20 @@ def test_one_invalid_bbox_does_not_discard_the_scene_report() -> None:
     ]
 
 
-def test_perception_schema_has_no_unbounded_entity_payload() -> None:
+def test_perception_schema_has_bounded_rich_entity_payload() -> None:
     entities = PERCEIVE_SCENE_SCHEMA["properties"]["entities"]
     entity_properties = entities["items"]["properties"]
 
-    assert entities["maxItems"] == 8
+    assert entities["maxItems"] == 16
     assert entity_properties["name"]["maxLength"] == 100
-    assert "attributes" not in entity_properties
-    assert PERCEIVE_SCENE_SCHEMA["properties"]["scene_description"]["maxLength"] == 280
+    assert "attributes" in entity_properties
+    assert (
+        PERCEIVE_SCENE_SCHEMA["properties"]["scene_description"]["maxLength"]
+        == 1200
+    )
+    assert PERCEIVE_SCENE_SCHEMA["properties"]["relations"]["maxItems"] == 16
+    assert PERCEIVE_SCENE_SCHEMA["properties"]["notable_details"]["maxItems"] == 16
+    assert PERCEIVE_SCENE_SCHEMA["properties"]["uncertainties"]["maxItems"] == 8
 
 
 class VerboseFakePerceptionClient:
@@ -130,12 +136,15 @@ class VerboseFakePerceptionClient:
         }
 
 
-def test_perception_discards_attributes_and_caps_entities() -> None:
+def test_perception_preserves_bounded_attributes_and_caps_entities() -> None:
     tool = PerceiveSceneTool(client=VerboseFakePerceptionClient())
 
     result = tool.call({"image_input": "not-read-by-fake.jpg"})
 
     assert result["status"] == "success"
-    assert result["total_entities"] == 8
-    assert len(result["entities"]) == 8
-    assert all(entity["attributes"] == {} for entity in result["entities"])
+    assert result["total_entities"] == 12
+    assert len(result["entities"]) == 12
+    assert all(
+        entity["attributes"] == {"unbounded": "must be discarded"}
+        for entity in result["entities"]
+    )

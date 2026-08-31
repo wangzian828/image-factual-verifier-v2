@@ -17,7 +17,8 @@ runtime 负责状态、权限、预算、结果归并和终止条件。
 
 - Agent：`src/orchestrator/pipeline.py`
 - ReAct reducer：`src/orchestrator/unified_react.py`
-- 当前 prompt：`src/orchestrator/unified_prompts.py`
+- 当前 prompt（英文）：`src/orchestrator/unified_prompts.py`
+- prompt 备份：`docs/active-agent-system-prompts.md`（精确英文）、`docs/active-agent-system-prompts-zh.md`（中文对照）
 - 紧凑上下文：`src/orchestrator/unified_context.py`
 - 教师 rollout：`scripts/trajectory/run_teacher_rollout_autopilot.py`
 - 轨迹审计：`scripts/audit_real_trace.py`

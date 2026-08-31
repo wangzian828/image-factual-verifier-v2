@@ -22,5 +22,5 @@ def test_visual_bootstrap_keeps_anchor_graph_up_to_state_limit() -> None:
         retrieval_anchors=anchors,
     )
 
-    assert len(bootstrap.retrieval_anchors) == 32
-    assert bootstrap.retrieval_anchors[-1].anchor_id == "anchor-31"
+    assert len(bootstrap.retrieval_anchors) == 33
+    assert bootstrap.retrieval_anchors[-1].anchor_id == "anchor-32"

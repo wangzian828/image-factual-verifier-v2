@@ -1038,12 +1038,17 @@ class StageRunner:
 
         for round_num in range(1, self.max_rounds + 2):
             request_previous_interaction_id = previous_interaction_id
+            request_input = (
+                next_input
+                if round_num == 1
+                else self._append_native_image(next_input)
+            )
             started = time.perf_counter()
             self.llm_api_calls += 1
             system_instruction = self.system_prompt
             response_format = self._native_response_format()
             payload = await self._create_interaction(
-                input_payload=next_input,
+                input_payload=request_input,
                 system_instruction=system_instruction,
                 previous_interaction_id=request_previous_interaction_id,
                 response_format=response_format,
@@ -1080,7 +1085,7 @@ class StageRunner:
                     "llm_duration_ms": round((time.perf_counter() - started) * 1000, 2),
                     "policy_input": self._policy_input_snapshot(
                         system_instruction=system_instruction,
-                        input_payload=next_input,
+                        input_payload=request_input,
                         tools=[],
                         response_format=response_format,
                     ),
@@ -1176,6 +1181,11 @@ class StageRunner:
         while action_turns < self.max_rounds:
             request_index += 1
             request_previous_interaction_id = previous_interaction_id
+            request_input = (
+                next_input
+                if request_index == 1
+                else self._append_native_image(next_input)
+            )
             started = time.perf_counter()
             self.llm_api_calls += 1
             native_tools = self._build_native_tool_schemas(steps=steps)
@@ -1205,7 +1215,7 @@ class StageRunner:
                 response_format = self._native_response_format()
             try:
                 payload = await self._create_interaction(
-                    input_payload=next_input,
+                    input_payload=request_input,
                     system_instruction=system_instruction,
                     tools=native_tools,
                     previous_interaction_id=request_previous_interaction_id,
@@ -1236,7 +1246,7 @@ class StageRunner:
                 "llm_duration_ms": duration_ms,
                 "policy_input": self._policy_input_snapshot(
                     system_instruction=system_instruction,
-                    input_payload=next_input,
+                    input_payload=request_input,
                     tools=native_tools,
                     response_format=response_format,
                 ),
@@ -2216,21 +2226,55 @@ class StageRunner:
             ),
         }
 
-    def _build_native_input(self, input_context: str) -> Any:
+    def _build_native_input(self, input_context: Any) -> Any:
+        if not isinstance(input_context, str):
+            return self._append_native_image(input_context)
         if not (self.attach_image and self.image_path):
             return input_context
+        return [
+            {"type": "text", "text": input_context},
+            self._native_image_item(),
+        ]
+
+    def _native_image_item(self) -> Dict[str, Any]:
+        """Build one compressed image content item for the current request."""
+
         image_url, view = controlled_image_to_data_url(self.image_path)
         self._record_image_view(view, purpose=self.stage_name or "stage")
         if not (image_url.startswith("data:") and ";base64," in image_url):
-            return [
-                {"type": "text", "text": input_context},
-                {"type": "image", "uri": image_url},
-            ]
+            return {"type": "image", "uri": image_url}
         header, data = image_url.split(",", 1)
         mime_type = header[5:].split(";", 1)[0] or "image/jpeg"
+        return {"type": "image", "mime_type": mime_type, "data": data}
+
+    def _append_native_image(self, input_payload: Any) -> Any:
+        """Attach the original image to one follow-up Interactions request.
+
+        Follow-up requests may contain function_result Step items, while a
+        correction request is usually plain text. Gemini requires those Step
+        items to stay separate from Content items, so the image is placed in a
+        small user_input step. It is never added to accumulated text history
+        or persisted in a StageStep.
+        """
+
+        if not (self.attach_image and self.image_path):
+            return input_payload
+        image_item = self._native_image_item()
+        if isinstance(input_payload, list):
+            return [
+                *deepcopy(input_payload),
+                {"type": "user_input", "content": [image_item]},
+            ]
+        if input_payload in (None, ""):
+            return [{"type": "user_input", "content": [image_item]}]
         return [
-            {"type": "text", "text": input_context},
-            {"type": "image", "mime_type": mime_type, "data": data},
+            {
+                "type": "user_input",
+                "content": [
+                    {"type": "text", "text": str(input_payload)},
+                    image_item,
+                ],
+            }
         ]
 
     def _session_previous_interaction_id(self) -> Optional[str]:
@@ -2475,9 +2519,10 @@ class StageRunner:
         for correction_index in range(2):
             started = time.perf_counter()
             self.llm_api_calls += 1
+            wire_request_input = self._append_native_image(request_input)
             try:
                 payload = await self._create_interaction(
-                    input_payload=request_input,
+                    input_payload=wire_request_input,
                     system_instruction=system_instruction,
                     tools=[],
                     previous_interaction_id=request_parent,
@@ -2515,7 +2560,7 @@ class StageRunner:
                 ),
                 "policy_input": self._policy_input_snapshot(
                     system_instruction=system_instruction,
-                    input_payload=request_input,
+                    input_payload=wire_request_input,
                     tools=[],
                     response_format=response_format,
                 ),

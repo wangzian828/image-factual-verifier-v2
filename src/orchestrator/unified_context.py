@@ -123,10 +123,16 @@ def render_unified_react_context(
             "phase": "first_investigation_action",
             "case_objective": state.brief.objective,
             "visual_bootstrap_completed": completed,
+            "visual_entities": [
+                item.model_dump(mode="json")
+                for item in state.entities[:16]
+            ],
             "visual_or_ocr_anchor_facts": visual_facts,
+            "visible_scene_details": list(state.visual_notable_details[:12]),
+            "visual_uncertainties": list(state.visual_uncertainties[:6]),
             "retrieval_anchors": [
                 item.model_dump(mode="json")
-                for item in state.retrieval_anchors[:24]
+                for item in state.retrieval_anchors[:32]
             ],
             "first_action_contract": {
                 "required": "investigation_intent",
@@ -150,6 +156,12 @@ def render_unified_react_context(
     payload = {
         "phase": "investigation",
         "image_account_summary": state.image_account_summary,
+        "visual_entities": [
+            item.model_dump(mode="json")
+            for item in state.entities[:16]
+        ],
+        "visible_scene_details": list(state.visual_notable_details[:12]),
+        "visual_uncertainties": list(state.visual_uncertainties[:6]),
         "target_facts": [
             item.model_dump(mode="json") for item in state.target_facts
         ],

@@ -35,12 +35,14 @@ flowchart TD
 保存在 canonical archive 供审计。
 
 `target_facts` 是当前字段，表示图片要求核查的正向现实事实；它不是 provenance 字段，也不
-使用 `image_claims` 作为别名。
+使用 `image_claims` 作为别名。`perceive_scene` 生成的实体属性、可见关系、场景细节和
+像素不确定性会进入受限的视觉 workspace；它们是原图的结构化索引，不替代原图。
 
 ## 4. 两种图片 API 模式
 
-- `direct_multimodal`：主策略请求直接带图；适合需要主模型直接观察的实验。
+- `direct_multimodal`：主策略的每次 ReAct、Reflection、Discrepancy Decision 和 Judgment
+  请求都临时带一份压缩原图；当前主流程用于需要策略模型直接观察的实验。
 - `separate_vlm`：图片只给视觉工具/VLM，主策略只接收结构化观察、Evidence 和 state delta；
-  当前生产 teacher rollout 使用这一边界。
+  这是仍保留的独立输入模式。
 
 两种模式共享工具 schema、Reducer 和 trace 格式，不修改成熟工具内部契约。

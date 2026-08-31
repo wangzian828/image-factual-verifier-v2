@@ -1,39 +1,74 @@
 # Agent Prompt and Runtime Guide
 
-当前唯一生产策略：`unified-react-v1`。实际 system prompt 在
-`src/orchestrator/unified_prompts.py`，本文说明运行边界。
+The active policy is `unified-react-v1`. Runtime prompts are English and are
+defined only in `src/orchestrator/unified_prompts.py`; the exact generated
+copy is [Active Agent System Prompts](active-agent-system-prompts.md).
+The Chinese files are documentation translations, not runtime inputs.
 
-## 1. 主 ReAct
+## 1. One unified ReAct loop
 
-每轮输出：
+Each policy turn is:
 
 ```text
 thought -> exactly one native tool call -> tool observation/state delta
 ```
 
-模型可以选择 scene 与 OCR 的先后顺序，但二者完成前不能调查外部来源。首次非 bootstrap
-动作必须带 `investigation_intent`，其中的 `target_fact` 是正向、原子、图像锚定的现实
-命题，`route` 是本次工具实际要获取的信息。runtime 随后创建 task/route/ID。
+The model chooses the order of `perceive_scene` and `ocr_with_position`. No
+external investigation tool is exposed until both bootstrap observations are
+complete. The first investigation action carries `investigation_intent`: a
+positive image-grounded `target_fact` and the route information needed by that
+action. Runtime creates the canonical route/task objects and IDs.
 
-后续换 query、换候选页或换视觉检查，直接调用下一工具；不再有独立 Query Replan、Route
-Replan 或 Planning 请求。
+Changing a query, candidate page, or visual direction is another ReAct action.
+There is no standalone Planning, Query Replan, or Route Replan request. If
+`route_local_replan` is exposed, it is a normal runtime control tool inside the
+same loop.
 
-## 2. 低频检查点
+## 2. Sparse checkpoints
 
-- `unified_reflection`：只总结全局缺口和策略，不选具体工具。
-- `unified_discrepancy_decision`：只依据已记录 Evidence、Finding 和视觉锚点更新语义状态，
-  不创建新路线。
-- `unified_judgment`：只复现 runtime 编译的 verdict/basis，或在未闭合时做受限二元判断。
+- `unified_reflection` summarizes global gaps and strategy; it does not choose
+  the next tool.
+- `unified_discrepancy_decision` interprets recorded Evidence, Findings, and
+  image anchors; it does not create a new investigation route.
+- `unified_judgment` writes the reader-facing report from the runtime-compiled
+  verdict basis.
 
-## 3. 上下文和输出上限
+## 3. State and context
 
-runtime 每轮只发送紧凑 workspace、最近观察、活跃路线、开放缺口和 state delta；完整累计
-workspace 只保存在 archive，不重复塞进每个训练 turn。
+The runtime owns state, IDs, budgets, deduplication, Evidence writes, and
+termination. Each turn receives a compact workspace projection, recent
+observations, active routes, open gaps, and state deltas. The visual workspace
+also carries bounded entity attributes, visible relations, scene details, and
+pixel-level uncertainties. The complete request/response/state archive remains
+available for audit, but is not copied in full into every policy turn.
 
-默认输出上限：ReAct、Reflection、Decision、Judgment 均为 8192；实际 provider 可通过现有
-环境变量覆盖。输出上限是 completion 上限，不等于单次工具超时。
+The current default output cap is 8,192 tokens for ReAct, Reflection,
+Discrepancy Decision, and Judgment. It is a completion cap, not a tool timeout.
 
-## 4. API 边界
+## 4. Image API boundaries
 
-`direct_multimodal` 把图片交给主策略请求；`separate_vlm` 把图片交给视觉工具/VLM，主策略
-只接收结构化观察。工具内部 prompt、上传、压缩、超时和重试逻辑保持在工具实现中。
+- `direct_multimodal`: every request of unified ReAct, Reflection, Discrepancy
+  Decision, and Judgment receives one temporary controlled image attachment.
+  The image is compressed with `IFV_IMAGE_MAX_LONG_EDGE` (default `1280`) and
+  `IFV_IMAGE_JPEG_QUALITY` (default `88`). It is not appended to text history
+  or persisted as base64; the runtime ledger externalizes it as media.
+- `separate_vlm`: visual tools/VLM receive the image; the policy receives
+  structured observations and state deltas.
+
+Both modes share the same dynamic tool schema, reducer, and trace contract.
+Tool-internal prompts and visual tool contracts remain with the mature tool
+implementations.
+
+In `direct_multimodal`, the structured perception report is a compact index,
+not a replacement for the original pixels. The final Judgment remains a
+binary synthesis step: a non-empty runtime verdict is reproduced, while an
+empty one is resolved from the available target, Evidence, visual observations,
+image, and explicit uncertainties.
+
+## 5. Trace files
+
+The canonical trace is one JSON object per completed episode in
+`traces/*.json`. A Qwen SFT export is a derived file:
+`trajectory_sft.jsonl` contains one JSON line per complete episode, with the
+messages and compacted training context. `selection-manifest.jsonl` and
+`manifest.json` describe the export; they are not trajectories.

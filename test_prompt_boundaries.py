@@ -31,22 +31,22 @@ def test_active_prompts_are_current_and_semantically_bounded() -> None:
     decision_prompt = " ".join(
         UNIFIED_DISCREPANCY_DECISION_SYSTEM_PROMPT.split()
     )
-    assert "一个持续的调查循环" in react_prompt
-    assert "扩展为 2–3 条" in react_prompt
-    assert "相似主体、相似地点、同类商品" in react_prompt
-    assert "不能仅凭相似性作为当前图片的证据" in react_prompt
-    assert "比较参考图只能回答图像是否相同" in react_prompt
-    assert "当前 target 仍是 `unresolved`" in react_prompt
+    assert "one continuing investigation loop" in react_prompt
+    assert "canonical target/routes/tasks" in react_prompt
+    assert "Similar keywords, subjects, places, or products" in react_prompt
+    assert "are not evidence by themselves" in react_prompt
+    assert "Reference comparison establishes only image identity/similarity" in react_prompt
+    assert "If the target is `unresolved`" in react_prompt
     assert "open_gaps" in react_prompt
-    assert "同一条路线只换几个词" in react_prompt
+    assert "materially different" in react_prompt
     assert "route_local_replan" in react_prompt
-    assert "不要求你修改 target" in react_prompt
-    assert "不能算 `supports_real`" in react_prompt
-    assert "不能因为证据 不足就强行选择任一终局标签" in react_prompt
-    assert "都是 overclaiming" in react_prompt
-    assert "合格 Evidence" in decision_prompt
-    assert "不能支持 real" in decision_prompt
-    assert "属于 overclaiming" in decision_prompt
+    assert "does not require changing the target" in react_prompt or "without changing the target" in react_prompt
+    assert "not support for `real`" in react_prompt
+    assert "lack of evidence alone is not a verdict" in react_prompt
+    assert "overclaiming" in react_prompt
+    assert "qualified Evidence" in decision_prompt
+    assert "do not support `real`" in decision_prompt
+    assert "overclaiming" in decision_prompt
     assert "core target fact is decisive" not in decision_prompt
 
     browse_prompt = " ".join(EXTRACT_PROMPT.split())

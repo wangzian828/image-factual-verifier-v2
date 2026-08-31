@@ -916,6 +916,8 @@ def reduce_visual_bootstrap_action(
         state.entities = list(bootstrap.entities)
         state.facts = list(bootstrap.facts)
         state.retrieval_anchors = list(bootstrap.retrieval_anchors)
+        state.visual_notable_details = list(bootstrap.notable_details)
+        state.visual_uncertainties = list(bootstrap.uncertainties)
         state.tasks = []
         materialized = True
     return {

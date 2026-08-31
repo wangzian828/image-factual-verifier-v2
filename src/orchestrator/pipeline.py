@@ -61,6 +61,7 @@ from src.orchestrator.source_access import SourceAccessPolicy
 from src.orchestrator.state import (
     Entity,
     ImageOnlyRuntimeCase,
+    PerceptionRelation,
     PerceptionReport,
     TextRegion,
     VerificationState,
@@ -599,6 +600,9 @@ class Orchestrator:
                         )
                         state.perception = PerceptionReport(
                             entities=scene.entities,
+                            relations=scene.relations,
+                            notable_details=scene.notable_details,
+                            uncertainties=scene.uncertainties,
                             text_regions=list(prior.text_regions),
                             scene_description=scene.scene_description,
                             image_type=scene.image_type,
@@ -655,7 +659,9 @@ class Orchestrator:
                     stage_name="unified_react",
                     runtime_store=state.runtime_store,
                     handoff_state=investigation,
-                    attach_image=False,
+                    attach_image=(
+                        bool(image_path) and self._main_llm_attaches_image()
+                    ),
                     prior_steps=[
                         step
                         for step in state.all_steps
@@ -778,6 +784,7 @@ class Orchestrator:
                     await self._run_unified_global_reflection(
                         state,
                         investigation,
+                        image_path=image_path,
                     )
                     last_reflection_action = investigation.action_count
                     self._sync_image_only_state(state, investigation)
@@ -822,7 +829,9 @@ class Orchestrator:
                 image_path=image_path,
                 final_visual_audit=None,
                 interaction_session=None,
-                attach_image=False,
+                attach_image=(
+                    bool(image_path) and self._main_llm_attaches_image()
+                ),
                 policy_rule_id=UNIFIED_REACT_POLICY_VERSION,
                 system_prompt=UNIFIED_JUDGMENT_SYSTEM_PROMPT,
                 prompt_version=UNIFIED_JUDGMENT_PROMPT_VERSION,
@@ -841,6 +850,8 @@ class Orchestrator:
         self,
         state: VerificationState,
         investigation: ImageOnlyInvestigationState,
+        *,
+        image_path: str = "",
     ) -> UnifiedReflectionOutput:
         """Record one low-frequency global strategy review without route mutation."""
 
@@ -851,10 +862,14 @@ class Orchestrator:
             tools=[],
             output_schema=UnifiedReflectionOutput,
             max_rounds=2,
+            image_path=image_path or state.image_path,
             stage_name="unified_reflection",
             runtime_store=state.runtime_store,
             handoff_state=investigation,
-            attach_image=False,
+            attach_image=(
+                bool(image_path or state.image_path)
+                and self._main_llm_attaches_image()
+            ),
             max_output_tokens=self._stage_output_tokens(
                 "UNIFIED_REFLECTION",
                 8192,
@@ -956,7 +971,10 @@ class Orchestrator:
             stage_name=stage_name,
             runtime_store=state.runtime_store,
             handoff_state=investigation,
-            attach_image=False,
+            image_path=state.image_path,
+            attach_image=(
+                bool(state.image_path) and self._main_llm_attaches_image()
+            ),
             interaction_session=interaction_session,
             output_validator=lambda parsed, _steps: (
                 self._validate_discrepancy_decision(
@@ -1956,8 +1974,36 @@ class Orchestrator:
                     attributes=item.get("attributes", {}) if isinstance(item.get("attributes"), dict) else {},
                 )
             )
+        relations: List[PerceptionRelation] = []
+        for item in data.get("relations", []) or []:
+            if not isinstance(item, dict):
+                continue
+            relations.append(
+                PerceptionRelation(
+                    subject=" ".join(str(item.get("subject", "")).split())[:160],
+                    predicate=" ".join(str(item.get("predicate", "")).split())[:160],
+                    object=" ".join(str(item.get("object", "")).split())[:160],
+                    description=" ".join(
+                        str(item.get("description", "")).split()
+                    )[:600],
+                    confidence=float(item.get("confidence", 0.0) or 0.0),
+                )
+            )
+        notable_details = [
+            " ".join(str(item).split())[:400]
+            for item in data.get("notable_details", []) or []
+            if " ".join(str(item).split())
+        ][:16]
+        uncertainties = [
+            " ".join(str(item).split())[:400]
+            for item in data.get("uncertainties", []) or []
+            if " ".join(str(item).split())
+        ][:8]
         return PerceptionReport(
             entities=entities,
+            relations=relations[:16],
+            notable_details=notable_details,
+            uncertainties=uncertainties,
             text_regions=[],
             scene_description=str(data.get("scene_description", "")).strip(),
             image_type=str(data.get("image_type", "photo") or "photo").strip(),
@@ -1978,6 +2024,9 @@ class Orchestrator:
             text_regions.append(normalized)
         return PerceptionReport(
             entities=report.entities,
+            relations=report.relations,
+            notable_details=report.notable_details,
+            uncertainties=report.uncertainties,
             text_regions=text_regions,
             scene_description=report.scene_description,
             image_type=report.image_type,

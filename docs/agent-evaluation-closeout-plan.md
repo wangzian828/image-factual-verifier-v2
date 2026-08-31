@@ -36,7 +36,7 @@ harness、审计口径或运行配置变更，必须先在第 4 节追加一行�
 |---|---|
 | 本地/服务器分支 | `codex/gpu13-canary-20260804-plan-relaxation-01` |
 | 服务器工作树 | `/gs/home/wza/projects/image-factual-verifier-v2-worktrees/gpu13-canary-20260804-plan-relaxation-01` |
-| 最新服务器 commit | `f383cc0 feat: add Gemini concurrency benchmark` |
+| 最新服务器 commit | `64c6169 feat: summarize isolated Agent test evaluations` |
 | 测试集 | 1,684 条，real 447 / fake 1,237 |
 | 3.1 Pro full direct QA | 1,682 完成、2 工程错误；judge 已完成 |
 | 3.7 full direct QA | 自动补跑中；完成数随恢复变化，尚未做全量 judge |
@@ -54,6 +54,8 @@ harness、审计口径或运行配置变更，必须先在第 4 节追加一行�
 | 2026-08-30 21:12 | 已实施：审计输出上限/主分类 | `scripts/audit_direct_qa_baseline.py`、`scripts/audit_agent_private_gold.py`、`src/eval/private_gold_metrics.py` | private-gold judge 默认输出上限升至 8,192；Agent 主三分类改为决定性、落地依据 / 正确但不足 / 错误，旧严格覆盖度仅保留诊断。 | Agent/Direct 分类差异单测通过；真实审计待部署后运行。 | 待提交 |
 | 2026-08-30 21:12 | 已核实：无需重复改 | `src/orchestrator/task_store.py`、`src/tools/compare_reference.py` | 当前代码已有失败/低相关候选的有界 sibling 控制；compare 已从 typed `differences` 派生并保留 `edit_evidence_*` 的原始字段与修复记录。先以真实 smoke 验证，不重复造同类补丁。 | 待真实 smoke 复核。 | 既有代码 |
 | 2026-08-30 21:50 | 待实施：审计去重 | `scripts/audit_direct_qa_baseline.py` | 3.7 direct QA 采用追加式补跑后，审计器直接读取全部 `results.jsonl`，会重复审计同一 case 的旧失败记录和新成功记录；改为按 `case_id` 只取最后一条结果，再进入 judge。 | 新增重复结果回归测试；用 3.7 全量 QA 重新执行一轮干净 private-gold audit。 | 待提交 |
+| 2026-08-31 | 已实施：统一 prompt 语言与文档 | `src/orchestrator/unified_prompts.py`, `src/orchestrator/context_workspace.py`, `docs/active-agent-system-prompts.md` | 当前主 Agent 的四类 runtime prompt 和 stage objective 统一为英文；中文文件降为阅读对照，不再作为运行时输入。新增从源码生成精确 prompt 备份的脚本。未改变工具契约、状态机、private-gold 隔离或判断规则。 | 本地 prompt 导出成功；待 compileall、diff-check 和真实 smoke。 | 待提交 |
+| 2026-08-31 | 已实施：轨迹可读视图 | `scripts/trajectory/render_sft_episodes_readable.py`, `docs/trajectory-artifact-guide.md` | 保留 canonical `trajectory_sft.jsonl` 不变，新增逐 episode 的原始 JSON 与 Markdown 审阅视图，明确 manifest/index 不是轨迹。 | 已从 H 盘 10 条导出生成 10 个 episode 目录；待检查脚本与文档。 | 待提交 |
 
 后续每一条 Agent 改动必须记录：修改前行为、修改后行为、为何不改变 private-gold
 隔离/成熟工具契约、对应测试、真实 smoke case、commit 和服务器部署状态。

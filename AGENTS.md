@@ -40,7 +40,7 @@ git log -1 --oneline --decorate
 
 - `src/orchestrator/pipeline.py`：统一 Agent runtime；
 - `src/orchestrator/unified_react.py`：动态工具和 reducer adapter；
-- `src/orchestrator/unified_prompts.py`：当前四类 agent prompt；
+- `src/orchestrator/unified_prompts.py`：当前四类英文 agent prompt；
 - `src/orchestrator/unified_context.py`：紧凑上下文；
 - `scripts/audit_real_trace.py`：统一 trace strict audit；
 - `src/trajectory/exporter.py`：完整 episode 的 Qwen SFT 导出；

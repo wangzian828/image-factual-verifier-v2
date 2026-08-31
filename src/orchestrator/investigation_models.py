@@ -334,6 +334,7 @@ class VisualEntity(StrictModel):
     origin_ids: List[str] = Field(default_factory=list, max_length=8)
     region: Optional[List[float]] = None
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    attributes: Dict[str, str] = Field(default_factory=dict, max_length=8)
 
     @model_validator(mode="after")
     def validate_region(self) -> "VisualEntity":
@@ -1963,7 +1964,7 @@ class ImageOnlyInvestigationState(StrictModel):
     tasks: List[ResearchTask] = Field(default_factory=list, max_length=12)
     retrieval_anchors: List[RetrievalAnchor] = Field(
         default_factory=list,
-        max_length=32,
+        max_length=40,
     )
     discoveries: List[InvestigationDiscovery] = Field(
         default_factory=list,
@@ -1997,6 +1998,14 @@ class ImageOnlyInvestigationState(StrictModel):
         max_length=32,
     )
     image_account_summary: str = Field(default="", max_length=1600)
+    visual_notable_details: List[str] = Field(
+        default_factory=list,
+        max_length=16,
+    )
+    visual_uncertainties: List[str] = Field(
+        default_factory=list,
+        max_length=8,
+    )
     target_facts: List[ImageClaim] = Field(
         default_factory=list,
         max_length=3,
@@ -2019,7 +2028,7 @@ class ImageOnlyInvestigationState(StrictModel):
     )
     discrepancy_coverage_audits: List[DiscrepancyCoverageAudit] = Field(
         default_factory=list,
-        max_length=32,
+        max_length=40,
     )
     discrepancy_verdict_basis: Optional[DiscrepancyVerdictBasis] = None
     discrepancy_judgment: Optional[DiscrepancyJudgment] = None
@@ -2242,15 +2251,17 @@ class VisualBootstrap(StrictModel):
     """Image/OCR observations materialized before investigation starts."""
     brief: InvestigationBrief
     entities: List[VisualEntity] = Field(default_factory=list, max_length=32)
-    facts: List[VisualFact] = Field(default_factory=list, max_length=48)
+    facts: List[VisualFact] = Field(default_factory=list, max_length=72)
     retrieval_anchors: List[RetrievalAnchor] = Field(
         default_factory=list,
-        max_length=32,
+        max_length=40,
     )
+    notable_details: List[str] = Field(default_factory=list, max_length=16)
+    uncertainties: List[str] = Field(default_factory=list, max_length=8)
 
     @field_validator("retrieval_anchors", mode="before")
     @classmethod
     def truncate_retrieval_anchors(cls, value: Any) -> Any:
         if isinstance(value, list):
-            return value[:32]
+            return value[:40]
         return value
