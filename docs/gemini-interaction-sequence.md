@@ -18,9 +18,11 @@ Claim/route/task 链路见带日期的历史计划和实验记录。
 ```
 
 每个 ReAct action 只允许一个 native function。视觉工具是普通工具，顺序不固定，后续也可以
-再次调用。同一 episode 内复用一个 `InteractionSession`：下一次请求使用上一响应的
-`previous_interaction_id`，并先提交上一轮的 `function_result`，再附加当前紧凑请求。
-原图临时附加到请求，不写入累计文本历史。
+再次调用。每个 action 都创建一个独立的紧凑请求：不跨 action 传递
+`previous_interaction_id`，也不把 provider 侧历史当作状态。上一轮工具结果先由本地
+reducer 写入紧凑 investigation state，下一轮再从该状态重建请求。原图临时附加到当前
+请求，不写入累计文本历史；同一请求内部的 function-result 往返仍按 Gemini Interactions
+原生协议处理。
 
 `reverse_image_search` 返回的少量参考图候选会在下一轮作为多模态图片输入追加；
 候选仍是未验证线索，不会自动成为证据。

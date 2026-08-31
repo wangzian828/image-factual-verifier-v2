@@ -527,10 +527,10 @@ class Orchestrator:
     ]:
         """Run the active one-loop ReAct runtime.
 
-        Each policy request receives a fresh compact context and one compressed
-        image attachment, while the provider-side interaction remains chained
-        across actions. The same session carries the previous interaction ID
-        and the pending function result into the next policy request.
+        Each policy action receives a fresh compact context and one compressed
+        image attachment. The reducer-owned investigation state is the only
+        cross-action memory; provider-side interaction history is not chained
+        across actions.
         """
 
         self._validate_image_only_bootstrap_configuration()
@@ -539,8 +539,6 @@ class Orchestrator:
         state.perception = PerceptionReport(scene_description="")
         self._sync_image_only_state(state, investigation)
         started = time.time()
-        interaction_session = InteractionSession()
-
         while not investigation.stop_reason:
             self._check_timeout(started, state)
             if investigation.action_count >= MAX_REACT_ACTIONS:
@@ -665,7 +663,6 @@ class Orchestrator:
                 max_tool_calls_per_turn=1,
                 force_tool_each_round=True,
                 protocol_exhaustion_boundary=True,
-                interaction_session=interaction_session,
                 stop_output_factory=lambda: InvestigationSegmentOutput(
                     segment_summary="One ReAct action completed.",
                     ready_for_reflection=True,
@@ -819,7 +816,6 @@ class Orchestrator:
         state.perception = PerceptionReport(scene_description="")
         self._sync_image_only_state(state, investigation)
         started = time.time()
-        interaction_session = InteractionSession()
         last_reflection_action = 0
         route_local_replan_boundary: tuple[str, str] | None = None
 
@@ -1002,7 +998,6 @@ class Orchestrator:
                     max_tool_calls_per_turn=1,
                     force_tool_each_round=True,
                     protocol_exhaustion_boundary=True,
-                    interaction_session=interaction_session,
                     stop_output_factory=lambda: InvestigationSegmentOutput(
                         segment_summary=(
                             "The unified-ReAct action selection correction "
