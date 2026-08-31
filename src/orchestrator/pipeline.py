@@ -2401,7 +2401,7 @@ class Orchestrator:
             bbox_quad=bbox_quad,
             confidence=float(item.get("confidence", 0.0) or 0.0),
             language=str(item.get("language", "unknown") or "unknown"),
-            text_role=self._normalize_text_role(
+            text_role=Orchestrator._normalize_text_role(
                 item.get("text_role", "unknown"),
                 default="unknown",
             ),

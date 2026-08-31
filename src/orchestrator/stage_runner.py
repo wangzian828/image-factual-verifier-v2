@@ -1299,6 +1299,7 @@ class StageRunner:
                     )
 
                 function_results: List[Dict[str, Any]] = []
+                follow_up_visual_items: List[Dict[str, Any]] = []
                 response_steps: List[StageStep] = []
                 for call_index, call in enumerate(function_calls):
                     call_id = str(call.get("id", "")).strip()
@@ -1478,6 +1479,14 @@ class StageRunner:
                             control_step=step,
                         )
                     )
+                    follow_up_visual_items.extend(
+                        self._visual_reinjection_items(
+                            tool_name,
+                            result=step.tool_result,
+                            state_update=state_update,
+                            control_step=step,
+                        )
+                    )
 
                 if any(item.action_type == "tool_call" for item in response_steps):
                     action_turns += 1
@@ -1491,10 +1500,21 @@ class StageRunner:
                     item.metadata["protocol_corrections_used"] = correction_turns
                     item.metadata["interaction_request_index"] = request_index
                 previous_interaction_id = interaction_id
-                next_input = function_results
+                next_input = list(function_results)
+                if follow_up_visual_items:
+                    # Interactions Step items and Content items cannot be
+                    # mixed inside one function_result.  Keep the canonical
+                    # function result text-only and place candidate/inspection
+                    # images in a separate user_input step for the next turn.
+                    next_input.append(
+                        {
+                            "type": "user_input",
+                            "content": follow_up_visual_items,
+                        }
+                    )
                 system_suffix = ""
                 if self.should_stop and self.should_stop(steps):
-                    self._set_session_pending_input(function_results)
+                    self._set_session_pending_input(next_input)
                     if self.stop_output_factory is not None:
                         parsed = self.stop_output_factory()
                         steps.append(
@@ -2400,20 +2420,11 @@ class StageRunner:
                 },
             }
             text = json.dumps(content, ensure_ascii=False, default=str)
-        result_items: List[Dict[str, Any]] = [{"type": "text", "text": text}]
-        result_items.extend(
-            self._visual_reinjection_items(
-                tool_name,
-                result=result,
-                state_update=state_update,
-                control_step=control_step,
-            )
-        )
         return {
             "type": "function_result",
             "name": tool_name,
             "call_id": call_id,
-            "result": result_items,
+            "result": [{"type": "text", "text": text}],
             **({"is_error": True} if self._tool_result_is_error(result) else {}),
         }
 

@@ -233,6 +233,26 @@ def _perception() -> PerceptionReport:
     )
 
 
+def test_normalize_text_region_does_not_require_instance_state() -> None:
+    region = Orchestrator._normalize_text_region(
+        {
+            "text": "VISIBLE",
+            "bbox": [0.1, 0.2, 0.4, 0.5],
+            "confidence": 0.9,
+        }
+    )
+
+    assert region is not None
+    assert region.text == "VISIBLE"
+    assert region.text_role == "unknown"
+    assert region.bbox_quad == [
+        [0.1, 0.2],
+        [0.4, 0.2],
+        [0.4, 0.5],
+        [0.1, 0.5],
+    ]
+
+
 def test_image_only_bootstrap_is_deterministic_grounded_and_bounded(
     tmp_path: Path,
 ) -> None:

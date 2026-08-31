@@ -56,6 +56,7 @@ harness、审计口径或运行配置变更，必须先在第 4 节追加一行�
 | 2026-08-30 21:50 | 待实施：审计去重 | `scripts/audit_direct_qa_baseline.py` | 3.7 direct QA 采用追加式补跑后，审计器直接读取全部 `results.jsonl`，会重复审计同一 case 的旧失败记录和新成功记录；改为按 `case_id` 只取最后一条结果，再进入 judge。 | 新增重复结果回归测试；用 3.7 全量 QA 重新执行一轮干净 private-gold audit。 | 待提交 |
 | 2026-08-31 | 已实施：统一 prompt 语言与文档 | `src/orchestrator/unified_prompts.py`, `src/orchestrator/context_workspace.py`, `docs/active-agent-system-prompts.md` | 当前主 Agent 的四类 runtime prompt 和 stage objective 统一为英文；中文文件降为阅读对照，不再作为运行时输入。新增从源码生成精确 prompt 备份的脚本。未改变工具契约、状态机、private-gold 隔离或判断规则。 | 本地 prompt 导出成功；待 compileall、diff-check 和真实 smoke。 | 待提交 |
 | 2026-08-31 | 已实施：轨迹可读视图 | `scripts/trajectory/render_sft_episodes_readable.py`, `docs/trajectory-artifact-guide.md` | 保留 canonical `trajectory_sft.jsonl` 不变，新增逐 episode 的原始 JSON 与 Markdown 审阅视图，明确 manifest/index 不是轨迹。 | 已从 H 盘 10 条导出生成 10 个 episode 目录；待检查脚本与文档。 | 待提交 |
+| 2026-08-31 | 真实 smoke 暴露待修工程错误 | `src/orchestrator/stage_runner.py`, `src/orchestrator/pipeline.py` | `99609df` 将候选图作为图片内容放进 `function_result.result`，触发 Gemini Interactions 400 `invalid_argument`；同时 `_normalize_text_region` 静态方法误用 `self`，触发 `NameError`。修复为：函数结果只保留文本，候选图作为独立 `user_input` 内容追加；静态方法改用类级静态调用。private-gold 隔离、成熟工具实现和公开工具契约不变。 | 新 smoke：8 条已明确失败（7 条 API 400、1 条 `NameError`），剩余 2 条已停止；待定向回归测试与最新 commit smoke。 | 待提交 |
 
 后续每一条 Agent 改动必须记录：修改前行为、修改后行为、为何不改变 private-gold
 隔离/成熟工具契约、对应测试、真实 smoke case、commit 和服务器部署状态。

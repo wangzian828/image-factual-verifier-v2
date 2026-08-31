@@ -92,6 +92,28 @@ class AlternateRecordingTool(BaseTool):
         }
 
 
+class CandidateImageTool(BaseTool):
+    name = "reverse_image_search"
+    description = "Search for candidate reference images."
+    parameters = {
+        "type": "object",
+        "properties": {
+            "branch": {"type": "string", "enum": ["lens", "semantic"]},
+        },
+        "required": ["branch"],
+    }
+
+    def call(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "status": "success",
+            "branch": params["branch"],
+            "reference_image_candidates": [
+                "https://cdn.example.org/reference-one",
+                "https://cdn.example.org/reference-two",
+            ],
+        }
+
+
 class VisualInspectTool(BaseTool):
     name = "crop_and_inspect"
     description = "Inspect a visual crop."
@@ -340,6 +362,53 @@ def test_native_follow_up_request_reinjects_compressed_original_image(
     )
     snapshot = steps[0].metadata["policy_input"]["input_payload"]
     assert "data" not in json.dumps(snapshot)
+
+
+def test_native_follow_up_keeps_candidate_images_outside_function_result(
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "image.png"
+    Image.new("RGB", (32, 24), color=(120, 150, 180)).save(image_path)
+    function_call = _function_call_response()
+    function_call["steps"][0]["name"] = "reverse_image_search"
+    function_call["steps"][0]["arguments"] = {
+        "question_id": "q1",
+        "branch": "lens",
+    }
+    backend = NativeFakeBackend([function_call, _completed_response()])
+    runner = StageRunner(
+        llm=backend,
+        system_prompt="Investigate with tools.",
+        tools=[CandidateImageTool()],
+        output_schema=ToolStageOutput,
+        max_rounds=2,
+        image_path=str(image_path),
+        stage_name="verification",
+        min_tool_calls=0,
+        attach_image=True,
+    )
+
+    parsed, steps = asyncio.run(
+        runner.run("Inspect the image and verify the active question.")
+    )
+
+    assert parsed is not None
+    assert steps[0].action_type == "tool_call"
+    _, second_request = backend.requests
+    assert [item["type"] for item in second_request["input_payload"]] == [
+        "function_result",
+        "user_input",
+        "user_input",
+    ]
+    function_result, candidate_images, original_image = second_request[
+        "input_payload"
+    ]
+    assert [item["type"] for item in function_result["result"]] == ["text"]
+    assert candidate_images["content"] == [
+        {"type": "image", "uri": "https://cdn.example.org/reference-one"},
+        {"type": "image", "uri": "https://cdn.example.org/reference-two"},
+    ]
+    assert original_image["content"][0]["type"] == "image"
 
 
 def test_native_tool_schema_hides_a_budget_exhausted_tool() -> None:
