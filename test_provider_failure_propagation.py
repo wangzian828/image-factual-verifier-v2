@@ -356,7 +356,7 @@ def test_goal_passage_selection_bounds_footer_noise_but_keeps_direct_body() -> N
     assert any(item["text"] == target for item in selected)
 
 
-def test_goal_passage_selection_has_no_fixed_passage_count_limit() -> None:
+def test_goal_passage_selection_is_bounded_even_with_large_configuration() -> None:
     client = JinaReaderClient(extract_max_chars=60000)
     page = "\n\n".join(
         f"Relevant transport record {index} identifies the vehicle used at the event."
@@ -372,7 +372,10 @@ def test_goal_passage_selection_has_no_fixed_passage_count_limit() -> None:
         max_chars=client.extract_max_chars,
     )
 
-    assert len(selected) == 40
+    assert len(selected) == 24
+    assert len(
+        client._format_evidence_passages(selected)
+    ) <= 24000
     assert sum(len(item["text"]) + 32 for item in selected) <= 60000
 
 

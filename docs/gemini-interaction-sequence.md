@@ -18,8 +18,12 @@ Claim/route/task 链路见带日期的历史计划和实验记录。
 ```
 
 每个 ReAct action 只允许一个 native function。视觉工具是普通工具，顺序不固定，后续也可以
-再次调用。`previous_interaction_id` 不跨 action 复用；每个新 action 都用新的紧凑请求。
+再次调用。同一 episode 内复用一个 `InteractionSession`：下一次请求使用上一响应的
+`previous_interaction_id`，并先提交上一轮的 `function_result`，再附加当前紧凑请求。
 原图临时附加到请求，不写入累计文本历史。
+
+`reverse_image_search` 返回的少量参考图候选会在下一轮作为多模态图片输入追加；
+候选仍是未验证线索，不会自动成为证据。
 
 工具失败写入当前 action 和 runtime failure 列表；外部不可访问不等同于工程失败，
 malformed contract 才进入工程错误路径。

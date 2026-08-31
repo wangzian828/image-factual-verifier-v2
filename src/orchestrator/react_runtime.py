@@ -44,7 +44,6 @@ REACT_RUNTIME_TOOLS = (
     "check_consistency",
     "analyze_visual_anomalies",
     "crop_and_inspect",
-    "crop_and_search",
     "focused_visual_inspection",
     "count_objects",
 )
@@ -191,7 +190,6 @@ def _exhausted_tools(state: UnifiedReactState) -> set[str]:
         "check_consistency": 3,
         "analyze_visual_anomalies": 3,
         "crop_and_inspect": 4,
-        "crop_and_search": 4,
         "focused_visual_inspection": 4,
         "count_objects": 2,
     }
@@ -223,7 +221,7 @@ def _public_parameters(delegate: BaseTool) -> Dict[str, Any]:
         if name not in _INTERNAL_FIELDS
     ]
     name = str(delegate.name).strip()
-    if name in {"visit", "crop_and_search"}:
+    if name == "visit":
         properties["question"] = {
             "type": "string",
             "description": (
@@ -279,7 +277,7 @@ class RuntimeToolAdapter(BaseTool):
     def __post_init__(self) -> None:
         self.name = self.delegate.name
         self.description = self.delegate.description
-        if self.name in {"visit", "crop_and_search"}:
+        if self.name == "visit":
             self.description = (
                 "Inspect a selected web candidate for the concrete image "
                 "fact or relationship in the current question."
@@ -315,7 +313,7 @@ class RuntimeToolAdapter(BaseTool):
             )
             or "Check the most relevant factual detail in the image."
         )
-        if name in {"visit", "crop_and_search"}:
+        if name == "visit":
             args.pop("question", None)
             context = args.pop("context", "")
             args["image_claim"] = focus

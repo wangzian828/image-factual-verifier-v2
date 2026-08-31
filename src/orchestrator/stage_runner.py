@@ -13,6 +13,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple, Type
+from urllib.parse import urlparse
 
 from pydantic import BaseModel
 
@@ -2432,31 +2433,75 @@ class StageRunner:
         state_update: Optional[Dict[str, Any]] = None,
         control_step: Optional[StageStep] = None,
     ) -> List[Dict[str, Any]]:
-        if tool_name != "focused_visual_inspection" or self.runtime_store is None:
-            return []
-        artifacts = self._visual_view_artifacts(
-            result,
-            state_update=state_update,
-            control_step=control_step,
-        )
         items: List[Dict[str, Any]] = []
-        for artifact in artifacts[:4]:
-            descriptor = artifact.get("artifact")
-            if not isinstance(descriptor, dict):
-                continue
+        if tool_name == "focused_visual_inspection" and self.runtime_store is not None:
+            artifacts = self._visual_view_artifacts(
+                result,
+                state_update=state_update,
+                control_step=control_step,
+            )
+            for artifact in artifacts[:4]:
+                descriptor = artifact.get("artifact")
+                if not isinstance(descriptor, dict):
+                    continue
+                try:
+                    payload = self.runtime_store.artifacts.read_bytes(descriptor)
+                except Exception:
+                    continue
+                mime_type = (
+                    str(descriptor.get("media_type", "")).strip()
+                    or "image/png"
+                )
+                items.append(
+                    {
+                        "type": "image",
+                        "mime_type": mime_type,
+                        "data": base64.b64encode(payload).decode("ascii"),
+                    }
+                )
+
+        if tool_name in {"reverse_image_search", "crop_and_search"}:
+            for image_url in self._reference_image_candidate_urls(result)[:3]:
+                items.append({"type": "image", "uri": image_url})
+        return items
+
+    @staticmethod
+    def _reference_image_candidate_urls(result: str) -> List[str]:
+        """Return only provider image URLs suitable for the next model turn."""
+
+        try:
+            data = json.loads(result)
+        except Exception:
+            return []
+        if not isinstance(data, dict):
+            return []
+        values: List[Any] = []
+        for key in ("reference_image_candidates", "reference_image_urls"):
+            raw = data.get(key)
+            if isinstance(raw, list):
+                values.extend(raw)
+            elif isinstance(raw, str):
+                values.append(raw)
+        direct = data.get("reference_image_url")
+        if isinstance(direct, str):
+            values.append(direct)
+        urls: List[str] = []
+        seen: set[str] = set()
+        for value in values:
+            url = str(value or "").strip()
             try:
-                payload = self.runtime_store.artifacts.read_bytes(descriptor)
+                parsed = urlparse(url)
             except Exception:
                 continue
-            mime_type = str(descriptor.get("media_type", "")).strip() or "image/png"
-            items.append(
-                {
-                    "type": "image",
-                    "mime_type": mime_type,
-                    "data": base64.b64encode(payload).decode("ascii"),
-                }
-            )
-        return items
+            if (
+                parsed.scheme not in {"http", "https"}
+                or not parsed.netloc
+                or url in seen
+            ):
+                continue
+            seen.add(url)
+            urls.append(url)
+        return urls
 
     @staticmethod
     def _visual_view_artifacts(
@@ -4216,6 +4261,9 @@ class StageRunner:
                 ),
                 "artifact_sha256": item.get("artifact_sha256", ""),
                 "evidence_span": item.get("evidence_span", {}),
+                "summary_model_context": dict(
+                    item.get("summary_model_context", {}) or {}
+                ),
                 "retrieved_at": item.get("retrieved_at", ""),
                 "injection_flags": item.get("injection_flags", []),
                 "evidence_eligible": bool(
@@ -4253,6 +4301,9 @@ class StageRunner:
                         ),
                         "artifact_sha256": item.get("artifact_sha256", ""),
                         "evidence_span": item.get("evidence_span", {}),
+                        "summary_model_context": dict(
+                            item.get("summary_model_context", {}) or {}
+                        ),
                         "retrieved_at": item.get("retrieved_at", ""),
                         "injection_flags": item.get("injection_flags", []),
                         "evidence_eligible": bool(item.get("evidence_eligible", False)),
@@ -4335,6 +4386,15 @@ class StageRunner:
                 )
         return {
             "regions": regions,
+            "candidate_page_urls": (
+                data.get("candidate_page_urls", []) or []
+            )[:3],
+            "reference_image_candidates": (
+                data.get("reference_image_candidates", []) or []
+            )[:3],
+            "reference_image_url": str(
+                data.get("reference_image_url", "") or ""
+            ),
             "summary": str(data.get("summary", ""))[:320],
             "evidence": str(data.get("evidence", "")),
             "image_claim": str(data.get("image_claim", "")),
@@ -4352,6 +4412,9 @@ class StageRunner:
             ),
             "artifact_sha256": data.get("artifact_sha256", ""),
             "evidence_span": data.get("evidence_span", {}),
+            "summary_model_context": dict(
+                data.get("summary_model_context", {}) or {}
+            ),
             "retrieved_at": data.get("retrieved_at", ""),
             "injection_flags": data.get("injection_flags", []),
             "evidence_eligible": bool(data.get("evidence_eligible", False)),

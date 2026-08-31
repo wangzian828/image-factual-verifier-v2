@@ -141,3 +141,29 @@ def test_jina_reuses_page_visit_executor_across_batches() -> None:
         reader.close()
 
     assert executor._shutdown is True
+
+
+def test_jina_summary_context_has_a_hard_character_bound() -> None:
+    passages = [
+        {
+            "passage_id": index,
+            "start": index * 1000,
+            "end": (index + 1) * 1000,
+            "text": (
+                f"Relation evidence paragraph {index}. "
+                + ("relevant relation text " * 80)
+            ),
+        }
+        for index in range(80)
+    ]
+
+    selected = jina_reader.JinaReaderClient._select_goal_passages(
+        passages,
+        "relation evidence",
+        max_chars=999999,
+        max_passages=999,
+    )
+
+    formatted = jina_reader.JinaReaderClient._format_evidence_passages(selected)
+    assert len(formatted) <= jina_reader.MAX_EXTRACT_INPUT_CHARS
+    assert 0 < len(selected) < len(passages)

@@ -13,6 +13,7 @@ from src.orchestrator.react_runtime import (
     validate_react_action,
 )
 from src.orchestrator.state import ImageOnlyRuntimeCase
+from src.orchestrator.stage_runner import StageRunner
 from src.tools.base import BaseTool
 from scripts.audit_real_trace import audit_trace
 
@@ -62,6 +63,7 @@ def test_runtime_state_has_no_preconstructed_target_graph() -> None:
     state = new_unified_react_runtime_state(_case())
     assert "target_facts" not in state.model_dump()
     assert "search_hypotheses" not in state.model_dump()
+    assert "crop_and_search" not in available_unified_react_runtime_tools(state)
     assert "perceive_scene" in available_unified_react_runtime_tools(state)
     assert "ocr_with_position" in available_unified_react_runtime_tools(state)
     assert "text_search" in available_unified_react_runtime_tools(state)
@@ -233,3 +235,35 @@ def test_current_runtime_trace_passes_current_audit_without_target_graph(
     assert not report.failures(strict_scheduler=True)
     assert report.stats["unified_react_actions"] == 1
     assert report.stats["unified_react_target_facts"] == 0
+
+
+def test_candidate_reference_images_are_reinjected_as_bounded_multimodal_items() -> None:
+    runner = StageRunner(
+        llm=object(),
+        system_prompt="",
+        tools=[],
+        attach_image=False,
+    )
+    result = json.dumps(
+        {
+            "status": "success",
+            "reference_image_candidates": [
+                "https://cdn.example.test/one",
+                "https://cdn.example.test/two",
+                "https://cdn.example.test/three",
+                "https://cdn.example.test/four",
+                "not-a-url",
+            ],
+        }
+    )
+
+    items = runner._visual_reinjection_items(
+        "reverse_image_search",
+        result=result,
+    )
+
+    assert items == [
+        {"type": "image", "uri": "https://cdn.example.test/one"},
+        {"type": "image", "uri": "https://cdn.example.test/two"},
+        {"type": "image", "uri": "https://cdn.example.test/three"},
+    ]

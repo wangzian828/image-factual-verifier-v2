@@ -528,9 +528,9 @@ class Orchestrator:
         """Run the active one-loop ReAct runtime.
 
         Each policy request receives a fresh compact context and one compressed
-        image attachment.  The provider-side interaction is intentionally not
-        chained across actions; completed actions are persisted in the trace and
-        the reducer supplies only bounded memory to the next request.
+        image attachment, while the provider-side interaction remains chained
+        across actions. The same session carries the previous interaction ID
+        and the pending function result into the next policy request.
         """
 
         self._validate_image_only_bootstrap_configuration()
@@ -539,6 +539,7 @@ class Orchestrator:
         state.perception = PerceptionReport(scene_description="")
         self._sync_image_only_state(state, investigation)
         started = time.time()
+        interaction_session = InteractionSession()
 
         while not investigation.stop_reason:
             self._check_timeout(started, state)
@@ -664,7 +665,7 @@ class Orchestrator:
                 max_tool_calls_per_turn=1,
                 force_tool_each_round=True,
                 protocol_exhaustion_boundary=True,
-                interaction_session=InteractionSession(),
+                interaction_session=interaction_session,
                 stop_output_factory=lambda: InvestigationSegmentOutput(
                     segment_summary="One ReAct action completed.",
                     ready_for_reflection=True,

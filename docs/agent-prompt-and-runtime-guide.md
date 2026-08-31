@@ -41,6 +41,21 @@ the trace. The next request receives a bounded projection of:
 The full request/response archive remains available for audit, but is not
 replayed into every policy turn.
 
+The active Gemini Interactions session is persistent for the whole episode.
+Dynamic tool schemas may be rebuilt between actions, but the next request keeps
+the previous interaction ID and submits the previous function result before the
+new compact context. A newly-created session per action would lose this
+continuation boundary.
+
+`reverse_image_search` keeps at most three reference-image candidates in the
+next multimodal request. They are unverified candidates, not evidence.
+
+`visit` uses a retrieve-then-bounded-extract path: Jina/direct content is cleaned
+and ranked into passages, a summary/extraction model reads a bounded selection,
+and exact source spans are retained for the trace. The summary input is capped
+by runtime code at 24,000 characters (18,000 by default); the full page is not
+placed in the Agent context.
+
 ## 3. Evidence boundary
 
 Search results, snippets, titles, URLs, source labels and guesses are leads.

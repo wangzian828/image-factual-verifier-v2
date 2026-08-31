@@ -47,7 +47,10 @@ from src.orchestrator.source_access import SourceAccessPolicy
 JINA_READER_PREFIX = "https://r.jina.ai/http://"
 DEFAULT_MAX_CHARS = 12000
 DEFAULT_SNIPPET_CHARS = 2000
-DEFAULT_EXTRACT_MAX_CHARS = 60000
+DEFAULT_EXTRACT_MAX_CHARS = 18000
+MAX_EXTRACT_INPUT_CHARS = 24000
+DEFAULT_EXTRACT_MAX_PASSAGES = 24
+DEFAULT_EXTRACT_PASSAGE_CHARS = 700
 DEFAULT_EXTRACT_MAX_OUTPUT_TOKENS = 4096
 DEFAULT_DIRECT_FETCH_TIMEOUT = 20
 DEFAULT_EXTRACT_TIMEOUT = 60.0
@@ -156,6 +159,8 @@ class JinaReaderClient:
     max_chars: int = DEFAULT_MAX_CHARS
     snippet_chars: int = DEFAULT_SNIPPET_CHARS
     extract_max_chars: int = DEFAULT_EXTRACT_MAX_CHARS
+    extract_max_passages: int = DEFAULT_EXTRACT_MAX_PASSAGES
+    extract_passage_chars: int = DEFAULT_EXTRACT_PASSAGE_CHARS
     extract_provider: str = "gemini"
     extract_model: Optional[str] = None
     extract_base_url: Optional[str] = None
@@ -204,6 +209,27 @@ class JinaReaderClient:
         if extract_retries_override:
             try:
                 self.extract_max_retries = max(0, int(extract_retries_override))
+            except ValueError:
+                pass
+        extract_chars_override = os.getenv("BROWSE_EXTRACT_MAX_CHARS")
+        if extract_chars_override:
+            try:
+                self.extract_max_chars = min(
+                    MAX_EXTRACT_INPUT_CHARS,
+                    max(4000, int(extract_chars_override)),
+                )
+            except ValueError:
+                pass
+        passage_count_override = os.getenv("BROWSE_EXTRACT_MAX_PASSAGES")
+        if passage_count_override:
+            try:
+                self.extract_max_passages = max(4, int(passage_count_override))
+            except ValueError:
+                pass
+        passage_chars_override = os.getenv("BROWSE_EXTRACT_PASSAGE_CHARS")
+        if passage_chars_override:
+            try:
+                self.extract_passage_chars = max(240, int(passage_chars_override))
             except ValueError:
                 pass
         workers_override = os.getenv("BROWSE_MAX_CONCURRENCY")
@@ -538,6 +564,9 @@ class JinaReaderClient:
             ),
             "artifact_sha256": extracted.get("artifact_sha256", ""),
             "evidence_span": extracted.get("evidence_span", {}),
+            "summary_model_context": dict(
+                extracted.get("summary_model_context", {}) or {}
+            ),
             "evidence_records": [
                 {
                     **dict(item),
@@ -895,12 +924,16 @@ class JinaReaderClient:
         evidence_document = self._prepare_evidence_document(content)
         if not evidence_document.strip():
             raise RuntimeError("Fetched page did not contain a usable evidence document.")
-        all_passages = self._build_evidence_passages(evidence_document)
+        all_passages = self._build_evidence_passages(
+            evidence_document,
+            max_chars=self.extract_passage_chars,
+        )
         passages = self._select_goal_passages(
             all_passages,
             image_claim,
             hint=retrieval_goal,
-            max_chars=self.extract_max_chars,
+            max_chars=min(self.extract_max_chars, MAX_EXTRACT_INPUT_CHARS),
+            max_passages=self.extract_max_passages,
         )
         if not passages:
             raise RuntimeError("Fetched page did not contain any usable evidence passages.")
@@ -1069,6 +1102,18 @@ class JinaReaderClient:
                 "passage_id": passage_id,
                 "supporting_passage_ids": supporting_passage_ids,
                 "evidence_records": evidence_records,
+                "summary_model_context": {
+                    "mode": "retrieve_then_bounded_extract",
+                    "candidate_passage_count": len(all_passages),
+                    "selected_passage_count": len(passages),
+                    "selected_input_chars": len(
+                        self._format_evidence_passages(passages)
+                    ),
+                    "max_input_chars": min(
+                        self.extract_max_chars,
+                        MAX_EXTRACT_INPUT_CHARS,
+                    ),
+                },
                 RUNTIME_METRICS_KEY: runtime_metrics,
             }
         )
@@ -1119,6 +1164,7 @@ class JinaReaderClient:
         *,
         hint: str = "",
         max_chars: int,
+        max_passages: int = DEFAULT_EXTRACT_MAX_PASSAGES,
     ) -> List[Dict[str, Any]]:
         """Keep the Claim relation visible while a free-form hint guides ranking."""
 
@@ -1159,7 +1205,11 @@ class JinaReaderClient:
 
         selected: List[Dict[str, Any]] = []
         used = 0
+        max_chars = min(max(1000, int(max_chars)), MAX_EXTRACT_INPUT_CHARS)
+        max_passages = max(1, int(max_passages))
         for _score, _goal_score, _index, passage in ranked:
+            if len(selected) >= max_passages:
+                break
             text = str(passage.get("text", ""))
             cost = len(text) + 32
             if selected and used + cost > max_chars:
