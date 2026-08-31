@@ -73,6 +73,8 @@ def _runtime_event(metadata: Mapping[str, Any]) -> dict[str, Any]:
         "investigation_state_update",
         "deterministic_segment_boundary",
         "stage",
+        "interaction_id",
+        "previous_interaction_id",
         "interaction_status",
         "interaction_lifecycle_kind",
     )

@@ -387,7 +387,14 @@ def export_trajectory_sft_example(
     allow_incomplete_verdict_chain: bool = False,
     require_provider_thought: bool = True,
 ) -> TrajectorySFTExample | ActionOnlyTrajectoryExample:
-    """Export one complete accepted episode as one prefix-preserving SFT row."""
+    """Export one complete accepted episode as one prefix-preserving SFT row.
+
+    The runtime may use a provider-side cumulative InteractionSession, but the
+    exported conversation is rebuilt once from the chronological canonical
+    steps. Each tool result is therefore represented exactly once as the
+    observation before the next policy target; provider request snapshots are
+    never copied into the conversation as additional history.
+    """
 
     state = _mapping(trace.get("state"))
     if str(trace.get("input_mode") or state.get("input_mode") or "") != (

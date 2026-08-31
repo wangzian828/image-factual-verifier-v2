@@ -1043,7 +1043,10 @@ class StageRunner:
             request_input = (
                 next_input
                 if round_num == 1
-                else self._append_native_image(next_input)
+                else self._append_native_image(
+                    next_input,
+                    include_image=not bool(request_previous_interaction_id),
+                )
             )
             started = time.perf_counter()
             self.llm_api_calls += 1
@@ -1186,7 +1189,10 @@ class StageRunner:
             request_input = (
                 next_input
                 if request_index == 1
-                else self._append_native_image(next_input)
+                else self._append_native_image(
+                    next_input,
+                    include_image=not bool(request_previous_interaction_id),
+                )
             )
             started = time.perf_counter()
             self.llm_api_calls += 1
@@ -2249,6 +2255,12 @@ class StageRunner:
         }
 
     def _build_native_input(self, input_context: Any) -> Any:
+        # With a chained Gemini Interaction, the provider already retains the
+        # original image in the episode history. Re-upload it only for the
+        # root request; otherwise every ReAct turn would duplicate the same
+        # image in provider-side history.
+        if self._session_previous_interaction_id():
+            return input_context
         if not isinstance(input_context, str):
             return self._append_native_image(input_context)
         if not (self.attach_image and self.image_path):
@@ -2269,7 +2281,12 @@ class StageRunner:
         mime_type = header[5:].split(";", 1)[0] or "image/jpeg"
         return {"type": "image", "mime_type": mime_type, "data": data}
 
-    def _append_native_image(self, input_payload: Any) -> Any:
+    def _append_native_image(
+        self,
+        input_payload: Any,
+        *,
+        include_image: bool = True,
+    ) -> Any:
         """Attach one compressed original image to a follow-up request.
 
         A follow-up may already contain a ``user_input`` step carrying visual
@@ -2277,11 +2294,17 @@ class StageRunner:
         sequence, but the provider rejects the same request when the image is
         split across multiple ``user_input`` steps.  Merge all existing
         ``user_input`` content into the first such step and append the
-        original image there.  The image is never added to accumulated text
-        history or persisted in a ``StageStep``.
+        original image there when this is an independent request.  A chained
+        Interaction already has the original image in provider history, so
+        callers can disable the append and keep only the new observation.
+        The image is never added to accumulated text history or persisted in a
+        ``StageStep``.
         """
 
-        if not (self.attach_image and self.image_path):
+        if (
+            not include_image
+            or not (self.attach_image and self.image_path)
+        ):
             return input_payload
         image_item = self._native_image_item()
         if isinstance(input_payload, list):
@@ -2424,10 +2447,44 @@ class StageRunner:
             user_content = current_input
         else:
             user_content = [{"type": "text", "text": str(current_input)}]
-        return [
+        payload = [
             *pending,
             {"type": "user_input", "content": user_content},
         ]
+        # A session handoff may already contain candidate/inspection images in
+        # one user_input step. Gemini Interactions expects the follow-up
+        # content to be presented as one coherent user step, so merge the
+        # pending observation and the current compact context before sending.
+        return self._merge_native_user_input_steps(payload)
+
+    @classmethod
+    def _merge_native_user_input_steps(
+        cls,
+        payload: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        merged: List[Dict[str, Any]] = []
+        merged_user_input: Optional[Dict[str, Any]] = None
+        for item in payload:
+            if (
+                isinstance(item, dict)
+                and str(item.get("type", ""))
+                .strip()
+                .lower()
+                .replace("-", "_")
+                == "user_input"
+            ):
+                if merged_user_input is None:
+                    merged_user_input = {
+                        "type": "user_input",
+                        "content": [],
+                    }
+                    merged.append(merged_user_input)
+                merged_user_input["content"].extend(
+                    cls._native_user_input_content(item)
+                )
+            else:
+                merged.append(item)
+        return merged
 
     def _advance_interaction_session(self, interaction_id: str) -> None:
         if self.interaction_session is None:
@@ -2506,7 +2563,11 @@ class StageRunner:
             ),
         )
         self._control_steps = list(getattr(self, "_control_steps", [])) + [recorded_step]
-        compact = self._compact_tool_result_for_context(tool_name, result)
+        compact = self._compact_tool_result_for_context(
+            tool_name,
+            result,
+            max_chars=max(32768, self.tool_response_max_chars),
+        )
         question_id = str(tool_args.get("__question_id", "")).strip()
         content: Dict[str, Any] = {
             "function_call_id": call_id,
@@ -2518,14 +2579,13 @@ class StageRunner:
             content["investigation_state_update"] = state_update
         content["agent_control_state"] = self._agent_control_state()
         text = json.dumps(content, ensure_ascii=False, default=str)
-        if len(text) > self.tool_response_max_chars:
+        if len(text) > max(32768, self.tool_response_max_chars):
             content = {
                 "function_call_id": call_id,
                 "question_id": question_id,
-                "agent_control_state": self._agent_control_state(),
                 "result": {
                     "truncated": True,
-                    "preview": text[: self.tool_response_max_chars - 160],
+                    "preview": text[: max(32768, self.tool_response_max_chars) - 160],
                 },
             }
             text = json.dumps(content, ensure_ascii=False, default=str)
@@ -2758,7 +2818,10 @@ class StageRunner:
         for correction_index in range(2):
             started = time.perf_counter()
             self.llm_api_calls += 1
-            wire_request_input = self._append_native_image(request_input)
+            wire_request_input = self._append_native_image(
+                request_input,
+                include_image=not bool(request_parent),
+            )
             try:
                 payload = await self._create_interaction(
                     input_payload=wire_request_input,
@@ -4311,7 +4374,15 @@ class StageRunner:
         )
         step.metadata["tool_result_artifact"] = descriptor
 
-    def _compact_tool_result_for_context(self, tool_name: str, result: str) -> Any:
+    def _compact_tool_result_for_context(
+        self,
+        tool_name: str,
+        result: str,
+        *,
+        max_chars: Optional[int] = None,
+    ) -> Any:
+        del tool_name  # The canonical tool-specific compaction happens upstream.
+        limit = max(1200, int(max_chars or self.tool_response_max_chars))
         try:
             data = json.loads(result)
         except Exception:
@@ -4328,10 +4399,10 @@ class StageRunner:
 
         if isinstance(data, (dict, list)):
             raw = json.dumps(data, ensure_ascii=False)
-            if len(raw) <= self.tool_response_max_chars:
+            if len(raw) <= limit:
                 return data
-            return {"preview": raw[: self.tool_response_max_chars - 32] + "...<truncated>"}
-        return str(result)[: self.tool_response_max_chars]
+            return {"preview": raw[: limit - 32] + "...<truncated>"}
+        return str(result)[:limit]
 
     def _canonical_tool_result(
         self,

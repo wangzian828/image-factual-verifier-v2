@@ -324,7 +324,7 @@ def test_native_function_call_round_trip() -> None:
     assert "is_error" not in function_result
 
 
-def test_native_follow_up_request_reinjects_compressed_original_image(
+def test_native_follow_up_reuses_original_image_from_interaction_history(
     tmp_path: Path,
 ) -> None:
     image_path = tmp_path / "image.png"
@@ -356,12 +356,10 @@ def test_native_follow_up_request_reinjects_compressed_original_image(
     ]
     assert [item["type"] for item in second_request["input_payload"]] == [
         "function_result",
-        "user_input",
     ]
-    assert second_request["input_payload"][1]["content"][0]["type"] == "image"
-    assert second_request["input_payload"][1]["content"][0]["mime_type"] == (
-        "image/jpeg"
-    )
+    # The provider-side interaction chain already contains the compressed
+    # original image from the root request. Re-uploading it on every tool turn
+    # would grow the episode context without adding information.
     snapshot = steps[0].metadata["policy_input"]["input_payload"]
     assert "data" not in json.dumps(snapshot)
 
@@ -417,15 +415,17 @@ def test_native_follow_up_keeps_candidate_images_outside_function_result(
     ]
     function_result, visual_input = second_request["input_payload"]
     assert [item["type"] for item in function_result["result"]] == ["text"]
-    assert len(visual_input["content"]) == 3
+    assert len(visual_input["content"]) == 2
     assert all(
         item["type"] == "image"
         and item["mime_type"] == "image/jpeg"
         and item["data"]
         for item in visual_input["content"]
     )
-    assert visual_input["content"][0]["data"] == visual_input["content"][1]["data"]
-    assert visual_input["content"][0]["data"] != visual_input["content"][2]["data"]
+    assert (
+        visual_input["content"][0]["data"]
+        == visual_input["content"][1]["data"]
+    )
 
 
 def test_native_follow_up_merges_existing_user_input_steps(
@@ -480,6 +480,59 @@ def test_native_follow_up_merges_existing_user_input_steps(
     }
     assert payload[1]["content"][2]["type"] == "image"
     assert payload[1]["content"][2]["mime_type"] == "image/jpeg"
+
+
+def test_session_handoff_merges_tool_observation_and_current_context(
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "image.png"
+    Image.new("RGB", (32, 24), color=(120, 150, 180)).save(image_path)
+    session = InteractionSession(
+        previous_interaction_id="interaction-1",
+        pending_input=[
+            {
+                "type": "function_result",
+                "name": "reverse_image_search",
+                "call_id": "call-1",
+                "result": [{"type": "text", "text": "candidates"}],
+            },
+            {
+                "type": "user_input",
+                "content": [
+                    {
+                        "type": "image",
+                        "mime_type": "image/jpeg",
+                        "data": "candidate-data",
+                    }
+                ],
+            },
+        ],
+    )
+    runner = StageRunner(
+        llm=NativeFakeBackend([]),
+        system_prompt="Investigate.",
+        tools=[],
+        image_path=str(image_path),
+        stage_name="verification",
+        attach_image=True,
+        interaction_session=session,
+    )
+
+    payload = runner._build_session_input("Continue from the latest observation.")
+
+    assert [item["type"] for item in payload] == [
+        "function_result",
+        "user_input",
+    ]
+    content = payload[1]["content"]
+    assert [item["type"] for item in content] == ["image", "text"]
+    assert content[0]["data"] == "candidate-data"
+    assert content[1]["text"] == "Continue from the latest observation."
+    assert not any(
+        item.get("data") != "candidate-data"
+        for item in content
+        if item.get("type") == "image"
+    )
 
 
 def test_native_candidate_image_item_is_compressed_inline_data(

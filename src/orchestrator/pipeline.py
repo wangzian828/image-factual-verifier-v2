@@ -539,6 +539,11 @@ class Orchestrator:
         state.perception = PerceptionReport(scene_description="")
         self._sync_image_only_state(state, investigation)
         started = time.time()
+        # Keep one provider-side conversation for the complete ReAct episode.
+        # Each outer iteration still creates a fresh StageRunner, but the
+        # shared session carries the previous interaction ID and exactly the
+        # immediately preceding function result into the next request.
+        interaction_session = InteractionSession()
         while not investigation.stop_reason:
             self._check_timeout(started, state)
             if investigation.action_count >= MAX_REACT_ACTIONS:
@@ -667,6 +672,7 @@ class Orchestrator:
                     segment_summary="One ReAct action completed.",
                     ready_for_reflection=True,
                 ),
+                interaction_session=interaction_session,
                 request_timeout_seconds=self.stage_request_timeout_seconds,
                 tool_timeout_seconds=self.tool_action_timeout_seconds,
             )
@@ -816,6 +822,7 @@ class Orchestrator:
         state.perception = PerceptionReport(scene_description="")
         self._sync_image_only_state(state, investigation)
         started = time.time()
+        interaction_session = InteractionSession()
         last_reflection_action = 0
         route_local_replan_boundary: tuple[str, str] | None = None
 
@@ -1005,6 +1012,7 @@ class Orchestrator:
                         ),
                         ready_for_reflection=True,
                     ),
+                    interaction_session=interaction_session,
                     request_timeout_seconds=self.stage_request_timeout_seconds,
                     tool_timeout_seconds=self.tool_action_timeout_seconds,
                 )

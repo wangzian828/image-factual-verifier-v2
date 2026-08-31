@@ -4280,8 +4280,16 @@ def _audit_current_react_runtime_trace(
                 location=location,
             )
 
-        if _mapping(metadata).get("native_interactions"):
-            native_interactions.append((index, metadata))
+    # Include protocol-correction requests as well as accepted tool actions.
+    # They are real provider interactions and must participate in the same
+    # parent chain; otherwise a correction can make the next accepted action
+    # look like a broken root.
+    native_interactions = [
+        (index, _mapping(step.get("metadata")))
+        for index, step in enumerate(steps)
+        if str(step.get("stage", "")).strip() == "unified_react"
+        and _mapping(step.get("metadata")).get("native_interactions")
+    ]
 
     budget_actions = [
         step
@@ -4307,6 +4315,8 @@ def _audit_current_react_runtime_trace(
             location="state.investigation_state.action_count",
         )
 
+    interaction_rows: dict[str, tuple[int, Mapping[str, Any], Mapping[str, Any]]] = {}
+    previous_interaction_id: str | None = None
     for index, metadata in native_interactions:
         interaction_id = str(metadata.get("interaction_id", "")).strip()
         parent_id = str(metadata.get("previous_interaction_id", "") or "").strip()
@@ -4328,16 +4338,75 @@ def _audit_current_react_runtime_trace(
                 "native current ReAct tool action must use tool_roundtrip lifecycle",
                 location=location,
             )
-        if parent_id:
+        if previous_interaction_id is None:
+            if parent_id:
+                _issue(
+                    report,
+                    "REACT_RUNTIME_INTERACTION_ROOT_INVALID",
+                    (
+                        "the first unified ReAct interaction must have an empty "
+                        f"parent, got {parent_id!r}"
+                    ),
+                    location=location,
+                )
+        elif parent_id != previous_interaction_id:
             _issue(
                 report,
-                "REACT_RUNTIME_INTERACTION_PARENT_INVALID",
+                "REACT_RUNTIME_INTERACTION_CHAIN_BROKEN",
                 (
-                    "each current ReAct action starts a fresh compact request; "
-                    "previous_interaction_id must be empty"
+                    "expected previous_interaction_id "
+                    f"{previous_interaction_id!r}, got {parent_id!r}"
                 ),
                 location=location,
             )
+        previous_step = (
+            interaction_rows.get(parent_id, (None, None, None))[2]
+            if parent_id
+            else None
+        )
+        if previous_step is not None and str(
+            previous_step.get("action_type", "")
+        ).strip() == "tool_call":
+            previous_call_id = str(
+                _mapping(previous_step.get("metadata")).get(
+                    "function_call_id",
+                    "",
+                )
+            ).strip()
+            policy_input = _mapping(metadata.get("policy_input"))
+            input_payload = policy_input.get("input_payload")
+            function_result_ids: list[str] = []
+
+            def collect_function_result_ids(value: Any) -> None:
+                if isinstance(value, Mapping):
+                    if str(value.get("type", "")).strip() == "function_result":
+                        call_id = str(value.get("call_id", "")).strip()
+                        if call_id:
+                            function_result_ids.append(call_id)
+                    for child in value.values():
+                        collect_function_result_ids(child)
+                elif isinstance(value, list):
+                    for child in value:
+                        collect_function_result_ids(child)
+
+            collect_function_result_ids(input_payload)
+            if previous_call_id and previous_call_id not in function_result_ids:
+                _issue(
+                    report,
+                    "REACT_RUNTIME_TOOL_RESULT_NOT_REINJECTED",
+                    (
+                        "the request following a completed tool action does not "
+                        f"contain its function_result call_id {previous_call_id!r}"
+                    ),
+                    location=location,
+                )
+        if interaction_id:
+            interaction_rows[interaction_id] = (
+                index,
+                metadata,
+                steps[index],
+            )
+            previous_interaction_id = interaction_id
 
     judgment_outputs = [
         (index, step)

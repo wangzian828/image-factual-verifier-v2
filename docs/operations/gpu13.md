@@ -891,18 +891,25 @@ the first turn; Gemini chooses which one to call and may choose visual tools
 again later. Every turn is one thought plus one native tool call. The runtime
 owns state, IDs, deduplication, budgets, failures, and termination.
 
-In `direct_multimodal` mode, every ReAct and Judgment request receives one
-temporary controlled image attachment. The default is a JPEG with longest edge
-1280 and quality 88; the image is not appended to text history or persisted as
-base64. The context ledger stores only the externalized media artifact and
-image metadata. In `separate_vlm` mode, visual tools receive the image and the
-policy model receives structured observations only. Both modes use the same
-dynamic tool schema, reducer, state delta, and trace contract. Mature
-visual/search/browse tool implementations remain unchanged.
+In `direct_multimodal` mode, the root ReAct request receives one temporary
+controlled image attachment. Later ReAct requests reuse that image through the
+same Gemini Interaction history and add only the newest function result and
+current observation; they do not upload the original image again. The default is
+a JPEG with longest edge 1280 and quality 88; the image is not copied into text
+history or persisted as base64. The independent final Judgment request receives
+its own controlled image attachment. The context ledger stores only the
+externalized media artifact and image metadata. In `separate_vlm` mode, visual
+tools receive the image and the policy model receives structured observations
+only. Both modes use the same dynamic tool schema, reducer, state delta, and
+trace contract. Mature visual/search/browse tool implementations remain
+unchanged.
 
 Trace snapshots store a `runtime_image` reference, not image base64. A tool action
-uses a short native `function_call -> function_result` round trip; completed
-actions are not replayed as a growing provider-side interaction chain.
+uses a short native `function_call -> function_result` round trip. ReAct actions
+share one provider-side InteractionSession: the completed function result is
+submitted to the next request exactly once, while earlier history remains
+available through the provider session rather than being manually duplicated in
+the new local context.
 Gemini main-chain requests use a 90-second per-attempt HTTP timeout, twelve retries,
 and a 900-second outer stage deadline by default. Retry delays grow exponentially,
 include jitter, and honor provider `Retry-After` or `google.rpc.RetryInfo` hints up
