@@ -398,17 +398,69 @@ def test_native_follow_up_keeps_candidate_images_outside_function_result(
     assert [item["type"] for item in second_request["input_payload"]] == [
         "function_result",
         "user_input",
-        "user_input",
     ]
-    function_result, candidate_images, original_image = second_request[
-        "input_payload"
-    ]
+    function_result, visual_input = second_request["input_payload"]
     assert [item["type"] for item in function_result["result"]] == ["text"]
-    assert candidate_images["content"] == [
+    assert visual_input["content"][:2] == [
         {"type": "image", "uri": "https://cdn.example.org/reference-one"},
         {"type": "image", "uri": "https://cdn.example.org/reference-two"},
     ]
-    assert original_image["content"][0]["type"] == "image"
+    assert visual_input["content"][2]["type"] == "image"
+    assert visual_input["content"][2]["mime_type"] == "image/jpeg"
+
+
+def test_native_follow_up_merges_existing_user_input_steps(
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "image.png"
+    Image.new("RGB", (32, 24), color=(120, 150, 180)).save(image_path)
+    backend = NativeFakeBackend([])
+    runner = StageRunner(
+        llm=backend,
+        system_prompt="Investigate with tools.",
+        tools=[],
+        image_path=str(image_path),
+        stage_name="verification",
+        attach_image=True,
+    )
+
+    payload = runner._append_native_image(
+        [
+            {
+                "type": "function_result",
+                "name": "reverse_image_search",
+                "call_id": "call-1",
+                "result": [{"type": "text", "text": "candidates"}],
+            },
+            {
+                "type": "user_input",
+                "content": [
+                    {"type": "image", "uri": "https://example.org/candidate"},
+                ],
+            },
+            {
+                "type": "user_input",
+                "content": [
+                    {"type": "text", "text": "Review the candidates."},
+                ],
+            },
+        ]
+    )
+
+    assert [item["type"] for item in payload] == [
+        "function_result",
+        "user_input",
+    ]
+    assert payload[1]["content"][0] == {
+        "type": "image",
+        "uri": "https://example.org/candidate",
+    }
+    assert payload[1]["content"][1] == {
+        "type": "text",
+        "text": "Review the candidates.",
+    }
+    assert payload[1]["content"][2]["type"] == "image"
+    assert payload[1]["content"][2]["mime_type"] == "image/jpeg"
 
 
 def test_native_tool_schema_hides_a_budget_exhausted_tool() -> None:

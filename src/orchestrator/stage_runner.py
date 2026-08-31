@@ -2269,23 +2269,76 @@ class StageRunner:
         return {"type": "image", "mime_type": mime_type, "data": data}
 
     def _append_native_image(self, input_payload: Any) -> Any:
-        """Attach the original image to one follow-up Interactions request.
+        """Attach one compressed original image to a follow-up request.
 
-        Follow-up requests may contain function_result Step items, while a
-        correction request is usually plain text. Gemini requires those Step
-        items to stay separate from Content items, so the image is placed in a
-        small user_input step. It is never added to accumulated text history
-        or persisted in a StageStep.
+        A follow-up may already contain a ``user_input`` step carrying visual
+        candidates or inspection artifacts.  Interactions accepts the step
+        sequence, but the provider rejects the same request when the image is
+        split across multiple ``user_input`` steps.  Merge all existing
+        ``user_input`` content into the first such step and append the
+        original image there.  The image is never added to accumulated text
+        history or persisted in a ``StageStep``.
         """
 
         if not (self.attach_image and self.image_path):
             return input_payload
         image_item = self._native_image_item()
         if isinstance(input_payload, list):
-            return [
-                *deepcopy(input_payload),
-                {"type": "user_input", "content": [image_item]},
-            ]
+            payload = deepcopy(input_payload)
+            if self._native_payload_contains_image(payload, image_item):
+                return payload
+
+            step_types = {
+                "function_result",
+                "function_call",
+                "user_input",
+                "message",
+                "model_output",
+                "thought",
+            }
+            has_steps = any(
+                isinstance(item, dict)
+                and str(item.get("type", "")).strip().lower().replace("-", "_")
+                in step_types
+                for item in payload
+            )
+            if not has_steps:
+                payload.append(image_item)
+                return payload
+
+            merged: List[Dict[str, Any]] = []
+            merged_user_input: Optional[Dict[str, Any]] = None
+            for item in payload:
+                if (
+                    isinstance(item, dict)
+                    and str(item.get("type", ""))
+                    .strip()
+                    .lower()
+                    .replace("-", "_")
+                    == "user_input"
+                ):
+                    if merged_user_input is None:
+                        merged_user_input = {
+                            "type": "user_input",
+                            "content": [],
+                        }
+                        merged.append(merged_user_input)
+                    merged_user_input["content"].extend(
+                        self._native_user_input_content(item)
+                    )
+                    continue
+                merged.append(item)
+
+            if merged_user_input is None:
+                merged.append(
+                    {
+                        "type": "user_input",
+                        "content": [image_item],
+                    }
+                )
+            else:
+                merged_user_input["content"].append(image_item)
+            return merged
         if input_payload in (None, ""):
             return [{"type": "user_input", "content": [image_item]}]
         return [
@@ -2297,6 +2350,61 @@ class StageRunner:
                 ],
             }
         ]
+
+    @staticmethod
+    def _native_user_input_content(
+        item: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        content = item.get("content")
+        if isinstance(content, list):
+            return [
+                deepcopy(value)
+                for value in content
+                if isinstance(value, dict)
+            ]
+        if isinstance(content, dict):
+            return [deepcopy(content)]
+        if content in (None, ""):
+            return []
+        return [{"type": "text", "text": str(content)}]
+
+    @staticmethod
+    def _native_payload_contains_image(
+        payload: List[Any],
+        image_item: Dict[str, Any],
+    ) -> bool:
+        target_uri = image_item.get("uri")
+        target_data = image_item.get("data")
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            content = item.get("content")
+            values = content if isinstance(content, list) else [content]
+            for value in values:
+                if not isinstance(value, dict):
+                    continue
+                if (
+                    value.get("type") == "image"
+                    and (
+                        (target_uri and value.get("uri") == target_uri)
+                        or (target_data and value.get("data") == target_data)
+                    )
+                ):
+                    return True
+            result = item.get("result")
+            if isinstance(result, list):
+                for value in result:
+                    if not isinstance(value, dict):
+                        continue
+                    if (
+                        value.get("type") == "image"
+                        and (
+                            (target_uri and value.get("uri") == target_uri)
+                            or (target_data and value.get("data") == target_data)
+                        )
+                    ):
+                        return True
+        return False
 
     def _session_previous_interaction_id(self) -> Optional[str]:
         if self.interaction_session is None:
