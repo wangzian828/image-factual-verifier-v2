@@ -190,6 +190,18 @@ def test_agent_audit_selects_sidecar_from_manifest_split() -> None:
     )
 
 
+def test_agent_audit_accepts_runtime_termination_success() -> None:
+    from scripts.audit_agent_private_gold import (
+        _source_result_is_successful,
+        _source_result_status,
+    )
+
+    assert _source_result_status({"termination": "success"}) == "success"
+    assert _source_result_is_successful({"termination": "success"}) is True
+    assert _source_result_is_successful({"status": "completed"}) is True
+    assert _source_result_is_successful({"termination": "timeout"}) is False
+
+
 def test_agent_report_sidecar_is_an_in_memory_overlay() -> None:
     from scripts.audit_agent_private_gold import _overlay_report_sidecar
 

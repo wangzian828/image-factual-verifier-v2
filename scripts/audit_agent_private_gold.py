@@ -55,6 +55,21 @@ def _case_id(row: Mapping[str, Any]) -> str:
     return str(row.get("case_id") or "").strip()
 
 
+def _source_result_status(result: Mapping[str, Any]) -> str:
+    """Normalize the two persisted Agent result conventions.
+
+    ``run_cases`` writes terminal runtime state as ``termination`` while some
+    higher-level collectors write ``status``.  Both describe the same source
+    rollout outcome for this post-hoc audit.
+    """
+
+    return str(result.get("status") or result.get("termination") or "").strip()
+
+
+def _source_result_is_successful(result: Mapping[str, Any]) -> bool:
+    return _source_result_status(result) in {"success", "completed"}
+
+
 def _trace_path(run_dir: Path, row: Mapping[str, Any]) -> Path:
     source_trace = str(row.get("source_trace_path") or "").strip()
     raw = source_trace or str(row.get("trace_path") or "").strip()
@@ -147,7 +162,7 @@ async def _audit_one(
     started = time.monotonic()
     audit: dict[str, Any] = {
         "case_id": case_id,
-        "source_status": result.get("status"),
+        "source_status": _source_result_status(result),
         "source_model": result.get("model"),
         "judge_model": judge_model,
         "audit_mode": "agent_trace_evidence",
@@ -156,7 +171,7 @@ async def _audit_one(
     try:
         if gold_row is None:
             raise ValueError("private gold row is missing")
-        if str(result.get("status") or "") not in {"success", "completed"}:
+        if not _source_result_is_successful(result):
             raise ValueError("Agent source result is not successful")
         trace_path = _trace_path(run_dir, result)
         raw_trace = _read_json(trace_path)
