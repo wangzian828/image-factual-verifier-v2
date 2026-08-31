@@ -193,6 +193,87 @@ def test_real_canary_accepts_unified_react_artifacts(
     assert result["successful_tools"] == ["text_search", "visit"]
 
 
+def test_real_canary_accepts_current_claimless_react_artifacts(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    (tmp_path / "traces").mkdir()
+    (tmp_path / "run_manifest.json").write_text(
+        json.dumps(
+            {
+                "status": "completed",
+                "agent": {
+                    "provider": "gemini",
+                    "profile_id": "teacher-gemini",
+                    "model": "gemini-3.7-flash",
+                    "decision_policy_version": "unified-react-v1",
+                },
+                "benchmark": {
+                    "input_mode": "image_only",
+                    "decision_policy_version": "reinspect-v2",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "summary.json").write_text(
+        json.dumps({"num_errors": 0}),
+        encoding="utf-8",
+    )
+    (tmp_path / "traces" / "case-react.json").write_text(
+        json.dumps(
+            {
+                "image_id": "case-react",
+                "input_mode": "image_only",
+                "decision_policy_version": "unified-react-v1",
+                "verdict": "real",
+                "verdict_basis": {
+                    "schema_version": "ifv-unified-judgment-basis-v1",
+                    "decision_mode": "bounded_binary_judgment",
+                    "evidence_ids": ["evidence-1"],
+                },
+                "judgment": {
+                    "policy_rule_id": "unified-react-v1",
+                    "fact_check_report": {
+                        "headline": "A bounded report",
+                    },
+                },
+                "termination": "success",
+                "llm_api_calls": 3,
+                "state": {
+                    "investigation_state": {
+                        "schema_version": "ifv-unified-react-v1",
+                        "action_count": 1,
+                        "visual_memory": {},
+                    },
+                    "all_steps": [
+                        {
+                            "action_type": "tool_call",
+                            "tool_name": "text_search",
+                            "tool_result": json.dumps({"status": "success"}),
+                        },
+                        {
+                            "action_type": "tool_call",
+                            "tool_name": "visit",
+                            "tool_result": json.dumps({"status": "success"}),
+                        },
+                    ],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        run_real_canary,
+        "audit_trace",
+        lambda path: SimpleNamespace(failures=lambda strict_scheduler: []),
+    )
+
+    result = run_real_canary._require_real_run_artifacts(tmp_path)
+
+    assert result["passed"] is True
+
+
 def test_trace_discovery_excludes_nested_runtime_json_artifacts(tmp_path) -> None:
     _write_v4_canary_artifacts(tmp_path)
     runtime_artifact = (

@@ -27,6 +27,7 @@ from src.eval.release_adapter import (  # noqa: E402
 from src.workflow import AGENT_DECISION_POLICY_VERSION  # noqa: E402
 from scripts.audit_real_trace import audit_trace, discover_trace_files  # noqa: E402
 from src.orchestrator.investigation_models import target_fact_rows  # noqa: E402
+from src.orchestrator.react_runtime import REACT_RUNTIME_SCHEMA_VERSION  # noqa: E402
 
 load_project_dotenv(REPO_ROOT)
 
@@ -224,41 +225,73 @@ def _require_real_run_artifacts(
                 f"trace is not {AGENT_DECISION_POLICY_VERSION}: {path.name}"
             )
         investigation = _mapping(state.get("investigation_state"))
-        if investigation.get("core_verdict_fact_id"):
-            raise RuntimeError(f"trace activates a legacy core fact: {path.name}")
-        claims = target_fact_rows(investigation)
-        if not claims or not any(
-            claim.get("salience") == "high" for claim in claims
-        ):
-            raise RuntimeError(
-                f"trace has no high-salience ImageClaim: {path.name}"
-            )
         basis = _mapping(trace.get("verdict_basis"))
-        if not basis.get("claim_ids"):
-            raise RuntimeError(f"trace has no verdict basis claims: {path.name}")
-        decision_mode = str(
-            basis.get("decision_mode", "evidence_determined")
-            or "evidence_determined"
-        )
         if (
-            trace.get("verdict") == "fake"
-            and decision_mode == "evidence_determined"
-            and not basis.get("discrepancy_ids")
+            str(investigation.get("schema_version", "")).strip()
+            == REACT_RUNTIME_SCHEMA_VERSION
         ):
-            raise RuntimeError(
-                f"fake trace has no selected discrepancy: {path.name}"
+            if int(investigation.get("action_count", 0) or 0) <= 0:
+                raise RuntimeError(
+                    f"current ReAct trace has no accepted actions: {path.name}"
+                )
+            if not isinstance(investigation.get("visual_memory"), Mapping):
+                raise RuntimeError(
+                    f"current ReAct trace has no visual memory: {path.name}"
+                )
+            if basis.get("schema_version") != "ifv-unified-judgment-basis-v1":
+                raise RuntimeError(
+                    f"current ReAct trace has invalid judgment basis: {path.name}"
+                )
+            if basis.get("decision_mode") != "bounded_binary_judgment":
+                raise RuntimeError(
+                    f"current ReAct trace has invalid decision mode: {path.name}"
+                )
+            if not isinstance(
+                _mapping(trace.get("judgment")).get("fact_check_report"),
+                Mapping,
+            ):
+                raise RuntimeError(
+                    f"current ReAct trace has no fact-check report: {path.name}"
+                )
+        else:
+            if investigation.get("core_verdict_fact_id"):
+                raise RuntimeError(
+                    f"trace activates a legacy core fact: {path.name}"
+                )
+            claims = target_fact_rows(investigation)
+            if not claims or not any(
+                claim.get("salience") == "high" for claim in claims
+            ):
+                raise RuntimeError(
+                    f"trace has no high-salience ImageClaim: {path.name}"
+                )
+            if not basis.get("claim_ids"):
+                raise RuntimeError(
+                    f"trace has no verdict basis claims: {path.name}"
+                )
+            decision_mode = str(
+                basis.get("decision_mode", "evidence_determined")
+                or "evidence_determined"
             )
-        if decision_mode == "bounded_binary_judgment" and (
-            not basis.get("unresolved_gaps")
-            or investigation.get("stop_reason")
-            not in {
-                "meaningful_routes_exhausted",
-                "hard_budget_exhausted",
-            }
-        ):
-            raise RuntimeError(
-                f"bounded binary trace lacks its terminal gaps: {path.name}"
-            )
+            if (
+                trace.get("verdict") == "fake"
+                and decision_mode == "evidence_determined"
+                and not basis.get("discrepancy_ids")
+            ):
+                raise RuntimeError(
+                    f"fake trace has no selected discrepancy: {path.name}"
+                )
+            if decision_mode == "bounded_binary_judgment" and (
+                not basis.get("unresolved_gaps")
+                or investigation.get("stop_reason")
+                not in {
+                    "meaningful_routes_exhausted",
+                    "hard_budget_exhausted",
+                }
+            ):
+                raise RuntimeError(
+                    f"bounded binary trace lacks its terminal gaps: {path.name}"
+                )
         if trace.get("termination") != "success":
             raise RuntimeError(f"trace did not terminate successfully: {path.name}")
         if int(trace.get("llm_api_calls", 0) or 0) <= 0:
