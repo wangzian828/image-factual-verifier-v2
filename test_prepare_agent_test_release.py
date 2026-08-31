@@ -1,4 +1,6 @@
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -99,3 +101,15 @@ def test_prepare_agent_test_release_rejects_non_test_rows(tmp_path: Path):
             output_dir=tmp_path / "output",
             limit=1,
         )
+
+
+def test_prepare_agent_test_release_cli_imports_project_package():
+    script = Path(__file__).parent / "scripts" / "prepare_agent_test_release.py"
+    completed = subprocess.run(
+        [sys.executable, str(script), "--help"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0
+    assert "Build a balanced evaluator-only test release" in completed.stdout
