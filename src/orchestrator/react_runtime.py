@@ -697,6 +697,41 @@ def _iter_candidate_rows(payload: Mapping[str, Any]) -> Iterable[Mapping[str, An
                             yield child
 
 
+def _iter_visit_evidence_rows(
+    payload: Mapping[str, Any],
+) -> Iterable[Mapping[str, Any]]:
+    """Yield the extracted passages returned by a completed page visit.
+
+    ``JinaReaderClient`` returns the page-level convenience summary alongside
+    ``evidence_records``.  The latter holds the actual selected passages and
+    their per-passage stance/directness metadata.  Keeping only the former, or
+    looking only in the generic candidate lists, loses the page evidence before
+    the next ReAct turn and terminal Judgment can see it.
+    """
+
+    records = payload.get("evidence_records")
+    if isinstance(records, list):
+        for record in records:
+            if isinstance(record, Mapping):
+                yield record
+        return
+
+    # Preserve compatibility with tools that return a single page payload or a
+    # legacy ``visits``/``pages`` collection without ``evidence_records``.
+    if any(
+        str(payload.get(key, "")).strip()
+        for key in ("evidence", "summary", "text", "content", "excerpt")
+    ):
+        yield payload
+        return
+    for row in _iter_candidate_rows(payload):
+        if any(
+            str(row.get(key, "")).strip()
+            for key in ("evidence", "summary", "text", "content", "excerpt")
+        ):
+            yield row
+
+
 def _append_discoveries(
     state: UnifiedReactState,
     *,
@@ -814,13 +849,7 @@ def _append_evidence(
         return []
     rows: list[Mapping[str, Any]] = []
     if tool_name == "visit":
-        rows.extend(
-            row for row in _iter_candidate_rows(payload)
-            if any(
-                str(row.get(key, "")).strip()
-                for key in ("evidence", "summary", "text", "content", "excerpt")
-            )
-        )
+        rows.extend(_iter_visit_evidence_rows(payload))
     elif tool_name in {
         "focused_visual_inspection",
         "crop_and_inspect",
@@ -1158,7 +1187,12 @@ def render_react_judgment_context(
         "objective": state.objective,
         "original_image": {
             "attached_to_this_request": True,
-            "instruction": "Inspect the image again when a detail matters.",
+            "instruction": (
+                "Use the image only to identify the object or relation discussed "
+                "by the recorded investigation material. Do not introduce a new "
+                "visual anomaly, OCR reading, or factual observation at this "
+                "terminal stage."
+            ),
         },
         "investigation": dict(basis),
         "output_requirements": {
@@ -1171,11 +1205,26 @@ def render_react_judgment_context(
                 "evidence_summary",
                 "remaining_uncertainties",
             ],
+            "verdict_evidence_ids": (
+                "List only evidence_id values from investigation.evidence that "
+                "your report actually relies on. Leave empty only when that list "
+                "is empty."
+            ),
             "rules": [
                 "Keep the claim under review faithful to what the image expresses.",
                 "Use recorded observations and sources without inventing facts.",
                 "A lack of evidence is uncertainty, not proof of fake.",
                 "Visible artifacts or image quality alone are not a factual verdict.",
+                (
+                    "investigation.evidence is the evidence ledger. "
+                    "investigation.discoveries are unverified leads, and "
+                    "investigation.failures do not establish facts."
+                ),
+                (
+                    "Do not use the attached image to create a new anomaly or "
+                    "factual finding that is absent from the evidence ledger or "
+                    "visual_memory."
+                ),
             ],
         },
     }

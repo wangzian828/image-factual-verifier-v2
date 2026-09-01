@@ -9,7 +9,7 @@ import json
 import os
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from src.integrations.gemini import take_runtime_metrics
 from src.integrations.clock.system_clock import SystemClockClient
@@ -745,6 +745,10 @@ class Orchestrator:
             attach_image=(
                 bool(image_path) and self._main_llm_attaches_image()
             ),
+            output_validator=lambda parsed, _steps: self._validate_react_judgment(
+                parsed,
+                basis=basis,
+            ),
             max_output_tokens=self._stage_output_tokens(
                 "UNIFIED_JUDGMENT",
                 8192,
@@ -762,6 +766,12 @@ class Orchestrator:
             raise RuntimeError(
                 "ReAct final Judgment did not produce a valid fact-check report"
             )
+        valid, validation_error = self._validate_react_judgment(
+            parsed,
+            basis=basis,
+        )
+        if not valid:
+            raise RuntimeError("ReAct final Judgment failed validation: " + validation_error)
 
         citations: list[FactCheckEvidenceCitation] = []
         evidence_rows = {
@@ -799,6 +809,7 @@ class Orchestrator:
             fact_check_report=parsed.fact_check_report,
             evidence_citations=citations,
             selected_evidence_ids=list(basis.get("evidence_ids", []))[:40],
+            verdict_evidence_ids=list(parsed.verdict_evidence_ids),
             unresolved_gaps=list(basis.get("open_questions", []))[:12],
         )
 
@@ -1748,9 +1759,38 @@ class Orchestrator:
             selected_visual_anchor_fact_ids=list(basis.visual_anchor_fact_ids),
             selected_finding_ids=list(basis.finding_ids),
             selected_evidence_ids=list(basis.evidence_ids),
+            verdict_evidence_ids=list(parsed.verdict_evidence_ids),
             unresolved_gaps=list(basis.unresolved_gaps),
             terminal_visual_rationale=parsed.terminal_visual_rationale,
         )
+
+    @staticmethod
+    def _validate_react_judgment(
+        parsed: DiscrepancyJudgmentOutput,
+        *,
+        basis: Mapping[str, Any],
+    ) -> tuple[bool, str]:
+        """Keep final reports grounded in the runtime-compiled evidence ledger."""
+
+        allowed = {
+            str(item)
+            for item in basis.get("evidence_ids", [])
+            if str(item).strip()
+        }
+        cited = [str(item) for item in parsed.verdict_evidence_ids]
+        unknown = [item for item in cited if item not in allowed]
+        if unknown:
+            return False, (
+                "verdict_evidence_ids contains IDs absent from the final "
+                "investigation evidence ledger: "
+                + ", ".join(unknown[:6])
+            )
+        if allowed and not cited:
+            return False, (
+                "final Judgment must cite at least one evidence ID when the "
+                "investigation evidence ledger is non-empty"
+            )
+        return True, ""
 
     @staticmethod
     def _validate_discrepancy_decision(
@@ -1801,6 +1841,24 @@ class Orchestrator:
         if parsed.fact_check_report is None:
             return False, (
                 "unified Judgment must produce a reader-facing fact_check_report"
+            )
+        allowed_evidence_ids = {
+            str(item) for item in basis.evidence_ids if str(item).strip()
+        }
+        cited_evidence_ids = [str(item) for item in parsed.verdict_evidence_ids]
+        unknown_evidence_ids = [
+            item for item in cited_evidence_ids if item not in allowed_evidence_ids
+        ]
+        if unknown_evidence_ids:
+            return False, (
+                "verdict_evidence_ids contains IDs absent from the compiled "
+                "evidence ledger: "
+                + ", ".join(unknown_evidence_ids[:6])
+            )
+        if allowed_evidence_ids and not cited_evidence_ids:
+            return False, (
+                "unified Judgment must cite at least one evidence ID when the "
+                "compiled evidence ledger is non-empty"
             )
         if compiled_verdict and parsed.verdict != compiled_verdict:
             return False, (

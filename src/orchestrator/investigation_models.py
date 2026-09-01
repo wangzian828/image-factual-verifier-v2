@@ -1668,6 +1668,7 @@ class DiscrepancyJudgmentOutput(StrictModel):
 
     verdict: Literal["real", "fake"]
     confidence: float = Field(ge=0.0, le=1.0)
+    verdict_evidence_ids: List[str] = Field(default_factory=list, max_length=12)
     overall_assessment: str = Field(min_length=1, max_length=2000)
     fact_check_report: FactCheckReport
     terminal_visual_rationale: Optional[TerminalVisualRationale] = None
@@ -1685,6 +1686,7 @@ class DiscrepancyJudgment(StrictModel):
     )
     selected_finding_ids: List[str] = Field(default_factory=list, max_length=20)
     selected_evidence_ids: List[str] = Field(default_factory=list, max_length=40)
+    verdict_evidence_ids: List[str] = Field(default_factory=list, max_length=12)
     overall_assessment: str = Field(min_length=1, max_length=2000)
     fact_check_report: Optional[FactCheckReport] = None
     evidence_citations: List[FactCheckEvidenceCitation] = Field(

@@ -11,9 +11,15 @@ from src.orchestrator.react_runtime import (
     compile_react_judgment_basis,
     new_unified_react_runtime_state,
     reduce_react_action,
+    render_react_judgment_context,
     render_react_runtime_context,
     validate_react_action,
 )
+from src.orchestrator.investigation_models import (
+    DiscrepancyJudgmentOutput,
+    FactCheckReport,
+)
+from src.orchestrator.pipeline import Orchestrator
 from src.orchestrator.state import ImageOnlyRuntimeCase
 from src.orchestrator.stage_runner import StageRunner
 from src.tools.base import BaseTool
@@ -202,6 +208,87 @@ def test_judgment_basis_contains_compact_investigation_not_repeated_workspace() 
     assert "workspace" not in basis
 
 
+def test_visit_evidence_records_enter_react_ledger_and_final_context() -> None:
+    state = new_unified_react_runtime_state(_case())
+    _bootstrap(state)
+    update = reduce_react_action(
+        state,
+        tool_name="visit",
+        tool_args={
+            "url": ["https://example.test/official"],
+            "investigation_progress": _progress(),
+        },
+        call_id="visit-1",
+        serialized_result=json.dumps(
+            {
+                "status": "success",
+                "summary": "A convenience page summary that must not replace passages.",
+                "evidence_records": [
+                    {
+                        "url": "https://example.test/official",
+                        "evidence": "The official release confirms the pictured bridge opened in 2026.",
+                        "stance": "support",
+                        "directness": "direct",
+                        "relevance": "high",
+                    },
+                    {
+                        "url": "https://example.test/official",
+                        "evidence": "The structure spans the river beside Highway 8.",
+                        "stance": "unclear",
+                        "directness": "indirect",
+                        "relevance": "medium",
+                    },
+                ],
+            }
+        ),
+    )
+
+    assert len(update["created_evidence_ids"]) == 2
+    assert len(state.evidence) == 2
+    assert state.evidence[0]["excerpt"] == (
+        "The official release confirms the pictured bridge opened in 2026."
+    )
+    assert state.evidence[0]["evidence_class"] == "decision_capable_support"
+
+    context = json.loads(
+        render_react_judgment_context(state, compile_react_judgment_basis(state))
+    )
+    assert context["investigation"]["evidence"][0]["excerpt"] == (
+        "The official release confirms the pictured bridge opened in 2026."
+    )
+    assert "verdict_evidence_ids" in context["output_requirements"]
+
+
+def test_final_judgment_cannot_cite_missing_runtime_evidence() -> None:
+    valid = DiscrepancyJudgmentOutput(
+        verdict="real",
+        confidence=0.7,
+        verdict_evidence_ids=["evidence-1"],
+        overall_assessment="The recorded official release supports the event.",
+        fact_check_report=FactCheckReport(
+            headline="Recorded release supports the event",
+            claim_under_review="The image depicts the documented event.",
+            verdict_summary="The available ledger supports real.",
+            key_findings=["The official release names the event."],
+            evidence_summary="The report uses the recorded release.",
+        ),
+    )
+    assert Orchestrator._validate_react_judgment(
+        valid,
+        basis={"evidence_ids": ["evidence-1"]},
+    ) == (True, "")
+
+    invalid = valid.model_copy(
+        update={"verdict_evidence_ids": ["invented-evidence-id"]}
+    )
+    accepted, reason = Orchestrator._validate_react_judgment(
+        invalid,
+        basis={"evidence_ids": ["evidence-1"]},
+    )
+    assert not accepted
+    assert "absent from the final investigation evidence ledger" in reason
+
+
 def test_current_runtime_trace_passes_current_audit_without_target_graph(
     tmp_path: Path,
 ) -> None:
@@ -223,6 +310,7 @@ def test_current_runtime_trace_passes_current_audit_without_target_graph(
         "policy_rule_id": "unified-react-v1",
         "verdict": "real",
         "confidence": 0.6,
+        "verdict_evidence_ids": basis["evidence_ids"],
         "selected_evidence_ids": basis["evidence_ids"],
         "overall_assessment": "The final binary label is a bounded judgment.",
         "fact_check_report": {
