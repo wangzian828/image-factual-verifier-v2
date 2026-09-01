@@ -22,21 +22,20 @@ def test_active_prompts_are_current_and_semantically_bounded() -> None:
 
     react_prompt = " ".join(UNIFIED_REACT_SYSTEM_PROMPT.split())
     assert "one continuing investigation loop" in react_prompt
-    assert "fixed investigation objective" in react_prompt
-    assert "perceive_scene" in react_prompt
-    assert "ocr_with_position" in react_prompt
-    assert "there is no separate planning or replan output" in react_prompt
-    assert "no mandatory visual bootstrap gate" in react_prompt
-    assert "Background context and a similar subject are not enough" in react_prompt
-    assert "unverified candidates, not proof of a match" in react_prompt
-    assert "Comparison can establish image similarity" in react_prompt
-    assert "Search results, titles, snippets" in react_prompt
-    assert "context_only" in react_prompt
-    assert "does not choose the final verdict" in react_prompt
+    assert "fixed task objective" in react_prompt
+    assert "No visual tool is mandatory" in react_prompt
+    assert "there is no separate planning or replan object" in react_prompt
+    assert "Established:" in react_prompt
+    assert "Open:" in react_prompt
+    assert "Action:" in react_prompt
+    assert "concrete image-grounded clue" in react_prompt
+    assert "generic real/fake answer" in react_prompt
+    assert "reverse-image match establishes at most an image or scene correspondence" in react_prompt
+    assert "direct support, direct contradiction, background context" in react_prompt
+    assert "does not choose the final binary verdict" in react_prompt
     assert "finish_investigation" in react_prompt
-    assert "never evidence for either `real` or `fake`" in react_prompt
-    assert "raise or lower verdict confidence" in react_prompt
-    assert "Never request a generic authenticity" in react_prompt
+    assert "The thought should explain the next action" in react_prompt
+    assert "generic visual impression" in react_prompt
 
     browse_prompt = " ".join(EXTRACT_PROMPT.split())
     assert "missing mention is not refutation" in browse_prompt
