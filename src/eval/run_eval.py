@@ -715,12 +715,22 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
             "qwen_stage_enable_thinking": qwen_stage_thinking,
             "concurrency": max(1, args.concurrency),
             "gemini_max_inflight_requests": (
-                int(os.getenv("GEMINI_MAX_INFLIGHT_REQUESTS", "4"))
+                int(
+                    os.getenv(
+                        "GEMINI_MAX_INFLIGHT_REQUESTS",
+                        str(max(1, args.concurrency)),
+                    )
+                )
                 if str(config.provider).lower() == "gemini"
                 else None
             ),
             "gemini_eval_max_concurrency": (
-                int(os.getenv("GEMINI_EVAL_MAX_CONCURRENCY", "4"))
+                int(
+                    os.getenv(
+                        "GEMINI_EVAL_MAX_CONCURRENCY",
+                        str(max(1, args.concurrency)),
+                    )
+                )
                 if str(config.provider).lower() == "gemini"
                 else None
             ),

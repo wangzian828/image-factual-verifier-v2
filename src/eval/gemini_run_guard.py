@@ -57,7 +57,14 @@ class GeminiRunGuard:
         requested = int(concurrency)
         if requested < 1:
             raise ValueError("Gemini rollout concurrency must be at least 1")
-        cap = _positive_env("GEMINI_EVAL_MAX_CONCURRENCY", 4)
+        # This variable is an optional machine-wide safety cap.  When it is
+        # absent, the requested concurrency is the effective cap for this
+        # run; do not resurrect an old fixed default that silently throttles
+        # every invocation.
+        cap = _positive_env(
+            "GEMINI_EVAL_MAX_CONCURRENCY",
+            requested,
+        )
         if requested > cap:
             raise ValueError(
                 f"Gemini rollout concurrency {requested} exceeds the configured "

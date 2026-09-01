@@ -15,12 +15,9 @@ for arg in "$@"; do
     esac
 done
 
-# Gemini supports concurrent teacher requests. Keep the default rollout cap and
-# request gate high enough for explicit multi-worker runs; transport recovery
-# must not silently serialize the provider. Every value remains explicitly
-# overridable for a controlled canary.
-export GEMINI_EVAL_MAX_CONCURRENCY="${GEMINI_EVAL_MAX_CONCURRENCY:-16}"
-export GEMINI_MAX_INFLIGHT_REQUESTS="${GEMINI_MAX_INFLIGHT_REQUESTS:-16}"
+# Gemini supports concurrent teacher requests.  The per-run --concurrency value
+# is applied by start_eval_gpu13.sh; these variables are optional explicit
+# safety caps only and must not carry a stale fixed default between runs.
 export IFV_VISION_TOOL_IMAGE_MODE="${IFV_VISION_TOOL_IMAGE_MODE:-original}"
 export GEMINI_VISION_TIMEOUT_SECONDS="${GEMINI_VISION_TIMEOUT_SECONDS:-150}"
 export VLM_TOOL_REQUEST_TIMEOUT_SECONDS="${VLM_TOOL_REQUEST_TIMEOUT_SECONDS:-150}"

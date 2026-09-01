@@ -212,8 +212,6 @@ containing exactly those 100 IDs. Passing the full 1051-case list together with
 ```bash
 cd /gs/home/wza/projects/image-factual-verifier-v2-worktrees/gpu13-canary-20260804-plan-relaxation-01
 source scripts/server/gpu13_env.sh
-export GEMINI_EVAL_MAX_CONCURRENCY=16
-export GEMINI_MAX_INFLIGHT_REQUESTS=16
 run_id="archive-rerun-$(date -u +%Y%m%dT%H%M%SZ)"
 scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
   python -m src.eval.run_cases \
@@ -227,6 +225,13 @@ scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
   --case-id <case-id-1> \
   --case-id <case-id-2>
 ```
+
+`--concurrency` is the per-run Gemini concurrency. Do not keep a fixed
+`GEMINI_EVAL_MAX_CONCURRENCY=4` (or any other value) in the server login,
+Jupyter, or shared runtime environment: it silently rejects larger runs.
+`GEMINI_EVAL_MAX_CONCURRENCY` and `GEMINI_MAX_INFLIGHT_REQUESTS` are optional
+explicit safety caps; when unset, the launcher follows the current command's
+`--concurrency`.
 
 `start_gemini_eval_gpu13.sh` 仍然适用于 v0.3 release 的正式后台评测：
 

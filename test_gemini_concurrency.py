@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 
 import pytest
 
@@ -78,3 +79,30 @@ def test_gemini_run_guard_enforces_rollout_cap(
 
     with pytest.raises(ValueError, match="exceeds the configured cap"):
         GeminiRunGuard.acquire(provider="gemini", concurrency=3)
+
+
+def test_gemini_run_guard_defaults_cap_to_requested_concurrency(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("IFV_DATA_ROOT", str(tmp_path))
+    monkeypatch.delenv("GEMINI_EVAL_MAX_CONCURRENCY", raising=False)
+    monkeypatch.delenv("GEMINI_MAX_INFLIGHT_REQUESTS", raising=False)
+    monkeypatch.delenv("IFV_GEMINI_LOCK_DIR", raising=False)
+
+    guard = GeminiRunGuard.acquire(
+        provider="gemini",
+        concurrency=24,
+        run_id="requested-24",
+    )
+    try:
+        assert guard.lock_dir is not None
+        owner = (guard.lock_dir / "owner.env").read_text(encoding="utf-8")
+        assert "requested_concurrency=24" in owner
+        assert "request_limit=24" in owner
+        assert (
+            os.environ["GEMINI_EVAL_MAX_CONCURRENCY"] == "24"
+        )
+        assert os.environ["GEMINI_MAX_INFLIGHT_REQUESTS"] == "24"
+    finally:
+        guard.release()

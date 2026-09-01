@@ -173,7 +173,9 @@ fi
 
 effective_gemini_request_limit=""
 if [[ "${gemini_mode}" == "true" ]]; then
-    gemini_eval_cap="${GEMINI_EVAL_MAX_CONCURRENCY:-4}"
+    # GEMINI_EVAL_MAX_CONCURRENCY is an optional explicit machine-wide safety
+    # cap.  Without it, the command's --concurrency controls this run.
+    gemini_eval_cap="${GEMINI_EVAL_MAX_CONCURRENCY:-${requested_concurrency}}"
     if [[ ! "${gemini_eval_cap}" =~ ^[1-9][0-9]*$ ]]; then
         echo "GEMINI_EVAL_MAX_CONCURRENCY must be a positive integer" >&2
         exit 2
