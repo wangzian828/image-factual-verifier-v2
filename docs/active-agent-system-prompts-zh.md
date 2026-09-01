@@ -38,8 +38,11 @@ thought → 一个工具调用 → 工具观察 → 下一轮 thought 和动作
   作匹配或事实。
 - 反向搜图结果是未验证候选。比较可以说明图像相似或对应，不能单独证明事件、
   日期、地点或其他现实关系。
-- 当剩余动作重复、无关或没有价值时，调用 `finish_investigation`。它只结束
-  调查，不产生最终 verdict。
+- 每轮工具调用都要维护 `investigation_progress`：
+  `investigating` 表示仍有重要事实问题未解决；
+  `decision_capable_support` 或 `decision_capable_refute` 表示模型自己判断当前
+  材料已经直接支持或反驳图片表达的事实。这个状态由模型维护，不是 runtime 根据
+  工具结果自动推导出来的证据结论。
 
 ### 4. 证据边界
 
@@ -56,6 +59,10 @@ thought → 一个工具调用 → 工具观察 → 下一轮 thought 和动作
 ### 5. 输出格式
 
 - 严格遵守动态工具 schema，每轮只调用一个 native function。
+- 只有在模型自己维护的 `investigation_progress.status` 为
+  `decision_capable_support` 或 `decision_capable_refute` 时，才主动调用
+  `finish_investigation`；保持 `investigating` 时继续调查。达到总动作上限后，
+  由现有流程直接进入 Judgment。
 - 直接输出 thought 后的工具调用，不输出普通 JSON 代替函数调用。
 - thought 简要说明当前问题、相关观察或缺口、选择的动作以及该动作要澄清什么。
 

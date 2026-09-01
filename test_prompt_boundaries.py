@@ -32,7 +32,9 @@ def test_active_prompts_are_current_and_semantically_bounded() -> None:
     assert "generic real/fake label" in react_prompt
     assert "Use a reverse-image result for image or scene correspondence" in react_prompt
     assert "direct answer, direct contradiction, background context" in react_prompt
-    assert "hands the recorded investigation to the final judgment stage" in react_prompt
+    assert "decision_capable_support" in react_prompt
+    assert "decision_capable_refute" in react_prompt
+    assert "global action budget is exhausted" in react_prompt
     assert "finish_investigation" in react_prompt
     assert "The runtime records evidence, IDs, and state" in react_prompt
     assert "generic visual impression" in react_prompt

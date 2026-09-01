@@ -53,6 +53,12 @@ image-grounded ReAct loop，状态由 runtime/reducer 管理，成熟工具继�
   预算、失败记录和 state delta 由 runtime 负责。
 - 每次直接多模态请求都会临时附加同一张受控压缩原图。原图不重复写入文本
   历史，也不把 base64 写入 trace。
+- `investigation_progress` 是模型在每轮动作中自行维护的调查状态：
+  `investigating`、`decision_capable_support` 或
+  `decision_capable_refute`。runtime 只校验结构、保存和传回；不会根据工具
+  名称、`stance`、`directness`、`relevance` 或 `evidence_class` 推断这个状态，
+  也不会因此动态增删调查工具。主动结束时，模型必须自行声明两个方向性状态
+  之一；达到总动作上限时仍按现有流程进入 Judgment。
 - `finish_investigation` 只结束调查，不决定 `real/fake`；最终标签和报告由
   Judgment 收尾。
 

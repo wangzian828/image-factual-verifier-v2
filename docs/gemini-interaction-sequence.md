@@ -27,6 +27,16 @@ Claim/route/task 链路仅作为历史资料保留。
 5. 参考图或聚焦视觉结果作为当前轮新增的多模态 `user_input` 追加，并与当前文本合并为一个
    `user_input` 步骤。
 
+每轮工具调用还携带模型自行维护的 `investigation_progress`：
+
+- `investigating`：仍有重要事实问题没有闭合；
+- `decision_capable_support`：模型判断当前材料已经直接支持图片表达的事实；
+- `decision_capable_refute`：模型判断当前材料已经直接反驳图片表达的事实。
+
+这只是模型的调查状态。runtime 负责校验、保存和传回，不根据工具名称或工具结果
+自动推断，也不根据它动态增删工具。模型只有在声明后两个方向性状态之一时才能
+主动调用 `finish_investigation`；达到 24 次动作上限时仍沿用现有流程进入 Judgment。
+
 因此，工具结果的生命周期是：
 
 ```text

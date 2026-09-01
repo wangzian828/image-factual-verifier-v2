@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 from src.orchestrator.react_runtime import (
+    FinishInvestigationTool,
     RuntimeToolAdapter,
     available_unified_react_runtime_tools,
     compile_react_judgment_basis,
@@ -60,6 +61,13 @@ def _bootstrap(state) -> None:
     }
 
 
+def _progress(
+    status: str = "investigating",
+    basis: str = "The factual question remains unresolved.",
+) -> dict:
+    return {"status": status, "basis": basis}
+
+
 def test_runtime_state_has_no_preconstructed_target_graph() -> None:
     state = new_unified_react_runtime_state(_case())
     assert "target_facts" not in state.model_dump()
@@ -78,9 +86,18 @@ def test_public_tool_schema_hides_mature_internal_fields() -> None:
 
     assert "image_claim" not in adapter.parameters["properties"]
     assert "retrieval_goal" not in adapter.parameters["properties"]
-    adapter.call({"url": ["https://example.test/page"], "question": "Check the event."})
+    assert "investigation_progress" in adapter.parameters["properties"]
+    assert "investigation_progress" in adapter.parameters["required"]
+    adapter.call(
+        {
+            "url": ["https://example.test/page"],
+            "question": "Check the event.",
+            "investigation_progress": _progress(),
+        }
+    )
     assert delegate.received["image_claim"] == "Check the event."
     assert delegate.received["retrieval_goal"] == "Check the event."
+    assert "investigation_progress" not in delegate.received
 
 
 def test_action_memory_is_bounded_and_react_context_has_current_image_marker() -> None:
@@ -89,12 +106,18 @@ def test_action_memory_is_bounded_and_react_context_has_current_image_marker() -
     assert not validate_react_action(
         state,
         tool_name="text_search",
-        tool_args={"queries": "bridge river"},
+        tool_args={
+            "queries": "bridge river",
+            "investigation_progress": _progress(),
+        },
     )
     update = reduce_react_action(
         state,
         tool_name="text_search",
-        tool_args={"queries": "bridge river"},
+        tool_args={
+            "queries": "bridge river",
+            "investigation_progress": _progress(),
+        },
         call_id="search-1",
         serialized_result=json.dumps(
             {
@@ -120,6 +143,54 @@ def test_action_memory_is_bounded_and_react_context_has_current_image_marker() -
     assert "target_facts" not in context
     assert "search_hypotheses" not in context
     assert context["budget"]["actions_used"] == 1
+    assert context["budget"]["tool_budgets"]["text_search"] == {
+        "used": 1,
+        "limit": 16,
+        "remaining": 15,
+    }
+    assert context["investigation_progress"]["status"] == "investigating"
+
+
+def test_tool_availability_does_not_depend_on_model_progress_status() -> None:
+    state = new_unified_react_runtime_state(_case())
+    expected = available_unified_react_runtime_tools(state)
+
+    for status in (
+        "investigating",
+        "decision_capable_support",
+        "decision_capable_refute",
+    ):
+        state.investigation_progress = _progress(status)
+        assert available_unified_react_runtime_tools(state) == expected
+
+
+def test_finish_requires_model_declared_directional_progress() -> None:
+    state = new_unified_react_runtime_state(_case())
+    _bootstrap(state)
+    tool = FinishInvestigationTool()
+    assert "investigation_progress" in tool.parameters["required"]
+    assert (
+        validate_react_action(
+            state,
+            tool_name="finish_investigation",
+            tool_args={
+                "rationale": "I have finished.",
+                "investigation_progress": _progress(),
+            },
+        )
+        != ""
+    )
+    assert not validate_react_action(
+        state,
+        tool_name="finish_investigation",
+        tool_args={
+            "rationale": "A source directly resolves the event shown.",
+            "investigation_progress": _progress(
+                "decision_capable_support",
+                "The official source directly identifies the pictured event.",
+            ),
+        },
+    )
 
 
 def test_judgment_basis_contains_compact_investigation_not_repeated_workspace() -> None:
@@ -138,7 +209,7 @@ def test_current_runtime_trace_passes_current_audit_without_target_graph(
     update = reduce_react_action(
         state,
         tool_name="perceive_scene",
-        tool_args={},
+        tool_args={"investigation_progress": _progress()},
         call_id="call-scene",
         serialized_result=json.dumps(
             {
@@ -169,7 +240,7 @@ def test_current_runtime_trace_passes_current_audit_without_target_graph(
         "stage": "unified_react",
         "action_type": "tool_call",
         "tool_name": "perceive_scene",
-        "tool_args": {},
+        "tool_args": {"investigation_progress": _progress()},
         "tool_result": json.dumps(
             {"status": "success", "scene_description": "A bridge crosses a river."}
         ),
@@ -184,7 +255,7 @@ def test_current_runtime_trace_passes_current_audit_without_target_graph(
             "policy_action": {
                 "type": "tool_call",
                 "name": "perceive_scene",
-                "arguments": {},
+                "arguments": {"investigation_progress": _progress()},
             },
             "react_state_delta": update,
         },

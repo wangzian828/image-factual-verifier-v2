@@ -62,7 +62,7 @@ harness、审计口径或运行配置变更，必须先在第 4 节追加一行�
 | 2026-08-31 | 已更新回归断言 | `test_native_structured_output.py` | 将共享 InteractionSession 的跨阶段测试改为验证后续阶段复用 provider 历史中的原图，只发送新的文本输入；不再把重复上传原图当作正确行为。 | 本地/服务器定向测试通过。 | `f88352a` |
 | 2026-08-31 | 已适配真实 canary 验收 | `scripts/run_real_canary.py`, `test_real_canary_cli.py` | 当前主流程是 claimless `react_runtime`：不再要求 ImageClaim、claim_ids 或旧的终止原因；只对当前 ReAct schema 检查有动作、视觉记忆、统一 judgment basis 和 fact-check report。旧图谱 trace 仍保留原校验。 | 本地/服务器定向测试通过；用当前 checkout 复核既有 smoke trace 通过。 | `62f6b9c` |
 | 2026-08-31 | 收尾验证与实验记录 | `docs/agent-evaluation-closeout-plan.md`, `docs/reports/2026-08-30-gemini-direct-qa-experiment-record.md` | 写入 3.7 全量 direct QA/judge、10 条新版 Agent smoke、SFT 分桶、128K 长轨迹和“未启动 Agent-100/教师 rollout”的决策。 | 本地 77 项当前门禁、服务器 103 项定向门禁通过；服务器无 rollout/audit 残留进程，CLOSE-WAIT=3。 | 本次文档提交 |
-| 2026-09-01 | 计划中：ReAct prompt 行为实验 | `src/orchestrator/unified_prompts.py`, `docs/active-agent-system-prompts.md`, `test_prompt_boundaries.py` | 不改变二分类收尾逻辑、工具契约、状态结构或 private-gold 口径；仅减少 AI/真实性关键词诱导，要求 thought 先处理最近工具结果，再明确未解决问题和下一步动作，并收紧无关搜索/访问与提前结束。 | 待本地门禁、gpu-13 部署及同一 10 条 smoke 对比。 | 待提交 |
+| 2026-09-01 | 已实施：ReAct 调查状态由模型维护 | `src/orchestrator/react_runtime.py`, `src/orchestrator/unified_prompts.py`, `test_react_runtime.py`, `test_prompt_boundaries.py` | 将 `investigation_progress.status` 定义为 `investigating`、`decision_capable_support`、`decision_capable_refute`。runtime 只校验、保存和传回这个状态；不根据工具名、`stance`、`directness`、`relevance` 或 `evidence_class` 推断它，也不因此动态增删工具。既有 Evidence 归档语义保持不变。主动结束仍需模型声明方向性状态；24 次动作上限和 Judgment 流程不变。 | 定向 pytest、compileall、git diff --check 通过；待提交、gpu-13 部署及同一 10 条 smoke 对比。 | 待提交 |
 
 后续每一条 Agent 改动必须记录：修改前行为、修改后行为、为何不改变 private-gold
 隔离/成熟工具契约、对应测试、真实 smoke case、commit 和服务器部署状态。

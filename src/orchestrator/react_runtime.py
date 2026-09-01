@@ -47,6 +47,24 @@ REACT_RUNTIME_TOOLS = (
     "focused_visual_inspection",
     "count_objects",
 )
+REACT_RUNTIME_TOOL_LIMITS = {
+    "current_time": 1,
+    "ocr_with_position": 3,
+    "reverse_image_search": 2,
+    "text_search": 16,
+    "visit": 16,
+    "compare_with_reference": 6,
+    "crop_and_inspect": 4,
+    "focused_visual_inspection": 2,
+    "check_consistency": 3,
+    "analyze_visual_anomalies": 3,
+}
+INVESTIGATION_PROGRESS_FIELD = "investigation_progress"
+INVESTIGATION_PROGRESS_STATUSES = (
+    "investigating",
+    "decision_capable_support",
+    "decision_capable_refute",
+)
 _INTERNAL_FIELDS = {
     "image_input",
     "image_claim",
@@ -59,6 +77,7 @@ _INTERNAL_FIELDS = {
     "source_evidence_id",
     "source_discovery_id",
     "before_understanding_version",
+    INVESTIGATION_PROGRESS_FIELD,
 }
 _URL_FIELDS = {
     "url",
@@ -67,6 +86,69 @@ _URL_FIELDS = {
     "candidate_url",
     "reference_image_url",
 }
+
+
+def _investigation_progress_schema() -> Dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "status": {
+                "type": "string",
+                "enum": list(INVESTIGATION_PROGRESS_STATUSES),
+                "description": (
+                    "Your current investigation status. Keep "
+                    "'investigating' while a material factual question "
+                    "remains unresolved. Use "
+                    "'decision_capable_support' or "
+                    "'decision_capable_refute' only when you personally judge "
+                    "that the accumulated material directly supports or "
+                    "contradicts the task's factual situation."
+                ),
+            },
+            "basis": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1200,
+                "description": (
+                    "One concise sentence naming what changed this status. "
+                    "When investigating, state the unresolved factual gap. "
+                    "For a directional status, identify the concrete source "
+                    "or observation that you judge to support or contradict "
+                    "the task. Do not "
+                    "use visual style, image quality, OCR uncertainty, or "
+                    "suspected AI artifacts as decisive evidence."
+                ),
+            },
+        },
+        "required": ["status", "basis"],
+        "additionalProperties": False,
+    }
+
+
+def _parse_investigation_progress(
+    value: Any,
+    *,
+    required: bool,
+) -> tuple[Dict[str, str] | None, str]:
+    if value is None:
+        if required:
+            return None, (
+                "every unified ReAct action must include "
+                f"{INVESTIGATION_PROGRESS_FIELD}"
+            )
+        return None, ""
+    if not isinstance(value, Mapping):
+        return None, f"{INVESTIGATION_PROGRESS_FIELD} must be an object"
+    status = str(value.get("status", "")).strip()
+    basis = _one_line(value.get("basis"), 1200)
+    if status not in INVESTIGATION_PROGRESS_STATUSES:
+        return None, (
+            f"{INVESTIGATION_PROGRESS_FIELD}.status must be one of "
+            + ", ".join(INVESTIGATION_PROGRESS_STATUSES)
+        )
+    if not basis:
+        return None, f"{INVESTIGATION_PROGRESS_FIELD}.basis is required"
+    return {"status": status, "basis": basis}, ""
 
 
 class UnifiedReactState(BaseModel):
@@ -104,6 +186,12 @@ class UnifiedReactState(BaseModel):
     action_count: int = Field(default=0, ge=0, le=MAX_REACT_ACTIONS)
     no_gain_streak: int = Field(default=0, ge=0, le=MAX_REACT_ACTIONS)
     stop_reason: str = Field(default="", max_length=200)
+    investigation_progress: Dict[str, str] = Field(
+        default_factory=lambda: {
+            "status": "investigating",
+            "basis": "A material factual question remains unresolved.",
+        }
+    )
 
     def to_dict(self) -> Dict[str, Any]:
         return self.model_dump(mode="json")
@@ -181,26 +269,38 @@ def available_unified_react_runtime_tools(
 
 
 def _exhausted_tools(state: UnifiedReactState) -> set[str]:
-    limits = {
-        "current_time": 1,
-        "reverse_image_search": 2,
-        "text_search": 16,
-        "visit": 16,
-        "compare_with_reference": 6,
-        "check_consistency": 3,
-        "analyze_visual_anomalies": 3,
-        "crop_and_inspect": 4,
-        "focused_visual_inspection": 4,
-        "count_objects": 2,
-    }
     counts: Dict[str, int] = {}
     for item in state.attempted_actions:
         name = str(item.get("tool_name", "")).strip()
         if name:
             counts[name] = counts.get(name, 0) + 1
     return {
-        name for name, limit in limits.items() if counts.get(name, 0) >= limit
+        name
+        for name, limit in REACT_RUNTIME_TOOL_LIMITS.items()
+        if counts.get(name, 0) >= limit
     }
+
+
+def _tool_budget_snapshot(state: UnifiedReactState) -> Dict[str, Any]:
+    counts: Dict[str, int] = {}
+    for item in state.attempted_actions:
+        name = str(item.get("tool_name", "")).strip()
+        if name and name != "finish_investigation":
+            counts[name] = counts.get(name, 0) + 1
+    snapshot: Dict[str, Any] = {}
+    for name in REACT_RUNTIME_TOOLS:
+        used = counts.get(name, 0)
+        limit = REACT_RUNTIME_TOOL_LIMITS.get(name)
+        snapshot[name] = {
+            "used": used,
+            "limit": limit,
+            "remaining": (
+                None
+                if limit is None
+                else max(0, int(limit) - used)
+            ),
+        }
+    return snapshot
 
 
 def is_unified_react_runtime_budget_action(step: Mapping[str, Any]) -> bool:
@@ -256,8 +356,11 @@ def _public_parameters(delegate: BaseTool) -> Dict[str, Any]:
             },
             "maxItems": 4,
         }
-    if name == "finish_investigation":
-        return parameters
+    properties[INVESTIGATION_PROGRESS_FIELD] = _investigation_progress_schema()
+    required = [
+        *required,
+        INVESTIGATION_PROGRESS_FIELD,
+    ]
     parameters["required"] = list(dict.fromkeys(required))
     parameters["additionalProperties"] = False
     return parameters
@@ -401,10 +504,14 @@ class FinishInvestigationTool(BaseTool):
                 "rationale": {
                     "type": "string",
                     "minLength": 1,
-                    "description": "Why further investigation is not worthwhile.",
-                }
+                    "description": (
+                        "Why the accumulated investigation can now be "
+                        "handed to final Judgment."
+                    ),
+                },
+                INVESTIGATION_PROGRESS_FIELD: _investigation_progress_schema(),
             },
-            "required": ["rationale"],
+            "required": ["rationale", INVESTIGATION_PROGRESS_FIELD],
             "additionalProperties": False,
         }
     )
@@ -471,9 +578,25 @@ def validate_react_action(
     allowed = set(available_unified_react_runtime_tools(state))
     if tool_name not in allowed:
         return f"{tool_name} is not available in the current unified ReAct state"
+    progress, progress_error = _parse_investigation_progress(
+        tool_args.get(INVESTIGATION_PROGRESS_FIELD),
+        required=True,
+    )
+    if progress_error:
+        return progress_error
     if tool_name == "finish_investigation":
         if not _one_line(tool_args.get("rationale")):
             return "finish_investigation requires a rationale"
+        if progress["status"] not in {
+            "decision_capable_support",
+            "decision_capable_refute",
+        }:
+            return (
+                "finish_investigation requires "
+                f"{INVESTIGATION_PROGRESS_FIELD}.status="
+                "to be 'decision_capable_support' or "
+                "'decision_capable_refute'; continue investigating otherwise"
+            )
         return ""
     if any(
         str(key) in {"claim_id", "task_id", "question_id", "__claim_id", "__question_id"}
@@ -649,6 +772,12 @@ def _append_discoveries(
 
 
 def _evidence_class(payload: Mapping[str, Any]) -> str:
+    """Normalize tool evidence metadata for archiving and downstream audit.
+
+    This is not the model's ``investigation_progress`` state and never changes
+    the available tool list or the model-declared direction of the episode.
+    """
+
     explicit = str(
         payload.get("evidence_class")
         or payload.get("relation_stance")
@@ -803,6 +932,30 @@ def reduce_react_action(
     serialized_result: str,
     perception: PerceptionReport | None = None,
 ) -> Dict[str, Any]:
+    progress, progress_error = _parse_investigation_progress(
+        tool_args.get(INVESTIGATION_PROGRESS_FIELD),
+        required=True,
+    )
+    if progress_error:
+        return {
+            "accepted": False,
+            "rejected_reason": progress_error,
+        }
+    if (
+        tool_name == "finish_investigation"
+        and progress["status"]
+        not in {"decision_capable_support", "decision_capable_refute"}
+    ):
+        return {
+            "accepted": False,
+            "rejected_reason": (
+                "finish_investigation requires "
+                f"{INVESTIGATION_PROGRESS_FIELD}.status="
+                "to be 'decision_capable_support' or "
+                "'decision_capable_refute'"
+            ),
+        }
+    state.investigation_progress = progress
     try:
         payload, succeeded = parse_tool_result(serialized_result)
     except Exception as exc:
@@ -954,10 +1107,12 @@ def render_react_runtime_context(
             for item in state.recent_actions[-8:]
         ],
         "open_questions": state.open_questions[-12:],
+        "investigation_progress": dict(state.investigation_progress),
         "budget": {
             "actions_used": state.action_count,
             "actions_remaining": max(0, MAX_REACT_ACTIONS - state.action_count),
             "no_gain_streak": state.no_gain_streak,
+            "tool_budgets": _tool_budget_snapshot(state),
         },
     }
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
@@ -986,6 +1141,7 @@ def compile_react_judgment_basis(
             _compact(item, max_string=1000) for item in state.failures[-16:]
         ],
         "open_questions": state.open_questions[-12:],
+        "investigation_progress": dict(state.investigation_progress),
         "attempted_queries": state.attempted_queries[-32:],
         "visited_urls": state.visited_urls[-32:],
         "action_count": state.action_count,

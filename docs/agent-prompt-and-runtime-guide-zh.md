@@ -34,6 +34,14 @@ base64 也不会写入 trace。下一轮只接收有限的：
 - 外部访问失败和工程错误；
 - query、URL、近期动作、未解决问题和剩余预算。
 
+每轮工具调用还带有模型自己维护的 `investigation_progress`。存在重要事实
+缺口时保持 `investigating`；只有模型自己判断当前材料已经直接支持或反驳图片
+表达的事实时，才改为 `decision_capable_support` 或
+`decision_capable_refute`。runtime 只校验结构、保存、传回并检查主动结束请求
+中的这个状态，不根据工具名称、结果字段或 `evidence_class` 替模型判断，也不
+根据这个状态动态增删调查工具。既有 `evidence_class` 仍用于归档、报告和审计。
+上下文同时提供总动作预算和各工具剩余预算。
+
 完整请求、响应和状态仍保存在归档中供审计，但不会整段复制进每一轮 prompt。
 
 ## 3. 证据边界
@@ -42,9 +50,10 @@ base64 也不会写入 trace。下一轮只接收有限的：
 有效的图像比较或已检查网页的具体正文片段，才可能支持最终报告。相似图片或
 背景网页不能单独证明图片表达的完整事实。
 
-`finish_investigation` 只结束 ReAct 调查，不直接决定 `real/fake`。随后由 Judgment
-输出二分类和面向读者的事实核查报告。信息不完整时可以做收尾判断，但缺少证据
-本身不是任一标签的自动依据。
+只有在 `investigation_progress.status=decision_capable_support` 或
+`decision_capable_refute` 时，模型才能主动调用 `finish_investigation`。否则继续
+使用同一组可用工具。达到总动作上限后，沿用现有流程直接进入 Judgment，不新增
+其他终止路径。最终证据是否充分仍由现有 SFT 审核判断。
 
 ## 4. SFT 导出
 

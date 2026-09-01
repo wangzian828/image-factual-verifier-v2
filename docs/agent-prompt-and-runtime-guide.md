@@ -38,6 +38,17 @@ the trace. The next request receives a bounded projection of:
 - external/access and engineering failures;
 - attempted queries, visited URLs, recent actions, open questions and budget.
 
+Each ReAct tool call also carries the model-maintained
+`investigation_progress` state. It remains `investigating` while a material
+factual question is open and changes to `decision_capable_support` or
+`decision_capable_refute` only when the model itself judges that the accumulated
+material directly supports or contradicts the factual situation. The runtime
+preserves this state and checks it on an explicit finish action; it does not
+infer this status from a tool name, result field, or evidence class, and it
+does not add or remove tools based on that state. Existing evidence annotations
+remain available to reporting and audit. The context exposes both the global
+action budget and each tool's remaining budget.
+
 The full request/response archive remains available for audit, but is not
 replayed into every policy turn.
 
@@ -63,9 +74,13 @@ Only successful visual/OCR observations, valid image comparisons, or inspected
 page passages can support the final report. A similar image or background page
 does not by itself establish the complete image fact.
 
-`finish_investigation` ends the ReAct loop only. Judgment then writes the binary
-label and the reader-facing report. It may have incomplete information; missing
-evidence is uncertainty, not automatic proof of either label.
+`finish_investigation` ends the ReAct loop only after the model declares
+`investigation_progress.status=decision_capable_support` or
+`decision_capable_refute`. Otherwise the model continues using the same
+available tools. If the global action budget is reached, the existing runtime
+path ends ReAct and sends the case to Judgment directly.
+Judgment then writes the binary label and reader-facing report; SFT audit remains
+responsible for judging evidence quality.
 
 ## 4. Training export
 
