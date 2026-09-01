@@ -23,18 +23,18 @@ def test_active_prompts_are_current_and_semantically_bounded() -> None:
     react_prompt = " ".join(UNIFIED_REACT_SYSTEM_PROMPT.split())
     assert "one continuing investigation loop" in react_prompt
     assert "fixed task objective" in react_prompt
-    assert "No visual tool is mandatory" in react_prompt
-    assert "there is no separate planning or replan object" in react_prompt
+    assert "visual tools and search tools can be used in any useful order" in react_prompt
+    assert "update the investigation direction and choose the next action directly" in react_prompt
     assert "Established:" in react_prompt
     assert "Open:" in react_prompt
     assert "Action:" in react_prompt
     assert "concrete image-grounded clue" in react_prompt
-    assert "generic real/fake answer" in react_prompt
-    assert "reverse-image match establishes at most an image or scene correspondence" in react_prompt
-    assert "direct support, direct contradiction, background context" in react_prompt
-    assert "does not choose the final binary verdict" in react_prompt
+    assert "generic real/fake label" in react_prompt
+    assert "Use a reverse-image result for image or scene correspondence" in react_prompt
+    assert "direct answer, direct contradiction, background context" in react_prompt
+    assert "hands the recorded investigation to the final judgment stage" in react_prompt
     assert "finish_investigation" in react_prompt
-    assert "The thought should explain the next action" in react_prompt
+    assert "The runtime records evidence, IDs, and state" in react_prompt
     assert "generic visual impression" in react_prompt
 
     browse_prompt = " ".join(EXTRACT_PROMPT.split())
