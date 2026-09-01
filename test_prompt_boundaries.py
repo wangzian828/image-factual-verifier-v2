@@ -34,6 +34,9 @@ def test_active_prompts_are_current_and_semantically_bounded() -> None:
     assert "context_only" in react_prompt
     assert "does not choose the final verdict" in react_prompt
     assert "finish_investigation" in react_prompt
+    assert "never evidence for either `real` or `fake`" in react_prompt
+    assert "raise or lower verdict confidence" in react_prompt
+    assert "Never request a generic authenticity" in react_prompt
 
     browse_prompt = " ".join(EXTRACT_PROMPT.split())
     assert "missing mention is not refutation" in browse_prompt
