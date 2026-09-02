@@ -21,6 +21,7 @@ STAGE_TOOLS: Dict[str, List[str]] = {
         "current_time",
         "ocr_with_position",
         "reverse_image_search",
+        "text_image_search",
         "text_search",
         "visit",
         "compare_with_reference",
@@ -38,6 +39,7 @@ REQUIRED_TOOLS = (
     "focused_visual_inspection",
     "ocr_with_position",
     "text_search",
+    "text_image_search",
     "visit",
     "reverse_image_search",
 )
@@ -209,6 +211,13 @@ def build_all_tools_with_health(
     register(
         "text_search",
         lambda: _build_text_search_tool(),
+    )
+    register(
+        "text_image_search",
+        lambda: __import__(
+            "src.tools.text_image_search",
+            fromlist=["TextImageSearchTool"],
+        ).TextImageSearchTool(client=shared_image_search_client),
     )
     register(
         "reverse_image_search",

@@ -79,6 +79,29 @@ def convert_policy_row(row: Mapping[str, Any]) -> dict[str, Any]:
         "channel": "trajectory_sft",
         "chat_template_kwargs": {"enable_thinking": True},
     }
+    images = row.get("images", [])
+    if images:
+        if not isinstance(images, list) or not all(
+            isinstance(item, str) and item.strip()
+            for item in images
+        ):
+            raise ValueError("trajectory SFT row images must be non-empty paths")
+        first_user = next(
+            (
+                message
+                for message in messages
+                if str(message.get("role", "")) == "user"
+            ),
+            None,
+        )
+        if first_user is None or "<image>" not in str(
+            first_user.get("content", "")
+        ):
+            raise ValueError(
+                "trajectory SFT row images require <image> in the first user "
+                "message"
+            )
+        output["images"] = list(images)
     if isinstance(tools, str) and tools.strip():
         output["tools"] = tools
     return output

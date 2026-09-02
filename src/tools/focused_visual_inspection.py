@@ -346,7 +346,7 @@ def _prepare_views(
         delete=False,
     )
     original_handle.close()
-    original_view.save(original_handle.name, format="JPEG", quality=88, optimize=True)
+    original_view.save(original_handle.name, format="JPEG", quality=95, optimize=True)
     image_inputs: List[str] = [original_handle.name]
     views: List[Dict[str, Any]] = [
         {
@@ -445,6 +445,7 @@ def _build_contact_sheet(
     views: Sequence[Mapping[str, Any]],
 ) -> str:
     from PIL import Image, ImageDraw, ImageFont
+    from src.tools.vision_utils import bounded_pil_image_to_jpeg_bytes
 
     loaded = []
     for path in image_inputs:
@@ -492,14 +493,17 @@ def _build_contact_sheet(
             outline=(0, 0, 0),
             width=2,
         )
-    handle = tempfile.NamedTemporaryFile(
+    # The grid can be larger than each individual view. Apply the same
+    # model-image contract to the completed packet so single-image clients
+    # never receive a contact sheet above the 1024-pixel bound.
+    sheet_bytes, _ = bounded_pil_image_to_jpeg_bytes(sheet)
+    with tempfile.NamedTemporaryFile(
         prefix="ifv_visual_contact_sheet_",
         suffix=".jpg",
         delete=False,
-    )
-    handle.close()
-    sheet.save(handle.name, format="JPEG", quality=90, optimize=True)
-    return handle.name
+    ) as handle:
+        handle.write(sheet_bytes)
+        return handle.name
 
 
 def _persist_view_artifacts(
@@ -580,7 +584,8 @@ def _bounded_view(image: Any) -> Any:
     from PIL import Image
 
     bounded = image.copy()
-    long_edge = max(256, int(os.getenv("IFV_IMAGE_MAX_LONG_EDGE", "1280")))
+    configured = max(256, int(os.getenv("IFV_IMAGE_MAX_LONG_EDGE", "1024")))
+    long_edge = min(1024, configured)
     bounded.thumbnail((long_edge, long_edge), Image.Resampling.LANCZOS)
     return bounded
 

@@ -2,10 +2,8 @@
 """Single-path stage runner for multi-round ReAct execution."""
 from __future__ import annotations
 
-import base64
 import asyncio
 import hashlib
-import io
 import json
 import os
 import re
@@ -131,7 +129,6 @@ class StageRunner:
         output_validator: Optional[Callable[[BaseModel, List[StageStep]], Tuple[bool, str]]] = None,
         min_tool_calls: int = 0,
         attach_image: bool = True,
-        tool_response_max_chars: int = 6000,
         prior_steps: Optional[List[StageStep]] = None,
         max_output_tokens: Optional[int] = None,
         generation_config: Optional[Dict[str, Any]] = None,
@@ -180,7 +177,6 @@ class StageRunner:
         self.output_validator = output_validator
         self.min_tool_calls = max(0, int(min_tool_calls))
         self.attach_image = attach_image
-        self.tool_response_max_chars = max(1200, int(tool_response_max_chars))
         self.prior_steps = list(prior_steps or [])
         self.max_output_tokens = (
             max(1, int(max_output_tokens)) if max_output_tokens is not None else None
@@ -2563,36 +2559,15 @@ class StageRunner:
             ),
         )
         self._control_steps = list(getattr(self, "_control_steps", [])) + [recorded_step]
-        context_limit = max(65536, self.tool_response_max_chars)
-        compact = self._compact_tool_result_for_context(
-            tool_name,
-            result,
-            max_chars=context_limit,
-        )
+        observed_result = self._model_visible_tool_result(tool_name, result)
         question_id = str(tool_args.get("__question_id", "")).strip()
         content: Dict[str, Any] = {
             "function_call_id": call_id,
-            "result": compact,
+            "result": observed_result,
         }
         if question_id:
             content["question_id"] = question_id
-        if state_update:
-            content["investigation_state_update"] = state_update
         text = json.dumps(content, ensure_ascii=False, default=str)
-        if len(text) > context_limit:
-            content = {
-                "function_call_id": call_id,
-                "question_id": question_id,
-                "result": {
-                    "truncated": True,
-                    "reason": (
-                        "The structured observation exceeded the model-context "
-                        "budget after complete-item reduction."
-                    ),
-                    "retained_result": compact,
-                },
-            }
-            text = json.dumps(content, ensure_ascii=False, default=str)
         return {
             "type": "function_result",
             "name": tool_name,
@@ -2618,33 +2593,52 @@ class StageRunner:
         control_step: Optional[StageStep] = None,
     ) -> List[Dict[str, Any]]:
         items: List[Dict[str, Any]] = []
-        if tool_name == "focused_visual_inspection" and self.runtime_store is not None:
+        if (
+            tool_name in {"focused_visual_inspection", "crop_and_inspect"}
+            and self.runtime_store is not None
+        ):
             artifacts = self._visual_view_artifacts(
                 result,
                 state_update=state_update,
                 control_step=control_step,
             )
-            for artifact in artifacts[:4]:
+            for artifact in artifacts:
                 descriptor = artifact.get("artifact")
                 if not isinstance(descriptor, dict):
                     continue
                 try:
                     payload = self.runtime_store.artifacts.read_bytes(descriptor)
+                    from src.tools.vision_utils import (
+                        controlled_image_bytes_to_data_url,
+                    )
+
+                    data_url, _ = controlled_image_bytes_to_data_url(
+                        payload,
+                        source_kind="runtime_view_artifact",
+                        source_media_type=str(
+                            descriptor.get("media_type", "image/jpeg")
+                        ),
+                    )
+                    header, encoded = data_url.split(",", 1)
+                    mime_type = (
+                        header[5:].split(";", 1)[0].strip().lower()
+                        or "image/jpeg"
+                    )
                 except Exception:
                     continue
-                mime_type = (
-                    str(descriptor.get("media_type", "")).strip()
-                    or "image/png"
-                )
                 items.append(
                     {
                         "type": "image",
                         "mime_type": mime_type,
-                        "data": base64.b64encode(payload).decode("ascii"),
+                        "data": encoded,
                     }
                 )
 
-        if tool_name in {"reverse_image_search", "crop_and_search"}:
+        if tool_name in {
+            "reverse_image_search",
+            "crop_and_search",
+            "text_image_search",
+        }:
             candidate_urls = self._reference_image_candidate_urls(result)[:3]
             candidate_items = await asyncio.gather(
                 *(
@@ -2677,50 +2671,21 @@ class StageRunner:
         result remains available to the model.
         """
 
-        from src.tools.vision_utils import image_to_data_url
+        from src.tools.vision_utils import controlled_image_to_data_url
 
         try:
-            data_url = image_to_data_url(str(image_url).strip())
+            data_url, _ = controlled_image_to_data_url(str(image_url).strip())
             header, encoded = data_url.split(",", 1)
-            raw_bytes = base64.b64decode(encoded, validate=True)
             source_mime = header[5:].split(";", 1)[0].strip().lower()
             if not source_mime.startswith("image/"):
                 return None
         except Exception:
             return None
 
-        try:
-            from PIL import Image, ImageOps
-
-            with Image.open(io.BytesIO(raw_bytes)) as opened:
-                image = ImageOps.exif_transpose(opened).convert("RGB")
-                max_edge = max(
-                    256,
-                    int(os.getenv("IFV_IMAGE_MAX_LONG_EDGE", "1280")),
-                )
-                quality = min(
-                    95,
-                    max(55, int(os.getenv("IFV_IMAGE_JPEG_QUALITY", "88"))),
-                )
-                image.thumbnail(
-                    (max_edge, max_edge),
-                    Image.Resampling.LANCZOS,
-                )
-                buffer = io.BytesIO()
-                image.save(
-                    buffer,
-                    format="JPEG",
-                    quality=quality,
-                    optimize=True,
-                )
-                payload = buffer.getvalue()
-        except Exception:
-            return None
-
         return {
             "type": "image",
-            "mime_type": "image/jpeg",
-            "data": base64.b64encode(payload).decode("ascii"),
+            "mime_type": source_mime,
+            "data": encoded,
         }
 
     @staticmethod
@@ -3629,8 +3594,11 @@ class StageRunner:
                 image_url, view = controlled_image_to_data_url(self.image_path)
                 self._record_image_view(view, purpose=self.stage_name or "stage")
                 parts.append({"type": "image_url", "image_url": {"url": image_url}})
-            except Exception:
-                pass
+            except Exception as exc:
+                raise RuntimeError(
+                    f"{self.stage_name or 'stage'} image preparation failed: "
+                    f"{type(exc).__name__}: {exc}"
+                ) from exc
         parts.append({"type": "text", "text": input_context})
         if len(parts) == 1 and parts[0]["type"] == "text":
             return {"role": "user", "content": parts[0]["text"]}
@@ -4338,33 +4306,16 @@ class StageRunner:
         state_update: Optional[Dict[str, Any]] = None,
         native_chat: bool = False,
     ) -> str:
-        compact = self._compact_tool_result_for_context(
-            tool_name,
-            result,
-            max_chars=max(12000, self.tool_response_max_chars),
-        )
         payload = {
             "function_call_id": function_call_id,
-            "tool": tool_name,
-            "arguments": tool_args,
-            "result": compact,
+            "result": self._model_visible_tool_result(tool_name, result),
         }
-        if state_update:
-            payload["investigation_state_update"] = state_update
         text = json.dumps(
             payload,
             ensure_ascii=False,
             indent=None if native_chat else 2,
             separators=(",", ":") if native_chat else None,
         )
-        if not native_chat and len(text) > max(12000, self.tool_response_max_chars):
-            compact = self._compact_tool_result_for_context(
-                tool_name,
-                result,
-                max_chars=max(12000, self.tool_response_max_chars),
-            )
-            payload["result"] = compact
-            text = json.dumps(payload, ensure_ascii=False, indent=2)
         if native_chat:
             return text
         return f"<tool_response>\n{text}\n</tool_response>"
@@ -4409,14 +4360,19 @@ class StageRunner:
         )
         step.metadata["tool_result_artifact"] = descriptor
 
-    def _compact_tool_result_for_context(
+    def _model_visible_tool_result(
         self,
         tool_name: str,
         result: str,
-        *,
-        max_chars: Optional[int] = None,
     ) -> Any:
-        limit = max(1200, int(max_chars or self.tool_response_max_chars))
+        """Return the complete textual observation for the next policy turn.
+
+        Provider media blobs and raw page HTML are transport artifacts rather
+        than observations. Everything else is retained exactly as returned by
+        the canonical tool result: this method intentionally has no character
+        budget and no list/field reduction.
+        """
+
         try:
             data = json.loads(result)
         except Exception:
@@ -4434,21 +4390,11 @@ class StageRunner:
         if isinstance(data, (dict, list)):
             data = self._strip_model_media(data)
             if tool_name == "visit" and isinstance(data, dict):
-                # These fields belong to the retired Claim/Task reducer.  They
-                # may still appear in a provider-side replay or an older tool
-                # adapter, but they are not page observations and must not be
-                # reintroduced into the current ReAct context.
+                # Reducer projections are not page observations.
                 data.pop("validated_claim_state", None)
                 data.pop("agent_control_state", None)
-            raw = json.dumps(data, ensure_ascii=False, default=str)
-            if len(raw) <= limit:
-                return data
-            return self._fit_structured_tool_result(
-                tool_name,
-                data,
-                limit=limit,
-            )
-        return str(result)[:limit]
+            return data
+        return str(result)
 
     @staticmethod
     def _strip_model_media(value: Any) -> Any:
@@ -4474,143 +4420,6 @@ class StageRunner:
             return [StageRunner._strip_model_media(item) for item in value]
         return value
 
-    @staticmethod
-    def _json_size(value: Any) -> int:
-        return len(json.dumps(value, ensure_ascii=False, default=str))
-
-    def _fit_structured_tool_result(
-        self,
-        tool_name: str,
-        data: Any,
-        *,
-        limit: int,
-    ) -> Any:
-        """Fit a result by whole fields/items, preserving evidence text.
-
-        A provider result must never be made model-visible by slicing its JSON
-        serialization.  Page evidence and context windows are retained first;
-        diagnostics, duplicated page summaries, and lower-priority candidates
-        are removed as complete fields or list items.
-        """
-
-        if not isinstance(data, dict):
-            return data
-        candidate = copy.deepcopy(data)
-        dropped: List[str] = []
-
-        if tool_name == "visit":
-            # The page-level convenience fields duplicate evidence_records.
-            # Keep the exact records and their context windows as the primary
-            # model input, then remove duplicate/diagnostic material if needed.
-            records = [
-                copy.deepcopy(item)
-                for item in candidate.get("evidence_records", []) or []
-                if isinstance(item, dict)
-            ][:3]
-            visits = [
-                copy.deepcopy(item)
-                for item in candidate.get("visits", []) or []
-                if isinstance(item, dict)
-            ][:3]
-            preferred_keys = (
-                "status",
-                "url",
-                "selected_url",
-                "provider",
-                "content_status",
-                "extraction_status",
-                "evidence_available",
-                "evidence",
-                "evidence_context",
-                "summary",
-                "rationale",
-                "relevance",
-                "stance",
-                "relation_scope",
-                "relation_stance",
-                "directness",
-                "temporal_alignment",
-                "artifact_sha256",
-                "evidence_span",
-                "summary_model_context",
-                "evidence_records",
-                "visits",
-            )
-            candidate = {
-                key: copy.deepcopy(candidate[key])
-                for key in preferred_keys
-                if key in candidate
-            }
-            candidate["evidence_records"] = records
-            candidate["visits"] = visits
-            for key in (
-                "visits",
-                "subcalls",
-                "fetch_attempts",
-                "timings",
-                "injection_flags",
-                "retrieved_at",
-                "rationale",
-                "summary",
-            ):
-                if self._json_size(candidate) <= limit:
-                    break
-                if key in candidate and key not in {
-                    "evidence_records",
-                    "evidence",
-                    "evidence_context",
-                }:
-                    candidate.pop(key, None)
-                    dropped.append(key)
-            if self._json_size(candidate) > limit:
-                # Keep the selected passages verbatim.  Context is useful but
-                # secondary to the selected source text when a pathological
-                # page still exceeds the hard transport budget.
-                for index, record in enumerate(candidate.get("evidence_records", [])):
-                    if not isinstance(record, dict):
-                        continue
-                    if self._json_size(candidate) <= limit:
-                        break
-                    if record.get("evidence_context"):
-                        record.pop("evidence_context", None)
-                        record.pop("context_spans", None)
-                        dropped.append(f"evidence_records[{index}].evidence_context")
-            if self._json_size(candidate) > limit:
-                # Retain complete evidence records in priority order. Never
-                # cut an evidence string to make the JSON appear shorter.
-                records = list(candidate.get("evidence_records", []) or [])
-                while len(records) > 1 and self._json_size(candidate) > limit:
-                    records.pop()
-                    candidate["evidence_records"] = records
-                    dropped.append("evidence_records.tail")
-        else:
-            for key in (
-                "debug",
-                "metadata",
-                "timings",
-                "subcalls",
-                "fetch_attempts",
-                "raw_response",
-            ):
-                if self._json_size(candidate) <= limit:
-                    break
-                if key in candidate:
-                    candidate.pop(key, None)
-                    dropped.append(key)
-            for key, value in list(candidate.items()):
-                if self._json_size(candidate) <= limit:
-                    break
-                if isinstance(value, list) and len(value) > 1:
-                    candidate[key] = value[: max(1, len(value) // 2)]
-                    dropped.append(f"{key}.tail")
-
-        if dropped:
-            candidate["_context_reduction"] = {
-                "whole_fields_or_items_omitted": dropped,
-                "text_was_not_sliced": True,
-            }
-        return candidate
-
     def _canonical_tool_result(
         self,
         tool_name: str,
@@ -4623,14 +4432,16 @@ class StageRunner:
         status = str(data.get("status", "")).strip().lower()
         if status != "success":
             return dict(data)
-        if tool_name == "text_search":
+        if tool_name in {"text_search", "text_image_search"}:
             return self._canonical_search_result(data)
         if tool_name == "visit":
             return self._canonical_visit_result(data)
-        if tool_name == "reverse_image_search":
-            return self._canonical_reverse_image_result(data)
-        if tool_name == "crop_and_search":
-            return self._canonical_crop_and_search_result(data)
+        if tool_name in {"reverse_image_search", "crop_and_search"}:
+            # These tools already produce bounded provider-side result sets.
+            # Keep every textual field of that completed observation.
+            canonical = self._strip_model_media(data)
+            canonical["status"] = "success"
+            return canonical
         return dict(data)
 
     @staticmethod
@@ -4640,13 +4451,13 @@ class StageRunner:
         result_count = 0
         if isinstance(queries, list):
             normalized_queries = []
-            for item in queries[:1]:
+            for item in queries:
                 if not isinstance(item, dict):
                     continue
                 normalized = dict(item)
                 rows = [
                     dict(row)
-                    for row in (item.get("results", []) or [])[:10]
+                    for row in (item.get("results", []) or [])
                     if isinstance(row, dict)
                 ]
                 normalized["results"] = rows
@@ -4677,7 +4488,7 @@ class StageRunner:
             if isinstance(values, list):
                 canonical[field_name] = [
                     self._strip_model_media(item)
-                    for item in values[:3]
+                    for item in values
                     if isinstance(item, dict)
                 ]
         # This was a legacy reducer projection, not page content. It duplicated

@@ -1,6 +1,6 @@
 # Agent 与评测收尾执行计划
 
-**状态：新版 Agent-100 真实重跑、逐条审阅和文档收尾已完成，停在大规模教师 rollout 启动前。** 本文是当前工作的连续执行记录。每次涉及 Agent 的代码、prompt、schema、
+**状态：本轮 unified Agent 上下文/图片/工具观察收尾进行中，停在大规模教师 rollout 启动前。** 本文是当前工作的连续执行记录。每次涉及 Agent 的代码、prompt、schema、
 harness、审计口径或运行配置变更，必须先在第 4 节追加一行，再实施、测试、提交和部署。
 
 Gemini 3.7 的当前在线可用性不影响本文档和本地回归的完成。依赖 3.7 的新 smoke、
@@ -73,7 +73,9 @@ judge 或 rollout 若遇到 API 不可用，只能暂停该运行；已经完成
 | 2026-09-02 | 已实施：`perceive_scene` 请求恢复 | `src/tools/perceive_scene.py`, `src/tools/visual_common.py`, `src/orchestrator/stage_runner.py`, `scripts/server/start_gemini_eval_gpu13.sh` | 视觉请求默认使用压缩 JPEG；对可恢复的 Gemini 400、传输失败和超时追加一次更小图片/宽松 schema 的恢复请求；移除 provider 不接受的 schema 约束；工具动作边界调整为 210 秒。失败仍记录为工具错误，不伪装成成功。 | 本地 468 项测试通过；gpu-13 fast-forward 到 `55ef0b3`；3.1 Pro 与 3.7 Flash 各完成 10/10、0 provider 工程错误。逐条质量问题见 `docs/reports/2026-09-02-perceive-scene-recovery-and-smoke.md`。 | `55ef0b3` |
 | 2026-09-02 | 已实施：测试 100 条正式 release 重建 | `scripts/prepare_agent_test_release.py` 及服务器生成 release | 复用原 Agent-100 的精确 100 个 case，排除其余 1,584 个测试 case；补齐顶层 `training_prohibited=true`，保证 runtime 只含 case/image/hash，gold 与来源策略仍在 evaluator-private。 | 100/100 case、5 个构造子路线各 20 条；首次启动因旧 release 元数据缺失而拒绝，失败目录保留；正式 release 已创建。 | `55ef0b3` |
 | 2026-09-02 | 文档收尾与状态统一 | `docs/agent-evaluation-closeout-plan.md`, `docs/reports/2026-09-02-*.md`, `docs/plans/2026-09-01-tool-parity-and-react-observation-plan.md` | 统一 runtime commit、仓库 HEAD、服务器状态、468 项测试结果、3.7 在线可用性边界和大规模 rollout 停止点；把已完成工作从“待提交/待部署”改为可核对的完成状态。 | 文档检查、链接/路径核对、`git diff --check`；不启动任何新 rollout。 | `10bb1e1` |
-| 2026-09-02 | 实验性放开主 ReAct 高思考 | `src/orchestrator/pipeline.py`, `test_provider_profiles.py` | 允许仅 `UNIFIED_REACT` 通过 `GEMINI_UNIFIED_REACT_THINKING_LEVEL=high` 覆盖默认 `low`；其它 Gemini 阶段仍只接受 `low`。用于同一 10 条 smoke 对照，不改变 prompt、工具契约、状态或审计口径。 | 定向 provider/profile、unified-react、scoring/accounting 测试通过；待提交、部署和真实 high smoke。 | 待提交 |
+| 2026-09-02 | 固定主 ReAct 默认高思考 | `src/orchestrator/pipeline.py`, `src/eval/run_eval.py`, `test_provider_profiles.py`, `docs/operations/gpu13.md` | `UNIFIED_REACT` 默认使用 `high`；其它 Gemini 阶段仍默认 `low`。可显式设置 `GEMINI_UNIFIED_REACT_THINKING_LEVEL=low` 做对照，不依赖临时启动命令。 | 定向测试和真实 high smoke 已完成；本批 10 条仅作样例记录，不外推整体质量。 | 待提交 |
+| 2026-09-02 | 完成 high ReAct 10 条对照 | `docs/reports/2026-09-02-unified-react-high-thinking-smoke.md` | 首轮 3 条 Gemini 429 case 以并发 3、high 重跑；与首轮成功的 7 条合并为最终 10 条，并完成统一 private-gold 审计。 | 最终 10/10 成功、0 工程错误、strict trace audit 10/10；4/10 标签正确，其中 3 条理由充分。仅作为固定样例结果，不据此否定 high。 | `54c2ee4` |
+| 2026-09-02 | 继续收尾：统一图片边界与完整工具观察 | `src/tools/vision_utils.py`, `src/tools/crop_and_inspect.py`, `src/tools/crop_and_search.py`, `src/tools/focused_visual_inspection.py`, `src/orchestrator/stage_runner.py`, `src/trajectory/exporter.py` 及对应测试 | 所有进入视觉 API 的图片统一最长边 1024、JPEG quality 95；contact sheet 和 crop 改用同一边界；crop 临时文件改为系统唯一文件名。删除已不再调用的工具结果二次压缩逻辑，canonical 工具结果只排除二进制传输字段和 raw HTML，完整文本在下一轮通过 InteractionSession 前递。SFT 仍只去重累计 workspace，不截断工具观察。 | 本地定向回归进行中；完成后提交、推送、gpu-13 定向回归，再按并发 10 跑 10 条真实 smoke。未启动大规模教师 rollout。 | 待提交 |
 
 后续每一条 Agent 改动必须记录：修改前行为、修改后行为、为何不改变 private-gold
 隔离/成熟工具契约、对应测试、真实 smoke case、commit 和服务器部署状态。
@@ -240,9 +242,20 @@ judge 或 rollout 若遇到 API 不可用，只能暂停该运行；已经完成
 3.7 实时请求，不影响上述归档结果、文档维护或本地测试；在人工复核完成前不会因此启动
 8,490 条教师 rollout。
 
+## 11. 本轮继续执行状态
+
+- 已完成：统一视觉 API 图片入口的 1024 边界与 quality 95；统一 contact sheet、crop
+  和候选图序列化；修复 crop 并发临时文件冲突风险。
+- 已完成：删除 StageRunner 中不再使用的工具结果按字符/列表二次压缩代码；下一轮仍
+  接收完整 canonical 文本观察，只排除二进制字段与 raw HTML。
+- 已完成：补充 text-image-search reducer、contact sheet、crop 并发和完整工具结果回归。
+- 待完成：本地全量 active 测试、提交推送、gpu-13 定向回归和并发 10 的 10 条真实 smoke。
+- 旧 v4 测试文件若引用已删除模块，只作为历史测试，不恢复旧 v4 主流程；active unified
+  ReAct 测试必须单独通过。
+
 ## 10. 文档收尾结论
 
-- 当前有效代码基线：运行时代码 `55ef0b3`，仓库/服务器最新 HEAD `10bb1e1`。
+- 当前有效代码基线：本地待提交；仓库/服务器已部署基线仍为 `10bb1e1` / 运行时代码 `55ef0b3`。
 - 当前有效 Agent：`unified-react-v1`；旧 v4 只作为历史归档，不作为兼容运行路径。
 - 当前训练输入仍固定为 8,490 条 `train-manifest.jsonl`；1,684 条测试集不进入
   teacher rollout、SFT 或 RL。

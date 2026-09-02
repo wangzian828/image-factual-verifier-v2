@@ -6,7 +6,7 @@ from typing import Any, Dict, Mapping, Optional, Sequence
 
 from src.integrations.gemini import missing_required_paths, normalize_json_schema
 from src.integrations.llm.openai_compatible import OpenAICompatibleChatClient, resolve_qwen_api_key
-from src.tools.vision_utils import image_to_data_url
+from src.tools.vision_utils import vision_tool_image_to_data_url
 
 
 @dataclass
@@ -94,7 +94,11 @@ class QwenVLClient:
                         *[
                             {
                                 "type": "image_url",
-                                "image_url": {"url": image_to_data_url(image_input)},
+                                "image_url": {
+                                    "url": vision_tool_image_to_data_url(
+                                        image_input
+                                    )
+                                },
                             }
                             for image_input in images
                         ],

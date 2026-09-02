@@ -27,9 +27,10 @@ deduplication, retries, budgets, failures, and state updates.
 
 ## 2. Context and image handling
 
-Every direct-multimodal request gets one temporary controlled image attachment.
-The image is not appended to the text history and its base64 is not persisted in
-the trace. The next request receives a bounded projection of:
+The root request of each Gemini Interaction gets one temporary controlled image
+attachment. Follow-up requests reuse that image through the same provider
+session; it is not uploaded again. The image is not appended to text history
+and its base64 is not persisted in the trace. Each next request receives:
 
 - the fixed objective;
 - visual memory;
@@ -50,15 +51,16 @@ remain available to reporting and audit. The context exposes both the global
 action budget and each tool's remaining budget.
 
 The full request/response archive remains available for audit, but is not
-replayed into every policy turn.
+replayed into every policy turn. The immediately completed canonical function
+result is passed to the next policy request in full textual form; only binary
+transport fields and raw HTML are excluded from model text.
 
-Visual tool requests use a compressed JPEG by default (longest edge 2048,
-quality 92). `perceive_scene` keeps its local output bounds and normalizes the
-returned observation after the provider response. For a recoverable provider
-400, transport failure, or timeout, it makes at most one additional attempt
-with a smaller JPEG (longest edge 1280, quality 88) and a schema-light object
-response. The result records both attempts and the recovery mode; a failed
-second attempt remains `status=error`.
+All images entering a vision API use JPEG with longest edge 1024 and quality 95.
+This includes the original image, crops, downloaded candidate images and
+single-image contact sheets. `perceive_scene` keeps its local output bounds and
+normalizes the returned observation after the provider response. A recoverable
+provider failure may make one additional schema-light attempt; both attempts
+remain observable and a failed recovery remains `status=error`.
 
 The active Gemini Interactions session is persistent for the whole episode.
 Dynamic tool schemas may be rebuilt between actions, but the next request keeps

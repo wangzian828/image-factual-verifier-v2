@@ -18,6 +18,7 @@ from src.integrations.search.visual_search import VisualReverseSearchClient
 from src.integrations.vlm.factory import build_vlm_client
 from src.orchestrator.source_access import SourceAccessPolicy
 from src.tools.base import BaseTool
+from src.tools.vision_utils import bounded_pil_image_to_jpeg_bytes
 
 
 CROP_QUERY_PROMPT = """You will see a cropped region from an image.
@@ -407,11 +408,14 @@ class CropAndSearchTool(BaseTool):
             x1, y1, x2, y2 = self._expand_small_region(x1, y1, x2, y2, width, height)
             cropped = img.crop((x1, y1, x2, y2))
 
-            tmp_path = os.path.join(
-                tempfile.gettempdir(),
-                f"crop_search_{os.getpid()}_{id(self)}_{region_index}.jpg",
-            )
-            cropped.save(tmp_path, "JPEG", quality=95)
+            crop_bytes, _ = bounded_pil_image_to_jpeg_bytes(cropped)
+            with tempfile.NamedTemporaryFile(
+                prefix=f"ifv_crop_search_{region_index}_",
+                suffix=".jpg",
+                delete=False,
+            ) as handle:
+                tmp_path = handle.name
+                handle.write(crop_bytes)
 
             return tmp_path, [
                 round(x1 / width, 4),

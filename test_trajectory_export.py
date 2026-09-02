@@ -218,7 +218,7 @@ def test_v4_sft_release_can_allow_incomplete_final_chain_only(
     assert examples
 
 
-def test_export_stage_packet_drops_archived_workspace_snapshot() -> None:
+def test_export_stage_packet_preserves_current_stage_input() -> None:
     packet = _stage_user_packet(
         example_type="route_local_replan",
         policy_input={
@@ -239,11 +239,13 @@ def test_export_stage_packet_drops_archived_workspace_snapshot() -> None:
     )
 
     rendered = json.loads(packet)
-    compact_input = json.loads(rendered["input_payload"])
+    preserved_input = json.loads(rendered["input_payload"])
 
-    assert compact_input["runtime_handoff"]["workspace_version"] == "ws-1"
-    assert "workspace" not in compact_input["runtime_handoff"]
-    assert compact_input["active_target"] == {"claim_id": "claim-1"}
+    assert preserved_input["runtime_handoff"]["workspace_version"] == "ws-1"
+    assert preserved_input["runtime_handoff"]["workspace"]["claims"] == [
+        {"claim_id": "claim-1"}
+    ]
+    assert preserved_input["active_target"] == {"claim_id": "claim-1"}
 
 
 def test_stage_control_packet_keeps_contract_without_cumulative_input() -> None:
@@ -277,10 +279,11 @@ def test_full_trajectory_uses_control_packets_after_initial_context(
     ]
     assert tool_messages
     assert all("next_stage_packet" not in item for item in tool_messages)
-    assert all(
-        "input_payload" not in json.loads(item["next_stage_control"])
-        for item in tool_messages
-        if "next_stage_control" in item
+    assert all("tool" not in item and "arguments" not in item for item in tool_messages)
+    assert any(
+        message["role"] == "user"
+        and '"stage":"judgment"' in message["content"]
+        for message in exported.messages
     )
 
 

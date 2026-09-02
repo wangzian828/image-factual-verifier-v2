@@ -13,7 +13,8 @@
   → Judgment 输出 real/fake 与 fact-check report
 ```
 
-视觉工具没有固定顺序，也不是隐藏的独立阶段。每轮请求都会重新附加受控压缩
+视觉工具没有固定顺序，也不是隐藏的独立阶段。每个 Interaction 的根请求附加受控
+原图，后续请求复用 provider session；独立视觉工具按需要接收受控
 原图；文本上下文只携带有限的视觉记忆、候选、证据、失败和近期动作。
 
 ## 职责边界
@@ -38,10 +39,11 @@ ownership。旧图状态只用于 legacy trace 回放，不会被 active runtime
 
 ## 图片 API
 
-- `direct_multimodal`：ReAct 和 Judgment 请求都带一份临时压缩原图。
+- `direct_multimodal`：ReAct Interaction 的根请求和独立 Judgment 请求各带一份
+  临时受控原图。
 - `separate_vlm`：图片只交给视觉工具，policy 使用结构化观察。
 
-两种模式共用工具契约、reducer 和 trace 记录。压缩图片不进入累计文本历史，
+两种模式共用工具契约、reducer 和 trace 记录。图片不进入累计文本历史，
 trace 只保存哈希、尺寸和外部化媒体引用。
 
 ## 产物

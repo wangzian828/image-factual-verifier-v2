@@ -10,7 +10,10 @@ from src.orchestrator.source_access import (
 )
 from src.orchestrator.source_provenance import classify_source
 from src.orchestrator.stage_runner import StageRunner
-from src.integrations.search.serper import SerperTextSearchClient
+from src.integrations.search.serper import (
+    SerperImageSearchClient,
+    SerperTextSearchClient,
+)
 from pydantic import ValidationError
 from test_support_models import ToolStageOutput, TruthAptQuestion
 from src.tools.reverse_image_search import ReverseImageSearchTool
@@ -271,6 +274,36 @@ def test_serper_adds_policy_exclusions_before_provider_call() -> None:
     assert payloads[0]["q"].startswith("underlying event record ")
     assert "-site:factcrescendo.com" in payloads[0]["q"]
     assert "factcrescendo.com" not in result["results"][0]["url"]
+
+
+def test_serper_image_search_adds_policy_exclusions_before_provider_call() -> None:
+    policy = _policy()
+    client = SerperImageSearchClient(api_key="test-key")
+    payloads: list[dict[str, Any]] = []
+
+    def fake_post(payload, _headers):
+        payloads.append(payload)
+        return {
+            "images": [
+                {
+                    "title": "Independent image",
+                    "link": "https://independent.example/photo",
+                    "imageUrl": "https://cdn.example/photo.jpg",
+                }
+            ]
+        }
+
+    client._post_json = fake_post  # type: ignore[method-assign]
+    client.set_source_access_policy(policy)
+    try:
+        result = client.search("bridge event", top_k=1)
+    finally:
+        client.close()
+
+    assert payloads
+    assert payloads[0]["q"].startswith("bridge event ")
+    assert "-site:factcrescendo.com" in payloads[0]["q"]
+    assert result[0]["url"] == "https://independent.example/photo"
 
 
 def test_text_search_filters_results_and_removes_aggregates() -> None:

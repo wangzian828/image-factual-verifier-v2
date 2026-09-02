@@ -50,6 +50,14 @@ def json_module(value):
     return json.dumps(value)
 
 
+def _tiny_jpeg_data_url() -> str:
+    buffer = BytesIO()
+    Image.new("RGB", (3, 2), color="white").save(buffer, format="JPEG")
+    return "data:image/jpeg;base64," + base64.b64encode(
+        buffer.getvalue()
+    ).decode("ascii")
+
+
 def test_gemini_vlm_uses_interactions(monkeypatch) -> None:
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     requests = []
@@ -107,6 +115,10 @@ def test_gemini_vlm_uses_custom_schema_and_uri(monkeypatch) -> None:
     requests = []
     fake_client = FakeAsyncClient(requests)
     monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: fake_client)
+    monkeypatch.setattr(
+        "src.integrations.vlm.openai_vlm.vision_tool_image_to_data_url",
+        lambda _value: _tiny_jpeg_data_url(),
+    )
     schema = {
         "type": "object",
         "properties": {"scene": {"type": "string"}},
@@ -131,10 +143,9 @@ def test_gemini_vlm_uses_custom_schema_and_uri(monkeypatch) -> None:
         "mime_type": "application/json",
         "schema": schema,
     }
-    assert request["input"][1] == {
-        "type": "image",
-        "uri": "https://example.test/input.png",
-    }
+    assert request["input"][1]["type"] == "image"
+    assert request["input"][1]["mime_type"] == "image/jpeg"
+    assert request["input"][1]["data"]
     assert "image_url" not in request["input"][1]
 
 
@@ -148,6 +159,10 @@ def test_gemini_vlm_strips_provider_unsupported_validation_constraints(
         output={"scene": "test", "items": []},
     )
     monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: fake_client)
+    monkeypatch.setattr(
+        "src.integrations.vlm.openai_vlm.vision_tool_image_to_data_url",
+        lambda _value: _tiny_jpeg_data_url(),
+    )
     schema = {
         "type": "object",
         "properties": {
@@ -192,6 +207,10 @@ def test_gemini_vlm_supports_ordered_multi_view_input(monkeypatch) -> None:
     requests = []
     fake_client = FakeAsyncClient(requests)
     monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: fake_client)
+    monkeypatch.setattr(
+        "src.integrations.vlm.openai_vlm.vision_tool_image_to_data_url",
+        lambda _value: _tiny_jpeg_data_url(),
+    )
 
     client = build_vlm_client(provider="gemini", model_name="gemini-test")
     result = client.create_images_json(
@@ -206,17 +225,18 @@ def test_gemini_vlm_supports_ordered_multi_view_input(monkeypatch) -> None:
 
     assert result["scene"] == "test"
     request = requests[0]["body"]
-    assert request["input"] == [
-        {"type": "text", "text": "The first image is the original."},
-        {
-            "type": "image",
-            "uri": "https://example.test/original.png",
-        },
-        {
-            "type": "image",
-            "uri": "https://example.test/detail.png",
-        },
+    assert request["input"][0] == {
+        "type": "text",
+        "text": "The first image is the original.",
+    }
+    assert [item["type"] for item in request["input"][1:]] == [
+        "image",
+        "image",
     ]
+    assert all(
+        item["mime_type"] == "image/jpeg"
+        for item in request["input"][1:]
+    )
 
 
 def test_gemini_vlm_reuses_one_transport_for_repeated_calls(monkeypatch) -> None:
@@ -230,6 +250,10 @@ def test_gemini_vlm_reuses_one_transport_for_repeated_calls(monkeypatch) -> None
         return client
 
     monkeypatch.setattr(httpx, "AsyncClient", make_client)
+    monkeypatch.setattr(
+        "src.integrations.vlm.openai_vlm.vision_tool_image_to_data_url",
+        lambda _value: _tiny_jpeg_data_url(),
+    )
     client = build_vlm_client(provider="gemini", model_name="gemini-test")
     try:
         for _ in range(2):
@@ -252,6 +276,10 @@ def test_gemini_vlm_rejects_missing_required_schema_paths(monkeypatch) -> None:
     requests = []
     fake_client = FakeAsyncClient(requests, output={"scene": "test"})
     monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: fake_client)
+    monkeypatch.setattr(
+        "src.integrations.vlm.openai_vlm.vision_tool_image_to_data_url",
+        lambda _value: _tiny_jpeg_data_url(),
+    )
     schema = {
         "type": "object",
         "properties": {

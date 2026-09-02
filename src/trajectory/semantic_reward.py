@@ -726,8 +726,6 @@ class SemanticRewardJudge:
         if image_path is not None:
             image_data_url, image_view = controlled_image_to_data_url(
                 str(image_path),
-                max_long_edge=1280,
-                jpeg_quality=88,
             )
         trajectory_call = await self._call(
             system_prompt=TRAJECTORY_SYSTEM_PROMPT,

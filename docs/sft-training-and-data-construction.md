@@ -39,10 +39,11 @@ SFT judge 在工程审计之后运行。通过轨迹继续按质量分桶，例�
 
 ## 4. 图片 API 分工
 
-- `direct_multimodal`：主策略每次需要视觉判断的请求携带一份受控压缩原图；
+- `direct_multimodal`：每个 Gemini Interaction 的根请求携带一份受控原图，
+  后续请求复用 provider session 中的原图；
 - `separate_vlm`：视觉工具/VLM 处理图片，主策略收到结构化观察。
 
 在 direct 模式中，原图是每个请求的独立多模态输入，不追加到累计文本历史，也不写入
-SFT 消息或 policy snapshot 的 base64。默认由 `IFV_IMAGE_MAX_LONG_EDGE=1280` 和
-`IFV_IMAGE_JPEG_QUALITY=88` 控制压缩。结构化视觉观察只保留有限实体属性、可见关系、
+SFT 消息或 policy snapshot 的 base64。视觉 API 统一使用最长边 1024、JPEG quality 95；
+环境变量只能在不超过 1024 的范围内调整。结构化视觉观察只保留有限实体属性、可见关系、
 场景细节和不确定性。两种模式的工具 schema、Reducer、trace 和训练消息格式保持一致。

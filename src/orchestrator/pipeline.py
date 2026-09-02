@@ -222,6 +222,7 @@ class Orchestrator:
             self.cacheable_tools.update(
                 {
                     "text_search",
+                    "text_image_search",
                     "visit",
                     "crop_and_inspect",
                     "focused_visual_inspection",
@@ -233,6 +234,7 @@ class Orchestrator:
             "current_time": 1,
             "ocr_with_position": 3,
             "reverse_image_search": 2,
+            "text_image_search": 6,
             "text_search": 16,
             "visit": 16,
             "compare_with_reference": 6,
@@ -525,13 +527,7 @@ class Orchestrator:
         Dict[str, Any],
         Optional[Dict[str, Any]],
     ]:
-        """Run the active one-loop ReAct runtime.
-
-        Each policy action receives a fresh compact context and one compressed
-        image attachment. The reducer-owned investigation state is the only
-        cross-action memory; provider-side interaction history is not chained
-        across actions.
-        """
+        """Run the active one-loop ReAct runtime on one retained Interaction."""
 
         self._validate_image_only_bootstrap_configuration()
         investigation = new_unified_react_runtime_state(runtime_case)
@@ -712,6 +708,7 @@ class Orchestrator:
                 investigation,
                 basis,
                 image_path=image_path,
+                interaction_session=interaction_session,
             )
         finally:
             state.stage_timings["judgment"] = round(
@@ -729,6 +726,7 @@ class Orchestrator:
         basis: Dict[str, Any],
         *,
         image_path: str,
+        interaction_session: InteractionSession,
     ) -> DiscrepancyJudgment:
         """Run the single terminal binary judgment and report writer."""
 
@@ -757,6 +755,7 @@ class Orchestrator:
                 "UNIFIED_JUDGMENT"
             ),
             request_timeout_seconds=self.stage_request_timeout_seconds,
+            interaction_session=interaction_session,
         )
         parsed, steps = await runner.run(
             render_react_judgment_context(investigation, basis)
@@ -2058,7 +2057,8 @@ class Orchestrator:
     @staticmethod
     def _stage_thinking_level(stage_name: str) -> str:
         normalized_stage = stage_name.strip().upper()
-        fallback = os.getenv("GEMINI_AGENT_THINKING_LEVEL", "low")
+        default_level = "high" if normalized_stage == "UNIFIED_REACT" else "low"
+        fallback = os.getenv("GEMINI_AGENT_THINKING_LEVEL", default_level)
         value = os.getenv(
             f"GEMINI_{normalized_stage}_THINKING_LEVEL",
             fallback,

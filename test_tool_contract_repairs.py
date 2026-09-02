@@ -1,18 +1,40 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import inspect
 import json
+import threading
 from types import SimpleNamespace
 
 import pytest
 
 from src.integrations.vlm.qwen_vl import QwenVLClient
+from src.orchestrator.react_runtime import (
+    new_unified_react_runtime_state,
+    reduce_react_action,
+)
 from src.orchestrator.stage_runner import StageRunner
-from src.orchestrator.task_store import record_tool_observation
 from src.orchestrator.tool_registry import build_all_tools_with_health
 from src.tools.crop_and_inspect import CropAndInspectTool, INSPECT_SCHEMA
 from src.tools.ocr_with_position import OCRWithPositionTool
-from test_image_only_state_machine import _runtime_state
+
+
+def _runtime_state():
+    from src.orchestrator.state import ImageOnlyRuntimeCase
+
+    case = ImageOnlyRuntimeCase(
+        case_id="case-state-machine",
+        image_path="fixture.jpg",
+        image_sha256="a" * 64,
+    )
+    return case, new_unified_react_runtime_state(case)
+
+
+def _progress() -> dict[str, str]:
+    return {
+        "status": "investigating",
+        "basis": "The factual question remains unresolved.",
+    }
 
 
 def test_qwen_structured_vision_accepts_and_validates_response_schema(
@@ -33,7 +55,7 @@ def test_qwen_structured_vision_accepts_and_validates_response_schema(
         FakeChat,
     )
     monkeypatch.setattr(
-        "src.integrations.vlm.qwen_vl.image_to_data_url",
+        "src.integrations.vlm.qwen_vl.vision_tool_image_to_data_url",
         lambda _value: "data:image/png;base64,AA==",
     )
     client = QwenVLClient(api_key="test-key")
@@ -84,12 +106,12 @@ def test_qwen_health_requires_credentials(
 
 def test_error_search_payload_cannot_create_discovery() -> None:
     case, state = _runtime_state()
-    task = state.tasks[0]
-    step = SimpleNamespace(
-        action_type="tool_call",
+    update = reduce_react_action(
+        state,
         tool_name="text_search",
-        tool_args={"task_id": task.task_id},
-        tool_result=json.dumps(
+        tool_args={"queries": "partial", "investigation_progress": _progress()},
+        call_id="call-error-partial",
+        serialized_result=json.dumps(
             {
                 "status": "error",
                 "error": "provider failed after returning partial rows",
@@ -107,23 +129,15 @@ def test_error_search_payload_cannot_create_discovery() -> None:
                 ],
             }
         ),
-        metadata={"function_call_id": "call-error-partial"},
     )
 
-    update = record_tool_observation(
-        state,
-        step,
-        image_sha256=case.image_sha256,
-    )
-
-    assert update["created_discovery_ids"] == []
-    assert update["created_failure_ids"]
+    assert update["accepted"] is True
+    assert update["failure"]["code"] == "provider_error"
     assert state.discoveries == []
 
 
 def test_search_runtime_payload_is_the_same_payload_shown_to_model() -> None:
     runner = object.__new__(StageRunner)
-    runner.tool_response_max_chars = 6000
     raw = {
         "status": "success",
         "queries": [
@@ -145,7 +159,7 @@ def test_search_runtime_payload_is_the_same_payload_shown_to_model() -> None:
     canonical = runner._canonical_tool_result("text_search", raw)
     serialized = json.dumps(canonical)
 
-    assert runner._compact_tool_result_for_context(
+    assert runner._model_visible_tool_result(
         "text_search",
         serialized,
     ) == canonical
@@ -158,7 +172,6 @@ def test_search_runtime_payload_is_the_same_payload_shown_to_model() -> None:
 
 def test_visit_canonical_payload_preserves_exact_passage_and_span() -> None:
     runner = object.__new__(StageRunner)
-    runner.tool_response_max_chars = 6000
     runner.prior_steps = []
     evidence = "A" * 500
     raw = {
@@ -300,6 +313,46 @@ def test_crop_and_inspect_keeps_legacy_findings_as_observations(
         "A visible horizontal edge crosses the region."
     ]
     assert "answer" not in result
+
+
+def test_crop_and_inspect_uses_unique_temp_files_under_concurrency(
+    tmp_path,
+) -> None:
+    from PIL import Image
+
+    image_path = tmp_path / "large-crop.png"
+    Image.new("RGB", (2400, 1200), "white").save(image_path)
+    barrier = threading.Barrier(2)
+    observed_paths: list[str] = []
+    observed_sizes: list[tuple[int, int]] = []
+
+    class ConcurrentFakeClient:
+        def create_image_json(self, **kwargs):
+            path = str(kwargs["image_input"])
+            observed_paths.append(path)
+            with Image.open(path) as sent:
+                observed_sizes.append(sent.size)
+            barrier.wait(timeout=5)
+            return {
+                "description": "The crop is visible.",
+                "observations": ["A bounded crop was supplied."],
+                "anomalies": [],
+                "limitations": [],
+            }
+
+    tool = CropAndInspectTool(client=ConcurrentFakeClient())
+    params = {
+        "image_input": str(image_path),
+        "bbox": [0.0, 0.0, 1.0, 1.0],
+        "focus_question": "What is visible?",
+    }
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(lambda _: tool.call(params), range(2)))
+
+    assert all(result["status"] == "success" for result in results)
+    assert len(observed_paths) == 2
+    assert len(set(observed_paths)) == 2
+    assert all(max(size) <= 1024 for size in observed_sizes)
 
 
 class _FakeOCRResponse:

@@ -638,7 +638,10 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
     stage_thinking_levels = {
         stage.lower(): os.getenv(
             f"GEMINI_{stage}_THINKING_LEVEL",
-            os.getenv("GEMINI_AGENT_THINKING_LEVEL", "low"),
+            os.getenv(
+                "GEMINI_AGENT_THINKING_LEVEL",
+                "high" if stage.lower() == "unified_react" else "low",
+            ),
         ).strip().lower()
         for stage in ACTIVE_POLICY_STAGES
     }

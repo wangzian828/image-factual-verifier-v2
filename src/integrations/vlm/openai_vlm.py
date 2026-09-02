@@ -22,7 +22,7 @@ from src.integrations.llm.openai_compatible import (
     resolve_model_wire_api,
 )
 from src.integrations.vlm.qwen_vl import parse_json_object
-from src.tools.vision_utils import image_to_data_url, vision_tool_image_to_data_url
+from src.tools.vision_utils import vision_tool_image_to_data_url
 
 
 DEFAULT_JSON_OBJECT_SCHEMA: Dict[str, Any] = {
@@ -180,7 +180,11 @@ class OpenAIVisionClient:
                         *[
                             {
                                 "type": "image_url",
-                                "image_url": {"url": image_to_data_url(image_input)},
+                                "image_url": {
+                                    "url": vision_tool_image_to_data_url(
+                                        image_input
+                                    )
+                                },
                             }
                             for image_input in images
                         ],
@@ -294,9 +298,9 @@ class OpenAIVisionClient:
 
     @staticmethod
     def _to_interactions_image(image_input: str) -> Dict[str, Any]:
-        if image_input.startswith(("http://", "https://")):
-            return OpenAIVisionClient._data_url_to_interactions_image(image_input)
-
+        # Every VLM input, including a remote candidate image, goes through the
+        # shared bounded serializer.  Passing remote URLs through as provider
+        # URIs would bypass the 1024-pixel model-image contract.
         image_url = vision_tool_image_to_data_url(image_input)
         return OpenAIVisionClient._data_url_to_interactions_image(image_url)
 

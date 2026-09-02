@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import hashlib
 import math
+import os
+from pathlib import Path
+import tempfile
 from typing import Any, Dict, Optional
 
 from src.integrations.gemini import RUNTIME_METRICS_KEY, exception_runtime_metrics
+from src.orchestrator.runtime_events import current_case_runtime_store
 from src.tools.base import BaseTool
+from src.tools.vision_utils import bounded_pil_image_to_jpeg_bytes
 
 
 INSPECT_PROMPT_TEMPLATE = """\
@@ -135,26 +141,24 @@ class CropAndInspectTool(BaseTool):
             }
 
         try:
-            import os
-            import tempfile
             from PIL import Image
 
-            img = Image.open(image_path)
-            w, h = img.size
-
-            x1, y1, x2, y2 = self._bbox_to_pixels(bbox, w, h)
-
-            x1 = max(0, min(x1, w - 1))
-            y1 = max(0, min(y1, h - 1))
-            x2 = max(x1 + 1, min(x2, w))
-            y2 = max(y1 + 1, min(y2, h))
-
-            cropped = img.crop((x1, y1, x2, y2))
-            tmp_path = os.path.join(
-                tempfile.gettempdir(),
-                f"crop_{os.getpid()}_{id(self)}.png",
-            )
-            cropped.save(tmp_path)
+            with Image.open(image_path) as img:
+                w, h = img.size
+                x1, y1, x2, y2 = self._bbox_to_pixels(bbox, w, h)
+                x1 = max(0, min(x1, w - 1))
+                y1 = max(0, min(y1, h - 1))
+                x2 = max(x1 + 1, min(x2, w))
+                y2 = max(y1 + 1, min(y2, h))
+                cropped = img.crop((x1, y1, x2, y2))
+            crop_bytes, crop_view = bounded_pil_image_to_jpeg_bytes(cropped)
+            with tempfile.NamedTemporaryFile(
+                prefix="ifv_crop_inspect_",
+                suffix=".jpg",
+                delete=False,
+            ) as handle:
+                tmp_path = handle.name
+                handle.write(crop_bytes)
         except Exception as exc:
             return {
                 "status": "error",
@@ -195,7 +199,7 @@ class CropAndInspectTool(BaseTool):
         if not isinstance(observations, list):
             observations = []
 
-        return {
+        result = {
             "status": "success",
             "description": str(parsed.get("description", "")),
             "observations": observations,
@@ -203,8 +207,50 @@ class CropAndInspectTool(BaseTool):
             "limitations": parsed.get("limitations", []),
             "crop_bbox": bbox,
             "focus_question": focus_question,
+            "crop_view": {
+                "original_size": crop_view["original_size"],
+                "sent_size": crop_view["sent_size"],
+                "max_long_edge": crop_view["max_long_edge"],
+                "jpeg_quality": crop_view["jpeg_quality"],
+            },
             RUNTIME_METRICS_KEY: parsed.get(RUNTIME_METRICS_KEY, {}),
         }
+        store = current_case_runtime_store()
+        if store is not None:
+            try:
+                descriptor = store.artifacts.put_bytes(
+                    crop_bytes,
+                    media_type="image/jpeg",
+                    suffix=".jpg",
+                    metadata={
+                        "kind": "crop_and_inspect_view",
+                        "crop_bbox": list(bbox),
+                        "focus_question": focus_question[:400],
+                        "source_image_sha256": _sha256_file(image_path),
+                        **crop_view,
+                    },
+                )
+                view_artifact = {
+                    "kind": "crop_and_inspect_view",
+                    "region": list(bbox),
+                    "artifact": descriptor,
+                }
+                result["view_artifacts"] = [view_artifact]
+                store.append_event(
+                    "image_view",
+                    {
+                        "stage": "unified_react",
+                        "purpose": "crop_and_inspect_follow_up",
+                        "image_id": "input-image",
+                        "crop": list(bbox),
+                        "view_artifacts": [view_artifact],
+                        "decision_impact": "pending",
+                        **crop_view,
+                    },
+                )
+            except Exception as exc:
+                result["crop_artifact_error"] = f"{type(exc).__name__}: {exc}"
+        return result
 
     @staticmethod
     def _validate_bbox(bbox: Any) -> None:
@@ -246,3 +292,11 @@ class CropAndInspectTool(BaseTool):
             x1, y1, x2, y2 = [int(v) for v in values]
 
         return x1, y1, x2, y2
+
+
+def _sha256_file(path: str) -> str:
+    hasher = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            hasher.update(chunk)
+    return hasher.hexdigest()

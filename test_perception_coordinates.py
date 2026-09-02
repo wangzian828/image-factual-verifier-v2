@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from src.tools.perceive_scene import (
     PERCEIVE_SCENE_SCHEMA,
     PerceiveSceneTool,
@@ -25,7 +27,20 @@ class FakePerceptionClient:
         }
 
 
-def test_gemini_1000_yxyx_bbox_is_converted_at_perception_boundary() -> None:
+def _patch_image_serializer(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "src.tools.perceive_scene.controlled_image_to_data_url",
+        lambda _value: (
+            "data:image/jpeg;base64,AA==",
+            {"sent_size": [32, 24]},
+        ),
+    )
+
+
+def test_gemini_1000_yxyx_bbox_is_converted_at_perception_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_image_serializer(monkeypatch)
     tool = PerceiveSceneTool(client=FakePerceptionClient())
 
     result = tool.call({"image_input": "not-read-by-fake.jpg"})
@@ -34,7 +49,10 @@ def test_gemini_1000_yxyx_bbox_is_converted_at_perception_boundary() -> None:
     assert result["entities"][0]["bbox"] == [0.088, 0.195, 0.56, 0.904]
 
 
-def test_qwen_1000_xyxy_bbox_is_converted_without_axis_swap() -> None:
+def test_qwen_1000_xyxy_bbox_is_converted_without_axis_swap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_image_serializer(monkeypatch)
     tool = PerceiveSceneTool(
         client=FakePerceptionClient(),
         provider="qwen_local",
@@ -82,7 +100,10 @@ class MixedScalePerceptionClient:
         }
 
 
-def test_one_invalid_bbox_does_not_discard_the_scene_report() -> None:
+def test_one_invalid_bbox_does_not_discard_the_scene_report(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_image_serializer(monkeypatch)
     tool = PerceiveSceneTool(client=MixedScalePerceptionClient())
 
     result = tool.call({"image_input": "not-read-by-fake.jpg"})
@@ -137,7 +158,10 @@ class VerboseFakePerceptionClient:
         }
 
 
-def test_perception_preserves_bounded_attributes_and_caps_entities() -> None:
+def test_perception_preserves_bounded_attributes_and_caps_entities(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_image_serializer(monkeypatch)
     tool = PerceiveSceneTool(client=VerboseFakePerceptionClient())
 
     result = tool.call({"image_input": "not-read-by-fake.jpg"})

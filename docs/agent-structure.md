@@ -11,7 +11,7 @@ image-grounded ReAct loop，状态由 runtime/reducer 管理，成熟工具继�
 ┌──────────────────────────────┐
 │ unified ReAct policy          │
 │ 每轮：thought → 一个工具调用 │
-│ 每次请求临时附加压缩原图     │
+│ 根请求附加受控原图；后续复用会话 │
 └──────────────┬───────────────┘
                │ public tool schema
                ▼
@@ -49,14 +49,15 @@ image-grounded ReAct loop，状态由 runtime/reducer 管理，成熟工具继�
   任意一个，也可以在后续因新问题再次调用；没有固定 bootstrap 闸门。
 - 每轮只允许一个工具调用。查询、换页面、反向搜图、视觉复查和结束调查，
   都是同一个循环中的动作。
-- 视觉工具默认发送受控压缩图：最长边 2048、JPEG quality 92。`perceive_scene`
-  遇到可恢复的 provider 400、传输失败或超时时，会再用最长边 1280、quality 88
-  的压缩图和宽松对象 schema 尝试一次；每次尝试都写入工具结果，不能把失败伪装成
+- 进入视觉 API 的图片统一限制为最长边 1024、JPEG quality 95。原图、裁剪图、
+  远程候选图和单图 contact sheet 都走同一序列化入口；不能通过环境变量绕过
+  1024 上限。`perceive_scene` 的恢复请求仍写入同一工具结果，失败不能伪装成
   正常观察。
 - 模型只产生 thought 和公开工具参数。ID、图片路径、工具内部参数、去重、
   预算、失败记录和 state delta 由 runtime 负责。
-- 每次直接多模态请求都会临时附加同一张受控压缩原图。原图不重复写入文本
-  历史，也不把 base64 写入 trace。
+- 每个 Gemini ReAct Interaction 的根请求附加一张受控原图；后续请求复用同一
+  provider session 中的原图，不重复上传，也不把 base64 写入文本历史或 trace。
+  独立视觉工具仍按自身需要接收原图、裁剪图或候选图。
 - `investigation_progress` 是模型在每轮动作中自行维护的调查状态：
   `investigating`、`decision_capable_support` 或
   `decision_capable_refute`。runtime 只校验结构、保存和传回；不会根据工具

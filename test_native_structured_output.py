@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List
 
+from PIL import Image
+
 from src.orchestrator.stage_runner import InteractionSession, StageRunner
 from test_support_models import StructuredJudgmentOutput
 
@@ -147,12 +149,7 @@ def test_shared_interaction_session_reuses_image_from_provider_history(
     tmp_path: Path,
 ) -> None:
     image_path = tmp_path / "image.png"
-    image_path.write_bytes(
-        bytes.fromhex(
-            "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
-            "0000000d49444154789c6360000000020001e221bc330000000049454e44ae426082"
-        )
-    )
+    Image.new("RGBA", (1, 1), color=(255, 255, 255, 0)).save(image_path)
     backend = StructuredFakeBackend(
         [
             response("planning-interaction", valid_judgment()),
@@ -204,11 +201,11 @@ def test_shared_interaction_session_reuses_image_from_provider_history(
     snapshot = planning_steps[0].metadata["policy_input"]["input_payload"]
     assert snapshot == [
         {"type": "text", "text": "Initial image-grounded planning context"},
-        {
-            "type": "image",
-            "runtime_image": True,
-            "mime_type": "image/png",
-        },
+            {
+                "type": "image",
+                "runtime_image": True,
+                "mime_type": "image/jpeg",
+            },
     ]
     assert "data" not in json.dumps(snapshot)
     assert session.previous_interaction_id == "checkpoint-interaction"

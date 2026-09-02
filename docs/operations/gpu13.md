@@ -737,9 +737,10 @@ scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
 Keep benchmark datasets and caches under `IFV_DATA_ROOT`, outside the Git checkout.
 
 For repeated rollouts, deterministic perception caching is enabled by default
-for `perceive_scene` and `ocr_with_position`. Visual tool requests use a
-compressed JPEG by default (`IFV_VISION_TOOL_IMAGE_MODE=compressed`, longest
-edge 2048, quality 92). Set
+for `perceive_scene` and `ocr_with_position`. All images entering a vision API
+use a controlled JPEG with longest edge 1024 and quality 95. This applies to
+original images, crops, downloaded candidate images, and single-image contact
+sheets; the 1024 bound cannot be bypassed by `IFV_VISION_TOOL_IMAGE_MODE`. Set
 `PERCEPTION_CACHE_ENABLED=0` to disable it. Web-result caching remains opt-in
 through `TOOL_CACHE_ENABLED=1`; do not enable that for freshness-sensitive
 production runs without an explicit cache namespace and TTL.
@@ -910,9 +911,8 @@ owns state, IDs, deduplication, budgets, failures, and termination.
 In `direct_multimodal` mode, the root ReAct request receives one temporary
 controlled image attachment. Later ReAct requests reuse that image through the
 same Gemini Interaction history and add only the newest function result and
-current observation; they do not upload the original image again. The default is
-a JPEG with longest edge 1280 and quality 88; the image is not copied into text
-history or persisted as base64. The independent final Judgment request receives
+current observation; they do not upload the original image again. The image is
+not copied into text history or persisted as base64. The independent final Judgment request receives
 its own controlled image attachment. The context ledger stores only the
 externalized media artifact and image metadata. In `separate_vlm` mode, visual
 tools receive the image and the policy model receives structured observations
@@ -942,7 +942,8 @@ bounded retry window still produces a diagnostic error trace.
 Coverage runs after every accepted action and stops when the target fact and its
 required evidence gaps resolve, meaningful routes are exhausted, or the 24-action
 budget is reached. The four active policy stages default to an 8,192-token output
-budget and low Gemini thinking. Qwen policy runs can enable visible thinking for
+budget; the active Gemini `unified_react` policy defaults to high thinking while
+the other Gemini policy stages default to low. Qwen policy runs can enable visible thinking for
 `unified_react`, `unified_reflection`, `unified_discrepancy_decision`, and
 `unified_judgment`; the exported ReAct target remains `<think>` plus one native
 tool call. Interactions failures that exhaust the

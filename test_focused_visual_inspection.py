@@ -192,7 +192,7 @@ def test_qwen_local_receives_one_labeled_contact_sheet(tmp_path: Path) -> None:
     contact_sheet = Path(image_inputs[0])
     assert contact_sheet.exists()
     with Image.open(contact_sheet) as image:
-        assert image.width > 640
-        assert image.height > 500
+        assert max(image.size) <= 1024
+        assert image.format == "JPEG"
 
     contact_sheet.unlink()

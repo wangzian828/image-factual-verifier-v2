@@ -36,14 +36,14 @@ def test_vision_tool_defaults_to_compressed_wire_path(tmp_path: Path) -> None:
     assert data_url.startswith("data:image/jpeg;base64,")
     encoded = data_url.split(",", 1)[1]
     with Image.open(BytesIO(base64.b64decode(encoded))) as sent:
-        assert sent.size == (2048, 1024)
+        assert sent.size == (1024, 512)
 
 
-def test_vision_tool_compression_can_be_selected_explicitly(
+def test_vision_tool_cannot_bypass_the_1024_bound(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("IFV_VISION_TOOL_IMAGE_MODE", "compressed")
+    monkeypatch.setenv("IFV_VISION_TOOL_IMAGE_MODE", "original")
     path = tmp_path / "large.png"
     Image.new("RGB", (3000, 1500), color=(30, 60, 90)).save(path)
 
@@ -53,4 +53,4 @@ def test_vision_tool_compression_can_be_selected_explicitly(
     encoded = data_url.split(",", 1)[1]
 
     with Image.open(BytesIO(base64.b64decode(encoded))) as sent:
-        assert sent.size == (2048, 1024)
+        assert sent.size == (1024, 512)

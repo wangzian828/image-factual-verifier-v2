@@ -38,6 +38,7 @@ REACT_RUNTIME_TOOLS = (
     "ocr_with_position",
     "current_time",
     "reverse_image_search",
+    "text_image_search",
     "text_search",
     "visit",
     "compare_with_reference",
@@ -51,6 +52,7 @@ REACT_RUNTIME_TOOL_LIMITS = {
     "current_time": 1,
     "ocr_with_position": 3,
     "reverse_image_search": 2,
+    "text_image_search": 6,
     "text_search": 16,
     "visit": 16,
     "compare_with_reference": 6,
@@ -604,19 +606,26 @@ def validate_react_action(
     ):
         return "claim/task/question IDs are not part of the unified ReAct contract"
     policy = source_access_policy or SourceAccessPolicy()
-    if tool_name == "text_search":
-        query = tool_args.get("queries", "")
+    if tool_name in {"text_search", "text_image_search"}:
+        query = (
+            tool_args.get("queries", "")
+            if tool_name == "text_search"
+            else tool_args.get("query", "")
+        )
         if isinstance(query, list):
             query = query[0] if query else ""
         query = _one_line(query, 1200)
         if not query:
-            return "text_search requires one non-empty query"
+            return f"{tool_name} requires one non-empty query"
         violation = query_policy_violation(query, source_access_policy=policy)
         if violation:
-            return f"text_search query violates source policy: {violation}"
+            return f"{tool_name} query violates source policy: {violation}"
         normalized = " ".join(query.casefold().split())
-        if any(normalized == " ".join(item.casefold().split()) for item in state.attempted_queries):
-            return "text_search query duplicates an earlier query"
+        if any(
+            normalized == " ".join(item.casefold().split())
+            for item in state.attempted_queries
+        ):
+            return f"{tool_name} query duplicates an earlier query"
     if tool_name in {"visit", "compare_with_reference"}:
         urls = _requested_urls(tool_name, tool_args)
         if not urls:
@@ -792,6 +801,40 @@ def _append_discoveries(
             ):
                 state.discoveries.append(item)
             ids.append(item["discovery_id"])
+    elif tool_name == "text_image_search":
+        for row in rows:
+            candidate_url = str(row.get("url") or row.get("link") or "").strip()
+            image_url = str(
+                row.get("image_url")
+                or row.get("thumbnail")
+                or row.get("imageUrl")
+                or ""
+            ).strip()
+            if not candidate_url and not image_url:
+                continue
+            item = {
+                "discovery_id": _stable_id(
+                    "discovery",
+                    call_id,
+                    candidate_url,
+                    image_url,
+                ),
+                "tool_name": tool_name,
+                "candidate_url": candidate_url,
+                "reference_image_url": image_url,
+                "title": _one_line(row.get("title"), 600),
+                "snippet": _one_line(row.get("snippet"), 1000),
+                "candidate_status": "unverified",
+                "match_status": "unverified",
+                "source_query": _one_line(payload.get("query"), 800),
+            }
+            if not any(
+                str(old.get("candidate_url", "")) == candidate_url
+                and str(old.get("reference_image_url", "")) == image_url
+                for old in state.discoveries
+            ):
+                state.discoveries.append(item)
+            ids.append(item["discovery_id"])
     elif tool_name == "reverse_image_search":
         for row in rows:
             candidate_url = str(row.get("url") or row.get("link") or "").strip()
@@ -960,7 +1003,11 @@ def _append_evidence(
     call_id: str,
     payload: Mapping[str, Any],
 ) -> list[str]:
-    if tool_name in {"text_search", "reverse_image_search"}:
+    if tool_name in {
+        "text_search",
+        "text_image_search",
+        "reverse_image_search",
+    }:
         return []
     rows: list[Mapping[str, Any]] = []
     if tool_name == "visit":
@@ -1360,14 +1407,6 @@ def reduce_react_action(
 def render_react_runtime_context(
     state: UnifiedReactState,
 ) -> str:
-    evidence_index = [
-        _model_visible_evidence_index(item)
-        for item in state.evidence[-48:]
-    ]
-    recent_evidence, omitted_evidence_ids = _bounded_model_evidence(
-        state.evidence[-4:],
-        max_chars=12000,
-    )
     payload = {
         "phase": "unified_react_investigation",
         "objective": state.objective,
@@ -1375,31 +1414,11 @@ def render_react_runtime_context(
             "attached_to_this_request": True,
             "note": "Use the pixels together with the structured memory; it is not a substitute for the image.",
         },
-        "visual_memory": _compact(state.visual_memory, max_string=1800),
-        "current_focus": state.current_focus,
-        "discoveries": [
-            _compact(item, max_string=1000)
-            for item in state.discoveries[-16:]
-        ],
-        "evidence_index": evidence_index,
-        "recent_evidence": recent_evidence,
-        "omitted_recent_evidence_ids": omitted_evidence_ids,
         "observation_delivery": (
-            "The preceding function_result contains the complete canonical "
-            "result of the latest action. This state payload is only an index "
-            "and must not be treated as a replacement for that result."
+            "The current and prior tool observations remain in the interaction "
+            "history. This packet contains runtime control only; it does not "
+            "summarize or replace any observation."
         ),
-        "failures": [
-            _compact(item, max_string=1000)
-            for item in state.failures[-10:]
-        ],
-        "attempted_queries": state.attempted_queries[-32:],
-        "visited_urls": state.visited_urls[-32:],
-        "recent_actions": [
-            _compact(item, max_string=1400)
-            for item in state.recent_actions[-8:]
-        ],
-        "open_questions": state.open_questions[-12:],
         "investigation_progress": dict(state.investigation_progress),
         "budget": {
             "actions_used": state.action_count,
@@ -1414,37 +1433,23 @@ def render_react_runtime_context(
 def compile_react_judgment_basis(
     state: UnifiedReactState,
 ) -> Dict[str, Any]:
-    evidence, omitted_evidence_ids = _bounded_model_evidence(
-        state.evidence[-40:],
-        max_chars=72000,
-    )
     return {
         "schema_version": "ifv-unified-judgment-basis-v1",
         "decision_mode": "bounded_binary_judgment",
         "objective": state.objective,
-        "visual_memory": _compact(state.visual_memory, max_string=1800),
+        "visual_memory": state.visual_memory,
         "evidence_ids": [
             str(item.get("evidence_id"))
-            for item in state.evidence[-40:]
+            for item in state.evidence
             if str(item.get("evidence_id", "")).strip()
         ],
-        "evidence": evidence,
-        "omitted_evidence_ids": omitted_evidence_ids,
-        "evidence_archive_note": (
-            "Only complete evidence records that fit the dossier budget are "
-            "shown here. Omitted records remain in the trace archive; their "
-            "text was not cut or rewritten."
-        ),
-        "discoveries": [
-            _compact(item, max_string=700) for item in state.discoveries[-20:]
-        ],
-        "failures": [
-            _compact(item, max_string=600) for item in state.failures[-12:]
-        ],
-        "open_questions": state.open_questions[-12:],
+        "evidence": state.evidence,
+        "discoveries": state.discoveries,
+        "failures": state.failures,
+        "open_questions": state.open_questions,
         "investigation_progress": dict(state.investigation_progress),
-        "attempted_queries": state.attempted_queries[-32:],
-        "visited_urls": state.visited_urls[-32:],
+        "attempted_queries": state.attempted_queries,
+        "visited_urls": state.visited_urls,
         "action_count": state.action_count,
         "stop_reason": state.stop_reason,
     }
@@ -1466,7 +1471,21 @@ def render_react_judgment_context(
                 "terminal stage."
             ),
         },
-        "investigation": dict(basis),
+        "evidence_locator": [
+            {
+                "evidence_id": str(item.get("evidence_id", "")),
+                "function_call_id": str(item.get("function_call_id", "")),
+                "tool_name": str(item.get("tool_name", "")),
+                "source_url": str(item.get("source_url", "")),
+            }
+            for item in state.evidence
+            if str(item.get("evidence_id", "")).strip()
+        ],
+        "investigation_history": (
+            "The complete ReAct tool history is retained in this interaction. "
+            "Use it rather than reconstructing observations from this control "
+            "packet."
+        ),
         "output_requirements": {
             "verdict": ["real", "fake"],
             "report": [
@@ -1477,21 +1496,13 @@ def render_react_judgment_context(
                 "evidence_summary",
                 "remaining_uncertainties",
             ],
-            "verdict_evidence_ids": (
-                "List only evidence_id values from investigation.evidence that "
-                "your report actually relies on. Leave empty only when that list "
-                "is empty."
-            ),
+            "verdict_evidence_ids": "List only evidence_id values from evidence_locator that your report actually relies on.",
             "rules": [
                 "Keep the claim under review faithful to what the image expresses.",
                 "Use recorded observations and sources without inventing facts.",
                 "A lack of evidence is uncertainty, not proof of fake.",
                 "Visible artifacts or image quality alone are not a factual verdict.",
-                (
-                    "investigation.evidence is the evidence ledger. "
-                    "investigation.discoveries are unverified leads, and "
-                    "investigation.failures do not establish facts."
-                ),
+                "The retained tool history is the evidence record. Search candidates are unverified leads, and access failures do not establish facts.",
                 (
                     "Do not use the attached image to create a new anomaly or "
                     "factual finding that is absent from the evidence ledger or "

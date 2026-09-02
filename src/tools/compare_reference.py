@@ -276,6 +276,7 @@ class CompareWithReferenceTool(BaseTool):
                 return error
 
             from src.tools.vision_utils import (
+                controlled_image_to_data_url,
                 image_to_data_url,
                 vision_tool_image_to_data_url,
             )
@@ -316,9 +317,10 @@ class CompareWithReferenceTool(BaseTool):
                     **deterministic,
                     RUNTIME_METRICS_KEY: {},
                 }
-            vision_current_data_url = vision_tool_image_to_data_url(
-                self.image_path
+            reference_data_url, _ = controlled_image_to_data_url(
+                reference_data_url
             )
+            vision_current_data_url = vision_tool_image_to_data_url(self.image_path)
             input_payload = [
                 {"type": "text", "text": COMPARE_PROMPT.format(focus=focus)},
                 self._data_url_to_image_content(reference_data_url),

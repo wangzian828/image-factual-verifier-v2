@@ -183,7 +183,7 @@ def test_gemini_requests_thought_summaries() -> None:
     orchestrator.provider = "gemini"
 
     assert orchestrator._stage_generation_config("UNIFIED_REACT") == {
-        "thinking_level": "low",
+        "thinking_level": "high",
         "thinking_summaries": "auto",
     }
     assert orchestrator._stage_generation_config("UNIFIED_JUDGMENT") == {
@@ -198,6 +198,24 @@ def test_gemini_unified_react_thinking_level_can_be_high(
     monkeypatch.setenv("GEMINI_UNIFIED_REACT_THINKING_LEVEL", "high")
 
     assert Orchestrator._stage_thinking_level("UNIFIED_REACT") == "high"
+
+
+def test_gemini_unified_react_defaults_high_without_global_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("GEMINI_UNIFIED_REACT_THINKING_LEVEL", raising=False)
+    monkeypatch.delenv("GEMINI_AGENT_THINKING_LEVEL", raising=False)
+
+    assert Orchestrator._stage_thinking_level("UNIFIED_REACT") == "high"
+    assert Orchestrator._stage_thinking_level("UNIFIED_JUDGMENT") == "low"
+
+
+def test_gemini_unified_react_can_be_explicitly_lowered(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_UNIFIED_REACT_THINKING_LEVEL", "low")
+
+    assert Orchestrator._stage_thinking_level("UNIFIED_REACT") == "low"
 
 
 def test_gemini_stage_output_budgets_are_balanced(

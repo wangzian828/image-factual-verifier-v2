@@ -231,19 +231,30 @@ class PerceiveSceneTool(BaseTool):
         image_input = params["image_input"]
 
         attempts: list[Dict[str, Any]] = []
-        request_inputs = [image_input]
         try:
             compressed_input, compression_metadata = controlled_image_to_data_url(
                 image_input,
-                max_long_edge=1280,
-                jpeg_quality=88,
             )
-            if compressed_input != image_input:
-                request_inputs.append(compressed_input)
+            request_inputs = [compressed_input, compressed_input]
         except Exception as exc:
             compression_metadata = {
                 "error": f"{type(exc).__name__}: {exc}",
             }
+            error = {
+                "status": "error",
+                "error": (
+                    "Scene perception image preparation failed: "
+                    f"{type(exc).__name__}: {exc}"
+                ),
+                "entities": [],
+                "scene_description": "",
+                "image_type": "unknown",
+                "compression": compression_metadata,
+            }
+            metrics = exception_runtime_metrics(exc)
+            if metrics:
+                error[RUNTIME_METRICS_KEY] = metrics
+            return error
 
         request_schemas = [PERCEIVE_SCENE_SCHEMA]
         if len(request_inputs) > 1:
@@ -257,7 +268,7 @@ class PerceiveSceneTool(BaseTool):
                 start=1,
             ):
                 try:
-                    parsed = client.create_image_json(
+                    candidate = client.create_image_json(
                         system_prompt=PERCEIVE_SCENE_PROMPT,
                         user_text=(
                             "Inspect the complete image, preserve the relationships "
@@ -269,6 +280,11 @@ class PerceiveSceneTool(BaseTool):
                         model_name=self.model_name,
                         response_schema=request_schema,
                     )
+                    if not _has_usable_perception_payload(candidate):
+                        raise RuntimeError(
+                            "Scene perception returned no usable structured observation."
+                        )
+                    parsed = candidate
                     if attempt_index > 1 and isinstance(parsed, dict):
                         parsed["perception_recovery"] = {
                             "recovered": True,
@@ -435,7 +451,22 @@ class PerceiveSceneTool(BaseTool):
             or "transport" in name
             or "readerror" in name
             or "connection" in name
+            or "no usable structured observation" in message
         )
+
+
+def _has_usable_perception_payload(value: Any) -> bool:
+    """Do not turn an empty fallback object into a successful observation."""
+
+    if not isinstance(value, dict):
+        return False
+    if str(value.get("scene_description", "")).strip():
+        return True
+    for key in ("entities", "relations", "notable_details", "uncertainties"):
+        rows = value.get(key)
+        if isinstance(rows, list) and any(item not in (None, "", {}) for item in rows):
+            return True
+    return False
 
 
 def normalize_entity_bbox(

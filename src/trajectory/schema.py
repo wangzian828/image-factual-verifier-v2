@@ -101,6 +101,7 @@ class TrajectorySFTExample(StrictModel):
         max_length=200,
     )
     messages: List[Dict[str, Any]] = Field(min_length=2)
+    images: List[str] = Field(default_factory=list)
     tools: str = ""
     token_count_estimate: int = Field(ge=1)
     message_count: int = Field(ge=2)
@@ -133,6 +134,22 @@ class TrajectorySFTExample(StrictModel):
                 assistant_targets += 1
         if assistant_targets < 1:
             raise ValueError("trajectory requires at least one supervised target")
+        if self.images:
+            first_user = next(
+                (
+                    message
+                    for message in self.messages
+                    if str(message.get("role", "")) == "user"
+                ),
+                None,
+            )
+            if first_user is None or "<image>" not in str(
+                first_user.get("content", "")
+            ):
+                raise ValueError(
+                    "trajectory images require an <image> marker in the first "
+                    "user message"
+                )
         return self
 
 

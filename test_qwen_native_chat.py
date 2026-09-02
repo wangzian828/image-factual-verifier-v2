@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List
 
+from PIL import Image
+
 import httpx
 import pytest
 from pydantic import BaseModel, Field
@@ -482,12 +484,7 @@ def test_qwen_no_tool_stage_uses_json_schema_and_redacts_image(
     tmp_path: Path,
 ) -> None:
     image_path = tmp_path / "pixel.png"
-    image_path.write_bytes(
-        bytes.fromhex(
-            "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
-            "0000000d49444154789c6360000000020001e221bc330000000049454e44ae426082"
-        )
-    )
+    Image.new("RGBA", (1, 1), color=(255, 255, 255, 0)).save(image_path)
     backend = QwenFakeBackend([_output_response()])
     runner = StageRunner(
         llm=backend,

@@ -157,6 +157,49 @@ def test_action_memory_is_bounded_and_react_context_has_current_image_marker() -
     assert context["investigation_progress"]["status"] == "investigating"
 
 
+def test_text_image_search_enters_discovery_ledger_without_becoming_evidence() -> None:
+    state = new_unified_react_runtime_state(_case())
+    _bootstrap(state)
+
+    update = reduce_react_action(
+        state,
+        tool_name="text_image_search",
+        tool_args={
+            "query": "blue bridge over river",
+            "investigation_progress": _progress(),
+        },
+        call_id="text-image-search-1",
+        serialized_result=json.dumps(
+            {
+                "status": "success",
+                "query": "blue bridge over river",
+                "results": [
+                    {
+                        "url": "https://example.test/page",
+                        "image_url": "https://example.test/image",
+                        "title": "Bridge opening",
+                        "snippet": "A page showing a bridge.",
+                    }
+                ],
+            }
+        ),
+    )
+
+    assert update["accepted"] is True
+    assert update["created_discovery_ids"]
+    assert len(state.discoveries) == 1
+    assert state.discoveries[0]["reference_image_url"] == (
+        "https://example.test/image"
+    )
+    assert state.evidence == []
+    # The runtime control packet intentionally contains only budget/progress;
+    # the complete tool result is delivered through the provider interaction
+    # history on the next turn.
+    context = json.loads(render_react_runtime_context(state))
+    assert "discoveries" not in context
+    assert context["budget"]["actions_used"] == 1
+
+
 def test_tool_availability_does_not_depend_on_model_progress_status() -> None:
     state = new_unified_react_runtime_state(_case())
     expected = available_unified_react_runtime_tools(state)
@@ -253,9 +296,10 @@ def test_visit_evidence_records_enter_react_ledger_and_final_context() -> None:
     context = json.loads(
         render_react_judgment_context(state, compile_react_judgment_basis(state))
     )
-    assert context["investigation"]["evidence"][0]["excerpt"] == (
-        "The official release confirms the pictured bridge opened in 2026."
+    assert context["evidence_locator"][0]["evidence_id"] == (
+        state.evidence[0]["evidence_id"]
     )
+    assert "investigation" not in context
     assert "verdict_evidence_ids" in context["output_requirements"]
 
 
@@ -454,8 +498,8 @@ def test_current_runtime_trace_passes_current_audit_without_target_graph(
         "metadata": {
             "native_interactions": True,
             "interaction_id": "interaction-judgment",
-            "previous_interaction_id": "",
-            "interaction_lifecycle_kind": "standalone_request",
+            "previous_interaction_id": "interaction-scene",
+            "interaction_lifecycle_kind": "protocol_correction",
             "policy_action": {"type": "output", "value": judgment},
         },
         "output": judgment,
@@ -544,15 +588,14 @@ def test_candidate_reference_images_are_reinjected_as_bounded_multimodal_items(
     ]
 
 
-def test_tool_result_context_reduction_keeps_valid_json_and_removes_legacy_state() -> None:
+def test_tool_result_context_keeps_complete_observation_and_removes_legacy_state() -> None:
     runner = StageRunner(
         llm=object(),
         system_prompt="",
         tools=[],
         attach_image=False,
-        tool_response_max_chars=1200,
     )
-    result = runner._compact_tool_result_for_context(
+    result = runner._model_visible_tool_result(
         "visit",
         json.dumps(
             {
@@ -568,12 +611,14 @@ def test_tool_result_context_reduction_keeps_valid_json_and_removes_legacy_state
                 "subcalls": [{"kind": "fetch"}],
             }
         ),
-        max_chars=1200,
     )
 
     assert isinstance(result, dict)
     assert "validated_claim_state" not in result
     assert result["evidence_records"][0]["evidence"] == (
         "The source directly states the event."
+    )
+    assert result["evidence_records"][0]["evidence_context"] == (
+        "The complete surrounding paragraph."
     )
     json.dumps(result, ensure_ascii=False)

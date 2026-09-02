@@ -220,9 +220,10 @@ def _initial_observation_packet(trace: Mapping[str, Any]) -> str:
         "initial_observations": [],
     }
     return (
-        "Image factual verification episode. Use the supplied observations and "
-        "subsequent tool responses as context. Generate only the next policy "
-        "message when it is your turn.\n\n"
+        "<image>\n"
+        "Image factual verification episode. Use the supplied image, "
+        "observations, and subsequent tool responses as context. Generate only "
+        "the next policy message when it is your turn.\n\n"
         + canonical_json(payload)
     )
 
@@ -232,7 +233,7 @@ def _stage_user_packet(
     example_type: str,
     policy_input: Mapping[str, Any],
 ) -> str:
-    input_payload = _compact_export_input_payload(policy_input.get("input_payload", ""))
+    input_payload = policy_input.get("input_payload", "")
     payload: dict[str, Any] = {
         "stage": example_type,
         "stage_instruction": _strip_gemini_wire_instructions(
@@ -282,43 +283,6 @@ def _stage_control_packet(
             str(tool["function"]["name"]) for tool in tools
         ]
     return canonical_json(payload)
-
-
-def _compact_export_input_payload(value: Any) -> Any:
-    """Remove archived workspace snapshots from model-visible SFT packets.
-
-    Runtime stage requests intentionally retain the complete handoff in the
-    canonical trace and context ledger.  The rendered stage-specific input
-    already contains the bounded state projection needed by that stage, so
-    exporting ``runtime_handoff.workspace`` again makes every policy turn carry
-    a second copy of cumulative state.  Keep the handoff metadata and compact
-    projection marker, but never copy the archived full workspace into SFT.
-    """
-
-    if isinstance(value, list):
-        return [_compact_export_input_payload(item) for item in value]
-    if isinstance(value, Mapping):
-        result: dict[str, Any] = {}
-        for key, child in value.items():
-            if key == "runtime_handoff" and isinstance(child, Mapping):
-                handoff = {
-                    str(name): _compact_export_input_payload(item)
-                    for name, item in child.items()
-                    if name != "workspace"
-                }
-                result[str(key)] = handoff
-            else:
-                result[str(key)] = _compact_export_input_payload(child)
-        return result
-    if isinstance(value, str):
-        try:
-            parsed = json.loads(value)
-        except (TypeError, ValueError):
-            return value
-        compacted = _compact_export_input_payload(parsed)
-        if compacted != parsed:
-            return canonical_json(compacted)
-    return value
 
 
 def _trajectory_candidate_steps(
@@ -421,8 +385,16 @@ def export_trajectory_sft_example(
     ).strip()
     runtime_case = _mapping(state.get("runtime_case"))
     case_id = str(runtime_case.get("case_id") or episode_id).strip()
-    if not episode_id or not case_id:
-        raise ValueError("canonical trace requires episode and case IDs")
+    image_path = str(
+        runtime_case.get("image_path")
+        or trace.get("image_path")
+        or state.get("image_path")
+        or ""
+    ).strip()
+    if not episode_id or not case_id or not image_path:
+        raise ValueError(
+            "canonical trace requires episode ID, case ID, and image path"
+        )
 
     messages: list[dict[str, Any]] = [
         {
@@ -432,8 +404,7 @@ def export_trajectory_sft_example(
                 "You are the Image Factual Verifier policy model. Follow each "
                 "stage control and generate the next assistant message or tool "
                 "call. Tool responses are observations, not text to imitate. "
-                "The event history and recorded state deltas are the current "
-                "investigation context."
+                "The event history is the investigation context."
             ),
         },
         {"role": "user", "content": _initial_observation_packet(trace)},
@@ -442,6 +413,7 @@ def export_trajectory_sft_example(
     tool_call_count = 0
     candidates = _trajectory_candidate_steps(trace)
     pending_tool_response: dict[str, Any] | None = None
+    previous_example_type = ""
     for position, (_, step, example_type) in enumerate(candidates):
         metadata = _mapping(step.get("metadata"))
         policy_input = dict(_mapping(metadata.get("policy_input")))
@@ -458,15 +430,12 @@ def export_trajectory_sft_example(
             example_type=example_type,
             policy_input=policy_input,
         )
+        stage_changed = (
+            position > 0 and example_type != previous_example_type
+        )
         if position == 0:
             messages[1]["content"] += "\n\n" + initial_stage_packet
         elif pending_tool_response is not None:
-            # Keep the role sequence expected by the Qwen chat template
-            # (assistant -> tool -> assistant).  The stage boundary is still
-            # carried once in the tool observation.  Do not replay the next
-            # stage's cumulative runtime input: its relevant event deltas have
-            # already been appended to the transcript.
-            pending_tool_response["next_stage_control"] = stage_control
             messages.append(
                 {
                     "role": "tool",
@@ -477,7 +446,9 @@ def export_trajectory_sft_example(
                 }
             )
             pending_tool_response = None
-        else:
+            if stage_changed:
+                messages.append({"role": "user", "content": stage_control})
+        elif stage_changed or messages[-1].get("role") == "assistant":
             messages.append({"role": "user", "content": stage_control})
         thought = str(step.get("thought", "") or "").strip()
         if thought:
@@ -525,16 +496,8 @@ def export_trajectory_sft_example(
             if tool_result:
                 tool_response: dict[str, Any] = {
                     "function_call_id": function_call_id,
-                    "tool": tool_call["name"],
-                    "arguments": tool_call["arguments"],
                     "result": _json_or_text(tool_result),
                 }
-                state_update = metadata.get("investigation_state_update")
-                if isinstance(state_update, Mapping):
-                    _assert_no_private_data(state_update)
-                    tool_response["investigation_state_update"] = dict(
-                        state_update
-                    )
                 pending_tool_response = tool_response
         else:
             messages.append(
@@ -547,6 +510,7 @@ def export_trajectory_sft_example(
                     "loss": True,
                 }
             )
+        previous_example_type = example_type
 
     if pending_tool_response is not None:
         raise ValueError("trajectory ended after a tool call without a next policy turn")
@@ -581,6 +545,7 @@ def export_trajectory_sft_example(
             source_metadata.get("process_reference_protocol_version", "")
         ),
         "messages": messages,
+        "images": [image_path],
         "tools": tools,
         "token_count_estimate": token_count,
         "message_count": len(messages),

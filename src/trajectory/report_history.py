@@ -8,10 +8,10 @@ delta while representing repeated runtime snapshots only once.
 
 from __future__ import annotations
 
+import json
 from typing import Any, Mapping
 
 from src.trajectory.exporter import (
-    _compact_export_input_payload,
     _normalize_tool_schema,
     _strip_gemini_wire_instructions,
 )
@@ -32,6 +32,38 @@ def _rows(value: Any) -> list[dict[str, Any]]:
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _deduplicate_initial_input(value: Any) -> Any:
+    """Remove one duplicated cumulative workspace from report context only."""
+
+    if isinstance(value, list):
+        return [_deduplicate_initial_input(item) for item in value]
+    if isinstance(value, Mapping):
+        result: dict[str, Any] = {}
+        for key, child in value.items():
+            if str(key) == "runtime_handoff" and isinstance(child, Mapping):
+                result[str(key)] = {
+                    str(name): _deduplicate_initial_input(item)
+                    for name, item in child.items()
+                    if str(name) != "workspace"
+                }
+            else:
+                result[str(key)] = _deduplicate_initial_input(child)
+        return result
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except (TypeError, ValueError):
+            return value
+        deduplicated = _deduplicate_initial_input(parsed)
+        if deduplicated != parsed:
+            return json.dumps(
+                deduplicated,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+    return value
 
 
 def _policy_contract(policy_input: Mapping[str, Any]) -> dict[str, Any]:
@@ -109,7 +141,7 @@ def build_full_event_history(trace: Mapping[str, Any]) -> dict[str, Any]:
             initial_input = {
                 "stage": _text(step.get("stage")),
                 "stage_instruction": contract.get("stage_instruction", ""),
-                "input_payload": _compact_export_input_payload(
+                "input_payload": _deduplicate_initial_input(
                     policy_input.get("input_payload", "")
                 ),
                 "authorized_tools": contract.get("authorized_tools", []),

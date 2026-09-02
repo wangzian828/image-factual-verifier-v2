@@ -563,7 +563,7 @@ def test_native_candidate_image_item_is_compressed_inline_data(
     with Image.open(
         io.BytesIO(base64.b64decode(item["data"]))
     ) as compressed:
-        assert max(compressed.size) <= 1280
+        assert max(compressed.size) <= 1024
 
 
 def test_native_tool_schema_hides_a_budget_exhausted_tool() -> None:
@@ -2177,7 +2177,7 @@ def test_forced_output_failure_preserves_completed_tool_steps() -> None:
     }
 
 
-def test_truncated_function_result_keeps_provenance_id() -> None:
+def test_function_result_keeps_complete_result_and_provenance_id() -> None:
     runner = StageRunner(
         llm=NativeFakeBackend([]),
         system_prompt="Investigate.",
@@ -2185,7 +2185,6 @@ def test_truncated_function_result_keeps_provenance_id() -> None:
         output_schema=ToolStageOutput,
         stage_name="verification",
         attach_image=False,
-        tool_response_max_chars=1200,
     )
     item = runner._build_native_function_result(
         call_id="call-large",
@@ -2208,6 +2207,8 @@ def test_truncated_function_result_keeps_provenance_id() -> None:
     returned = json.loads(item["result"][0]["text"])
     assert returned["function_call_id"] == "call-large"
     assert returned["question_id"] == "q1"
+    assert len(returned["result"]["queries"][0]["summary"]) == 5000
+    assert len(returned["result"]["queries"][0]["evidence"]) == 5000
 
 
 def test_native_visual_question_runtime_binds_required_crop_args() -> None:

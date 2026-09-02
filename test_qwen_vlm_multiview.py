@@ -33,7 +33,7 @@ def test_qwen_vlm_supports_ordered_multi_view_input(monkeypatch) -> None:
         "detail.png": "data:image/png;base64,ZGV0YWls",
     }
     monkeypatch.setattr(
-        "src.integrations.vlm.qwen_vl.image_to_data_url",
+        "src.integrations.vlm.qwen_vl.vision_tool_image_to_data_url",
         lambda value: encoded[value],
     )
     client = QwenVLClient(
@@ -72,7 +72,7 @@ def test_local_qwen_vision_uses_direct_mode_and_native_schema(
         RecordingChatClient,
     )
     monkeypatch.setattr(
-        "src.integrations.vlm.openai_vlm.image_to_data_url",
+        "src.integrations.vlm.openai_vlm.vision_tool_image_to_data_url",
         lambda _value: "data:image/png;base64,AA==",
     )
     client = OpenAIVisionClient(

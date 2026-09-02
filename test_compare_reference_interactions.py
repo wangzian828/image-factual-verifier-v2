@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 from copy import deepcopy
+from io import BytesIO
 from pathlib import Path
 
 from PIL import Image
@@ -31,6 +33,14 @@ def valid_comparison() -> dict:
         "overall_observation": "The images are near-duplicates with a benign crop.",
         "confidence": 0.94,
     }
+
+
+def _reference_data_url() -> str:
+    buffer = BytesIO()
+    Image.new("RGB", (4, 4), color="gray").save(buffer, format="PNG")
+    return "data:image/png;base64," + base64.b64encode(
+        buffer.getvalue()
+    ).decode("ascii")
 
 
 def interaction(output: object, *, status: str = "completed") -> dict:
@@ -77,7 +87,7 @@ def make_tool(tmp_path: Path, backend: FakeBackend) -> CompareWithReferenceTool:
     tool = CompareWithReferenceTool(vlm_backend=backend, image_path=str(image_path))
 
     async def fake_download(_url: str) -> str:
-        return "data:image/jpeg;base64,cmVmZXJlbmNl"
+        return _reference_data_url()
 
     tool._download_reference = fake_download
     return tool
@@ -123,11 +133,9 @@ def test_compare_uses_two_interactions_content_images_and_exact_schema(tmp_path:
         "image",
     ]
     reference_image, current_image = request["input_payload"][1:]
-    assert reference_image == {
-        "type": "image",
-        "mime_type": "image/jpeg",
-        "data": "cmVmZXJlbmNl",
-    }
+    assert reference_image["type"] == "image"
+    assert reference_image["mime_type"] == "image/jpeg"
+    assert reference_image["data"]
     assert current_image["type"] == "image"
     assert current_image["mime_type"] == "image/jpeg"
     assert current_image["data"]

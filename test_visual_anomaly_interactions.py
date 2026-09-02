@@ -76,7 +76,9 @@ def _run_tool(
     params: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     image_path = tmp_path / "input.png"
-    image_path.write_bytes(b"test-image-bytes")
+    from PIL import Image
+
+    Image.new("RGB", (8, 8), color="white").save(image_path)
     tool = VisualAnomalyTool(vlm_backend=backend, image_path=str(image_path))
     return asyncio.run(tool.call_async(params or {}))
 
@@ -212,7 +214,7 @@ def test_visual_anomaly_uses_interactions_with_exact_structured_schema(tmp_path)
     interaction_input = request["input_payload"]
     assert [item["type"] for item in interaction_input] == ["text", "image"]
     assert "inspect the left hand" in interaction_input[0]["text"]
-    assert interaction_input[1]["mime_type"] == "image/png"
+    assert interaction_input[1]["mime_type"] == "image/jpeg"
     assert interaction_input[1]["data"]
     assert "image_url" not in interaction_input[1]
 

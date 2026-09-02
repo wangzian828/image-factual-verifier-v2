@@ -154,6 +154,7 @@ class SerperImageSearchClient:
     endpoint: str = SERPER_IMAGE_ENDPOINT
     timeout: int = 20
     max_retries: int = 2
+    source_access_policy: Any = None
 
     def __post_init__(self) -> None:
         if self.api_key is None:
@@ -167,18 +168,44 @@ class SerperImageSearchClient:
     def close(self) -> None:
         close_tracked_sessions(self)
 
+    def set_source_access_policy(self, policy: Any) -> None:
+        self.source_access_policy = policy
+
     def search(self, query: str, *, top_k: int = 5, gl: Optional[str] = None, hl: Optional[str] = None) -> List[Dict[str, Any]]:
         if not self.api_key:
             raise RuntimeError("SERPER_API_KEY is not set. Add it to the environment before using image search.")
 
-        country = default_gl(query, gl)
-        language = default_hl(query, country, hl)
-        payload = {"q": query, "gl": country, "hl": language, "num": top_k}
+        original_query = str(query or "").strip()
+        if self.source_access_policy is not None:
+            blocked = self.source_access_policy.blocked_query_reference(
+                original_query
+            )
+            if blocked:
+                raise ValueError(
+                    "Image-search query explicitly targets a source excluded "
+                    "by the active evaluation policy."
+                )
+            provider_query = self.source_access_policy.augment_search_query(
+                original_query
+            )
+        else:
+            provider_query = original_query
+        country = default_gl(original_query, gl)
+        language = default_hl(original_query, country, hl)
+        payload = {
+            "q": provider_query,
+            "gl": country,
+            "hl": language,
+            "num": top_k,
+        }
         headers = {"X-API-KEY": self.api_key, "Content-Type": "application/json"}
 
         raw = self._post_json(payload, headers)
         images = raw.get("images", [])
-        return [self._normalize_result(query, item, idx + 1) for idx, item in enumerate(images[:top_k])]
+        return [
+            self._normalize_result(original_query, item, idx + 1)
+            for idx, item in enumerate(images[:top_k])
+        ]
 
     def _post_json(self, payload: Dict[str, Any], headers: Dict[str, str]) -> Dict[str, Any]:
         last_error: Exception | None = None
