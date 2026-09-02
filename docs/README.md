@@ -27,6 +27,7 @@
 
 - [Gemini 图像直接事实核查实验记录（测试集 1684 条）](reports/2026-08-30-gemini-direct-qa-experiment-record.md)：100 条对照、全量 direct QA、private-gold 审计与新版 10 条 Agent smoke。
 - [`perceive_scene` 恢复与 2026-09-02 smoke](reports/2026-09-02-perceive-scene-recovery-and-smoke.md)：3.1 Pro / 3.7 Flash 逐条轨迹检查、工具错误与调查质量问题。
+- [新版 Agent-100 重跑与逐条审阅](reports/2026-09-02-agent100-newagent-rollout-and-review.md)：3.7 Flash 的 100 条 rollout、private-gold 三分类、BACC 与问题清单。
 
 ## 历史与排障
 

@@ -1,6 +1,6 @@
 # Agent 与评测收尾执行计划
 
-**状态：新版 Agent-100 真实重跑与逐条审阅进行中（仍停在大规模教师 rollout 启动前）。** 本文是当前工作的连续执行记录。每次涉及 Agent 的代码、prompt、schema、
+**状态：新版 Agent-100 真实重跑与逐条审阅已完成（仍停在大规模教师 rollout 启动前）。** 本文是当前工作的连续执行记录。每次涉及 Agent 的代码、prompt、schema、
 harness、审计口径或运行配置变更，必须先在第 4 节追加一行，再实施、测试、提交和部署。
 
 ## 1. 目标与停止边界
@@ -42,7 +42,7 @@ harness、审计口径或运行配置变更，必须先在第 4 节追加一行�
 | 3.7 full direct QA | 1,684 完成、0 工程错误；private-gold judge 已完成 |
 | 3.7 Agent-100（旧版） | 100 条与 report sidecar 已完成；仅作为旧基线 |
 | 新版 Agent-10 smoke | 3.1 Pro、3.7 Flash 各 10/10 完成、0 provider 工程错误；逐条审阅见 2026-09-02 报告 |
-| 新版 Agent-100 | 已按同一 100 条测试 release 启动，工程失败由现有队列自动补跑，等待最终合并与 judge |
+| 新版 Agent-100 | 99/100 成功、1 条 provider `content_blocked`；99 条已完成统一 3.7 Flash private-gold judge |
 | 大规模教师 rollout | 禁止启动，等待本计划全部完成后的人工确认 |
 
 ## 4. Agent 变更日志（从现在起持续追加）
@@ -190,7 +190,7 @@ harness、审计口径或运行配置变更，必须先在第 4 节追加一行�
 
 ## 8. 2026-09-02 工具观察续做记录
 
-本轮针对 WebWatcher 风格的工具观察与上下文传递继续收尾，尚未部署服务器：
+本轮针对 WebWatcher 风格的工具观察与上下文传递已部署服务器并完成收尾：
 
 - `visit` 保留选中原文段落及必要的前置完整段落；模型看到的是受限的完整来源上下文，
   不是被截断的半句。
@@ -220,7 +220,9 @@ harness、审计口径或运行配置变更，必须先在第 4 节追加一行�
   `/gsdata/home/wza/image-factual-verifier-v2-data/generated/direct-qa-baselines/gemini37-agent-test100-newagent-release-20260902-r55ef0b3/runtime-release/runtime_input/cases.jsonl`
 - 新版 Agent-100 rollout 输出：
   `/gsdata/home/wza/image-factual-verifier-v2-data/generated/direct-qa-baselines/gemini37-agent-test100-newagent-rollout-20260902-r55ef0b3/`
-- rollout 并发：10；工程失败自动进入现有 attempt 队列，最多 4 次；
-- rollout 完成后执行统一 private-gold Agent judge，再逐条汇总错误类型、调查质量和
-  三分类；该 100 条不进入训练；
+- rollout 并发：10；工程失败自动进入现有 attempt 队列，最多 4 次；最终 99 条成功，
+  1 条 Gemini `content_blocked`；
+- 统一 private-gold Agent judge 已完成：34 条正确且理由充分、40 条正确但依据不足、
+  25 条判断错误；逐条审阅产物见 `docs/reports/2026-09-02-agent100-newagent-rollout-and-review.md`；
+- 该 100 条不进入训练；
 - 大规模训练集教师 rollout 仍未启动。
