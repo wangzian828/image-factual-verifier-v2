@@ -448,15 +448,21 @@ def _successful_trace_sources(
         seen_in_attempt: set[str] = set()
         for trace_path in _trace_paths(attempt_dir):
             trace = _read_json(trace_path)
+            # Error traces produced before a case is initialized may not carry
+            # state.runtime_case.case_id (for example an early SSL/429 failure).
+            # They are deliberately ignored here; the retry scanner will see
+            # the target case as still missing and queue it for another attempt.
+            # Only terminal-success traces need the strict identity fields used
+            # by the merge and audit stages.
+            if not _terminal_success(trace):
+                continue
             summary = _trace_summary(trace)
             case_id = summary["case_id"]
             if case_id in seen_in_attempt:
                 raise ValueError(f"duplicate case trace in {attempt_dir}: {case_id}")
             seen_in_attempt.add(case_id)
             if (
-                summary["termination"] == "success"
-                and summary["verdict"] in VALID_VERDICTS
-                and case_id not in selected
+                case_id not in selected
             ):
                 selected[case_id] = (attempt_dir, trace_path, summary)
     return selected
@@ -473,6 +479,11 @@ def _candidate_trace_sources(
         seen_in_attempt: set[str] = set()
         for trace_path in _trace_paths(attempt_dir):
             trace = _read_json(trace_path)
+            # See _successful_trace_sources: provider/transport failures can
+            # be valid JSON without a runtime case identity.  They represent a
+            # missing candidate, not a malformed successful candidate.
+            if not _terminal_success(trace):
+                continue
             summary = _trace_summary(trace)
             case_id = summary["case_id"]
             episode_id = summary["episode_id"]
@@ -481,8 +492,6 @@ def _candidate_trace_sources(
                     f"duplicate episode trace in {attempt_dir}: {episode_id}"
                 )
             seen_in_attempt.add(episode_id)
-            if not _terminal_success(trace):
-                continue
             if episode_id in seen_episode_ids:
                 raise ValueError(f"duplicate successful episode_id: {episode_id}")
             seen_episode_ids.add(episode_id)

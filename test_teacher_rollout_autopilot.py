@@ -222,6 +222,35 @@ def test_success_scan_keeps_only_trace_metadata(tmp_path: Path) -> None:
     }
 
 
+def test_success_scan_ignores_provider_error_without_case_identity(
+    tmp_path: Path,
+) -> None:
+    attempt = tmp_path / "attempt-01"
+    traces = attempt / "traces"
+    traces.mkdir(parents=True)
+    (traces / "failed-before-case-init.json").write_text(
+        json.dumps(
+            {
+                "termination": "error",
+                "verdict": "error",
+                "error": "SSLError: [SSL] record layer failure",
+            }
+        ),
+        encoding="utf-8",
+    )
+    successful = _trace("case-one", early_judgment=True)
+    (traces / "successful.json").write_text(
+        json.dumps(successful),
+        encoding="utf-8",
+    )
+
+    selected = _successful_trace_sources([attempt])
+    grouped = _candidate_trace_sources([attempt])
+
+    assert set(selected) == {"case-one"}
+    assert set(grouped) == {"case-one"}
+
+
 def test_early_bucket_requires_strict_discrepancy_judgment(tmp_path: Path) -> None:
     proposal_only = _trace("case-proposal", early_judgment=False)
     explicit_judgment = _trace("case-judgment", early_judgment=True)
