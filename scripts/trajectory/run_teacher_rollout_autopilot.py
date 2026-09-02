@@ -1274,11 +1274,23 @@ def _quality_reroll_case_ids(classification_dir: Path) -> list[str]:
     if not isinstance(target_case_ids, list):
         source_run = str(classification.get("source_run") or "").strip()
         if source_run:
-            gold_path = (
+            gold_candidates = [
+                classification_dir.parent
+                / "private-gold"
+                / "private_gold.jsonl",
                 classification_dir.parent.parent
                 / "private-gold"
-                / "private_gold.jsonl"
+                / "private_gold.jsonl",
+            ]
+            gold_path = next(
+                (path for path in gold_candidates if path.is_file()),
+                None,
             )
+            if gold_path is None:
+                raise FileNotFoundError(
+                    "private gold is missing beside classification directory: "
+                    f"{classification_dir}"
+                )
             gold_case_ids = {
                 str(row.get("case_id") or "").strip()
                 for row in _read_jsonl(gold_path)
