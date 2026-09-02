@@ -154,6 +154,11 @@ ss -tan state close-wait | tail -n +2 | wc -l
 - [`2026-08-23-gemini-rollout-resource-lifecycle.md`](2026-08-23-gemini-rollout-resource-lifecycle.md)
 - [`2026-08-24-close-wait-session-leak-followup.md`](2026-08-24-close-wait-session-leak-followup.md)
 
+2026 年 9 月 2 日复核：此前观测到的 32 个 CLOSE-WAIT 属于我们账号下的旧
+Jupyter kernel（PID `313159`，kernel `d70e049b-9643-4d40-bfc4-7cae6c34b56f`），
+已停止该 kernel。随后 gpu-13 上只剩 2 个无所属进程的代理 socket，15 秒内不再增长；
+不能通过停止进程进一步清理，等待内核自然回收。其他用户的 Jupyter/代理进程未处理。
+
 ### 历史：1051 条 archive 训练池与重跑（2026-08-23）
 
 下列内容记录的是 2026-08-23 的 1051 条 archive 训练池和针对 archive 的排障，

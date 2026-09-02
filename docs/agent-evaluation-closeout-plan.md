@@ -1,6 +1,6 @@
 # Agent 与评测收尾执行计划
 
-**状态：追加 ReAct prompt 实验中（仍停在大规模教师 rollout 启动前）。** 本文是当前工作的连续执行记录。每次涉及 Agent 的代码、prompt、schema、
+**状态：新版 Agent-100 真实重跑与逐条审阅进行中（仍停在大规模教师 rollout 启动前）。** 本文是当前工作的连续执行记录。每次涉及 Agent 的代码、prompt、schema、
 harness、审计口径或运行配置变更，必须先在第 4 节追加一行，再实施、测试、提交和部署。
 
 ## 1. 目标与停止边界
@@ -36,13 +36,13 @@ harness、审计口径或运行配置变更，必须先在第 4 节追加一行�
 |---|---|
 | 本地/服务器分支 | `codex/gpu13-canary-20260804-plan-relaxation-01` |
 | 服务器工作树 | `/gs/home/wza/projects/image-factual-verifier-v2-worktrees/gpu13-canary-20260804-plan-relaxation-01` |
-| 当前运行代码 commit | `62f6b9c fix: validate current claimless react canary contract` |
+| 当前运行代码 commit | `55ef0b3 Harden Gemini scene perception recovery` |
 | 测试集 | 1,684 条，real 447 / fake 1,237 |
 | 3.1 Pro full direct QA | 1,682 完成、2 工程错误；judge 已完成 |
 | 3.7 full direct QA | 1,684 完成、0 工程错误；private-gold judge 已完成 |
 | 3.7 Agent-100（旧版） | 100 条与 report sidecar 已完成；仅作为旧基线 |
-| 新版 Agent-10 smoke | 10/10 完成、0 工程错误、strict audit 10/10；整体质量未明显改善 |
-| 新版 Agent-100 | 未启动；按 10 条 smoke 的质量门槛有意停止 |
+| 新版 Agent-10 smoke | 3.1 Pro、3.7 Flash 各 10/10 完成、0 provider 工程错误；逐条审阅见 2026-09-02 报告 |
+| 新版 Agent-100 | 已按同一 100 条测试 release 启动，工程失败由现有队列自动补跑，等待最终合并与 judge |
 | 大规模教师 rollout | 禁止启动，等待本计划全部完成后的人工确认 |
 
 ## 4. Agent 变更日志（从现在起持续追加）
@@ -63,6 +63,8 @@ harness、审计口径或运行配置变更，必须先在第 4 节追加一行�
 | 2026-08-31 | 已适配真实 canary 验收 | `scripts/run_real_canary.py`, `test_real_canary_cli.py` | 当前主流程是 claimless `react_runtime`：不再要求 ImageClaim、claim_ids 或旧的终止原因；只对当前 ReAct schema 检查有动作、视觉记忆、统一 judgment basis 和 fact-check report。旧图谱 trace 仍保留原校验。 | 本地/服务器定向测试通过；用当前 checkout 复核既有 smoke trace 通过。 | `62f6b9c` |
 | 2026-08-31 | 收尾验证与实验记录 | `docs/agent-evaluation-closeout-plan.md`, `docs/reports/2026-08-30-gemini-direct-qa-experiment-record.md` | 写入 3.7 全量 direct QA/judge、10 条新版 Agent smoke、SFT 分桶、128K 长轨迹和“未启动 Agent-100/教师 rollout”的决策。 | 本地 77 项当前门禁、服务器 103 项定向门禁通过；服务器无 rollout/audit 残留进程，CLOSE-WAIT=3。 | 本次文档提交 |
 | 2026-09-01 | 已实施：ReAct 调查状态由模型维护 | `src/orchestrator/react_runtime.py`, `src/orchestrator/unified_prompts.py`, `test_react_runtime.py`, `test_prompt_boundaries.py` | 将 `investigation_progress.status` 定义为 `investigating`、`decision_capable_support`、`decision_capable_refute`。runtime 只校验、保存和传回这个状态；不根据工具名、`stance`、`directness`、`relevance` 或 `evidence_class` 推断它，也不因此动态增删工具。既有 Evidence 归档语义保持不变。主动结束仍需模型声明方向性状态；24 次动作上限和 Judgment 流程不变。 | 定向 pytest、compileall、git diff --check 通过；待提交、gpu-13 部署及同一 10 条 smoke 对比。 | 待提交 |
+| 2026-09-02 | 已实施：`perceive_scene` 请求恢复 | `src/tools/perceive_scene.py`, `src/tools/visual_common.py`, `src/orchestrator/stage_runner.py`, `scripts/server/start_gemini_eval_gpu13.sh` | 视觉请求默认使用压缩 JPEG；对可恢复的 Gemini 400、传输失败和超时追加一次更小图片/宽松 schema 的恢复请求；移除 provider 不接受的 schema 约束；工具动作边界调整为 210 秒。失败仍记录为工具错误，不伪装成成功。 | 本地 468 项测试通过；gpu-13 fast-forward 到 `55ef0b3`；3.1 Pro 与 3.7 Flash 各完成 10/10、0 provider 工程错误。逐条质量问题见 `docs/reports/2026-09-02-perceive-scene-recovery-and-smoke.md`。 | `55ef0b3` |
+| 2026-09-02 | 已实施：测试 100 条正式 release 重建 | `scripts/prepare_agent_test_release.py` 及服务器生成 release | 复用原 Agent-100 的精确 100 个 case，排除其余 1,584 个测试 case；补齐顶层 `training_prohibited=true`，保证 runtime 只含 case/image/hash，gold 与来源策略仍在 evaluator-private。 | 100/100 case、5 个构造子路线各 20 条；首次启动因旧 release 元数据缺失而拒绝，失败目录保留；正式 release 已创建。 | `55ef0b3` |
 
 后续每一条 Agent 改动必须记录：修改前行为、修改后行为、为何不改变 private-gold
 隔离/成熟工具契约、对应测试、真实 smoke case、commit 和服务器部署状态。
@@ -135,11 +137,11 @@ harness、审计口径或运行配置变更，必须先在第 4 节追加一行�
 2. 每个提交 push 后，gpu-13 fast-forward；服务器运行定向测试。
 3. 先用 10 条真实 Gemini 3.7 smoke 验证 trace：候选标识、页面回退、失败记录、工具 contract、
    终止与 report 均正常。
-4. 先用 10 条真实 smoke 做质量门槛；只有调查质量整体明显改善，才对固定测试集 100 条
-   各跑一条新 Agent 完整轨迹。
-5. 本次新版 smoke 的强证据桶由 1 增至 4，但总正确数由 7/10 降至 5/10，质量门槛未满足；
-   因此不启动新版 Agent-100，也不伪造其 judge 指标。
-6. 旧 Agent-100、3.7 direct-QA-100、3.1 Pro direct-QA-100 的历史对照已保留。
+4. 先用 10 条真实 smoke 验证工程稳定性和调查轨迹；本次按人工要求，即使 smoke 的
+   accuracy 不能作为质量结论，也继续把同一固定 100 条作为诊断性 Agent-100 跑完。
+   该 100 条不进入训练，只用于逐条轨迹审阅和 private-gold judge。
+5. 旧 Agent-100、3.7 direct-QA-100、3.1 Pro direct-QA-100 的历史对照继续保留；
+   新版 Agent-100 的最终分类必须等待所有工程补跑和 judge 完成后写入。
 
 ### F. 文档、SFT 与 PSD/RL 前置收尾（已完成）
 
@@ -156,14 +158,15 @@ harness、审计口径或运行配置变更，必须先在第 4 节追加一行�
 
 ## 6. 实际执行结果与停止决策
 
-本计划已执行到人工复核边界：
+历史记录曾执行到人工复核边界；2026-09-02 已按新的人工指令继续进行诊断性 100 条重跑：
 
 1. Gemini 3.7 并发定标、全量 direct QA、全量 private-gold judge 均完成；
 2. unified-react-v1 的代码、工具结果前递、InteractionSession、原图/候选图传递、
    canary 验收和下游 SFT 分桶均已在服务器复核；
-3. 新版 10 条 Agent smoke 工程上通过，但质量相对旧版不是整体改善，因此没有启动
-   新版 Agent-100；
-4. 训练集大规模教师 rollout、正式 SFT/RL 训练均未启动。
+3. 新版 10 条 Agent smoke 工程上通过；3.1 Pro 为 8/10、3.7 Flash 为 4/10，
+   其中多条仍有视觉异常越界或证据不足早停，具体问题不在本轮擅自修复；
+4. 诊断性新版 Agent-100 已启动，不作为训练数据，不进入 SFT/RL；
+5. 训练集大规模教师 rollout、正式 SFT/RL 训练均未启动。
 
 可启动大规模教师 rollout 的输入和边界已经固定：
 
@@ -181,11 +184,11 @@ harness、审计口径或运行配置变更，必须先在第 4 节追加一行�
 - A 的 64/256/512 结果已落盘并据此记录生产并发；
 - 3.7 full direct QA 和完整 judge 已结束并有最终汇总；
 - C/D 全部改动有日志、测试、提交和 gpu-13 验证；
-- 新 Agent-100 仅在 10 条 smoke 质量明显改善时启动；本次质量门槛未满足，已记录为有意不启动；
+- 新 Agent-100 已按 2026-09-02 人工要求启动，完成后必须有逐条轨迹问题清单和统一 private-gold 三分类；
 - 实验文档、SFT 导出审查和 PSD/RL 前置验证已更新；
 - 没有启动大规模教师 rollout。
 
-## 8. 2026-09-02 续做记录
+## 8. 2026-09-02 工具观察续做记录
 
 本轮针对 WebWatcher 风格的工具观察与上下文传递继续收尾，尚未部署服务器：
 
@@ -202,6 +205,22 @@ harness、审计口径或运行配置变更，必须先在第 4 节追加一行�
 - 新增回归测试覆盖上述边界；本地全量测试为 `466 passed`，`compileall` 和
   `git diff --check` 已通过。
 
-待完成：提交并推送、更新 gpu-13 checkout、使用 `gemini-3.1-pro-preview` 并发 10
-完成原定 10 条真实 smoke，逐条检查工具结果传递和调查轨迹；在此之前不启动大规模
-教师 rollout。
+上述工具观察改动已由 `55ef0b3` 部署并完成服务器回归；3.1 Pro / 3.7 Flash smoke
+的具体结果和逐条问题已写入：
+
+`docs/reports/2026-09-02-perceive-scene-recovery-and-smoke.md`
+
+## 9. 2026-09-02 当前执行状态
+
+- 3.1 Pro smoke：10/10，0 provider 工程错误，8/10 对 private gold；
+- 3.7 Flash smoke：10/10，0 provider 工程错误，4/10 对 private gold；
+- 两组 smoke 均出现外部访问失败记录，但没有 `perceive_scene` 400/超时；
+- 发现的问题统一作为诊断记录，当前不擅自改变 Agent 结构或 prompt；
+- 新版 Agent-100 正式输入：
+  `/gsdata/home/wza/image-factual-verifier-v2-data/generated/direct-qa-baselines/gemini37-agent-test100-newagent-release-20260902-r55ef0b3/runtime-release/runtime_input/cases.jsonl`
+- 新版 Agent-100 rollout 输出：
+  `/gsdata/home/wza/image-factual-verifier-v2-data/generated/direct-qa-baselines/gemini37-agent-test100-newagent-rollout-20260902-r55ef0b3/`
+- rollout 并发：10；工程失败自动进入现有 attempt 队列，最多 4 次；
+- rollout 完成后执行统一 private-gold Agent judge，再逐条汇总错误类型、调查质量和
+  三分类；该 100 条不进入训练；
+- 大规模训练集教师 rollout 仍未启动。
