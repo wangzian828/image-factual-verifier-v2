@@ -96,7 +96,7 @@ def test_gemini_vlm_uses_interactions(monkeypatch) -> None:
     assert request["body"]["input"][0] == {"type": "text", "text": "Inspect it."}
     image_item = request["body"]["input"][1]
     assert image_item["type"] == "image"
-    assert image_item["mime_type"] == "image/png"
+    assert image_item["mime_type"] == "image/jpeg"
     assert image_item["data"]
     with Image.open(BytesIO(base64.b64decode(image_item["data"]))) as sent:
         assert sent.size == (8, 8)
@@ -136,6 +136,55 @@ def test_gemini_vlm_uses_custom_schema_and_uri(monkeypatch) -> None:
         "uri": "https://example.test/input.png",
     }
     assert "image_url" not in request["input"][1]
+
+
+def test_gemini_vlm_strips_provider_unsupported_validation_constraints(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    requests = []
+    fake_client = FakeAsyncClient(
+        requests,
+        output={"scene": "test", "items": []},
+    )
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: fake_client)
+    schema = {
+        "type": "object",
+        "properties": {
+            "scene": {
+                "type": "string",
+                "maxLength": 1200,
+            },
+            "items": {
+                "type": "array",
+                "items": {"type": "string"},
+                "minItems": 1,
+                "maxItems": 4,
+            },
+        },
+        "required": ["scene", "items"],
+        "additionalProperties": False,
+    }
+
+    client = build_vlm_client(provider="gemini", model_name="gemini-test")
+    client.create_image_json(
+        system_prompt="Describe the image as JSON.",
+        user_text="Inspect it.",
+        image_input="https://example.test/input.png",
+        max_tokens=128,
+        response_schema=schema,
+    )
+
+    sent_schema = requests[0]["body"]["response_format"]["schema"]
+    assert sent_schema == {
+        "type": "object",
+        "properties": {
+            "scene": {"type": "string"},
+            "items": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": ["scene", "items"],
+        "additionalProperties": False,
+    }
 
 
 def test_gemini_vlm_supports_ordered_multi_view_input(monkeypatch) -> None:

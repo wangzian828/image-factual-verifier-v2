@@ -227,6 +227,7 @@ class OpenAIVisionClient:
         schema = normalize_json_schema(
             DEFAULT_JSON_OBJECT_SCHEMA if response_schema is None else response_schema,
             require_all_properties=response_schema is not None,
+            strip_validation_constraints=self.provider == "gemini",
         )
 
         async def _request() -> Dict[str, Any]:

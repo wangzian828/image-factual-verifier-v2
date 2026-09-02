@@ -7,6 +7,8 @@
 
 ## Unified ReAct
 
+Prompt version：`unified-react-image-grounded-loop-v10-en`
+
 当前 Agent 在一个连续调查循环中工作。每轮使用附加的原图、固定任务和最新的
 紧凑观察记忆，选择一个有用的 native tool：
 
@@ -67,6 +69,8 @@ thought → 一个工具调用 → 工具观察 → 下一轮 thought 和动作
 - thought 简要说明当前问题、相关观察或缺口、选择的动作以及该动作要澄清什么。
 
 ## Unified Judgment
+
+Prompt version：`unified-react-judgment-fact-check-report-v5-en`
 
 Judgment 是调查收尾阶段。它重新查看必要的原图细节，结合固定任务、视觉记忆、
 已检查页面片段、有效比较和工具失败，输出 `real` 或 `fake` 以及完整的

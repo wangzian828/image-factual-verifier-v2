@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 
 from src.tools.base import BaseTool
 from src.integrations.gemini import RUNTIME_METRICS_KEY, exception_runtime_metrics
+from src.tools.vision_utils import controlled_image_to_data_url
 
 
 TEXT_ROLE_VALUES = (
@@ -183,6 +184,10 @@ PERCEIVE_SCENE_SCHEMA = {
     },
 }
 
+PERCEIVE_SCENE_FALLBACK_SCHEMA = {
+    "type": "object",
+}
+
 
 @dataclass
 class PerceiveSceneTool(BaseTool):
@@ -225,19 +230,70 @@ class PerceiveSceneTool(BaseTool):
     def call(self, params: Dict[str, Any]) -> Dict[str, Any]:
         image_input = params["image_input"]
 
+        attempts: list[Dict[str, Any]] = []
+        request_inputs = [image_input]
+        try:
+            compressed_input, compression_metadata = controlled_image_to_data_url(
+                image_input,
+                max_long_edge=1280,
+                jpeg_quality=88,
+            )
+            if compressed_input != image_input:
+                request_inputs.append(compressed_input)
+        except Exception as exc:
+            compression_metadata = {
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+
+        request_schemas = [PERCEIVE_SCENE_SCHEMA]
+        if len(request_inputs) > 1:
+            request_schemas.append(PERCEIVE_SCENE_FALLBACK_SCHEMA)
+
         try:
             client = self._get_client()
-            parsed = client.create_image_json(
-                system_prompt=PERCEIVE_SCENE_PROMPT,
-                user_text=(
-                    "Inspect the complete image, preserve the relationships between "
-                    "the visible entities, and output the structured scene JSON."
-                ),
-                image_input=image_input,
-                max_tokens=4000,
-                model_name=self.model_name,
-                response_schema=PERCEIVE_SCENE_SCHEMA,
-            )
+            parsed = None
+            for attempt_index, (request_image, request_schema) in enumerate(
+                zip(request_inputs, request_schemas),
+                start=1,
+            ):
+                try:
+                    parsed = client.create_image_json(
+                        system_prompt=PERCEIVE_SCENE_PROMPT,
+                        user_text=(
+                            "Inspect the complete image, preserve the relationships "
+                            "between the visible entities, and output the structured "
+                            "scene JSON."
+                        ),
+                        image_input=request_image,
+                        max_tokens=4000,
+                        model_name=self.model_name,
+                        response_schema=request_schema,
+                    )
+                    if attempt_index > 1 and isinstance(parsed, dict):
+                        parsed["perception_recovery"] = {
+                            "recovered": True,
+                            "attempt": attempt_index,
+                            "reason": attempts[-1].get("error", ""),
+                            "compression": compression_metadata,
+                        }
+                    break
+                except Exception as exc:
+                    attempts.append(
+                        {
+                            "attempt": attempt_index,
+                            "error": (
+                                f"{type(exc).__name__}: {exc or '<no message>'}"
+                            ),
+                            "retryable": self._is_recoverable_provider_error(exc),
+                        }
+                    )
+                    if (
+                        attempt_index >= len(request_inputs)
+                        or not self._is_recoverable_provider_error(exc)
+                    ):
+                        raise
+            if parsed is None:
+                raise RuntimeError("Scene perception returned no result.")
         except Exception as exc:
             error = {
                 "status": "error",
@@ -249,6 +305,8 @@ class PerceiveSceneTool(BaseTool):
                 "scene_description": "",
                 "image_type": "unknown",
             }
+            if attempts:
+                error["perception_attempts"] = attempts
             metrics = exception_runtime_metrics(exc)
             if metrics:
                 error[RUNTIME_METRICS_KEY] = metrics
@@ -352,7 +410,32 @@ class PerceiveSceneTool(BaseTool):
             "total_relations": len(relations[:16]),
             "bbox_warnings": bbox_warnings[:16],
             RUNTIME_METRICS_KEY: parsed.get(RUNTIME_METRICS_KEY, {}),
+            **(
+                {"perception_attempts": attempts}
+                if attempts
+                else {}
+            ),
+            **(
+                {"perception_recovery": parsed["perception_recovery"]}
+                if isinstance(parsed.get("perception_recovery"), dict)
+                else {}
+            ),
         }
+
+    @staticmethod
+    def _is_recoverable_provider_error(exc: BaseException) -> bool:
+        status_code = getattr(exc, "status_code", None)
+        if status_code in {400, 429, 500, 502, 503, 504}:
+            return True
+        name = type(exc).__name__.lower()
+        message = str(exc).lower()
+        return (
+            "timeout" in name
+            or "timeout" in message
+            or "transport" in name
+            or "readerror" in name
+            or "connection" in name
+        )
 
 
 def normalize_entity_bbox(

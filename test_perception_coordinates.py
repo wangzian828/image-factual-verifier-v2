@@ -5,6 +5,7 @@ from src.tools.perceive_scene import (
     PerceiveSceneTool,
     normalize_entity_bbox,
 )
+from src.integrations.gemini import GeminiInteractionsHTTPError
 
 
 class FakePerceptionClient:
@@ -148,3 +149,46 @@ def test_perception_preserves_bounded_attributes_and_caps_entities() -> None:
         entity["attributes"] == {"unbounded": "must be discarded"}
         for entity in result["entities"]
     )
+
+
+class RecoveringPerceptionClient:
+    def __init__(self) -> None:
+        self.calls = []
+
+    def create_image_json(self, **kwargs):
+        self.calls.append(kwargs)
+        if len(self.calls) == 1:
+            error = GeminiInteractionsHTTPError(
+                400,
+                '{"error":{"message":"Request contains an invalid argument.","code":"invalid_request"}}',
+                "https://example.test/interactions",
+            )
+            raise error
+        return {
+            "scene_description": "A person stands beside a vehicle.",
+            "image_type": "photo",
+            "entities": [],
+            "relations": [],
+            "notable_details": [],
+            "uncertainties": [],
+        }
+
+
+def test_perception_retries_invalid_provider_request_with_compressed_fallback(
+    tmp_path: Path,
+) -> None:
+    from PIL import Image
+
+    image = tmp_path / "input.png"
+    Image.new("RGB", (2400, 1200), color="white").save(image)
+    client = RecoveringPerceptionClient()
+    tool = PerceiveSceneTool(client=client)
+
+    result = tool.call({"image_input": str(image)})
+
+    assert result["status"] == "success"
+    assert result["perception_recovery"]["recovered"] is True
+    assert len(client.calls) == 2
+    assert client.calls[0]["response_schema"] == PERCEIVE_SCENE_SCHEMA
+    assert client.calls[1]["response_schema"] == {"type": "object"}
+    assert client.calls[1]["image_input"].startswith("data:image/jpeg;base64,")

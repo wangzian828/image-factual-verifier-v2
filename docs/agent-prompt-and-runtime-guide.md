@@ -52,6 +52,14 @@ action budget and each tool's remaining budget.
 The full request/response archive remains available for audit, but is not
 replayed into every policy turn.
 
+Visual tool requests use a compressed JPEG by default (longest edge 2048,
+quality 92). `perceive_scene` keeps its local output bounds and normalizes the
+returned observation after the provider response. For a recoverable provider
+400, transport failure, or timeout, it makes at most one additional attempt
+with a smaller JPEG (longest edge 1280, quality 88) and a schema-light object
+response. The result records both attempts and the recovery mode; a failed
+second attempt remains `status=error`.
+
 The active Gemini Interactions session is persistent for the whole episode.
 Dynamic tool schemas may be rebuilt between actions, but the next request keeps
 the previous interaction ID and submits the previous function result before the
@@ -66,6 +74,10 @@ and ranked into passages, a summary/extraction model reads a bounded selection,
 and exact source spans are retained for the trace. The summary input is capped
 by runtime code at 24,000 characters (18,000 by default); the full page is not
 placed in the Agent context.
+
+Gemini vision structured-output requests send an API-compatible schema projection:
+provider-side validation-only bounds such as `maxLength` and `maxItems` are
+removed, while the local tool still enforces its own normalization and limits.
 
 ## 3. Evidence boundary
 

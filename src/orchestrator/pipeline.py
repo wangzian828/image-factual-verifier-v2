@@ -168,7 +168,7 @@ class Orchestrator:
         self._sampling_request_counts: Dict[str, int] = {}
         self.tool_action_timeout_seconds = self._runtime_timeout(
             "AGENT_TOOL_ACTION_TIMEOUT_SECONDS",
-            150.0,
+            210.0,
         )
         self.stage_request_timeout_seconds = self._runtime_timeout(
             "AGENT_STAGE_REQUEST_TIMEOUT_SECONDS",

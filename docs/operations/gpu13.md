@@ -732,7 +732,9 @@ scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
 Keep benchmark datasets and caches under `IFV_DATA_ROOT`, outside the Git checkout.
 
 For repeated rollouts, deterministic perception caching is enabled by default
-for `perceive_scene` and `ocr_with_position`. Set
+for `perceive_scene` and `ocr_with_position`. Visual tool requests use a
+compressed JPEG by default (`IFV_VISION_TOOL_IMAGE_MODE=compressed`, longest
+edge 2048, quality 92). Set
 `PERCEPTION_CACHE_ENABLED=0` to disable it. Web-result caching remains opt-in
 through `TOOL_CACHE_ENABLED=1`; do not enable that for freshness-sensitive
 production runs without an explicit cache namespace and TTL.
@@ -764,6 +766,10 @@ Python 3.11 async transport, so the HTTP connection can be reused across
 perception, semantic image search, and visual reinspection calls. This changes
 transport reuse only; it does not change prompts, output budgets, tool boundaries,
 or evidence semantics.
+`perceive_scene` makes one bounded recovery attempt after a recoverable provider
+400/transport/timeout error, using a smaller compressed image and a schema-light
+object response. Both attempts remain in the tool result; a failed recovery is
+still an explicit tool error.
 
 Jina page extraction follows the same transport rule. Each process shares one
 Jina Reader client between `visit` and `crop_and_search`; its Gemini evidence
