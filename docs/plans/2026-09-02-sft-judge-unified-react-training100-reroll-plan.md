@@ -117,24 +117,24 @@ src/orchestrator/pipeline.py::Orchestrator.run()
 
 ### A. 固定代码和运行边界
 
-- [ ] 确认本地分支、工作树、基线 commit；
-- [ ] 确认服务器 checkout 是同一分支，且只接受 GitHub commit；
-- [ ] 确认没有正在运行的旧 Agent/rollout 进程污染新实验；
-- [ ] 确认没有固定的 `GEMINI_EVAL_MAX_CONCURRENCY=4` 等环境变量偷偷覆盖命令行并发；
-- [ ] 确认当前唯一训练输入是统一数据集的 `train-manifest.jsonl`；
-- [ ] 固定本次验证 100 条 case ID，写入不可变 preparation artifact；
-- [ ] 在本阶段完成前不启动全量 8,490 条教师 rollout。
+- [x] 确认本地分支、工作树、基线 commit；
+- [x] 确认服务器 checkout 是同一分支，且只接受 GitHub commit；
+- [x] 确认没有正在运行的旧 Agent/rollout 进程污染新实验；
+- [x] 确认没有固定的 `GEMINI_EVAL_MAX_CONCURRENCY=4` 等环境变量偷偷覆盖命令行并发；
+- [x] 确认当前唯一训练输入是统一数据集的 `train-manifest.jsonl`；
+- [x] 固定本次验证 100 条 case ID，写入不可变 preparation artifact；
+- [x] 在本阶段完成前不启动全量 8,490 条教师 rollout。
 
 ### B. 正确接入并说明文搜图
 
-- [ ] 保持公开工具名 `text_image_search` 不变；
-- [ ] 检查其公开 schema 只暴露 query、语言和地区参数，不暴露内部字段；
-- [ ] 检查 Serper 请求前的 source policy 黑名单拦截；
-- [ ] 检查空结果明确为 `empty_results`，不伪装为成功证据；
-- [ ] 检查候选图和候选页面进入 Discovery，不自动进入 Evidence；
-- [ ] 在英文 Unified ReAct prompt 中增加独立的文搜图规则和使用时机；
-- [ ] 同步更新英文 prompt 备份、中文阅读版、Agent 结构文档和工具清单；
-- [ ] 加单测覆盖：可用工具列表、schema、query 校验、候选 Discovery、空结果、
+- [x] 保持公开工具名 `text_image_search` 不变；
+- [x] 检查其公开 schema 只暴露 query、语言和地区参数，不暴露内部字段；
+- [x] 检查 Serper 请求前的 source policy 黑名单拦截；
+- [x] 检查空结果明确为 `empty_results`，不伪装为成功证据；
+- [x] 检查候选图和候选页面进入 Discovery，不自动进入 Evidence；
+- [x] 在英文 Unified ReAct prompt 中增加独立的文搜图规则和使用时机；
+- [x] 同步更新英文 prompt 备份、中文阅读版、Agent 结构文档和工具清单；
+- [x] 加单测覆盖：可用工具列表、schema、query 校验、候选 Discovery、空结果、
   下一轮候选图注入和禁止直接当 Evidence。
 
 ### C. 修复 SFT judge 与新版 unified ReAct 的适配
@@ -174,16 +174,16 @@ src/orchestrator/pipeline.py::Orchestrator.run()
 
 ### D. 回归、真实 smoke 和轨迹检查
 
-- [ ] 补充新版 ReAct、SFT judge、文搜图和工具结果前递相关单测；
-- [ ] 跑相关 pytest；
-- [ ] 跑 `compileall` 和 `git diff --check`；
-- [ ] 提交前检查所有测试是否使用当前主流程，旧 v3/v4 残留失败单独记录；
-- [ ] 提交并 push 后更新服务器 checkout；
-- [ ] 服务器先跑小规模真实 smoke；
-- [ ] 如果 Gemini 3.7 可用，使用 3.7 验证；
-- [ ] 如果 3.7 完全不可用，可用 `gemini-3.1-pro-preview` 做工程和调查链路 smoke，
+- [x] 补充新版 ReAct、SFT judge、文搜图和工具结果前递相关单测；
+- [x] 跑相关 pytest；
+- [x] 跑 `compileall` 和 `git diff --check`；
+- [x] 提交前检查所有测试是否使用当前主流程，旧 v3/v4 残留失败单独记录；
+- [x] 提交并 push 后更新服务器 checkout；
+- [x] 服务器先跑小规模真实 smoke；
+- [x] 如果 Gemini 3.7 可用，使用 3.7 验证；
+- [x] 如果 3.7 完全不可用，可用 `gemini-3.1-pro-preview` 做工程和调查链路 smoke，
   但不得把它的质量结果写成 3.7 结果；
-- [ ] 检查每条新 trace 是否：
+- [x] 检查每条新 trace 是否：
   - 只产生一个动作；
   - 真的读取上一轮工具结果；
   - 文搜图结果有候选内容时能看到候选；
@@ -344,20 +344,20 @@ src/orchestrator/pipeline.py::Orchestrator.run()
 
 提交前：
 
-- [ ] 所有源代码、测试、prompt 备份、文档和实验记录纳入 commit；
-- [ ] `git diff --check` 通过；
-- [ ] 相关 pytest 通过；
-- [ ] 记录最终 commit 和文件变更；
-- [ ] push 到当前 canary branch。
+- [x] 所有源代码、测试、prompt 备份、文档和实验记录纳入 commit；
+- [x] `git diff --check` 通过；
+- [x] 相关 pytest 通过；
+- [x] 记录最终 commit 和文件变更；
+- [x] push 到当前 canary branch。
 
 服务器：
 
-- [ ] 只 fast-forward 到已验证 commit；
-- [ ] 核对 branch、status、commit、hostname、账号和 `OMP_NUM_THREADS=1`；
-- [ ] 真实 smoke 只从服务器 checkout 运行；
-- [ ] 记录 run path、模型、并发、prompt/schema 版本；
-- [ ] 监控当前 worker 的 CLOSE-WAIT 是否随 trace 无界增长；
-- [ ] 不处理不属于本次 worker 的历史/他人进程。
+- [x] 只 fast-forward 到已验证 commit；
+- [x] 核对 branch、status、commit、hostname、账号和 `OMP_NUM_THREADS=1`；
+- [x] 真实 smoke 只从服务器 checkout 运行；
+- [x] 记录 run path、模型、并发、prompt/schema 版本；
+- [x] 监控当前 worker 的 CLOSE-WAIT 是否随 trace 无界增长；
+- [x] 不处理不属于本次 worker 的历史/他人进程。
 
 最终停止条件：
 
@@ -371,25 +371,41 @@ src/orchestrator/pipeline.py::Orchestrator.run()
 
 ## 7. 本轮实际执行状态
 
-- [x] 当前提交 `2e64147` 已 push GitHub，gpu-13 已 fast-forward；
-- [x] 合并器保留 attempt 的 `git_commit`、Agent、benchmark 和 `source_access_policy`；
-- [x] 新版 Gemini 3.7 smoke 最终 10/10 完成，2 条进入工程恢复；
-- [x] 使用真实 source policy 的 strict trace audit：10/10；
-- [x] `text_image_search` 在 4/10 条 smoke 中被主动使用，结果进入后续 Interaction；
+- [x] 当前分支、服务器 checkout、数据集边界和进程状态已核对；
+- [x] `text_image_search` 的 schema、Serper 前置黑名单、空结果、
+  Discovery 前递和 prompt 规则已完成验证；
+- [x] 新版 3.7 smoke、source-policy strict audit 和工具结果前递检查已完成；
 - [x] 训练集 100 条 preparation 已创建，runtime/private 各 100 条，gold 全齐；
-- [ ] Gemini 3.7 SFT judge：当前 7/10 完成，3 条因 HTTP 429 未完成；
-- [ ] 训练集 100 条初始 rollout + 最多三轮 SFT reroll；
-- [ ] 训练集 100 条最终分桶、逐条失败分析和实验记录；
+- [x] 100 条初始 rollout 全部完成，100 条均有 terminal success；
+- [x] 初始轮 SFT judge：56 条通过，44 条进入质量 reroll；
+- [x] quality-reroll-01：44 条中新增通过 6 条，剩余 38 条；
+- [x] quality-reroll-02：38 条中新增通过 5 条，剩余 33 条；
+- [x] quality-reroll-03：33 条中新增通过 1 条，剩余 32 条 hard case；
+- [x] 最终选中 68 条，hard case 32 条，未解决工程错误 0 条；
+- [x] 所有轮次的 trace、judge、分类和失败记录均已保留；
+- [x] 发现并修复 package 导出耦合：action-only 不进入 reasoning policy SFT，
+  但其有效 perception 样本仍进入独立 perception SFT；
+- [x] 默认回归测试 481 passed，`compileall` 和 `git diff --check` 通过；
 - [x] 在上述依赖完成前不启动全量 8,490 条教师 rollout。
 
 本轮真实记录：
 
-`docs/reports/2026-09-02-unified-react-smoke10-718ac2f.md`
+- `docs/reports/2026-09-02-unified-react-smoke10-718ac2f.md`
+- `docs/reports/2026-09-02-training100-fourround-reroll.md`
 
 训练 100 条 preparation：
 
 `/gsdata/home/wza/image-factual-verifier-v2-data/generated/teacher-rollouts/unified-react-v1-gemini37-train100-fourround-20260902-2e64147/`
 
-3.7 初次 SFT judge 运行曾因 provider HTTP 429 停在 7/10；随后并发 1 的最小
-Interactions 协议探针已成功。3.1 Pro 仅用于完成 judge packet/审计链路的工程
-对照，不替代 3.7 教师 rollout 或 3.7 正式 SFT 指标。
+本轮 SFT 训练包的口径为：
+
+- accepted release：68 条；
+- reasoning policy SFT：67 条；
+- action-only：1 条，单独保留，不混入 reasoning SFT；
+- independent perception SFT：68 条；
+- 质量目录：high 65、usable 3；
+- 100 条实验数据不进入正式训练。
+
+旧的 `classification/quality-reroll-01/classification.json` 保留了修复前的
+`incomplete_case_count=56` 历史字段；它不影响最终选择，但已在新的复核产物中
+明确标记为 superseded，后续只使用按本轮 target-case-list 重算的结果。

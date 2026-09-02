@@ -22,6 +22,7 @@ raw rollout
 - `traces/`
 - `eligibility/`
 - `trajectory_sft.jsonl`
+- `action_only.jsonl`
 - `perception_trajectories.jsonl`
 
 staging 阶段完成唯一的 teacher acceptance：
@@ -32,6 +33,11 @@ staging 阶段完成唯一的 teacher acceptance：
 - source trace SHA-256 一致；
 - deterministic fatal reason 拒绝；
 - 完整 episode SFT 行从 canonical trace 生成并写入 `trajectory_sft.jsonl`。
+
+`action_only.jsonl` 不进入 reasoning policy SFT，但必须继续保留；它对应的
+有效 `PerceptionReport` 仍进入独立的 perception 数据。包的 manifest 必须分别
+记录 selected release、policy reasoning、action-only 和 perception 的数量，
+不能用一个 `accepted_case_count` 代替这四个口径。
 
 允许通过 judge 的非 fatal 轨迹保留 deterministic red flags。最终 exporter
 只验证 canonical release 的完整性、SHA、split 和 model-visible 数据契约，不重新

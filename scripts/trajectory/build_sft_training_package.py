@@ -579,7 +579,18 @@ This directory is the complete output of the frozen-teacher SFT pipeline:
 - `ms-swift-policy/`: primary Agent SFT input. Use this directory with the existing `training/scripts/train/run_sft.sh` flow.
 - `ms-swift-perception/`: optional independent perception SFT input.
 
-The policy dataset contains {counts['policy_rows']} complete episode row(s), and the perception dataset contains {counts['perception_rows']} row(s). Each policy row is one complete episode; this package does not use the legacy step-level `policy_trajectories.jsonl` format. Episodes above the 128K approximate-token admission gate remain in `accepted-dataset/long_holdout.jsonl` and are not converted into the direct training files.
+The accepted release contains {counts['selected_release_cases']} selected case(s):
+
+- policy reasoning SFT: {counts['policy_rows']} complete episode row(s);
+- action-only executable traces: {counts['action_only_rows']} row(s), kept separately and not mixed into reasoning SFT;
+- independent perception SFT: {counts['perception_rows']} row(s).
+
+Each policy row is one complete episode; this package does not use the legacy
+step-level `policy_trajectories.jsonl` format. Episodes above the 128K
+approximate-token admission gate remain in `accepted-dataset/long_holdout.jsonl`
+and are not converted into the direct policy training files. Action-only rows
+are available at `accepted-dataset/action_only.jsonl` for separate action/RL
+workflows.
 
 ## Reproducibility and audit artifacts
 
@@ -697,8 +708,17 @@ def build_package(args: argparse.Namespace) -> dict[str, Any]:
         },
         "counts": {
             "accepted_cases": int(dataset_manifest.get("accepted_case_count", 0)),
+            "selected_release_cases": int(
+                dataset_manifest.get(
+                    "selected_release_case_count",
+                    dataset_manifest.get("accepted_case_count", 0),
+                )
+            ),
             "policy_rows": int(policy_manifest.get("example_count", 0)),
             "perception_rows": int(perception_manifest.get("example_count", 0)),
+            "action_only_rows": int(
+                dataset_manifest.get("action_only_episode_count", 0)
+            ),
             "long_holdout_rows": int(
                 dataset_manifest.get("long_holdout_episode_count", 0)
             ),
@@ -706,6 +726,7 @@ def build_package(args: argparse.Namespace) -> dict[str, Any]:
         "training_inputs": {
             "policy": "ms-swift-policy",
             "perception": "ms-swift-perception",
+            "action_only": "accepted-dataset/action_only.jsonl",
             "legacy_step_level_policy": False,
         },
         "training": training,

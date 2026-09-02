@@ -49,6 +49,16 @@ SFT judge 在工程审计之后运行。通过轨迹继续按质量分桶，例�
 - `action_only`：动作可用但 thought 不完整；
 - `rl_candidate`：可进入后续奖励/策略优化流程。
 
+这几个维度不能混为一个数量：
+
+- `trajectory_sft.jsonl` 和 `ms-swift-policy/` 只接收 `reasoning_sft`；
+- `action_only.jsonl` 单独保留，可供动作模仿或 RL 使用，不伪造 `<think>`；
+- perception 是独立的图像观察任务。只要 canonical trace 有有效
+  `PerceptionReport`，即使对应 policy trace 是 `action_only`，仍可进入
+  `perception_trajectories.jsonl` 和 `ms-swift-perception/`；
+- 因此一个 accepted release 可能是“策略 67 条、action-only 1 条、
+  perception 68 条”，这不是数据丢失，而是三条训练入口的准入条件不同。
+
 ## 4. 图片 API 分工
 
 - `direct_multimodal`：每个 Gemini Interaction 的根请求携带一份受控原图，

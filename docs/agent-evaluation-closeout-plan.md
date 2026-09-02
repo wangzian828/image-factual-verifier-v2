@@ -278,3 +278,27 @@ judge 或 rollout 若遇到 API 不可用，只能暂停该运行；已经完成
 
 runtime/private projection 各 100 条且 gold 全齐。3.7 恢复后从该目录启动初始轮，
 按现有 autopilot 追加最多三轮质量 reroll；在此之前不启动全量 8,490 条教师 rollout。
+
+## 12. 2026-09-02 四轮实验收尾补充
+
+上面的历史执行状态以本节为准。训练集 100 条四轮实验已经完成：
+
+- initial：100 条中 56 条通过，44 条进入 reroll；
+- quality-reroll-01：44 条中新增通过 6 条；
+- quality-reroll-02：38 条中新增通过 5 条；
+- quality-reroll-03：33 条中新增通过 1 条；
+- 最终选中 68 条，32 条 hard case，工程错误 0 条。
+
+最终 release 的 68 条中，67 条有可读 provider thought，进入 reasoning policy
+SFT；`main-05344` 为 1 条 action-only，保留在独立动作产物，不混入 reasoning
+SFT。该条仍有有效 perception 目标，因此独立 perception SFT 应为 68 条。
+
+此前 package 显示 perception 67 条是导出器把 action-only 从 policy 排除时连带
+跳过 perception 的耦合错误。现已修复，并新增回归测试；修复后的 package 必须
+分别展示 selected release、policy、action-only 和 perception 数量。
+
+实验详情见：
+
+`docs/reports/2026-09-02-training100-fourround-reroll.md`
+
+正式停止点不变：不启动全量 8,490 条教师 rollout，等待人工复核。

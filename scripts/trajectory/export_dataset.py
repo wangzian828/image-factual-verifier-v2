@@ -436,6 +436,7 @@ def export_dataset(
     )
     trajectory_by_episode: Dict[str, TrajectorySFTExample] = {}
     perception_by_episode: Dict[str, PerceptionExample] = {}
+    action_only_by_episode: Dict[str, Dict[str, Any]] = {}
     episode_metadata: Dict[str, Dict[str, Any]] = {}
     export_jobs: Dict[
         str, tuple[str, Path, Dict[str, Any], bool]
@@ -504,6 +505,14 @@ def export_dataset(
                     isinstance(buckets, list)
                     and "reasoning_sft" not in buckets
                 ):
+                    # Action-only traces are intentionally excluded from the
+                    # reasoning policy corpus, but their independent
+                    # perception target remains valid training data.
+                    action_only_by_episode[episode_id] = {
+                        "case_id": case_id,
+                        "source_run_id": manifest.get("run_id"),
+                        "source_trace": str(trace_path),
+                    }
                     continue
                 score = {
                     "episode_id": episode_id,
@@ -787,12 +796,19 @@ def export_dataset(
                 "frozen SFT export accepted too few cases: "
                 f"{len(accepted_case_ids)} < {minimum_accepted_cases}"
             )
-        if require_all_validation_cases:
-            expected_validation = {
-                case_id
-                for case_id, row in (fixed_split or {}).items()
-                if row.get("split") == "validation"
-            }
+            if require_all_validation_cases:
+                policy_case_ids = {
+                    str(episode_metadata[episode_id]["case_id"])
+                    for episode_id in all_episodes
+                }
+                expected_validation = {
+                    case_id
+                    for case_id, row in (fixed_split or {}).items()
+                    if (
+                        row.get("split") == "validation"
+                        and case_id in policy_case_ids
+                    )
+                }
             missing_validation = sorted(expected_validation - accepted_case_ids)
             if missing_validation:
                 raise ValueError(
@@ -961,6 +977,41 @@ def export_dataset(
                 dataset_perception.model_dump(mode="json")
             )
 
+    # Perception is an independent image-only task. Do not make it depend on
+    # the policy trace having readable provider thought. In particular, an
+    # accepted action-only trace is excluded from reasoning SFT but still has
+    # a valid PerceptionReport target.
+    action_only_perception_count = 0
+    for episode_id, action_only in action_only_by_episode.items():
+        perception_example = perception_by_episode.get(episode_id)
+        if perception_example is None:
+            continue
+        case_id = str(action_only["case_id"])
+        if fixed_split is not None:
+            fixed_row = fixed_split.get(case_id)
+            if fixed_row is None:
+                raise ValueError(
+                    "fixed case split lacks action-only perception case: "
+                    f"{case_id}"
+                )
+            split = str(fixed_row["split"])
+            split_group_id = str(fixed_row["split_group_id"])
+        else:
+            # Canonical accepted-release exports require a frozen split. Keep
+            # this invariant explicit instead of inventing another split.
+            raise ValueError(
+                "action-only perception export requires a frozen case split"
+            )
+        dataset_perception = DatasetPerceptionExample(
+            **perception_example.model_dump(mode="json"),
+            split=split,
+            split_group_id=split_group_id,
+        )
+        perception_split_rows[split].append(
+            dataset_perception.model_dump(mode="json")
+        )
+        action_only_perception_count += 1
+
     for split, rows in split_rows.items():
         rows.sort(key=lambda item: item["episode_id"])
         _write_jsonl(output_dir / f"{split}.jsonl", rows)
@@ -980,6 +1031,15 @@ def export_dataset(
     _write_jsonl(
         output_dir / "excluded_episode_metadata.jsonl",
         excluded_episode_rows,
+    )
+    action_only_rows: List[Dict[str, Any]] = []
+    if accepted_release is not None:
+        action_only_rows = _load_jsonl(accepted_release / "action_only.jsonl")
+    _write_jsonl(output_dir / "action_only.jsonl", action_only_rows)
+    selected_release_case_count = (
+        len(accepted_release_rows)
+        if accepted_release is not None
+        else len(episodes)
     )
     manifest = {
         "schema_version": "ifv-trajectory-sft-dataset-manifest-v1",
@@ -1046,6 +1106,9 @@ def export_dataset(
         "export_concurrency": export_concurrency,
         "episode_count": sum(len(rows) for rows in split_rows.values()),
         "accepted_episode_count": len(episodes),
+        "selected_release_case_count": selected_release_case_count,
+        "action_only_episode_count": len(action_only_rows),
+        "action_only_perception_count": action_only_perception_count,
         "long_holdout_episode_count": len(long_holdout_rows),
         "accepted_case_count": len(
             {str(episode_metadata[episode_id]["case_id"]) for episode_id in episodes}
@@ -1080,6 +1143,7 @@ def export_dataset(
                 "excluded_episode_metadata.jsonl"
             ),
             "long_holdout": "long_holdout.jsonl",
+            "action_only": "action_only.jsonl",
         },
     }
     _write_json(output_dir / "manifest.json", manifest)

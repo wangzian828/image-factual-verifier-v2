@@ -6,6 +6,8 @@
 | --- | --- | --- |
 | `traces/<episode>.json` | runtime 保存的 canonical trace，含完整状态和调用记录 | 是 |
 | `trajectory_sft.jsonl` | Qwen SFT 导出；每一行是一个完整 episode | 是，训练用 |
+| `action_only.jsonl` | 没有可读 thought、但动作可执行的独立导出 | 是，单独使用 |
+| `perception_trajectories.jsonl` | 从 canonical trace 导出的独立视觉观察样本 | 是，单独训练 |
 | `manifest.json`、`selection-manifest.jsonl` | 选择结果、哈希、数量、来源和统计 | 否 |
 
 `trajectory_sft.jsonl` 为了可训练，会把消息、工具调用、观察和紧凑状态上下文放在同一
@@ -33,3 +35,8 @@ python scripts/trajectory/render_sft_episodes_readable.py `
 
 Markdown 版会隐藏重复的动态 schema 和大块 state delta，只用于审阅；训练和程序处理仍
 使用原始 `trajectory_sft.jsonl`。源 JSONL 不会被这个脚本修改。
+
+`action_only` 不会混入 `trajectory_sft.jsonl`，但不代表整条 case 被丢弃：
+同一条 canonical trace 的 perception 结果仍可进入独立 perception SFT。阅读
+package 时应分别查看 `accepted-dataset/action_only.jsonl`、
+`accepted-dataset/perception.*.jsonl` 和 `ms-swift-perception/`。

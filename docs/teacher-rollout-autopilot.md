@@ -43,5 +43,11 @@ audit 中仍使用与 rollout 相同的来源黑名单，不会因合并丢失 p
 `quality-reroll-release/` 和 `quality-reroll-training-package/`。已完成的初始 pipeline 可以用
 `--reroll-from <pipeline-dir> --quality-reroll-rounds 3` 继续，不会重复初始成功轨迹。
 
+发布包中的训练入口按目标拆开统计：有可读 provider thought 的轨迹进入
+`trajectory_sft.jsonl`；没有可读 thought 的可执行轨迹进入独立
+`action_only.jsonl`，不伪造 reasoning SFT。perception 是独立图像任务，只要
+canonical trace 有有效 `PerceptionReport`，action-only trace 也可以进入
+`perception_trajectories.jsonl` 和 `ms-swift-perception/`。
+
 建议生产前先做 10 条并发 10 的真实 Gemini smoke，检查：成功率、工程错误、每条是否有 scene/OCR
 action、thought 捕获率、工具调用顺序和最终审计结果。通过后再启动全量 rollout。
