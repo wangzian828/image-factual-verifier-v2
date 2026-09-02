@@ -82,6 +82,7 @@ def test_runtime_state_has_no_preconstructed_target_graph() -> None:
     assert "perceive_scene" in available_unified_react_runtime_tools(state)
     assert "ocr_with_position" in available_unified_react_runtime_tools(state)
     assert "text_search" in available_unified_react_runtime_tools(state)
+    assert "text_image_search" in available_unified_react_runtime_tools(state)
 
 
 def test_public_tool_schema_hides_mature_internal_fields() -> None:

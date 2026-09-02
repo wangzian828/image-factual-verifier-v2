@@ -22,7 +22,8 @@ image-grounded ReAct loop，状态由 runtime/reducer 管理，成熟工具继�
                ▼
 ┌──────────────────────────────┐
 │ mature tools                 │
-│ perceive / OCR / search /    │
+│ perceive / OCR / text search │
+│ text-image / reverse-image   │
 │ visit / compare / visual ... │
 └──────────────┬───────────────┘
                ▼
@@ -49,6 +50,12 @@ image-grounded ReAct loop，状态由 runtime/reducer 管理，成熟工具继�
   任意一个，也可以在后续因新问题再次调用；没有固定 bootstrap 闸门。
 - 每轮只允许一个工具调用。查询、换页面、反向搜图、视觉复查和结束调查，
   都是同一个循环中的动作。
+- `text_search` 用文字检索网页候选；`text_image_search` 用文字检索图片和
+  含图页面；`reverse_image_search` 上传当前图片寻找 Lens/语义候选。三者的
+  搜索结果都只是未验证线索，不能直接当作 Evidence。
+- `text_image_search` 适合已有具体人物、事件、地点、物体或图片文字，需要
+  找对应图片/图片页面的情况。拿到候选后，仍需用 `visit` 或
+  `compare_with_reference` 继续核查。
 - 进入视觉 API 的图片统一限制为最长边 1024、JPEG quality 95。原图、裁剪图、
   远程候选图和单图 contact sheet 都走同一序列化入口；不能通过环境变量绕过
   1024 上限。`perceive_scene` 的恢复请求仍写入同一工具结果，失败不能伪装成

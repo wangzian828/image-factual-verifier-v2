@@ -407,7 +407,7 @@ def test_packet_includes_compact_retrieval_and_rejection_history() -> None:
 
     packet = build_sft_eligibility_input(trace, _gold())
 
-    assert packet["schema_version"] == "ifv-sft-eligibility-input-v8"
+    assert packet["schema_version"] == "ifv-sft-eligibility-input-v9"
     assert packet["candidate"]["retrieval_history"] == [
         {
             "tool": "text_search",
@@ -490,6 +490,149 @@ def test_packet_exposes_all_valid_evidence_and_basis_is_only_a_flag() -> None:
     assert evidence["evidence-1"]["basis_selected"] is True
     assert evidence["evidence-2"]["basis_selected"] is False
     assert packet["candidate"]["claims"][0]["claim_id"] == "claim-1"
+
+
+def test_unified_packet_exposes_ordered_react_actions_and_image_search_candidates() -> None:
+    trace = _trace()
+    trace["verdict_basis"] = {
+        "objective": "Verify the pictured event and its relationship.",
+        "evidence_ids": [],
+        "open_questions": ["Whether the pictured event occurred as shown."],
+    }
+    trace["state"]["investigation_state"] = {
+        "schema_version": "ifv-unified-react-v1",
+        "objective": "Verify the pictured event and its relationship.",
+        "visual_memory": {
+            "scene_description": "A person stands beside a marked vehicle.",
+            "entities": [{"name": "marked vehicle"}],
+            "relations": [{"description": "The person stands beside the vehicle."}],
+            "text_regions": [{"text": "EVENT 2026"}],
+        },
+        "discoveries": [
+            {
+                "discovery_id": "discovery-image-1",
+                "tool_name": "text_image_search",
+                "candidate_url": "https://example.org/event-page",
+                "reference_image_url": "https://cdn.example.org/event.jpg",
+                "title": "Event 2026 image",
+                "snippet": "A page containing a related event photograph.",
+                "source_query": "EVENT 2026 marked vehicle",
+                "candidate_status": "unverified",
+                "match_status": "unverified",
+            }
+        ],
+        "evidence": [],
+        "open_questions": ["Whether the pictured event occurred as shown."],
+    }
+    trace["state"]["all_steps"] = [
+        {
+            "stage": "unified_react",
+            "action_type": "tool_call",
+            "tool_name": "text_image_search",
+            "thought": "The image contains a named event. I will find image-bearing pages for that event.",
+            "tool_args": {
+                "query": "EVENT 2026 marked vehicle",
+                "investigation_progress": {
+                    "status": "investigating",
+                    "basis": "The event relationship remains unresolved.",
+                },
+            },
+            "tool_result": json.dumps(
+                {
+                    "status": "success",
+                    "query": "EVENT 2026 marked vehicle",
+                    "observation_status": "has_results",
+                    "results": [
+                        {
+                            "rank": 1,
+                            "title": "Event 2026 image",
+                            "url": "https://example.org/event-page",
+                            "image_url": "https://cdn.example.org/event.jpg",
+                            "snippet": "A related event photograph.",
+                        }
+                    ],
+                    "candidate_page_urls": ["https://example.org/event-page"],
+                    "reference_image_candidates": ["https://cdn.example.org/event.jpg"],
+                }
+            ),
+            "metadata": {
+                "tool_success": True,
+                "react_state_delta": {
+                    "accepted": True,
+                    "tool_success": True,
+                    "substantive_gain": True,
+                    "created_discovery_ids": ["discovery-image-1"],
+                },
+            },
+        }
+    ]
+
+    packet = build_sft_eligibility_input(trace, _gold())
+
+    assert packet["candidate"]["react_action_history"][0]["tool"] == (
+        "text_image_search"
+    )
+    action = packet["candidate"]["react_action_history"][0]
+    assert action["observation"]["results"][0]["image_url"].endswith(
+        "event.jpg"
+    )
+    assert packet["candidate"]["discovery_ledger"][0]["candidate_status"] == (
+        "unverified"
+    )
+    assert packet["candidate"]["evidence"] == []
+    assert packet["candidate"]["retrieval_history"][0]["result_count"] == 1
+    assert packet["candidate"]["retrieval_history"][0]["candidate_image_count"] == 1
+
+
+def test_unified_packet_keeps_nested_visit_evidence_records() -> None:
+    trace = _trace()
+    trace["state"]["investigation_state"] = {
+        "schema_version": "ifv-unified-react-v1",
+        "objective": "Verify the pictured event.",
+        "visual_memory": {},
+        "discoveries": [],
+        "evidence": [],
+        "open_questions": [],
+    }
+    trace["state"]["all_steps"] = [
+        {
+            "stage": "unified_react",
+            "action_type": "tool_call",
+            "tool_name": "visit",
+            "tool_args": {
+                "url": ["https://example.org/page"],
+                "question": "What event does the page document?",
+            },
+            "tool_result": json.dumps(
+                {
+                    "status": "success",
+                    "visits": [
+                        {
+                            "url": "https://example.org/page",
+                            "evidence_records": [
+                                {
+                                    "url": "https://example.org/page",
+                                    "evidence": "The page documents the event.",
+                                    "evidence_context": "The surrounding paragraph names the date.",
+                                    "stance": "support",
+                                    "directness": "direct",
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ),
+            "metadata": {"tool_success": True},
+        }
+    ]
+
+    packet = build_sft_eligibility_input(trace, _gold())
+
+    action = packet["candidate"]["react_action_history"][0]
+    assert action["observation"]["evidence_records"][0]["evidence"] == (
+        "The page documents the event."
+    )
+    assert action["observation"]["visited_pages"][0]["record_count"] == 1
 
 
 def test_compatible_subfact_can_pass_without_claim_relation_matching() -> None:

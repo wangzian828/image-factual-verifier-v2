@@ -28,8 +28,8 @@ from src.trajectory.semantic_reward import (
 
 
 SFT_ELIGIBILITY_SCHEMA_VERSION = "ifv-sft-eligibility-v3"
-SFT_ELIGIBILITY_INPUT_VERSION = "ifv-sft-eligibility-input-v8"
-SFT_ELIGIBILITY_PROMPT_VERSION = "ifv-sft-private-image-fact-gate-v5"
+SFT_ELIGIBILITY_INPUT_VERSION = "ifv-sft-eligibility-input-v9"
+SFT_ELIGIBILITY_PROMPT_VERSION = "ifv-sft-private-image-fact-gate-v6"
 SFT_ELIGIBILITY_GENERATION_VERSION = "minimal-thinking-4096-v6"
 SFT_ELIGIBILITY_POSTPROCESS_VERSION = "image-fact-safety-gate-v5"
 
@@ -59,8 +59,12 @@ SFT_ELIGIBILITY_SYSTEM_PROMPT = (
     "central route is generic, repeatedly low-yield, premise-led, ignores useful "
     "candidates, or treats non-results as a conclusion. Mark major overclaiming "
     "when the cited material does not establish the conclusion. Do not search and "
-    "do not create human-review work. The candidate also contains a compact record "
-    "of rejected intermediate policy outputs. A single rejected attempt that is "
+    "do not create human-review work. The candidate also contains the ordered "
+    "ReAct actions, their tool observations, the unverified search/image-candidate "
+    "ledger, and rejected intermediate policy outputs. The action history is "
+    "process context: it shows what the teacher actually did, but it does not "
+    "promote search candidates or titles into Evidence. A single rejected attempt "
+    "that is "
     "followed by a materially different, successful investigation or decision is a "
     "recoverable minor error. Repeated duplicate tool attempts, repeated terminal "
     "verdict proposals after the same stated deficiency, or a rejection that the "
@@ -402,6 +406,321 @@ def _tool_result_mapping(step: Mapping[str, Any]) -> Mapping[str, Any]:
     return _mapping(parsed)
 
 
+_TRACE_MEDIA_KEYS = {
+    "image_input",
+    "image",
+    "image_url",
+    "data_url",
+    "base64",
+    "content_bytes",
+    "raw_html",
+    "html",
+}
+
+
+def _compact_trace_value(
+    value: Any,
+    *,
+    depth: int = 0,
+    max_string: int = 6000,
+) -> Any:
+    """Bound trace observations without rewriting their textual meaning."""
+
+    if depth > 5:
+        return "[nested content omitted]"
+    if isinstance(value, str):
+        text = value.strip()
+        if len(text) <= max_string:
+            return text
+        return text[: max_string - 1].rstrip() + "…"
+    if isinstance(value, (int, float, bool)) or value is None:
+        return value
+    if isinstance(value, Mapping):
+        result: Dict[str, Any] = {}
+        for raw_key, child in list(value.items())[:80]:
+            key = str(raw_key)
+            if key.casefold() in _TRACE_MEDIA_KEYS:
+                continue
+            result[key] = _compact_trace_value(
+                child,
+                depth=depth + 1,
+                max_string=max_string,
+            )
+        return result
+    if isinstance(value, (list, tuple)):
+        return [
+            _compact_trace_value(
+                child,
+                depth=depth + 1,
+                max_string=max_string,
+            )
+            for child in list(value)[:40]
+        ]
+    return _compact_trace_value(
+        str(value),
+        depth=depth + 1,
+        max_string=max_string,
+    )
+
+
+def _project_search_rows(value: Any) -> List[Dict[str, Any]]:
+    projected: List[Dict[str, Any]] = []
+    for row in _rows(value)[:12]:
+        item: Dict[str, Any] = {}
+        for key in (
+            "rank",
+            "title",
+            "snippet",
+            "source",
+            "url",
+            "link",
+            "image_url",
+            "thumbnail",
+            "imageUrl",
+            "candidate_url",
+            "reference_image_url",
+            "match_status",
+            "provider",
+        ):
+            if key in row and row[key] not in (None, ""):
+                item[key] = _compact_trace_value(row[key], max_string=2400)
+        if item:
+            projected.append(item)
+    return projected
+
+
+def _project_tool_observation(
+    tool_name: str,
+    result: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """Expose completed observations while omitting media and raw HTML blobs."""
+
+    if not result:
+        return {}
+    status = str(result.get("status", "")).strip()
+    if tool_name == "text_search":
+        queries = []
+        for query_row in _rows(result.get("queries"))[:8]:
+            query = {
+                "query": _text(query_row.get("query"), limit=1200),
+                "results": _project_search_rows(query_row.get("results")),
+            }
+            if query["query"] or query["results"]:
+                queries.append(query)
+        return {
+            "status": status,
+            "observation_status": _text(
+                result.get("observation_status"),
+                limit=80,
+            ),
+            "observation_note": _text(
+                result.get("observation_note"),
+                limit=800,
+            ),
+            "queries": queries,
+            "error": _text(result.get("error"), limit=800),
+        }
+    if tool_name == "text_image_search":
+        return {
+            "status": status,
+            "query": _text(result.get("query"), limit=1200),
+            "observation_status": _text(
+                result.get("observation_status"),
+                limit=80,
+            ),
+            "observation_note": _text(
+                result.get("observation_note"),
+                limit=800,
+            ),
+            "results": _project_search_rows(result.get("results")),
+            "candidate_page_urls": _string_list(
+                result.get("candidate_page_urls"),
+                limit=12,
+            ),
+            "reference_image_candidates": _string_list(
+                result.get("reference_image_candidates"),
+                limit=12,
+            ),
+            "error": _text(result.get("error"), limit=800),
+        }
+    if tool_name == "reverse_image_search":
+        return {
+            "status": status,
+            "branch": _text(result.get("branch"), limit=80),
+            "candidate_match_status": _text(
+                result.get("candidate_match_status"),
+                limit=120,
+            ),
+            "lens_results": _project_search_rows(result.get("lens_results")),
+            "semantic_results": _project_search_rows(
+                result.get("semantic_results")
+            ),
+            "candidate_page_urls": _string_list(
+                result.get("candidate_page_urls"),
+                limit=12,
+            ),
+            "reference_image_candidates": _string_list(
+                result.get("reference_image_candidates"),
+                limit=12,
+            ),
+            "error": _text(result.get("error"), limit=800),
+        }
+    if tool_name == "visit":
+        records = []
+        record_sources = list(_rows(result.get("evidence_records")))
+        for visit in _rows(result.get("visits")):
+            record_sources.extend(_rows(visit.get("evidence_records")))
+        seen_records: set[str] = set()
+        for row in record_sources:
+            row_key = json.dumps(
+                _compact_trace_value(row, max_string=8000),
+                ensure_ascii=False,
+                sort_keys=True,
+                default=str,
+            )
+            if row_key in seen_records:
+                continue
+            seen_records.add(row_key)
+            if len(records) >= 12:
+                break
+            records.append(
+                {
+                    key: _compact_trace_value(row[key], max_string=8000)
+                    for key in (
+                        "url",
+                        "title",
+                        "evidence",
+                        "exact_text",
+                        "evidence_context",
+                        "context_spans",
+                        "stance",
+                        "directness",
+                        "relevance",
+                        "evidence_class",
+                        "content_status",
+                    )
+                    if key in row and row[key] not in (None, "")
+                }
+            )
+        return {
+            "status": status,
+            "url": _text(result.get("url"), limit=2400),
+            "summary": _text(result.get("summary"), limit=3000),
+            "content_status": _text(result.get("content_status"), limit=120),
+            "evidence_records": records,
+            "visited_pages": [
+                {
+                    "url": _text(visit.get("url"), limit=2400),
+                    "summary": _text(visit.get("summary"), limit=1800),
+                    "record_count": len(_rows(visit.get("evidence_records"))),
+                }
+                for visit in _rows(result.get("visits"))[:12]
+            ],
+            "error": _text(result.get("error"), limit=800),
+        }
+    return _compact_trace_value(dict(result))
+
+
+def _project_action_delta(metadata: Mapping[str, Any]) -> Dict[str, Any]:
+    raw = (
+        _mapping(metadata.get("unified_react_delta"))
+        or _mapping(metadata.get("react_state_delta"))
+        or _mapping(metadata.get("investigation_state_update"))
+    )
+    state_update = _mapping(raw.get("state_update")) or raw
+    result: Dict[str, Any] = {}
+    for key in (
+        "accepted",
+        "tool_success",
+        "substantive_gain",
+        "created_discovery_ids",
+        "created_evidence_ids",
+        "failure",
+        "rejected_reason",
+    ):
+        if key in state_update:
+            result[key] = _compact_trace_value(
+                state_update[key],
+                max_string=1800,
+            )
+    progress = _mapping(state_update.get("progress"))
+    if progress:
+        result["progress"] = {
+            "action_count": progress.get("action_count"),
+            "gain": progress.get("gain"),
+            "no_gain_streak": progress.get("no_gain_streak"),
+        }
+    return result
+
+
+def _react_action_history(state: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    """Project accepted unified-ReAct actions in actual episode order."""
+
+    history: List[Dict[str, Any]] = []
+    for index, step in enumerate(_rows(state.get("all_steps"))):
+        if str(step.get("action_type", "")).strip() != "tool_call":
+            continue
+        if str(step.get("stage", "")).strip() != "unified_react":
+            continue
+        tool_name = str(step.get("tool_name", "")).strip()
+        if not tool_name:
+            continue
+        tool_args = {
+            str(key): _compact_trace_value(value, max_string=2400)
+            for key, value in _mapping(step.get("tool_args")).items()
+            if str(key).casefold() not in _TRACE_MEDIA_KEYS
+        }
+        metadata = _mapping(step.get("metadata"))
+        result = _tool_result_mapping(step)
+        history.append(
+            {
+                "step_index": index,
+                "turn": len(history) + 1,
+                "tool": tool_name,
+                "thought": _text(step.get("thought"), limit=4000),
+                "arguments": tool_args,
+                "observation": _project_tool_observation(tool_name, result),
+                "state_delta": _project_action_delta(metadata),
+                "tool_success": bool(
+                    metadata.get(
+                        "tool_success",
+                        result.get("status") == "success",
+                    )
+                ),
+            }
+        )
+        if len(history) >= 40:
+            break
+    return history
+
+
+def _discovery_ledger(
+    investigation: Mapping[str, Any],
+) -> List[Dict[str, Any]]:
+    """Keep search/image candidates visible without promoting them to Evidence."""
+
+    result: List[Dict[str, Any]] = []
+    for item in _rows(investigation.get("discoveries"))[-80:]:
+        result.append(
+            {
+                key: _compact_trace_value(item[key], max_string=3000)
+                for key in (
+                    "discovery_id",
+                    "tool_name",
+                    "candidate_url",
+                    "reference_image_url",
+                    "title",
+                    "snippet",
+                    "source_query",
+                    "candidate_status",
+                    "match_status",
+                )
+                if key in item and item[key] not in (None, "")
+            }
+        )
+    return result
+
+
 def _string_list(value: Any, *, limit: int) -> List[str]:
     values = value if isinstance(value, list) else [value]
     return _unique(
@@ -422,7 +741,12 @@ def _retrieval_history(state: Mapping[str, Any]) -> List[Dict[str, Any]]:
         if str(step.get("action_type", "")).strip() != "tool_call":
             continue
         tool_name = str(step.get("tool_name", "")).strip()
-        if tool_name not in {"text_search", "visit"}:
+        if tool_name not in {
+            "text_search",
+            "text_image_search",
+            "reverse_image_search",
+            "visit",
+        }:
             continue
         tool_args = _mapping(step.get("tool_args"))
         result = _tool_result_mapping(step)
@@ -450,7 +774,7 @@ def _retrieval_history(state: Mapping[str, Any]) -> List[Dict[str, Any]]:
                     "search_error": _text(result.get("search_error"), result.get("error"), limit=500),
                 }
             )
-        else:
+        elif tool_name == "visit":
             source_urls = _string_list(tool_args.get("url", []), limit=3)
             source_urls = _unique(
                 [*source_urls, *_string_list(result.get("url", ""), limit=1)],
@@ -476,6 +800,71 @@ def _retrieval_history(state: Mapping[str, Any]) -> List[Dict[str, Any]]:
                         )
                     ),
                     "fetch_error": _text(result.get("error"), limit=500),
+                }
+            )
+        elif tool_name == "text_image_search":
+            history.append(
+                {
+                    "tool": tool_name,
+                    "goal": _text(
+                        tool_args.get("goal"),
+                        tool_args.get("question"),
+                        tool_args.get("context"),
+                        limit=800,
+                    ),
+                    "queries": _string_list(
+                        tool_args.get("query"),
+                        limit=3,
+                    ),
+                    "status": status or "unknown",
+                    "result_count": len(_rows(result.get("results"))),
+                    "candidate_page_urls": _string_list(
+                        result.get("candidate_page_urls"),
+                        limit=3,
+                    ),
+                    "candidate_image_count": len(
+                        _string_list(
+                            result.get("reference_image_candidates"),
+                            limit=6,
+                        )
+                    ),
+                    "search_error": _text(
+                        result.get("search_error"),
+                        result.get("error"),
+                        limit=500,
+                    ),
+                }
+            )
+        else:
+            history.append(
+                {
+                    "tool": tool_name,
+                    "goal": _text(
+                        tool_args.get("goal"),
+                        tool_args.get("question"),
+                        tool_args.get("context"),
+                        limit=800,
+                    ),
+                    "status": status or "unknown",
+                    "result_count": sum(
+                        len(_rows(result.get(key)))
+                        for key in ("lens_results", "semantic_results")
+                    ),
+                    "candidate_page_urls": _string_list(
+                        result.get("candidate_page_urls"),
+                        limit=3,
+                    ),
+                    "candidate_image_count": len(
+                        _string_list(
+                            result.get("reference_image_candidates"),
+                            limit=6,
+                        )
+                    ),
+                    "search_error": _text(
+                        result.get("search_error"),
+                        result.get("error"),
+                        limit=500,
+                    ),
                 }
             )
         if len(history) >= 24:
@@ -743,6 +1132,12 @@ def build_sft_eligibility_input(
             "findings": findings,
             "evidence": evidence,
             "discrepancies": discrepancies,
+            "react_action_history": (
+                _react_action_history(state) if current_runtime else []
+            ),
+            "discovery_ledger": (
+                _discovery_ledger(investigation) if current_runtime else []
+            ),
             "retrieval_history": _retrieval_history(state),
             "rejection_history": _rejection_history(state),
             "final_visual_audit": _mapping(state.get("final_visual_audit")),

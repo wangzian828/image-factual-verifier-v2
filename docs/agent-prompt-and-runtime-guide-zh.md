@@ -22,6 +22,16 @@
 ReAct loop 中的动作。ID、图片路径、内部工具参数、去重、重试、预算、失败记录
 和状态更新由 runtime 管理。
 
+三个搜索工具职责不同：
+
+- `text_search`：根据事实 query 查找网页候选；
+- `text_image_search`：根据事实 query 查找图片或含图页面，适合已有具体的
+  人物、事件、地点、物体或图片文字，需要定位相关图片时使用；
+- `reverse_image_search`：上传当前图片，寻找 Lens 或语义图像对应候选。
+
+三者返回的都只是未验证 Discovery。`text_image_search` 找到候选后，仍需用
+`visit` 或 `compare_with_reference` 继续核查，不能直接当作 Evidence。
+
 ## 2. 上下文和图片
 
 每个 Gemini Interaction 的根请求会临时附加一份受控原图，后续请求通过同一个

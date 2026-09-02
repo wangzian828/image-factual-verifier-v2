@@ -12,6 +12,11 @@
 个 JSON 行里，因此肉眼直接打开很难读。这不代表它是多条轨迹拼在一起：一行就是一条
 完整 episode。
 
+其中，`text_search`、`text_image_search` 和 `reverse_image_search` 的候选会作为
+未验证 Discovery 保留在轨迹中；只有后续检查形成的有效观察或正文片段才属于
+Evidence。SFT judge 使用同一条轨迹的有序动作和工具观察做审计，不把搜索候选
+直接升级为证据。
+
 ## 推荐阅读方式
 
 ```powershell

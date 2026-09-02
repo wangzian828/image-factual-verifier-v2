@@ -25,6 +25,19 @@ Changing a query, page, reverse-image candidate, visual question, or stopping is
 another action in the same loop. The runtime owns IDs, internal tool parameters,
 deduplication, retries, budgets, failures, and state updates.
 
+The search tools have distinct roles:
+
+- `text_search` finds web-page candidates from a factual text query.
+- `text_image_search` finds image and image-page candidates from a factual text
+  query, when a named person, event, place, object, or visible text can locate
+  relevant images.
+- `reverse_image_search` uploads the current image for Lens or semantic image
+  correspondence.
+
+Results from all three search tools are unverified Discovery. A
+`text_image_search` result must be inspected with `visit` or
+`compare_with_reference` before it can contribute to Evidence.
+
 ## 2. Context and image handling
 
 The root request of each Gemini Interaction gets one temporary controlled image
