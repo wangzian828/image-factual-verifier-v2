@@ -2065,7 +2065,10 @@ class Orchestrator:
         ).strip().lower()
         if value == "minimal":
             value = "low"
-        allowed = {"low"}
+        # Keep the existing low-only policy for non-ReAct stages.  The main
+        # ReAct loop is the one stage under experiment where Gemini high
+        # thinking is useful for selecting and sequencing investigation tools.
+        allowed = {"low", "high"} if normalized_stage == "UNIFIED_REACT" else {"low"}
         if value not in allowed:
             raise ValueError(
                 f"GEMINI_{normalized_stage}_THINKING_LEVEL must be one of "
