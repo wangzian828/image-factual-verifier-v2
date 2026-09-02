@@ -11,6 +11,7 @@ from scripts.trajectory.run_teacher_rollout_autopilot import (
     _classify_initial_outcomes,
     _build_quality_reroll_summary,
     _has_early_correct_judgment,
+    _merge_successful_attempts,
     _quality_reroll_case_ids,
     _read_jsonl,
     _successful_trace_sources,
@@ -138,6 +139,48 @@ def test_attempt_launcher_log_is_outside_run_cases_output(tmp_path: Path) -> Non
 
     assert log == group / "logs" / "attempt-01.log"
     assert attempt not in log.parents
+
+
+def test_successful_merge_preserves_source_access_policy_metadata(
+    tmp_path: Path,
+) -> None:
+    group = tmp_path / "rollouts" / "initial"
+    attempt = group / "attempt-01"
+    traces = attempt / "traces"
+    traces.mkdir(parents=True)
+    trace = _trace("case-one", early_judgment=True)
+    (traces / "episode.json").write_text(
+        json.dumps(trace),
+        encoding="utf-8",
+    )
+    (attempt / "run_manifest.json").write_text(
+        json.dumps(
+            {
+                "git_commit": "commit-1",
+                "benchmark": {"path": "/release/runtime_input/cases.jsonl"},
+                "agent": {"model": "gemini-3.7-flash"},
+                "source_access_policy": {
+                    "active": True,
+                    "path": "/release/evaluator_private/source_access_policy.json",
+                    "policy_id": "fixture-policy",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    merged, manifest = _merge_successful_attempts(
+        group_dir=group,
+        group_name="initial",
+        target_ids=["case-one"],
+    )
+
+    assert merged == group / "merged"
+    assert manifest["git_commit"] == "commit-1"
+    assert manifest["benchmark"]["path"].endswith("cases.jsonl")
+    assert manifest["agent"]["model"] == "gemini-3.7-flash"
+    assert manifest["source_access_policy"]["active"] is True
+    assert manifest["source_access_policy"]["policy_id"] == "fixture-policy"
 
 
 def test_package_output_allows_autopilot_command_log_only(tmp_path: Path) -> None:

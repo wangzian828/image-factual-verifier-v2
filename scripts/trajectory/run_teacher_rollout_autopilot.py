@@ -504,6 +504,16 @@ def _copy_or_link(source: Path, destination: Path) -> str:
         return "copy"
 
 
+def _inherited_run_manifest(attempts: Sequence[Path]) -> dict[str, Any]:
+    """Read non-secret run metadata from the first completed attempt."""
+
+    for attempt_dir in attempts:
+        manifest_path = attempt_dir / "run_manifest.json"
+        if manifest_path.is_file():
+            return _read_json(manifest_path)
+    return {}
+
+
 def _merge_successful_attempts(
     *,
     group_dir: Path,
@@ -547,12 +557,20 @@ def _merge_successful_attempts(
                 "verdict": summary["verdict"],
             }
         )
+    inherited_manifest = _inherited_run_manifest(attempts)
     manifest = {
         "schema_version": "ifv-merged-teacher-rollout-v1",
         "run_id": merged_dir.name,
         "status": "completed" if not unresolved else "completed_with_errors",
         "started_at": _now(),
         "completed_at": _now(),
+        "git_commit": inherited_manifest.get("git_commit"),
+        "benchmark": inherited_manifest.get("benchmark"),
+        "agent": inherited_manifest.get("agent"),
+        "source_access_policy": inherited_manifest.get(
+            "source_access_policy",
+            {"active": False},
+        ),
         "metadata": {
             "kind": "terminal-success-merge",
             "group": group_name,
@@ -832,12 +850,7 @@ def _merge_candidate_attempts(
             }
         )
 
-    inherited_manifest: dict[str, Any] = {}
-    for attempt_dir in attempts:
-        candidate_manifest = attempt_dir / "run_manifest.json"
-        if candidate_manifest.is_file():
-            inherited_manifest = _read_json(candidate_manifest)
-            break
+    inherited_manifest = _inherited_run_manifest(attempts)
     manifest = {
         "schema_version": "ifv-merged-teacher-candidates-v1",
         "run_id": merged_dir.name,
