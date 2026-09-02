@@ -1,15 +1,17 @@
 # unified-react-v1 主流程重构记录
 
 日期：2026-08-27
-状态：主流程已实现；2026-08-28 本地补强首次多路线注册、路线停止条件和 active ReAct prompt，
-等待提交、服务器更新和真实 Gemini smoke。
+状态：历史重构计划，已完成并由
+`docs/superpowers/plans/2026-08-31-unified-react-runtime-refactor-plan.md`
+和 `docs/agent-evaluation-closeout-plan.md` 收尾。本文保留当时的设计过程，
+不作为当前运行时规范；当前以 `unified-react-v1` 的活动文档为准。
 
 ## 目标
 
 把 IFV 收敛为一个大的 ReAct Agent：模型每轮决定一个工具动作，runtime 负责工具权限、状态、
 预算、去重、结果归并和终止条件。路线变化不再通过独立的 Replan 请求表达。
 
-## 当前流程
+## 当时的设计流程
 
 ```text
 空 workspace

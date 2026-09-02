@@ -401,7 +401,7 @@ git diff --check
 
 ## 12. 2026-09-02 续做状态
 
-本轮已完成本地实现与回归测试，尚未提交或部署：
+本轮实现、部署和真实 smoke 已完成，当前停在人工作质量复核边界：
 
 - Jina 页面提取增加 bounded evidence context，保留完整来源段落和必要前置上下文；
 - StageRunner 对 canonical tool result 做结构化裁剪，移除二进制/HTML 和历史 Claim 控制字段，
@@ -410,8 +410,11 @@ git diff --check
 - compare 结果增加 `comparison_status`，参考图片先做真实栅格解码校验；
 - perception entity attributes 使用固定 schema，避免 Gemini schema 400；
 - `src.orchestrator` 对活动 ReAct 状态延迟加载，避免工具导入循环；
-- 新增回归测试后，本地全量 `466 passed`，`compileall`、`git diff --check` 通过。
+- 新增回归测试后，服务器全量 `468 passed`，`compileall`、`git diff --check` 通过。
 
-下一步固定为：commit/push → gpu-13 fast-forward → 3.1 Pro Preview 并发 10
-真实 smoke → 逐条检查 function result 前递、页面证据完整性、空成功结果、候选图输入、
-工程错误和轨迹长度。质量复核完成前不恢复大规模教师 rollout。
+运行时代码提交为 `55ef0b3`， canary 验收提交为 `62f6b9c`，当前文档收尾提交为
+`10bb1e1`；gpu-13 已同步且工作树干净。3.1 Pro 与 3.7 Flash 各完成 10 条真实
+smoke，工具结果前递、页面证据、空成功结果、候选图输入、工程错误和轨迹产物均已记录。
+
+如果 Gemini 3.7 当前不可用，不再把新的 3.7 smoke 当作文档完成条件；只暂停依赖
+3.7 的新运行。质量问题进入人工复核清单，大规模教师 rollout 仍不启动。

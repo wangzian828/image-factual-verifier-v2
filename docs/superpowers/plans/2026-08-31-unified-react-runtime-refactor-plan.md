@@ -35,12 +35,17 @@ image-grounded ReAct loop：
 
 ## 当前收尾
 
-- [ ] 提交并 push 当前工作树，记录最终 commit。
-- [ ] 按 gpu13 运维文档更新服务器 checkout，确认分支、commit 和
+- [x] 提交并 push 当前工作树，记录最终 commit：运行时代码
+      `55ef0b3`，当前文档 HEAD `10bb1e1`。
+- [x] 按 gpu13 运维文档更新服务器 checkout，确认分支、commit 和
       `OMP_NUM_THREADS=1`。
-- [ ] 用真实 Gemini 跑之前约定的 10 条 smoke，检查工程错误、工具路线、视觉
+- [x] 用真实 Gemini 跑之前约定的 10 条 smoke，检查工程错误、工具路线、视觉
       上下文、最终 report、trace audit 和 private-gold 结果。
-- [ ] smoke 完成并记录后，才决定是否恢复大规模教师 rollout。
+- [x] smoke 完成并记录；结果进入人工复核边界。大规模教师 rollout 尚未恢复，
+      仍需人工确认。
+
+如果 Gemini 3.7 当前不可用，只暂停新的 3.7 实时调用，不影响上述已完成记录、
+本地测试和文档收尾。
 
 ## 约束
 

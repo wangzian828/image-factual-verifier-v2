@@ -2,6 +2,9 @@
 
 日期：2026 年 9 月 2 日
 
+本报告是已完成运行的归档记录。Gemini 3.7 当前是否在线不改变本报告的历史结果；
+若 API 暂时不可用，不需要为了文档收尾重复运行本批 100 条。
+
 ## 运行配置
 
 - 模型：Gemini 3.7 Flash
@@ -106,11 +109,14 @@ Judge 使用 Gemini 3.7 Flash，并发 12，输出上限 8192。
 
 ## 工程与文档收尾
 
-- 代码提交：`55ef0b3 Harden Gemini scene perception recovery`
-- 最终文档提交：`0f6efce docs: record new agent100 audit and trace review`
-- gpu-13 已 fast-forward 到 `0f6efce`；
+- 运行时代码提交：`55ef0b3 Harden Gemini scene perception recovery`
+- 最新文档提交：`10bb1e1 docs: finalize agent100 closeout status`
+- gpu-13 已 fast-forward 到 `10bb1e1`，工作树干净；
 - 服务器全量测试：`468 passed`；
 - 32 个旧 Jupyter kernel CLOSE-WAIT 已清理；当前只剩少量无所属进程的
   代理 socket，未继续增长；
 - 训练集大规模教师 rollout、SFT 正式训练和 RL 正式训练均未启动；
 - 本批 100 条仅用于 Agent 诊断和 private-gold 审计，不进入训练。
+
+当前没有残留 rollout、judge 或旧 Jupyter kernel 进程。本报告不包含任何尚未执行的
+3.7 新任务，也不构成恢复大规模教师 rollout 的授权。

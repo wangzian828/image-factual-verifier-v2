@@ -1,8 +1,13 @@
 # Gemini 图像直接事实核查实验记录
 
-**记录范围：** 测试集上的 Gemini direct QA 对照实验，以及与其对应的 100 条
-Agent 对照。本文记录截至 **2026-08-31** 已落盘的结果；Gemini 3.7
+**记录范围：** 测试集上的 Gemini direct QA 对照实验，以及与其对应的历史 100 条
+Agent 对照。本文记录截至 **2026-09-02** 已落盘的结果；Gemini 3.7
 全量 direct QA 和 private-gold 审计均已完成。
+
+本文中的 2026-08-30/31 对照数字是历史基线，不覆盖后续新版 Agent-100 诊断结果。
+新版 Agent-100 的最终 34/40/25 分类和逐条问题，以
+`reports/2026-09-02-agent100-newagent-rollout-and-review.md` 为准。Gemini 3.7
+当前是否在线不影响这些已落盘结果。
 
 ## 1. 数据、输入与指标口径
 
@@ -194,6 +199,10 @@ SFT 下游分桶复核：
   holdout，不应直接进入短轨迹 SFT。
 
 ## 8. Agent-100 启动决策
+
+以下是本节形成时的历史启动决策。之后按人工要求完成了新版 Agent-100
+诊断性重跑；新版结果不覆盖本节的历史对照，见
+`reports/2026-09-02-agent100-newagent-rollout-and-review.md`。
 
 新版 10 条 smoke 的统一 private-gold 对照为：
 
