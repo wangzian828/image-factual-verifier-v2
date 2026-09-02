@@ -2,7 +2,7 @@
 
 更新时间：2026-09-02  
 当前分支：`codex/gpu13-canary-20260804-plan-relaxation-01`  
-当前基线提交：`2e64147`
+当前基线提交：`a398578`
 当前本地 checkout：`C:\Users\wangza\ifv-gpu13-canary-20260804-01`  
 明确停止点：本计划全部完成后，停在启动全量 8,490 条教师 rollout 之前。
 
@@ -409,3 +409,12 @@ src/orchestrator/pipeline.py::Orchestrator.run()
 旧的 `classification/quality-reroll-01/classification.json` 保留了修复前的
 `incomplete_case_count=56` 历史字段；它不影响最终选择，但已在新的复核产物中
 明确标记为 superseded，后续只使用按本轮 target-case-list 重算的结果。
+
+当前代码提交：`a398578`，已 push GitHub 并 fast-forward 到 gpu-13。
+修正版训练包：
+
+`/gsdata/home/wza/image-factual-verifier-v2-data/generated/teacher-rollouts/unified-react-v1-gemini37-train100-fourround-20260902-2e64147/quality-reroll-training-package-r2/`
+
+历史分类复核：
+
+`/gsdata/home/wza/image-factual-verifier-v2-data/generated/teacher-rollouts/unified-react-v1-gemini37-train100-fourround-20260902-2e64147/classification/recomputed-a398578/recompute-manifest.json`

@@ -64,7 +64,11 @@ SFT；但它仍有有效的图像 perception 目标，不能从 perception 数�
 该条独立 perception 样本，造成 package 中 policy 和 perception 都显示为 67 条。
 这不是 rollout 或 judge 丢数据，而是两个训练入口被错误耦合。
 
-现已修复：
+现已修复，修正版 package 已在 gpu-13 用提交 `a398578` 重建：
+
+`/gsdata/home/wza/image-factual-verifier-v2-data/generated/teacher-rollouts/unified-react-v1-gemini37-train100-fourround-20260902-2e64147/quality-reroll-training-package-r2/`
+
+修复内容：
 
 1. action-only 继续保留在独立 `action_only.jsonl`；
 2. action-only 不进入 reasoning policy `train/validation/test.jsonl`；
@@ -81,9 +85,15 @@ SFT；但它仍有有效的图像 perception 目标，不能从 perception 数�
 它没有参与最终 68 条选择；后续复核以每轮 `target-case-list.txt` 和按当前代码重算的
 分类结果为准。原始文件不覆盖，避免破坏实验审计链。
 
+当前代码已按每轮真实目标重算，复核结果全部为
+`incomplete_case_count=0`，产物位于：
+
+`/gsdata/home/wza/image-factual-verifier-v2-data/generated/teacher-rollouts/unified-react-v1-gemini37-train100-fourround-20260902-2e64147/classification/recomputed-a398578/recompute-manifest.json`
+
 ## 验证状态
 
 - 本地默认回归：481 passed；
+- gpu-13 默认回归：481 passed；
 - `compileall`：通过；
 - `git diff --check`：通过；
 - 服务器当前无 rollout、judge 或遗留 Jupyter kernel 进程；
