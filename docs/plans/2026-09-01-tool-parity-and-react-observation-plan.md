@@ -398,3 +398,20 @@ git diff --check
   轨迹进入 `action_only`，不伪造 `<think>`；超出 128K 的轨迹进入 holdout。
 - 新版 10 条 smoke 未达到整体质量改善门槛，因此不启动新的 Agent-100，不启动
   8,490 条大规模教师 rollout。
+
+## 12. 2026-09-02 续做状态
+
+本轮已完成本地实现与回归测试，尚未提交或部署：
+
+- Jina 页面提取增加 bounded evidence context，保留完整来源段落和必要前置上下文；
+- StageRunner 对 canonical tool result 做结构化裁剪，移除二进制/HTML 和历史 Claim 控制字段，
+  不再用 JSON 字符串前缀冒充工具观察；
+- unified ReAct 接收多页面 evidence、拒绝空 `success` payload 和无效参考图 Evidence；
+- compare 结果增加 `comparison_status`，参考图片先做真实栅格解码校验；
+- perception entity attributes 使用固定 schema，避免 Gemini schema 400；
+- `src.orchestrator` 对活动 ReAct 状态延迟加载，避免工具导入循环；
+- 新增回归测试后，本地全量 `466 passed`，`compileall`、`git diff --check` 通过。
+
+下一步固定为：commit/push → gpu-13 fast-forward → 3.1 Pro Preview 并发 10
+真实 smoke → 逐条检查 function result 前递、页面证据完整性、空成功结果、候选图输入、
+工程错误和轨迹长度。质量复核完成前不恢复大规模教师 rollout。

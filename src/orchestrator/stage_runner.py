@@ -2563,10 +2563,11 @@ class StageRunner:
             ),
         )
         self._control_steps = list(getattr(self, "_control_steps", [])) + [recorded_step]
+        context_limit = max(65536, self.tool_response_max_chars)
         compact = self._compact_tool_result_for_context(
             tool_name,
             result,
-            max_chars=max(32768, self.tool_response_max_chars),
+            max_chars=context_limit,
         )
         question_id = str(tool_args.get("__question_id", "")).strip()
         content: Dict[str, Any] = {
@@ -2577,15 +2578,18 @@ class StageRunner:
             content["question_id"] = question_id
         if state_update:
             content["investigation_state_update"] = state_update
-        content["agent_control_state"] = self._agent_control_state()
         text = json.dumps(content, ensure_ascii=False, default=str)
-        if len(text) > max(32768, self.tool_response_max_chars):
+        if len(text) > context_limit:
             content = {
                 "function_call_id": call_id,
                 "question_id": question_id,
                 "result": {
                     "truncated": True,
-                    "preview": text[: max(32768, self.tool_response_max_chars) - 160],
+                    "reason": (
+                        "The structured observation exceeded the model-context "
+                        "budget after complete-item reduction."
+                    ),
+                    "retained_result": compact,
                 },
             }
             text = json.dumps(content, ensure_ascii=False, default=str)
@@ -4244,6 +4248,19 @@ class StageRunner:
                 "tool_tokens": self._normalize_tool_tokens(runtime_metrics.get("tokens")),
                 "tool_subcalls": tool_subcalls,
             }, error=str(exc))
+        raw_serialized = serialized
+        raw_tool_result_artifact: Optional[Dict[str, Any]] = None
+        if succeeded and self.runtime_store is not None:
+            raw_tool_result_artifact = self.runtime_store.artifacts.put_text(
+                raw_serialized,
+                media_type="application/json; charset=utf-8",
+                suffix=".json",
+                metadata={
+                    "kind": "raw_tool_result",
+                    "stage": self.stage_name,
+                    "tool_name": tool_name,
+                },
+            )
         if succeeded:
             parsed_result, _ = parse_tool_result(serialized)
             canonical = self._canonical_tool_result(
@@ -4281,7 +4298,12 @@ class StageRunner:
             "serialized_size": len(serialized),
             "tool_llm_api_calls": int(runtime_metrics.get("llm_api_calls", 0) or 0),
             "tool_tokens": self._normalize_tool_tokens(runtime_metrics.get("tokens")),
-            "tool_subcalls": tool_subcalls,
+                "tool_subcalls": tool_subcalls,
+                **(
+                    {"raw_tool_result_artifact": raw_tool_result_artifact}
+                    if raw_tool_result_artifact is not None
+                    else {}
+                ),
             },
             error="" if succeeded else "tool returned an error result",
         )
@@ -4316,7 +4338,11 @@ class StageRunner:
         state_update: Optional[Dict[str, Any]] = None,
         native_chat: bool = False,
     ) -> str:
-        compact = self._compact_tool_result_for_context(tool_name, result)
+        compact = self._compact_tool_result_for_context(
+            tool_name,
+            result,
+            max_chars=max(12000, self.tool_response_max_chars),
+        )
         payload = {
             "function_call_id": function_call_id,
             "tool": tool_name,
@@ -4331,8 +4357,14 @@ class StageRunner:
             indent=None if native_chat else 2,
             separators=(",", ":") if native_chat else None,
         )
-        if not native_chat and len(text) > self.tool_response_max_chars:
-            text = text[: self.tool_response_max_chars] + "\n...<truncated>"
+        if not native_chat and len(text) > max(12000, self.tool_response_max_chars):
+            compact = self._compact_tool_result_for_context(
+                tool_name,
+                result,
+                max_chars=max(12000, self.tool_response_max_chars),
+            )
+            payload["result"] = compact
+            text = json.dumps(payload, ensure_ascii=False, indent=2)
         if native_chat:
             return text
         return f"<tool_response>\n{text}\n</tool_response>"
@@ -4370,6 +4402,9 @@ class StageRunner:
                 "cache_hit": bool(step.metadata.get("cache_hit", False)),
                 "tool_success": bool(step.metadata.get("tool_success", False)),
                 "function_call_id": step.metadata.get("function_call_id"),
+                "raw_tool_result_artifact": step.metadata.get(
+                    "raw_tool_result_artifact"
+                ),
             },
         )
         step.metadata["tool_result_artifact"] = descriptor
@@ -4381,7 +4416,6 @@ class StageRunner:
         *,
         max_chars: Optional[int] = None,
     ) -> Any:
-        del tool_name  # The canonical tool-specific compaction happens upstream.
         limit = max(1200, int(max_chars or self.tool_response_max_chars))
         try:
             data = json.loads(result)
@@ -4398,11 +4432,184 @@ class StageRunner:
             return {"status": "error", "error": str(result).strip()}
 
         if isinstance(data, (dict, list)):
-            raw = json.dumps(data, ensure_ascii=False)
+            data = self._strip_model_media(data)
+            if tool_name == "visit" and isinstance(data, dict):
+                # These fields belong to the retired Claim/Task reducer.  They
+                # may still appear in a provider-side replay or an older tool
+                # adapter, but they are not page observations and must not be
+                # reintroduced into the current ReAct context.
+                data.pop("validated_claim_state", None)
+                data.pop("agent_control_state", None)
+            raw = json.dumps(data, ensure_ascii=False, default=str)
             if len(raw) <= limit:
                 return data
-            return {"preview": raw[: limit - 32] + "...<truncated>"}
+            return self._fit_structured_tool_result(
+                tool_name,
+                data,
+                limit=limit,
+            )
         return str(result)[:limit]
+
+    @staticmethod
+    def _strip_model_media(value: Any) -> Any:
+        """Remove binary/provider payloads without changing textual observations."""
+
+        omitted_keys = {
+            "data_url",
+            "image_input",
+            "base64",
+            "content_bytes",
+            "raw_html",
+            "html",
+        }
+        if isinstance(value, dict):
+            return {
+                str(key): StageRunner._strip_model_media(child)
+                for key, child in value.items()
+                if str(key).casefold() not in omitted_keys
+            }
+        if isinstance(value, list):
+            return [StageRunner._strip_model_media(item) for item in value]
+        if isinstance(value, tuple):
+            return [StageRunner._strip_model_media(item) for item in value]
+        return value
+
+    @staticmethod
+    def _json_size(value: Any) -> int:
+        return len(json.dumps(value, ensure_ascii=False, default=str))
+
+    def _fit_structured_tool_result(
+        self,
+        tool_name: str,
+        data: Any,
+        *,
+        limit: int,
+    ) -> Any:
+        """Fit a result by whole fields/items, preserving evidence text.
+
+        A provider result must never be made model-visible by slicing its JSON
+        serialization.  Page evidence and context windows are retained first;
+        diagnostics, duplicated page summaries, and lower-priority candidates
+        are removed as complete fields or list items.
+        """
+
+        if not isinstance(data, dict):
+            return data
+        candidate = copy.deepcopy(data)
+        dropped: List[str] = []
+
+        if tool_name == "visit":
+            # The page-level convenience fields duplicate evidence_records.
+            # Keep the exact records and their context windows as the primary
+            # model input, then remove duplicate/diagnostic material if needed.
+            records = [
+                copy.deepcopy(item)
+                for item in candidate.get("evidence_records", []) or []
+                if isinstance(item, dict)
+            ][:3]
+            visits = [
+                copy.deepcopy(item)
+                for item in candidate.get("visits", []) or []
+                if isinstance(item, dict)
+            ][:3]
+            preferred_keys = (
+                "status",
+                "url",
+                "selected_url",
+                "provider",
+                "content_status",
+                "extraction_status",
+                "evidence_available",
+                "evidence",
+                "evidence_context",
+                "summary",
+                "rationale",
+                "relevance",
+                "stance",
+                "relation_scope",
+                "relation_stance",
+                "directness",
+                "temporal_alignment",
+                "artifact_sha256",
+                "evidence_span",
+                "summary_model_context",
+                "evidence_records",
+                "visits",
+            )
+            candidate = {
+                key: copy.deepcopy(candidate[key])
+                for key in preferred_keys
+                if key in candidate
+            }
+            candidate["evidence_records"] = records
+            candidate["visits"] = visits
+            for key in (
+                "visits",
+                "subcalls",
+                "fetch_attempts",
+                "timings",
+                "injection_flags",
+                "retrieved_at",
+                "rationale",
+                "summary",
+            ):
+                if self._json_size(candidate) <= limit:
+                    break
+                if key in candidate and key not in {
+                    "evidence_records",
+                    "evidence",
+                    "evidence_context",
+                }:
+                    candidate.pop(key, None)
+                    dropped.append(key)
+            if self._json_size(candidate) > limit:
+                # Keep the selected passages verbatim.  Context is useful but
+                # secondary to the selected source text when a pathological
+                # page still exceeds the hard transport budget.
+                for index, record in enumerate(candidate.get("evidence_records", [])):
+                    if not isinstance(record, dict):
+                        continue
+                    if self._json_size(candidate) <= limit:
+                        break
+                    if record.get("evidence_context"):
+                        record.pop("evidence_context", None)
+                        record.pop("context_spans", None)
+                        dropped.append(f"evidence_records[{index}].evidence_context")
+            if self._json_size(candidate) > limit:
+                # Retain complete evidence records in priority order. Never
+                # cut an evidence string to make the JSON appear shorter.
+                records = list(candidate.get("evidence_records", []) or [])
+                while len(records) > 1 and self._json_size(candidate) > limit:
+                    records.pop()
+                    candidate["evidence_records"] = records
+                    dropped.append("evidence_records.tail")
+        else:
+            for key in (
+                "debug",
+                "metadata",
+                "timings",
+                "subcalls",
+                "fetch_attempts",
+                "raw_response",
+            ):
+                if self._json_size(candidate) <= limit:
+                    break
+                if key in candidate:
+                    candidate.pop(key, None)
+                    dropped.append(key)
+            for key, value in list(candidate.items()):
+                if self._json_size(candidate) <= limit:
+                    break
+                if isinstance(value, list) and len(value) > 1:
+                    candidate[key] = value[: max(1, len(value) // 2)]
+                    dropped.append(f"{key}.tail")
+
+        if dropped:
+            candidate["_context_reduction"] = {
+                "whole_fields_or_items_omitted": dropped,
+                "text_was_not_sliced": True,
+            }
+        return candidate
 
     def _canonical_tool_result(
         self,
@@ -4428,57 +4635,71 @@ class StageRunner:
 
     @staticmethod
     def _canonical_search_result(data: Dict[str, Any]) -> Dict[str, Any]:
-        if not isinstance(data.get("queries"), list):
-            return dict(data)
-        queries: List[Dict[str, Any]] = []
-        for item in (data.get("queries", []) or [])[:1]:
-            if not isinstance(item, dict):
-                continue
-            rows = []
-            for row in (item.get("results", []) or [])[:10]:
-                if isinstance(row, dict):
-                    rows.append(
-                        {
-                            "title": str(row.get("title", "")),
-                            "url": str(row.get("url", "")),
-                            "snippet": str(row.get("snippet", ""))[:220],
-                        }
-                    )
-            queries.append(
-                {
-                    "query": str(item.get("query", "")),
-                    "provider": str(item.get("provider", "")),
-                    "results": rows,
-                    "search_error": str(item.get("search_error", "")),
-                    "timings": dict(item.get("timings", {}) or {}),
-                }
+        canonical = StageRunner._strip_model_media(data)
+        queries = canonical.get("queries")
+        result_count = 0
+        if isinstance(queries, list):
+            normalized_queries = []
+            for item in queries[:1]:
+                if not isinstance(item, dict):
+                    continue
+                normalized = dict(item)
+                rows = [
+                    dict(row)
+                    for row in (item.get("results", []) or [])[:10]
+                    if isinstance(row, dict)
+                ]
+                normalized["results"] = rows
+                result_count += len(rows)
+                normalized_queries.append(normalized)
+            canonical["queries"] = normalized_queries
+        elif isinstance(canonical.get("results"), list):
+            result_count = len(canonical["results"])
+        canonical["status"] = "success"
+        canonical["observation_status"] = (
+            "has_results" if result_count else "empty_results"
+        )
+        if not result_count:
+            canonical["observation_note"] = (
+                "The search request completed but returned no candidate results. "
+                "Treat the current question as unresolved."
             )
-        return {
-            "status": "success",
-            "queries": queries,
-            "subcalls": [
-                dict(item)
-                for item in (data.get("subcalls", []) or [])
-                if isinstance(item, dict)
-            ],
-        }
+        return canonical
 
     def _canonical_visit_result(
         self,
         data: Dict[str, Any],
     ) -> Dict[str, Any]:
-        canonical = self._compact_visit_result(data)
-        canonical.update(
-            {
-                "status": "success",
-                "url": str(data.get("url", "")),
-                "selected_url": str(
-                    data.get("selected_url", "")
-                    or data.get("url", "")
-                ),
-                "provider": str(data.get("provider", "")),
-            }
-        )
+        canonical = self._strip_model_media(data)
+        canonical["status"] = "success"
+        for field_name in ("evidence_records", "visits"):
+            values = canonical.get(field_name)
+            if isinstance(values, list):
+                canonical[field_name] = [
+                    self._strip_model_media(item)
+                    for item in values[:3]
+                    if isinstance(item, dict)
+                ]
+        # This was a legacy reducer projection, not page content. It duplicated
+        # state in every visit result and could make the next turn look as if
+        # the page itself had asserted those fields.
+        canonical.pop("validated_claim_state", None)
+        has_observation = any(
+            str(canonical.get(key, "")).strip()
+            for key in (
+                "evidence",
+                "evidence_context",
+                "summary",
+                "rationale",
+                "content_status",
+            )
+        ) or bool(canonical.get("evidence_records"))
+        if not has_observation:
+            canonical["observation_status"] = "empty_success_payload"
+            canonical["observation_note"] = (
+                "The page request completed without a usable extracted "
+                "observation; do not treat status=success as evidence."
+            )
         return canonical
 
     @staticmethod

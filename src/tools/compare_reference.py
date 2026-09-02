@@ -267,6 +267,8 @@ class CompareWithReferenceTool(BaseTool):
                 error = self._error(
                     f"Reference image access failed for {reference_url}"
                 )
+                error["comparison_status"] = "invalid_reference"
+                error["error_class"] = "external_unavailable"
                 error["attempted_urls"] = list(
                     (download or {}).get("attempted_urls", [])
                 )
@@ -286,6 +288,7 @@ class CompareWithReferenceTool(BaseTool):
             if deterministic is not None:
                 return {
                     "status": "success",
+                    "comparison_status": "same_capture_or_near_duplicate",
                     "reference_url": reference_url,
                     "resolved_reference_url": str(
                         (download or {}).get("resolved_url", reference_url)
@@ -406,6 +409,7 @@ class CompareWithReferenceTool(BaseTool):
 
         return {
             "status": "success",
+            "comparison_status": self._comparison_status(validated),
             "reference_url": reference_url,
             "resolved_reference_url": str(
                 (download or {}).get("resolved_url", reference_url)
@@ -447,6 +451,25 @@ class CompareWithReferenceTool(BaseTool):
             return max(1024, int(raw))
         except ValueError:
             return DEFAULT_REFERENCE_COMPARE_MAX_OUTPUT_TOKENS
+
+    @staticmethod
+    def _comparison_status(value: Mapping[str, Any]) -> str:
+        """Classify a valid comparison for downstream evidence handling."""
+
+        if value.get("same_capture_or_near_duplicate") is True:
+            return "same_capture_or_near_duplicate"
+        if value.get("same_subject_or_scene") is True:
+            return "same_subject_or_scene"
+        if value.get("likely_different_original_capture") is True:
+            for difference in value.get("differences", []) or []:
+                if (
+                    isinstance(difference, Mapping)
+                    and str(difference.get("type", "")).strip()
+                    == "unrelated_content"
+                ):
+                    return "unrelated_candidate"
+            return "different_original_capture"
+        return "insufficient_comparison"
 
     @staticmethod
     def _env_float(name: str, default: float, *, minimum: float) -> float:
@@ -673,6 +696,23 @@ class CompareWithReferenceTool(BaseTool):
                         else self._sniff_image_mime(response.content)
                     )
                     if image_mime:
+                        valid_image, invalid_reason = (
+                            self._validate_reference_image_bytes(
+                                response.content,
+                                content_type=content_type,
+                            )
+                        )
+                        if not valid_image:
+                            diagnostics.append(
+                                {
+                                    "stage": stage,
+                                    "url": candidate,
+                                    "outcome": "invalid_image_payload",
+                                    "reason": invalid_reason,
+                                    "content_type": content_type,
+                                }
+                            )
+                            continue
                         encoded = base64.b64encode(response.content).decode(
                             "ascii"
                         )
@@ -926,6 +966,29 @@ class CompareWithReferenceTool(BaseTool):
         if content.startswith(b"RIFF") and content[8:12] == b"WEBP":
             return "image/webp"
         return ""
+
+    @staticmethod
+    def _validate_reference_image_bytes(
+        content: bytes,
+        *,
+        content_type: str = "",
+    ) -> tuple[bool, str]:
+        """Reject HTML/SVG/login payloads that advertise themselves as images."""
+
+        lowered_type = str(content_type or "").split(";", 1)[0].strip().lower()
+        prefix = bytes(content[:512]).lstrip().lower()
+        if lowered_type == "image/svg+xml" or prefix.startswith(
+            (b"<svg", b"<?xml", b"<!doctype html", b"<html")
+        ):
+            return False, "reference payload is SVG or HTML, not a raster image"
+        try:
+            from PIL import Image
+
+            with Image.open(io.BytesIO(content)) as image:
+                image.verify()
+        except Exception as exc:
+            return False, f"reference payload could not be decoded as an image: {type(exc).__name__}"
+        return True, ""
 
     @staticmethod
     def _data_url_to_image_content(data_url: str) -> Dict[str, Any]:

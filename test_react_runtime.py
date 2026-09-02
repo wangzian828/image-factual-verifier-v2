@@ -259,6 +259,105 @@ def test_visit_evidence_records_enter_react_ledger_and_final_context() -> None:
     assert "verdict_evidence_ids" in context["output_requirements"]
 
 
+def test_multi_page_visit_keeps_each_page_evidence_record() -> None:
+    state = new_unified_react_runtime_state(_case())
+    _bootstrap(state)
+    update = reduce_react_action(
+        state,
+        tool_name="visit",
+        tool_args={
+            "url": [
+                "https://example.test/one",
+                "https://example.test/two",
+            ],
+            "investigation_progress": _progress(),
+        },
+        call_id="visit-many",
+        serialized_result=json.dumps(
+            {
+                "status": "success",
+                "visits": [
+                    {
+                        "url": "https://example.test/one",
+                        "evidence_records": [
+                            {
+                                "url": "https://example.test/one",
+                                "evidence": "The first page states the event date.",
+                                "stance": "support",
+                                "directness": "direct",
+                                "relevance": "high",
+                            }
+                        ],
+                    },
+                    {
+                        "url": "https://example.test/two",
+                        "evidence_records": [
+                            {
+                                "url": "https://example.test/two",
+                                "evidence": "The second page states the event venue.",
+                                "stance": "support",
+                                "directness": "direct",
+                                "relevance": "high",
+                            }
+                        ],
+                    },
+                ],
+            }
+        ),
+    )
+
+    assert len(update["created_evidence_ids"]) == 2
+    assert [item["source_url"] for item in state.evidence] == [
+        "https://example.test/one",
+        "https://example.test/two",
+    ]
+
+
+def test_empty_success_payload_is_not_promoted_to_evidence() -> None:
+    state = new_unified_react_runtime_state(_case())
+    _bootstrap(state)
+
+    update = reduce_react_action(
+        state,
+        tool_name="visit",
+        tool_args={
+            "url": ["https://example.test/empty"],
+            "investigation_progress": _progress(),
+        },
+        call_id="visit-empty",
+        serialized_result=json.dumps({"status": "success"}),
+    )
+
+    assert update["created_evidence_ids"] == []
+    assert state.evidence == []
+
+
+def test_invalid_reference_comparison_is_not_promoted_to_evidence() -> None:
+    state = new_unified_react_runtime_state(_case())
+    _bootstrap(state)
+
+    update = reduce_react_action(
+        state,
+        tool_name="compare_with_reference",
+        tool_args={
+            "reference_url": "https://example.test/login",
+            "focus": "the pictured subject",
+            "investigation_progress": _progress(),
+        },
+        call_id="compare-invalid",
+        serialized_result=json.dumps(
+            {
+                "status": "success",
+                "comparison_status": "invalid_reference",
+                "overall_observation": "The downloaded page was a login form.",
+            }
+        ),
+    )
+
+    assert update["created_evidence_ids"] == []
+    assert state.evidence == []
+
+
 def test_final_judgment_cannot_cite_missing_runtime_evidence() -> None:
     valid = DiscrepancyJudgmentOutput(
         verdict="real",
@@ -443,3 +542,38 @@ def test_candidate_reference_images_are_reinjected_as_bounded_multimodal_items(
         {"type": "image", "mime_type": "image/jpeg", "data": "two"},
         {"type": "image", "mime_type": "image/jpeg", "data": "three"},
     ]
+
+
+def test_tool_result_context_reduction_keeps_valid_json_and_removes_legacy_state() -> None:
+    runner = StageRunner(
+        llm=object(),
+        system_prompt="",
+        tools=[],
+        attach_image=False,
+        tool_response_max_chars=1200,
+    )
+    result = runner._compact_tool_result_for_context(
+        "visit",
+        json.dumps(
+            {
+                "status": "success",
+                "validated_claim_state": {"should": "not reach the model"},
+                "evidence_records": [
+                    {
+                        "evidence": "The source directly states the event.",
+                        "evidence_context": "The complete surrounding paragraph.",
+                    }
+                ],
+                "timings": {"fetch_ms": 1, "extract_ms": 2},
+                "subcalls": [{"kind": "fetch"}],
+            }
+        ),
+        max_chars=1200,
+    )
+
+    assert isinstance(result, dict)
+    assert "validated_claim_state" not in result
+    assert result["evidence_records"][0]["evidence"] == (
+        "The source directly states the event."
+    )
+    json.dumps(result, ensure_ascii=False)

@@ -52,6 +52,7 @@ MAX_EXTRACT_INPUT_CHARS = 24000
 DEFAULT_EXTRACT_MAX_PASSAGES = 24
 DEFAULT_EXTRACT_PASSAGE_CHARS = 700
 DEFAULT_EXTRACT_MAX_OUTPUT_TOKENS = 4096
+DEFAULT_EVIDENCE_CONTEXT_CHARS = 9000
 DEFAULT_DIRECT_FETCH_TIMEOUT = 20
 DEFAULT_EXTRACT_TIMEOUT = 60.0
 DEFAULT_EXTRACT_MAX_RETRIES = 0
@@ -161,6 +162,7 @@ class JinaReaderClient:
     extract_max_chars: int = DEFAULT_EXTRACT_MAX_CHARS
     extract_max_passages: int = DEFAULT_EXTRACT_MAX_PASSAGES
     extract_passage_chars: int = DEFAULT_EXTRACT_PASSAGE_CHARS
+    evidence_context_chars: int = DEFAULT_EVIDENCE_CONTEXT_CHARS
     extract_provider: str = "gemini"
     extract_model: Optional[str] = None
     extract_base_url: Optional[str] = None
@@ -230,6 +232,15 @@ class JinaReaderClient:
         if passage_chars_override:
             try:
                 self.extract_passage_chars = max(240, int(passage_chars_override))
+            except ValueError:
+                pass
+        evidence_context_override = os.getenv("BROWSE_EVIDENCE_CONTEXT_CHARS")
+        if evidence_context_override:
+            try:
+                self.evidence_context_chars = max(
+                    1200,
+                    int(evidence_context_override),
+                )
             except ValueError:
                 pass
         workers_override = os.getenv("BROWSE_MAX_CONCURRENCY")
@@ -551,7 +562,25 @@ class JinaReaderClient:
             ],
             "rationale": extracted.get("rationale", ""),
             "evidence": extracted.get("evidence", ""),
+            "evidence_context": extracted.get("evidence_context", ""),
             "summary": extracted.get("summary", ""),
+            "content_status": extracted.get(
+                "content_status",
+                "relevant_evidence",
+            ),
+            "extraction_status": extracted.get(
+                "extraction_status",
+                "completed",
+            ),
+            "evidence_available": bool(
+                extracted.get("evidence_available", False)
+            ),
+            "selected_passage_count": int(
+                extracted.get("selected_passage_count", 0) or 0
+            ),
+            "source_content_chars": int(
+                extracted.get("source_content_chars", 0) or 0
+            ),
             "relevance": extracted.get("relevance", "medium"),
             "stance": extracted.get("stance", "unclear"),
             "relation_scope": extracted.get("relation_scope", "unclear"),
@@ -1049,9 +1078,28 @@ class JinaReaderClient:
         selected_passages = selected_passages[:3]
         for index, passage in enumerate(selected_passages):
             primary = index == 0 and passage_id >= 0
+            context_passages = self._context_passages(
+                all_passages,
+                passage,
+                max_chars=self.evidence_context_chars,
+            )
             evidence_records.append(
                 {
                     "evidence": passage["text"],
+                    "evidence_context": (
+                        self._format_context_passages(context_passages)
+                        if primary
+                        else ""
+                    ),
+                    "context_spans": [
+                        {
+                            "start": int(item.get("start", 0) or 0),
+                            "end": int(item.get("end", 0) or 0),
+                        }
+                        for item in context_passages
+                    ]
+                    if primary
+                    else [],
                     "image_claim": image_claim,
                     "retrieval_goal": retrieval_goal,
                     "relevance": relevance if primary else "medium",
@@ -1094,7 +1142,16 @@ class JinaReaderClient:
                 "temporal_alignment": temporal_alignment,
                 "artifact_sha256": document_sha256,
                 "evidence_span": {},
+                "evidence_context": "",
+                "context_spans": [],
             }
+        )
+        evidence_available = bool(
+            evidence_records
+            and any(
+                str(item.get("evidence", "")).strip()
+                for item in evidence_records
+            )
         )
         extracted.update(
             {
@@ -1102,8 +1159,17 @@ class JinaReaderClient:
                 "passage_id": passage_id,
                 "supporting_passage_ids": supporting_passage_ids,
                 "evidence_records": evidence_records,
+                "content_status": (
+                    "relevant_evidence"
+                    if evidence_available
+                    else "no_relevant_evidence"
+                ),
+                "extraction_status": "completed",
+                "evidence_available": evidence_available,
+                "selected_passage_count": len(passages),
+                "source_content_chars": len(evidence_document),
                 "summary_model_context": {
-                    "mode": "retrieve_then_bounded_extract",
+                    "mode": "retrieve_then_summary_model_extract",
                     "candidate_passage_count": len(all_passages),
                     "selected_passage_count": len(passages),
                     "selected_input_chars": len(
@@ -1113,6 +1179,9 @@ class JinaReaderClient:
                         self.extract_max_chars,
                         MAX_EXTRACT_INPUT_CHARS,
                     ),
+                    "evidence_context_chars": self.evidence_context_chars,
+                    "selected_evidence_record_count": len(evidence_records),
+                    "preserves_source_text": True,
                 },
                 RUNTIME_METRICS_KEY: runtime_metrics,
             }
@@ -1398,10 +1467,13 @@ class JinaReaderClient:
         return False
 
     @staticmethod
-    def _build_evidence_passages(content: str, max_chars: int = 700) -> List[Dict[str, Any]]:
+    def _build_evidence_passages(
+        content: str,
+        max_chars: int = 700,
+    ) -> List[Dict[str, Any]]:
         passages: List[Dict[str, Any]] = []
         paragraph_pattern = re.compile(r"\S(?:.*?\S)?(?=\n\s*\n|\Z)", re.DOTALL)
-        for match in paragraph_pattern.finditer(content):
+        for source_block_id, match in enumerate(paragraph_pattern.finditer(content)):
             paragraph_start, paragraph_end = match.span()
             cursor = paragraph_start
             while cursor < paragraph_end:
@@ -1430,6 +1502,12 @@ class JinaReaderClient:
                         "start": cursor,
                         "end": end,
                         "text": content[cursor:end],
+                        "source_block_id": source_block_id,
+                        "source_block_start": paragraph_start,
+                        "source_block_end": paragraph_end,
+                        "source_block_text": content[
+                            paragraph_start:paragraph_end
+                        ],
                     }
                 )
                 cursor = end
@@ -1442,6 +1520,132 @@ class JinaReaderClient:
         return "\n".join(
             f"[PASSAGE {passage['passage_id']}] {passage['text']}"
             for passage in passages
+        )
+
+    @staticmethod
+    def _context_passages(
+        passages: List[Dict[str, Any]],
+        current: Mapping[str, Any],
+        *,
+        max_chars: int,
+    ) -> List[Dict[str, Any]]:
+        """Return complete nearby source chunks without cutting their text.
+
+        The extractor may select a chunk from a long source paragraph.  The
+        model-visible record keeps that exact selected text and adds nearby
+        complete chunks so pronouns, qualifications, and the paragraph's
+        surrounding context are not silently removed.  We only omit whole
+        chunks when the bounded context window is full; no selected chunk is
+        sliced.
+        """
+
+        if not passages:
+            return []
+        ordered = sorted(
+            (dict(item) for item in passages if str(item.get("text", "")).strip()),
+            key=lambda item: int(item.get("start", 0) or 0),
+        )
+        current_start = int(current.get("start", 0) or 0)
+        current_index = next(
+            (
+                index
+                for index, item in enumerate(ordered)
+                if int(item.get("start", 0) or 0) == current_start
+            ),
+            -1,
+        )
+        if current_index < 0:
+            return [dict(current)]
+
+        limit = max(1200, int(max_chars))
+        current_passage = ordered[current_index]
+        source_block_text = str(
+            current_passage.get("source_block_text", "")
+        ).strip()
+        source_block_start = int(
+            current_passage.get("source_block_start", 0) or 0
+        )
+        source_block_end = int(
+            current_passage.get("source_block_end", 0) or 0
+        )
+        if source_block_text and len(source_block_text) <= limit:
+            selected = [
+                {
+                    **current_passage,
+                    "text": source_block_text,
+                    "start": source_block_start,
+                    "end": source_block_end,
+                    "context_role": "selected_source_paragraph",
+                }
+            ]
+            # A deictic sentence often depends on the preceding paragraph.
+            # Include that complete paragraph when it fits, preserving the
+            # relationship without cutting either paragraph.
+            if JinaReaderClient._passage_has_unresolved_referent(
+                current_passage.get("text", "")
+            ):
+                previous = next(
+                    (
+                        item
+                        for item in reversed(ordered[:current_index])
+                        if str(item.get("source_block_text", "")).strip()
+                        and int(item.get("source_block_id", -1))
+                        != int(current_passage.get("source_block_id", -2))
+                    ),
+                    None,
+                )
+                if previous is not None:
+                    previous_text = str(previous.get("source_block_text", ""))
+                    if len(source_block_text) + len(previous_text) + 2 <= limit:
+                        selected.insert(
+                            0,
+                            {
+                                **previous,
+                                "text": previous_text,
+                                "start": int(
+                                    previous.get("source_block_start", 0) or 0
+                                ),
+                                "end": int(
+                                    previous.get("source_block_end", 0) or 0
+                                ),
+                                "context_role": "referent_context",
+                            },
+                        )
+            return sorted(
+                selected,
+                key=lambda item: int(item.get("start", 0) or 0),
+            )
+
+        # A pathological single source block can exceed the bounded context
+        # window. In that case retain complete extractor chunks and never slice
+        # the selected chunk itself.
+        selected: List[Dict[str, Any]] = [ordered[current_index]]
+        used = len(str(selected[0].get("text", "")))
+        candidate_indexes: List[int] = []
+        for distance in range(1, len(ordered) + 1):
+            for index in (current_index - distance, current_index + distance):
+                if 0 <= index < len(ordered):
+                    candidate_indexes.append(index)
+        for index in candidate_indexes:
+            candidate = ordered[index]
+            cost = len(str(candidate.get("text", ""))) + 2
+            if used + cost > limit:
+                continue
+            selected.append(candidate)
+            used += cost
+        return sorted(
+            selected,
+            key=lambda item: int(item.get("start", 0) or 0),
+        )
+
+    @staticmethod
+    def _format_context_passages(
+        passages: List[Dict[str, Any]],
+    ) -> str:
+        return "\n\n".join(
+            str(passage.get("text", ""))
+            for passage in passages
+            if str(passage.get("text", "")).strip()
         )
 
     def _extract_with_llm(

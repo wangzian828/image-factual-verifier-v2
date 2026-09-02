@@ -74,3 +74,28 @@ assistant action
 
 后续可额外从同一 canonical trace 派生 `prefix → next_action` 样本，但这不是替代 v3 完整 episode，
 而是用于极长轨迹的补充训练视图。
+
+## 2026-09-02 当前 ReAct 观察传递
+
+当前运行时采用“上一轮结果显式前递一次”的方式：
+
+```text
+tool call
+  -> canonical function_result（下一轮完整看到）
+  -> bounded state index（只保留索引、近期观察和预算）
+```
+
+原始工具结果写入 archive，模型上下文不携带二进制图片、base64、完整 HTML 或旧的
+Claim/Task 控制状态。原图按当前请求需要重新附加，但不会写入历史文本反复累积。
+
+`visit` 的网页证据由 summary model 从候选段落中选择；被选段落原样保留，并在指代不完整时
+加入必要的前置完整段落。上下文窗口只删除完整字段或完整记录，不切半段来源文本。
+
+因此要区分三件事：
+
+1. provider 是否成功返回；
+2. 模型是否实际收到本轮工具观察；
+3. 观察是否足以支持事实判断。
+
+`status=success` 只说明第 1 点；空搜索结果、空页面提取和无效参考图不会自动变成
+Evidence，也不会替代模型的最终二分类判断。

@@ -184,3 +184,24 @@ harness、审计口径或运行配置变更，必须先在第 4 节追加一行�
 - 新 Agent-100 仅在 10 条 smoke 质量明显改善时启动；本次质量门槛未满足，已记录为有意不启动；
 - 实验文档、SFT 导出审查和 PSD/RL 前置验证已更新；
 - 没有启动大规模教师 rollout。
+
+## 8. 2026-09-02 续做记录
+
+本轮针对 WebWatcher 风格的工具观察与上下文传递继续收尾，尚未部署服务器：
+
+- `visit` 保留选中原文段落及必要的前置完整段落；模型看到的是受限的完整来源上下文，
+  不是被截断的半句。
+- `text_search` 的空结果明确标记为 `empty_results`，不会伪装成可用证据。
+- 多页面 `visit` 的每个页面都进入统一 Evidence ledger；不再只保留第一张页面。
+- `compare_with_reference` 对无效图片、登录页、验证码页和 SVG 返回
+  `invalid_reference` / `external_unavailable`，不生成比较证据。
+- 当前 ReAct 下一轮收到完整 canonical `function_result`；状态只保留索引和有限的近期证据，
+  不重复叠加累计 workspace。
+- 原始 provider/tool 结果仍写入 archive；`validated_claim_state` 和
+  `agent_control_state` 不再进入当前 ReAct 模型上下文。
+- 新增回归测试覆盖上述边界；本地全量测试为 `466 passed`，`compileall` 和
+  `git diff --check` 已通过。
+
+待完成：提交并推送、更新 gpu-13 checkout、使用 `gemini-3.1-pro-preview` 并发 10
+完成原定 10 条真实 smoke，逐条检查工具结果传递和调查轨迹；在此之前不启动大规模
+教师 rollout。

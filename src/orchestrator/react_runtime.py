@@ -716,6 +716,28 @@ def _iter_visit_evidence_rows(
                 yield record
         return
 
+    visits = payload.get("visits")
+    if isinstance(visits, list):
+        yielded = False
+        for visit in visits:
+            if not isinstance(visit, Mapping):
+                continue
+            visit_records = visit.get("evidence_records")
+            if isinstance(visit_records, list):
+                for record in visit_records:
+                    if isinstance(record, Mapping):
+                        yield record
+                        yielded = True
+                continue
+            if any(
+                str(visit.get(key, "")).strip()
+                for key in ("evidence", "summary", "text", "content", "excerpt")
+            ):
+                yield visit
+                yielded = True
+        if yielded:
+            return
+
     # Preserve compatibility with tools that return a single page payload or a
     # legacy ``visits``/``pages`` collection without ``evidence_records``.
     if any(
@@ -838,6 +860,99 @@ def _evidence_class(payload: Mapping[str, Any]) -> str:
     return "context_only"
 
 
+def _has_material_observation(
+    payload: Mapping[str, Any],
+    *,
+    tool_name: str,
+) -> bool:
+    """Return whether a successful payload contains an actual observation.
+
+    ``status=success`` is only an execution result.  In particular, a mature
+    tool may return that status while its provider produced no rows or no
+    readable text.  Such a payload must remain a recent action diagnostic, not
+    become Evidence through the JSON fallback below.
+    """
+
+    if not isinstance(payload, Mapping):
+        return False
+    payload_status = str(payload.get("status", "")).strip().lower()
+    if payload_status not in {"", "success"}:
+        return False
+    # ``visit.evidence_records`` are already successful sub-records of the
+    # enclosing visit result and historically did not carry their own status.
+    # Do not discard them merely because the parent result is the only place
+    # where the execution status is represented.
+    if tool_name != "visit" and payload_status != "success":
+        return False
+    if (
+        tool_name == "compare_with_reference"
+        and str(payload.get("comparison_status", "")).strip()
+        in {"unrelated_candidate", "invalid_reference"}
+    ):
+        return False
+    meaningful_scalar_fields = {
+        "evidence",
+        "evidence_context",
+        "summary",
+        "overall_observation",
+        "scene_description",
+        "description",
+        "details",
+        "full_text",
+        "text",
+        "vlm_query",
+    }
+    if any(str(payload.get(key, "")).strip() for key in meaningful_scalar_fields):
+        if (
+            tool_name == "visit"
+            and str(payload.get("content_status", "")).strip()
+            == "no_relevant_evidence"
+            and not str(payload.get("evidence", "")).strip()
+            and not str(payload.get("evidence_context", "")).strip()
+        ):
+            return False
+        return True
+    for key in (
+        "entities",
+        "relations",
+        "text_regions",
+        "notable_details",
+        "uncertainties",
+        "differences",
+        "visual_anomalies",
+        "observations",
+        "evidence_records",
+    ):
+        value = payload.get(key)
+        if isinstance(value, list) and any(item not in (None, "", {}) for item in value):
+            return True
+    return False
+
+
+def _observation_text(
+    row: Mapping[str, Any],
+    *,
+    max_chars: int = 10000,
+) -> str:
+    """Keep observation text readable; do not collapse source paragraphs."""
+
+    for key in (
+        "evidence",
+        "evidence_context",
+        "summary",
+        "details",
+        "description",
+        "overall_observation",
+        "full_text",
+        "text",
+    ):
+        value = row.get(key)
+        if isinstance(value, str) and value.strip():
+            text = value.strip()
+            return text if len(text) <= max_chars else text[:max_chars].rstrip()
+    return json.dumps(_compact(row), ensure_ascii=False)
+
+
 def _append_evidence(
     state: UnifiedReactState,
     *,
@@ -863,18 +978,9 @@ def _append_evidence(
         rows.append(payload)
     evidence_ids: list[str] = []
     for index, row in enumerate(rows[:12]):
-        excerpt = _one_line(
-            row.get("excerpt")
-            or row.get("evidence")
-            or row.get("summary")
-            or row.get("details")
-            or row.get("description")
-            or row.get("overall_observation")
-            or row.get("full_text")
-            or row.get("text")
-            or json.dumps(_compact(row), ensure_ascii=False),
-            2400,
-        )
+        if not _has_material_observation(row, tool_name=tool_name):
+            continue
+        excerpt = _observation_text(row)
         if not excerpt:
             continue
         evidence_kind = (
@@ -899,15 +1005,161 @@ def _append_evidence(
                 2400,
             ),
             "excerpt": excerpt,
+            "evidence_context": str(
+                row.get("evidence_context", "")
+            ).strip(),
+            "context_spans": copy.deepcopy(row.get("context_spans", []))
+            if isinstance(row.get("context_spans"), list)
+            else [],
             "evidence_class": _evidence_class(row),
+            "relevance": str(row.get("relevance", "")).strip(),
+            "stance": str(row.get("stance", "")).strip(),
+            "relation_scope": str(row.get("relation_scope", "")).strip(),
+            "relation_stance": str(
+                row.get("relation_stance", "")
+            ).strip(),
+            "directness": str(row.get("directness", "")).strip(),
+            "context_only": bool(row.get("context_only", False)),
+            "temporal_alignment": str(
+                row.get("temporal_alignment", "")
+            ).strip(),
+            "artifact_sha256": str(
+                row.get("artifact_sha256", "")
+            ).strip(),
+            "evidence_span": copy.deepcopy(row.get("evidence_span", {}))
+            if isinstance(row.get("evidence_span"), Mapping)
+            else {},
             "match_status": (
                 str(row.get("candidate_match_status", "")).strip()
                 or "not_applicable"
             ),
         }
+        if tool_name == "compare_with_reference":
+            for key in (
+                "comparison_status",
+                "same_subject_or_scene",
+                "same_capture_or_near_duplicate",
+                "likely_different_original_capture",
+                "edit_evidence_present",
+                "edit_evidence_strength",
+                "differences",
+                "overall_observation",
+            ):
+                if key in row:
+                    item[key] = copy.deepcopy(row[key])
         state.evidence.append(item)
         evidence_ids.append(item["evidence_id"])
     return evidence_ids
+
+
+def _model_visible_evidence(item: Mapping[str, Any]) -> Dict[str, Any]:
+    """Project one evidence item without duplicating or rewriting its text."""
+
+    result: Dict[str, Any] = {}
+    for key in (
+        "evidence_id",
+        "tool_name",
+        "function_call_id",
+        "status",
+        "successful_call",
+        "evidence_kind",
+        "source_url",
+        "excerpt",
+        "evidence_context",
+        "context_spans",
+        "evidence_class",
+        "relevance",
+        "stance",
+        "relation_scope",
+        "relation_stance",
+        "directness",
+        "context_only",
+        "temporal_alignment",
+        "artifact_sha256",
+        "evidence_span",
+        "match_status",
+        "comparison_status",
+        "same_subject_or_scene",
+        "same_capture_or_near_duplicate",
+        "likely_different_original_capture",
+        "edit_evidence_present",
+        "edit_evidence_strength",
+        "differences",
+        "overall_observation",
+    ):
+        if key not in item:
+            continue
+        value = item[key]
+        result[key] = copy.deepcopy(value)
+    return result
+
+
+def _model_visible_evidence_index(
+    item: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """Return a small ledger index; full text arrives in the tool result."""
+
+    result: Dict[str, Any] = {}
+    for key in (
+        "evidence_id",
+        "tool_name",
+        "function_call_id",
+        "evidence_kind",
+        "source_url",
+        "evidence_class",
+        "match_status",
+        "relevance",
+        "stance",
+        "relation_scope",
+        "relation_stance",
+        "directness",
+        "context_only",
+    ):
+        if key in item:
+            result[key] = copy.deepcopy(item[key])
+    excerpt = str(item.get("excerpt", "")).strip()
+    if excerpt:
+        result["excerpt_preview"] = excerpt[:800]
+    return result
+
+
+def _bounded_model_evidence(
+    items: Sequence[Mapping[str, Any]],
+    *,
+    max_chars: int,
+) -> tuple[list[Dict[str, Any]], list[str]]:
+    """Keep complete evidence records under a structural character budget."""
+
+    ordered = [item for item in items if isinstance(item, Mapping)]
+    selected: list[Dict[str, Any]] = []
+    omitted: list[str] = []
+    used = 0
+    # Prefer the most recent material while retaining original order in the
+    # final dossier. Older records remain in the immutable archive and their
+    # IDs are explicitly reported as omitted.
+    for item in reversed(ordered):
+        projected = _model_visible_evidence(item)
+        cost = len(json.dumps(projected, ensure_ascii=False, default=str)) + 1
+        evidence_id = str(item.get("evidence_id", "")).strip()
+        if selected and used + cost > max_chars:
+            if evidence_id:
+                omitted.append(evidence_id)
+            continue
+        if not selected and cost > max_chars:
+            # Current tool evidence is bounded by the tool-context budget. If a
+            # future tool violates that bound, keep its ID and metadata rather
+            # than slicing its source text.
+            projected = _model_visible_evidence_index(item)
+            cost = len(json.dumps(projected, ensure_ascii=False, default=str)) + 1
+        if used + cost > max_chars:
+            if evidence_id:
+                omitted.append(evidence_id)
+            continue
+        selected.append(projected)
+        used += cost
+    selected.reverse()
+    omitted.reverse()
+    return selected, omitted
 
 
 def _focus_from_args(tool_name: str, args: Mapping[str, Any]) -> str:
@@ -1108,6 +1360,14 @@ def reduce_react_action(
 def render_react_runtime_context(
     state: UnifiedReactState,
 ) -> str:
+    evidence_index = [
+        _model_visible_evidence_index(item)
+        for item in state.evidence[-48:]
+    ]
+    recent_evidence, omitted_evidence_ids = _bounded_model_evidence(
+        state.evidence[-4:],
+        max_chars=12000,
+    )
     payload = {
         "phase": "unified_react_investigation",
         "objective": state.objective,
@@ -1121,10 +1381,14 @@ def render_react_runtime_context(
             _compact(item, max_string=1000)
             for item in state.discoveries[-16:]
         ],
-        "evidence": [
-            _compact(item, max_string=1800)
-            for item in state.evidence[-16:]
-        ],
+        "evidence_index": evidence_index,
+        "recent_evidence": recent_evidence,
+        "omitted_recent_evidence_ids": omitted_evidence_ids,
+        "observation_delivery": (
+            "The preceding function_result contains the complete canonical "
+            "result of the latest action. This state payload is only an index "
+            "and must not be treated as a replacement for that result."
+        ),
         "failures": [
             _compact(item, max_string=1000)
             for item in state.failures[-10:]
@@ -1150,6 +1414,10 @@ def render_react_runtime_context(
 def compile_react_judgment_basis(
     state: UnifiedReactState,
 ) -> Dict[str, Any]:
+    evidence, omitted_evidence_ids = _bounded_model_evidence(
+        state.evidence[-40:],
+        max_chars=72000,
+    )
     return {
         "schema_version": "ifv-unified-judgment-basis-v1",
         "decision_mode": "bounded_binary_judgment",
@@ -1160,14 +1428,18 @@ def compile_react_judgment_basis(
             for item in state.evidence[-40:]
             if str(item.get("evidence_id", "")).strip()
         ],
-        "evidence": [
-            _compact(item, max_string=2200) for item in state.evidence[-40:]
-        ],
+        "evidence": evidence,
+        "omitted_evidence_ids": omitted_evidence_ids,
+        "evidence_archive_note": (
+            "Only complete evidence records that fit the dossier budget are "
+            "shown here. Omitted records remain in the trace archive; their "
+            "text was not cut or rewritten."
+        ),
         "discoveries": [
-            _compact(item, max_string=1200) for item in state.discoveries[-24:]
+            _compact(item, max_string=700) for item in state.discoveries[-20:]
         ],
         "failures": [
-            _compact(item, max_string=1000) for item in state.failures[-16:]
+            _compact(item, max_string=600) for item in state.failures[-12:]
         ],
         "open_questions": state.open_questions[-12:],
         "investigation_progress": dict(state.investigation_progress),

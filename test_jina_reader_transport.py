@@ -167,3 +167,45 @@ def test_jina_summary_context_has_a_hard_character_bound() -> None:
     formatted = jina_reader.JinaReaderClient._format_evidence_passages(selected)
     assert len(formatted) <= jina_reader.MAX_EXTRACT_INPUT_CHARS
     assert 0 < len(selected) < len(passages)
+
+
+def test_jina_context_keeps_selected_paragraph_and_needed_referent_whole() -> None:
+    passages = [
+        {
+            "passage_id": 0,
+            "start": 0,
+            "end": 52,
+            "text": "The city opened a temporary riverside exhibition.",
+            "source_block_id": 0,
+            "source_block_start": 0,
+            "source_block_end": 52,
+            "source_block_text": (
+                "The city opened a temporary riverside exhibition."
+            ),
+        },
+        {
+            "passage_id": 1,
+            "start": 54,
+            "end": 137,
+            "text": "This event was cancelled after the venue failed inspection.",
+            "source_block_id": 1,
+            "source_block_start": 54,
+            "source_block_end": 137,
+            "source_block_text": (
+                "This event was cancelled after the venue failed inspection."
+            ),
+        },
+    ]
+
+    selected = jina_reader.JinaReaderClient._context_passages(
+        passages,
+        passages[1],
+        max_chars=1000,
+    )
+
+    assert [item["text"] for item in selected] == [
+        passages[0]["source_block_text"],
+        passages[1]["source_block_text"],
+    ]
+    assert selected[0]["context_role"] == "referent_context"
+    assert selected[1]["context_role"] == "selected_source_paragraph"

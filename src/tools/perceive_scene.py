@@ -129,11 +129,21 @@ PERCEIVE_SCENE_SCHEMA = {
                     },
                     "attributes": {
                         "type": "object",
-                        "maxProperties": 8,
-                        "additionalProperties": {
-                            "type": "string",
-                            "maxLength": 300,
+                        "properties": {
+                            "appearance": {
+                                "type": "string",
+                                "maxLength": 300,
+                            },
+                            "role_or_action": {
+                                "type": "string",
+                                "maxLength": 300,
+                            },
+                            "spatial_context": {
+                                "type": "string",
+                                "maxLength": 300,
+                            },
                         },
+                        "additionalProperties": False,
                     },
                 },
                 "required": [
