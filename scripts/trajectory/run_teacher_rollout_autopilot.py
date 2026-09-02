@@ -503,6 +503,47 @@ def _candidate_trace_sources(
     return grouped
 
 
+def _target_case_ids_for_run(
+    run_dir: Path,
+    gold_case_ids: Iterable[str],
+) -> list[str]:
+    """Resolve the case scope owned by one rollout group.
+
+    A quality-reroll run contains only a subset of the private-gold cases.
+    Its parent group writes ``target-case-list.txt`` before launching the
+    attempt. Classification must use that scope; treating every gold case
+    absent from a partial reroll as incomplete would enqueue already-settled
+    cases again.
+    """
+
+    allowed = {
+        str(case_id).strip()
+        for case_id in gold_case_ids
+        if str(case_id).strip()
+    }
+    candidates = [
+        run_dir / "target-case-list.txt",
+        run_dir.parent / "target-case-list.txt",
+        run_dir.parent.parent / "target-case-list.txt",
+    ]
+    for path in candidates:
+        if not path.is_file():
+            continue
+        values = [
+            line.strip()
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        unknown = sorted(set(values) - allowed)
+        if unknown:
+            raise ValueError(
+                "target case list contains IDs absent from private gold: "
+                f"{unknown[:3]}"
+            )
+        return sorted(set(values))
+    return sorted(allowed)
+
+
 def _copy_or_link(source: Path, destination: Path) -> str:
     destination.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -1029,6 +1070,7 @@ def _classify_initial_outcomes(
     private_gold: Path,
     output_dir: Path,
     candidates_per_case: int = 1,
+    target_case_ids: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     """Classify every candidate and select one winner per case.
 
@@ -1045,6 +1087,23 @@ def _classify_initial_outcomes(
     gold_by_case = {
         _case_id(row): _expected_verdict(row) for row in _read_jsonl(private_gold)
     }
+    scoped_case_ids = (
+        sorted(
+            {
+                str(case_id).strip()
+                for case_id in target_case_ids
+                if str(case_id).strip()
+            }
+        )
+        if target_case_ids is not None
+        else _target_case_ids_for_run(run_dir, gold_by_case)
+    )
+    unknown_scoped_ids = sorted(set(scoped_case_ids) - set(gold_by_case))
+    if unknown_scoped_ids:
+        raise ValueError(
+            "classification target contains IDs absent from private gold: "
+            f"{unknown_scoped_ids[:3]}"
+        )
     artifacts = _sft_artifact_index(eligibility_dir)
     early: list[dict[str, Any]] = []
     final_only: list[dict[str, Any]] = []
@@ -1112,7 +1171,7 @@ def _classify_initial_outcomes(
     selected: list[dict[str, Any]] = []
     hard_cases: list[dict[str, Any]] = []
     incomplete_cases: list[dict[str, Any]] = []
-    for case_id in sorted(gold_by_case):
+    for case_id in scoped_case_ids:
         candidates = candidates_by_case.get(case_id, [])
         candidates.sort(key=lambda item: tuple(item["candidate_rank"]), reverse=True)
         eligible = [
@@ -1171,7 +1230,8 @@ def _classify_initial_outcomes(
         "source_run": str(run_dir),
         "source_eligibility": str(eligibility_dir),
         "candidates_per_case": candidates_per_case,
-        "case_count": len(gold_by_case),
+        "case_count": len(scoped_case_ids),
+        "target_case_ids": scoped_case_ids,
         "successful_case_count": len(candidates_by_case),
         "candidate_count": sum(len(items) for items in candidates_by_case.values()),
         "early_correct_judgment_count": len(early),
@@ -1190,13 +1250,56 @@ def _classify_initial_outcomes(
 def _quality_reroll_case_ids(classification_dir: Path) -> list[str]:
     """Return only cases rejected by SFT, plus cases with no terminal trace."""
 
+    classification_path = classification_dir / "classification.json"
+    if not classification_path.is_file():
+        # Keep the small legacy helper contract used by older offline callers.
+        # Production classifications always have classification.json and are
+        # scoped below, so this fallback cannot widen a real reroll queue.
+        return sorted(
+            set(
+                _case_ids_from_rows(
+                    _read_jsonl(classification_dir / "sft-rejected.jsonl")
+                )
+                + (
+                    _case_ids_from_rows(
+                        _read_jsonl(classification_dir / "incomplete-cases.jsonl")
+                    )
+                    if (classification_dir / "incomplete-cases.jsonl").is_file()
+                    else []
+                )
+            )
+        )
+    classification = _read_json(classification_path)
+    target_case_ids = classification.get("target_case_ids")
+    if not isinstance(target_case_ids, list):
+        source_run = str(classification.get("source_run") or "").strip()
+        if source_run:
+            gold_path = (
+                classification_dir.parent.parent
+                / "private-gold"
+                / "private_gold.jsonl"
+            )
+            gold_case_ids = {
+                str(row.get("case_id") or "").strip()
+                for row in _read_jsonl(gold_path)
+                if str(row.get("case_id") or "").strip()
+            }
+            target_case_ids = _target_case_ids_for_run(
+                Path(source_run),
+                gold_case_ids,
+            )
+    scoped = {
+        str(case_id).strip()
+        for case_id in (target_case_ids or [])
+        if str(case_id).strip()
+    }
     rejected = _case_ids_from_rows(
         _read_jsonl(classification_dir / "sft-rejected.jsonl")
     )
     incomplete_path = classification_dir / "incomplete-cases.jsonl"
     if incomplete_path.is_file():
         rejected.extend(_case_ids_from_rows(_read_jsonl(incomplete_path)))
-    return sorted(set(rejected))
+    return sorted(set(rejected).intersection(scoped))
 
 
 def _selected_classification_rows(classification_dir: Path) -> list[dict[str, Any]]:

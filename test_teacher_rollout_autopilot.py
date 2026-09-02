@@ -341,6 +341,40 @@ def test_quality_reroll_queue_contains_only_sft_rejections_and_incomplete_cases(
     ]
 
 
+def test_quality_reroll_queue_is_scoped_to_current_round_targets(
+    tmp_path: Path,
+) -> None:
+    classification = tmp_path / "classification"
+    classification.mkdir()
+    (classification / "classification.json").write_text(
+        json.dumps(
+            {
+                "target_case_ids": ["case-a", "case-b"],
+                "source_run": str(tmp_path / "rollouts" / "initial" / "merged"),
+            }
+        ),
+        encoding="utf-8",
+    )
+    (classification / "sft-rejected.jsonl").write_text(
+        "\n".join(
+            json.dumps({"case_id": case_id})
+            for case_id in ("case-a", "case-outside")
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (classification / "incomplete-cases.jsonl").write_text(
+        "\n".join(
+            json.dumps({"case_id": case_id})
+            for case_id in ("case-b", "case-outside")
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert _quality_reroll_case_ids(classification) == ["case-a", "case-b"]
+
+
 def test_quality_reroll_summary_selects_one_winner_per_case_across_rounds(
     tmp_path: Path,
 ) -> None:
