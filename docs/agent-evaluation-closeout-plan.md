@@ -131,7 +131,7 @@ harness、审计口径或运行配置变更，必须先在第 4 节追加一行�
    的第一类只评价其图片直答的 `core_fact/reason`，不能称为检索证据。
 4. 所有 private-gold judge 默认输出上限至少 8,192；审计结果 JSON 被截断时不能计为语义失败。
 
-### E. 真实验收与新 Agent-100（按质量门槛停止）
+### E. 真实验收与新 Agent-100（诊断性重跑）
 
 1. 为 C/D 的每项补定向单测；本地运行相关 pytest、`compileall` 与 `git diff --check`。
 2. 每个提交 push 后，gpu-13 fast-forward；服务器运行定向测试。
