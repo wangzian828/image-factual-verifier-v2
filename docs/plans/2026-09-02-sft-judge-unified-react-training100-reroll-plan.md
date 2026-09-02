@@ -2,7 +2,7 @@
 
 更新时间：2026-09-02  
 当前分支：`codex/gpu13-canary-20260804-plan-relaxation-01`  
-当前基线提交：`0a76001`  
+当前基线提交：`2e64147`
 当前本地 checkout：`C:\Users\wangza\ifv-gpu13-canary-20260804-01`  
 明确停止点：本计划全部完成后，停在启动全量 8,490 条教师 rollout 之前。
 
@@ -368,3 +368,28 @@ src/orchestrator/pipeline.py::Orchestrator.run()
 5. 每轮 SFT judge、最终分桶、路径和失败分析已记录；
 6. 所有 Agent 改动和 prompt/schema 版本已记录；
 7. 不启动全量 8,490 条教师 rollout，只保留可复核的启动方案。
+
+## 7. 本轮实际执行状态
+
+- [x] 当前提交 `2e64147` 已 push GitHub，gpu-13 已 fast-forward；
+- [x] 合并器保留 attempt 的 `git_commit`、Agent、benchmark 和 `source_access_policy`；
+- [x] 新版 Gemini 3.7 smoke 最终 10/10 完成，2 条进入工程恢复；
+- [x] 使用真实 source policy 的 strict trace audit：10/10；
+- [x] `text_image_search` 在 4/10 条 smoke 中被主动使用，结果进入后续 Interaction；
+- [x] 训练集 100 条 preparation 已创建，runtime/private 各 100 条，gold 全齐；
+- [ ] Gemini 3.7 SFT judge：当前 7/10 完成，3 条因 HTTP 429 未完成；
+- [ ] 训练集 100 条初始 rollout + 最多三轮 SFT reroll；
+- [ ] 训练集 100 条最终分桶、逐条失败分析和实验记录；
+- [x] 在上述依赖完成前不启动全量 8,490 条教师 rollout。
+
+本轮真实记录：
+
+`docs/reports/2026-09-02-unified-react-smoke10-718ac2f.md`
+
+训练 100 条 preparation：
+
+`/gsdata/home/wza/image-factual-verifier-v2-data/generated/teacher-rollouts/unified-react-v1-gemini37-train100-fourround-20260902-2e64147/`
+
+3.7 初次 SFT judge 运行曾因 provider HTTP 429 停在 7/10；随后并发 1 的最小
+Interactions 协议探针已成功。3.1 Pro 仅用于完成 judge packet/审计链路的工程
+对照，不替代 3.7 教师 rollout 或 3.7 正式 SFT 指标。

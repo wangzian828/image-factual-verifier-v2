@@ -249,7 +249,8 @@ judge 或 rollout 若遇到 API 不可用，只能暂停该运行；已经完成
 - 已完成：删除 StageRunner 中不再使用的工具结果按字符/列表二次压缩代码；下一轮仍
   接收完整 canonical 文本观察，只排除二进制字段与 raw HTML。
 - 已完成：补充 text-image-search reducer、contact sheet、crop 并发和完整工具结果回归。
-- 待完成：本地全量 active 测试、提交推送、gpu-13 定向回归和并发 10 的 10 条真实 smoke。
+- 已完成：本地当前 unified 主流程定向测试 56 项、提交推送、gpu-13 定向回归和并发 10
+  的 10 条真实 smoke。
 - 旧 v4 测试文件若引用已删除模块，只作为历史测试，不恢复旧 v4 主流程；active unified
   ReAct 测试必须单独通过。
 
@@ -261,3 +262,19 @@ judge 或 rollout 若遇到 API 不可用，只能暂停该运行；已经完成
   teacher rollout、SFT 或 RL。
 - 新版 Agent-100 仅用于调查质量诊断和统一 private-gold 审计，不进入训练。
 - 大规模教师 rollout 的命令、数据边界、重试和分桶规则已记录，但在人工复核完成前不启动。
+
+最新 10 条真实 smoke 的完整路径、逐条工具检查和 SFT 链路记录见：
+
+`docs/reports/2026-09-02-unified-react-smoke10-718ac2f.md`
+
+该批最终 10/10 完成，真实 source policy strict audit 10/10；
+`text_image_search` 在 4/10 条中被主动调用。3.7 SFT judge 初次运行完成 7/10，
+剩余 3 条因 HTTP 429 暂停；随后最小协议探针已恢复成功，待用缓存续跑完成。
+3.1 Pro 对照 10/10 完成，但不替代 3.7 指标。
+
+训练集 100 条已完成 preparation，但尚未启动 rollout：
+
+`/gsdata/home/wza/image-factual-verifier-v2-data/generated/teacher-rollouts/unified-react-v1-gemini37-train100-fourround-20260902-2e64147/`
+
+runtime/private projection 各 100 条且 gold 全齐。3.7 恢复后从该目录启动初始轮，
+按现有 autopilot 追加最多三轮质量 reroll；在此之前不启动全量 8,490 条教师 rollout。

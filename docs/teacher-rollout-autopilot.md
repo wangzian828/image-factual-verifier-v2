@@ -35,6 +35,10 @@
 - `sft-eligibility/quality-reroll-XX/`：该轮 SFT 审计；
 - `classification/quality-reroll-XX/`：该轮 accepted/rejected 清单。
 
+合并后的 `run_manifest.json` 会继承 attempt 的 `git_commit`、Agent、benchmark
+和 `source_access_policy` 元数据。这样 merged trace 在 SFT judge 或独立 strict
+audit 中仍使用与 rollout 相同的来源黑名单，不会因合并丢失 policy 而误报普通查询。
+
 最终合并结果写入 `classification/final/`，质量重跑后的训练发布包写入
 `quality-reroll-release/` 和 `quality-reroll-training-package/`。已完成的初始 pipeline 可以用
 `--reroll-from <pipeline-dir> --quality-reroll-rounds 3` 继续，不会重复初始成功轨迹。
