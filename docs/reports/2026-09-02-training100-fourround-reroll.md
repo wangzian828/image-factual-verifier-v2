@@ -68,6 +68,8 @@ SFT；但它仍有有效的图像 perception 目标，不能从 perception 数�
 
 `/gsdata/home/wza/image-factual-verifier-v2-data/generated/teacher-rollouts/unified-react-v1-gemini37-train100-fourround-20260902-2e64147/quality-reroll-training-package-r2/`
 
+`pipeline-state.json` 已指向该修正版，并保留旧 package 的 superseded 路径与替换原因。
+
 修复内容：
 
 1. action-only 继续保留在独立 `action_only.jsonl`；
