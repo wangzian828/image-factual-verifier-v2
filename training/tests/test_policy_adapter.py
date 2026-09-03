@@ -16,8 +16,8 @@ def _trajectory_row() -> dict:
         "question_id": "task-1",
     }
     return {
-        "dataset_version": "ifv-trajectory-sft-dataset-v2",
-        "trajectory_version": "ifv-trajectory-sft-v2",
+        "dataset_version": "ifv-trajectory-sft-dataset-v3",
+        "trajectory_version": "ifv-trajectory-sft-v3",
         "episode_id": "case-1",
         "case_id": "case-1",
         "source_run_id": "run-1",
@@ -32,46 +32,48 @@ def _trajectory_row() -> dict:
             },
             {
                 "role": "user",
-                "content": "Investigate the image and decide the visible fact.",
+                "content": (
+                    "<image>\nInvestigate the image and decide the visible fact."
+                ),
             },
             {
                 "role": "assistant",
-                "content": (
-                    "<think>先调用搜索工具核对这个事实。</think>\n\n"
-                    "<tool_call>\n"
-                    "<function=text_search>\n"
-                    "<parameter=queries>\n"
-                    "[\"museum object official collection\"]\n"
-                    "</parameter>\n"
-                    "<parameter=question_id>\n"
-                    "task-1\n"
-                    "</parameter>\n"
-                    "</function>\n"
-                    "</tool_call>"
-                ),
-                "loss": True,
+                "content": "<think>\n先调用搜索工具核对这个事实。\n</think>",
             },
             {
-                "role": "tool",
-                "tool_call_id": "call-1",
+                "role": "tool_call",
                 "content": json.dumps(
                     {
-                        "function_call_id": "call-1",
-                        "tool": "text_search",
-                        "arguments": tool_call_arguments,
-                        "result": {"status": "ok", "results": []},
-                    }
+                        "name": "text_search",
+                        "arguments": json.dumps(
+                            tool_call_arguments,
+                            ensure_ascii=False,
+                        ),
+                    },
+                    ensure_ascii=False,
+                ),
+            },
+            {
+                "role": "tool_response",
+                "content": json.dumps(
+                    {"status": "ok", "results": []},
+                    ensure_ascii=False,
                 ),
             },
             {
                 "role": "assistant",
                 "content": (
-                    "<think>证据不足以支持原说法。</think>\n\n"
+                    "<think>\n证据不足以支持原说法。\n</think>\n\n"
+                    "<answer>\n"
                     + json.dumps(
-                        {"verdict": "real", "reason": "evidence is sufficient"}
+                        {
+                            "verdict": "real",
+                            "reason": "evidence is insufficient",
+                        },
+                        ensure_ascii=False,
                     )
+                    + "\n</answer>"
                 ),
-                "loss": True,
             },
         ],
         "tools": json.dumps(
@@ -96,8 +98,9 @@ def _trajectory_row() -> dict:
                 }
             ]
         ),
+        "images": [],
         "token_count_estimate": 100,
-        "message_count": 5,
+        "message_count": 6,
         "tool_call_count": 1,
         "split": "train",
         "split_group_id": "group-1",
@@ -113,24 +116,91 @@ def test_react_uses_ms_swift_native_agent_format() -> None:
         "system",
         "user",
         "assistant",
-        "tool",
+        "tool_call",
+        "tool_response",
         "assistant",
     ]
-    assert converted["messages"][2]["loss"] is True
-    assert "<think>先调用搜索工具核对这个事实。</think>" in (
-        converted["messages"][2]["content"]
+    assert "<think>" in converted["messages"][2]["content"]
+    call = json.loads(converted["messages"][3]["content"])
+    assert call["name"] == "text_search"
+    assert json.loads(call["arguments"]) == {
+        "queries": ["museum object official collection"],
+        "question_id": "task-1",
+    }
+    assert converted["messages"][4]["role"] == "tool_response"
+    assert "<answer>" in converted["messages"][5]["content"]
+    assert json.loads(converted["tools"])[0]["function"]["name"] == "text_search"
+    assert set(converted) == {"messages", "images", "tools"}
+
+
+def test_policy_adapter_accepts_adjacent_tool_call_batches() -> None:
+    row = _trajectory_row()
+    row["messages"] = [
+        row["messages"][0],
+        row["messages"][1],
+        row["messages"][2],
+        row["messages"][3],
+        row["messages"][4],
+        {
+            "role": "tool_call",
+            "content": json.dumps(
+                {
+                    "name": "visit",
+                    "arguments": json.dumps(
+                        {"url": "https://example.org"},
+                        ensure_ascii=False,
+                    ),
+                },
+                ensure_ascii=False,
+            ),
+        },
+        {
+            "role": "tool_response",
+            "content": json.dumps(
+                {"status": "ok", "text": "Example"},
+                ensure_ascii=False,
+            ),
+        },
+        row["messages"][-1],
+    ]
+    row["message_count"] = len(row["messages"])
+    row["tool_call_count"] = 2
+
+    converted = convert_policy_row(row)
+
+    assert [message["role"] for message in converted["messages"]] == [
+        "system",
+        "user",
+        "assistant",
+        "tool_call",
+        "tool_response",
+        "tool_call",
+        "tool_response",
+        "assistant",
+    ]
+
+
+def test_audit_accepts_ms_swift_data_uri_images(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    write_json(
+        source / "manifest.json",
+        {
+            "dataset_version": "ifv-trajectory-sft-dataset-v3",
+            "schema_version": "ifv-trajectory-sft-dataset-manifest-v1",
+        },
     )
-    assert "<function=text_search>" in converted["messages"][2]["content"]
-    assert converted["messages"][3].get("loss") is None
-    assert converted["messages"][4]["loss"] is True
-    assert "<think>证据不足以支持原说法。</think>" in (
-        converted["messages"][4]["content"]
-    )
-    tools = json.loads(converted["tools"])
-    assert tools[0]["function"]["name"] == "text_search"
-    assert converted["channel"] == "trajectory_sft"
-    assert converted["chat_template_kwargs"]["enable_thinking"] is True
-    assert "policy_action_token_ids" not in converted
+    row = _trajectory_row()
+    row["images"] = ["data:image/jpeg;base64,ZmFrZS1pbWFnZQ=="]
+    row["messages"][1]["content"] = "<image>\nInvestigate the image."
+    write_jsonl(source / "train.jsonl", [row])
+    write_jsonl(source / "validation.jsonl", [])
+    write_jsonl(source / "test.jsonl", [])
+
+    output = tmp_path / "output"
+    convert_policy_dataset(source, output)
+
+    assert audit_derived_dataset(output)["passed"] is True
 
 
 def test_private_fields_are_rejected() -> None:
@@ -149,7 +219,7 @@ def test_dataset_conversion_is_deterministic_and_auditable(
     write_json(
         source / "manifest.json",
         {
-            "dataset_version": "ifv-trajectory-sft-dataset-v2",
+            "dataset_version": "ifv-trajectory-sft-dataset-v3",
             "schema_version": "ifv-trajectory-sft-dataset-manifest-v1",
         },
     )
@@ -176,28 +246,12 @@ def test_dataset_conversion_is_deterministic_and_auditable(
         assert path.read_bytes() == (second / path.name).read_bytes()
 
 
-def test_unified_react_v3_dataset_is_accepted(tmp_path: Path) -> None:
-    source = tmp_path / "source"
-    source.mkdir()
-    write_json(
-        source / "manifest.json",
-        {
-            "dataset_version": "ifv-trajectory-sft-dataset-v3",
-            "schema_version": "ifv-trajectory-sft-dataset-manifest-v1",
-        },
-    )
-    row = {
-        **_trajectory_row(),
-        "dataset_version": "ifv-trajectory-sft-dataset-v3",
-        "trajectory_version": "ifv-trajectory-sft-v3",
-    }
-    write_jsonl(source / "train.jsonl", [row])
-    write_jsonl(source / "validation.jsonl", [])
-    write_jsonl(source / "test.jsonl", [])
+def test_legacy_step_dataset_is_rejected() -> None:
+    row = _trajectory_row()
+    row["dataset_version"] = "ifv-policy-dataset-v2"
 
-    manifest = convert_policy_dataset(source, tmp_path / "output")
-
-    assert manifest["example_count"] == 1
+    with pytest.raises(ValueError, match="step-level"):
+        convert_policy_row(row)
 
 
 def test_audit_allows_provider_error_observation_but_rejects_wire_prompt(
@@ -208,23 +262,18 @@ def test_audit_allows_provider_error_observation_but_rejects_wire_prompt(
     write_json(
         source / "manifest.json",
         {
-            "dataset_version": "ifv-trajectory-sft-dataset-v2",
+            "dataset_version": "ifv-trajectory-sft-dataset-v3",
             "schema_version": "ifv-trajectory-sft-dataset-manifest-v1",
         },
     )
     row = _trajectory_row()
-    row["messages"][3]["content"] = json.dumps(
+    row["messages"][4]["content"] = json.dumps(
         {
-            "function_call_id": "call-1",
-            "tool": "text_search",
-            "arguments": {},
-            "result": {
-                "status": "error",
-                "error": (
-                    "Gemini Interactions request failed with HTTP 500; "
-                    "retry later"
-                ),
-            },
+            "status": "error",
+            "error": (
+                "Gemini Interactions request failed with HTTP 500; "
+                "retry later"
+            ),
         }
     )
     write_jsonl(source / "train.jsonl", [row])

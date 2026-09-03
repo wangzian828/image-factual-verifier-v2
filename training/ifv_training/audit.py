@@ -7,22 +7,37 @@ from typing import Any, Mapping
 
 from .contracts import assert_model_visible
 from .io import load_json, load_jsonl, sha256_file
+from .policy import _validate_qwen_agent_messages
 
 
 GEMINI_WIRE_PROTOCOL_MARKER = "Native Gemini Interactions protocol:"
+
+
+def _valid_image_reference(value: Any) -> bool:
+    if not isinstance(value, str) or not value.strip():
+        return False
+    if value.startswith("data:image/") and "," in value:
+        return True
+    return Path(value).is_file()
 
 
 def _audit_message(message: Any, location: str) -> None:
     if not isinstance(message, Mapping):
         raise ValueError(f"{location} must be an object")
     role = str(message.get("role", ""))
-    if role not in {"system", "user", "assistant", "tool"}:
+    if role not in {
+        "system",
+        "user",
+        "assistant",
+        "tool_call",
+        "tool_response",
+    }:
         raise ValueError(f"{location} has unsupported role {role!r}")
     content = message.get("content")
     if not isinstance(content, str) or not content.strip():
         raise ValueError(f"{location}.content must be a non-empty string")
-    if role == "assistant" and message.get("loss") is not True:
-        raise ValueError(f"{location} must explicitly set loss=true")
+    if set(message) != {"role", "content"}:
+        raise ValueError(f"{location} must contain only role and content")
 
 
 def audit_derived_dataset(dataset_dir: Path) -> dict[str, Any]:
@@ -50,22 +65,29 @@ def audit_derived_dataset(dataset_dir: Path) -> dict[str, Any]:
                 messages = row.get("messages")
                 if not isinstance(messages, list) or len(messages) < 2:
                     raise ValueError(f"{location}.messages is invalid")
+                _validate_qwen_agent_messages(
+                    messages,
+                    require_image=bool(row.get("images")),
+                )
                 for message_index, message in enumerate(messages):
                     _audit_message(message, f"{location}.messages[{message_index}]")
                     roles[str(message["role"])] += 1
                 images = row.get("images")
                 if images is not None:
-                    if not isinstance(images, list) or not images:
-                        raise ValueError(f"{location}.images must be a non-empty list")
-                    if messages[0].get("role") == "user" and "<image>" not in str(
-                        messages[0].get("content", "")
-                    ):
-                        raise ValueError(f"{location} image row lacks <image> placeholder")
-                    for image in images:
-                        if not Path(str(image)).is_file():
-                            raise FileNotFoundError(
-                                f"{location} image is unavailable: {image}"
+                    if not isinstance(images, list):
+                        raise ValueError(f"{location}.images must be a list")
+                    if images:
+                        if messages[1].get("role") != "user" or "<image>" not in str(
+                            messages[1].get("content", "")
+                        ):
+                            raise ValueError(
+                                f"{location} image row lacks <image> placeholder"
                             )
+                        for image in images:
+                            if not _valid_image_reference(image):
+                                raise FileNotFoundError(
+                                    f"{location} image is unavailable: {image}"
+                                )
                 if GEMINI_WIRE_PROTOCOL_MARKER in json.dumps(
                     row,
                     ensure_ascii=False,

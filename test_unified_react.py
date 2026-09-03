@@ -1015,9 +1015,9 @@ def test_unified_export_uses_qwen_think_and_tool_call_and_rejects_missing_though
         if message["role"] == "assistant"
     )
     assert any(
-        "<function=perceive_scene>" in message["content"]
+        message["role"] == "tool_call"
+        and json.loads(message["content"])["name"] == "perceive_scene"
         for message in exported.messages
-        if message["role"] == "assistant"
     )
 
     broken = json.loads(json.dumps(trace))

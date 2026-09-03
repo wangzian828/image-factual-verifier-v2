@@ -1,71 +1,130 @@
-# SFT 训练数据构造
+# SFT 训练与数据构造
 
-## 1. 一条训练样本
+本文只描述当前的 reasoning policy SFT 和独立 perception SFT。
 
-一条样本对应一条完整 episode，不按每个阶段拆成互不相干的样本：
+## 1. policy SFT 一行是什么
+
+一行就是一条完整 Agent episode，不按阶段拆成互不相干的样本：
 
 ```text
 system
-user：图片 case + 初始观察
-assistant：<think>...</think><tool_call>...</tool_call>
-tool：真实结果 + 紧凑 state delta
-assistant：<think>...</think><tool_call>...</tool_call>
-...
-assistant：Decision / Reflection / Judgment 结构化输出
+user: 图片 + 事实核查任务
+assistant: <think>...</think>
+tool_call: {"name":"工具名","arguments":"{...}"}
+tool_response: 完整公开工具结果
+tool_call: {"name":"另一个工具","arguments":"{...}"}
+tool_response: 完整公开工具结果
+assistant: <think>...</think>
+tool_call: ...
+tool_response: ...
+assistant: <think>...</think><answer>{最终报告}</answer>
 ```
 
-ReAct 的行为目标是 thought 和工具调用；tool observation 只作为上下文，不作为模型要模仿的
-输出。Qwen 使用原生 `<think>` 与 `<tool_call><function=...>` 模板，不自造另一套格式。
+policy 学的是“给定已有上下文，下一步如何思考、是否调用哪个工具、最后如何写报告”。
+工具结果是条件上下文，不是模型要复述的目标；assistant 的 thought、工具调用和最终
+报告才是监督目标。
 
-搜索动作要区分：
+## 2. 导出字段
 
-- `text_search`：文字到网页候选；
-- `text_image_search`：文字到图片/图片页面候选；
-- `reverse_image_search`：当前图片到图像对应候选。
+policy 行的训练输入只保留：
 
-搜索候选在训练上下文中保留为 Discovery，不能被导出器或 SFT judge 自动当成
-Evidence；只有后续 `visit`、比较或其他成功观察形成的内容才进入证据链。
+```json
+{
+  "tools": "[...]",
+  "messages": [
+    {"role": "system", "content": "..."},
+    {"role": "user", "content": "<image>..."},
+    {"role": "assistant", "content": "<think>...</think>"},
+    {"role": "tool_call", "content": "{\"name\":\"...\",\"arguments\":\"{...}\"}"},
+    {"role": "tool_response", "content": "..."},
+    {"role": "assistant", "content": "<think>...</think><answer>...</answer>"}
+  ],
+  "images": ["/absolute/path/to/image.jpg"]
+}
+```
 
-## 2. 上下文、loss 和长度
+每个消息只有 `role` 和 `content`。不写 `loss`、`channel` 或
+`chat_template_kwargs`，由目标 Qwen checkpoint 的 ms-swift template 自动生成 labels。
+真实 ms-swift 样本允许在一个工具结果后紧接另一个 `tool_call`；导出器保留这种顺序，
+但每个工具调用都必须有配对的工具结果。
 
-- 完整历史保留在 episode；每轮输入只放当前紧凑 workspace、最近观察、开放 gap、活跃路线和
-  state delta，不重复嵌入完整累计 workspace。
-- loss 只监督 assistant 输出：可见 thought、tool call 以及 Decision/Reflection/Judgment 的
- 结构化策略输出。
-- user、tool observation、state delta 和图片元数据只提供上下文，不计算监督 loss。
-- 真实 provider 没有返回可读 thought 的 ReAct turn，不伪造 `<think>`；整条轨迹进入
-  `action_only`，可供动作模仿或 RL 初始化，不能混入 reasoning SFT。
-- 用真实 Qwen processor 编码后以 128K 作为准入线；超出者保留到 holdout，不截断核心轨迹。
-- SFT eligibility judge 会看到按真实顺序排列的 ReAct 工具动作、工具观察、
-  搜索候选和 state delta；图片二进制、base64、raw HTML 和 provider 内部快照不
-  进入 judge packet。候选仍与 Evidence 分开。
+`<think>` 必须来自 provider 原生返回的 thought。导出器不会凭空补 thought；没有可读
+thought 的轨迹不进入 reasoning SFT。
 
-## 3. 质量分桶
+## 3. 上下文与图片
 
-SFT judge 在工程审计之后运行。通过轨迹继续按质量分桶，例如高质量、可用但较弱、holdout；
-所有原始轨迹保留。另标记：
+- 初始 user 消息提供图片占位符和任务。
+- 每轮工具结果在生成后进入下一轮一次。
+- 不把累计 workspace、旧 request snapshot 或同一工具结果重复嵌入每轮。
+- 图片通过顶层 `images` 传给 processor，不把 base64 写进文本历史。
+- 主 Agent 使用受控原图；视觉工具按需单独接收原图、裁剪图或参考图。
 
-- `reasoning_sft`：每个 ReAct action 都有 provider thought；
-- `action_only`：动作可用但 thought 不完整；
-- `rl_candidate`：可进入后续奖励/策略优化流程。
+这样既保留调查所需上下文，也避免完整状态在 episode 中指数式重复。
 
-这几个维度不能混为一个数量：
+## 4. policy 与 perception 分开
 
-- `trajectory_sft.jsonl` 和 `ms-swift-policy/` 只接收 `reasoning_sft`；
-- `action_only.jsonl` 单独保留，可供动作模仿或 RL 使用，不伪造 `<think>`；
-- perception 是独立的图像观察任务。只要 canonical trace 有有效
-  `PerceptionReport`，即使对应 policy trace 是 `action_only`，仍可进入
-  `perception_trajectories.jsonl` 和 `ms-swift-perception/`；
-- 因此一个 accepted release 可能是“策略 67 条、action-only 1 条、
-  perception 68 条”，这不是数据丢失，而是三条训练入口的准入条件不同。
+### policy
 
-## 4. 图片 API 分工
+输入是完整 ReAct episode，目标包含 thought、工具动作和最终 `<answer>`。它训练调查
+策略，不训练隐藏 runtime 字段或 evaluator private gold。
 
-- `direct_multimodal`：每个 Gemini Interaction 的根请求携带一份受控原图，
-  后续请求复用 provider session 中的原图；
-- `separate_vlm`：视觉工具/VLM 处理图片，主策略收到结构化观察。
+### perception
 
-在 direct 模式中，原图是每个请求的独立多模态输入，不追加到累计文本历史，也不写入
-SFT 消息或 policy snapshot 的 base64。视觉 API 统一使用最长边 1024、JPEG quality 95；
-环境变量只能在不超过 1024 的范围内调整。结构化视觉观察只保留有限实体属性、可见关系、
-场景细节和不确定性。两种模式的工具 schema、Reducer、trace 和训练消息格式保持一致。
+输入是：
+
+```text
+system
+user: <image> + “只报告图片中可见内容”
+assistant: PerceptionReport JSON
+```
+
+perception 不伪造 `<think>`，也不混入 policy 的工具调用。它是独立图片观察能力，
+通过 `ms-swift-perception/` 训练。
+
+## 5. 数据筛选
+
+原始 rollout 先经过工程审计和 SFT judge，再进入 frozen accepted release。筛选记录
+保留原始 trace，不覆盖或删除失败轨迹。
+
+进入 reasoning policy SFT 的基本条件：
+
+- episode 结构完整；
+- 工具调用和工具结果顺序正确；
+- provider thought 可读且位于真实 assistant turn；
+- 没有 evaluator private 字段；
+- 图像路径存在；
+- 目标 processor 编码成功并产生非空 assistant labels；
+- 没有超过当前上下文上限。
+
+质量桶由现有 SFT judge 负责；`high`、`usable`、`rejected` 和
+`engineering_error` 不由转换器重新调用 judge。action-only 和 perception 是独立
+产物，不能静默混进 reasoning policy 文件。
+
+## 6. 训练设置
+
+训练入口仍使用 ms-swift 的 `swift sft`。本项目转换器只负责生成标准输入，不实现
+第二套 trainer。
+
+- 监督目标由 Qwen chat template 生成；
+- assistant 的 thought、tool call 和最终 answer 参与 loss；
+- system、user、tool response 作为条件上下文；
+- 真实 processor 决定 special tokens、图片 token、labels 和最终长度；
+- reasoning SFT 保持 `IFV_ADD_NON_THINKING_PREFIX` 关闭；
+- action-only 不进入 reasoning SFT。
+
+训练前必须运行真实 processor 验证脚本，不能仅依据 JSON 校验通过就开训。
+
+## 7. 检查命令
+
+```powershell
+cd training
+python -m pytest -q
+python scripts/probe/verify_ms_swift_agent_dataset.py `
+  --model <Qwen checkpoint> `
+  --policy-dir <ms-swift-policy> `
+  --perception-dir <ms-swift-perception> `
+  --output <processor-verification.json>
+```
+
+验证脚本会检查 thought 是否进入 labels、tool call/response 是否进入编码输入、图片
+是否被 processor 接收，以及最长样本是否超过上下文上限。

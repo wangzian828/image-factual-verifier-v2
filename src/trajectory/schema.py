@@ -85,7 +85,7 @@ class DatasetPerceptionExample(PerceptionExample):
 
 
 class TrajectorySFTExample(StrictModel):
-    """One complete accepted episode rendered as one Agent SFT conversation."""
+    """One complete accepted episode in the Qwen/ms-swift Agent format."""
 
     trajectory_version: Literal["ifv-trajectory-sft-v3"] = (
         "ifv-trajectory-sft-v3"
@@ -111,45 +111,71 @@ class TrajectorySFTExample(StrictModel):
     def validate_messages(self) -> "TrajectorySFTExample":
         if self.message_count != len(self.messages):
             raise ValueError("message_count must match messages length")
-        assistant_targets = 0
+        allowed_roles = {
+            "system",
+            "user",
+            "assistant",
+            "tool_call",
+            "tool_response",
+        }
+        if len(self.messages) < 3:
+            raise ValueError("trajectory requires system, user, and assistant")
+        if self.messages[0].get("role") != "system":
+            raise ValueError("trajectory must start with a system message")
+        if self.messages[1].get("role") != "user":
+            raise ValueError("trajectory must have one initial user message")
+        if self.images and "<image>" not in str(
+            self.messages[1].get("content", "")
+        ):
+            raise ValueError(
+                "trajectory images require an <image> marker in the initial user"
+            )
+        if self.messages[-1].get("role") != "assistant":
+            raise ValueError("trajectory must end with an assistant target")
         for index, message in enumerate(self.messages):
             if not isinstance(message, dict):
                 raise ValueError(f"messages[{index}] must be an object")
             role = str(message.get("role", ""))
-            if role not in {
-                "system",
-                "user",
-                "assistant",
-                "tool",
-            }:
+            if role not in allowed_roles:
                 raise ValueError(f"messages[{index}] has unsupported role")
             content = message.get("content")
             if not isinstance(content, str) or not content.strip():
                 raise ValueError(f"messages[{index}].content must be non-empty")
-            if role == "assistant":
-                if message.get("loss") is not True:
-                    raise ValueError(
-                        f"messages[{index}] must set loss=true"
-                    )
-                assistant_targets += 1
-        if assistant_targets < 1:
-            raise ValueError("trajectory requires at least one supervised target")
-        if self.images:
-            first_user = next(
-                (
-                    message
-                    for message in self.messages
-                    if str(message.get("role", "")) == "user"
-                ),
-                None,
-            )
-            if first_user is None or "<image>" not in str(
-                first_user.get("content", "")
-            ):
+            if set(message) != {"role", "content"}:
                 raise ValueError(
-                    "trajectory images require an <image> marker in the first "
-                    "user message"
+                    f"messages[{index}] must contain only role and content"
                 )
+        if any(
+            str(message.get("role")) == "user"
+            for message in self.messages[2:]
+        ):
+            raise ValueError("trajectory cannot contain later user messages")
+        index = 2
+        while index < len(self.messages):
+            role = self.messages[index].get("role")
+            if role == "assistant":
+                if index == len(self.messages) - 1:
+                    break
+                if self.messages[index + 1].get("role") != "tool_call":
+                    raise ValueError(
+                        "every non-final assistant target must be followed by tool_call"
+                    )
+                index += 1
+                continue
+            if role == "tool_call":
+                if index + 1 >= len(self.messages) or self.messages[
+                    index + 1
+                ].get("role") != "tool_response":
+                    raise ValueError(
+                        "every tool_call must be followed by tool_response"
+                    )
+                index += 2
+                continue
+            if role == "tool_response":
+                raise ValueError("tool_response must follow tool_call")
+            raise ValueError(
+                f"messages[{index}] has an invalid turn role {role!r}"
+            )
         return self
 
 

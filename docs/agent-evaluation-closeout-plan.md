@@ -302,3 +302,25 @@ SFT。该条仍有有效 perception 目标，因此独立 perception SFT 应为 
 `docs/reports/2026-09-02-training100-fourround-reroll.md`
 
 正式停止点不变：不启动全量 8,490 条教师 rollout，等待人工复核。
+
+## 13. 2026-09-03 Qwen/ms-swift 导出收尾
+
+- policy 导出与 ms-swift 转换统一为真实参考行使用的
+  `tools` / `messages` / `images` 外层格式。
+- 消息角色统一为 `system`、`user`、`assistant`、`tool_call`、
+  `tool_response`；模型原生 `<think>` 保留，导出行不再写 `loss`、
+  `channel` 或 `chat_template_kwargs`。
+- 转换器在归一化前检查源消息，防止 evaluator-private 字段被静默丢弃。
+- 允许真实 ms-swift Agent 样本中的连续
+  `tool_call -> tool_response` 批次；每个调用仍必须有配对结果。
+- perception 转换同步到同一外层消息契约，但不伪造 thought。
+- 图片审计同时接受本地路径和 `data:image/...;base64,...` 引用。
+- 英文、中文轨迹阅读器已重写为 UTF-8，并支持新旧消息格式；中文版只翻译阅读标签，
+  不改原始 thought、工具参数和观察。
+- 新增 `training/scripts/probe/verify_ms_swift_agent_dataset.py`，用目标 Qwen 的
+  真实 processor 检查 thought labels、工具观察、图片接收和上下文长度。
+- 本地结果：主仓库 `481 passed`；training `112 passed`；用户提供的真实
+  `train_traj_0427_tools_swift_sample_182.json` 已完成转换和严格结构审计。
+- 服务器状态：2026-09-03 检查时 gpu-13 的 Jupyter 后端未在跳板机
+  `127.0.0.1:8333` 或旧 `9814` 监听；因此真实 processor 验证待服务恢复后执行，
+ 不能用本地结果代替。

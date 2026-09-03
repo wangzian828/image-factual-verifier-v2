@@ -1,60 +1,92 @@
-# SFT canonical accepted release workflow
+# SFT Canonical Release 工作流
 
-从 2026 年 8 月 17 日起，正式 SFT 不直接消费原始 teacher rollout 目录。
-
-唯一训练链路是：
+当前版本（2026-09-03）的唯一训练发布链路：
 
 ```text
-raw rollout
-  + frozen sft_eligibility
-  -> stage_accepted_teacher_release.py
-  -> accepted_release/
-  -> export_dataset.py --accepted-release
-  -> ifv-training convert-policy
-  -> ifv-training convert-accepted-perception
-  -> ms-swift / run_sft.sh
+teacher rollout
+  + strict trace audit
+  + frozen SFT judge
+  -> accepted-teacher-release
+  -> accepted-dataset
+  -> ms-swift policy/perception conversion
+  -> real Qwen processor verification
+  -> swift sft
 ```
 
-`accepted_release/` 是训练前的 canonical source，至少包含：
+## 1. accepted release
+
+`accepted-teacher-release/` 是训练前的冻结来源，至少包含：
 
 - `accepted_release_manifest.json`
 - `selected_episodes.jsonl`
 - `traces/`
 - `eligibility/`
-- `trajectory_sft.jsonl`
-- `action_only.jsonl`
-- `perception_trajectories.jsonl`
+- 质量分桶和来源校验记录
 
-staging 阶段完成唯一的 teacher acceptance：
+它固定每条入选 episode 的 trace SHA-256、judge 结果、split、runtime commit 和
+图像路径。后续导出只读这个 release，不回到原始 rollout 目录重新拼接数据。
 
-- trace 正常结束并有二元 verdict；
-- `engineering_valid=true`；
-- frozen `sft_eligibility_pass=true`；
-- source trace SHA-256 一致；
-- deterministic fatal reason 拒绝；
-- 完整 episode SFT 行从 canonical trace 生成并写入 `trajectory_sft.jsonl`。
+原始 trace、拒绝项和 holdout 不删除；它们只是不进入本次训练输入。
 
-`action_only.jsonl` 不进入 reasoning policy SFT，但必须继续保留；它对应的
-有效 `PerceptionReport` 仍进入独立的 perception 数据。包的 manifest 必须分别
-记录 selected release、policy reasoning、action-only 和 perception 的数量，
-不能用一个 `accepted_case_count` 代替这四个口径。
+## 2. 生成训练数据
 
-允许通过 judge 的非 fatal 轨迹保留 deterministic red flags。最终 exporter
-只验证 canonical release 的完整性、SHA、split 和 model-visible 数据契约，不重新
-读取 source run 中可能按旧标准生成的 step-level `policy_trajectories.jsonl`。
+```powershell
+python scripts/trajectory/export_dataset.py `
+  --accepted-release <accepted-teacher-release> `
+  --case-split <case_split.jsonl> `
+  --output-dir <accepted-dataset>
 
-这样可以避免两套 SFT 标准再次分叉：source run 的旧 policy 导出失败不会覆盖
-canonical release 中已经通过 frozen judge 的完整轨迹行。
+cd training
+python -m ifv_training convert-policy `
+  --input <accepted-dataset> `
+  --output <ms-swift-policy>
 
-训练前固定检查：
-
-```bash
-python -m ifv_training convert-policy \
-  --input "$ACCEPTED_DATASET" \
-  --output "$MS_SWIFT_POLICY"
-python -m ifv_training convert-accepted-perception \
-  --input "$ACCEPTED_DATASET" \
-  --output "$MS_SWIFT_PERCEPTION"
-python -m ifv_training audit --strict --input "$MS_SWIFT_POLICY"
-python -m ifv_training audit --strict --input "$MS_SWIFT_PERCEPTION"
+python -m ifv_training convert-accepted-perception `
+  --input <accepted-dataset> `
+  --output <ms-swift-perception>
 ```
+
+`ms-swift-policy` 和 `ms-swift-perception` 是两个独立数据集：
+
+- policy：完整 ReAct episode，保留 provider 原生 `<think>`；
+- perception：图片观察 JSON，不伪造 thinking。
+
+两者均使用标准 `messages` 和 `images` 字段。policy 额外提供 episode 实际使用的
+`tools` schema。
+
+## 3. 发布前检查
+
+```powershell
+python -m ifv_training audit --strict --input <ms-swift-policy>
+python -m ifv_training audit --strict --input <ms-swift-perception>
+
+python scripts/probe/verify_ms_swift_agent_dataset.py `
+  --model <目标 Qwen checkpoint> `
+  --policy-dir <ms-swift-policy> `
+  --perception-dir <ms-swift-perception> `
+  --output <processor-verification.json>
+```
+
+JSON 审计只检查结构；真实 processor 验证还必须通过：
+
+- `<think>` token 出现在 assistant labels；
+- 工具调用和工具结果进入编码后的输入；
+- 图片没有被 processor 丢失；
+- 每行存在可训练 assistant token；
+- 编码长度不超过目标上下文上限。
+
+目标模型变化时必须重新跑 processor 验证，不能复用旧模型的通过结果。
+
+## 4. 数据边界
+
+- evaluator private gold、judge 字段、source access policy 和内部缓存不得进入模型可见
+  消息；
+- provider wire instruction 不进入训练输入；
+- `action_only` 不进入 reasoning policy SFT；
+- 失败轨迹可保留在 audit/holdout，但不能通过转换器伪装成高质量训练样本；
+- 训练包中的每一行是一条完整 episode，不拆成 step-level policy 样本。
+
+## 5. 当前暂停点
+
+本次收尾完成代码、文档、格式审计和真实 processor 验证后，停在完整教师 rollout
+启动之前。不会自动启动 8,490 条训练数据的全量 rollout。

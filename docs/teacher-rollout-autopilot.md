@@ -4,50 +4,54 @@
 
 ```text
 读取 case
-  -> 并发启动 rollout
-  -> 每条 trace 实时落盘
-  -> 工程错误自动回队列重跑
-  -> strict trace audit
-  -> SFT eligibility / LLM judge
-  -> accepted、holdout、action-only、RL candidate 分桶
+  → 并发 rollout
+  → 每条 trace 实时落盘
+  → 工程异常自动回队列重跑
+  → strict trace audit
+  → SFT eligibility / LLM judge
+  → accepted / holdout / action-only / RL candidate 分桶
 ```
 
-重跑只针对未成功的 case，不覆盖已经成功的 episode。每条 trace 的原始请求、响应、错误和
-重试关系都保留；分桶只建立清单，不删除轨迹。
+## 重跑规则
 
-质量重跑在初始 SFT 审计之后最多追加三轮：
+- 工程失败的 case 自动进入待跑队列，不覆盖原始尝试。
+- 质量重跑按轮次保存；上一轮未通过 SFT 的 case 才进入下一轮。
+- 同一 case 最终选择质量最高且通过准入的轨迹。
+- 连续质量重跑仍未通过的 case 标为 hard case，保留全部尝试。
+- 轨迹不会因为重跑而混入旧的初始池，也不会删除原始结果。
+
+每轮独立保存：
 
 ```text
-初始 rollout
-  -> SFT judge
-  -> 只把 SFT rejected / 未产出 terminal trace 的 case 放入 quality-reroll-01
-  -> SFT judge
-  -> 只把上一轮仍 rejected 的 case 放入 quality-reroll-02
-  -> SFT judge
-  -> 只把上一轮仍 rejected 的 case 放入 quality-reroll-03
-  -> 每个 case 选择第一条通过 SFT 的轨迹
+rollouts/<round>/
+sft-eligibility/<round>/
+classification/<round>/
 ```
 
-已通过 SFT 的 case 不会再次 rollout；`final_only_judgment` 虽然是可接受桶，也不会进入
-质量重跑队列。三轮后仍未通过的 case 记录为 `hard case`。每轮独立保存：
+## SFT 导出边界
 
-- `rollouts/quality-reroll-XX/`：该轮所有尝试和完整 trace；
-- `sft-eligibility/quality-reroll-XX/`：该轮 SFT 审计；
-- `classification/quality-reroll-XX/`：该轮 accepted/rejected 清单。
+通过审计的 reasoning 轨迹进入 `trajectory_sft.jsonl`；没有可读 provider thought
+但动作可执行的轨迹进入独立 `action_only.jsonl`；有效的图片观察报告进入
+`perception_trajectories.jsonl`。
 
-合并后的 `run_manifest.json` 会继承 attempt 的 `git_commit`、Agent、benchmark
-和 `source_access_policy` 元数据。这样 merged trace 在 SFT judge 或独立 strict
-audit 中仍使用与 rollout 相同的来源黑名单，不会因合并丢失 policy 而误报普通查询。
+导出前必须完成：
 
-最终合并结果写入 `classification/final/`，质量重跑后的训练发布包写入
-`quality-reroll-release/` 和 `quality-reroll-training-package/`。已完成的初始 pipeline 可以用
-`--reroll-from <pipeline-dir> --quality-reroll-rounds 3` 继续，不会重复初始成功轨迹。
+- trace 结构和工程错误审计；
+- SFT judge；
+- 图像路径和 SHA-256 校验；
+- private 字段泄漏检查；
+- 目标 Qwen processor 编码检查。
 
-发布包中的训练入口按目标拆开统计：有可读 provider thought 的轨迹进入
-`trajectory_sft.jsonl`；没有可读 thought 的可执行轨迹进入独立
-`action_only.jsonl`，不伪造 reasoning SFT。perception 是独立图像任务，只要
-canonical trace 有有效 `PerceptionReport`，action-only trace 也可以进入
-`perception_trajectories.jsonl` 和 `ms-swift-perception/`。
+## 启动前 smoke
 
-建议生产前先做 10 条并发 10 的真实 Gemini smoke，检查：成功率、工程错误、每条是否有 scene/OCR
-action、thought 捕获率、工具调用顺序和最终审计结果。通过后再启动全量 rollout。
+完整 rollout 前先用并发 10 跑少量真实 case，检查：
+
+- trace 是否正常结束；
+- 每轮 thought 和工具动作是否真实存在；
+- 工具结果是否进入下一轮；
+- 图片输入没有重复塞进文本历史；
+- 没有 CLOSE-WAIT 持续增长；
+- SFT 导出和 processor 审计通过。
+
+本次代码收尾完成后停在全量教师 rollout 启动之前，不自动启动 8,490 条全量训练
+数据生产。

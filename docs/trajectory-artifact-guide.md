@@ -1,42 +1,64 @@
 # 轨迹产物说明
 
-一条完整 Agent 轨迹通常同时有三层文件：
+## 1. 哪个文件是真正的轨迹
 
-| 文件 | 作用 | 是否是轨迹 |
+| 文件 | 内容 | 是否用于训练 |
 | --- | --- | --- |
-| `traces/<episode>.json` | runtime 保存的 canonical trace，含完整状态和调用记录 | 是 |
-| `trajectory_sft.jsonl` | Qwen SFT 导出；每一行是一个完整 episode | 是，训练用 |
-| `action_only.jsonl` | 没有可读 thought、但动作可执行的独立导出 | 是，单独使用 |
-| `perception_trajectories.jsonl` | 从 canonical trace 导出的独立视觉观察样本 | 是，单独训练 |
-| `manifest.json`、`selection-manifest.jsonl` | 选择结果、哈希、数量、来源和统计 | 否 |
+| `traces/<episode>.json` | runtime 保存的 canonical trace，含完整状态和调用记录 | 不是直接训练输入 |
+| `trajectory_sft.jsonl` | 一行一条完整 policy episode | 是，转换后用于 reasoning SFT |
+| `action_only.jsonl` | 有可执行动作但没有可读 thought 的完整 episode | 不进入 reasoning SFT |
+| `perception_trajectories.jsonl` | 独立图片观察样本 | 转换后用于 perception SFT |
+| `manifest.json` | 数量、版本、来源和哈希 | 否 |
+| `index.jsonl` / selection manifest | 行号与来源索引 | 否 |
 
-`trajectory_sft.jsonl` 为了可训练，会把消息、工具调用、观察和紧凑状态上下文放在同一
-个 JSON 行里，因此肉眼直接打开很难读。这不代表它是多条轨迹拼在一起：一行就是一条
-完整 episode。
+最适合人工查看的是：
 
-其中，`text_search`、`text_image_search` 和 `reverse_image_search` 的候选会作为
-未验证 Discovery 保留在轨迹中；只有后续检查形成的有效观察或正文片段才属于
-Evidence。SFT judge 使用同一条轨迹的有序动作和工具观察做审计，不把搜索候选
-直接升级为证据。
-
-## 推荐阅读方式
-
-```powershell
-python scripts/trajectory/render_sft_episodes_readable.py `
-  --input <package>\trajectory_sft.jsonl `
-  --output-dir <package>\readable-episodes
+```text
+readable-episodes/episodes/<编号>-<case>/episode.md
 ```
 
-生成结果：
+它只是阅读视图。完整单条 JSON 在旁边的 `trajectory.json`，canonical 训练来源仍是
+`trajectory_sft.jsonl`。
 
-- `readable-episodes/episodes/0001-*/episode.md`：人类可读的单条 transcript；
-- `readable-episodes/episodes/0001-*/trajectory.json`：该条完整 JSON 数据的可读重排版；
-- `readable-episodes/README.md`：文件关系和使用边界。
+## 2. policy 轨迹消息
 
-Markdown 版会隐藏重复的动态 schema 和大块 state delta，只用于审阅；训练和程序处理仍
-使用原始 `trajectory_sft.jsonl`。源 JSONL 不会被这个脚本修改。
+```text
+system
+user
+assistant: <think>...</think>
+tool_call: {"name":"...","arguments":"{...}"}
+tool_response: 完整公开工具结果
+...
+assistant: <think>...</think><answer>{...}</answer>
+```
 
-`action_only` 不会混入 `trajectory_sft.jsonl`，但不代表整条 case 被丢弃：
-同一条 canonical trace 的 perception 结果仍可进入独立 perception SFT。阅读
-package 时应分别查看 `accepted-dataset/action_only.jsonl`、
-`accepted-dataset/perception.*.jsonl` 和 `ms-swift-perception/`。
+每个消息只有 `role` 和 `content`。图片通过顶层 `images` 提供，工具 schema 通过顶层
+`tools` 提供。不要根据文件名猜测数据类型，以行内容和 manifest 为准。
+
+工具结果不会只保留 `{"status":"success"}` 这种 transport 状态；导出器会保留模型可见
+的完整公开结果。provider wire、内部 state、缓存和 private gold 不进入训练消息。
+图片引用可以是本地路径或 `data:image/...;base64,...`；审计器两种都接受。
+
+## 3. 中文阅读目录
+
+```powershell
+python scripts/trajectory/render_sft_episodes_zh_readable.py `
+  --input <package>\trajectory_sft.jsonl `
+  --output-dir <package>\readable-episodes-zh
+```
+
+生成的中文目录只翻译标题、轮次和字段标签。模型原生 thought、结构化输出、工具参数
+及工具观察原文保留，不把阅读视图当作翻译后的训练数据。
+
+## 4. 训练前检查
+
+```powershell
+cd training
+python -m ifv_training audit --strict --input <ms-swift-policy>
+python scripts/probe/verify_ms_swift_agent_dataset.py `
+  --model <Qwen checkpoint> `
+  --policy-dir <ms-swift-policy> `
+  --output <processor-verification.json>
+```
+
+真实 processor 验证通过后，才可把 `ms-swift-policy` 交给训练。

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -22,8 +23,277 @@ SUPPORTED_DATASET_VERSIONS = frozenset(
     }
 )
 LEGACY_STEP_DATASET_VERSION = "ifv-policy-dataset-v2"
-OUTPUT_VERSION = "ifv-ms-swift-trajectory-sft-v1"
+OUTPUT_VERSION = "ifv-ms-swift-qwen-agent-v2"
 SPLITS = ("train", "validation", "test")
+TARGET_ROLES = frozenset(
+    {"system", "user", "assistant", "tool_call", "tool_response"}
+)
+
+
+def _json_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def _extract_think_block(content: str) -> str:
+    match = re.search(r"<think>.*?</think>", content, re.IGNORECASE | re.DOTALL)
+    if match:
+        return match.group(0).strip()
+    return content.strip()
+
+
+def _tool_call_from_legacy_assistant(content: str) -> dict[str, Any] | None:
+    match = re.search(
+        r"<function=([^>\s]+)>(.*?)</function>",
+        content,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if match is None:
+        return None
+    arguments: dict[str, Any] = {}
+    for parameter in re.finditer(
+        r"<parameter=([^>\s]+)>\s*(.*?)\s*</parameter>",
+        match.group(2),
+        re.IGNORECASE | re.DOTALL,
+    ):
+        name = parameter.group(1).strip()
+        raw_value = parameter.group(2).strip()
+        try:
+            arguments[name] = json.loads(raw_value)
+        except json.JSONDecodeError:
+            arguments[name] = raw_value
+    return {
+        "name": match.group(1).strip(),
+        "arguments": json.dumps(
+            arguments,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ),
+    }
+
+
+def _normalize_tool_call_content(content: str) -> str:
+    try:
+        payload = json.loads(content)
+    except json.JSONDecodeError:
+        payload = None
+    if isinstance(payload, Mapping):
+        name = str(payload.get("name", "")).strip()
+        arguments = payload.get("arguments", "{}")
+        if name:
+            return json.dumps(
+                {
+                    "name": name,
+                    "arguments": _json_text(arguments),
+                },
+                ensure_ascii=False,
+            )
+    legacy = _tool_call_from_legacy_assistant(content)
+    if legacy is None:
+        raise ValueError("tool_call content is not a Qwen tool-call object")
+    return json.dumps(legacy, ensure_ascii=False)
+
+
+def _render_tool_response(content: str) -> str:
+    """Drop the old transport envelope but keep the actual result as text."""
+
+    try:
+        payload = json.loads(content)
+    except json.JSONDecodeError:
+        return content.strip()
+    if isinstance(payload, Mapping) and "result" in payload:
+        payload = payload["result"]
+    if isinstance(payload, str):
+        return payload.strip()
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def _to_qwen_agent_messages(messages: list[Mapping[str, Any]]) -> list[dict[str, str]]:
+    """Convert the old provider-neutral row to the observed ms-swift format.
+
+    The Qwen template accepts a single initial user message followed by
+    assistant/tool_call/tool_response turns.  Historical exporter rows used
+    ``role=tool`` plus additional ``role=user`` stage-control messages; those
+    user messages are folded into the immediately preceding tool response so
+    the model still sees them without violating the Qwen turn grammar.
+    """
+
+    output: list[dict[str, str]] = []
+    initial_user_index: int | None = None
+    last_tool_response_index: int | None = None
+    pending_legacy_tool_call = False
+
+    for source_index, source in enumerate(messages):
+        role = str(source.get("role", "")).strip()
+        content = source.get("content")
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError(f"messages[{source_index}].content must be non-empty")
+
+        if role == "system":
+            if output and output[0]["role"] == "system":
+                output[0]["content"] += "\n" + content
+            else:
+                output.insert(0, {"role": "system", "content": content})
+            continue
+
+        if role == "user":
+            if initial_user_index is None:
+                output.append({"role": "user", "content": content})
+                initial_user_index = len(output) - 1
+            elif last_tool_response_index is not None:
+                output[last_tool_response_index]["content"] += (
+                    "\n\n" + content
+                )
+            else:
+                output[initial_user_index]["content"] += "\n\n" + content
+            continue
+
+        if role == "assistant":
+            tool_call_match = re.search(
+                r"<tool_call>.*?</tool_call>",
+                content,
+                re.IGNORECASE | re.DOTALL,
+            )
+            if tool_call_match:
+                thought = _extract_think_block(
+                    content[: tool_call_match.start()]
+                )
+                if not thought:
+                    raise ValueError(
+                        "assistant tool-call turn has no preserved <think> block"
+                    )
+                output.append({"role": "assistant", "content": thought})
+                output.append(
+                    {
+                        "role": "tool_call",
+                        "content": _normalize_tool_call_content(content),
+                    }
+                )
+                pending_legacy_tool_call = True
+                last_tool_response_index = None
+            else:
+                output.append(
+                    {
+                        "role": "assistant",
+                        "content": content.strip(),
+                    }
+                )
+                pending_legacy_tool_call = False
+                last_tool_response_index = None
+            continue
+
+        if role == "tool_call":
+            output.append(
+                {
+                    "role": "tool_call",
+                    "content": _normalize_tool_call_content(content),
+                }
+            )
+            pending_legacy_tool_call = True
+            last_tool_response_index = None
+            continue
+
+        if role == "tool":
+            if not pending_legacy_tool_call:
+                raise ValueError(
+                    f"messages[{source_index}] has a tool result without a call"
+                )
+            output.append(
+                {
+                    "role": "tool_response",
+                    "content": _render_tool_response(content),
+                }
+            )
+            pending_legacy_tool_call = False
+            last_tool_response_index = len(output) - 1
+            continue
+
+        if role == "tool_response":
+            if not pending_legacy_tool_call:
+                raise ValueError(
+                    f"messages[{source_index}] has a tool response without a call"
+                )
+            output.append(
+                {
+                    "role": "tool_response",
+                    "content": content.strip(),
+                }
+            )
+            pending_legacy_tool_call = False
+            last_tool_response_index = len(output) - 1
+            continue
+
+        raise ValueError(f"messages[{source_index}] has unsupported role {role!r}")
+
+    if pending_legacy_tool_call:
+        raise ValueError("trajectory ends with a tool call without a response")
+    return output
+
+
+def _validate_qwen_agent_messages(
+    messages: list[Mapping[str, Any]],
+    *,
+    require_image: bool,
+) -> None:
+    if len(messages) < 3:
+        raise ValueError("Qwen Agent row requires at least three messages")
+    if messages[0].get("role") != "system":
+        raise ValueError("Qwen Agent row must start with one system message")
+    if messages[1].get("role") != "user":
+        raise ValueError("Qwen Agent row must have one initial user message")
+    if require_image and "<image>" not in str(messages[1].get("content", "")):
+        raise ValueError("Qwen Agent image row requires <image> in initial user")
+    if messages[-1].get("role") != "assistant":
+        raise ValueError("Qwen Agent row must end with an assistant target")
+    if any(str(message.get("role")) == "user" for message in messages[2:]):
+        raise ValueError("Qwen Agent row cannot contain later user messages")
+    for index, message in enumerate(messages):
+        role = str(message.get("role", ""))
+        if role not in TARGET_ROLES:
+            raise ValueError(f"messages[{index}] has unsupported role {role!r}")
+        if set(message) != {"role", "content"}:
+            raise ValueError(
+                f"messages[{index}] must contain only role and content"
+            )
+        content = message.get("content")
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError(f"messages[{index}].content must be non-empty")
+    index = 2
+    while index < len(messages):
+        role = str(messages[index]["role"])
+        if role == "assistant":
+            if index == len(messages) - 1:
+                break
+            if str(messages[index + 1]["role"]) != "tool_call":
+                raise ValueError(
+                    "every non-final assistant target must be followed by tool_call"
+                )
+            index += 1
+            continue
+        if role == "tool_call":
+            try:
+                call = json.loads(str(messages[index]["content"]))
+            except json.JSONDecodeError as exc:
+                raise ValueError("tool_call content must be valid JSON") from exc
+            if not isinstance(call, Mapping) or not str(
+                call.get("name", "")
+            ).strip():
+                raise ValueError("tool_call must contain a name")
+            if not isinstance(call.get("arguments"), str):
+                raise ValueError("tool_call arguments must be a JSON string")
+            if index + 1 >= len(messages) or str(
+                messages[index + 1]["role"]
+            ) != "tool_response":
+                raise ValueError("every tool_call must be followed by tool_response")
+            # ms-swift Agent rows may emit another tool call immediately after
+            # a response. This represents one assistant action batch and is
+            # present in the real reference sample.
+            index += 2
+            continue
+        if role == "tool_response":
+            raise ValueError("tool_response must follow tool_call")
+        raise ValueError(f"messages[{index}] has an invalid turn role {role!r}")
 
 
 def convert_policy_row(row: Mapping[str, Any]) -> dict[str, Any]:
@@ -32,30 +302,30 @@ def convert_policy_row(row: Mapping[str, Any]) -> dict[str, Any]:
             "step-level ifv-policy-dataset-v2 rows are no longer accepted "
             "by the default SFT converter; use full trajectory_sft rows."
         )
-    messages = row.get("messages")
-    if not isinstance(messages, list) or len(messages) < 2:
+    source_messages = row.get("messages")
+    if not isinstance(source_messages, list) or len(source_messages) < 2:
         raise ValueError("trajectory SFT row requires messages")
-    supervised_targets = 0
-    for index, message in enumerate(messages):
+    # Validate the source representation before normalizing it.  Otherwise a
+    # private field attached to a legacy message could be silently discarded
+    # while converting only ``role`` and ``content``.
+    assert_model_visible(
+        {"messages": source_messages, "tools": row.get("tools", "")},
+        location="trajectory_sft_source_row",
+    )
+    for index, message in enumerate(source_messages):
         if not isinstance(message, Mapping):
             raise ValueError(f"messages[{index}] must be an object")
-        role = str(message.get("role", ""))
-        if role not in {
-            "system",
-            "user",
-            "assistant",
-            "tool",
-        }:
-            raise ValueError(f"messages[{index}] has unsupported role {role!r}")
         content = message.get("content")
         if not isinstance(content, str) or not content.strip():
             raise ValueError(f"messages[{index}].content must be non-empty")
-        if role == "assistant":
-            if message.get("loss") is not True:
-                raise ValueError(f"messages[{index}] must set loss=true")
-            supervised_targets += 1
-    if supervised_targets < 1:
-        raise ValueError("trajectory SFT row has no supervised targets")
+    messages = _to_qwen_agent_messages(source_messages)
+    images = row.get("images", [])
+    if images and (
+        not isinstance(images, list)
+        or not all(isinstance(item, str) and item.strip() for item in images)
+    ):
+        raise ValueError("trajectory SFT row images must be a non-empty list")
+    _validate_qwen_agent_messages(messages, require_image=bool(images))
     tools = row.get("tools", "")
     if tools is None:
         tools = ""
@@ -74,26 +344,13 @@ def convert_policy_row(row: Mapping[str, Any]) -> dict[str, Any]:
         {"messages": messages, "tools": parsed_tools},
         location="trajectory_sft_row",
     )
-    output: dict[str, Any] = {
-        "messages": [dict(message) for message in messages],
-        "channel": "trajectory_sft",
-        "chat_template_kwargs": {"enable_thinking": True},
-    }
-    images = row.get("images", [])
+    output: dict[str, Any] = {}
+    if isinstance(tools, str) and tools.strip():
+        output["tools"] = tools
+    output["messages"] = [dict(message) for message in messages]
+    output["images"] = []
     if images:
-        if not isinstance(images, list) or not all(
-            isinstance(item, str) and item.strip()
-            for item in images
-        ):
-            raise ValueError("trajectory SFT row images must be non-empty paths")
-        first_user = next(
-            (
-                message
-                for message in messages
-                if str(message.get("role", "")) == "user"
-            ),
-            None,
-        )
+        first_user = messages[1]
         if first_user is None or "<image>" not in str(
             first_user.get("content", "")
         ):
@@ -102,8 +359,6 @@ def convert_policy_row(row: Mapping[str, Any]) -> dict[str, Any]:
                 "message"
             )
         output["images"] = list(images)
-    if isinstance(tools, str) and tools.strip():
-        output["tools"] = tools
     return output
 
 
@@ -164,6 +419,19 @@ def convert_policy_dataset(input_dir: Path, output_dir: Path) -> dict[str, Any]:
         "schema_version": "ifv-ms-swift-dataset-manifest-v1",
         "dataset_version": OUTPUT_VERSION,
         "framework": {"name": "ms-swift", "version": "4.4.2"},
+        "format_contract": {
+            "name": "ms-swift-qwen-agent",
+            "version": "v2",
+            "message_roles": [
+                "system",
+                "user",
+                "assistant",
+                "tool_call",
+                "tool_response",
+            ],
+            "preserves_native_think": True,
+            "assistant_loss_metadata": "omitted; inferred by ms-swift template",
+        },
         "source": {
             "dataset_version": source_manifest["dataset_version"],
             "manifest_sha256": sha256_file(input_dir / "manifest.json"),

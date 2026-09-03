@@ -46,10 +46,10 @@ def test_perception_row_is_multimodal_and_json_target(tmp_path: Path) -> None:
     row = perception_row(_trace(image))
 
     assert row["images"] == [str(image.resolve())]
-    assert row["messages"][0]["content"].startswith("<image>")
-    target = json.loads(row["messages"][1]["content"])
+    assert row["messages"][1]["content"].startswith("<image>")
+    target = json.loads(row["messages"][2]["content"])
     assert target["scene_description"] == "A red square."
-    assert row["messages"][1]["loss"] is True
+    assert set(row) == {"messages", "images"}
 
 
 def test_perception_conversion_uses_source_split_and_quality_gate(
@@ -130,7 +130,7 @@ def test_accepted_perception_conversion_uses_frozen_dataset(
         (output / "validation.jsonl").read_text(encoding="utf-8")
     )
     assert converted["images"] == [str(image.resolve())]
-    assert converted["messages"][0]["content"].startswith("<image>")
+    assert converted["messages"][1]["content"].startswith("<image>")
     assert audit["passed"] is True
 
 

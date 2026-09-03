@@ -28,5 +28,5 @@ def test_synthetic_smoke_dataset_is_multimodal_and_split(tmp_path: Path) -> None
     assert manifest["synthetic"] is True
     assert manifest["splits"] == {"train": 2, "validation": 1}
     assert Path(row["images"][0]).is_file()
-    assert "<image>" in row["messages"][0]["content"]
-    assert row["messages"][-1]["loss"] is True
+    assert "<image>" in row["messages"][1]["content"]
+    assert set(row["messages"][-1]) == {"role", "content"}

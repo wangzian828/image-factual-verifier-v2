@@ -1,11 +1,9 @@
-# Image Factual Verifier Training
+# IFV Training
 
-`training/` is a small, provider-neutral subproject for dataset conversion,
-reward-ledger construction, GRPO group contracts, checkpoint manifests, and serving
-manifests. It does not run the Agent loop and does not expose evaluator-private gold
-to the runtime model.
+`training/` 提供数据转换、数据审计、奖励账本、GRPO 分组和 checkpoint
+清单。Agent runtime 不在这里执行。
 
-## Local gates
+## 本地检查
 
 ```powershell
 cd training
@@ -15,130 +13,75 @@ python -m compileall -q ifv_training scripts
 git diff --check
 ```
 
-## RL: standard GRPO
-
-The default RL path is deterministic. It consumes `post_rollout_rewards.jsonl`
-directly; no LLM judge is required for training reward.
-
-```powershell
-cd training
-ifv-training build-run-rewards `
-  --deterministic D:\runs\qwen-g4\post_rollout_rewards.jsonl `
-  --rollout-members D:\runs\qwen-g4\rollout_groups.jsonl `
-  --profile configs\rl\deterministic-process-v2.json `
-  --ledger-output D:\runs\qwen-g4\reward_ledgers.jsonl `
-  --group-output D:\runs\qwen-g4\grpo_groups.jsonl
-```
-
-Reward policy:
+## SFT 数据链路
 
 ```text
-engineering error / hard audit failure / missing correctness -> mask
-wrong verdict                                               -> 0.0
-correct verdict                                             -> 0.35 + 0.65 * deterministic process quality
+teacher rollout
+  -> strict trace audit + frozen SFT judge
+  -> accepted-teacher-release
+  -> accepted-dataset
+  -> convert-policy / convert-accepted-perception
+  -> real ms-swift processor verification
+  -> swift sft
 ```
 
-Every episode receives one scalar reward. rLLM / veRL handles standard same-prompt
-normalization; this project does not implement turn-level reward, custom advantage,
-or CW-GRPO.
-
-Optional `--semantic-artifacts` may be supplied for offline diagnostics. Those
-artifacts are recorded in the ledger but never change reward, trainability, or
-positive-buffer eligibility.
-
-## Frozen teacher SFT export
-
-Frozen SFT has one canonical path:
+policy 行是一条完整 Qwen Agent episode，格式为：
 
 ```text
-teacher rollouts + frozen LLM judge
-  -> stage_accepted_teacher_release.py
-  -> canonical accepted release
-  -> export_dataset.py --accepted-release
-  -> ifv-training converters
-  -> run_sft.sh
+system
+user: <image> + task
+assistant: <think>...</think>
+tool_call: {"name":"...","arguments":"{...}"}
+tool_response: ...
+...
+assistant: <think>...</think><answer>...</answer>
 ```
 
-The accepted release is authoritative for the selected trace, eligibility decision,
-and provider-neutral policy/perception rows. The final exporter validates trace SHA-256,
-eligibility identity, split membership, and model-visible schema; it does not reread
-or regenerate policy rows from the original rollout directories.
-
-First stage all accepted teacher candidates:
+转换结果只使用 `tools`、`messages`、`images`。消息只有 `role` 和 `content`；
+不写 `loss`、`channel` 或 `chat_template_kwargs`。目标 Qwen/ms-swift template
+负责生成 labels。
 
 ```powershell
-python scripts/trajectory/stage_accepted_teacher_release.py `
-  --source D:\runs\teacher-run-a D:\runs\teacher-run-a\sft-eligibility-v3 `
-  --source D:\runs\teacher-run-b D:\runs\teacher-run-b\sft-eligibility-v3 `
-  --minimum-accepted-cases 40 `
-  --output-dir D:\training\sft-v1\accepted-teacher-release
-```
-
-Then export only from that canonical release:
-
-```powershell
-python scripts/trajectory/export_dataset.py `
-  --accepted-release D:\training\sft-v1\accepted-teacher-release `
-  --case-split D:\training\sft-v1\case-split\case_split.jsonl `
-  --minimum-accepted-cases 40 `
-  --output-dir D:\training\sft-v1\accepted-dataset
-```
-
-`--semantic-reward-dir` remains optional and diagnostic-only. Deterministic fatal
-reasons such as `incorrect_result`, `engineering_error`, and
-`legacy_core_ownership` are rejected during staging; non-fatal process issues remain
-red flags in the canonical release.
-
-Then convert accepted data for ms-swift:
-
-```powershell
-python -m ifv_training convert-accepted-perception `
-  --input D:\training\sft-v1\accepted-dataset `
-  --output D:\training\sft-v1\ms-swift-perception
 python -m ifv_training convert-policy `
-  --input D:\training\sft-v1\accepted-dataset `
-  --output D:\training\sft-v1\ms-swift-policy
+  --input <accepted-dataset> `
+  --output <ms-swift-policy>
+
+python -m ifv_training convert-accepted-perception `
+  --input <accepted-dataset> `
+  --output <ms-swift-perception>
+
+python -m ifv_training audit --strict --input <ms-swift-policy>
+python -m ifv_training audit --strict --input <ms-swift-perception>
+python scripts/probe/verify_ms_swift_agent_dataset.py `
+  --model <target Qwen checkpoint> `
+  --policy-dir <ms-swift-policy> `
+  --perception-dir <ms-swift-perception> `
+  --output <processor-verification.json>
 ```
 
-## Checkpoint validation and epoch selection
+验证脚本会实际调用 processor，确认原生 `<think>` 在 labels 中、工具调用和工具
+结果进入输入、图片未丢失，并检查上下文长度。
 
-The training process itself remains the existing `swift sft` path. The launcher
-accepts either the framework-native `IFV_MAX_STEPS` or
-`IFV_NUM_TRAIN_EPOCHS`; it does not implement a second trainer.
+## RL
 
-After a run, validate every saved checkpoint that has a matching validation
-metric:
+标准 GRPO 入口消费 `post_rollout_rewards.jsonl`：
 
 ```powershell
-python -m ifv_training validate-checkpoints `
-  --train-log D:\training\logs\exp-1\train.log `
-  --checkpoint-root D:\training\checkpoints\exp-1 `
-  --output D:\training\logs\exp-1\checkpoint-validation.json `
-  --train-rows 50000
+python -m ifv_training build-run-rewards `
+  --deterministic <run>/post_rollout_rewards.jsonl `
+  --rollout-members <run>/rollout_groups.jsonl `
+  --profile <profile.json> `
+  --ledger-output <run>/reward_ledgers.jsonl `
+  --group-output <run>/grpo_groups.jsonl
 ```
 
-The report maps `global_step` to epoch using the observed global batch, records
-missing checkpoint/evaluation pairs, and selects the lowest `eval_loss` by
-default. This is a selection report, not an additional SFT eligibility gate.
+reward ledger 负责记录工程审计、正确性和过程质量；训练框架负责同 prompt 的组内
+归一化。本项目不实现第二套 trainer。
 
-If the existing external behavior evaluator has already evaluated checkpoints,
-it may provide JSONL rows keyed by `global_step` with an explicit
-`behavior_score` (or `selection_score`):
+## 环境边界
 
-```json
-{"global_step": 1000, "metrics": {
-  "behavior_score": 0.81,
-  "verdict_accuracy": 0.84,
-  "evidence_chain_complete_rate": 0.77,
-  "protocol_valid_rate": 0.99
-}}
-```
-
-Then use `--behavior-metrics`; `--selection auto` will use that explicit
-external score when present and otherwise fall back to `eval_loss`. The tool
-does not invent weights for task metrics and does not treat missing behavior
-metrics as a hard training failure.
-
-Development subsets and their derived traces/artifacts/ledgers remain
-`training_prohibited` and must not enter SFT, RL, teacher data, or synthetic training
-data.
+- SFT 和 RL 使用独立环境。
+- 所有目标模型变化都要重新跑真实 processor 验证。
+- `action_only` 不混入 reasoning policy SFT。
+- evaluator private gold、judge 字段和 provider 内部协议不得进入模型可见数据。
+- 本目录不保存 rollout、图片或 checkpoint；这些数据放在服务器 `/gsdata`。

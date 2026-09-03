@@ -189,7 +189,17 @@ def _qwen_parameter_value(value: Any) -> str:
 
 
 def _qwen_think_block(thought: str) -> str:
-    return f"<think>\n{thought.strip()}\n</think>"
+    value = thought.strip()
+    if value.startswith("<think>") and value.endswith("</think>"):
+        return value
+    return f"<think>\n{value}\n</think>"
+
+
+def _qwen_answer_block(answer: str) -> str:
+    value = answer.strip()
+    if value.startswith("<answer>") and value.endswith("</answer>"):
+        return value
+    return f"<answer>\n{value}\n</answer>"
 
 
 def _qwen_tool_call_block(
@@ -208,6 +218,39 @@ def _qwen_tool_call_block(
         )
     lines.extend(["</function>", "</tool_call>"])
     return "\n".join(lines)
+
+
+def _render_tool_response_content(value: str) -> str:
+    """Render only the public tool result for a Qwen tool_response message."""
+
+    raw = value.strip()
+    if raw.startswith("<tool_response>") and raw.endswith("</tool_response>"):
+        raw = raw[len("<tool_response>") : -len("</tool_response>")].strip()
+    try:
+        payload = json.loads(raw)
+    except Exception:
+        return raw
+    if isinstance(payload, Mapping) and "result" in payload:
+        payload = payload["result"]
+    if isinstance(payload, str):
+        return payload.strip()
+    return canonical_json(payload)
+
+
+def _qwen_tool_call_json(
+    *,
+    name: str,
+    arguments: Mapping[str, Any],
+) -> str:
+    """Match the observed ms-swift Agent row: name + JSON argument string."""
+
+    return json.dumps(
+        {
+            "name": name,
+            "arguments": canonical_json(arguments),
+        },
+        ensure_ascii=False,
+    )
 
 
 def _initial_observation_packet(trace: Mapping[str, Any]) -> str:
@@ -396,15 +439,18 @@ def export_trajectory_sft_example(
             "canonical trace requires episode ID, case ID, and image path"
         )
 
+    # This is the provider-neutral form consumed by the Qwen/ms-swift
+    # adapter.  It intentionally mirrors the verified external sample:
+    # tool calls and tool results are separate message roles, while the
+    # assistant thought remains its own supervised assistant message.
     messages: list[dict[str, Any]] = [
         {
             "role": "system",
             "content": (
-                "<ifv_training_mode>compact_full_trajectory_sft</ifv_training_mode>\n"
-                "You are the Image Factual Verifier policy model. Follow each "
-                "stage control and generate the next assistant message or tool "
-                "call. Tool responses are observations, not text to imitate. "
-                "The event history is the investigation context."
+                "You are the Image Factual Verifier policy model. Investigate "
+                "the supplied image, use the available tools when useful, and "
+                "produce the next tool call or final answer. Preserve the "
+                "visible reasoning format used by the Qwen Agent template."
             ),
         },
         {"role": "user", "content": _initial_observation_packet(trace)},
@@ -412,7 +458,7 @@ def export_trajectory_sft_example(
     tool_schemas: dict[str, dict[str, Any]] = {}
     tool_call_count = 0
     candidates = _trajectory_candidate_steps(trace)
-    pending_tool_response: dict[str, Any] | None = None
+    pending_tool_response: str | None = None
     previous_example_type = ""
     for position, (_, step, example_type) in enumerate(candidates):
         metadata = _mapping(step.get("metadata"))
@@ -435,21 +481,22 @@ def export_trajectory_sft_example(
         )
         if position == 0:
             messages[1]["content"] += "\n\n" + initial_stage_packet
-        elif pending_tool_response is not None:
+        if pending_tool_response is not None:
             messages.append(
                 {
-                    "role": "tool",
-                    "tool_call_id": pending_tool_response.get(
-                        "function_call_id", ""
-                    ),
-                    "content": canonical_json(pending_tool_response),
+                    "role": "tool_response",
+                    "content": pending_tool_response,
                 }
             )
             pending_tool_response = None
-            if stage_changed:
-                messages.append({"role": "user", "content": stage_control})
-        elif stage_changed or messages[-1].get("role") == "assistant":
-            messages.append({"role": "user", "content": stage_control})
+        if stage_changed:
+            # Qwen's Agent template does not accept a new user turn after the
+            # initial prompt.  Keep the stage boundary visible by attaching
+            # its compact control to the immediately preceding observation.
+            if messages and messages[-1].get("role") == "tool_response":
+                messages[-1]["content"] += "\n\n" + stage_control
+            else:
+                messages[1]["content"] += "\n\n" + stage_control
         thought = str(step.get("thought", "") or "").strip()
         if thought:
             _assert_no_private_data(thought)
@@ -471,43 +518,46 @@ def export_trajectory_sft_example(
             }
             if not tool_call["name"]:
                 raise ValueError("react trajectory action lacks tool name")
-            function_call_id = str(
-                metadata.get("function_call_id", "")
-            ).strip()
+            if not thought and require_provider_thought:
+                raise ValueError(
+                    "unified-react reasoning SFT requires provider-visible "
+                    "thought for every ReAct action"
+                )
             messages.append(
                 {
                     "role": "assistant",
-                    "content": (
-                        (
-                            _qwen_think_block(thought) + "\n\n"
-                            if thought
-                            else ""
-                        )
-                        + _qwen_tool_call_block(
-                            name=tool_call["name"],
-                            arguments=tool_call["arguments"],
-                        )
+                    "content": _qwen_think_block(thought)
+                    if thought
+                    else "<think>\n\n</think>",
+                }
+            )
+            messages.append(
+                {
+                    "role": "tool_call",
+                    "content": _qwen_tool_call_json(
+                        name=tool_call["name"],
+                        arguments=tool_call["arguments"],
                     ),
-                    "loss": True,
                 }
             )
             tool_call_count += 1
             tool_result = str(step.get("tool_result", "") or "").strip()
             if tool_result:
-                tool_response: dict[str, Any] = {
-                    "function_call_id": function_call_id,
-                    "result": _json_or_text(tool_result),
-                }
-                pending_tool_response = tool_response
+                pending_tool_response = _render_tool_response_content(tool_result)
         else:
+            if not thought and require_provider_thought:
+                raise ValueError(
+                    f"{example_type} SFT turn lacks provider-visible thought"
+                )
+            answer = canonical_json(policy_action)
+            assistant_content = (
+                (_qwen_think_block(thought) + "\n\n" if thought else "")
+                + _qwen_answer_block(answer)
+            )
             messages.append(
                 {
                     "role": "assistant",
-                    "content": (
-                        (_qwen_think_block(thought) + "\n\n" if thought else "")
-                        + canonical_json(policy_action)
-                    ),
-                    "loss": True,
+                    "content": assistant_content,
                 }
             )
         previous_example_type = example_type

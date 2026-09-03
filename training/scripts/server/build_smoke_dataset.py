@@ -44,18 +44,19 @@ def main() -> None:
     row = {
         "messages": [
             {
+                "role": "system",
+                "content": "You are an image perception model. Return only JSON.",
+            },
+            {
                 "role": "user",
                 "content": "<image>Return one JSON object describing only literal visible content.",
             },
             {
                 "role": "assistant",
                 "content": json.dumps(assistant, ensure_ascii=False, sort_keys=True),
-                "loss": True,
             },
         ],
         "images": [str(image_path.resolve())],
-        "channel": "perception",
-        "model_mode": "thinking",
     }
     _write_jsonl(args.output / "train.jsonl", [row, row])
     _write_jsonl(args.output / "validation.jsonl", [row])

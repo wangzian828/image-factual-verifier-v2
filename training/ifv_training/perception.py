@@ -16,7 +16,7 @@ from .io import (
 )
 
 
-OUTPUT_VERSION = "ifv-ms-swift-perception-v1"
+OUTPUT_VERSION = "ifv-ms-swift-perception-v2"
 SUPPORTED_ACCEPTED_DATASET_VERSIONS = {
     "ifv-policy-dataset-v2",
     "ifv-trajectory-sft-dataset-v1",
@@ -28,6 +28,10 @@ Report only literal, visible image content as one JSON object matching the
 PerceptionReport contract. Include scene_description, image_type, entities with
 normalized bounding boxes, positioned text regions, and uncertainty. Do not use
 web knowledge, evaluator labels, or hidden benchmark context."""
+PERCEPTION_SYSTEM = (
+    "You are the Image Factual Verifier perception model. "
+    "Return only the requested visible-content JSON."
+)
 
 
 def _scores(run_dir: Path) -> dict[str, Mapping[str, Any]]:
@@ -51,18 +55,14 @@ def perception_row(trace: Mapping[str, Any]) -> dict[str, Any]:
         raise FileNotFoundError(f"trace image is unavailable: {image_path}")
     return {
         "messages": [
+            {"role": "system", "content": PERCEPTION_SYSTEM},
             {"role": "user", "content": PERCEPTION_INSTRUCTION},
             {
                 "role": "assistant",
                 "content": canonical_json(report),
-                "loss": True,
             },
         ],
         "images": [str(image_path.resolve())],
-        "chat_template_kwargs": {
-            "enable_thinking": False,
-            "max_pixels": 1048576,
-        },
     }
 
 
@@ -96,19 +96,14 @@ def accepted_perception_row(
         instruction = f"<image>\n{instruction}"
     return {
         "messages": [
+            {"role": "system", "content": PERCEPTION_SYSTEM},
             {"role": "user", "content": instruction},
             {
                 "role": "assistant",
                 "content": canonical_json(report),
-                "loss": True,
             },
         ],
         "images": [str(image_path)],
-        "channel": "perception",
-        "chat_template_kwargs": {
-            "enable_thinking": False,
-            "max_pixels": 1048576,
-        },
     }
 
 
@@ -226,7 +221,6 @@ def convert_perception_runs(
                 exclusions["missing_or_invalid_split"] += 1
                 continue
             row = perception_row(trace)
-            row["channel"] = "perception"
             rows_by_split[split].append(row)
             index_rows.append(
                 {
@@ -260,6 +254,13 @@ def convert_perception_runs(
         "schema_version": "ifv-ms-swift-dataset-manifest-v1",
         "dataset_version": OUTPUT_VERSION,
         "framework": {"name": "ms-swift", "version": "4.4.2"},
+        "format_contract": {
+            "name": "ms-swift-qwen-vision",
+            "version": "v2",
+            "message_roles": ["system", "user", "assistant"],
+            "preserves_native_think": False,
+            "assistant_loss_metadata": "omitted; inferred by ms-swift template",
+        },
         "source_split_map_sha256": sha256_file(split_map_path),
         "example_count": sum(len(rows) for rows in rows_by_split.values()),
         "exclusion_counts": dict(sorted(exclusions.items())),

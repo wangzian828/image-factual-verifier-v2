@@ -13,6 +13,21 @@ this private host or project configuration.
 This profile intentionally contains no Jupyter password, API key, private key,
 or other credential.
 
+## 2026-09-03 状态记录
+
+- 本地工作树已完成 Qwen/ms-swift Agent 数据格式迁移：`tools`、
+  `messages`、`images`；消息角色使用 `system`、`user`、`assistant`、
+  `tool_call`、`tool_response`。
+- policy 轨迹保留 provider 原生 `<think>`；不在消息上写 `loss`、
+  `channel` 或 `chat_template_kwargs`，labels 由目标 Qwen processor 生成。
+- 本地验证：主仓库 `481 passed`，training `112 passed`；用户提供的真实
+  ms-swift 样本已通过转换和严格结构审计。
+- 服务器 processor 验证尚未完成：检查时跳板机 `gpu-16` 的
+  `127.0.0.1:8333` 和旧 `9814` 均无 Jupyter 后端监听。连接恢复后必须用
+  `training/scripts/probe/verify_ms_swift_agent_dataset.py` 对实际 checkpoint
+  重新编码验证。
+- 在 processor 验证完成前，不启动 8,490 条全量教师 rollout 或正式 SFT。
+
 ## Non-Negotiable Rules
 
 1. Edit project source only in the local Windows checkout.
