@@ -8,6 +8,9 @@
 Jupyter 后端当日不可达，因此尚未登记为服务器已验收版本；不得把本地测试结果替代
 服务器 processor 验证。
 
+对应本地/GitHub 提交为 `329b94e`。服务器 checkout 仍待 gpu-13 连接恢复后
+fast-forward 并重新登记。
+
 ## 当前运行基线
 
 | 项目 | 值 |

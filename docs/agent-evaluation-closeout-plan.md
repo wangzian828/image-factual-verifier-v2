@@ -321,6 +321,8 @@ SFT。该条仍有有效 perception 目标，因此独立 perception SFT 应为 
   真实 processor 检查 thought labels、工具观察、图片接收和上下文长度。
 - 本地结果：主仓库 `481 passed`；training `112 passed`；用户提供的真实
   `train_traj_0427_tools_swift_sample_182.json` 已完成转换和严格结构审计。
+- 代码提交：`329b94e`，已推送到
+  `codex/gpu13-canary-20260804-plan-relaxation-01`。
 - 服务器状态：2026-09-03 检查时 gpu-13 的 Jupyter 后端未在跳板机
   `127.0.0.1:8333` 或旧 `9814` 监听；因此真实 processor 验证待服务恢复后执行，
- 不能用本地结果代替。
+  不能用本地结果代替。
