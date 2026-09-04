@@ -124,11 +124,19 @@ class TrajectorySFTExample(StrictModel):
             raise ValueError("trajectory must start with a system message")
         if self.messages[1].get("role") != "user":
             raise ValueError("trajectory must have one initial user message")
+        marker_count = sum(
+            str(message.get("content", "")).count("<image>")
+            for message in self.messages
+        )
         if self.images and "<image>" not in str(
             self.messages[1].get("content", "")
         ):
             raise ValueError(
                 "trajectory images require an <image> marker in the initial user"
+            )
+        if marker_count != len(self.images):
+            raise ValueError(
+                "trajectory <image> marker count must match images length"
             )
         if self.messages[-1].get("role") != "assistant":
             raise ValueError("trajectory must end with an assistant target")

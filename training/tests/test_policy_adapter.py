@@ -98,7 +98,7 @@ def _trajectory_row() -> dict:
                 }
             ]
         ),
-        "images": [],
+        "images": ["data:image/jpeg;base64,ZmFrZS1pbWFnZQ=="],
         "token_count_estimate": 100,
         "message_count": 6,
         "tool_call_count": 1,

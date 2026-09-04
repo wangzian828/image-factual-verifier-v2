@@ -1,0 +1,191 @@
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+from src.trajectory.exporter import export_trajectory_sft_example
+from src.trajectory.media_projection import project_trajectory_media
+
+
+def _artifact(runtime_root: Path, content: bytes) -> dict:
+    digest = hashlib.sha256(content).hexdigest()
+    relative = f"{digest[:2]}/{digest}.jpg"
+    path = runtime_root / "artifacts" / "sha256" / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(content)
+    return {
+        "sha256": digest,
+        "media_type": "image/jpeg",
+        "byte_count": len(content),
+        "artifact_path": relative,
+    }
+
+
+def _context(runtime_root: Path, request_id: str, media: list[dict]) -> None:
+    path = runtime_root / "context" / f"{request_id}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "request_id": request_id,
+                "context_items": [
+                    {
+                        "kind": "input_payload",
+                        "media": media,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _step(
+    *,
+    stage: str,
+    action_type: str,
+    request_id: str,
+    policy_action: dict,
+    thought: str,
+    tool_result: str = "",
+) -> dict:
+    return {
+        "stage": stage,
+        "action_type": action_type,
+        "thought": thought,
+        "tool_result": tool_result,
+        "metadata": {
+            "context_request_id": request_id,
+            "policy_input": {
+                "system_instruction": f"{stage} instruction",
+                "input_payload": {"request_id": request_id},
+                "tools": (
+                    [
+                        {
+                            "name": "example_tool",
+                            "description": "Inspect evidence.",
+                            "parameters": {"type": "object"},
+                        }
+                    ]
+                    if stage == "unified_react"
+                    else []
+                ),
+            },
+            "policy_action": policy_action,
+            "react_state_delta": (
+                {"progress": "updated"}
+                if stage == "unified_react"
+                else None
+            ),
+        },
+    }
+
+
+def _trace(tmp_path: Path) -> dict:
+    runtime_root = tmp_path / "runtime" / "case-1" / "attempt-1"
+    original = _artifact(runtime_root, b"original-image")
+    candidate = _artifact(runtime_root, b"candidate-image")
+    crop = _artifact(runtime_root, b"crop-image")
+    _context(runtime_root, "req-000001", [original])
+    _context(runtime_root, "req-000002", [original, candidate])
+    _context(runtime_root, "req-000003", [original, candidate, crop])
+
+    image_path = tmp_path / "original.jpg"
+    image_path.write_bytes(b"fallback-that-should-not-be-used")
+    steps = [
+        _step(
+            stage="unified_react",
+            action_type="tool_call",
+            request_id="req-000001",
+            policy_action={
+                "type": "tool_call",
+                "name": "example_tool",
+                "arguments": {"query": "first"},
+            },
+            thought="Inspect the first route.",
+            tool_result=json.dumps({"status": "success", "result": "first"}),
+        ),
+        _step(
+            stage="unified_react",
+            action_type="tool_call",
+            request_id="req-000002",
+            policy_action={
+                "type": "tool_call",
+                "name": "example_tool",
+                "arguments": {"query": "second"},
+            },
+            thought="Inspect the candidate image.",
+            tool_result=json.dumps({"status": "success", "result": "second"}),
+        ),
+        _step(
+            stage="unified_judgment",
+            action_type="output",
+            request_id="req-000003",
+            policy_action={
+                "type": "output",
+                "verdict": "real",
+                "reason": "The evidence is consistent.",
+            },
+            thought="Conclude from the collected evidence.",
+        ),
+    ]
+    return {
+        "image_id": "case-1",
+        "input_mode": "image_only",
+        "termination": "success",
+        "decision_policy_version": "unified-react-v1",
+        "state": {
+            "input_mode": "image_only",
+            "runtime_store": {"runtime_path": str(runtime_root)},
+            "runtime_case": {
+                "case_id": "case-1",
+                "image_path": str(image_path),
+                "image_sha256": hashlib.sha256(image_path.read_bytes()).hexdigest(),
+            },
+            "investigation_state": {
+                "schema_version": "ifv-unified-react-v1",
+                "bootstrap_tools_completed": [],
+            },
+            "all_steps": steps,
+        },
+    }
+
+
+def test_projection_preserves_new_runtime_images_once(tmp_path: Path) -> None:
+    trace = _trace(tmp_path)
+    steps = trace["state"]["all_steps"]
+
+    projection = project_trajectory_media(
+        trace,
+        candidate_steps=steps,
+        fallback_image_path=trace["state"]["runtime_case"]["image_path"],
+    )
+
+    assert len(projection.initial_images) == 1
+    assert {index: len(images) for index, images in projection.images_after_step.items()} == {
+        0: 1,
+        1: 1,
+    }
+    assert len(projection.images) == 3
+    assert len(set(projection.images)) == 3
+    assert projection.missing == []
+
+
+def test_trajectory_export_matches_image_markers_to_portable_media(
+    tmp_path: Path,
+) -> None:
+    exported = export_trajectory_sft_example(_trace(tmp_path))
+
+    assert len(exported.images) == 3
+    assert all(image.startswith("data:image/jpeg;base64,") for image in exported.images)
+    assert sum(
+        message["content"].count("<image>") for message in exported.messages
+    ) == 3
+    tool_responses = [
+        message["content"]
+        for message in exported.messages
+        if message["role"] == "tool_response"
+    ]
+    assert len(tool_responses) == 2
+    assert all(content.count("<image>") == 1 for content in tool_responses)

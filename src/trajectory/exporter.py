@@ -17,6 +17,10 @@ from src.orchestrator.evidence_semantics import (
 )
 from src.orchestrator.investigation_models import target_fact_rows
 from src.orchestrator.tool_result import parse_tool_result
+from src.trajectory.media_projection import (
+    image_markers,
+    project_trajectory_media,
+)
 
 
 FORBIDDEN_PRIVATE_KEYS = frozenset(
@@ -458,7 +462,17 @@ def export_trajectory_sft_example(
     tool_schemas: dict[str, dict[str, Any]] = {}
     tool_call_count = 0
     candidates = _trajectory_candidate_steps(trace)
+    media_projection = project_trajectory_media(
+        trace,
+        candidate_steps=[step for _, step, _ in candidates],
+        fallback_image_path=image_path,
+    )
+    if not media_projection.initial_images:
+        raise ValueError(
+            "trajectory SFT export cannot recover the initial image"
+        )
     pending_tool_response: str | None = None
+    pending_tool_step_index: int | None = None
     previous_example_type = ""
     for position, (_, step, example_type) in enumerate(candidates):
         metadata = _mapping(step.get("metadata"))
@@ -482,6 +496,14 @@ def export_trajectory_sft_example(
         if position == 0:
             messages[1]["content"] += "\n\n" + initial_stage_packet
         if pending_tool_response is not None:
+            projected_images = media_projection.images_after_step.get(
+                int(pending_tool_step_index or 0),
+                [],
+            )
+            if projected_images:
+                pending_tool_response += (
+                    "\n\n" + image_markers(len(projected_images))
+                )
             messages.append(
                 {
                     "role": "tool_response",
@@ -489,6 +511,7 @@ def export_trajectory_sft_example(
                 }
             )
             pending_tool_response = None
+            pending_tool_step_index = None
         if stage_changed:
             # Qwen's Agent template does not accept a new user turn after the
             # initial prompt.  Keep the stage boundary visible by attaching
@@ -544,6 +567,7 @@ def export_trajectory_sft_example(
             tool_result = str(step.get("tool_result", "") or "").strip()
             if tool_result:
                 pending_tool_response = _render_tool_response_content(tool_result)
+                pending_tool_step_index = position
         else:
             if not thought and require_provider_thought:
                 raise ValueError(
@@ -595,7 +619,7 @@ def export_trajectory_sft_example(
             source_metadata.get("process_reference_protocol_version", "")
         ),
         "messages": messages,
-        "images": [image_path],
+        "images": media_projection.images,
         "tools": tools,
         "token_count_estimate": token_count,
         "message_count": len(messages),

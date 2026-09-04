@@ -234,7 +234,7 @@ def _to_qwen_agent_messages(messages: list[Mapping[str, Any]]) -> list[dict[str,
 def _validate_qwen_agent_messages(
     messages: list[Mapping[str, Any]],
     *,
-    require_image: bool,
+    image_count: int,
 ) -> None:
     if len(messages) < 3:
         raise ValueError("Qwen Agent row requires at least three messages")
@@ -242,8 +242,16 @@ def _validate_qwen_agent_messages(
         raise ValueError("Qwen Agent row must start with one system message")
     if messages[1].get("role") != "user":
         raise ValueError("Qwen Agent row must have one initial user message")
-    if require_image and "<image>" not in str(messages[1].get("content", "")):
+    if image_count and "<image>" not in str(messages[1].get("content", "")):
         raise ValueError("Qwen Agent image row requires <image> in initial user")
+    marker_count = sum(
+        str(message.get("content", "")).count("<image>")
+        for message in messages
+    )
+    if marker_count != image_count:
+        raise ValueError(
+            "Qwen Agent <image> marker count must match images length"
+        )
     if messages[-1].get("role") != "assistant":
         raise ValueError("Qwen Agent row must end with an assistant target")
     if any(str(message.get("role")) == "user" for message in messages[2:]):
@@ -325,7 +333,7 @@ def convert_policy_row(row: Mapping[str, Any]) -> dict[str, Any]:
         or not all(isinstance(item, str) and item.strip() for item in images)
     ):
         raise ValueError("trajectory SFT row images must be a non-empty list")
-    _validate_qwen_agent_messages(messages, require_image=bool(images))
+    _validate_qwen_agent_messages(messages, image_count=len(images))
     tools = row.get("tools", "")
     if tools is None:
         tools = ""

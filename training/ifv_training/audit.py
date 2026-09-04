@@ -67,7 +67,7 @@ def audit_derived_dataset(dataset_dir: Path) -> dict[str, Any]:
                     raise ValueError(f"{location}.messages is invalid")
                 _validate_qwen_agent_messages(
                     messages,
-                    require_image=bool(row.get("images")),
+                    image_count=len(row.get("images") or []),
                 )
                 for message_index, message in enumerate(messages):
                     _audit_message(message, f"{location}.messages[{message_index}]")
