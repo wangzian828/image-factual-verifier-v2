@@ -1132,7 +1132,7 @@ def _classify_initial_outcomes(
             "expected_verdict": expected,
             "final_verdict": str(trace.get("verdict") or "").lower(),
             "sft_eligibility_pass": passed,
-            "fact_alignment": metrics.get("fact_alignment"),
+            "target_scope": metrics.get("target_scope"),
             "decision_support": metrics.get("decision_support"),
             "retrieval_quality": metrics.get("retrieval_quality"),
             "trajectory_conduct": metrics.get("trajectory_conduct"),

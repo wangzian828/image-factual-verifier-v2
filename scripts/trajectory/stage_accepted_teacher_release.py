@@ -153,12 +153,13 @@ def sft_candidate_rank(
     metrics = eligibility.get("metrics") or {}
     gates = eligibility.get("gates") or {}
     passed = int(gates.get("sft_eligibility_pass") is True)
-    alignment = {
-        "same_image_fact": 2,
-        "compatible_subfact": 1,
-        "different_fact": 0,
+    target_scope = {
+        "direct_target": 3,
+        "decisive_subfact": 2,
+        "related_but_incomplete": 1,
+        "unrelated_fact": 0,
         "unclear": 0,
-    }.get(str(metrics.get("fact_alignment", "")), 0)
+    }.get(str(metrics.get("target_scope", "")), 0)
     retrieval = {
         "effective": 2,
         "mixed": 1,
@@ -185,7 +186,7 @@ def sft_candidate_rank(
     confidence = int(round(float(metrics.get("confidence", 0.0) or 0.0) * 1000))
     return (
         passed,
-        alignment,
+        target_scope,
         retrieval,
         conduct,
         overclaiming,

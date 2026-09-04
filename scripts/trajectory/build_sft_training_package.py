@@ -404,7 +404,7 @@ def _build_trajectory_catalog(
                 "verdict_correct": metrics.get("verdict_correct"),
                 "trajectory_conduct": metrics.get("trajectory_conduct"),
                 "llm_judge": {
-                    "fact_alignment": judgment.get("fact_alignment"),
+                    "target_scope": judgment.get("target_scope"),
                     "decision_support": judgment.get("decision_support"),
                     "retrieval_quality": judgment.get("retrieval_quality"),
                     "overclaiming": judgment.get("overclaiming"),

@@ -19,7 +19,10 @@ from src.trajectory.sft_eligibility import (
     sft_eligibility_metrics,
     sft_eligibility_passes,
 )
-from scripts.trajectory.stage_accepted_teacher_release import _eligible as stage_eligible
+from scripts.trajectory.stage_accepted_teacher_release import (
+    _eligible as stage_eligible,
+    sft_candidate_rank,
+)
 
 
 def _trace(*, verdict: str = "fake") -> dict[str, Any]:
@@ -682,6 +685,27 @@ def test_unrelated_fact_is_rejected_as_unrelated_image_fact() -> None:
         strict_trace_audit_pass=True,
         engineering_valid=True,
     )
+
+
+def test_candidate_rank_uses_new_target_scope() -> None:
+    direct = build_sft_eligibility_artifact(
+        trace=_trace(),
+        trace_sha256="b" * 64,
+        packet=_packet(),
+        judgment=_judgment(target_scope="direct_target"),
+        judge_audit={},
+        strict_trace_audit_pass=True,
+    )
+    subfact = build_sft_eligibility_artifact(
+        trace=_trace(),
+        trace_sha256="c" * 64,
+        packet=_packet(),
+        judgment=_judgment(target_scope="decisive_subfact"),
+        judge_audit={},
+        strict_trace_audit_pass=True,
+    )
+
+    assert sft_candidate_rank(direct) > sft_candidate_rank(subfact)
 
 
 def test_nonfatal_audit_warning_does_not_veto_sft() -> None:
