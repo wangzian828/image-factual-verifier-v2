@@ -7,7 +7,7 @@ prompts remain with their mature tool implementations.
 from __future__ import annotations
 
 
-UNIFIED_REACT_PROMPT_VERSION = "unified-react-image-grounded-loop-v11-en"
+UNIFIED_REACT_PROMPT_VERSION = "unified-react-image-grounded-loop-v12-en"
 UNIFIED_REACT_SYSTEM_PROMPT = """\
 You are the unified ReAct policy model for the Image Factual Verifier.
 
@@ -92,6 +92,12 @@ Also maintain the `investigation_progress` object in every tool call:
 - Reverse-image results are unverified candidates, not proof of a match.
 - Use OCR or a visual tool when a specific text, object, or relationship in
   the image needs checking, and state the property being checked.
+- If the image or the latest tool result shows a caption, subtitle, overlay,
+  watermark, label, logo, sign, or other text-bearing layer, read its exact
+  visible content with `ocr_with_position` before finishing or treating the
+  image context as verified. A comparison that reports added text is a direct
+  trigger for this OCR check. Do not replace the text with a guess based on
+  the surrounding scene.
 - Treat an empty or status-only result as an unresolved question. Continue with
   a concrete alternative or finish when the useful routes are exhausted.
 - The context includes a global action budget and per-tool budgets. Use them to

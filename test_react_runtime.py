@@ -201,6 +201,89 @@ def test_text_image_search_enters_discovery_ledger_without_becoming_evidence() -
     assert context["budget"]["actions_used"] == 1
 
 
+def test_text_overlay_comparison_requires_ocr_before_next_action() -> None:
+    state = new_unified_react_runtime_state(_case())
+    _bootstrap(state)
+
+    update = reduce_react_action(
+        state,
+        tool_name="compare_with_reference",
+        tool_args={
+            "reference_url": "https://example.test/reference.jpg",
+            "investigation_progress": _progress(),
+        },
+        call_id="compare-overlay",
+        serialized_result=json.dumps(
+            {
+                "status": "success",
+                "comparison_status": "same_capture_or_near_duplicate",
+                "differences": [
+                    {
+                        "region": "bottom edge",
+                        "description": (
+                            "Image 2 has an added caption text and emoji overlay."
+                        ),
+                        "type": "addition",
+                        "significance": "low",
+                        "is_edit_evidence": True,
+                    }
+                ],
+                "overall_observation": (
+                    "Image 2 is the same capture with a caption overlay."
+                ),
+            }
+        ),
+    )
+
+    assert update["accepted"] is True
+    assert state.required_text_reading
+    assert available_unified_react_runtime_tools(state) == [
+        "ocr_with_position"
+    ]
+    context = json.loads(render_react_runtime_context(state))
+    assert context["required_followups"][0]["tool"] == "ocr_with_position"
+    assert "caption" in context["required_followups"][0]["reason"]
+    assert validate_react_action(
+        state,
+        tool_name="finish_investigation",
+        tool_args={
+            "rationale": "Finish.",
+            "investigation_progress": _progress(
+                "decision_capable_support",
+                "The image matches a source.",
+            ),
+        },
+    )
+
+    ocr_update = reduce_react_action(
+        state,
+        tool_name="ocr_with_position",
+        tool_args={"investigation_progress": _progress()},
+        call_id="ocr-overlay",
+        serialized_result=json.dumps(
+            {
+                "status": "success",
+                "full_text": "Rescue in Colombia",
+                "text_regions": [
+                    {
+                        "text": "Rescue in Colombia",
+                        "bbox_quad": [
+                            [0.1, 0.8],
+                            [0.9, 0.8],
+                            [0.9, 0.95],
+                            [0.1, 0.95],
+                        ],
+                    }
+                ],
+            }
+        ),
+    )
+
+    assert ocr_update["accepted"] is True
+    assert state.required_text_reading == ""
+    assert "text_search" in available_unified_react_runtime_tools(state)
+
+
 def test_tool_availability_does_not_depend_on_model_progress_status() -> None:
     state = new_unified_react_runtime_state(_case())
     expected = available_unified_react_runtime_tools(state)

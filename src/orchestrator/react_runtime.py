@@ -185,6 +185,7 @@ class UnifiedReactState(BaseModel):
     )
     open_questions: list[str] = Field(default_factory=list, max_length=12)
     current_focus: str = Field(default="", max_length=800)
+    required_text_reading: str = Field(default="", max_length=800)
     action_count: int = Field(default=0, ge=0, le=MAX_REACT_ACTIONS)
     no_gain_streak: int = Field(default=0, ge=0, le=MAX_REACT_ACTIONS)
     stop_reason: str = Field(default="", max_length=200)
@@ -244,6 +245,118 @@ def _one_line(value: Any, limit: int = 800) -> str:
     return text[:limit]
 
 
+_TEXT_BEARING_ROLES = frozenset(
+    {
+        "scene_text",
+        "overlay_text",
+        "watermark",
+        "caption",
+        "identity_label",
+        "claim_text",
+        "unknown",
+    }
+)
+_TEXT_READING_HINT = re.compile(
+    r"(?:caption|subtitle|overlay|watermark|emoji|text|word|writing|"
+    r"label|logo|sign|文字|字幕|配文|叠加|水印|表情|标题|标识)",
+    re.IGNORECASE,
+)
+
+
+def _text_reading_followup(
+    tool_name: str,
+    payload: Mapping[str, Any],
+) -> str:
+    """Return a bounded OCR follow-up when a tool exposes unread text.
+
+    This is a routing guard, not a verdict rule. It only prevents the policy
+    from finishing after noticing a text-bearing layer without reading it.
+    """
+
+    if not isinstance(payload, Mapping):
+        return ""
+    if tool_name == "compare_with_reference":
+        differences = payload.get("differences")
+        if isinstance(differences, list):
+            for difference in differences:
+                if not isinstance(difference, Mapping):
+                    continue
+                description = " ".join(
+                    [
+                        str(difference.get("description", "")),
+                        str(difference.get("type", "")),
+                    ]
+                )
+                if (
+                    _TEXT_READING_HINT.search(description)
+                    and str(difference.get("type", "")).strip().lower()
+                    in {"addition", "modification", "removal", "watermark"}
+                ):
+                    return (
+                        "The latest image comparison found a text-bearing layer "
+                        "(caption, overlay, watermark, label, or similar). Read "
+                        "its exact visible content with ocr_with_position before "
+                        "finishing or treating the image context as verified."
+                    )
+        if _TEXT_READING_HINT.search(
+            str(payload.get("overall_observation", ""))
+        ):
+            return (
+                "The latest image comparison mentions visible text or an overlay. "
+                "Read its exact visible content with ocr_with_position before "
+                "finishing or treating the image context as verified."
+            )
+    if tool_name == "perceive_scene":
+        entities = payload.get("entities")
+        if isinstance(entities, list):
+            for entity in entities:
+                if not isinstance(entity, Mapping):
+                    continue
+                role = str(entity.get("text_role", "")).strip().lower()
+                if role in _TEXT_BEARING_ROLES:
+                    return (
+                        "The scene contains a text-bearing region. Read its exact "
+                        "visible content with ocr_with_position before finishing "
+                        "or treating the image context as verified."
+                    )
+        visible_text = " ".join(
+            [
+                str(payload.get("scene_description", "")),
+                " ".join(
+                    str(item)
+                    for item in payload.get("notable_details", []) or []
+                ),
+            ]
+        )
+        if _TEXT_READING_HINT.search(visible_text):
+            return (
+                "The scene mentions visible text or a text-bearing region. Read "
+                "its exact content with ocr_with_position before finishing or "
+                "treating the image context as verified."
+            )
+    return ""
+
+
+def _has_ocr_attempt(state: UnifiedReactState) -> bool:
+    return any(
+        str(item.get("tool_name", "")).strip() == "ocr_with_position"
+        for item in state.attempted_actions
+        if isinstance(item, Mapping)
+    )
+
+
+def _append_open_question(
+    state: UnifiedReactState,
+    question: str,
+) -> None:
+    normalized = _one_line(question, 800)
+    if not normalized:
+        return
+    state.open_questions = list(
+        dict.fromkeys([*state.open_questions, normalized])
+    )[-12:]
+
+
 def _stable_id(prefix: str, *parts: Any) -> str:
     raw = json.dumps(parts, ensure_ascii=False, sort_keys=True, default=str)
     return f"{prefix}-{hashlib.sha256(raw.encode('utf-8')).hexdigest()[:20]}"
@@ -263,10 +376,13 @@ def available_unified_react_runtime_tools(
 ) -> list[str]:
     if state.action_count >= MAX_REACT_ACTIONS:
         return ["finish_investigation"]
+    exhausted = _exhausted_tools(state)
+    if state.required_text_reading and "ocr_with_position" not in exhausted:
+        return ["ocr_with_position"]
     return [
         name
         for name in REACT_RUNTIME_TOOLS
-        if name not in _exhausted_tools(state)
+        if name not in exhausted
     ] + ["finish_investigation"]
 
 
@@ -586,6 +702,15 @@ def validate_react_action(
     )
     if progress_error:
         return progress_error
+    if (
+        state.required_text_reading
+        and tool_name != "ocr_with_position"
+        and state.action_count < MAX_REACT_ACTIONS
+    ):
+        return (
+            "the current investigation has an unread text-bearing region; "
+            "call ocr_with_position before choosing another action or finishing"
+        )
     if tool_name == "finish_investigation":
         if not _one_line(tool_args.get("rationale")):
             return "finish_investigation requires a rationale"
@@ -1270,6 +1395,19 @@ def reduce_react_action(
             "rejected_reason": progress_error,
         }
     if (
+        state.required_text_reading
+        and tool_name != "ocr_with_position"
+        and state.action_count < MAX_REACT_ACTIONS
+    ):
+        return {
+            "accepted": False,
+            "rejected_reason": (
+                "the current investigation has an unread text-bearing region; "
+                "call ocr_with_position before choosing another action or "
+                "finishing"
+            ),
+        }
+    if (
         tool_name == "finish_investigation"
         and progress["status"]
         not in {"decision_capable_support", "decision_capable_refute"}
@@ -1340,9 +1478,10 @@ def reduce_react_action(
             error=str(payload.get("error", "tool failed")),
         )
         state.no_gain_streak += 1
-        state.open_questions = list(
-            dict.fromkeys([*state.open_questions, f"{tool_name}: retry or choose another route"])
-        )[-12:]
+        _append_open_question(
+            state,
+            f"{tool_name}: retry or choose another route",
+        )
         state.recent_actions.append(
             {
                 "tool_name": tool_name,
@@ -1356,6 +1495,7 @@ def reduce_react_action(
             "accepted": True,
             "tool_success": False,
             "failure": failure,
+            "required_text_reading": state.required_text_reading,
             "next_available_tools": available_unified_react_runtime_tools(state),
         }
 
@@ -1375,14 +1515,33 @@ def reduce_react_action(
     state.no_gain_streak = 0 if gain else state.no_gain_streak + 1
     limitations = payload.get("limitations")
     if isinstance(limitations, list):
-        state.open_questions = list(
-            dict.fromkeys(
-                [
-                    *state.open_questions,
-                    *(_one_line(item, 500) for item in limitations if _one_line(item)),
-                ]
+        for item in limitations:
+            _append_open_question(state, _one_line(item, 500))
+
+    if tool_name == "ocr_with_position":
+        pending_text_reading = state.required_text_reading
+        state.required_text_reading = ""
+        if pending_text_reading:
+            state.open_questions = [
+                item
+                for item in state.open_questions
+                if item != pending_text_reading
+            ]
+        text_regions = payload.get("text_regions")
+        if not str(payload.get("full_text", "")).strip() and not (
+            isinstance(text_regions, list)
+            and any(item not in (None, "", {}) for item in text_regions)
+        ):
+            _append_open_question(
+                state,
+                "OCR completed without readable text in the requested image.",
             )
-        )[-12:]
+    else:
+        followup = _text_reading_followup(tool_name, payload)
+        if followup and not _has_ocr_attempt(state):
+            state.required_text_reading = followup
+            _append_open_question(state, followup)
+
     state.recent_actions.append(
         {
             "tool_name": tool_name,
@@ -1400,6 +1559,7 @@ def reduce_react_action(
         "created_discovery_ids": discovery_ids,
         "created_evidence_ids": evidence_ids,
         "substantive_gain": gain,
+        "required_text_reading": state.required_text_reading,
         "next_available_tools": available_unified_react_runtime_tools(state),
     }
 
@@ -1418,6 +1578,16 @@ def render_react_runtime_context(
             "The current and prior tool observations remain in the interaction "
             "history. This packet contains runtime control only; it does not "
             "summarize or replace any observation."
+        ),
+        "required_followups": (
+            [
+                {
+                    "tool": "ocr_with_position",
+                    "reason": state.required_text_reading,
+                }
+            ]
+            if state.required_text_reading
+            else []
         ),
         "investigation_progress": dict(state.investigation_progress),
         "budget": {
@@ -1447,6 +1617,7 @@ def compile_react_judgment_basis(
         "discoveries": state.discoveries,
         "failures": state.failures,
         "open_questions": state.open_questions,
+        "required_text_reading": state.required_text_reading,
         "investigation_progress": dict(state.investigation_progress),
         "attempted_queries": state.attempted_queries,
         "visited_urls": state.visited_urls,

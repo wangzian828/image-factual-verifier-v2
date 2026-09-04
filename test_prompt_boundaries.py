@@ -38,6 +38,9 @@ def test_active_prompts_are_current_and_semantically_bounded() -> None:
     assert "finish_investigation" in react_prompt
     assert "The runtime records evidence, IDs, and state" in react_prompt
     assert "generic visual impression" in react_prompt
+    assert "text-bearing layer" in react_prompt
+    assert "read its exact visible content with" in react_prompt
+    assert "added text is a direct trigger" in react_prompt
 
     browse_prompt = " ".join(EXTRACT_PROMPT.split())
     assert "missing mention is not refutation" in browse_prompt
