@@ -264,7 +264,12 @@ class APIBackend(LLMBackend):
         if self.provider == "necodex":
             return os.getenv("NECODEX_BASE_URL", "https://api.sbbbbbbbbb.xyz/v1")
         elif self.provider == "gpustack":
-            return "http://10.254.47.36/v1"
+            value = os.getenv("GPUSTACK_BASE_URL", "").strip()
+            if not value:
+                raise ValueError(
+                    "gpustack requires an explicit GPUSTACK_BASE_URL"
+                )
+            return value
         elif self.provider == "lmdeploy":
             return os.getenv("LMDEPLOY_BASE_URL", "http://127.0.0.1:8899/v1")
         elif self.provider == "qwen_local":
@@ -273,7 +278,7 @@ class APIBackend(LLMBackend):
 
     def _resolve_proxy(self) -> Optional[str]:
         if self.provider == "gpustack":
-            return os.getenv("GPUSTACK_PROXY", "http://100.10.1.210:80")
+            return os.getenv("GPUSTACK_PROXY", "").strip() or None
         if self.provider in {"lmdeploy", "qwen_local"}:
             return None  # Local service, no proxy needed
         # Use HTTP proxy for external API calls

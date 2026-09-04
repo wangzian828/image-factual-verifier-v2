@@ -39,7 +39,7 @@ policy 行的训练输入只保留：
     {"role": "tool_response", "content": "..."},
     {"role": "assistant", "content": "<think>...</think><answer>...</answer>"}
   ],
-  "images": ["/absolute/path/to/image.jpg"]
+  "images": ["data:image/jpeg;base64,..."]
 }
 ```
 
@@ -48,15 +48,20 @@ policy 行的训练输入只保留：
 真实 ms-swift 样本允许在一个工具结果后紧接另一个 `tool_call`；导出器保留这种顺序，
 但每个工具调用都必须有配对的工具结果。
 
-`<think>` 必须来自 provider 原生返回的 thought。导出器不会凭空补 thought；没有可读
-thought 的轨迹不进入 reasoning SFT。
+每个 ReAct 动作的 `<think>` 必须来自 provider 原生返回。导出器不会凭空补
+thought；缺少 ReAct thought 的轨迹不进入 reasoning SFT。最终 Judgment 或其他
+结构化输出阶段没有 thought，不会单独导致一条完整 ReAct 轨迹被拒绝。
 
 ## 3. 上下文与图片
 
 - 初始 user 消息提供图片占位符和任务。
 - 每轮工具结果在生成后进入下一轮一次。
 - 不把累计 workspace、旧 request snapshot 或同一工具结果重复嵌入每轮。
-- 图片通过顶层 `images` 传给 processor，不把 base64 写进文本历史。
+- 正式发布包把图片写在顶层 `images`，内容为可迁移 data URI；base64 不进入
+  `messages[].content`。
+- 初始原图对应初始 user 的 `<image>`；搜索候选图、裁剪图和聚焦复查图对应产生
+  它们的 `tool_response` 后追加的 `<image>`。
+- 图片按 SHA-256 去重，marker 总数必须等于 `images` 总数。
 - 主 Agent 使用受控原图；视觉工具按需单独接收原图、裁剪图或参考图。
 
 这样既保留调查所需上下文，也避免完整状态在 episode 中指数式重复。
@@ -126,5 +131,6 @@ python scripts/probe/verify_ms_swift_agent_dataset.py `
   --output <processor-verification.json>
 ```
 
-验证脚本会检查 thought 是否进入 labels、tool call/response 是否进入编码输入、图片
-是否被 processor 接收，以及最长样本是否超过上下文上限。
+验证脚本会按 Qwen 模板实际渲染的 `<function=...>` /
+`<parameter=...>` 检查工具调用，检查 thought 是否进入 labels、tool response 是否
+进入编码输入、图片是否被 processor 接收，以及最长样本是否超过上下文上限。

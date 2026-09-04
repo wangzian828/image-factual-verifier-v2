@@ -3,17 +3,24 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ACTION="${1:-status}"
-MODEL="${IFV_QWEN35_MODEL:-/gsdata/home/wza/models/Qwen3.5-9B}"
+MODEL="${IFV_QWEN35_MODEL:-${IFV_MODEL_ID:-}}"
 SERVED_NAME="${IFV_VLLM_SERVED_NAME:-ifv-qwen3.5-9b}"
 PORT="${IFV_VLLM_PORT:-8901}"
 TP_SIZE="${IFV_VLLM_TP_SIZE:-2}"
 CONTEXT_LENGTH="${IFV_VLLM_CONTEXT_LENGTH:-131072}"
-ENV_PREFIX="${IFV_VLLM_ENV_PREFIX:-/gsdata/home/wza/conda/envs/ifv-qwen35-vllm-nightly}"
-STATE_ROOT="${IFV_TRAINING_DATA_ROOT:-/gsdata/home/wza/image-factual-verifier-v2-data/training}/logs/serving/$SERVED_NAME"
+ENV_PREFIX="${IFV_VLLM_ENV_PREFIX:-${CONDA_PREFIX:-}}"
+TRAINING_ROOT="${IFV_TRAINING_DATA_ROOT:-${IFV_DATA_ROOT:+${IFV_DATA_ROOT}/training}}"
+TRAINING_ROOT="${TRAINING_ROOT:-${XDG_DATA_HOME:-${HOME}/.local/share}/image-factual-verifier/training}"
+STATE_ROOT="${TRAINING_ROOT}/logs/serving/$SERVED_NAME"
 PID_FILE="$STATE_ROOT/server.pid"
 LOG_FILE="$STATE_ROOT/server.log"
 
 mkdir -p "$STATE_ROOT"
+
+if [[ -z "$MODEL" || -z "$ENV_PREFIX" ]]; then
+  echo "set IFV_QWEN35_MODEL/IFV_MODEL_ID and IFV_VLLM_ENV_PREFIX" >&2
+  exit 2
+fi
 
 read_pid() {
   [[ -s "$PID_FILE" ]] || return 1
@@ -51,7 +58,10 @@ case "$ACTION" in
       exit 0
     fi
     rm -f "$PID_FILE"
-    export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-4,5}"
+    if [[ -z "${CUDA_VISIBLE_DEVICES:-}" ]]; then
+      echo "set CUDA_VISIBLE_DEVICES explicitly for this server" >&2
+      exit 2
+    fi
     : >"$LOG_FILE"
     setsid bash "$SCRIPT_DIR/start_vllm_qwen35.sh" \
       "$MODEL" "$SERVED_NAME" "$PORT" "$TP_SIZE" "$CONTEXT_LENGTH" \

@@ -6,6 +6,8 @@ import os
 from pathlib import Path
 from typing import Optional
 
+from src.storage import runtime_lock_root
+
 
 def _positive_env(name: str, default: int) -> int:
     raw = os.getenv(name, str(default))
@@ -87,13 +89,7 @@ class GeminiRunGuard:
             # lock from its worker shell.  Do not double-own that directory.
             return cls(Path(inherited_lock), acquired=False)
 
-        data_root = Path(
-            os.getenv(
-                "IFV_DATA_ROOT",
-                "/gsdata/home/wza/image-factual-verifier-v2-data",
-            )
-        )
-        lock_dir = data_root / "runs" / "_locks" / "gemini-agent-eval.lock"
+        lock_dir = runtime_lock_root() / "gemini-agent-eval.lock"
         lock_dir.parent.mkdir(parents=True, exist_ok=True)
 
         for _attempt in range(2):

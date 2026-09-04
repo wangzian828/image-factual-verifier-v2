@@ -208,6 +208,37 @@ def upload_file(
         )
 
 
+def download_file(
+    session: requests.Session,
+    base: str,
+    remote_path: str,
+    local_path: Path,
+    request_timeout: float,
+) -> None:
+    """Download one Jupyter-visible file without printing its contents."""
+
+    url = _contents_url(base, remote_path)
+    response = session.get(
+        url,
+        params={"content": 1, "format": "base64"},
+        timeout=max(request_timeout, 120.0),
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if payload.get("type") != "file" or payload.get("format") != "base64":
+        raise RuntimeError("remote download target is not a base64 file")
+    content = base64.b64decode(str(payload.get("content", "")), validate=True)
+    local_path = local_path.expanduser().resolve()
+    local_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = local_path.with_name(f".{local_path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        temporary.write_bytes(content)
+        temporary.replace(local_path)
+    finally:
+        temporary.unlink(missing_ok=True)
+    print(f"downloaded {len(content)} bytes to {local_path}")
+
+
 def execute_code(
     session: requests.Session,
     base: str,
@@ -357,6 +388,12 @@ def parse_args() -> argparse.Namespace:
         metavar=("LOCAL_PATH", "REMOTE_PATH"),
         help="upload one file through the Jupyter Contents API with resume support",
     )
+    parser.add_argument(
+        "--download",
+        nargs=2,
+        metavar=("REMOTE_PATH", "LOCAL_PATH"),
+        help="download one file through the Jupyter Contents API",
+    )
     parser.add_argument("--upload-chunk-mib", type=int, default=8)
     parser.add_argument("--stdin", action="store_true")
     parser.add_argument("code", nargs="?", default="")
@@ -404,6 +441,15 @@ def main() -> int:
             args.upload[1],
             args.request_timeout,
             max(1, int(args.upload_chunk_mib)) * 1024 * 1024,
+        )
+        return 0
+    if args.download:
+        download_file(
+            session,
+            base,
+            args.download[0],
+            Path(args.download[1]),
+            args.request_timeout,
         )
         return 0
 

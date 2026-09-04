@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import tempfile
 from pathlib import Path
 from typing import Optional, Union
 
@@ -30,3 +31,21 @@ def default_eval_root() -> Path:
 
 def default_tool_cache_dir() -> str:
     return str(data_path("cache/tools", ".cache/tool_results"))
+
+
+def runtime_lock_root() -> Path:
+    """Return a cross-process lock root without assuming a server mount."""
+
+    root = data_root()
+    if root is not None:
+        return root.expanduser().resolve() / "runs" / "_locks"
+    user_scope = (
+        str(os.getuid())
+        if hasattr(os, "getuid")
+        else os.getenv("USERNAME", os.getenv("USER", "user"))
+    )
+    return (
+        Path(tempfile.gettempdir())
+        / f"image-factual-verifier-{user_scope}"
+        / "locks"
+    )

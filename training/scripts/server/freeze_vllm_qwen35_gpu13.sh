@@ -2,12 +2,17 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-ENV_PREFIX="${IFV_VLLM_ENV_PREFIX:-/gsdata/home/wza/conda/envs/ifv-qwen35-vllm-nightly}"
-MODEL="${IFV_QWEN35_MODEL:-/gsdata/home/wza/models/Qwen3.5-9B}"
-ARTIFACT_ROOT="${IFV_TRAINING_DATA_ROOT:-/gsdata/home/wza/image-factual-verifier-v2-data/training}"
+ENV_PREFIX="${IFV_VLLM_ENV_PREFIX:-}"
+MODEL="${IFV_QWEN35_MODEL:-${IFV_MODEL_ID:-}}"
+ARTIFACT_ROOT="${IFV_TRAINING_DATA_ROOT:-${IFV_DATA_ROOT:+${IFV_DATA_ROOT}/training}}"
+ARTIFACT_ROOT="${ARTIFACT_ROOT:-${XDG_DATA_HOME:-${HOME}/.local/share}/image-factual-verifier/training}"
 ARTIFACT_DIR="$ARTIFACT_ROOT/logs/environments/ifv-qwen35-vllm-nightly"
 PYTHON="$ENV_PREFIX/bin/python"
 
+if [[ -z "$ENV_PREFIX" || -z "$MODEL" ]]; then
+  echo "set IFV_VLLM_ENV_PREFIX and IFV_QWEN35_MODEL/IFV_MODEL_ID" >&2
+  exit 2
+fi
 if [[ ! -x "$PYTHON" || ! -x "$ENV_PREFIX/bin/vllm" ]]; then
   echo "Qwen3.5 serving environment is incomplete: $ENV_PREFIX" >&2
   exit 2

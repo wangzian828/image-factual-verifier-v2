@@ -152,7 +152,8 @@ def test_launchers_enforce_physical_gpu_allowlist() -> None:
     diagnose = _source("scripts/server/diagnose_gpu_io.sh")
     measure = _source("scripts/server/measure_gpu_io.py")
 
-    assert 'IFV_ALLOWED_GPU_IDS:-4,5,6,7' in common
+    assert 'ALLOWED_GPU_IDS="${IFV_ALLOWED_GPU_IDS:-}"' in common
+    assert '[[ -n "$ALLOWED_GPU_IDS"' in common
     assert 'configure_training_runtime' in common
     assert 'configure_cuda_toolkit' in common
     assert 'configure_conda_compilers' in common
@@ -230,7 +231,7 @@ def test_vllm_bootstrap_is_fresh_pinned_and_refuses_existing_prefix() -> None:
 def test_qwen35_is_the_primary_training_profile() -> None:
     primary = _source("configs/models/qwen3.5-9b.env")
 
-    assert "Qwen3.5-9B" in primary
+    assert "IFV_QWEN35_MODEL" in primary
     assert "primary_student" in primary
     assert "IFV_ENABLE_THINKING=false" in primary
     assert "IFV_ADD_NON_THINKING_PREFIX=true" in primary

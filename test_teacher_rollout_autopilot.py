@@ -7,6 +7,7 @@ from typing import Any
 
 from scripts.trajectory.run_teacher_rollout_autopilot import (
     _attempt_command_log_path,
+    _runtime_command,
     _candidate_trace_sources,
     _classify_initial_outcomes,
     _build_quality_reroll_summary,
@@ -139,6 +140,20 @@ def test_attempt_launcher_log_is_outside_run_cases_output(tmp_path: Path) -> Non
 
     assert log == group / "logs" / "attempt-01.log"
     assert attempt not in log.parents
+
+
+def test_autopilot_uses_portable_server_runner(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    runner = tmp_path / "run-ifv"
+    monkeypatch.setenv("IFV_SERVER_RUNNER", str(runner))
+
+    command = _runtime_command("-m", "src.eval.run_cases")
+
+    assert command[0] == str(runner.resolve())
+    assert command[1]
+    assert command[-2:] == ["-m", "src.eval.run_cases"]
 
 
 def test_successful_merge_preserves_source_access_policy_metadata(

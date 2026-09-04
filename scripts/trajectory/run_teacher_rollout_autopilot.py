@@ -17,7 +17,8 @@ fresh seeds, while every produced trace is retained for provenance and diagnosis
 its successful initial traces.  This is used to attach the quality-reroll policy
 to historical smoke results.
 
-Run this on gpu-13 through ``scripts/server/run_gpu13.sh``.  It is intentionally
+Run this through ``scripts/server/run_ifv.sh`` (or ``IFV_SERVER_RUNNER``). It is
+intentionally
 resumable: the output directory is also the durable state and provenance record.
 """
 
@@ -54,6 +55,18 @@ from src.eval.evaluator_private_gold import private_gold_index
 
 
 SCHEMA_VERSION = "ifv-teacher-rollout-autopilot-v1"
+
+
+def _runtime_command(*arguments: str) -> list[str]:
+    """Run the current Python through the configured server invariant wrapper."""
+
+    configured = os.environ.get("IFV_SERVER_RUNNER", "").strip()
+    runner = (
+        Path(configured).expanduser().resolve()
+        if configured
+        else REPO_ROOT / "scripts" / "server" / "run_ifv.sh"
+    )
+    return [str(runner), sys.executable, *arguments]
 TERMINAL_RUN_STATUSES = frozenset({"completed", "completed_with_errors"})
 VALID_VERDICTS = frozenset({"real", "fake"})
 
@@ -731,14 +744,7 @@ def _run_engineering_retries(
         attempt_dir = group_dir / f"attempt-{attempt_number:02d}"
         case_list_path = group_dir / f"attempt-{attempt_number:02d}-case-list.txt"
         _write_case_list(case_list_path, batch_case_ids)
-        command = [
-            str(REPO_ROOT / "scripts" / "server" / "run_gpu13.sh"),
-            "conda",
-            "run",
-            "--no-capture-output",
-            "-n",
-            "ifv-agent",
-            "python",
+        command = _runtime_command(
             "-m",
             "src.eval.run_cases",
             "--benchmark",
@@ -760,7 +766,7 @@ def _run_engineering_retries(
             "--skip-preflight-image-hash-verification",
             "--case-list",
             str(case_list_path),
-        ]
+        )
         env = os.environ.copy()
         env.update(
             {
@@ -997,14 +1003,7 @@ def _run_sft_audit(
     if _sft_audit_complete(eligibility_dir, expected_count):
         return eligibility_dir
     for attempt in range(1, maximum_attempts + 1):
-        command = [
-            str(REPO_ROOT / "scripts" / "server" / "run_gpu13.sh"),
-            "conda",
-            "run",
-            "--no-capture-output",
-            "-n",
-            "ifv-agent",
-            "python",
+        command = _runtime_command(
             "-m",
             "src.eval.score_sft_eligibility",
             "--run-dir",
@@ -1027,7 +1026,7 @@ def _run_sft_audit(
             str(timeout),
             "--concurrency",
             str(concurrency),
-        ]
+        )
         env = os.environ.copy()
         env.update({"OMP_NUM_THREADS": "1", "PYTHONUNBUFFERED": "1"})
         _run_command(
@@ -1620,14 +1619,7 @@ def _build_package(
     manifest_path = package_dir / "MANIFEST.json"
     if manifest_path.is_file():
         return package_dir
-    command = [
-        str(REPO_ROOT / "scripts" / "server" / "run_gpu13.sh"),
-        "conda",
-        "run",
-        "--no-capture-output",
-        "-n",
-        "ifv-agent",
-        "python",
+    command = _runtime_command(
         "scripts/trajectory/build_sft_training_package.py",
         "--accepted-release",
         str(accepted_release),
@@ -1636,7 +1628,7 @@ def _build_package(
         "--all-train",
         "--minimum-accepted-cases",
         "1",
-    ]
+    )
     env = os.environ.copy()
     env.update({"OMP_NUM_THREADS": "1", "PYTHONUNBUFFERED": "1"})
     returncode = _run_command(

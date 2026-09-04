@@ -2,8 +2,10 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-DATA_ROOT="${IFV_TRAINING_DATA_ROOT:-/gsdata/home/wza/image-factual-verifier-v2-data/training}"
-ALLOWED_GPU_IDS="${IFV_ALLOWED_GPU_IDS:-4,5,6,7}"
+DEFAULT_DATA_ROOT="${XDG_DATA_HOME:-${HOME}/.local/share}/image-factual-verifier/training"
+DATA_ROOT="${IFV_TRAINING_DATA_ROOT:-${IFV_DATA_ROOT:+${IFV_DATA_ROOT}/training}}"
+DATA_ROOT="${DATA_ROOT:-${DEFAULT_DATA_ROOT}}"
+ALLOWED_GPU_IDS="${IFV_ALLOWED_GPU_IDS:-}"
 
 load_profile() {
   local profile="$1"
@@ -177,7 +179,7 @@ require_visible_gpus() {
       echo "CUDA_VISIBLE_DEVICES contains duplicate GPU index: $device" >&2
       exit 2
     fi
-    if [[ "$allowed" != *",$device,"* ]]; then
+    if [[ -n "$ALLOWED_GPU_IDS" && "$allowed" != *",$device,"* ]]; then
       echo "GPU $device is outside the allowed physical GPU set: $ALLOWED_GPU_IDS" >&2
       exit 2
     fi

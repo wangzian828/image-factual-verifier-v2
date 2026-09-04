@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
+from src.orchestrator.stage_runner import StageRunner
+from src.orchestrator.unified_prompts import UNIFIED_REACT_SYSTEM_PROMPT
 from src.tools.text_image_search import TextImageSearchTool
 
 
@@ -61,3 +64,54 @@ def test_text_image_search_rejects_empty_query_without_provider_call() -> None:
     assert result["status"] == "error"
     assert "non-empty" in result["error"]
     assert client.calls == []
+
+
+def test_react_prompt_exposes_text_image_search_as_discovery() -> None:
+    assert "`text_image_search`" in UNIFIED_REACT_SYSTEM_PROMPT
+    assert "unverified image/page candidates" in UNIFIED_REACT_SYSTEM_PROMPT
+
+
+def test_text_image_search_candidates_are_attached_to_next_policy_turn(
+    monkeypatch,
+) -> None:
+    runner = StageRunner.__new__(StageRunner)
+    observed: list[str] = []
+
+    def fake_candidate(url: str) -> dict:
+        observed.append(url)
+        return {
+            "type": "image",
+            "mime_type": "image/jpeg",
+            "data": f"encoded:{url}",
+        }
+
+    monkeypatch.setattr(
+        StageRunner,
+        "_native_candidate_image_item",
+        staticmethod(fake_candidate),
+    )
+    result = json.dumps(
+        {
+            "status": "success",
+            "reference_image_candidates": [
+                "https://cdn.example.org/one.jpg",
+                "https://cdn.example.org/two.jpg",
+            ],
+        }
+    )
+
+    items = asyncio.run(
+        runner._visual_reinjection_items(
+            "text_image_search",
+            result=result,
+        )
+    )
+
+    assert observed == [
+        "https://cdn.example.org/one.jpg",
+        "https://cdn.example.org/two.jpg",
+    ]
+    assert [item["data"] for item in items] == [
+        "encoded:https://cdn.example.org/one.jpg",
+        "encoded:https://cdn.example.org/two.jpg",
+    ]

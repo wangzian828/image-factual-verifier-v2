@@ -3,11 +3,12 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 MODE="${1:-all}"
-CONDA="${IFV_CONDA_BIN:-/gs/home/wza/anaconda3/bin/conda}"
-SFT_PREFIX="${IFV_QWEN35_SFT_ENV_PREFIX:-/gsdata/home/wza/conda/envs/ifv-qwen35-sft-ms-swift442}"
-RL_PREFIX="${IFV_QWEN35_RL_ENV_PREFIX:-/gsdata/home/wza/conda/envs/ifv-qwen35-rl-ms-swift442-vllm0221}"
-MODEL="${IFV_QWEN35_MODEL:-/gsdata/home/wza/models/Qwen3.5-9B}"
-ARTIFACT_ROOT="${IFV_TRAINING_DATA_ROOT:-/gsdata/home/wza/image-factual-verifier-v2-data/training}"
+CONDA="${IFV_CONDA_BIN:-$(command -v conda || true)}"
+SFT_PREFIX="${IFV_QWEN35_SFT_ENV_PREFIX:-}"
+RL_PREFIX="${IFV_QWEN35_RL_ENV_PREFIX:-}"
+MODEL="${IFV_QWEN35_MODEL:-${IFV_MODEL_ID:-}}"
+ARTIFACT_ROOT="${IFV_TRAINING_DATA_ROOT:-${IFV_DATA_ROOT:+${IFV_DATA_ROOT}/training}}"
+ARTIFACT_ROOT="${ARTIFACT_ROOT:-${XDG_DATA_HOME:-${HOME}/.local/share}/image-factual-verifier/training}"
 
 if [[ "$MODE" != "sft" && "$MODE" != "rl" && "$MODE" != "all" ]]; then
   echo "usage: $0 [sft|rl|all]" >&2
@@ -17,15 +18,26 @@ if [[ ! -x "$CONDA" ]]; then
   echo "conda is required: $CONDA" >&2
   exit 2
 fi
+if [[ "$MODE" != "rl" && -z "$SFT_PREFIX" ]]; then
+  echo "set IFV_QWEN35_SFT_ENV_PREFIX" >&2
+  exit 2
+fi
+if [[ "$MODE" != "sft" && -z "$RL_PREFIX" ]]; then
+  echo "set IFV_QWEN35_RL_ENV_PREFIX" >&2
+  exit 2
+fi
 if [[ ! -d "$MODEL" ]]; then
   echo "Qwen3.5 model directory does not exist: $MODEL" >&2
   exit 2
 fi
 
-export http_proxy="${IFV_HTTP_PROXY:-http://100.10.1.210:47899}"
-export https_proxy="${IFV_HTTPS_PROXY:-$http_proxy}"
-export HTTP_PROXY="$http_proxy"
-export HTTPS_PROXY="$https_proxy"
+proxy="${IFV_HTTP_PROXY:-${IFV_SERVER_PROXY:-${http_proxy:-}}}"
+if [[ -n "$proxy" ]]; then
+  export http_proxy="$proxy"
+  export https_proxy="${IFV_HTTPS_PROXY:-$proxy}"
+  export HTTP_PROXY="$http_proxy"
+  export HTTPS_PROXY="$https_proxy"
+fi
 export NO_PROXY="127.0.0.1,localhost"
 export no_proxy="$NO_PROXY"
 export PIP_DISABLE_PIP_VERSION_CHECK=1
@@ -50,10 +62,13 @@ freeze_env() {
   "$prefix/bin/python" -m pip check
   "$prefix/bin/python" -m pip freeze --all >"$out/pip-freeze.txt"
   sha256sum "$out/pip-freeze.txt" >"$out/pip-freeze.sha256"
-  CUDA_VISIBLE_DEVICES=4 "$prefix/bin/python" -m ifv_training environment-manifest \
+  CUDA_VISIBLE_DEVICES="${IFV_BOOTSTRAP_GPU_ID:-0}" "$prefix/bin/python" -m ifv_training environment-manifest \
     --repo-root "$REPO_ROOT" --output "$out/environment.json"
-  CUDA_VISIBLE_DEVICES=4 "$prefix/bin/python" - <<'PY' >"$out/qwen35-import-gate.json"
+  IFV_BOOTSTRAP_MODEL="$MODEL" \
+    CUDA_VISIBLE_DEVICES="${IFV_BOOTSTRAP_GPU_ID:-0}" \
+    "$prefix/bin/python" - <<'PY' >"$out/qwen35-import-gate.json"
 import json
+import os
 import torch
 from transformers import Qwen3_5ForConditionalGeneration
 from transformers.utils.import_utils import (
@@ -63,7 +78,7 @@ from transformers.utils.import_utils import (
 )
 from swift import get_model_processor, get_template
 
-model = "/gsdata/home/wza/models/Qwen3.5-9B"
+model = os.environ["IFV_BOOTSTRAP_MODEL"]
 loaded, processor = get_model_processor(model, load_model=False)
 template = get_template(processor, enable_thinking=False)
 print(json.dumps({

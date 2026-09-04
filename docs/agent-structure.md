@@ -62,7 +62,11 @@ Planning、Query Replan、Route Replan、Reflection 不再作为主流程中的�
 - 主 Agent 的每次视觉请求都使用受控原图；同一 provider session 复用原图，不重复上传。
 - 视觉工具需要时单独接收原图、裁剪图或候选参考图。
 - 进入视觉 API 的图像最长边为 1024，JPEG 质量保持在较高水平；文本历史不保存 base64。
-- 工具返回的公开结果会进入下一轮上下文一次，并进入 canonical trace。
+- 工具返回的公开结果会进入下一轮 provider 会话，并进入 canonical trace；后续轮次
+  通过同一个 Interaction 历史继续可见，不在每轮文本包里重复复制。
+- `text_image_search`、`reverse_image_search` 和 `crop_and_search` 新得到的候选图最多
+  取 3 张，作为紧邻工具结果的下一轮多模态输入；裁剪/聚焦检查产生的新视图同样
+  紧邻对应工具结果。
 - runtime 内部字段、provider wire 数据、缓存和 evaluator 私有 gold 不进入模型可见内容。
 
 ## 5. 最终输出
@@ -108,20 +112,24 @@ assistant: <think>...</think><answer>{...}</answer>
     {"role": "tool_response", "content": "..."},
     {"role": "assistant", "content": "<think>...</think><answer>...</answer>"}
   ],
-  "images": ["/path/to/image.jpg"]
+  "images": ["data:image/jpeg;base64,..."]
 }
 ```
 
-`images` 可以是本地绝对路径，也可以是 ms-swift 支持的 `data:image/...;base64,...`
-引用；canonical trace 和导出器按实际输入保留它。
+正式可迁移发布包使用 `data:image/...;base64,...`。导出器从 runtime context
+artifact 恢复“每次 policy 请求实际看到的图片”，将初始原图放在初始 user
+`<image>`，将工具后新出现的候选图、裁剪图或聚焦视图放在对应 `tool_response`
+后，并按 SHA-256 全 episode 去重。`<image>` marker 数必须与顶层 `images`
+长度严格相等。
 
 每个消息只含 `role` 和 `content`。不在消息上写 `loss`、`channel` 或
 `chat_template_kwargs`；由真实 Qwen/ms-swift processor 根据模板生成 labels。
 同一轮 assistant 动作批次可以在一个 `tool_response` 后继续出现下一个
 `tool_call`；每个 `tool_call` 都必须有对应的 `tool_response`。
 
-policy SFT 保留 provider 原生 thought，不由导出器编造 thought。没有可读 thought
-的轨迹只能进入独立 action-only 或其他非 reasoning 用途，不能伪装成 reasoning SFT。
+policy SFT 要求每个 ReAct 动作有 provider 原生 thought；Judgment 等结构化阶段
+没有 thought 不会误伤整条轨迹。导出器不编造 thought。缺少 ReAct thought 的轨迹
+进入独立 action-only 或其他非 reasoning 用途。
 
 ## 7. 两条训练输入
 

@@ -110,6 +110,15 @@ def test_backend_exposes_bounded_interaction_retry_configuration() -> None:
     assert backend.timeout == 90.0
     assert backend.max_retries == 1
 
+
+def test_gpustack_requires_explicit_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("GPUSTACK_BASE_URL", raising=False)
+
+    with pytest.raises(ValueError, match="GPUSTACK_BASE_URL"):
+        APIBackend(provider="gpustack", model_name="model")
+
 def test_qwen_api_profile_fails_closed_without_selected_model() -> None:
     with pytest.raises(ValueError, match="QWEN_API_MODEL"):
         resolve_provider_settings(profile_id="student-qwen-api", environ={})

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from typing import Any, Dict
 
@@ -916,8 +917,17 @@ def test_visual_bootstrap_materializes_attributes_relations_and_limits() -> None
     ]
 
 
-def test_unified_export_uses_qwen_think_and_tool_call_and_rejects_missing_thought() -> None:
+def test_unified_export_uses_qwen_think_and_tool_call_and_rejects_missing_thought(
+    tmp_path: Path,
+) -> None:
     state, case, bootstrap_steps = _bootstrap_state()
+    image_path = tmp_path / "fixture.jpg"
+    image_path.write_bytes(b"fixture-image")
+    runtime_case_payload = case.model_dump(mode="json")
+    runtime_case_payload["image_path"] = str(image_path)
+    runtime_case_payload["image_sha256"] = hashlib.sha256(
+        image_path.read_bytes()
+    ).hexdigest()
     anchor_id = state.facts[0].fact_id
     search_step = _step(
         tool_name="text_search",
@@ -990,7 +1000,7 @@ def test_unified_export_uses_qwen_think_and_tool_call_and_rejects_missing_though
         "state": {
             "image_id": case.case_id,
             "input_mode": "image_only",
-            "runtime_case": case.model_dump(mode="json"),
+            "runtime_case": runtime_case_payload,
             "investigation_state": state.model_dump(mode="json"),
             "all_steps": [
                 {

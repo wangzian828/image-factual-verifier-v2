@@ -43,7 +43,8 @@ Results from all three search tools are unverified Discovery. A
 The root request of each Gemini Interaction gets one temporary controlled image
 attachment. Follow-up requests reuse that image through the same provider
 session; it is not uploaded again. The image is not appended to text history
-and its base64 is not persisted in the trace. Each next request receives:
+and its base64 is not stored inside canonical step text. Each next request
+continues from:
 
 - the fixed objective;
 - visual memory;
@@ -81,8 +82,10 @@ the previous interaction ID and submits the previous function result before the
 new compact context. A newly-created session per action would lose this
 continuation boundary.
 
-`reverse_image_search` keeps at most three reference-image candidates in the
-next multimodal request. They are unverified candidates, not evidence.
+`reverse_image_search`, `text_image_search`, and `crop_and_search` keep at most
+three new reference-image candidates in the next multimodal request. Crops and
+focused visual views are attached at the same immediate observation boundary.
+They are observations or unverified candidates, not automatically Evidence.
 
 `visit` uses a retrieve-then-bounded-extract path: Jina/direct content is cleaned
 and ranked into passages, a summary/extraction model reads a bounded selection,
@@ -123,6 +126,10 @@ tool: result + state delta
 assistant: final report
 ```
 
-The exporter keeps one complete episode, removes repeated cumulative workspace,
-and does not create one training row per action. Missing provider thought is
-classified as action-only/RL material rather than filled with fabricated text.
+The exporter keeps one complete episode and does not create one training row per
+action. It reconstructs the exact request images from the runtime artifact
+archive, writes portable `data:image/...;base64,...` entries, attaches each new
+image at the corresponding message boundary, and deduplicates identical bytes
+by SHA-256. Missing ReAct thought is classified as action-only/RL material
+rather than filled with fabricated text; a thought-free structured Judgment
+does not invalidate otherwise complete ReAct supervision.

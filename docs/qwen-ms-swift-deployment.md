@@ -1,115 +1,142 @@
-# Qwen / ms-swift 部署说明
+# Qwen / ms-swift 部署与验证
 
-这份文档给另一台服务器部署 IFV SFT 数据链路使用。模型 checkpoint 可以是不同
-规模的 Qwen，格式是否可训练必须以实际 checkpoint 的 processor 验证结果为准。
+本文件描述在任意新服务器上接收 IFV 数据并验证 Qwen/ms-swift 训练输入。机器专属
+CUDA、驱动、挂载点、代理和模型路径必须由部署者配置，不能从现有服务器照搬。
 
-## 1. 建议环境
+## 1. 环境边界
+
+建议基础版本：
 
 ```text
 Python       3.12
 ms-swift     4.4.2
 transformers 5.12.1
-torch        2.10.0
 datasets     4.8.4
 ```
 
-安装时固定版本并记录：
-
-```bash
-python3.12 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install "ms-swift==4.4.2" "transformers==5.12.1" \
-  "datasets==4.8.4"
-python -m pip check
-```
-
-`torch` 和 CUDA 版本应按目标服务器驱动及 ms-swift 官方支持矩阵安装；不要把
-gpu-13 的 CUDA wheel 直接复制到另一台机器。
-
-## 2. 安装项目适配器
-
-```bash
-python -m pip install -e ./training
-python -m pytest -q ./training
-```
-
-## 3. 数据转换
-
-```bash
-python -m ifv_training convert-policy \
-  --input <accepted-dataset> \
-  --output <ms-swift-policy>
-
-python -m ifv_training convert-accepted-perception \
-  --input <accepted-dataset> \
-  --output <ms-swift-perception>
-```
-
-policy 的一行对应完整 episode，保留：
+`torch` 与 CUDA 必须按目标服务器驱动和目标 Qwen checkpoint 的支持矩阵安装。
+环境文件使用 `configs/runtime.env.example`，复制到：
 
 ```text
-assistant <think>...</think>
-tool_call {"name":"...","arguments":"{...}"}
-tool_response ...
+~/.config/image-factual-verifier/runtime.env
 ```
 
-不要给 assistant 消息添加 `loss=true`。ms-swift template 会根据角色和训练模式
-生成 labels。`IFV_ADD_NON_THINKING_PREFIX` 在 reasoning SFT 中保持关闭。
+至少配置：
 
-## 4. 必须做的真实验证
+```text
+IFV_DATA_ROOT
+IFV_MODEL_ID
+IFV_OMP_NUM_THREADS=1
+```
+
+API key、代理和本地模型 endpoint 按实际用途补充。真实配置文件权限设为 `600`，
+不得提交到 Git。
+
+## 2. 快捷安装和预检
+
+```bash
+git clone <repository-url> image-factual-verifier
+cd image-factual-verifier
+mkdir -p ~/.config/image-factual-verifier
+cp configs/runtime.env.example \
+  ~/.config/image-factual-verifier/runtime.env
+# 编辑 runtime.env
+chmod 600 ~/.config/image-factual-verifier/runtime.env
+
+source scripts/server/ifv_env.sh
+scripts/server/bootstrap_runtime.sh
+scripts/server/run_ifv.sh python scripts/server/doctor.py --json
+```
+
+训练环境单独创建，避免和 rollout runtime、vLLM 服务环境混装：
+
+```bash
+python3.12 -m venv .venv-sft
+source .venv-sft/bin/activate
+python -m pip install --upgrade pip
+# 先按本机驱动安装 torch/CUDA wheel
+python -m pip install "ms-swift==4.4.2" \
+  "transformers==5.12.1" "datasets==4.8.4"
+python -m pip install -e ./training
+python -m pip check
+python scripts/server/doctor.py --require-training --json
+```
+
+## 3. 训练包结构
+
+正式包至少包含：
+
+```text
+ms-swift-policy/
+ms-swift-perception/
+accepted-dataset/
+accepted-release/
+audits/
+MANIFEST.json
+```
+
+policy 一行是一条完整 episode。顶层只使用：
+
+```json
+{
+  "tools": "[...]",
+  "messages": [{"role": "...", "content": "..."}],
+  "images": ["data:image/jpeg;base64,..."]
+}
+```
+
+ReAct assistant turn 保留教师原生 `<think>`；工具调用由 `tool_call`、工具结果由
+`tool_response` 表示。图片 marker 和 `images` 数量严格相等。private gold、judge
+字段、runtime 内部状态、原始 HTML 和 provider wire 数据不进入模型可见行。
+
+## 4. 严格审计
+
+先做结构审计：
+
+```bash
+python -m ifv_training audit --strict --input <package>/ms-swift-policy
+python -m ifv_training audit --strict --input <package>/ms-swift-perception
+```
+
+再用最终要训练的真实 checkpoint 做 processor 编码：
 
 ```bash
 python training/scripts/probe/verify_ms_swift_agent_dataset.py \
-  --model <实际 Qwen checkpoint> \
-  --policy-dir <ms-swift-policy> \
-  --perception-dir <ms-swift-perception> \
-  --output <processor-verification.json>
+  --model "$IFV_MODEL_ID" \
+  --policy-dir <package>/ms-swift-policy \
+  --perception-dir <package>/ms-swift-perception \
+  --output <package>/audits/processor-verification.json \
+  --max-context 131072
 ```
 
-只有以下检查全部通过才可以启动训练：
+探针必须确认：
 
-1. 每行能被真实 processor 编码；
-2. policy 的 `<think>` token 出现在 assistant labels；
-3. tool call 和 tool response 出现在编码后的输入；
-4. 图片数量和图片 marker 对齐；
-5. 每行至少有一个可训练 assistant token；
-6. 编码长度不超过目标上下文上限。
+1. 每行可编码且长度未超上限；
+2. `<think>` 位于可训练 assistant labels；
+3. JSON 工具调用被 Qwen 模板渲染为真实 function/parameter token；
+4. 工具结果进入编码输入；
+5. 所有图片被 processor 接收；
+6. 每行存在非空训练 label。
 
-## 5. gpu-13 上线验收顺序
+换 checkpoint、processor、chat template 或 ms-swift 版本后必须重新验证。
 
-转发恢复后，先确认实际落到 gpu-13，再执行发布和验证；跳板机不执行项目命令：
+## 5. 启动边界
+
+通用 rollout 入口：
 
 ```bash
-hostname
-test "$(hostname)" = "gpu-13"
-git status --short --branch
-bash scripts/server/update_gpu13_checkout.sh
+source scripts/server/ifv_env.sh
+scripts/server/start_gemini_eval.sh \
+  --benchmark <runtime-cases.jsonl> \
+  --output-dir "$IFV_DATA_ROOT/runs/eval/<run-id>" \
+  --concurrency <N>
+
+scripts/server/poll_eval.sh <run-id>
 ```
 
-更新脚本会校验 canonical 分支、服务器工作树干净以及 fast-forward 结果。随后在
-gpu-13 的目标 Conda 环境中执行：
+训练入口继续使用 `training/scripts/train/run_sft.sh`。模型路径从
+`IFV_MODEL_ID`/模型 profile 读取，训练数据路径由命令行提供。不要在启动器里写死
+用户名、挂载点、模型目录、GPU 编号或代理。
 
-```bash
-source scripts/server/gpu13_env.sh
-scripts/server/run_gpu13.sh python -m pytest -q
-(
-  cd training
-  ../scripts/server/run_gpu13.sh python -m pytest -q
-)
-scripts/server/run_gpu13.sh python -m compileall -q src scripts training/scripts training/ifv_training
-```
-
-最后针对实际发布包和实际 Qwen checkpoint 运行第 4 节的 processor 探针。只有
-`update_gpu13_checkout.sh`、回归测试、结构审计和真实 processor 验证全部通过，才把
-该发布记为服务器验收版本。转发未恢复时，状态只能记为“本地通过、服务器待验收”。
-
-## 6. 训练输入边界
-
-- `ms-swift-policy/` 只放 reasoning policy 数据。
-- `ms-swift-perception/` 只放图片观察数据。
-- `action_only` 不混入 policy reasoning SFT。
-- 不把 `trajectory.json`、judge 输出、private gold 或内部 runtime 状态直接交给
-  ms-swift。
-- 训练日志、checkpoint 和 processor 验证报告单独保存，并记录代码 commit 和数据
-  manifest 哈希。
+完整新服务器交付流程见
+[`portable-deployment-handoff.md`](portable-deployment-handoff.md)。

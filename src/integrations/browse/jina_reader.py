@@ -1670,9 +1670,11 @@ class JinaReaderClient:
 
         if not model_name:
             if provider == "lmdeploy":
-                model_name = os.getenv(
-                    "LMDEPLOY_MODEL", "/gsdata/home/wza/models/Qwen3-VL-8B-Thinking"
-                )
+                model_name = os.getenv("LMDEPLOY_MODEL", "").strip()
+                if not model_name:
+                    raise RuntimeError(
+                        "lmdeploy page extraction requires LMDEPLOY_MODEL"
+                    )
             elif provider == "gemini":
                 model_name = os.getenv("BROWSE_EXTRACT_MODEL", os.getenv("GEMINI_MODEL", "gemini-3.7-flash"))
             elif provider == "qwen":

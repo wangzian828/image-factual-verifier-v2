@@ -5,14 +5,22 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../lib/common.sh
 source "$SCRIPT_DIR/../lib/common.sh"
 
-MODEL="${1:-/gsdata/home/wza/models/Qwen3-VL-8B-Thinking}"
+MODEL="${1:-${IFV_QWEN3VL_MODEL:-${IFV_MODEL_ID:-}}}"
 SERVED_NAME="${2:-ifv-qwen3-vl-8b-thinking-vllm}"
 PORT="${3:-8901}"
 TP_SIZE="${4:-2}"
 CONTEXT_LENGTH="${5:-131072}"
-ENV_PREFIX="${IFV_VLLM_ENV_PREFIX:-/gsdata/home/wza/conda/envs/ifv-qwen3vl-vllm0112-locked}"
+ENV_PREFIX="${IFV_VLLM_ENV_PREFIX:-${CONDA_PREFIX:-}}"
 VLLM="$ENV_PREFIX/bin/vllm"
 
+if [[ -z "$MODEL" ]]; then
+  echo "set IFV_QWEN3VL_MODEL/IFV_MODEL_ID or pass MODEL as argument 1" >&2
+  exit 2
+fi
+if [[ -z "$ENV_PREFIX" ]]; then
+  echo "set IFV_VLLM_ENV_PREFIX or activate the vLLM environment" >&2
+  exit 2
+fi
 if [[ ! -x "$VLLM" || ! -f "$ENV_PREFIX/.ifv-vllm-qwen3vl-ready" ]]; then
   echo "locked vLLM environment is absent or incomplete: $ENV_PREFIX" >&2
   exit 2
@@ -30,7 +38,10 @@ if [[ "$TP_SIZE" -lt 1 ]]; then
   exit 2
 fi
 
-export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-4,5}"
+if [[ -z "${CUDA_VISIBLE_DEVICES:-}" ]]; then
+  echo "set CUDA_VISIBLE_DEVICES explicitly for this server" >&2
+  exit 2
+fi
 require_idle_runtime_gpus
 IFS=',' read -r -a visible_devices <<<"$CUDA_VISIBLE_DEVICES"
 if [[ "$TP_SIZE" -ne "${#visible_devices[@]}" ]]; then

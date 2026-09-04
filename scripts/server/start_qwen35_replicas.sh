@@ -1,13 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO="${IFV_QWEN_REPO:-/gs/home/wza/projects/image-factual-verifier-v2-worktrees/gpu13-canary-20260804-plan-relaxation-01}"
-PYTHON="${IFV_QWEN_PYTHON:-/gsdata/home/wza/conda/envs/ifv-qwen35-vllm-nightly/bin/python}"
-VLLM="${IFV_QWEN_VLLM:-/gsdata/home/wza/conda/envs/ifv-qwen35-vllm-nightly/bin/vllm}"
-MODEL="${IFV_QWEN_MODEL:-/gsdata/home/wza/models/Qwen3.5-9B}"
-RUN_ROOT="${IFV_QWEN_RUN_ROOT:-/gsdata/home/wza/image-factual-verifier-v2-data/runs}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO="${IFV_QWEN_REPO:-$(cd -- "${SCRIPT_DIR}/../.." && pwd)}"
+ENV_PREFIX="${IFV_VLLM_ENV_PREFIX:-${CONDA_PREFIX:-}}"
+PYTHON="${IFV_QWEN_PYTHON:-${ENV_PREFIX:+${ENV_PREFIX}/bin/python}}"
+VLLM="${IFV_QWEN_VLLM:-${ENV_PREFIX:+${ENV_PREFIX}/bin/vllm}}"
+MODEL="${IFV_QWEN_MODEL:-${IFV_MODEL_ID:-}}"
+RUN_ROOT="${IFV_QWEN_RUN_ROOT:-${IFV_DATA_ROOT:+${IFV_DATA_ROOT}/runs}}"
 LOG_ROOT="$RUN_ROOT/_logs"
 PID_ROOT="$RUN_ROOT/queues"
+
+for name in REPO PYTHON VLLM MODEL RUN_ROOT; do
+  if [[ -z "${!name:-}" ]]; then
+    echo "required value is empty: ${name}" >&2
+    exit 2
+  fi
+done
 
 BASE_ARGS=(
   serve "$MODEL"

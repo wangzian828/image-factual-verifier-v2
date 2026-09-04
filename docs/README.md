@@ -10,6 +10,7 @@
 - [轨迹产物说明](trajectory-artifact-guide.md)
 - [Teacher Rollout 自动流程](teacher-rollout-autopilot.md)
 - [Qwen / ms-swift 部署说明](qwen-ms-swift-deployment.md)
+- [新服务器部署与 Codex 交接](portable-deployment-handoff.md)
 
 ## Prompt 与运行时
 

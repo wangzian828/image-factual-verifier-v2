@@ -37,7 +37,9 @@ assistant: <think>...</think><answer>{...}</answer>
 
 工具结果不会只保留 `{"status":"success"}` 这种 transport 状态；导出器会保留模型可见
 的完整公开结果。provider wire、内部 state、缓存和 private gold 不进入训练消息。
-图片引用可以是本地路径或 `data:image/...;base64,...`；审计器两种都接受。
+审计器兼容本地路径和 `data:image/...;base64,...`，但正式可迁移发布包使用
+data URI。导出器按 runtime context artifact 恢复初始原图以及工具后新出现的候选图、
+裁剪图和聚焦视图，按 SHA-256 去重，并保证 `<image>` marker 与顶层图片一一对应。
 
 ## 3. 中文阅读目录
 

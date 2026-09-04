@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import statistics
 from collections import Counter
 from datetime import datetime, timezone
@@ -70,6 +71,80 @@ def _text_for_presence_check(content: str) -> str:
     # In multimodal rows ms-swift consumes each <image> marker and replaces it
     # with image tokens. Check the surrounding public text separately.
     return content.replace("<image>", " ").strip()
+
+
+def _tool_call_contract(content: str) -> tuple[str, list[str]]:
+    """Return the function name and public parameter names for one call."""
+
+    payload = json.loads(content)
+    if not isinstance(payload, Mapping):
+        raise ValueError("tool_call content must be a JSON object")
+    name = str(payload.get("name", "")).strip()
+    if not name:
+        raise ValueError("tool_call content has no function name")
+    raw_arguments = payload.get("arguments", "{}")
+    if not isinstance(raw_arguments, str):
+        raise ValueError("tool_call arguments must be a JSON string")
+    arguments = json.loads(raw_arguments)
+    if not isinstance(arguments, Mapping):
+        raise ValueError("tool_call arguments must decode to an object")
+    return name, [str(key) for key in arguments]
+
+
+def _verify_rendered_tool_calls(
+    messages: list[Mapping[str, Any]],
+    decoded_text: str,
+) -> int:
+    """Verify calls after ms-swift renders JSON into Qwen function XML.
+
+    The source dataset stores ``tool_call`` content as JSON, while the Qwen
+    template serializes it as ``<function=...>`` and ``<parameter=...>``.
+    Searching for the source JSON verbatim therefore produces false failures.
+    Function tags are not used by the tool-schema preamble, so their counts
+    prove that the actual calls reached the encoded conversation.
+    """
+
+    expected_functions: Counter[str] = Counter()
+    expected_parameters: Counter[tuple[str, str]] = Counter()
+    for message in messages:
+        if str(message.get("role", "")) != "tool_call":
+            continue
+        name, parameter_names = _tool_call_contract(
+            str(message.get("content", ""))
+        )
+        expected_functions[name] += 1
+        for parameter_name in parameter_names:
+            expected_parameters[(name, parameter_name)] += 1
+
+    for name, count in expected_functions.items():
+        rendered = len(
+            re.findall(
+                rf"<function={re.escape(name)}>",
+                decoded_text,
+            )
+        )
+        if rendered < count:
+            raise ValueError(
+                f"encoded input preserves only {rendered}/{count} "
+                f"calls to {name}"
+            )
+
+    for (name, parameter_name), count in expected_parameters.items():
+        function_blocks = re.findall(
+            rf"<function={re.escape(name)}>(.*?)</function>",
+            decoded_text,
+            flags=re.DOTALL,
+        )
+        rendered = sum(
+            block.count(f"<parameter={parameter_name}>")
+            for block in function_blocks
+        )
+        if rendered < count:
+            raise ValueError(
+                f"encoded input preserves only {rendered}/{count} "
+                f"{name}.{parameter_name} parameters"
+            )
+    return sum(expected_functions.values())
 
 
 def _validate_roles(messages: Any, *, kind: str) -> list[str]:
@@ -177,6 +252,10 @@ def main() -> None:
                 encoded = template.encode(row, return_template_inputs=True)
                 input_ids = _as_list(encoded["input_ids"])
                 labels = _as_list(encoded["labels"])
+                decoded_text = tokenizer.decode(
+                    input_ids,
+                    skip_special_tokens=False,
+                )
                 if len(input_ids) != len(labels):
                     raise ValueError("input_ids and labels have different lengths")
                 if not input_ids:
@@ -197,6 +276,11 @@ def main() -> None:
                 if not expected_images and encoded_images:
                     raise ValueError("text-only row unexpectedly gained images")
                 checks["rows_encoded"] += 1
+                if kind == "policy":
+                    checks["tool_call_preserved"] += _verify_rendered_tool_calls(
+                        messages,
+                        decoded_text,
+                    )
 
                 for message in messages:
                     if not isinstance(message, Mapping):
@@ -208,7 +292,7 @@ def main() -> None:
                         if not _contains_supervised_subsequence(input_ids, labels, marker_ids):
                             raise ValueError("native <think> marker is not supervised")
                         checks["thought_targets"] += 1
-                    if role in {"tool_call", "tool_response"}:
+                    if role == "tool_response":
                         presence_text = _text_for_presence_check(content)
                         content_ids = _encode(tokenizer, presence_text)
                         if content_ids and not _contains_subsequence(

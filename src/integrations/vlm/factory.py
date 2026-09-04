@@ -48,12 +48,18 @@ def build_vlm_client(
             max_retries=max_retries,
         )
     if provider == "lmdeploy":
+        resolved_model_name = model_name or os.getenv("LMDEPLOY_MODEL", "").strip()
+        if not resolved_model_name:
+            raise ValueError(
+                "lmdeploy requires model_name or LMDEPLOY_MODEL; "
+                "no machine-specific checkpoint is assumed"
+            )
         return OpenAIVisionClient(
             api_key=api_key or os.getenv("LMDEPLOY_API_KEY", "none"),
             provider="lmdeploy",
             base_url=base_url or os.getenv("LMDEPLOY_BASE_URL", "http://127.0.0.1:8899/v1"),
             wire_api=wire_api,
-            model_name=model_name or os.getenv("LMDEPLOY_MODEL", "/gsdata/home/wza/models/Qwen3-VL-8B-Thinking"),
+            model_name=resolved_model_name,
             timeout=timeout,
             max_retries=max_retries,
         )

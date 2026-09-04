@@ -36,7 +36,7 @@ ReAct loop 中的动作。ID、图片路径、内部工具参数、去重、重�
 
 每个 Gemini Interaction 的根请求会临时附加一份受控原图，后续请求通过同一个
 provider session 复用这张图，不重复上传。图片不会追加到文本历史，base64 也
-不会写入 trace。下一轮会接收：
+不会写进 canonical step 的文本字段。下一轮从以下内容继续：
 
 - 固定事实核查目标；
 - `visual_memory`；
@@ -71,6 +71,10 @@ provider session 复用这张图，不重复上传。图片不会追加到文本
 所有进入视觉 API 的图片统一为最长边 1024、JPEG quality 95，包括原图、裁剪图、
 候选图和单图 contact sheet。
 
+`reverse_image_search`、`text_image_search` 和 `crop_and_search` 每次最多把
+3 张新候选图附在紧邻工具结果的下一轮请求中；裁剪图和聚焦复查图也附在产生它们
+的工具结果边界。它们仍是观察或待核查候选，不会因为进入上下文就自动成为 Evidence。
+
 ## 4. SFT 导出
 
 完整 episode 按 Qwen 可读格式导出：
@@ -85,6 +89,8 @@ tool: 结果 + 状态增量
 assistant: 最终报告
 ```
 
-导出器保留一条完整 episode，删除重复的累计 workspace，不按动作拆成多条独立
-训练样本。provider 没有实际返回 thought 文本的轨迹归入 action-only/RL 材料，
-不伪造思考内容。
+导出器保留一条完整 episode，不按动作拆成多条独立训练样本。它会从 runtime
+artifact 恢复 policy 请求实际看到的图片，写成可迁移的
+`data:image/...;base64,...`，按消息边界挂载，并用 SHA-256 去重。ReAct 动作没有
+实际 thought 的轨迹归入 action-only/RL 材料；Judgment 等结构化阶段没有 thought
+不会错误淘汰已有完整 ReAct thought 的轨迹。
