@@ -569,10 +569,6 @@ def export_trajectory_sft_example(
                 pending_tool_response = _render_tool_response_content(tool_result)
                 pending_tool_step_index = position
         else:
-            if not thought and require_provider_thought:
-                raise ValueError(
-                    f"{example_type} SFT turn lacks provider-visible thought"
-                )
             answer = canonical_json(policy_action)
             assistant_content = (
                 (_qwen_think_block(thought) + "\n\n" if thought else "")

@@ -127,7 +127,7 @@ def _trace(tmp_path: Path) -> dict:
                 "verdict": "real",
                 "reason": "The evidence is consistent.",
             },
-            thought="Conclude from the collected evidence.",
+            thought="",
         ),
     ]
     return {
