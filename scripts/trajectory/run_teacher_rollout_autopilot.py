@@ -14,8 +14,10 @@ quality round are recorded as hard cases.  Engineering failures are refilled wit
 fresh seeds, while every produced trace is retained for provenance and diagnosis.
 
 ``--reroll-from`` can reuse an already completed initial pipeline without rerunning
-its successful initial traces.  This is used to attach the quality-reroll policy
-to historical smoke results.
+its successful initial traces. ``--bootstrap-initial-run`` and
+``--bootstrap-initial-eligibility`` can instead register one externally completed,
+already-audited initial candidate per case, then apply the same quality-reroll
+policy without mixing it with another historical rollout group.
 
 Run this through ``scripts/server/run_ifv.sh`` (or ``IFV_SERVER_RUNNER``). It is
 intentionally
@@ -985,6 +987,396 @@ def _sft_audit_complete(eligibility_dir: Path, expected_count: int) -> bool:
     )
 
 
+def _materialize_bootstrap_file(source: Path, destination: Path) -> str:
+    """Preserve an immutable bootstrap artifact, allowing an interrupted resume."""
+
+    source = source.expanduser().resolve()
+    if not source.is_file():
+        raise FileNotFoundError(f"bootstrap source file does not exist: {source}")
+    if destination.exists():
+        if not destination.is_file():
+            raise ValueError(
+                f"bootstrap destination is not a file: {destination}"
+            )
+        if _sha256_file(destination) != _sha256_file(source):
+            raise ValueError(
+                "bootstrap destination conflicts with immutable source: "
+                f"{destination}"
+            )
+        return "existing"
+    return _copy_or_link(source, destination)
+
+
+def _bootstrap_completed_initial_pipeline(
+    args: argparse.Namespace,
+) -> tuple[dict[str, Any], dict[str, Any], Path, Path]:
+    """Attach one completed, audited candidate per case as quality-reroll round 0.
+
+    This is deliberately not a shortcut around SFT eligibility.  The imported
+    artifacts must match the exact imported trace bytes, and the source cases must
+    equal the freshly prepared evaluator-private scope.  Later quality rounds are
+    produced by the ordinary rollout and frozen-judge pipeline.
+    """
+
+    dataset_root = args.dataset_root.expanduser().resolve()
+    train_manifest = (
+        args.train_manifest.expanduser().resolve()
+        if args.train_manifest is not None
+        else dataset_root / "train-manifest.jsonl"
+    )
+    pipeline_dir = args.output_dir.expanduser().resolve()
+    source_run = args.bootstrap_initial_run.expanduser().resolve()
+    source_eligibility = (
+        args.bootstrap_initial_eligibility.expanduser().resolve()
+    )
+    source_manifest_path = source_run / "run_manifest.json"
+    if not source_manifest_path.is_file():
+        raise FileNotFoundError(
+            f"bootstrap initial run lacks run manifest: {source_manifest_path}"
+        )
+    source_manifest = _read_json(source_manifest_path)
+    if source_manifest.get("status") not in TERMINAL_RUN_STATUSES:
+        raise ValueError(
+            "bootstrap initial run must have a terminal status: "
+            f"{source_manifest.get('status')!r}"
+        )
+
+    preparation = prepare_runtime_release(
+        dataset_root=dataset_root,
+        train_manifest=train_manifest,
+        output_dir=pipeline_dir,
+        limit=args.limit,
+        source_access_policy=args.source_access_policy,
+    )
+    private_gold = Path(str(preparation["private_gold"])).expanduser().resolve()
+    private_gold_rows = _read_jsonl(private_gold)
+    gold_by_case = {
+        _case_id(row): _expected_verdict(row) for row in private_gold_rows
+    }
+    target_ids = sorted(gold_by_case)
+    if not target_ids:
+        raise ValueError("bootstrap target scope is empty")
+
+    source_traces: dict[str, tuple[Path, dict[str, Any]]] = {}
+    for trace_path in _trace_paths(source_run):
+        trace = _read_json(trace_path)
+        if not _terminal_success(trace):
+            continue
+        case_id = _trace_case_id(trace)
+        if case_id in source_traces:
+            raise ValueError(
+                "bootstrap initial run has multiple terminal candidates for "
+                f"{case_id}; provide a run with exactly one selected candidate"
+            )
+        source_traces[case_id] = (trace_path, trace)
+    source_case_ids = sorted(source_traces)
+    if source_case_ids != target_ids:
+        raise ValueError(
+            "bootstrap source cases must exactly match the prepared train scope; "
+            f"source_only={sorted(set(source_case_ids) - set(target_ids))[:3]}, "
+            f"target_only={sorted(set(target_ids) - set(source_case_ids))[:3]}"
+        )
+
+    if not _sft_audit_complete(source_eligibility, len(target_ids)):
+        raise ValueError(
+            "bootstrap SFT eligibility directory is incomplete for its source "
+            f"run: {source_eligibility}"
+        )
+    source_artifacts = _sft_artifact_index(source_eligibility)
+
+    initial_run = pipeline_dir / "rollouts" / "initial" / "merged"
+    initial_eligibility = pipeline_dir / "sft-eligibility" / "initial"
+    initial_classification = pipeline_dir / "classification"
+    state_path = pipeline_dir / "pipeline-state.json"
+    bootstrap_descriptor = {
+        "source_run": str(source_run),
+        "source_run_manifest_sha256": _sha256_file(source_manifest_path),
+        "source_sft_eligibility": str(source_eligibility),
+        "source_sft_summary_sha256": _sha256_file(
+            source_eligibility / "sft_eligibility_summary.json"
+        ),
+    }
+
+    if state_path.is_file():
+        state = _read_json(state_path)
+        if state.get("bootstrap_initial") != bootstrap_descriptor:
+            raise ValueError(
+                "existing pipeline state belongs to a different bootstrap source"
+            )
+        initial = state.get("initial")
+        if not isinstance(initial, Mapping):
+            raise ValueError("existing bootstrap pipeline lacks initial state")
+        expected_initial_run = Path(str(initial.get("merged_run") or "")).resolve()
+        expected_initial_audit = Path(
+            str(initial.get("sft_eligibility") or "")
+        ).resolve()
+        if expected_initial_run != initial_run or expected_initial_audit != initial_eligibility:
+            raise ValueError("existing bootstrap pipeline has inconsistent initial paths")
+        if not (initial_run / "run_manifest.json").is_file():
+            raise FileNotFoundError("existing bootstrap initial run is missing")
+        if not _sft_audit_complete(initial_eligibility, len(target_ids)):
+            raise FileNotFoundError("existing bootstrap initial SFT audit is incomplete")
+        return state, preparation, initial_run, initial_eligibility
+
+    trace_root = initial_run / "traces"
+    trace_root.mkdir(parents=True, exist_ok=True)
+    trace_materialization: dict[str, int] = {
+        "hardlink": 0,
+        "copy": 0,
+        "existing": 0,
+    }
+    artifact_materialization: dict[str, int] = {
+        "hardlink": 0,
+        "copy": 0,
+        "existing": 0,
+    }
+    provenance: list[dict[str, Any]] = []
+    summary_rows: list[dict[str, Any]] = []
+    for case_id in target_ids:
+        source_trace_path, trace = source_traces[case_id]
+        episode_id = _trace_episode_id(trace)
+        artifact = source_artifacts.get(episode_id)
+        if artifact is None:
+            raise ValueError(
+                "bootstrap SFT eligibility lacks trace episode: "
+                f"{case_id}/{episode_id}"
+            )
+        if str(artifact.get("case_id") or "") != case_id:
+            raise ValueError(
+                "bootstrap eligibility case_id mismatches trace: "
+                f"{case_id}/{episode_id}"
+            )
+        trace_sha256 = _sha256_file(source_trace_path)
+        artifact_sha256 = str(
+            (artifact.get("source_trace") or {}).get("sha256") or ""
+        )
+        if artifact_sha256 != trace_sha256:
+            raise ValueError(
+                "bootstrap eligibility does not match source trace bytes: "
+                f"{case_id}/{episode_id}"
+            )
+        metrics = artifact.get("metrics") or {}
+        if str(metrics.get("expected_verdict") or "") != gold_by_case[case_id]:
+            raise ValueError(
+                "bootstrap eligibility expected verdict mismatches private gold: "
+                f"{case_id}"
+            )
+
+        trace_destination = trace_root / source_trace_path.name
+        method = _materialize_bootstrap_file(
+            source_trace_path,
+            trace_destination,
+        )
+        trace_materialization[method] += 1
+        source_artifact_path = (
+            source_eligibility / f"{episode_id}.sft_eligibility.json"
+        )
+        artifact_destination = (
+            initial_eligibility / f"{episode_id}.sft_eligibility.json"
+        )
+        method = _materialize_bootstrap_file(
+            source_artifact_path,
+            artifact_destination,
+        )
+        artifact_materialization[method] += 1
+        provenance.append(
+            {
+                "case_id": case_id,
+                "episode_id": episode_id,
+                "source_run": str(source_run),
+                "source_trace": str(source_trace_path),
+                "source_trace_sha256": trace_sha256,
+                "verdict": str(trace.get("verdict") or "").lower(),
+            }
+        )
+        gates = artifact.get("gates") or {}
+        summary_rows.append(
+            {
+                "status": "success",
+                "case_id": case_id,
+                "episode_id": episode_id,
+                "artifact": str(artifact_destination),
+                "artifact_id": artifact.get("artifact_id"),
+                "sft_eligibility_pass": gates.get("sft_eligibility_pass"),
+                "target_scope": metrics.get("target_scope"),
+                "decision_support": metrics.get("decision_support"),
+                "retrieval_quality": metrics.get("retrieval_quality"),
+                "decisive_evidence_ids": metrics.get("decisive_evidence_ids") or [],
+                "fatal_errors": metrics.get("fatal_errors") or [],
+                "warnings": metrics.get("warnings") or [],
+                "bootstrapped": True,
+            }
+        )
+
+    source_policy = source_manifest.get("source_access_policy")
+    run_manifest = {
+        "schema_version": "ifv-bootstrap-merged-teacher-rollout-v1",
+        "run_id": initial_run.name,
+        "status": "completed",
+        "started_at": _now(),
+        "completed_at": _now(),
+        "git_commit": source_manifest.get("git_commit"),
+        "benchmark": source_manifest.get("benchmark"),
+        "agent": source_manifest.get("agent"),
+        "source_access_policy": (
+            dict(source_policy)
+            if isinstance(source_policy, Mapping)
+            else {"active": False}
+        ),
+        "metadata": {
+            "kind": "bootstrapped-completed-initial-candidates",
+            "bootstrap": bootstrap_descriptor,
+            "target_case_count": len(target_ids),
+            "trace_materialization": trace_materialization,
+            "eligibility_materialization": artifact_materialization,
+        },
+        "result": {
+            "num_cases": len(target_ids),
+            "num_episodes": len(target_ids),
+            "num_errors": 0,
+            "status_distribution": {"success": len(target_ids)},
+        },
+        "artifacts": {
+            "traces": "traces/",
+            "trace_provenance": "trace-provenance.jsonl",
+        },
+    }
+    _write_jsonl(initial_run / "trace-provenance.jsonl", provenance)
+    _write_json(initial_run / "run_manifest.json", run_manifest)
+    _write_case_list(initial_run.parent / "target-case-list.txt", target_ids)
+    _write_jsonl(
+        initial_eligibility / "accepted_episodes.jsonl",
+        [
+            row
+            for row in summary_rows
+            if row["sft_eligibility_pass"] is True
+        ],
+    )
+    _write_json(
+        initial_eligibility / "sft_eligibility_summary.json",
+        {
+            "schema_version": "ifv-sft-eligibility-summary-v2",
+            "run_dir": str(initial_run),
+            "private_gold": {
+                "path": str(private_gold),
+                "sha256": _sha256_file(private_gold),
+            },
+            "episode_count": len(summary_rows),
+            "passed_count": sum(
+                row["sft_eligibility_pass"] is True for row in summary_rows
+            ),
+            "bootstrap": bootstrap_descriptor,
+            "rows": summary_rows,
+        },
+    )
+    classification = _classify_initial_outcomes(
+        run_dir=initial_run,
+        eligibility_dir=initial_eligibility,
+        private_gold=private_gold,
+        output_dir=initial_classification,
+        candidates_per_case=1,
+        target_case_ids=target_ids,
+    )
+    state: dict[str, Any] = {
+        "schema_version": SCHEMA_VERSION,
+        "pipeline_dir": str(pipeline_dir),
+        "prepared": preparation,
+        "bootstrap_initial": bootstrap_descriptor,
+        "models": {
+            "rollout": args.rollout_model,
+            "sft_judge": args.sft_model,
+        },
+        "concurrency": {
+            "rollout": args.rollout_concurrency,
+            "sft_judge": args.sft_concurrency,
+        },
+        "initial": {
+            "merged_run": str(initial_run),
+            "unresolved_engineering_case_count": 0,
+            "sft_eligibility": str(initial_eligibility),
+            "classification": str(initial_classification),
+        },
+        "classification": classification,
+        "status": "bootstrapped",
+        "updated_at": _now(),
+    }
+    _write_json(state_path, state)
+    return state, preparation, initial_run, initial_eligibility
+
+
+def _run_bootstrapped_initial_pipeline(args: argparse.Namespace) -> dict[str, Any]:
+    """Complete ordinary quality rerolls after registering a preserved round 0."""
+
+    state, preparation, initial_run, initial_audit = (
+        _bootstrap_completed_initial_pipeline(args)
+    )
+    if state.get("status") == "completed":
+        return state
+    pipeline_dir = args.output_dir.expanduser().resolve()
+    state_path = pipeline_dir / "pipeline-state.json"
+    private_gold = Path(str(preparation["private_gold"])).expanduser().resolve()
+    initial_classification_dir = pipeline_dir / "classification"
+    if not (initial_classification_dir / "classification.json").is_file():
+        raise FileNotFoundError(
+            "bootstrap initial classification is missing: "
+            f"{initial_classification_dir}"
+        )
+
+    state["status"] = "running"
+    state["quality_reroll_config"] = {
+        "maximum_rounds": args.quality_reroll_rounds,
+        "rollout_concurrency": args.rollout_concurrency,
+        "sft_concurrency": args.sft_concurrency,
+    }
+    state["updated_at"] = _now()
+    _write_json(state_path, state)
+    sources, final_classification = _run_quality_rerolls(
+        pipeline_dir=pipeline_dir,
+        preparation=preparation,
+        private_gold=private_gold,
+        initial_run=initial_run,
+        initial_audit=initial_audit,
+        initial_classification_dir=initial_classification_dir,
+        profile=args.rollout_profile,
+        rollout_concurrency=args.rollout_concurrency,
+        sft_model=args.sft_model,
+        sft_concurrency=args.sft_concurrency,
+        rollout_timeout=args.rollout_timeout,
+        sft_timeout=args.sft_timeout,
+        maximum_engineering_attempts=args.maximum_engineering_attempts,
+        maximum_sft_audit_attempts=args.maximum_sft_audit_attempts,
+        base_seed=args.base_seed,
+        maximum_rounds=args.quality_reroll_rounds,
+        state=state,
+        state_path=state_path,
+    )
+    selected_episode_ids = {
+        str(row["episode_id"])
+        for row in _selected_classification_rows(
+            pipeline_dir / "classification" / "final"
+        )
+        if str(row.get("episode_id", "")).strip()
+    }
+    accepted_release = _final_release(
+        pipeline_dir=pipeline_dir,
+        sources=sources,
+        selected_episode_ids=selected_episode_ids,
+        output_name="quality-reroll-release",
+    )
+    package_dir = _build_package(
+        pipeline_dir=pipeline_dir,
+        accepted_release=accepted_release,
+        output_name="quality-reroll-training-package",
+    )
+    state["classification"] = final_classification
+    state["quality_reroll_release"] = str(accepted_release)
+    state["quality_reroll_training_package"] = str(package_dir)
+    state["status"] = "completed"
+    state["updated_at"] = _now()
+    _write_json(state_path, state)
+    return state
+
+
 def _run_sft_audit(
     *,
     run_dir: Path,
@@ -1907,6 +2299,24 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Continue quality rerolls from an existing completed pipeline directory.",
     )
+    parser.add_argument(
+        "--bootstrap-initial-run",
+        type=Path,
+        default=None,
+        help=(
+            "Completed external run with exactly one terminal trace per case. "
+            "Registers it as round 0 before ordinary quality rerolls."
+        ),
+    )
+    parser.add_argument(
+        "--bootstrap-initial-eligibility",
+        type=Path,
+        default=None,
+        help=(
+            "Frozen SFT eligibility directory matching --bootstrap-initial-run "
+            "trace bytes exactly."
+        ),
+    )
     parser.add_argument("--base-seed", type=int, default=2026082401)
     parser.add_argument("--rollout-timeout", type=float, default=1800.0)
     parser.add_argument("--sft-timeout", type=float, default=180.0)
@@ -1922,6 +2332,23 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_parser().parse_args()
+    bootstrap_requested = (
+        args.bootstrap_initial_run is not None
+        or args.bootstrap_initial_eligibility is not None
+    )
+    if (
+        args.bootstrap_initial_run is None
+    ) != (
+        args.bootstrap_initial_eligibility is None
+    ):
+        raise SystemExit(
+            "--bootstrap-initial-run and --bootstrap-initial-eligibility "
+            "must be supplied together"
+        )
+    if args.reroll_from is not None and bootstrap_requested:
+        raise SystemExit(
+            "--reroll-from cannot be combined with bootstrap initial inputs"
+        )
     if args.reroll_from is None:
         missing = [
             option
@@ -1937,6 +2364,15 @@ def main() -> None:
         raise SystemExit(
             "--dataset-root and --output-dir are only valid for a new pipeline; "
             "use --reroll-from for an existing pipeline"
+        )
+    if bootstrap_requested and args.prepare_only:
+        raise SystemExit(
+            "--prepare-only cannot be combined with bootstrap initial inputs"
+        )
+    if bootstrap_requested and args.candidates_per_case != 1:
+        raise SystemExit(
+            "bootstrap initial mode requires --candidates-per-case 1; "
+            "quality rerolls add the remaining candidates one round at a time"
         )
     numeric_values = {
         "--rollout-concurrency": args.rollout_concurrency,
@@ -1964,7 +2400,11 @@ def main() -> None:
     result = (
         _continue_quality_rerolls(args)
         if args.reroll_from is not None
-        else run_pipeline(args)
+        else (
+            _run_bootstrapped_initial_pipeline(args)
+            if bootstrap_requested
+            else run_pipeline(args)
+        )
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
 

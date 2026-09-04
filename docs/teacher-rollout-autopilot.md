@@ -19,6 +19,10 @@
 - 同一 case 最终选择质量最高且通过准入的轨迹。
 - 连续质量重跑仍未通过的 case 标为 hard case，保留全部尝试。
 - 轨迹不会因为重跑而混入旧的初始池，也不会删除原始结果。
+- 若要从一个已经完成且已完成 SFT judge 的外部 smoke 继续，可用
+  `--bootstrap-initial-run` 和 `--bootstrap-initial-eligibility` 将它作为 round 0。
+  程序会校验每个 trace 的 SHA-256、case scope 和 eligibility artifact，随后才启动后续
+  reroll；不会把它与另一个历史 rollout 目录的初始候选混用。
 
 每轮独立保存：
 

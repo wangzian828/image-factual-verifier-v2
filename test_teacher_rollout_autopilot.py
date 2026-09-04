@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from argparse import Namespace
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,7 @@ from scripts.trajectory.run_teacher_rollout_autopilot import (
     _candidate_trace_sources,
     _classify_initial_outcomes,
     _build_quality_reroll_summary,
+    _bootstrap_completed_initial_pipeline,
     _has_early_correct_judgment,
     _merge_successful_attempts,
     _quality_reroll_case_ids,
@@ -131,6 +133,123 @@ def test_prepare_runtime_release_allows_precreated_logs_only(tmp_path: Path) -> 
 
     assert prepared["case_count"] == 1
     assert (output / "preparation.json").is_file()
+
+
+def test_bootstrap_completed_initial_preserves_only_matching_audited_traces(
+    tmp_path: Path,
+) -> None:
+    dataset = tmp_path / "unified-dataset"
+    images = dataset / "images"
+    images.mkdir(parents=True)
+    for case_id in ("case-one", "case-two"):
+        (images / f"{case_id}.jpg").write_bytes(case_id.encode("utf-8"))
+    train_manifest = dataset / "train-manifest.jsonl"
+    train_manifest.write_text(
+        "\n".join(
+            json.dumps(
+                _manifest_row(
+                    case_id,
+                    factual_status="refuted",
+                    image=f"images/{case_id}.jpg",
+                )
+            )
+            for case_id in ("case-two", "case-one")
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    source_run = tmp_path / "source-run"
+    source_traces = source_run / "traces"
+    source_traces.mkdir(parents=True)
+    (source_run / "run_manifest.json").write_text(
+        json.dumps(
+            {
+                "status": "completed",
+                "git_commit": "source-commit",
+                "benchmark": {"path": "/source/cases.jsonl"},
+                "agent": {"model": "gemini-3.7-flash"},
+                "source_access_policy": {"active": False},
+            }
+        ),
+        encoding="utf-8",
+    )
+    source_eligibility = tmp_path / "source-eligibility"
+    source_eligibility.mkdir()
+    summary_rows: list[dict[str, Any]] = []
+    for index, case_id in enumerate(("case-one", "case-two")):
+        trace = _trace(case_id, early_judgment=True)
+        trace_path = source_traces / f"{trace['image_id']}.json"
+        trace_path.write_text(json.dumps(trace), encoding="utf-8")
+        passed = index == 0
+        artifact = {
+            "schema_version": "ifv-sft-eligibility-v4",
+            "case_id": case_id,
+            "episode_id": trace["image_id"],
+            "source_trace": {"sha256": _sha256(trace_path)},
+            "metrics": {
+                "expected_verdict": "fake",
+                "target_scope": "direct_target",
+                "decision_support": "supports_fake" if passed else "insufficient",
+                "retrieval_quality": "effective" if passed else "poor",
+                "decisive_evidence_ids": ["evidence-1"] if passed else [],
+                "fatal_errors": [] if passed else ["no_decisive_evidence"],
+                "warnings": [],
+                "trajectory_conduct": "clean",
+                "overclaiming": "none",
+                "boundary_assessment": "respected",
+            },
+            "gates": {"sft_eligibility_pass": passed},
+        }
+        artifact_path = (
+            source_eligibility / f"{trace['image_id']}.sft_eligibility.json"
+        )
+        artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
+        summary_rows.append(
+            {
+                "status": "success",
+                "case_id": case_id,
+                "episode_id": trace["image_id"],
+            }
+        )
+    (source_eligibility / "sft_eligibility_summary.json").write_text(
+        json.dumps({"rows": summary_rows}),
+        encoding="utf-8",
+    )
+
+    output = tmp_path / "bootstrap-pipeline"
+    args = Namespace(
+        dataset_root=dataset,
+        train_manifest=train_manifest,
+        output_dir=output,
+        source_access_policy=None,
+        limit=None,
+        bootstrap_initial_run=source_run,
+        bootstrap_initial_eligibility=source_eligibility,
+        rollout_model="gemini-3.7-flash",
+        sft_model="gemini-3.7-flash",
+        rollout_concurrency=10,
+        sft_concurrency=10,
+    )
+    state, preparation, initial_run, initial_eligibility = (
+        _bootstrap_completed_initial_pipeline(args)
+    )
+
+    assert state["status"] == "bootstrapped"
+    assert preparation["case_count"] == 2
+    assert len(list((initial_run / "traces").glob("*.json"))) == 2
+    assert _sha256(
+        initial_run / "traces" / "case-one--teacher-r000.json"
+    ) == _sha256(source_traces / "case-one--teacher-r000.json")
+    assert len(
+        list(initial_eligibility.glob("*.sft_eligibility.json"))
+    ) == 2
+    assert (
+        output / "classification" / "quality-reroll-case-list.txt"
+    ).read_text(encoding="utf-8").splitlines() == ["case-two"]
+
+    resumed, _, _, _ = _bootstrap_completed_initial_pipeline(args)
+    assert resumed["bootstrap_initial"] == state["bootstrap_initial"]
 
 
 def test_attempt_launcher_log_is_outside_run_cases_output(tmp_path: Path) -> None:
