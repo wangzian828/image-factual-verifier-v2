@@ -4,13 +4,12 @@
 
 这份表是 GPU-13 Agent 运行版本的唯一登记入口。分支名不是版本号；每次实验必须记录 commit、benchmark release、benchmark SHA-256、模型和 OCR 后端。
 
-2026-09-04 的 Qwen/ms-swift SFT 格式迁移已在本地完成并通过回归，但 gpu-13
-Jupyter 后端当日不可达，因此尚未登记为服务器已验收版本；不得把本地测试结果替代
-服务器 processor 验证。
+2026-09-04 的 Qwen/ms-swift SFT 格式迁移与可移植教师 rollout 入口已在 gpu-13
+完成真实验证。当前登记提交为 `414cb07`；服务器 checkout 已 fast-forward，目标
+Qwen3.5 processor 对新导出的 3 条 policy / 3 条 perception 数据通过。
 
-对应本地/GitHub 发布 HEAD 为 `d54edc7`，其中导出实现提交为 `329b94e`。
-截至 2026-09-04 已重新确认 Jupyter 落点为 `gpu-13/wza`；服务器 checkout 仍待
-fast-forward 并重新登记。
+本次真实 smoke 的运行路径、SFT package、token 长度和质量边界见：
+[`../reports/2026-09-04-portable-handoff-smoke10.md`](../reports/2026-09-04-portable-handoff-smoke10.md)。
 
 ## 当前运行基线
 

@@ -41,10 +41,10 @@ judge 或 rollout 若遇到 API 不可用，只能暂停该运行；已经完成
 |---|---|
 | 本地/服务器分支 | `codex/gpu13-canary-20260804-plan-relaxation-01` |
 | 服务器工作树 | `/gs/home/wza/projects/image-factual-verifier-v2-worktrees/gpu13-canary-20260804-plan-relaxation-01` |
-| 最近一次服务器真实 Agent smoke 的行为 commit | `55ef0b3 Harden Gemini scene perception recovery` |
-| 本地/GitHub 当前发布 HEAD | `d54edc7 docs: record processor verification boundary` |
-| SFT 导出与真实 processor 探针代码 | `329b94e`（已包含在 `d54edc7`） |
-| gpu-13 checkout | 当前未完成本次发布候选的 fast-forward 与验收；转发恢复后执行，不能用本地结果代替 |
+| 最近一次服务器真实 Agent smoke 的行为 commit | `414cb07 fix: add dedicated teacher rollout launcher` |
+| 本地/GitHub 当前发布 HEAD | `414cb07 fix: add dedicated teacher rollout launcher` |
+| SFT 导出与真实 processor 探针代码 | `a4e5ad3` 起的媒体投影/可移植性实现，启动入口修复为 `414cb07` |
+| gpu-13 checkout | 已 fast-forward 到 `414cb07`；服务器定向测试、真实 10 条 smoke 与目标 Qwen3.5 processor 均已完成 |
 | 测试集 | 1,684 条，real 447 / fake 1,237 |
 | 3.1 Pro full direct QA | 1,682 完成、2 工程错误；judge 已完成 |
 | 3.7 full direct QA | 1,684 完成、0 工程错误；private-gold judge 已完成 |
@@ -337,7 +337,24 @@ SFT。该条仍有有效 perception 目标，因此独立 perception SFT 应为 
   直接从仓库根目录执行 `pytest training` 会因未安装本地 `ifv_training` 包而产生导入错误，
   这不是代码测试失败。
 - `python -m compileall -q src scripts training/scripts training/ifv_training` 通过。
-- `git diff --check` 通过；本地 HEAD 与 GitHub tracking ref 在本次验收前均为
-  `d54edc7`。
+- `git diff --check` 通过；该节记录的是转发恢复前的中间验收。当前本地、GitHub 和
+  gpu-13 已统一到 `414cb07`。
 - 未启动 rollout、judge、训练或服务器生产进程；全量 8,490 条教师 rollout 仍是人工复核后的
   最后一步。
+
+## 15. 2026-09-04 可移植入口真实验收
+
+- 提交 `414cb07` 修复教师轨迹误走 `src.eval.run_eval`、从而错误要求
+  `evaluation_gold` 的问题；教师输入现在走 `src.eval.run_cases`。
+- gpu-13 已 fast-forward；主仓 70 项定向回归、training 10 项定向回归通过。
+- 并发 10 的真实 10 条 smoke 初始 9 条成功，1 条瞬时 SSL transport 错误按工程重跑规则
+  单条续跑；最终 10/10 有成功 terminal trace，strict trace audit 全通过，worker
+  `CLOSE-WAIT=0`。
+- frozen SFT judge 接收 3 条，导出 3 条 policy / 3 条 perception；目标 Qwen3.5
+  processor 最大 policy 行为 28,064 tokens，`passed=true`。
+- 质量复核确认主要问题是纯图片 runtime 未收到传播 claim，模型会自行选择图片中的底图、
+  叠字、转发帖文或来源视频作为核查对象。7 条错误中 6 条为
+  `different_image_fact`，并非最终 Judgment 独立丢失历史。
+- 详细路径、工具观察、候选图片注入、长度分层和逐条 SFT judge 结论见：
+  `docs/reports/2026-09-04-portable-handoff-smoke10.md`。
+- 明确停止：没有启动 8,490 条全量教师 rollout。

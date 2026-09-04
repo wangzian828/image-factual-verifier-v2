@@ -126,7 +126,7 @@ scripts/server/poll_eval.sh
 ## 7. 本地验证
 
 ```text
-主仓：489 passed
+主仓：490 passed
 training：114 passed
 compileall：通过
 git diff --check：通过
@@ -148,4 +148,25 @@ main-02731-ms-swift-reasoning-sample-a4e5ad3.json
 43FE46344258B096CC9EB4EF395FE51B4D51447D3D28C404E3D6009F807AEC2A
 ```
 
-剩余步骤是正式提交上的小规模 rollout smoke 与逐条轨迹检查。
+## 8. 正式提交的真实 Smoke
+
+提交 `414cb07` 新增教师 rollout 专用启动入口后，gpu-13 已完成真实 10 条运行、单条
+SSL 工程续跑、strict trace audit、frozen SFT judge、ms-swift 导出和目标 Qwen3.5
+processor 验证。
+
+最终训练包为：
+
+```text
+/gsdata/home/wza/image-factual-verifier-v2-data/generated/teacher-rollouts/
+portable-handoff-smoke10-20260904-414cb07/sft-training-package/
+```
+
+- policy：3 条；
+- perception：3 条；
+- action-only：0；
+- processor 最大 policy 输入：28,064 tokens；
+- processor：`passed=true`；
+- 没有启动 8,490 条全量教师 rollout。
+
+本批逐条调查质量、scope drift、候选图片实际注入和长度预估边界见：
+[`2026-09-04-portable-handoff-smoke10.md`](2026-09-04-portable-handoff-smoke10.md)。
