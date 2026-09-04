@@ -394,8 +394,8 @@ async def _run(args: argparse.Namespace) -> Dict[str, Any]:
             "sft_eligibility_pass": artifact.get("gates", {}).get(
                 "sft_eligibility_pass"
             ),
-            "fact_alignment": artifact.get("metrics", {}).get(
-                "fact_alignment"
+            "target_scope": artifact.get("metrics", {}).get(
+                "target_scope"
             ),
             "decision_support": artifact.get("metrics", {}).get(
                 "decision_support"

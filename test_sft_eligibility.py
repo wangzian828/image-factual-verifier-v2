@@ -128,7 +128,7 @@ def _gold() -> dict[str, Any]:
 
 def _judgment(**updates: Any) -> SFTEligibilityJudgment:
     payload: Dict[str, Any] = {
-        "fact_alignment": "same_image_fact",
+        "target_scope": "direct_target",
         "decision_support": "supports_fake",
         "retrieval_quality": "effective",
         "decisive_evidence_ids": ["evidence-1"],
@@ -407,7 +407,7 @@ def test_packet_includes_compact_retrieval_and_rejection_history() -> None:
 
     packet = build_sft_eligibility_input(trace, _gold())
 
-    assert packet["schema_version"] == "ifv-sft-eligibility-input-v9"
+    assert packet["schema_version"] == "ifv-sft-eligibility-input-v10"
     assert packet["candidate"]["retrieval_history"] == [
         {
             "tool": "text_search",
@@ -635,10 +635,10 @@ def test_unified_packet_keeps_nested_visit_evidence_records() -> None:
     assert action["observation"]["visited_pages"][0]["record_count"] == 1
 
 
-def test_compatible_subfact_can_pass_without_claim_relation_matching() -> None:
+def test_decisive_subfact_can_pass_without_claim_relation_matching() -> None:
     packet = _packet()
     judgment = _judgment(
-        fact_alignment="compatible_subfact",
+        target_scope="decisive_subfact",
         decision_support="supports_fake",
         decisive_evidence_ids=["evidence-1"],
     )
@@ -649,6 +649,37 @@ def test_compatible_subfact_can_pass_without_claim_relation_matching() -> None:
     assert sft_eligibility_passes(
         metrics,
         strict_trace_audit_pass=False,
+        engineering_valid=True,
+    )
+
+
+def test_related_but_incomplete_is_rejected_without_calling_it_unrelated() -> None:
+    metrics = sft_eligibility_metrics(
+        _packet(),
+        _judgment(target_scope="related_but_incomplete"),
+    )
+
+    assert metrics["target_scope"] == "related_but_incomplete"
+    assert "key_target_condition_unchecked" in metrics["fatal_errors"]
+    assert "unrelated_image_fact" not in metrics["fatal_errors"]
+    assert not sft_eligibility_passes(
+        metrics,
+        strict_trace_audit_pass=True,
+        engineering_valid=True,
+    )
+
+
+def test_unrelated_fact_is_rejected_as_unrelated_image_fact() -> None:
+    metrics = sft_eligibility_metrics(
+        _packet(),
+        _judgment(target_scope="unrelated_fact"),
+    )
+
+    assert "unrelated_image_fact" in metrics["fatal_errors"]
+    assert "key_target_condition_unchecked" not in metrics["fatal_errors"]
+    assert not sft_eligibility_passes(
+        metrics,
+        strict_trace_audit_pass=True,
         engineering_valid=True,
     )
 
@@ -810,7 +841,7 @@ def test_judge_is_one_post_rollout_call_and_does_not_request_human_review() -> N
         backend = _MockBackend()
         judgment, audit = await SFTEligibilityJudge(backend).judge(packet)
 
-        assert judgment.fact_alignment == "same_image_fact"
+        assert judgment.target_scope == "direct_target"
         assert len(backend.messages) == 1
         request = json.dumps(backend.messages[0], ensure_ascii=False)
         assert "decision_paths" not in request
@@ -837,6 +868,12 @@ def test_prompt_is_image_fact_based_not_claim_path_based() -> None:
 
     assert "factual content expressed by the supplied image" in prompt
     assert "Do not require the teacher to reproduce the target wording" in prompt
+    assert "First assess target_scope independently from correctness" in prompt
+    assert "related_but_incomplete" in prompt
+    assert (
+        "Do not call a trajectory unrelated_fact merely because it missed a key "
+        "condition" in prompt
+    )
     assert "Retrieval history describes what the teacher actually investigated" in prompt
     assert "generic web search failure" in prompt
     assert "Assess retrieval_quality" in prompt

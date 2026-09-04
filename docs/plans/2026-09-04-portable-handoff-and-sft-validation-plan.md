@@ -46,8 +46,9 @@
   action-only。目标 Qwen3.5 processor 的最长 policy 输入为 28,064 tokens，远低于
   128K。
 - 逐条质量复核发现当前最大语义问题是：纯图片 runtime 没有传播 claim，模型会在图片的
-  底图、叠字、转发帖文和视频来源之间自行选择一个可调查对象。SFT judge 在事后将 5/7
-  错误标为 `different_image_fact`，但不会在 rollout 时把 private target 泄漏给模型。
+  底图、叠字、转发帖文和视频来源之间自行选择一个可调查对象。旧版 SFT judge 曾将
+  部分“相关但漏掉关键条件”的错误粗略标为 `different_image_fact`；v7 重审时会以
+  `target_scope` 区分它和真正无关的调查，但不会在 rollout 时把 private target 泄漏给模型。
 - 详细运行路径、SFT 分桶、长度解释、文搜图真实注入和逐条质量分析见：
   [`2026-09-04-portable-handoff-smoke10.md`](../reports/2026-09-04-portable-handoff-smoke10.md)。
 - 停止点保持不变：不启动 8,490 条全量教师 rollout。

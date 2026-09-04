@@ -353,8 +353,8 @@ SFT。该条仍有有效 perception 目标，因此独立 perception SFT 应为 
 - frozen SFT judge 接收 3 条，导出 3 条 policy / 3 条 perception；目标 Qwen3.5
   processor 最大 policy 行为 28,064 tokens，`passed=true`。
 - 质量复核确认主要问题是纯图片 runtime 未收到传播 claim，模型会自行选择图片中的底图、
-  叠字、转发帖文或来源视频作为核查对象。7 条错误中 6 条为
-  `different_image_fact`，并非最终 Judgment 独立丢失历史。
+  叠字、转发帖文或来源视频作为核查对象。旧版 SFT judge 曾将其中 6 条粗略写为
+  `different_image_fact`；v7 已区分真正无关的调查与“相关但漏掉关键条件”的调查。
 - 详细路径、工具观察、候选图片注入、长度分层和逐条 SFT judge 结论见：
   `docs/reports/2026-09-04-portable-handoff-smoke10.md`。
 - 明确停止：没有启动 8,490 条全量教师 rollout。

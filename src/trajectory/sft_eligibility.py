@@ -27,11 +27,11 @@ from src.trajectory.semantic_reward import (
 )
 
 
-SFT_ELIGIBILITY_SCHEMA_VERSION = "ifv-sft-eligibility-v3"
-SFT_ELIGIBILITY_INPUT_VERSION = "ifv-sft-eligibility-input-v9"
-SFT_ELIGIBILITY_PROMPT_VERSION = "ifv-sft-private-image-fact-gate-v6"
-SFT_ELIGIBILITY_GENERATION_VERSION = "minimal-thinking-4096-v6"
-SFT_ELIGIBILITY_POSTPROCESS_VERSION = "image-fact-safety-gate-v5"
+SFT_ELIGIBILITY_SCHEMA_VERSION = "ifv-sft-eligibility-v4"
+SFT_ELIGIBILITY_INPUT_VERSION = "ifv-sft-eligibility-input-v10"
+SFT_ELIGIBILITY_PROMPT_VERSION = "ifv-sft-private-image-fact-gate-v7"
+SFT_ELIGIBILITY_GENERATION_VERSION = "minimal-thinking-4096-v7"
+SFT_ELIGIBILITY_POSTPROCESS_VERSION = "image-fact-safety-gate-v6"
 
 
 SFT_ELIGIBILITY_SYSTEM_PROMPT = (
@@ -41,8 +41,23 @@ SFT_ELIGIBILITY_SYSTEM_PROMPT = (
     "private target describes the image fact and the expected binary verdict. "
     "Do not require the teacher to reproduce the target wording, private-target "
     "wording, a specific runtime ID, URL, original image, source span, or registered "
-    "decision path. Accept a different but clearly image-grounded sub-fact when it "
-    "decisively establishes the same image-level verdict. Evidence may be a "
+    "decision path. First assess target_scope independently from correctness, "
+    "evidence sufficiency, retrieval quality, and overclaiming. Use direct_target "
+    "when the teacher's central investigation tests the target's decisive relation, "
+    "including its important identity, time, place, attribution, or physical "
+    "condition. Use decisive_subfact when the teacher investigates a different "
+    "image-grounded sub-fact that logically establishes the target verdict. For "
+    "example, a dated source image proving a picture was taken in a different "
+    "country and year can decisively refute a displayed event attribution. Use "
+    "related_but_incomplete when the teacher investigates the same picture, event, "
+    "entity, or general scene authenticity but does not test the target's decisive "
+    "condition. For example, checking whether a garden scene looks real is related "
+    "but incomplete when the target is whether a particular planter is unsupported "
+    "and floating. Use unrelated_fact only when the teacher's central investigation "
+    "is a genuinely different image fact, event, entity, or claim. Do not call a "
+    "trajectory unrelated_fact merely because it missed a key condition, reached a "
+    "wrong verdict, used weak Evidence, or did not reproduce the target wording. "
+    "Evidence may be a "
     "successful visual observation, OCR/crop result, source passage, same-image "
     "context, or a multi-item chain. Retrieval history describes what the teacher "
     "actually investigated, but is not itself factual Evidence and has no Evidence "
@@ -84,10 +99,11 @@ SFT_ELIGIBILITY_SYSTEM_PROMPT = (
 
 
 class SFTEligibilityJudgment(_StrictModel):
-    fact_alignment: Literal[
-        "same_image_fact",
-        "compatible_subfact",
-        "different_fact",
+    target_scope: Literal[
+        "direct_target",
+        "decisive_subfact",
+        "related_but_incomplete",
+        "unrelated_fact",
         "unclear",
     ]
     decision_support: Literal[
@@ -1218,7 +1234,7 @@ def sft_eligibility_metrics(
     }
     if judgment is None:
         judgment_values: Dict[str, Any] = {
-            "fact_alignment": "unclear",
+            "target_scope": "unclear",
             "decision_support": "unclear",
             "retrieval_quality": "poor",
             "decisive_evidence_ids": [],
@@ -1262,7 +1278,7 @@ def sft_eligibility_metrics(
         and bool(evidence_by_id[evidence_id].get("successful_call"))
         and _evidence_has_content(evidence_by_id[evidence_id])
     ]
-    fact_alignment = str(judgment_values.get("fact_alignment", "unclear"))
+    target_scope = str(judgment_values.get("target_scope", "unclear"))
     decision_support = str(judgment_values.get("decision_support", "unclear"))
     retrieval_quality = str(judgment_values.get("retrieval_quality", "poor"))
     trajectory_conduct = str(
@@ -1285,8 +1301,13 @@ def sft_eligibility_metrics(
             else []
         ),
         *(
-            ["different_image_fact"]
-            if fact_alignment == "different_fact"
+            ["unrelated_image_fact"]
+            if target_scope == "unrelated_fact"
+            else []
+        ),
+        *(
+            ["key_target_condition_unchecked"]
+            if target_scope == "related_but_incomplete"
             else []
         ),
         *(
@@ -1311,8 +1332,8 @@ def sft_eligibility_metrics(
         ),
     ]
     warnings: List[str] = []
-    if fact_alignment == "unclear":
-        warnings.append("fact_alignment_unclear")
+    if target_scope == "unclear":
+        warnings.append("target_scope_unclear")
     if decision_support in {"supporting_only", "insufficient", "unclear"}:
         warnings.append("decision_support_not_decisive")
     if retrieval_quality == "mixed":
@@ -1346,7 +1367,7 @@ def sft_eligibility_metrics(
         "expected_decision_support": expected_support,
         "verdict_correct": recorded_verdict == expected_verdict,
         "image_available": image_available,
-        "fact_alignment": fact_alignment,
+        "target_scope": target_scope,
         "decision_support": decision_support,
         "retrieval_quality": retrieval_quality,
         "trajectory_conduct": trajectory_conduct,
@@ -1379,8 +1400,8 @@ def sft_eligibility_passes(
     return bool(
         engineering_valid
         and metrics.get("verdict_correct") is True
-        and metrics.get("fact_alignment")
-        in {"same_image_fact", "compatible_subfact"}
+        and metrics.get("target_scope")
+        in {"direct_target", "decisive_subfact"}
         and metrics.get("decision_support") == expected_support
         and metrics.get("decisive_evidence_ids")
         and not metrics.get("fatal_errors")

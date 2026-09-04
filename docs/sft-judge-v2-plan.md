@@ -88,7 +88,7 @@ action/audit summary。
 
 ```json
 {
-  "fact_alignment": "same_image_fact|compatible_subfact|different_fact|unclear",
+  "target_scope": "direct_target|decisive_subfact|related_but_incomplete|unrelated_fact|unclear",
   "decision_support": "supports_real|supports_fake|supporting_only|insufficient|unclear",
   "decisive_evidence_ids": ["..."],
   "supporting_evidence_ids": ["..."],
@@ -99,8 +99,10 @@ action/audit summary。
 }
 ```
 
-`compatible_subfact` 允许候选通过另一条确实能决定同一图像事实的合理路径，
-不要求匹配原始 Claim 或 relation slot。
+`decisive_subfact` 允许候选通过另一条确实能决定同一图像事实的合理路径，
+不要求匹配原始 Claim 或 relation slot。`related_but_incomplete` 表示调查对象
+与 target 同图、同事件或同一实体，但漏掉了 target 的关键关系、时间、地点、归因或物理
+条件；它不能通过 SFT gate，但也不能被错误写成无关事实。
 
 ## Eligibility gate
 
@@ -114,7 +116,8 @@ action/audit summary。
 - judge 选择不存在的 Evidence ID；
 - 选择的 Evidence 来自失败工具调用；
 - Evidence 明确对应另一张图或另一事件；
-- `fact_alignment == different_fact`；
+- `target_scope == unrelated_fact`；
+- `target_scope == related_but_incomplete`；
 - `overclaiming == major`；
 - 没有 decisive Evidence；
 - source-access policy 违规或存在未恢复的安全边界错误。
@@ -141,7 +144,7 @@ eligible = (
     verdict_correct
     and engineering_valid
     and image_available
-    and fact_alignment in {"same_image_fact", "compatible_subfact"}
+    and target_scope in {"direct_target", "decisive_subfact"}
     and decision_support == expected_decision_support
     and bool(decisive_evidence_ids)
     and overclaiming != "major"
