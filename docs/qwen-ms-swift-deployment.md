@@ -122,16 +122,26 @@ python training/scripts/probe/verify_ms_swift_agent_dataset.py \
 
 ## 5. 启动边界
 
-通用 rollout 入口：
+测试集评测入口：
 
 ```bash
 source scripts/server/ifv_env.sh
 scripts/server/start_gemini_eval.sh \
-  --benchmark <runtime-cases.jsonl> \
+  --benchmark <evaluation-release/runtime_input/cases.jsonl> \
   --output-dir "$IFV_DATA_ROOT/runs/eval/<run-id>" \
   --concurrency <N>
 
 scripts/server/poll_eval.sh <run-id>
+```
+
+不带 `evaluation_gold` 的教师轨迹输入使用：
+
+```bash
+scripts/server/start_teacher_rollout.sh \
+  --benchmark <runtime-cases.jsonl> \
+  --output-dir "$IFV_DATA_ROOT/runs/eval/<run-id>" \
+  --concurrency <N> \
+  --rollouts-per-case 1
 ```
 
 训练入口继续使用 `training/scripts/train/run_sft.sh`。模型路径从

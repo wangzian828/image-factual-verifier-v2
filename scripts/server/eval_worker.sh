@@ -51,8 +51,9 @@ printf 'started_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 printf 'pid=%s\n' "$$"
 
 runtime_python="${IFV_RUNTIME_PYTHON:-python}"
+runtime_module="${IFV_EVAL_MODULE:-src.eval.run_eval}"
 "${SCRIPT_DIR}/run_ifv.sh" \
-    "${runtime_python}" -m src.eval.run_eval "$@" &
+    "${runtime_python}" -m "${runtime_module}" "$@" &
 child_pid=$!
 
 set +e

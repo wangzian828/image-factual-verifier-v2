@@ -63,11 +63,12 @@ scripts/server/run_ifv.sh python scripts/server/doctor.py \
 ```bash
 cd "$IFV_REPO_ROOT"
 source scripts/server/ifv_env.sh
-scripts/server/start_gemini_eval.sh \
+scripts/server/start_teacher_rollout.sh \
   --benchmark <runtime-cases.jsonl> \
   --output-dir "$IFV_DATA_ROOT/runs/eval/handoff-smoke-10" \
   --limit 10 \
-  --concurrency 10
+  --concurrency 10 \
+  --rollouts-per-case 1
 scripts/server/poll_eval.sh handoff-smoke-10 --tail 100
 ```
 

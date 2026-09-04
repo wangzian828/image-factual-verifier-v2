@@ -109,6 +109,7 @@ scripts/server/bootstrap_runtime.sh
 scripts/server/run_ifv.sh
 scripts/server/start_eval.sh
 scripts/server/start_gemini_eval.sh
+scripts/server/start_teacher_rollout.sh
 scripts/server/eval_worker.sh
 scripts/server/poll_eval.sh
 ```
