@@ -78,6 +78,8 @@ judge 或 rollout 若遇到 API 不可用，只能暂停该运行；已经完成
 | 2026-09-02 | 完成 high ReAct 10 条对照 | `docs/reports/2026-09-02-unified-react-high-thinking-smoke.md` | 首轮 3 条 Gemini 429 case 以并发 3、high 重跑；与首轮成功的 7 条合并为最终 10 条，并完成统一 private-gold 审计。 | 最终 10/10 成功、0 工程错误、strict trace audit 10/10；4/10 标签正确，其中 3 条理由充分。仅作为固定样例结果，不据此否定 high。 | `54c2ee4` |
 | 2026-09-02 | 继续收尾：统一图片边界与完整工具观察 | `src/tools/vision_utils.py`, `src/tools/crop_and_inspect.py`, `src/tools/crop_and_search.py`, `src/tools/focused_visual_inspection.py`, `src/orchestrator/stage_runner.py`, `src/trajectory/exporter.py` 及对应测试 | 所有进入视觉 API 的图片统一最长边 1024、JPEG quality 95；contact sheet 和 crop 改用同一边界；crop 临时文件改为系统唯一文件名。删除已不再调用的工具结果二次压缩逻辑，canonical 工具结果只排除二进制传输字段和 raw HTML，完整文本在下一轮通过 InteractionSession 前递。SFT 仍只去重累计 workspace，不截断工具观察。 | 本地 `481 passed`、training `112 passed`、`compileall` 和 `git diff --check` 通过；已提交并推送。gpu-13 定向回归和并发 10 的真实 smoke 待转发恢复后执行。未启动大规模教师 rollout。 | `0a76001` 及后续 `329b94e` |
 
+| 2026-09-04 | 已实施：SFT target scope 重分层 | `src/trajectory/sft_eligibility.py`, `src/eval/score_sft_eligibility.py`, teacher staging/autopilot/package metadata 及测试 | 将旧 `fact_alignment` 替换为 `target_scope`：`direct_target`、`decisive_subfact`、`related_but_incomplete`、`unrelated_fact`。相关但漏关键条件仍拒绝训练，但改记为 `key_target_condition_unchecked`，不再误称无关事实；候选排名与训练包元数据同步使用新字段。未改 Agent、runtime、private-gold 隔离或准入强度。 | 本地与 gpu-13 38 项定向测试通过；对既有 10 条 trace 使用 Gemini 3.7 Flash 新调用重审，仍通过 3/10，旧版 6 条 `different_image_fact` 全部不再为 `unrelated_fact`。详情见 2026-09-04 portable handoff 报告。 | `cc1ac5a`, `76bc97f` |
+
 后续每一条 Agent 改动必须记录：修改前行为、修改后行为、为何不改变 private-gold
 隔离/成熟工具契约、对应测试、真实 smoke case、commit 和服务器部署状态。
 

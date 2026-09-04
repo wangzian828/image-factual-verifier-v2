@@ -64,7 +64,9 @@
 本批标签正确为 3/10：`main-02728`、`main-02731`、`main-02732`。这只是固定小样本，
 不能外推整体准确率。
 
-7 条错误中，6 条被 frozen SFT judge 明确标记为 `different_image_fact`：
+旧版 v6 frozen SFT judge 将下列 6 条标记为 `different_image_fact`。该标签把
+“真正调查无关事实”和“调查相关、但漏掉 target 关键条件或错误解释证据”混在了一起；
+下表仅保留为旧版审计记录：
 
 | Case | Agent 实际核查对象 | private target 中应核查的关键事实 |
 | --- | --- | --- |
@@ -75,7 +77,34 @@
 | `main-02735` | 狗被埋住的底图是否为真实救援 | “2026 哥伦比亚地震救援”的传播归因是否真实 |
 | `main-02736` | 摩洛哥警察和水炮场景是否存在 | “2026-07-15 Ceuta 第二波”的具体传播语境是否真实 |
 
-最后两项在该批 judge 中也属于 `different_image_fact`；表内将它们列出以便复核传播事实。
+最后两项在旧版 judge 中也属于 `different_image_fact`。
+
+### 2026-09-04 v7 target-scope 重审
+
+在提交 `cc1ac5a` 与 `76bc97f` 后，使用同一 private gold、同一批完整 trace
+（`main-02730` 使用其成功的 SSL 补跑 trace）对 10 条进行一次全新的 Gemini 3.7 Flash
+SFT judge 调用。新结果单独保存，不覆盖旧 v6 artifact：
+
+```text
+/gsdata/home/wza/image-factual-verifier-v2-data/generated/teacher-rollouts/
+portable-handoff-smoke10-20260904-414cb07/sft-eligibility/v7-target-scope/
+```
+
+通过数仍为 3/10，说明这次改动没有放宽 SFT 准入；它只纠正 scope 的诊断口径。
+
+| Case | v7 target scope | 仍被拒绝的核心原因 |
+| --- | --- | --- |
+| `main-02729` | `direct_target` | 直接调查石盆是否悬浮，但忽略视觉一致性工具指出的无支撑悬浮，错误判为 real |
+| `main-02730` | `direct_target` | 直接调查 Corcoran grade separation；轨迹判 fake、private gold 为 real，属于 verdict/gold 证据解释冲突，不是查错对象 |
+| `main-02733` | `direct_target` | 调查帖子和视频真实性，但没有证实底层视频画面真实，证据不足且错误判 real |
+| `main-02734` | `decisive_subfact` | 找到 Haiti 2010 原图，足以反驳 Colombia 2026 归因；但最终把“底图真实”外推成 real |
+| `main-02735` | `direct_target` | 直接调查救援图片和 Colombia 归因，但未找到 Brazil 原始出处，错误判 real |
+| `main-02736` | `related_but_incomplete` | 核到摩洛哥水炮的一般事件，却未核具体日期、“第二波”与 Ceuta 传播归因 |
+
+因此，旧版 6 个 `different_image_fact` 中没有一个在 v7 被判为
+`unrelated_fact`。`main-02736` 是“相关但漏关键条件”；`main-02734` 是可决定
+target 的子事实；其余四条均是直接调查 target。最终是否可进入 SFT 仍由 verdict
+正确性、decision support、decisive Evidence、retrieval quality 和行为质量共同决定。
 
 根因不在最终 Judgment 的新造结论，也不是 reducer 改写了一个已有 target：
 
@@ -106,8 +135,8 @@
 - 初始 10 条通过：3 条；
 - 工程补跑的 `main-02730`：未通过；
 - 通过并进入 accepted release：`main-02728`、`main-02731`、`main-02732`；
-- 其余被拒原因以 `different_image_fact`、`major_overclaiming`、
-  `poor_retrieval_quality`、`no_decisive_evidence` 为主；
+- v7 重审仍只通过上述 3 条；其余拒绝主要来自 verdict 错误、证据不足、过度外推、
+  retrieval 质量或未核关键 target 条件，而非“查了无关事实”；
 - 这一拒绝发生在 rollout 后，不会把 private target 写入模型可见轨迹。
 
 训练包：
