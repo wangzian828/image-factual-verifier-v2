@@ -41,9 +41,10 @@ judge 或 rollout 若遇到 API 不可用，只能暂停该运行；已经完成
 |---|---|
 | 本地/服务器分支 | `codex/gpu13-canary-20260804-plan-relaxation-01` |
 | 服务器工作树 | `/gs/home/wza/projects/image-factual-verifier-v2-worktrees/gpu13-canary-20260804-plan-relaxation-01` |
-| 当前运行时代码 commit | `55ef0b3 Harden Gemini scene perception recovery` |
-| 最新仓库 HEAD（含文档收尾） | `10bb1e1 docs: finalize agent100 closeout status` |
-| gpu-13 checkout | 已同步到 `10bb1e1`，工作树干净；运行时代码仍为 `55ef0b3` |
+| 最近一次服务器真实 Agent smoke 的行为 commit | `55ef0b3 Harden Gemini scene perception recovery` |
+| 本地/GitHub 当前发布 HEAD | `d54edc7 docs: record processor verification boundary` |
+| SFT 导出与真实 processor 探针代码 | `329b94e`（已包含在 `d54edc7`） |
+| gpu-13 checkout | 当前未完成本次发布候选的 fast-forward 与验收；转发恢复后执行，不能用本地结果代替 |
 | 测试集 | 1,684 条，real 447 / fake 1,237 |
 | 3.1 Pro full direct QA | 1,682 完成、2 工程错误；judge 已完成 |
 | 3.7 full direct QA | 1,684 完成、0 工程错误；private-gold judge 已完成 |
@@ -73,9 +74,9 @@ judge 或 rollout 若遇到 API 不可用，只能暂停该运行；已经完成
 | 2026-09-02 | 已实施：`perceive_scene` 请求恢复 | `src/tools/perceive_scene.py`, `src/tools/visual_common.py`, `src/orchestrator/stage_runner.py`, `scripts/server/start_gemini_eval_gpu13.sh` | 视觉请求默认使用压缩 JPEG；对可恢复的 Gemini 400、传输失败和超时追加一次更小图片/宽松 schema 的恢复请求；移除 provider 不接受的 schema 约束；工具动作边界调整为 210 秒。失败仍记录为工具错误，不伪装成成功。 | 本地 468 项测试通过；gpu-13 fast-forward 到 `55ef0b3`；3.1 Pro 与 3.7 Flash 各完成 10/10、0 provider 工程错误。逐条质量问题见 `docs/reports/2026-09-02-perceive-scene-recovery-and-smoke.md`。 | `55ef0b3` |
 | 2026-09-02 | 已实施：测试 100 条正式 release 重建 | `scripts/prepare_agent_test_release.py` 及服务器生成 release | 复用原 Agent-100 的精确 100 个 case，排除其余 1,584 个测试 case；补齐顶层 `training_prohibited=true`，保证 runtime 只含 case/image/hash，gold 与来源策略仍在 evaluator-private。 | 100/100 case、5 个构造子路线各 20 条；首次启动因旧 release 元数据缺失而拒绝，失败目录保留；正式 release 已创建。 | `55ef0b3` |
 | 2026-09-02 | 文档收尾与状态统一 | `docs/agent-evaluation-closeout-plan.md`, `docs/reports/2026-09-02-*.md`, `docs/plans/2026-09-01-tool-parity-and-react-observation-plan.md` | 统一 runtime commit、仓库 HEAD、服务器状态、468 项测试结果、3.7 在线可用性边界和大规模 rollout 停止点；把已完成工作从“待提交/待部署”改为可核对的完成状态。 | 文档检查、链接/路径核对、`git diff --check`；不启动任何新 rollout。 | `10bb1e1` |
-| 2026-09-02 | 固定主 ReAct 默认高思考 | `src/orchestrator/pipeline.py`, `src/eval/run_eval.py`, `test_provider_profiles.py`, `docs/operations/gpu13.md` | `UNIFIED_REACT` 默认使用 `high`；其它 Gemini 阶段仍默认 `low`。可显式设置 `GEMINI_UNIFIED_REACT_THINKING_LEVEL=low` 做对照，不依赖临时启动命令。 | 定向测试和真实 high smoke 已完成；本批 10 条仅作样例记录，不外推整体质量。 | 待提交 |
+| 2026-09-02 | 固定主 ReAct 默认高思考 | `src/orchestrator/pipeline.py`, `src/eval/run_eval.py`, `test_provider_profiles.py`, `docs/operations/gpu13.md` | `UNIFIED_REACT` 默认使用 `high`；其它 Gemini 阶段仍默认 `low`。可显式设置 `GEMINI_UNIFIED_REACT_THINKING_LEVEL=low` 做对照，不依赖临时启动命令。 | 定向测试和真实 high smoke 已完成；本批 10 条仅作样例记录，不外推整体质量。 | `54c2ee4` |
 | 2026-09-02 | 完成 high ReAct 10 条对照 | `docs/reports/2026-09-02-unified-react-high-thinking-smoke.md` | 首轮 3 条 Gemini 429 case 以并发 3、high 重跑；与首轮成功的 7 条合并为最终 10 条，并完成统一 private-gold 审计。 | 最终 10/10 成功、0 工程错误、strict trace audit 10/10；4/10 标签正确，其中 3 条理由充分。仅作为固定样例结果，不据此否定 high。 | `54c2ee4` |
-| 2026-09-02 | 继续收尾：统一图片边界与完整工具观察 | `src/tools/vision_utils.py`, `src/tools/crop_and_inspect.py`, `src/tools/crop_and_search.py`, `src/tools/focused_visual_inspection.py`, `src/orchestrator/stage_runner.py`, `src/trajectory/exporter.py` 及对应测试 | 所有进入视觉 API 的图片统一最长边 1024、JPEG quality 95；contact sheet 和 crop 改用同一边界；crop 临时文件改为系统唯一文件名。删除已不再调用的工具结果二次压缩逻辑，canonical 工具结果只排除二进制传输字段和 raw HTML，完整文本在下一轮通过 InteractionSession 前递。SFT 仍只去重累计 workspace，不截断工具观察。 | 本地定向回归进行中；完成后提交、推送、gpu-13 定向回归，再按并发 10 跑 10 条真实 smoke。未启动大规模教师 rollout。 | 待提交 |
+| 2026-09-02 | 继续收尾：统一图片边界与完整工具观察 | `src/tools/vision_utils.py`, `src/tools/crop_and_inspect.py`, `src/tools/crop_and_search.py`, `src/tools/focused_visual_inspection.py`, `src/orchestrator/stage_runner.py`, `src/trajectory/exporter.py` 及对应测试 | 所有进入视觉 API 的图片统一最长边 1024、JPEG quality 95；contact sheet 和 crop 改用同一边界；crop 临时文件改为系统唯一文件名。删除已不再调用的工具结果二次压缩逻辑，canonical 工具结果只排除二进制传输字段和 raw HTML，完整文本在下一轮通过 InteractionSession 前递。SFT 仍只去重累计 workspace，不截断工具观察。 | 本地 `481 passed`、training `112 passed`、`compileall` 和 `git diff --check` 通过；已提交并推送。gpu-13 定向回归和并发 10 的真实 smoke 待转发恢复后执行。未启动大规模教师 rollout。 | `0a76001` 及后续 `329b94e` |
 
 后续每一条 Agent 改动必须记录：修改前行为、修改后行为、为何不改变 private-gold
 隔离/成熟工具契约、对应测试、真实 smoke case、commit 和服务器部署状态。
@@ -249,14 +250,16 @@ judge 或 rollout 若遇到 API 不可用，只能暂停该运行；已经完成
 - 已完成：删除 StageRunner 中不再使用的工具结果按字符/列表二次压缩代码；下一轮仍
   接收完整 canonical 文本观察，只排除二进制字段与 raw HTML。
 - 已完成：补充 text-image-search reducer、contact sheet、crop 并发和完整工具结果回归。
-- 已完成：本地当前 unified 主流程定向测试 56 项、提交推送、gpu-13 定向回归和并发 10
-  的 10 条真实 smoke。
+- 已完成：本地当前 unified 主流程定向测试、提交推送；gpu-13 定向回归和并发 10
+  的 10 条真实 smoke 属于前一发布基线，当前 `d54edc7` 的服务器复验待转发恢复。
 - 旧 v4 测试文件若引用已删除模块，只作为历史测试，不恢复旧 v4 主流程；active unified
   ReAct 测试必须单独通过。
 
 ## 10. 文档收尾结论
 
-- 当前有效代码基线：本地待提交；仓库/服务器已部署基线仍为 `10bb1e1` / 运行时代码 `55ef0b3`。
+- 当前有效代码基线：本地/GitHub 为 `d54edc7`；gpu-13 尚未完成该发布候选的
+  checkout 与真实 processor 验收。最近一次服务器真实 Agent 行为基线仍是
+  `55ef0b3`。
 - 当前有效 Agent：`unified-react-v1`；旧 v4 只作为历史归档，不作为兼容运行路径。
 - 当前训练输入仍固定为 8,490 条 `train-manifest.jsonl`；1,684 条测试集不进入
   teacher rollout、SFT 或 RL。
@@ -303,7 +306,7 @@ SFT。该条仍有有效 perception 目标，因此独立 perception SFT 应为 
 
 正式停止点不变：不启动全量 8,490 条教师 rollout，等待人工复核。
 
-## 13. 2026-09-03 Qwen/ms-swift 导出收尾
+## 13. 2026-09-04 Qwen/ms-swift 导出收尾
 
 - policy 导出与 ms-swift 转换统一为真实参考行使用的
   `tools` / `messages` / `images` 外层格式。
@@ -321,8 +324,20 @@ SFT。该条仍有有效 perception 目标，因此独立 perception SFT 应为 
   真实 processor 检查 thought labels、工具观察、图片接收和上下文长度。
 - 本地结果：主仓库 `481 passed`；training `112 passed`；用户提供的真实
   `train_traj_0427_tools_swift_sample_182.json` 已完成转换和严格结构审计。
-- 代码提交：`329b94e`，已推送到
+- 代码提交：`d54edc7`（包含导出实现 `329b94e`），已推送到
   `codex/gpu13-canary-20260804-plan-relaxation-01`。
-- 服务器状态：2026-09-03 检查时 gpu-13 的 Jupyter 后端未在跳板机
-  `127.0.0.1:8333` 或旧 `9814` 监听；因此真实 processor 验证待服务恢复后执行，
-  不能用本地结果代替。
+- 服务器状态：截至 2026-09-04，转发恢复、`hostname=gpu-13`、`id -un=wza`、
+  `OMP_NUM_THREADS=1` 已重新核验；下一步 fast-forward 当前发布候选并执行真实
+  processor 验证，不能用本地结果代替。
+
+## 14. 2026-09-04 转发恢复前的本地验收
+
+- 仓库根目录：`python -m pytest -q` → `481 passed`。
+- training 目录：`python -m pytest -q` → `112 passed`。必须在 `training/` 目录运行；
+  直接从仓库根目录执行 `pytest training` 会因未安装本地 `ifv_training` 包而产生导入错误，
+  这不是代码测试失败。
+- `python -m compileall -q src scripts training/scripts training/ifv_training` 通过。
+- `git diff --check` 通过；本地 HEAD 与 GitHub tracking ref 在本次验收前均为
+  `d54edc7`。
+- 未启动 rollout、judge、训练或服务器生产进程；全量 8,490 条教师 rollout 仍是人工复核后的
+  最后一步。

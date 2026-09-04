@@ -76,7 +76,35 @@ python training/scripts/probe/verify_ms_swift_agent_dataset.py \
 5. 每行至少有一个可训练 assistant token；
 6. 编码长度不超过目标上下文上限。
 
-## 5. 训练输入边界
+## 5. gpu-13 上线验收顺序
+
+转发恢复后，先确认实际落到 gpu-13，再执行发布和验证；跳板机不执行项目命令：
+
+```bash
+hostname
+test "$(hostname)" = "gpu-13"
+git status --short --branch
+bash scripts/server/update_gpu13_checkout.sh
+```
+
+更新脚本会校验 canonical 分支、服务器工作树干净以及 fast-forward 结果。随后在
+gpu-13 的目标 Conda 环境中执行：
+
+```bash
+source scripts/server/gpu13_env.sh
+scripts/server/run_gpu13.sh python -m pytest -q
+(
+  cd training
+  ../scripts/server/run_gpu13.sh python -m pytest -q
+)
+scripts/server/run_gpu13.sh python -m compileall -q src scripts training/scripts training/ifv_training
+```
+
+最后针对实际发布包和实际 Qwen checkpoint 运行第 4 节的 processor 探针。只有
+`update_gpu13_checkout.sh`、回归测试、结构审计和真实 processor 验证全部通过，才把
+该发布记为服务器验收版本。转发未恢复时，状态只能记为“本地通过、服务器待验收”。
+
+## 6. 训练输入边界
 
 - `ms-swift-policy/` 只放 reasoning policy 数据。
 - `ms-swift-perception/` 只放图片观察数据。
