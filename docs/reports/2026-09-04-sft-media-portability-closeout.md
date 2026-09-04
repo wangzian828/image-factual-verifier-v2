@@ -73,7 +73,18 @@ selected release 总数 3。
 - 训练 label 非空；
 - 总长度不超过 128K。
 
-服务器最终 processor 报告在提交同步后补记。
+服务器真实 Qwen3.5 processor 报告：
+
+```text
+audits/processor-verification-qwen35-a4e5ad3.json
+passed=true
+policy rows=2
+perception rows=3
+thought targets=15
+tool calls preserved=15
+tool responses preserved=15
+policy input tokens=19,601 / 22,637
+```
 
 ## 5. 文搜图
 
@@ -121,4 +132,19 @@ git diff --check：通过
 active 代码机器路径/IP 扫描：0 条
 ```
 
-服务器 shell 语法、真实 processor、样本下载和小规模 smoke 在正式提交同步后补记。
+服务器 shell 语法和定向测试通过；真实 processor 通过。
+
+本地人工复核样本：
+
+```text
+C:\Users\wangza\ifv-sft-handoff-samples\
+main-02731-ms-swift-reasoning-sample-a4e5ad3.json
+```
+
+文件 941,792 bytes，SHA-256：
+
+```text
+43FE46344258B096CC9EB4EF395FE51B4D51447D3D28C404E3D6009F807AEC2A
+```
+
+剩余步骤是正式提交上的小规模 rollout smoke 与逐条轨迹检查。

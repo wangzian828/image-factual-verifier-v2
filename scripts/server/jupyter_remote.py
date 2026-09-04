@@ -227,7 +227,8 @@ def download_file(
     payload = response.json()
     if payload.get("type") != "file" or payload.get("format") != "base64":
         raise RuntimeError("remote download target is not a base64 file")
-    content = base64.b64decode(str(payload.get("content", "")), validate=True)
+    encoded = "".join(str(payload.get("content", "")).split())
+    content = base64.b64decode(encoded, validate=True)
     local_path = local_path.expanduser().resolve()
     local_path.parent.mkdir(parents=True, exist_ok=True)
     temporary = local_path.with_name(f".{local_path.name}.{uuid.uuid4().hex}.tmp")
