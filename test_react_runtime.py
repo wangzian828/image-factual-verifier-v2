@@ -284,6 +284,79 @@ def test_text_overlay_comparison_requires_ocr_before_next_action() -> None:
     assert "text_search" in available_unified_react_runtime_tools(state)
 
 
+def test_partial_ocr_requires_focused_visual_followup() -> None:
+    state = new_unified_react_runtime_state(_case())
+    _bootstrap(state)
+    state.required_text_reading = (
+        "Read the detected caption before finishing."
+    )
+    state.required_text_reading_tool = "ocr_with_position"
+
+    update = reduce_react_action(
+        state,
+        tool_name="ocr_with_position",
+        tool_args={"investigation_progress": _progress()},
+        call_id="ocr-partial",
+        serialized_result=json.dumps(
+            {
+                "status": "success",
+                "full_text": "TE",
+                "text_regions": [{"text": "TE"}],
+            }
+        ),
+    )
+
+    assert update["accepted"] is True
+    assert state.required_text_reading_tool == "focused_visual_inspection"
+    assert available_unified_react_runtime_tools(state) == [
+        "focused_visual_inspection"
+    ]
+    assert (
+        validate_react_action(
+            state,
+            tool_name="finish_investigation",
+            tool_args={
+                "rationale": "Finish.",
+                "investigation_progress": _progress(
+                    "decision_capable_support",
+                    "The source matches the image.",
+                ),
+            },
+        )
+        != ""
+    )
+
+    visual_update = reduce_react_action(
+        state,
+        tool_name="focused_visual_inspection",
+        tool_args={
+            "question": "Read the bottom caption.",
+            "expected_property": "The exact bottom caption text.",
+            "investigation_progress": _progress(),
+        },
+        call_id="visual-text",
+        serialized_result=json.dumps(
+            {
+                "status": "success",
+                "summary": "The bottom caption is visible but not legible.",
+                "observations": [
+                    {
+                        "view_index": 0,
+                        "statement": "A caption is present at the bottom.",
+                        "property_status": "observed",
+                        "confidence": 0.7,
+                    }
+                ],
+            }
+        ),
+    )
+
+    assert visual_update["accepted"] is True
+    assert state.required_text_reading == ""
+    assert state.required_text_reading_tool == ""
+    assert "text_search" in available_unified_react_runtime_tools(state)
+
+
 def test_tool_availability_does_not_depend_on_model_progress_status() -> None:
     state = new_unified_react_runtime_state(_case())
     expected = available_unified_react_runtime_tools(state)

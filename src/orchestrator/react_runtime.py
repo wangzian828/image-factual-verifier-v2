@@ -186,6 +186,7 @@ class UnifiedReactState(BaseModel):
     open_questions: list[str] = Field(default_factory=list, max_length=12)
     current_focus: str = Field(default="", max_length=800)
     required_text_reading: str = Field(default="", max_length=800)
+    required_text_reading_tool: str = Field(default="", max_length=80)
     action_count: int = Field(default=0, ge=0, le=MAX_REACT_ACTIONS)
     no_gain_streak: int = Field(default=0, ge=0, le=MAX_REACT_ACTIONS)
     stop_reason: str = Field(default="", max_length=200)
@@ -253,7 +254,6 @@ _TEXT_BEARING_ROLES = frozenset(
         "caption",
         "identity_label",
         "claim_text",
-        "unknown",
     }
 )
 _TEXT_READING_HINT = re.compile(
@@ -337,12 +337,14 @@ def _text_reading_followup(
     return ""
 
 
-def _has_ocr_attempt(state: UnifiedReactState) -> bool:
-    return any(
-        str(item.get("tool_name", "")).strip() == "ocr_with_position"
-        for item in state.attempted_actions
-        if isinstance(item, Mapping)
-    )
+def _ocr_result_is_partial(payload: Mapping[str, Any]) -> bool:
+    """Detect an OCR call that did not plausibly read the requested region."""
+
+    full_text = _one_line(payload.get("full_text"), 800)
+    if not full_text or len(full_text) < 4:
+        return True
+    rejected = payload.get("rejected_text_regions")
+    return isinstance(rejected, list) and bool(rejected)
 
 
 def _append_open_question(
@@ -377,8 +379,17 @@ def available_unified_react_runtime_tools(
     if state.action_count >= MAX_REACT_ACTIONS:
         return ["finish_investigation"]
     exhausted = _exhausted_tools(state)
-    if state.required_text_reading and "ocr_with_position" not in exhausted:
-        return ["ocr_with_position"]
+    if state.required_text_reading:
+        required_tool = state.required_text_reading_tool or "ocr_with_position"
+        if required_tool not in exhausted:
+            return [required_tool]
+        fallback = (
+            "focused_visual_inspection"
+            if required_tool == "ocr_with_position"
+            else "ocr_with_position"
+        )
+        if fallback not in exhausted:
+            return [fallback]
     return [
         name
         for name in REACT_RUNTIME_TOOLS
@@ -702,14 +713,17 @@ def validate_react_action(
     )
     if progress_error:
         return progress_error
+    required_tool = (
+        state.required_text_reading_tool or "ocr_with_position"
+    )
     if (
         state.required_text_reading
-        and tool_name != "ocr_with_position"
+        and tool_name != required_tool
         and state.action_count < MAX_REACT_ACTIONS
     ):
         return (
             "the current investigation has an unread text-bearing region; "
-            "call ocr_with_position before choosing another action or finishing"
+            f"call {required_tool} before choosing another action or finishing"
         )
     if tool_name == "finish_investigation":
         if not _one_line(tool_args.get("rationale")):
@@ -1394,16 +1408,19 @@ def reduce_react_action(
             "accepted": False,
             "rejected_reason": progress_error,
         }
+    required_tool = (
+        state.required_text_reading_tool or "ocr_with_position"
+    )
     if (
         state.required_text_reading
-        and tool_name != "ocr_with_position"
+        and tool_name != required_tool
         and state.action_count < MAX_REACT_ACTIONS
     ):
         return {
             "accepted": False,
             "rejected_reason": (
                 "the current investigation has an unread text-bearing region; "
-                "call ocr_with_position before choosing another action or "
+                f"call {required_tool} before choosing another action or "
                 "finishing"
             ),
         }
@@ -1520,26 +1537,51 @@ def reduce_react_action(
 
     if tool_name == "ocr_with_position":
         pending_text_reading = state.required_text_reading
+        if _ocr_result_is_partial(payload):
+            state.required_text_reading = (
+                "OCR returned no complete readable text for the detected "
+                "text-bearing region. Use focused_visual_inspection to inspect "
+                "the region and recover the visible wording before finishing."
+            )
+            state.required_text_reading_tool = "focused_visual_inspection"
+            if pending_text_reading:
+                state.open_questions = [
+                    item
+                    for item in state.open_questions
+                    if item != pending_text_reading
+                ]
+            _append_open_question(
+                state,
+                state.required_text_reading,
+            )
+        else:
+            state.required_text_reading = ""
+            state.required_text_reading_tool = ""
+            if pending_text_reading:
+                state.open_questions = [
+                    item
+                    for item in state.open_questions
+                    if item != pending_text_reading
+                ]
+    elif (
+        tool_name == "focused_visual_inspection"
+        and state.required_text_reading_tool
+        == "focused_visual_inspection"
+    ):
+        pending_text_reading = state.required_text_reading
         state.required_text_reading = ""
+        state.required_text_reading_tool = ""
         if pending_text_reading:
             state.open_questions = [
                 item
                 for item in state.open_questions
                 if item != pending_text_reading
             ]
-        text_regions = payload.get("text_regions")
-        if not str(payload.get("full_text", "")).strip() and not (
-            isinstance(text_regions, list)
-            and any(item not in (None, "", {}) for item in text_regions)
-        ):
-            _append_open_question(
-                state,
-                "OCR completed without readable text in the requested image.",
-            )
     else:
         followup = _text_reading_followup(tool_name, payload)
-        if followup and not _has_ocr_attempt(state):
+        if followup:
             state.required_text_reading = followup
+            state.required_text_reading_tool = "ocr_with_position"
             _append_open_question(state, followup)
 
     state.recent_actions.append(
@@ -1560,6 +1602,7 @@ def reduce_react_action(
         "created_evidence_ids": evidence_ids,
         "substantive_gain": gain,
         "required_text_reading": state.required_text_reading,
+        "required_text_reading_tool": state.required_text_reading_tool,
         "next_available_tools": available_unified_react_runtime_tools(state),
     }
 

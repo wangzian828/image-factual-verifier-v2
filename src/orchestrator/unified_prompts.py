@@ -98,6 +98,9 @@ Also maintain the `investigation_progress` object in every tool call:
   image context as verified. A comparison that reports added text is a direct
   trigger for this OCR check. Do not replace the text with a guess based on
   the surrounding scene.
+- If OCR returns no text or only a short fragment for a detected caption or
+  overlay, treat the reading as incomplete and use `focused_visual_inspection`
+  to inspect that text-bearing region before finishing.
 - Treat an empty or status-only result as an unresolved question. Continue with
   a concrete alternative or finish when the useful routes are exhausted.
 - The context includes a global action budget and per-tool budgets. Use them to
