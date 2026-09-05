@@ -8,6 +8,7 @@ import inspect
 import json
 import os
 import time
+from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
@@ -569,49 +570,13 @@ class Orchestrator:
                 call_id = str(
                     (step.metadata or {}).get("function_call_id", "")
                 ).strip()
-                if tool_name == "perceive_scene":
-                    scene = self._parse_perception_result(step.tool_result)
-                    prior = state.perception or PerceptionReport(
-                        scene_description=""
-                    )
-                    state.perception = PerceptionReport(
-                        entities=scene.entities,
-                        relations=scene.relations,
-                        notable_details=scene.notable_details,
-                        uncertainties=scene.uncertainties,
-                        text_regions=list(prior.text_regions),
-                        scene_description=scene.scene_description,
-                        image_type=scene.image_type,
-                    )
-                elif tool_name == "ocr_with_position":
-                    state.perception = self._merge_ocr(
-                        state.perception or PerceptionReport(
-                            scene_description=""
-                        ),
-                        step.tool_result,
-                    )
-                update = reduce_react_action(
+                update = self._apply_react_observation(
+                    state,
                     investigation,
+                    step=step,
                     tool_name=tool_name,
-                    tool_args=dict(step.tool_args or {}),
                     call_id=call_id or f"action-{investigation.action_count}",
-                    serialized_result=step.tool_result,
-                    perception=state.perception
-                    if tool_name in {"perceive_scene", "ocr_with_position"}
-                    else None,
                 )
-                failure = update.get("failure")
-                if (
-                    isinstance(failure, dict)
-                    and str(failure.get("code", "")) == "engineering_error"
-                ):
-                    update["fatal_engineering_error"] = True
-
-                if not update.get("accepted", False):
-                    raise RuntimeError(
-                        "ReAct reducer rejected an executed action: "
-                        + str(update.get("rejected_reason", update))
-                    )
                 step.metadata["react_state_delta"] = dict(update)
                 step.metadata["investigation_state_update"] = dict(update)
                 observation_update = dict(update)
@@ -683,15 +648,37 @@ class Orchestrator:
                 )
                 raise
             self._record_stage_steps(state, steps)
-            if parsed is None or not observation_update:
+            protocol_boundary = any(
+                bool(
+                    (item.metadata or {}).get(
+                        "protocol_correction_exhaustion_boundary"
+                    )
+                )
+                for item in steps
+            )
+            if parsed is None:
+                raise RuntimeError(
+                    "ReAct stage returned no structured boundary or action output"
+                )
+            if not observation_update and protocol_boundary:
+                # No tool action was accepted in this StageRunner instance.
+                # This is a bounded protocol-repair outcome, not a failed
+                # investigation. Hand the accumulated state to the existing
+                # terminal Judgment stage.
+                investigation.stop_reason = (
+                    "protocol_correction_budget_exhausted"
+                )
+                self._sync_image_only_state(state, investigation)
+                break
+            if not observation_update:
                 raise RuntimeError(
                     "ReAct did not complete one accepted action"
                 )
-            if observation_update.get("fatal_engineering_error"):
+            if observation_update.get("fatal_runtime_error"):
                 investigation.stop_reason = "engineering_error"
                 self._sync_image_only_state(state, investigation)
                 raise RuntimeError(
-                    "ReAct encountered a fatal tool-result contract error"
+                    "ReAct encountered an unrecoverable runtime error"
                 )
             if investigation.action_count >= MAX_REACT_ACTIONS:
                 investigation.stop_reason = "hard_budget_exhausted"
@@ -2366,18 +2353,196 @@ class Orchestrator:
             cache_args["__web_evidence_contract__"] = WEB_EVIDENCE_CONTRACT_VERSION
         return cache_args
 
+    @staticmethod
+    def _restore_react_model(target: Any, snapshot: Any) -> None:
+        """Restore a pydantic runtime model without replacing shared references."""
+
+        for field_name in getattr(type(snapshot), "model_fields", {}):
+            setattr(
+                target,
+                field_name,
+                deepcopy(getattr(snapshot, field_name)),
+            )
+
+    @staticmethod
+    def _safe_numeric(value: Any, default: float = 0.0) -> float:
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            return default
+        return (
+            numeric
+            if numeric == numeric and abs(numeric) != float("inf")
+            else default
+        )
+
+    @staticmethod
+    def _malformed_tool_result(step: StageStep, *, reason: str) -> None:
+        """Make a bad semantic payload visible as a recoverable observation."""
+
+        message = "MalformedToolResult: " + " ".join(str(reason).split())
+        step.metadata["tool_result_normalization_error"] = message[:2400]
+        step.metadata["error_class"] = "recoverable_tool_result_error"
+        step.metadata["tool_success"] = False
+        # StageRunner archives the raw provider result before this callback.
+        # Keep that artifact and send only the structured failure downstream.
+        step.metadata["raw_tool_result_preserved"] = True
+        step.tool_result = json.dumps(
+            {"status": "error", "error": message[:2400]},
+            ensure_ascii=False,
+        )
+
+    def _apply_react_observation(
+        self,
+        state: VerificationState,
+        investigation: RuntimeReactState,
+        *,
+        step: StageStep,
+        tool_name: str,
+        call_id: str,
+    ) -> Dict[str, Any]:
+        """Apply one active ReAct observation transactionally."""
+
+        previous_perception = (
+            state.perception.model_copy(deep=True)
+            if state.perception is not None
+            else None
+        )
+        previous_investigation = investigation.model_copy(deep=True)
+        parsed_perception: Optional[PerceptionReport] = None
+        parse_error = ""
+
+        try:
+            _payload, succeeded = parse_tool_result(step.tool_result)
+        except Exception as exc:
+            succeeded = False
+            parse_error = f"{type(exc).__name__}: {exc}"
+
+        if succeeded and tool_name == "perceive_scene":
+            try:
+                scene = self._parse_perception_result(step.tool_result)
+                prior = state.perception or PerceptionReport(
+                    scene_description=""
+                )
+                parsed_perception = PerceptionReport(
+                    entities=scene.entities,
+                    relations=scene.relations,
+                    notable_details=scene.notable_details,
+                    uncertainties=scene.uncertainties,
+                    text_regions=list(prior.text_regions),
+                    scene_description=scene.scene_description,
+                    image_type=scene.image_type,
+                )
+            except Exception as exc:
+                parse_error = f"{type(exc).__name__}: {exc}"
+        elif succeeded and tool_name == "ocr_with_position":
+            try:
+                parsed_perception = self._merge_ocr(
+                    state.perception or PerceptionReport(
+                        scene_description=""
+                    ),
+                    step.tool_result,
+                )
+            except Exception as exc:
+                parse_error = f"{type(exc).__name__}: {exc}"
+
+        if parse_error:
+            self._malformed_tool_result(step, reason=parse_error)
+            parsed_perception = None
+
+        try:
+            update = reduce_react_action(
+                investigation,
+                tool_name=tool_name,
+                tool_args=dict(step.tool_args or {}),
+                call_id=call_id,
+                serialized_result=step.tool_result,
+                perception=parsed_perception,
+            )
+        except Exception as exc:
+            self._restore_react_model(investigation, previous_investigation)
+            state.perception = (
+                previous_perception.model_copy(deep=True)
+                if previous_perception is not None
+                else None
+            )
+            self._malformed_tool_result(
+                step,
+                reason=f"state update failed: {type(exc).__name__}: {exc}",
+            )
+            fallback_args = dict(step.tool_args or {})
+            fallback_args["investigation_progress"] = dict(
+                investigation.investigation_progress
+            )
+            try:
+                update = reduce_react_action(
+                    investigation,
+                    tool_name=tool_name,
+                    tool_args=fallback_args,
+                    call_id=call_id,
+                    serialized_result=step.tool_result,
+                    perception=None,
+                )
+            except Exception as retry_exc:
+                raise RuntimeError(
+                    "active ReAct state update could not be recovered: "
+                    f"{type(retry_exc).__name__}: {retry_exc}"
+                ) from retry_exc
+
+        if not update.get("accepted", False):
+            rejection = str(
+                update.get("rejected_reason", "observation update rejected")
+            )
+            self._restore_react_model(investigation, previous_investigation)
+            state.perception = (
+                previous_perception.model_copy(deep=True)
+                if previous_perception is not None
+                else None
+            )
+            self._malformed_tool_result(step, reason=rejection)
+            fallback_args = dict(step.tool_args or {})
+            fallback_args["investigation_progress"] = dict(
+                investigation.investigation_progress
+            )
+            update = reduce_react_action(
+                investigation,
+                tool_name=tool_name,
+                tool_args=fallback_args,
+                call_id=call_id,
+                serialized_result=step.tool_result,
+                perception=None,
+            )
+            if not update.get("accepted", False):
+                raise RuntimeError(
+                    "active ReAct observation update remained rejected after "
+                    "runtime recovery: " + rejection
+                )
+
+        if parsed_perception is not None:
+            state.perception = parsed_perception
+        return update
+
     def _parse_perception_result(self, tool_result: str) -> PerceptionReport:
-        data = self._safe_json_dict(tool_result)
+        data, succeeded = parse_tool_result(tool_result)
+        if not succeeded:
+            return PerceptionReport(scene_description="")
         entities: List[Entity] = []
         for item in data.get("entities", []) or []:
             if not isinstance(item, dict):
                 continue
+            bbox = self._normalize_entity_bbox(item.get("bbox"))
             entities.append(
                 Entity(
                     name=str(item.get("name", "")).strip(),
                     entity_type=str(item.get("entity_type", "")).strip(),
-                    bbox=item.get("bbox", []) if isinstance(item.get("bbox"), list) else [],
-                    confidence=float(item.get("confidence", 0.0) or 0.0),
+                    bbox=bbox,
+                    confidence=max(
+                        0.0,
+                        min(
+                            1.0,
+                            self._safe_numeric(item.get("confidence", 0.0)),
+                        ),
+                    ),
                     attributes=item.get("attributes", {}) if isinstance(item.get("attributes"), dict) else {},
                     text_role=self._normalize_text_role(
                         item.get("text_role", "not_applicable")
@@ -2396,7 +2561,13 @@ class Orchestrator:
                     description=" ".join(
                         str(item.get("description", "")).split()
                     )[:600],
-                    confidence=float(item.get("confidence", 0.0) or 0.0),
+                    confidence=max(
+                        0.0,
+                        min(
+                            1.0,
+                            self._safe_numeric(item.get("confidence", 0.0)),
+                        ),
+                    ),
                 )
             )
         notable_details = [
@@ -2420,7 +2591,9 @@ class Orchestrator:
         )
 
     def _merge_ocr(self, report: PerceptionReport, tool_result: str) -> PerceptionReport:
-        data = self._safe_json_dict(tool_result)
+        data, succeeded = parse_tool_result(tool_result)
+        if not succeeded:
+            return report.model_copy(deep=True)
         text_regions = list(report.text_regions)
         seen = {self._text_region_key(region) for region in text_regions}
         for item in data.get("text_regions", []) or []:
@@ -2456,20 +2629,49 @@ class Orchestrator:
             return None
         bbox_quad = item.get("bbox_quad", [])
         if not bbox_quad and isinstance(item.get("bbox"), list) and len(item["bbox"]) == 4:
-            x1, y1, x2, y2 = [float(value) for value in item["bbox"]]
+            try:
+                x1, y1, x2, y2 = [float(value) for value in item["bbox"]]
+            except (TypeError, ValueError):
+                return None
             bbox_quad = [[x1, y1], [x2, y1], [x2, y2], [x1, y2]]
         if not isinstance(bbox_quad, list):
             bbox_quad = []
         return TextRegion(
             text=str(item.get("text", "")).strip(),
             bbox_quad=bbox_quad,
-            confidence=float(item.get("confidence", 0.0) or 0.0),
+            confidence=max(
+                0.0,
+                min(
+                    1.0,
+                    Orchestrator._safe_numeric(item.get("confidence", 0.0)),
+                ),
+            ),
             language=str(item.get("language", "unknown") or "unknown"),
             text_role=Orchestrator._normalize_text_role(
                 item.get("text_role", "unknown"),
                 default="unknown",
             ),
         )
+
+    @staticmethod
+    def _normalize_entity_bbox(value: Any) -> List[float]:
+        if not isinstance(value, list) or len(value) != 4:
+            return []
+        try:
+            bbox = [float(item) for item in value]
+        except (TypeError, ValueError):
+            return []
+        x1, y1, x2, y2 = bbox
+        if not (
+            all(
+                item == item and abs(item) != float("inf")
+                for item in bbox
+            )
+            and 0 <= x1 < x2 <= 1
+            and 0 <= y1 < y2 <= 1
+        ):
+            return []
+        return bbox
 
     @staticmethod
     def _normalize_text_role(
@@ -2592,16 +2794,6 @@ class Orchestrator:
             return False
         explicit = step.metadata.get("tool_success")
         return succeeded and explicit is not False
-
-    @staticmethod
-    def _safe_json_dict(raw: str) -> Dict[str, Any]:
-        try:
-            parsed = json.loads(raw) if raw else {}
-        except Exception:
-            return {}
-        if isinstance(parsed, dict):
-            return parsed
-        return {}
 
     def _check_timeout(self, started: float, state: VerificationState) -> None:
         if time.time() - started > self.timeout:

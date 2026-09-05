@@ -3,7 +3,11 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
+import pytest
+
+import src.orchestrator.pipeline as pipeline_module
 from src.orchestrator.react_runtime import (
     FinishInvestigationTool,
     RuntimeToolAdapter,
@@ -18,10 +22,11 @@ from src.orchestrator.react_runtime import (
 from src.orchestrator.investigation_models import (
     DiscrepancyJudgmentOutput,
     FactCheckReport,
+    InvestigationSegmentOutput,
 )
 from src.orchestrator.pipeline import Orchestrator
-from src.orchestrator.state import ImageOnlyRuntimeCase
-from src.orchestrator.stage_runner import StageRunner
+from src.orchestrator.state import ImageOnlyRuntimeCase, VerificationState
+from src.orchestrator.stage_runner import StageRunner, StageStep
 from src.tools.base import BaseTool
 from scripts.audit_real_trace import audit_trace
 
@@ -531,6 +536,136 @@ def test_empty_success_payload_is_not_promoted_to_evidence() -> None:
 
     assert update["created_evidence_ids"] == []
     assert state.evidence == []
+    assert update["failure"]["code"] == "success_empty"
+    assert update["failure"]["recoverable"] is True
+
+
+def test_malformed_tool_result_is_recovered_as_a_visible_react_failure() -> None:
+    runtime_state = new_unified_react_runtime_state(_case())
+    orchestrator = object.__new__(Orchestrator)
+    verification_state = VerificationState()
+    step = StageStep(
+        stage_name="unified_react",
+        action_type="tool_call",
+        tool_name="perceive_scene",
+        tool_args={"investigation_progress": _progress()},
+        tool_result="{not valid json",
+        metadata={
+            "function_call_id": "malformed-scene",
+            "tool_success": True,
+        },
+    )
+
+    update = orchestrator._apply_react_observation(
+        verification_state,
+        runtime_state,
+        step=step,
+        tool_name="perceive_scene",
+        call_id="malformed-scene",
+    )
+
+    assert update["accepted"] is True
+    assert update["tool_success"] is False
+    assert update["failure"]["code"] == "malformed_tool_result"
+    assert update["failure"]["recoverable"] is True
+    assert runtime_state.action_count == 1
+    assert runtime_state.stop_reason == ""
+    assert step.metadata["tool_success"] is False
+    assert step.metadata["raw_tool_result_preserved"] is True
+    assert json.loads(step.tool_result)["status"] == "error"
+
+
+def test_contract_error_is_recoverable_in_current_react_runtime() -> None:
+    state = new_unified_react_runtime_state(_case())
+    update = reduce_react_action(
+        state,
+        tool_name="visit",
+        tool_args={
+            "url": ["https://example.test/broken"],
+            "investigation_progress": _progress(),
+        },
+        call_id="broken-visit",
+        serialized_result=json.dumps(
+            {
+                "status": "error",
+                "error": (
+                    "ToolResultContractError: tool result is missing a valid "
+                    "status"
+                ),
+            }
+        ),
+    )
+
+    assert update["accepted"] is True
+    assert update["failure"]["code"] == "malformed_tool_result"
+    assert update["failure"]["recoverable"] is True
+    assert state.stop_reason == ""
+
+
+def test_protocol_correction_exhaustion_reaches_existing_judgment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ExhaustedRunner:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        async def run(self, _context: str):
+            return InvestigationSegmentOutput(
+                segment_summary="Protocol correction budget exhausted.",
+                ready_for_reflection=True,
+            ), [
+                StageStep(
+                    stage_name="unified_react",
+                    action_type="output",
+                    metadata={
+                        "protocol_correction_exhaustion_boundary": True,
+                    },
+                )
+            ]
+
+    async def fake_judgment(
+        _state,
+        _investigation,
+        _basis,
+        **_kwargs,
+    ):
+        return SimpleNamespace(verdict="real")
+
+    orchestrator = object.__new__(Orchestrator)
+    orchestrator.provider = "gemini"
+    orchestrator.llm = SimpleNamespace(wire_api="interactions")
+    orchestrator.date_prefix = ""
+    orchestrator.image_access_mode = "direct_multimodal"
+    orchestrator.timeout = 60.0
+    orchestrator.all_tools = {}
+    orchestrator.cacheable_tools = set()
+    orchestrator.tool_cache = None
+    orchestrator.verification_tool_limits = {}
+    orchestrator.source_access_policy = None
+    orchestrator.stage_request_timeout_seconds = 30.0
+    orchestrator.tool_action_timeout_seconds = 30.0
+    orchestrator._validate_image_only_bootstrap_configuration = lambda: None
+    orchestrator._stage_output_tokens = lambda *_args: 512
+    orchestrator._stage_generation_config = lambda *_args: {}
+    orchestrator._run_react_judgment = fake_judgment
+    monkeypatch.setattr(pipeline_module, "StageRunner", ExhaustedRunner)
+
+    state = VerificationState()
+    investigation, judgment, _basis, _ = asyncio.run(
+        orchestrator._run_react_runtime_policy(
+            state,
+            image_path="fixture.jpg",
+            runtime_case=_case(),
+        )
+    )
+
+    assert investigation.stop_reason == "protocol_correction_budget_exhausted"
+    assert judgment.verdict == "real"
+    assert state.termination == ""
+    assert any(
+        step.metadata.get("protocol_correction_exhaustion_boundary")
+        for step in state.all_steps
+    )
 
 
 def test_invalid_reference_comparison_is_not_promoted_to_evidence() -> None:

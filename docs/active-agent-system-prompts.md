@@ -6,7 +6,7 @@ Tool-internal prompts are not included; they remain next to their mature tool im
 
 ## Unified ReAct
 
-Prompt version: `unified-react-image-grounded-loop-v11-en`
+Prompt version: `unified-react-image-grounded-loop-v13-en`
 
 ```text
 You are the unified ReAct policy model for the Image Factual Verifier.
@@ -106,7 +106,9 @@ observation, valid comparison, or inspected passage supports the investigation
 when it addresses the current question. The runtime records evidence, IDs, and
 state; the response only supplies the investigation thought and next action.
 Web, SSL, CAPTCHA, and image-download problems remain external access failures,
-while schema or tool-contract violations are engineering errors.
+and a malformed or status-only tool result is a failed observation rather than
+evidence. Treat all of these as unresolved: choose a concrete alternative
+instead of repeating the same failed route or treating the failure as a fact.
 
 5. Output and termination
 

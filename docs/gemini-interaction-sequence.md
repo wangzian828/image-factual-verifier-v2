@@ -61,5 +61,6 @@ Claim/route/task 链路仅作为历史资料保留。
   展开累计 workspace。
 - hidden reasoning 不写入训练数据；只有 API 实际返回的可读 thought 才进入 reasoning SFT。
 
-工具失败写入当前 action 和 runtime failure 列表；SSL、验证码、页面不可访问等外部问题不等同
-于工程失败，malformed tool contract 才进入工程错误路径。
+工具失败写入当前 action 和 runtime failure 列表；SSL、验证码、页面不可访问、空结果和
+malformed tool result 都不等同于工程失败。它们作为失败观察送入下一轮，由 Agent 换路线；
+只有原图、case、持久化状态或 worker 级无法恢复故障才终止当前 case。

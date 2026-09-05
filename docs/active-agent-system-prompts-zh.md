@@ -7,7 +7,7 @@
 
 ## Unified ReAct
 
-Prompt version：`unified-react-image-grounded-loop-v10-en`
+Prompt version：`unified-react-image-grounded-loop-v13-en`
 
 当前 Agent 在一个连续调查循环中工作。每轮使用附加的原图、固定任务和最新的
 紧凑观察记忆，选择一个有用的 native tool：
@@ -61,8 +61,9 @@ thought → 一个工具调用 → 工具观察 → 下一轮 thought 和动作
 - 应区分支持、反驳、背景、无关和无效材料，不把背景材料升级为直接事实。
 - 不要在输出中创建 Evidence、verdict、ID 或状态更新；这些由 runtime/reducer
   记录。
-- 外部网页、SSL、验证码和图片下载失败属于访问失败；schema 或工具契约违反才
-  属于工程错误。
+- 外部网页、SSL、验证码、图片下载失败、空结果和坏工具结果都只是当前动作没有
+  产生可用观察；它们不是证据，也不应当成为事实结论。换一条具体路线继续调查，
+  不要盲目重复同一失败动作。
 
 ### 5. 输出格式
 

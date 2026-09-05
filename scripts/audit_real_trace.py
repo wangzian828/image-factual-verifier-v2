@@ -4518,6 +4518,28 @@ def _audit_current_react_runtime_trace(
             ),
             "react_runtime_evidence": len(_rows(investigation.get("evidence"))),
             "react_runtime_failures": len(_rows(investigation.get("failures"))),
+            "react_runtime_recoverable_failures": sum(
+                bool(item.get("recoverable", False))
+                for item in _rows(investigation.get("failures"))
+            ),
+            "react_runtime_unrecoverable_failures": sum(
+                not bool(item.get("recoverable", False))
+                for item in _rows(investigation.get("failures"))
+            ),
+            "react_runtime_external_unavailable": sum(
+                str(item.get("code", "")).strip()
+                == "external_unavailable"
+                for item in _rows(investigation.get("failures"))
+            ),
+            "react_runtime_malformed_tool_results": sum(
+                str(item.get("code", "")).strip()
+                == "malformed_tool_result"
+                for item in _rows(investigation.get("failures"))
+            ),
+            "react_runtime_success_empty": sum(
+                str(item.get("code", "")).strip() == "success_empty"
+                for item in _rows(investigation.get("failures"))
+            ),
         }
     )
 

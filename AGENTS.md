@@ -21,7 +21,8 @@
 - 当前目标字段是 `target_facts`，不要新增 `image_claims` 别名；
 - 模型不能读取 gold、标签、构造信息或 judge 结果；
 - 搜索摘要和反向搜图结果是 Discovery，不是 Evidence；
-- 外部不可访问记录为可恢复访问失败；malformed tool contract 才是工程错误；
+- 外部不可访问、空结果和 malformed tool result 都记录为可恢复观察失败；只有
+  原图/case/持久化状态或 worker 级无法恢复故障才是工程错误；
 - 每轮只接受一个 native tool call；状态只能由 reducer 写入；
 - 完整 archive 保留原始请求、响应和状态，模型上下文只使用紧凑 handoff。
 
@@ -39,7 +40,8 @@ git log -1 --oneline --decorate
 ## 主要入口
 
 - `src/orchestrator/pipeline.py`：统一 Agent runtime；
-- `src/orchestrator/unified_react.py`：动态工具和 reducer adapter；
+- `src/orchestrator/react_runtime.py`：当前 ReAct 状态、动态工具 adapter 与状态登记；
+- `src/orchestrator/unified_react.py`：未激活的历史图状态实现，不作为当前入口；
 - `src/orchestrator/unified_prompts.py`：当前四类英文 agent prompt；
 - `src/orchestrator/unified_context.py`：紧凑上下文；
 - `scripts/audit_real_trace.py`：统一 trace strict audit；

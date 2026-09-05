@@ -794,10 +794,39 @@ def validate_react_action(
 
 def _failure_code(error: str) -> tuple[str, bool]:
     lowered = str(error).casefold()
-    if any(token in lowered for token in ("ssl", "captcha", "timeout", "timed out", "download", "unavailable", "403", "404", "429")):
+    if any(
+        token in lowered
+        for token in (
+            "ssl",
+            "captcha",
+            "timeout",
+            "timed out",
+            "download",
+            "unavailable",
+            "403",
+            "404",
+            "429",
+        )
+    ):
         return "external_unavailable", True
-    if any(token in lowered for token in ("schema", "contract", "invalid_argument", "malformed", "required field")):
-        return "engineering_error", False
+    # A tool payload that cannot be parsed or does not satisfy its semantic
+    # result shape is still an observation from an attempted route. The
+    # harness can preserve it, show the failure to the next ReAct turn, and
+    # let the model choose another route. Reserve fatal runtime errors for
+    # failures outside this reducer (case/state persistence, worker, etc.).
+    if any(
+        token in lowered
+        for token in (
+            "schema",
+            "contract",
+            "invalid_argument",
+            "malformed",
+            "required field",
+            "valid json",
+            "valid status",
+        )
+    ):
+        return "malformed_tool_result", True
     return "provider_error", True
 
 
@@ -816,6 +845,31 @@ def _append_failure(
         "code": code,
         "recoverable": recoverable,
         "error": _one_line(error, 2400),
+    }
+    state.failures.append(item)
+    return item
+
+
+def _append_empty_observation(
+    state: UnifiedReactState,
+    *,
+    tool_name: str,
+    call_id: str,
+) -> Dict[str, Any]:
+    """Record a completed route that supplied no usable observation."""
+
+    item = {
+        "failure_id": _stable_id(
+            "failure",
+            state.case_id,
+            call_id,
+            "success_empty",
+        ),
+        "tool_name": tool_name,
+        "function_call_id": call_id,
+        "code": "success_empty",
+        "recoverable": True,
+        "error": "Tool completed successfully but returned no usable observation.",
     }
     state.failures.append(item)
     return item
@@ -1530,6 +1584,13 @@ def reduce_react_action(
     )
     gain = bool(discovery_ids or evidence_ids)
     state.no_gain_streak = 0 if gain else state.no_gain_streak + 1
+    empty_failure = None
+    if not gain and not _has_material_observation(payload, tool_name=tool_name):
+        empty_failure = _append_empty_observation(
+            state,
+            tool_name=tool_name,
+            call_id=call_id,
+        )
     limitations = payload.get("limitations")
     if isinstance(limitations, list):
         for item in limitations:
@@ -1593,6 +1654,11 @@ def reduce_react_action(
             "discovery_ids": discovery_ids,
             "evidence_ids": evidence_ids,
             "observation": _compact(payload),
+            **(
+                {"failure_id": empty_failure["failure_id"]}
+                if empty_failure is not None
+                else {}
+            ),
         }
     )
     return {
@@ -1601,6 +1667,14 @@ def reduce_react_action(
         "created_discovery_ids": discovery_ids,
         "created_evidence_ids": evidence_ids,
         "substantive_gain": gain,
+        **(
+            {
+                "failure": empty_failure,
+                "created_failure_ids": [empty_failure["failure_id"]],
+            }
+            if empty_failure is not None
+            else {}
+        ),
         "required_text_reading": state.required_text_reading,
         "required_text_reading_tool": state.required_text_reading_tool,
         "next_available_tools": available_unified_react_runtime_tools(state),

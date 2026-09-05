@@ -4055,90 +4055,127 @@ class StageRunner:
             )
             if recovered is not None:
                 recovered_result = str(recovered["result"])
-                recovered_payload, succeeded = parse_tool_result(recovered_result)
-                if succeeded and self.source_access_policy.active:
-                    sanitized, filtered_count = (
-                        self.source_access_policy.sanitize_payload(
-                            recovered_payload
-                        )
+                try:
+                    recovered_payload, succeeded = parse_tool_result(
+                        recovered_result
                     )
-                    if sanitized is None:
-                        succeeded = False
-                        recovered_result = json.dumps(
-                            {
-                                "status": "error",
-                                "error": (
-                                    "Recovered tool result blocked by the "
-                                    "active source access policy."
-                                ),
-                            },
-                            ensure_ascii=False,
+                except ToolResultContractError as exc:
+                    self.runtime_store.append_event(
+                        "tool_result_recovery_invalid",
+                        {
+                            "stage": self.stage_name,
+                            "tool_name": tool_name,
+                            "source_attempt_id": recovered.get(
+                                "source_attempt_id"
+                            ),
+                            "error": str(exc),
+                        },
+                    )
+                    recovered = None
+                if recovered is not None:
+                    if succeeded and self.source_access_policy.active:
+                        sanitized, filtered_count = (
+                            self.source_access_policy.sanitize_payload(
+                                recovered_payload
+                            )
                         )
-                    else:
-                        if filtered_count:
-                            sanitized["policy_filtered_count"] = int(
-                                sanitized.get("policy_filtered_count", 0) or 0
-                            ) + filtered_count
-                        recovered_result, succeeded = serialize_tool_result(
-                            sanitized
-                        )
-                return recovered_result, finish_metadata(
-                    "completed" if succeeded else "failed",
-                    {
-                        "cache_hit": True,
-                        "recovery_cache_hit": True,
-                        "recovery_source_attempt_id": recovered.get(
-                            "source_attempt_id"
+                        if sanitized is None:
+                            succeeded = False
+                            recovered_result = json.dumps(
+                                {
+                                    "status": "error",
+                                    "error": (
+                                        "Recovered tool result blocked by the "
+                                        "active source access policy."
+                                    ),
+                                },
+                                ensure_ascii=False,
+                            )
+                        else:
+                            if filtered_count:
+                                sanitized["policy_filtered_count"] = int(
+                                    sanitized.get("policy_filtered_count", 0) or 0
+                                ) + filtered_count
+                            recovered_result, succeeded = serialize_tool_result(
+                                sanitized
+                            )
+                    return recovered_result, finish_metadata(
+                        "completed" if succeeded else "failed",
+                        {
+                            "cache_hit": True,
+                            "recovery_cache_hit": True,
+                            "recovery_source_attempt_id": recovered.get(
+                                "source_attempt_id"
+                            ),
+                            "recovery_source_memory_id": recovered.get(
+                                "source_memory_id"
+                            ),
+                            "tool_success": succeeded,
+                            "observed_at": datetime.now(timezone.utc).isoformat(),
+                            "duration_ms": round(
+                                (time.perf_counter() - started) * 1000,
+                                2,
+                            ),
+                            "serialized_size": len(recovered_result),
+                        },
+                        error=(
+                            ""
+                            if succeeded
+                            else "recovered tool result was rejected"
                         ),
-                        "recovery_source_memory_id": recovered.get(
-                            "source_memory_id"
-                        ),
-                        "tool_success": succeeded,
-                        "observed_at": datetime.now(timezone.utc).isoformat(),
-                        "duration_ms": round(
-                            (time.perf_counter() - started) * 1000,
-                            2,
-                        ),
-                        "serialized_size": len(recovered_result),
-                    },
-                    error="" if succeeded else "recovered tool result was rejected",
-                )
+                    )
 
         if self.tool_cache and tool_name in self.cacheable_tools:
             cached = self.tool_cache.get(tool_name, cache_args)
             if cached is not None:
-                cached_result, succeeded = parse_tool_result(cached)
-                if succeeded and self.source_access_policy.active:
-                    sanitized, filtered_count = self.source_access_policy.sanitize_payload(cached_result)
-                    if sanitized is None:
-                        succeeded = False
-                        cached = json.dumps(
-                            {
-                                "status": "error",
-                                "error": "Cached tool result blocked by the active source access policy.",
-                            },
-                            ensure_ascii=False,
+                try:
+                    cached_result, succeeded = parse_tool_result(cached)
+                except ToolResultContractError:
+                    cached_result = None
+                    succeeded = False
+                if cached_result is not None:
+                    if succeeded and self.source_access_policy.active:
+                        sanitized, filtered_count = (
+                            self.source_access_policy.sanitize_payload(
+                                cached_result
+                            )
                         )
-                    else:
-                        if filtered_count:
-                            sanitized["policy_filtered_count"] = int(
-                                sanitized.get("policy_filtered_count", 0) or 0
-                            ) + filtered_count
-                        cached, succeeded = serialize_tool_result(sanitized)
-                return cached, finish_metadata(
-                    "completed" if succeeded else "failed",
-                    {
-                        "cache_hit": True,
-                        "tool_success": succeeded,
-                        "observed_at": datetime.now(timezone.utc).isoformat(),
-                        "duration_ms": round(
-                            (time.perf_counter() - started) * 1000,
-                            2,
+                        if sanitized is None:
+                            succeeded = False
+                            cached = json.dumps(
+                                {
+                                    "status": "error",
+                                    "error": (
+                                        "Cached tool result blocked by the "
+                                        "active source access policy."
+                                    ),
+                                },
+                                ensure_ascii=False,
+                            )
+                        else:
+                            if filtered_count:
+                                sanitized["policy_filtered_count"] = int(
+                                    sanitized.get("policy_filtered_count", 0) or 0
+                                ) + filtered_count
+                            cached, succeeded = serialize_tool_result(sanitized)
+                    return cached, finish_metadata(
+                        "completed" if succeeded else "failed",
+                        {
+                            "cache_hit": True,
+                            "tool_success": succeeded,
+                            "observed_at": datetime.now(timezone.utc).isoformat(),
+                            "duration_ms": round(
+                                (time.perf_counter() - started) * 1000,
+                                2,
+                            ),
+                            "serialized_size": len(cached),
+                        },
+                        error=(
+                            ""
+                            if succeeded
+                            else "cached tool result was rejected"
                         ),
-                        "serialized_size": len(cached),
-                    },
-                    error="" if succeeded else "cached tool result was rejected",
-                )
+                    )
 
         try:
             if hasattr(tool, "call_async"):

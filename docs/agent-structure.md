@@ -55,7 +55,9 @@ Planning、Query Replan、Route Replan、Reflection 不再作为主流程中的�
 
 搜索候选只是线索。只有后续工具结果中真正与当前图片事实相关的内容，才可作为
 调查依据。网页访问失败、SSL、验证码和参考图不可用要记录为外部不可用，不伪装成
-正常证据。
+正常证据；空结果和 malformed tool result 同样只是当前动作失败观察。它们保留在
+failure ledger 并进入下一轮，Agent 应换路线继续；只有 worker 或不可恢复运行时状态
+故障才会终止当前 case。
 
 ## 4. 图像与上下文
 
