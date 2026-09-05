@@ -250,6 +250,41 @@ def test_v03_eval_keeps_gold_post_rollout_and_writes_scorer_predictions(
             trace_dir = Path(self.config.output_dir)
             trace_dir.mkdir(parents=True, exist_ok=True)
             episode_id = kwargs["image_ids"][0]
+            observation_id = "call-perceive-scene"
+            verdict_basis = {
+                "schema_version": "ifv-raw-history-judgment-basis-v1",
+                "decision_mode": "bounded_binary_judgment",
+                "objective": "Verify the factual content expressed by the image.",
+                "observation_ids": [observation_id],
+                "observations": [
+                    {
+                        "observation_id": observation_id,
+                        "function_call_id": observation_id,
+                        "tool_name": "perceive_scene",
+                        "status": "success",
+                    }
+                ],
+                "action_count": 1,
+                "stop_reason": "model_finished",
+                "finish_rationale": "The retained observation is sufficient.",
+            }
+            judgment = {
+                "verdict": "real",
+                "confidence": 0.9,
+                "policy_rule_id": "unified-react-v1",
+                "overall_assessment": "The retained observation supports the verdict.",
+                "fact_check_report": {
+                    "headline": "Fixture verdict",
+                    "claim_under_review": "The image is factually accurate.",
+                    "verdict_summary": "The fixture observation supports the claim.",
+                    "key_findings": ["The image observation is internally consistent."],
+                    "evidence_summary": "The perception result is retained in raw history.",
+                    "remaining_uncertainties": [],
+                },
+                "selected_observation_ids": [observation_id],
+                "verdict_observation_ids": [observation_id],
+                "evidence_citations": [],
+            }
             (trace_dir / f"{episode_id}.json").write_text(
                 json.dumps(
                     {
@@ -257,6 +292,8 @@ def test_v03_eval_keeps_gold_post_rollout_and_writes_scorer_predictions(
                         "input_mode": "image_only",
                         "decision_policy_version": "unified-react-v1",
                         "verdict": "real",
+                        "verdict_basis": verdict_basis,
+                        "judgment": judgment,
                         "termination": "success",
                         "state": {
                             "image_id": episode_id,
@@ -264,14 +301,38 @@ def test_v03_eval_keeps_gold_post_rollout_and_writes_scorer_predictions(
                             "decision_policy_version": "unified-react-v1",
                             "runtime_case": case.model_dump(),
                             "investigation_state": {
-                                "facts": [],
-                                "tasks": [],
-                                "evidence": [],
-                                "findings": [],
-                                "decisive_fact_ids": [],
-                                "action_count": 0,
+                                "schema_version": "ifv-unified-react-raw-history-v1",
+                                "case_id": episode_id,
+                                "image_sha256": case.image_sha256,
+                                "objective": "Verify the factual content expressed by the image.",
+                                "action_count": 1,
+                                "stop_reason": "model_finished",
+                                "finish_rationale": "The retained observation is sufficient.",
                             },
-                            "all_steps": [],
+                            "all_steps": [
+                                {
+                                    "round": 1,
+                                    "stage": "unified_react",
+                                    "action_type": "tool_call",
+                                    "tool_name": "perceive_scene",
+                                    "tool_args": {},
+                                    "tool_result": json.dumps(
+                                        {
+                                            "status": "success",
+                                            "result": "The image observation is internally consistent.",
+                                        }
+                                    ),
+                                    "metadata": {
+                                        "function_call_id": observation_id,
+                                    },
+                                },
+                                {
+                                    "round": 2,
+                                    "stage": "unified_judgment",
+                                    "action_type": "output",
+                                    "output": judgment,
+                                },
+                            ],
                         },
                     }
                 ),

@@ -50,13 +50,18 @@ def _step(
     thought: str,
     tool_result: str = "",
 ) -> dict:
+    tool_name = str(policy_action.get("name", ""))
+    tool_args = policy_action.get("arguments", {})
     return {
         "stage": stage,
         "action_type": action_type,
+        "tool_name": tool_name,
+        "tool_args": tool_args if isinstance(tool_args, dict) else {},
         "thought": thought,
         "tool_result": tool_result,
         "metadata": {
             "context_request_id": request_id,
+            "function_call_id": request_id if action_type == "tool_call" else "",
             "policy_input": {
                 "system_instruction": f"{stage} instruction",
                 "input_payload": {"request_id": request_id},
@@ -144,8 +149,13 @@ def _trace(tmp_path: Path) -> dict:
                 "image_sha256": hashlib.sha256(image_path.read_bytes()).hexdigest(),
             },
             "investigation_state": {
-                "schema_version": "ifv-unified-react-v1",
-                "bootstrap_tools_completed": [],
+                "schema_version": "ifv-unified-react-raw-history-v1",
+                "case_id": "case-1",
+                "image_sha256": hashlib.sha256(image_path.read_bytes()).hexdigest(),
+                "objective": "Verify the factual content expressed by the image.",
+                "action_count": 2,
+                "stop_reason": "model_finished",
+                "finish_rationale": "The retained observations are sufficient.",
             },
             "all_steps": steps,
         },
