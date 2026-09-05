@@ -6,40 +6,47 @@ from src.trajectory.scoring import score_process_trace
 
 
 def _trace_with_bootstrap_actions() -> dict:
-    claim_id = "claim-1"
-    anchor_id = "vf-anchor-1"
-    target_fact_id = "vf-target-1"
-    task_id = "task-1"
     basis = {
-        "policy_rule_id": "unified-react-v1",
-        "decision_mode": "bounded_binary_judgment",
+        "schema_version": "ifv-raw-history-judgment-basis-v1",
+        "decision_mode": "raw_history",
         "verdict_target": "The image depicts the Riverfest bridge.",
-        "claim_ids": [claim_id],
-        "discrepancy_ids": [],
-        "visual_anchor_fact_ids": [anchor_id],
-        "finding_ids": [],
-        "evidence_ids": [],
+        "observation_ids": [
+            "call-perceive_scene",
+            "call-ocr_with_position",
+            "call-text_search",
+        ],
+        "observations": [
+            {
+                "observation_id": "call-perceive_scene",
+                "tool_name": "perceive_scene",
+                "status": "success",
+            },
+            {
+                "observation_id": "call-ocr_with_position",
+                "tool_name": "ocr_with_position",
+                "status": "success",
+            },
+            {
+                "observation_id": "call-text_search",
+                "tool_name": "text_search",
+                "status": "success",
+            },
+        ],
+        "action_count": 3,
         "unresolved_gaps": ["No decisive external evidence was available."],
     }
     judgment = {
         "policy_rule_id": "unified-react-v1",
         "verdict": "real",
         "confidence": 0.7,
-        "selected_claim_ids": [claim_id],
-        "selected_discrepancy_ids": [],
-        "selected_visual_anchor_fact_ids": [anchor_id],
-        "selected_finding_ids": [],
-        "selected_evidence_ids": [],
+        "selected_observation_ids": basis["observation_ids"],
+        "verdict_observation_ids": ["call-perceive_scene"],
         "overall_assessment": "The bounded basis supports the depicted relation.",
         "unresolved_gaps": ["No decisive external evidence was available."],
+        "fact_check_report": {"summary": "The image depicts the bridge."},
     }
 
-    def tool_step(tool_name: str, *, investigation: bool) -> dict:
-        update = (
-            {"investigation_state_update": {"accepted": True}}
-            if investigation
-            else {}
-        )
+    def tool_step(tool_name: str) -> dict:
         return {
             "stage": "unified_react",
             "action_type": "tool_call",
@@ -49,7 +56,6 @@ def _trace_with_bootstrap_actions() -> dict:
             "metadata": {
                 "tool_success": True,
                 "function_call_id": f"call-{tool_name}",
-                **update,
             },
         }
 
@@ -66,42 +72,23 @@ def _trace_with_bootstrap_actions() -> dict:
             "decision_policy_version": "unified-react-v1",
             "termination": "success",
             "all_steps": [
-                tool_step("perceive_scene", investigation=False),
-                tool_step("ocr_with_position", investigation=False),
-                tool_step("text_search", investigation=True),
+                tool_step("perceive_scene"),
+                tool_step("ocr_with_position"),
+                tool_step("text_search"),
+                {
+                    "stage": "unified_judgment",
+                    "action_type": "output",
+                    "output": judgment,
+                },
             ],
             "investigation_state": {
-                "target_facts": [
-                    {
-                        "claim_id": claim_id,
-                        "fact_id": target_fact_id,
-                        "anchor_fact_ids": [anchor_id],
-                        "status": "unresolved",
-                        "task_ids": [task_id],
-                    }
-                ],
-                "tasks": [
-                    {
-                        "task_id": task_id,
-                        "claim_ids": [claim_id],
-                        "fact_ids": [target_fact_id],
-                        "status": "exhausted",
-                    }
-                ],
-                "evidence": [],
-                "findings": [],
-                "claim_assessments": [],
-                "material_discrepancies": [],
-                "discrepancy_coverage_audits": [
-                    {
-                        "action_count": 1,
-                        "complete": False,
-                        "stop_reason": "meaningful_routes_exhausted",
-                    }
-                ],
+                "schema_version": "ifv-unified-react-raw-history-v1",
+                "case_id": "case-1",
+                "image_sha256": "a" * 64,
+                "objective": "Verify the factual content expressed by the image.",
+                "action_count": 3,
                 "stop_reason": "meaningful_routes_exhausted",
-                "action_count": 1,
-                "discrepancy_verdict_basis": basis,
+                "finish_rationale": "The available routes were exhausted.",
             },
         },
     }
