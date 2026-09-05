@@ -16,6 +16,10 @@ from src.orchestrator.evidence_semantics import (
     required_assessment_stances,
 )
 from src.orchestrator.investigation_models import target_fact_rows
+from src.orchestrator.react_runtime import (
+    REACT_RUNTIME_SCHEMA_VERSION,
+    is_unified_react_runtime_budget_action,
+)
 from src.orchestrator.tool_result import parse_tool_result
 from src.trajectory.media_projection import (
     image_markers,
@@ -994,22 +998,12 @@ def _unified_react_quality_gate(
     if str(trace.get("termination", "")) != "success":
         raise ValueError("unified-react policy export requires a successful trace")
     investigation = _mapping(state.get("investigation_state"))
-    is_current_runtime = (
-        str(investigation.get("schema_version", "")).strip()
-        == "ifv-unified-react-v1"
-    )
-    completed = {
-        str(item)
-        for item in (
-            investigation.get(
-                "bootstrap_tools_completed"
-                if is_current_runtime
-                else "unified_react_bootstrap_tools_completed",
-                [],
-            )
-            or []
+    if str(investigation.get("schema_version", "")).strip() != (
+        REACT_RUNTIME_SCHEMA_VERSION
+    ):
+        raise ValueError(
+            "unified-react policy export requires the raw-history runtime schema"
         )
-    }
     retired_stages = {
         "perception",
         "image_account_planning",
@@ -1030,23 +1024,19 @@ def _unified_react_quality_gate(
         for step in steps
         if str(step.get("stage", "")) == "unified_react"
         and str(step.get("action_type", "")) == "tool_call"
+        and is_unified_react_runtime_budget_action(step)
     ]
     if len(actions) < 1:
         raise ValueError(
             "unified-react trace requires at least one ReAct action"
         )
     if any(
-        not (
-            _mapping(step.get("metadata")).get("unified_react_delta")
-            or _mapping(step.get("metadata")).get("react_state_delta")
-            or _mapping(step.get("metadata")).get(
-                "investigation_state_update"
-            )
-        )
+        not str(_mapping(step.get("metadata")).get("function_call_id", "")).strip()
+        or not str(step.get("tool_result", "")).strip()
         for step in actions
     ):
         raise ValueError(
-            "unified-react trace requires one persisted reducer delta per action"
+            "unified-react trace requires a function ID and raw tool result per action"
         )
     if require_provider_thought and any(
         not str(step.get("thought", "") or "").strip() for step in actions
@@ -1054,27 +1044,12 @@ def _unified_react_quality_gate(
         raise ValueError(
             "unified-react trace lacks provider-visible thought; route to action-only/RL"
         )
-    if is_current_runtime:
-        if any(
-            key in investigation
-            for key in ("target_facts", "search_hypotheses", "claim_assessments")
-        ):
-            raise ValueError(
-                "current unified-react trace must not contain legacy target graph fields"
-            )
-        if not any(
-            str(step.get("stage", "")).strip() == "unified_judgment"
-            and str(step.get("action_type", "")).strip() == "output"
-            for step in steps
-        ):
-            raise ValueError(
-                "current unified-react trace requires a final judgment output"
-            )
-    else:
-        if not target_fact_rows(investigation):
-            raise ValueError("unified-react trace requires a reducer-created target fact")
-        if not _rows(investigation.get("search_hypotheses")):
-            raise ValueError("unified-react trace requires a reducer-created route")
+    if not any(
+        str(step.get("stage", "")).strip() == "unified_judgment"
+        and str(step.get("action_type", "")).strip() == "output"
+        for step in steps
+    ):
+        raise ValueError("current unified-react trace requires a final judgment output")
 
 
 def unified_react_training_buckets(

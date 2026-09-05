@@ -386,3 +386,46 @@ pytest -q test_react_runtime.py test_native_interactions.py \
 3. 从统一测试集抽取此前未用于 smoke 的 10 个新 case，真实运行；
 4. 对每条新 trace 检查外部/坏结果是否继续调查、是否进入 Judgment、是否通过 strict audit；
 5. 将真实结果回填本计划和实验记录；在启动任何大规模 rollout 前停止。
+
+### 真实 smoke 验证完成（2026-09-05）
+
+使用提交 `2f1d87a` 在 gpu-13 完成新的 10 条 Gemini 3.7 Flash smoke。运行目录为：
+
+```text
+/gsdata/home/wza/image-factual-verifier-v2-data/runs/eval/
+react-harness-recovery-smoke10-20260905-2f1d87a-r2/
+```
+
+运行结果：
+
+- 10/10 terminal success；
+- 0 engineering error；
+- 0 scheduler rejection；
+- 0 protocol rejection；
+- 12 个可恢复 runtime failure，包含 2 个 external unavailable 和 10 个
+  success-empty；没有不可恢复 failure；
+- 自动重试不需要，所有 case 首轮完成。
+
+本地从完整 audit bundle 重建 trace 后，使用 active policy
+`web-refuted-roster-v3-expanded-20260821` 运行严格审计：
+
+```text
+passed=true
+trace_count=10
+passed_count=10
+failed_count=0
+warning_count=4
+scheduler_rejections=0
+protocol_rejections=0
+route_control_rejections=1
+fact_check_url_leaks=0
+fact_check_query_leaks=0
+fact_check_query_rejections=2
+```
+
+4 个 warning 均为可接受的 correction：1 个重复动作 route-control warning，
+以及同一条 `Full Fact` policy 拒绝在 trace 中产生的 3 个 correction warning。
+普通 fact-check 查询没有产生 `FACT_CHECK_QUERY_LEAK`；名单外来源不再作为审计失败。
+
+policy rejection 的审计材料已从 Jupyter 根目录下载并保存在本地 review bundle；
+未修改运行时、工具实现或 private gold。全量 `8,490` 条教师 rollout 仍未启动。

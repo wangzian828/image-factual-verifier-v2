@@ -1,4 +1,4 @@
-"""Strictly audit canonical v3 image-only traces."""
+"""Strictly audit current raw-history image-only traces."""
 from __future__ import annotations
 
 import argparse
@@ -17,19 +17,11 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from src.orchestrator.source_access import (  # noqa: E402
-    FACT_CHECK_DOMAIN_MARKERS,
     SourceAccessPolicy,
-    benchmark_source_access_policy,
     url_variants,
 )
 from src.orchestrator.source_provenance import domain_matches  # noqa: E402
-from src.orchestrator.evidence_policy import (  # noqa: E402
-    query_targets_fact_check_answer,
-)
 from src.orchestrator.investigation_models import target_fact_rows  # noqa: E402
-from src.orchestrator.unified_react import (  # noqa: E402
-    is_unified_react_budget_action,
-)
 from src.orchestrator.react_runtime import (  # noqa: E402
     REACT_RUNTIME_SCHEMA_VERSION,
     REACT_RUNTIME_TOOLS,
@@ -56,12 +48,6 @@ WEB_EVIDENCE_TOOLS = frozenset({"visit", "crop_and_search"})
 COMPOSITE_SOURCE_VISUAL_DISCREPANCY_FAMILY = (
     "composite:source_visual_discrepancy"
 )
-KNOWN_FACT_CHECK_QUERY_POLICY = SourceAccessPolicy(
-    policy_id="canonical-trace-known-fact-check-sites",
-    excluded_domains=frozenset(FACT_CHECK_DOMAIN_MARKERS),
-)
-
-
 @dataclass(frozen=True)
 class Issue:
     code: str
@@ -401,11 +387,7 @@ def _fact_check_domain(
                 if domain_matches(hostname, domain):
                     return domain
         return ""
-    policy = benchmark_source_access_policy(
-        [value],
-        policy_id="canonical-trace-audit",
-    )
-    return next(iter(sorted(policy.excluded_domains)), "")
+    return ""
 
 
 def _fact_check_query_domain(
@@ -464,8 +446,6 @@ def _fact_check_url_query(
             source_access_policy=source_access_policy,
         ):
             return f"known fact-check domain {domain!r} in URL query"
-        if source_access_policy is None and query_targets_fact_check_answer(query):
-            return "fact-check-oriented URL query"
     return ""
 
 
@@ -474,9 +454,10 @@ def _fact_check_query_reference(
     *,
     source_access_policy: SourceAccessPolicy | None = None,
 ) -> str:
-    policy = source_access_policy or KNOWN_FACT_CHECK_QUERY_POLICY
+    if source_access_policy is None:
+        return ""
     return (
-        policy.blocked_query_reference(value)
+        source_access_policy.blocked_query_reference(value)
         or _fact_check_query_domain(
             value,
             source_access_policy=source_access_policy,
@@ -634,20 +615,11 @@ def _audit_leaks(
                 if enforce_source_access_policy
                 else ""
             )
-            oriented = (
-                query_targets_fact_check_answer(raw_value)
-                if enforce_source_access_policy and source_access_policy is None
-                else False
-            )
-            if query_domain or oriented:
+            if query_domain:
                 signature = ("query", path)
                 if signature not in seen:
                     seen.add(signature)
-                    detail = (
-                        f"known fact-check domain {query_domain!r} is named in query"
-                        if query_domain
-                        else "fact-check-oriented query"
-                    )
+                    detail = f"excluded source {query_domain!r} is named in query"
                     if _policy_rejected_step_for_path(trace, path) is not None:
                         rejected_query_count += 1
                         _issue(
@@ -690,6 +662,8 @@ def _rejection_category(step: Mapping[str, Any]) -> str:
             ).casefold()
         except (TypeError, json.JSONDecodeError):
             reason = ""
+    if "source policy" in reason or "excluded source reference" in reason:
+        return CORRECTION
     scheduler_markers = (
         "coverage requires",
         "required investigation questions",
@@ -3432,709 +3406,32 @@ def _audit_unified_react_trace(
     steps: Sequence[Mapping[str, Any]],
     report: TraceReport,
 ) -> None:
-    """Audit the clean tool-first ``unified-react-v1`` canonical contract."""
+    """Audit the one supported raw-history ReAct contract."""
 
     if str(
         trace.get("decision_policy_version")
         or state.get("decision_policy_version")
         or ""
-    ) != UNIFIED_REACT_POLICY_VERSION:
+    ).strip() != UNIFIED_REACT_POLICY_VERSION:
         _issue(
             report,
-            "UNIFIED_REACT_POLICY_MISMATCH",
-            "unified trace must use decision_policy_version=unified-react-v1",
+            "REACT_RUNTIME_POLICY_MISMATCH",
+            "current trace must use decision_policy_version=unified-react-v1",
             location="decision_policy_version",
         )
-
+        return
     investigation = _mapping(state.get("investigation_state"))
-    if not investigation:
-        _issue(
-            report,
-            "UNIFIED_REACT_STATE_MISSING",
-            "unified trace must contain state.investigation_state",
-            location="state.investigation_state",
-        )
-        return
-
-    if (
-        str(investigation.get("schema_version", "")).strip()
-        == REACT_RUNTIME_SCHEMA_VERSION
-    ):
-        _audit_current_react_runtime_trace(trace, state, steps, report)
-        return
-
-    collection_names = (
-        "entities",
-        "facts",
-        "target_facts",
-        "search_hypotheses",
-        "tasks",
-        "retrieval_anchors",
-        "discoveries",
-        "evidence",
-        "findings",
-        "failures",
-        "discrepancy_coverage_audits",
-    )
-    for name in collection_names:
-        if not isinstance(investigation.get(name), list):
-            _issue(
-                report,
-                "UNIFIED_REACT_COLLECTION_INVALID",
-                f"state.investigation_state.{name} must be an array",
-                location=f"state.investigation_state.{name}",
-            )
-
-    entities = _rows(investigation.get("entities"))
-    facts = _rows(investigation.get("facts"))
-    targets = _rows(investigation.get("target_facts"))
-    hypotheses = _rows(investigation.get("search_hypotheses"))
-    tasks = _rows(investigation.get("tasks"))
-    anchors = _rows(investigation.get("retrieval_anchors"))
-    discoveries = _rows(investigation.get("discoveries"))
-    evidence = _rows(investigation.get("evidence"))
-    findings = _rows(investigation.get("findings"))
-    failures = _rows(investigation.get("failures"))
-    coverage_audits = _rows(
-        investigation.get("discrepancy_coverage_audits")
-    )
-
-    entity_by_id = _unique_index(
-        entities,
-        id_field="entity_id",
-        location_prefix="state.investigation_state.entities",
-        report=report,
-    )
-    fact_by_id = _unique_index(
-        facts,
-        id_field="fact_id",
-        location_prefix="state.investigation_state.facts",
-        report=report,
-    )
-    target_by_claim = _unique_index(
-        targets,
-        id_field="claim_id",
-        location_prefix="state.investigation_state.target_facts",
-        report=report,
-    )
-    hypothesis_by_id = _unique_index(
-        hypotheses,
-        id_field="hypothesis_id",
-        location_prefix="state.investigation_state.search_hypotheses",
-        report=report,
-    )
-    task_by_id = _unique_index(
-        tasks,
-        id_field="task_id",
-        location_prefix="state.investigation_state.tasks",
-        report=report,
-    )
-    anchor_by_id = _unique_index(
-        anchors,
-        id_field="anchor_id",
-        location_prefix="state.investigation_state.retrieval_anchors",
-        report=report,
-    )
-    discovery_by_id = _unique_index(
-        discoveries,
-        id_field="discovery_id",
-        location_prefix="state.investigation_state.discoveries",
-        report=report,
-    )
-    evidence_by_id = _unique_index(
-        evidence,
-        id_field="evidence_id",
-        location_prefix="state.investigation_state.evidence",
-        report=report,
-    )
-    finding_by_id = _unique_index(
-        findings,
-        id_field="finding_id",
-        location_prefix="state.investigation_state.findings",
-        report=report,
-    )
-    failure_by_id = _unique_index(
-        failures,
-        id_field="failure_id",
-        location_prefix="state.investigation_state.failures",
-        report=report,
-    )
-
-    all_known_origins = {
-        *entity_by_id,
-        *fact_by_id,
-        *target_by_claim,
-        *hypothesis_by_id,
-        *task_by_id,
-        *anchor_by_id,
-        *discovery_by_id,
-        *evidence_by_id,
-        *finding_by_id,
-        *failure_by_id,
-        str(_mapping(investigation.get("brief")).get("brief_id", "")).strip(),
-        str(_mapping(investigation.get("brief")).get("case_id", "")).strip(),
-    }
-    all_known_origins.discard("")
-
-    for fact_id, fact in fact_by_id.items():
-        location = _location("state.investigation_state.facts", fact_id)
-        unknown_basis = sorted(
-            {
-                str(item)
-                for item in fact.get("basis_ids", []) or []
-                if str(item)
-            }
-            - all_known_origins
-        )
-        if unknown_basis:
-            _issue(
-                report,
-                "UNIFIED_VISUAL_FACT_BASIS_UNKNOWN",
-                "unknown fact basis ids: " + ", ".join(unknown_basis),
-                location=location,
-            )
-
-    for claim_id, target in target_by_claim.items():
-        location = _location(
-            "state.investigation_state.target_facts", claim_id
-        )
-        fact_id = str(target.get("fact_id", "")).strip()
-        if fact_id not in fact_by_id:
-            _issue(
-                report,
-                "UNIFIED_TARGET_FACT_UNKNOWN",
-                f"target claim references unknown fact {fact_id!r}",
-                location=location,
-            )
-        unknown_anchors = sorted(
-            {
-                str(item)
-                for item in target.get("anchor_fact_ids", []) or []
-                if str(item)
-            }
-            - set(fact_by_id)
-        )
-        if unknown_anchors:
-            _issue(
-                report,
-                "UNIFIED_TARGET_ANCHOR_UNKNOWN",
-                "target claim references unknown visual facts: "
-                + ", ".join(unknown_anchors),
-                location=location,
-            )
-        unknown_tasks = sorted(
-            {
-                str(item)
-                for item in target.get("task_ids", []) or []
-                if str(item)
-            }
-            - set(task_by_id)
-        )
-        if unknown_tasks:
-            _issue(
-                report,
-                "UNIFIED_TARGET_TASK_UNKNOWN",
-                "target claim references unknown task ids: "
-                + ", ".join(unknown_tasks),
-                location=location,
-            )
-
-    for hypothesis_id, hypothesis in hypothesis_by_id.items():
-        location = _location(
-            "state.investigation_state.search_hypotheses", hypothesis_id
-        )
-        unknown_claims = sorted(
-            {
-                str(item)
-                for item in hypothesis.get("claim_ids", []) or []
-                if str(item)
-            }
-            - set(target_by_claim)
-        )
-        if unknown_claims:
-            _issue(
-                report,
-                "UNIFIED_HYPOTHESIS_CLAIM_UNKNOWN",
-                "route references unknown target claims: "
-                + ", ".join(unknown_claims),
-                location=location,
-            )
-        task_id = str(hypothesis.get("task_id", "")).strip()
-        if task_id not in task_by_id:
-            _issue(
-                report,
-                "UNIFIED_HYPOTHESIS_TASK_UNKNOWN",
-                f"route references unknown task {task_id!r}",
-                location=location,
-            )
-
-    failures_by_task: dict[str, list[str]] = {}
-    for failure_id, failure in failure_by_id.items():
-        task_id = str(failure.get("task_id", "")).strip()
-        failures_by_task.setdefault(task_id, []).append(failure_id)
-        if task_id not in task_by_id:
-            _issue(
-                report,
-                "UNIFIED_FAILURE_TASK_UNKNOWN",
-                f"failure references unknown task {task_id!r}",
-                location=_location(
-                    "state.investigation_state.failures", failure_id
-                ),
-            )
-
-    for task_id, task in task_by_id.items():
-        location = _location("state.investigation_state.tasks", task_id)
-        unknown_facts = sorted(
-            {
-                str(item)
-                for item in task.get("fact_ids", []) or []
-                if str(item)
-            }
-            - set(fact_by_id)
-        )
-        unknown_claims = sorted(
-            {
-                str(item)
-                for item in task.get("claim_ids", []) or []
-                if str(item)
-            }
-            - set(target_by_claim)
-        )
-        hypothesis_id = str(task.get("hypothesis_id") or "").strip()
-        if unknown_facts:
-            _issue(
-                report,
-                "UNIFIED_TASK_FACT_UNKNOWN",
-                "task references unknown facts: " + ", ".join(unknown_facts),
-                location=location,
-            )
-        if unknown_claims:
-            _issue(
-                report,
-                "UNIFIED_TASK_CLAIM_UNKNOWN",
-                "task references unknown claims: " + ", ".join(unknown_claims),
-                location=location,
-            )
-        if hypothesis_id and hypothesis_id not in hypothesis_by_id:
-            _issue(
-                report,
-                "UNIFIED_TASK_HYPOTHESIS_UNKNOWN",
-                f"task references unknown route {hypothesis_id!r}",
-                location=location,
-            )
-        parent_id = str(task.get("parent_task_id", "") or "").strip()
-        if not hypothesis_id and parent_id not in task_by_id:
-            _issue(
-                report,
-                "UNIFIED_TASK_PARENT_UNKNOWN",
-                (
-                    "a route-independent unified task must be a child of an "
-                    "existing route task"
-                ),
-                location=location,
-            )
-        unknown_origins = sorted(
-            {
-                str(item)
-                for item in task.get("origin_ids", []) or []
-                if str(item)
-            }
-            - all_known_origins
-        )
-        if unknown_origins:
-            _issue(
-                report,
-                "UNIFIED_TASK_ORIGIN_UNKNOWN",
-                "task references unknown origins: " + ", ".join(unknown_origins),
-                location=location,
-            )
-        if (
-            str(task.get("status", "")).strip() == "blocked"
-            and not failures_by_task.get(task_id)
-        ):
-            _issue(
-                report,
-                "UNIFIED_BLOCKED_TASK_WITHOUT_FAILURE",
-                "blocked task must reference a recorded failure",
-                location=location,
-            )
-
-    legacy_stages = {
-        "perception",
-        "image_account_planning",
-        "image_only_planning",
-        "image_only_investigation",
-        "image_only_discrepancy_investigation",
-        "image_only_query_concept_extraction",
-        "image_only_query_replan",
-        "image_only_route_local_replan",
-        "image_only_evidence_decision",
-    }
-    for index, step in enumerate(steps):
-        if str(step.get("stage", "")).strip() in legacy_stages:
-            _issue(
-                report,
-                "UNIFIED_REACT_LEGACY_STAGE",
-                "unified trace must not include a legacy policy stage",
-                location=_step_label(index, step),
-            )
-
-    actions = [
-        (index, step)
-        for index, step in enumerate(steps)
-        if str(step.get("stage", "")).strip() == "unified_react"
-        and str(step.get("action_type", "")).strip() == "tool_call"
-    ]
-    if len(actions) < 3:
-        _issue(
-            report,
-            "UNIFIED_REACT_ACTIONS_MISSING",
-            "unified trace requires scene, OCR, and one investigation action",
-            location="state.all_steps",
-        )
-        _audit_unified_react_interaction_chains(steps, report)
-        return
-
-    bootstrap_actions = actions[:2]
-    bootstrap_names = {
-        str(step.get("tool_name", "")).strip()
-        for _, step in bootstrap_actions
-    }
-    if bootstrap_names != {"perceive_scene", "ocr_with_position"}:
-        _issue(
-            report,
-            "UNIFIED_REACT_BOOTSTRAP_INVALID",
-            "the first two accepted actions must be perceive_scene and ocr_with_position",
-            location="state.all_steps",
-        )
-    completed = {
-        str(item)
-        for item in investigation.get(
-            "unified_react_bootstrap_tools_completed", []
-        )
-        or []
-    }
-    if completed != {"perceive_scene", "ocr_with_position"}:
-        _issue(
-            report,
-            "UNIFIED_REACT_BOOTSTRAP_STATE_INVALID",
-            "unified workspace must persist both completed visual bootstrap tools",
-            location=(
-                "state.investigation_state."
-                "unified_react_bootstrap_tools_completed"
-            ),
-        )
-    if investigation.get("unified_react_bootstrap_failures"):
-        _issue(
-            report,
-            "UNIFIED_REACT_BOOTSTRAP_FAILURE_RECORDED",
-            "successful unified trace cannot retain a bootstrap failure",
-            location=(
-                "state.investigation_state."
-                "unified_react_bootstrap_failures"
-            ),
-        )
-
-    action_ids: set[str] = set()
-    for action_position, (index, step) in enumerate(actions):
-        metadata = _mapping(step.get("metadata"))
-        delta = _mapping(metadata.get("unified_react_delta"))
-        location = _step_label(index, step)
-        tool_name = str(step.get("tool_name", "")).strip()
-        call_id = str(metadata.get("function_call_id", "")).strip()
-        if not delta:
-            _issue(
-                report,
-                "UNIFIED_REACT_DELTA_MISSING",
-                "every accepted unified tool action requires a persisted reducer delta",
-                location=location,
-            )
-            continue
-        if str(delta.get("tool_name", "")).strip() != tool_name:
-            _issue(
-                report,
-                "UNIFIED_REACT_DELTA_TOOL_MISMATCH",
-                "reducer delta tool_name must match the executed tool",
-                location=location,
-            )
-        if str(delta.get("function_call_id", "")).strip() != call_id:
-            _issue(
-                report,
-                "UNIFIED_REACT_DELTA_CALL_MISMATCH",
-                "reducer delta function_call_id must match the action",
-                location=location,
-            )
-        if not _mapping(delta.get("state_update")).get("accepted", False):
-            _issue(
-                report,
-                "UNIFIED_REACT_DELTA_REJECTED",
-                "accepted tool action has no accepted reducer state update",
-                location=location,
-            )
-        if not call_id:
-            _issue(
-                report,
-                "UNIFIED_REACT_CALL_ID_MISSING",
-                "accepted unified tool action lacks function_call_id",
-                location=location,
-            )
-        elif call_id in action_ids:
-            _issue(
-                report,
-                "UNIFIED_REACT_CALL_ID_DUPLICATE",
-                f"duplicate unified function_call_id {call_id!r}",
-                location=location,
-            )
-        action_ids.add(call_id)
-        policy_action = _mapping(metadata.get("policy_action"))
-        if (
-            str(policy_action.get("type", "")).strip() != "tool_call"
-            or str(policy_action.get("name", "")).strip() != tool_name
-        ):
-            _issue(
-                report,
-                "UNIFIED_REACT_POLICY_ACTION_MISMATCH",
-                "native policy_action must record the same tool call",
-                location=location,
-            )
-        if action_position == 2:
-            intent = _mapping(delta.get("accepted_investigation_intent"))
-            update = _mapping(delta.get("state_update"))
-            if not intent or not _mapping(update.get("initial_intent")):
-                _issue(
-                    report,
-                    "UNIFIED_REACT_INITIAL_INTENT_MISSING",
-                    "first non-bootstrap action must persist its accepted intent",
-                    location=location,
-                )
-            if not target_by_claim or not hypothesis_by_id or not task_by_id:
-                _issue(
-                    report,
-                    "UNIFIED_REACT_INITIAL_GRAPH_MISSING",
-                    "first non-bootstrap action must create target, route, and task",
-                    location=location,
-                )
-
-    budget_actions = [
-        step
-        for _, step in actions
-        if is_unified_react_budget_action(step)
-    ]
-    action_count = int(investigation.get("action_count", 0) or 0)
-    if action_count != len(budget_actions):
-        _issue(
-            report,
-            "UNIFIED_REACT_ACTION_COUNT_MISMATCH",
-            (
-                f"action_count={action_count}, but trace records "
-                f"{len(budget_actions)} accepted investigation actions"
-            ),
-            location="state.investigation_state.action_count",
-        )
-    if action_count > 24:
-        _issue(
-            report,
-            "UNIFIED_REACT_ACTION_BUDGET_EXCEEDED",
-            f"unified investigation used {action_count} actions; maximum is 24",
-            location="state.investigation_state.action_count",
-        )
-
-    current_action_count = 0
-    reflection_counts: list[int] = []
-    decision_steps = 0
-    judgment_steps = 0
-    for _index, step in enumerate(steps):
-        stage = str(step.get("stage", "")).strip()
-        if (
-            stage == "unified_react"
-            and str(step.get("action_type", "")).strip() == "tool_call"
-            and is_unified_react_budget_action(step)
-        ):
-            current_action_count += 1
-        if (
-            stage == "unified_reflection"
-            and _mapping(step.get("metadata")).get("native_interactions")
-        ):
-            reflection_counts.append(current_action_count)
-        elif (
-            stage == "unified_discrepancy_decision"
-            and _mapping(step.get("metadata")).get("native_interactions")
-        ):
-            decision_steps += 1
-        elif (
-            stage == "unified_judgment"
-            and _mapping(step.get("metadata")).get("native_interactions")
-        ):
-            judgment_steps += 1
-    invalid_reflections = [
-        count
-        for count in reflection_counts
-        if count <= 0 or count % 4 != 0
-    ]
-    terminal_stop = str(investigation.get("stop_reason", "")).strip()
-    required_limit = (
-        action_count - 1
-        if terminal_stop and action_count > 0 and action_count % 4 == 0
-        else action_count
-    )
-    expected_reflections = list(range(4, required_limit + 1, 4))
-    allowed_reflection_counts = set(expected_reflections)
-    if terminal_stop and action_count > 0 and action_count % 4 == 0:
-        # A final Reflection at the same boundary may be what establishes the
-        # terminal global state.  Earlier four-action checkpoints remain
-        # mandatory, but this terminal one is optional.
-        allowed_reflection_counts.add(action_count)
-    missing_reflections = [
-        count for count in expected_reflections if count not in reflection_counts
-    ]
-    unexpected_reflections = [
-        count
-        for count in reflection_counts
-        if count not in allowed_reflection_counts
-    ]
-    if (
-        invalid_reflections
-        or len(reflection_counts) != len(set(reflection_counts))
-        or missing_reflections
-        or unexpected_reflections
+    if str(investigation.get("schema_version", "")).strip() != (
+        REACT_RUNTIME_SCHEMA_VERSION
     ):
         _issue(
             report,
-            "UNIFIED_REACT_REFLECTION_CADENCE_INVALID",
-            (
-                "unified Reflection is only allowed at non-terminal four-action "
-                "boundaries, with an optional terminal reflection; "
-                f"expected={expected_reflections}, got={reflection_counts}"
-            ),
-            location="state.all_steps",
+            "REACT_RUNTIME_SCHEMA_INVALID",
+            "current trace must use the raw-history runtime schema",
+            location="state.investigation_state.schema_version",
         )
-    if not decision_steps:
-        _issue(
-            report,
-            "UNIFIED_REACT_DECISION_MISSING",
-            "unified trace must include at least one Discrepancy Decision",
-            location="state.all_steps",
-        )
-    if judgment_steps != 1:
-        _issue(
-            report,
-            "UNIFIED_REACT_JUDGMENT_COUNT_INVALID",
-            f"unified trace must include exactly one Judgment, got {judgment_steps}",
-            location="state.all_steps",
-        )
-
-    terminal_coverage = [
-        item
-        for item in coverage_audits
-        if str(item.get("stop_reason", "")).strip() == terminal_stop
-        and terminal_stop
-    ]
-    if not terminal_coverage:
-        _issue(
-            report,
-            "UNIFIED_REACT_TERMINAL_COVERAGE_MISSING",
-            "unified trace requires a terminal discrepancy Coverage record",
-            location=(
-                "state.investigation_state."
-                "discrepancy_coverage_audits"
-            ),
-        )
-
-    basis = _mapping(
-        trace.get("verdict_basis")
-        or investigation.get("discrepancy_verdict_basis")
-    )
-    judgment = _mapping(trace.get("judgment") or state.get("judgment"))
-    if str(basis.get("policy_rule_id", "")).strip() != UNIFIED_REACT_POLICY_VERSION:
-        _issue(
-            report,
-            "UNIFIED_REACT_BASIS_POLICY_INVALID",
-            "unified verdict basis must use unified-react-v1",
-            location="verdict_basis.policy_rule_id",
-        )
-    if str(judgment.get("policy_rule_id", "")).strip() != UNIFIED_REACT_POLICY_VERSION:
-        _issue(
-            report,
-            "UNIFIED_REACT_JUDGMENT_POLICY_INVALID",
-            "unified Judgment must use unified-react-v1",
-            location="judgment.policy_rule_id",
-        )
-    verdict = str(trace.get("verdict", "")).strip()
-    if verdict not in {"real", "fake"}:
-        _issue(
-            report,
-            "UNIFIED_REACT_VERDICT_INVALID",
-            f"unified trace verdict must be real or fake, got {verdict!r}",
-            location="verdict",
-        )
-    if str(judgment.get("verdict", "")).strip() != verdict:
-        _issue(
-            report,
-            "UNIFIED_REACT_JUDGMENT_VERDICT_MISMATCH",
-            "trace verdict and Judgment verdict must match",
-            location="judgment.verdict",
-        )
-    for basis_field, judgment_field, known in (
-        ("claim_ids", "selected_claim_ids", set(target_by_claim)),
-        (
-            "visual_anchor_fact_ids",
-            "selected_visual_anchor_fact_ids",
-            set(fact_by_id),
-        ),
-        ("finding_ids", "selected_finding_ids", set(finding_by_id)),
-        ("evidence_ids", "selected_evidence_ids", set(evidence_by_id)),
-    ):
-        selected = {
-            str(item)
-            for item in basis.get(basis_field, []) or []
-            if str(item)
-        }
-        unknown = sorted(selected - known)
-        if unknown:
-            _issue(
-                report,
-                "UNIFIED_REACT_BASIS_REFERENCE_UNKNOWN",
-                f"unknown {basis_field}: " + ", ".join(unknown),
-                location=f"verdict_basis.{basis_field}",
-            )
-        judgment_selected = {
-            str(item)
-            for item in judgment.get(judgment_field, []) or []
-            if str(item)
-        }
-        if selected != judgment_selected:
-            _issue(
-                report,
-                "UNIFIED_REACT_JUDGMENT_BASIS_MISMATCH",
-                (
-                    f"Judgment {judgment_field} must equal verdict basis "
-                    f"{basis_field}"
-                ),
-                location=f"judgment.{judgment_field}",
-            )
-    if str(basis.get("decision_mode", "")).strip() not in {
-        "evidence_determined",
-        "bounded_binary_judgment",
-    }:
-        _issue(
-            report,
-            "UNIFIED_REACT_DECISION_MODE_INVALID",
-            "unified verdict basis has an unsupported decision_mode",
-            location="verdict_basis.decision_mode",
-        )
-
-    report.stats.update(
-        {
-            "unified_react_actions": action_count,
-            "unified_react_target_facts": len(target_by_claim),
-            "unified_react_routes": len(hypothesis_by_id),
-            "unified_react_tasks": len(task_by_id),
-            "unified_react_reflections": len(reflection_counts),
-            "unified_react_decisions": decision_steps,
-        }
-    )
-    _audit_unified_react_interaction_chains(steps, report)
-
+        return
+    _audit_current_react_runtime_trace(trace, state, steps, report)
 
 def _audit_current_react_runtime_trace(
     trace: Mapping[str, Any],
@@ -4142,55 +3439,25 @@ def _audit_current_react_runtime_trace(
     steps: Sequence[Mapping[str, Any]],
     report: TraceReport,
 ) -> None:
-    """Audit the active compact ReAct runtime without legacy graph semantics."""
+    """Audit the active raw-history runtime without reducer semantics."""
 
     investigation = _mapping(state.get("investigation_state"))
-    required_lists = (
-        "discoveries",
-        "evidence",
-        "failures",
-        "attempted_queries",
-        "visited_urls",
-        "attempted_actions",
-        "recent_actions",
-        "open_questions",
-    )
-    for name in required_lists:
-        if not isinstance(investigation.get(name), list):
-            _issue(
-                report,
-                "REACT_RUNTIME_COLLECTION_INVALID",
-                f"current ReAct state field {name!r} must be an array",
-                location=f"state.investigation_state.{name}",
-            )
-    if not isinstance(investigation.get("visual_memory"), Mapping):
-        _issue(
-            report,
-            "REACT_RUNTIME_VISUAL_MEMORY_INVALID",
-            "current ReAct state must contain a visual_memory object",
-            location="state.investigation_state.visual_memory",
-        )
-
-    retired_state_fields = {
-        "target_facts",
-        "search_hypotheses",
-        "claim_assessments",
-        "material_discrepancies",
-        "tasks",
-        "findings",
-        "retrieval_anchors",
-        "brief",
-        "core_verdict_fact_id",
+    allowed_state_fields = {
+        "schema_version",
+        "case_id",
+        "image_sha256",
+        "objective",
+        "action_count",
+        "stop_reason",
+        "finish_rationale",
     }
-    present_retired_fields = sorted(
-        field_name for field_name in retired_state_fields if field_name in investigation
-    )
-    if present_retired_fields:
+    unexpected_state_fields = sorted(set(investigation) - allowed_state_fields)
+    if unexpected_state_fields:
         _issue(
             report,
-            "REACT_RUNTIME_LEGACY_STATE",
-            "current ReAct state contains retired graph fields: "
-            + ", ".join(present_retired_fields),
+            "REACT_RUNTIME_STATE_FIELDS_INVALID",
+            "raw-history ReAct state contains non-mechanical fields: "
+            + ", ".join(unexpected_state_fields),
             location="state.investigation_state",
         )
 
@@ -4210,6 +3477,11 @@ def _audit_current_react_runtime_trace(
 
     accepted_tool_names = set(REACT_RUNTIME_TOOLS) | {"finish_investigation"}
     call_ids: set[str] = set()
+    observation_rows: list[dict[str, str]] = []
+    successful_observation_ids: list[str] = []
+    successful_results = 0
+    error_results = 0
+    malformed_results = 0
     native_interactions: list[tuple[int, Mapping[str, Any]]] = []
     for index, step in actions:
         location = _step_label(index, step)
@@ -4239,17 +3511,6 @@ def _audit_current_react_runtime_trace(
             )
         call_ids.add(call_id)
 
-        delta = _mapping(
-            metadata.get("react_state_delta")
-            or metadata.get("investigation_state_update")
-        )
-        if not delta.get("accepted", False):
-            _issue(
-                report,
-                "REACT_RUNTIME_DELTA_REJECTED",
-                "accepted current ReAct action has no accepted reducer delta",
-                location=location,
-            )
         policy_action = _mapping(metadata.get("policy_action"))
         if (
             str(policy_action.get("type", "")).strip() != "tool_call"
@@ -4264,21 +3525,33 @@ def _audit_current_react_runtime_trace(
 
         try:
             _payload, succeeded = parse_tool_result(str(step.get("tool_result", "")))
+            result_status = "success" if succeeded else "error"
         except Exception as exc:
-            succeeded = False
+            result_status = "malformed"
             _issue(
                 report,
                 "REACT_RUNTIME_TOOL_RESULT_INVALID",
                 f"cannot parse tool result: {exc}",
                 location=location,
             )
-        if not succeeded and not delta.get("failure"):
-            _issue(
-                report,
-                "REACT_RUNTIME_FAILURE_NOT_RECORDED",
-                "a failed tool result must produce a reducer failure record",
-                location=location,
-            )
+        if result_status == "success":
+            successful_results += 1
+        elif result_status == "error":
+            error_results += 1
+        else:
+            malformed_results += 1
+        if tool_name == "finish_investigation" or not call_id:
+            continue
+        observation_rows.append(
+            {
+                "observation_id": call_id,
+                "function_call_id": call_id,
+                "tool_name": tool_name,
+                "status": result_status,
+            }
+        )
+        if result_status == "success":
+            successful_observation_ids.append(call_id)
 
     # Include protocol-correction requests as well as accepted tool actions.
     # They are real provider interactions and must participate in the same
@@ -4331,11 +3604,11 @@ def _audit_current_react_runtime_trace(
                 "native current ReAct action lacks interaction_id",
                 location=location,
             )
-        if lifecycle != "tool_roundtrip":
+        if lifecycle not in {"tool_roundtrip", "protocol_correction"}:
             _issue(
                 report,
                 "REACT_RUNTIME_INTERACTION_LIFECYCLE_INVALID",
-                "native current ReAct tool action must use tool_roundtrip lifecycle",
+                "native current ReAct interaction has an invalid lifecycle",
                 location=location,
             )
         if previous_interaction_id is None:
@@ -4424,12 +3697,12 @@ def _audit_current_react_runtime_trace(
 
     basis = _mapping(trace.get("verdict_basis"))
     if str(basis.get("schema_version", "")).strip() != (
-        "ifv-unified-judgment-basis-v1"
+        "ifv-raw-history-judgment-basis-v1"
     ):
         _issue(
             report,
             "REACT_RUNTIME_BASIS_INVALID",
-            "current ReAct verdict basis has an invalid schema_version",
+            "raw-history ReAct verdict basis has an invalid schema_version",
             location="verdict_basis.schema_version",
         )
     if str(basis.get("decision_mode", "")).strip() != "bounded_binary_judgment":
@@ -4440,24 +3713,40 @@ def _audit_current_react_runtime_trace(
             location="verdict_basis.decision_mode",
         )
 
-    evidence_ids = {
-        str(item.get("evidence_id", "")).strip()
-        for item in _rows(investigation.get("evidence"))
-        if str(item.get("evidence_id", "")).strip()
-    }
-    selected_evidence_ids = {
+    basis_observation_ids = [
         str(item).strip()
-        for item in basis.get("evidence_ids", []) or []
+        for item in basis.get("observation_ids", []) or []
         if str(item).strip()
-    }
-    unknown_basis_evidence = sorted(selected_evidence_ids - evidence_ids)
-    if unknown_basis_evidence:
+    ]
+    if basis_observation_ids != successful_observation_ids:
         _issue(
             report,
-            "REACT_RUNTIME_BASIS_EVIDENCE_UNKNOWN",
-            "verdict basis references unknown evidence: "
-            + ", ".join(unknown_basis_evidence),
-            location="verdict_basis.evidence_ids",
+            "REACT_RUNTIME_BASIS_OBSERVATIONS_MISMATCH",
+            "verdict basis observation_ids must equal successful raw observations",
+            location="verdict_basis.observation_ids",
+        )
+    basis_observation_rows = [
+        {
+            "observation_id": str(item.get("observation_id", "")).strip(),
+            "function_call_id": str(item.get("function_call_id", "")).strip(),
+            "tool_name": str(item.get("tool_name", "")).strip(),
+            "status": str(item.get("status", "")).strip(),
+        }
+        for item in _rows(basis.get("observations"))
+    ]
+    if basis_observation_rows != observation_rows:
+        _issue(
+            report,
+            "REACT_RUNTIME_OBSERVATION_LOCATOR_MISMATCH",
+            "verdict basis observations must match raw tool calls in order",
+            location="verdict_basis.observations",
+        )
+    if int(basis.get("action_count", 0) or 0) != action_count:
+        _issue(
+            report,
+            "REACT_RUNTIME_BASIS_ACTION_COUNT_MISMATCH",
+            "verdict basis action_count must equal investigation action_count",
+            location="verdict_basis.action_count",
         )
 
     judgment = _mapping(trace.get("judgment") or state.get("judgment"))
@@ -4485,17 +3774,43 @@ def _audit_current_react_runtime_trace(
             "trace verdict and current ReAct Judgment verdict must match",
             location="judgment.verdict",
         )
-    judgment_selected_evidence = {
+    judgment_selected_observations = [
         str(item).strip()
-        for item in judgment.get("selected_evidence_ids", []) or []
+        for item in judgment.get("selected_observation_ids", []) or []
         if str(item).strip()
-    }
-    if judgment_selected_evidence != selected_evidence_ids:
+    ]
+    if judgment_selected_observations != basis_observation_ids:
         _issue(
             report,
             "REACT_RUNTIME_JUDGMENT_BASIS_MISMATCH",
-            "Judgment selected_evidence_ids must equal verdict_basis.evidence_ids",
-            location="judgment.selected_evidence_ids",
+            (
+                "Judgment selected_observation_ids must equal "
+                "verdict_basis.observation_ids"
+            ),
+            location="judgment.selected_observation_ids",
+        )
+    verdict_observation_ids = [
+        str(item).strip()
+        for item in judgment.get("verdict_observation_ids", []) or []
+        if str(item).strip()
+    ]
+    if len(verdict_observation_ids) != len(set(verdict_observation_ids)):
+        _issue(
+            report,
+            "REACT_RUNTIME_VERDICT_OBSERVATIONS_DUPLICATE",
+            "Judgment verdict_observation_ids must be unique",
+            location="judgment.verdict_observation_ids",
+        )
+    unknown_verdict_observations = sorted(
+        set(verdict_observation_ids) - set(successful_observation_ids)
+    )
+    if unknown_verdict_observations:
+        _issue(
+            report,
+            "REACT_RUNTIME_VERDICT_OBSERVATION_UNKNOWN",
+            "Judgment cites unsuccessful or unknown observations: "
+            + ", ".join(unknown_verdict_observations),
+            location="judgment.verdict_observation_ids",
         )
     if not isinstance(judgment.get("fact_check_report"), Mapping):
         _issue(
@@ -4513,33 +3828,13 @@ def _audit_current_react_runtime_trace(
             "unified_react_tasks": 0,
             "unified_react_reflections": 0,
             "unified_react_decisions": 0,
-            "react_runtime_discoveries": len(
-                _rows(investigation.get("discoveries"))
+            "react_runtime_observations": len(observation_rows),
+            "react_runtime_successful_observations": len(
+                successful_observation_ids
             ),
-            "react_runtime_evidence": len(_rows(investigation.get("evidence"))),
-            "react_runtime_failures": len(_rows(investigation.get("failures"))),
-            "react_runtime_recoverable_failures": sum(
-                bool(item.get("recoverable", False))
-                for item in _rows(investigation.get("failures"))
-            ),
-            "react_runtime_unrecoverable_failures": sum(
-                not bool(item.get("recoverable", False))
-                for item in _rows(investigation.get("failures"))
-            ),
-            "react_runtime_external_unavailable": sum(
-                str(item.get("code", "")).strip()
-                == "external_unavailable"
-                for item in _rows(investigation.get("failures"))
-            ),
-            "react_runtime_malformed_tool_results": sum(
-                str(item.get("code", "")).strip()
-                == "malformed_tool_result"
-                for item in _rows(investigation.get("failures"))
-            ),
-            "react_runtime_success_empty": sum(
-                str(item.get("code", "")).strip() == "success_empty"
-                for item in _rows(investigation.get("failures"))
-            ),
+            "react_runtime_success_results": successful_results,
+            "react_runtime_error_results": error_results,
+            "react_runtime_malformed_results": malformed_results,
         }
     )
 
@@ -4761,6 +4056,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Treat runtime action/output rejections as failures instead of warnings.",
     )
+    parser.add_argument(
+        "--source-access-policy",
+        type=Path,
+        help=(
+            "Optional active source-access policy. Only sources listed in this "
+            "policy are checked for query or URL leaks."
+        ),
+    )
     return parser
 
 
@@ -4790,7 +4093,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(message, file=sys.stderr)
         return 1
 
-    reports = [audit_trace(path) for path in files]
+    source_access_policy = (
+        SourceAccessPolicy.load(args.source_access_policy)
+        if args.source_access_policy is not None
+        else None
+    )
+    reports = [
+        audit_trace(path, source_access_policy=source_access_policy)
+        for path in files
+    ]
     if args.json_output:
         print(
             json.dumps(

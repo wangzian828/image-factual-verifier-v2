@@ -234,11 +234,7 @@ def _require_real_run_artifacts(
                 raise RuntimeError(
                     f"current ReAct trace has no accepted actions: {path.name}"
                 )
-            if not isinstance(investigation.get("visual_memory"), Mapping):
-                raise RuntimeError(
-                    f"current ReAct trace has no visual memory: {path.name}"
-                )
-            if basis.get("schema_version") != "ifv-unified-judgment-basis-v1":
+            if basis.get("schema_version") != "ifv-raw-history-judgment-basis-v1":
                 raise RuntimeError(
                     f"current ReAct trace has invalid judgment basis: {path.name}"
                 )

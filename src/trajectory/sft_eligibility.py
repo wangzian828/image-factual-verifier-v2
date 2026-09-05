@@ -16,6 +16,7 @@ from typing import Any, Dict, Iterable, List, Literal, Mapping, Sequence
 from pydantic import Field
 
 from src.orchestrator.investigation_models import target_fact_rows
+from src.orchestrator.react_runtime import REACT_RUNTIME_SCHEMA_VERSION
 from src.tools.vision_utils import controlled_image_to_data_url
 from src.trajectory.semantic_reward import (
     SemanticRewardJudge,
@@ -637,40 +638,8 @@ def _project_tool_observation(
     return _compact_trace_value(dict(result))
 
 
-def _project_action_delta(metadata: Mapping[str, Any]) -> Dict[str, Any]:
-    raw = (
-        _mapping(metadata.get("unified_react_delta"))
-        or _mapping(metadata.get("react_state_delta"))
-        or _mapping(metadata.get("investigation_state_update"))
-    )
-    state_update = _mapping(raw.get("state_update")) or raw
-    result: Dict[str, Any] = {}
-    for key in (
-        "accepted",
-        "tool_success",
-        "substantive_gain",
-        "created_discovery_ids",
-        "created_evidence_ids",
-        "failure",
-        "rejected_reason",
-    ):
-        if key in state_update:
-            result[key] = _compact_trace_value(
-                state_update[key],
-                max_string=1800,
-            )
-    progress = _mapping(state_update.get("progress"))
-    if progress:
-        result["progress"] = {
-            "action_count": progress.get("action_count"),
-            "gain": progress.get("gain"),
-            "no_gain_streak": progress.get("no_gain_streak"),
-        }
-    return result
-
-
 def _react_action_history(state: Mapping[str, Any]) -> List[Dict[str, Any]]:
-    """Project accepted unified-ReAct actions in actual episode order."""
+    """Project raw unified-ReAct actions in actual episode order."""
 
     history: List[Dict[str, Any]] = []
     for index, step in enumerate(_rows(state.get("all_steps"))):
@@ -688,15 +657,16 @@ def _react_action_history(state: Mapping[str, Any]) -> List[Dict[str, Any]]:
         }
         metadata = _mapping(step.get("metadata"))
         result = _tool_result_mapping(step)
+        observation_id = str(metadata.get("function_call_id", "")).strip()
         history.append(
             {
                 "step_index": index,
                 "turn": len(history) + 1,
+                "observation_id": observation_id,
                 "tool": tool_name,
                 "thought": _text(step.get("thought"), limit=4000),
                 "arguments": tool_args,
                 "observation": _project_tool_observation(tool_name, result),
-                "state_delta": _project_action_delta(metadata),
                 "tool_success": bool(
                     metadata.get(
                         "tool_success",
@@ -708,33 +678,6 @@ def _react_action_history(state: Mapping[str, Any]) -> List[Dict[str, Any]]:
         if len(history) >= 40:
             break
     return history
-
-
-def _discovery_ledger(
-    investigation: Mapping[str, Any],
-) -> List[Dict[str, Any]]:
-    """Keep search/image candidates visible without promoting them to Evidence."""
-
-    result: List[Dict[str, Any]] = []
-    for item in _rows(investigation.get("discoveries"))[-80:]:
-        result.append(
-            {
-                key: _compact_trace_value(item[key], max_string=3000)
-                for key in (
-                    "discovery_id",
-                    "tool_name",
-                    "candidate_url",
-                    "reference_image_url",
-                    "title",
-                    "snippet",
-                    "source_query",
-                    "candidate_status",
-                    "match_status",
-                )
-                if key in item and item[key] not in (None, "")
-            }
-        )
-    return result
 
 
 def _string_list(value: Any, *, limit: int) -> List[str]:
@@ -976,7 +919,7 @@ def build_sft_eligibility_input(
     )
     current_runtime = (
         str(investigation.get("schema_version", "")).strip()
-        == "ifv-unified-react-v1"
+        == REACT_RUNTIME_SCHEMA_VERSION
     )
     basis_claim_ids = (
         []
@@ -1056,55 +999,6 @@ def build_sft_eligibility_input(
         )
         if str(item.get("fact_id", "")).strip()
     ]
-    if current_runtime:
-        visual_memory = _mapping(investigation.get("visual_memory"))
-        visual_facts = []
-        scene_description = _text(
-            visual_memory.get("scene_description"),
-            limit=1800,
-        )
-        if scene_description:
-            visual_facts.append(
-                {
-                    "fact_id": "visual-memory-scene",
-                    "statement": scene_description,
-                    "source": "perceive_scene",
-                }
-            )
-        for index, item in enumerate(_rows(visual_memory.get("entities"))):
-            name = _text(item.get("name"), limit=400)
-            if name:
-                visual_facts.append(
-                    {
-                        "fact_id": f"visual-memory-entity-{index}",
-                        "statement": name,
-                        "source": "perceive_scene",
-                    }
-                )
-        for index, item in enumerate(_rows(visual_memory.get("relations"))):
-            statement = _text(
-                item.get("description"),
-                limit=800,
-            )
-            if statement:
-                visual_facts.append(
-                    {
-                        "fact_id": f"visual-memory-relation-{index}",
-                        "statement": statement,
-                        "source": "perceive_scene",
-                    }
-                )
-        for index, item in enumerate(_rows(visual_memory.get("text_regions"))):
-            text = _text(item.get("text"), limit=600)
-            if text:
-                visual_facts.append(
-                    {
-                        "fact_id": f"visual-memory-text-{index}",
-                        "statement": text,
-                        "source": "ocr_with_position",
-                    }
-                )
-
     return {
         "schema_version": SFT_ELIGIBILITY_INPUT_VERSION,
         "case_id": case_id,
@@ -1150,9 +1044,6 @@ def build_sft_eligibility_input(
             "discrepancies": discrepancies,
             "react_action_history": (
                 _react_action_history(state) if current_runtime else []
-            ),
-            "discovery_ledger": (
-                _discovery_ledger(investigation) if current_runtime else []
             ),
             "retrieval_history": _retrieval_history(state),
             "rejection_history": _rejection_history(state),

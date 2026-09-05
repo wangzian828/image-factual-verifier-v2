@@ -1,9 +1,9 @@
 """Lossless semantic history projection for post-hoc fact-check reports.
 
-Canonical traces keep full per-turn provider packets for replay.  Those packets
-repeat the same system prompt and cumulative workspace many times.  This module
-preserves every chronological action, thought, tool result, failure, and reducer
-delta while representing repeated runtime snapshots only once.
+Canonical traces keep full per-turn provider packets for replay. Those packets
+repeat the same system prompt and cumulative workspace many times. This module
+preserves every chronological action, thought, tool result, and failure while
+representing repeated runtime snapshots only once.
 """
 
 from __future__ import annotations
@@ -101,8 +101,6 @@ def _runtime_event(metadata: Mapping[str, Any]) -> dict[str, Any]:
         "protocol_corrections_used",
         "accepted_investigation_intent",
         "route_local_replan_trigger",
-        "unified_react_delta",
-        "investigation_state_update",
         "deterministic_segment_boundary",
         "stage",
         "interaction_id",

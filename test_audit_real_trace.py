@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from scripts.audit_real_trace import audit_trace
+from src.orchestrator.source_access import SourceAccessPolicy
 from test_image_only_trajectory import (
     test_scripted_image_only_complete_trajectory,
 )
@@ -1343,7 +1344,7 @@ def test_successful_planning_revision_is_not_a_protocol_rejection(
     assert report.stats["protocol_rejections"] == 0
 
 
-def test_policy_rejected_query_is_warning_but_canonical_query_is_hard(
+def test_generic_fact_check_query_is_not_an_audit_failure(
     tmp_path: Path,
 ) -> None:
     trace_path = _scripted_trace(tmp_path)
@@ -1382,10 +1383,7 @@ def test_policy_rejected_query_is_warning_but_canonical_query_is_hard(
 
     assert not corrected.failures(strict_scheduler=True)
     assert corrected.stats["fact_check_query_leaks"] == 0
-    assert corrected.stats["fact_check_query_rejections"] == 2
-    assert {
-        item.code for item in corrected.warnings(strict_scheduler=True)
-    } >= {"FACT_CHECK_QUERY_REJECTED"}
+    assert corrected.stats["fact_check_query_rejections"] == 0
 
     trace = json.loads(trace_path.read_text(encoding="utf-8"))
     investigation = trace["state"]["investigation_state"]
@@ -1399,9 +1397,8 @@ def test_policy_rejected_query_is_warning_but_canonical_query_is_hard(
 
     leaked = audit_trace(trace_path)
 
-    assert "FACT_CHECK_QUERY_LEAK" in {
-        item.code for item in leaked.failures(strict_scheduler=True)
-    }
+    assert not leaked.failures(strict_scheduler=True)
+    assert leaked.stats["fact_check_query_leaks"] == 0
 
 
 def test_fact_check_source_audit_requires_active_source_policy(
@@ -1426,7 +1423,15 @@ def test_fact_check_source_audit_requires_active_source_policy(
         encoding="utf-8",
     )
 
-    active = audit_trace(trace_path, enforce_source_access_policy=True)
+    active_policy = SourceAccessPolicy(
+        policy_id="fixture-active-policy",
+        excluded_domains=frozenset({"politifact.com", "snopes.com"}),
+    )
+    active = audit_trace(
+        trace_path,
+        enforce_source_access_policy=True,
+        source_access_policy=active_policy,
+    )
     inactive = audit_trace(trace_path, enforce_source_access_policy=False)
 
     assert "FACT_CHECK_URL_LEAK" in {

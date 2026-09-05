@@ -7,7 +7,11 @@ private-gold judge.
 
 from __future__ import annotations
 
+import json
 from typing import Any, Mapping
+
+from src.orchestrator.react_runtime import REACT_RUNTIME_SCHEMA_VERSION
+from src.orchestrator.tool_result import parse_tool_result
 
 
 def _mapping(value: Any) -> dict[str, Any]:
@@ -85,6 +89,77 @@ def _evidence_projection(
     }
 
 
+def _compact_raw_value(value: Any, *, depth: int = 0) -> Any:
+    if depth > 5:
+        return "[nested content omitted]"
+    if isinstance(value, Mapping):
+        result: dict[str, Any] = {}
+        for raw_key, child in list(value.items())[:80]:
+            key = str(raw_key)
+            if key.casefold() in {
+                "image_input",
+                "image",
+                "image_url",
+                "data_url",
+                "base64",
+                "content_bytes",
+                "raw_html",
+                "html",
+            }:
+                continue
+            result[key] = _compact_raw_value(child, depth=depth + 1)
+        return result
+    if isinstance(value, list):
+        return [_compact_raw_value(item, depth=depth + 1) for item in value[:40]]
+    if isinstance(value, str):
+        return value.strip()[:6000]
+    return value
+
+
+def _raw_action_history(state: Mapping[str, Any]) -> list[dict[str, Any]]:
+    history: list[dict[str, Any]] = []
+    for index, step in enumerate(_rows(state.get("all_steps"))):
+        if (
+            _text(step.get("stage"), limit=80) != "unified_react"
+            or _text(step.get("action_type"), limit=80) != "tool_call"
+            or _text(step.get("tool_name"), limit=120) == "finish_investigation"
+        ):
+            continue
+        metadata = _mapping(step.get("metadata"))
+        call_id = _text(metadata.get("function_call_id"), limit=160)
+        raw_result = str(step.get("tool_result", ""))
+        try:
+            payload, succeeded = parse_tool_result(raw_result)
+            observation = _compact_raw_value(payload)
+            status = "success" if succeeded else "error"
+        except Exception:
+            observation = raw_result[:6000]
+            status = "malformed"
+            succeeded = False
+        arguments = {
+            str(key): _compact_raw_value(value)
+            for key, value in _mapping(step.get("tool_args")).items()
+            if str(key).casefold()
+            not in {"image_input", "image", "image_url", "data_url", "base64"}
+        }
+        history.append(
+            {
+                "step_index": index,
+                "turn": len(history) + 1,
+                "observation_id": call_id,
+                "tool": _text(step.get("tool_name"), limit=120),
+                "thought": _text(step.get("thought"), limit=4000),
+                "arguments": arguments,
+                "observation": observation,
+                "status": status,
+                "tool_success": bool(succeeded),
+            }
+        )
+        if len(history) >= 80:
+            break
+    return history
+
+
 def build_agent_private_gold_candidate(
     trace: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -94,7 +169,7 @@ def build_agent_private_gold_candidate(
     investigation = _mapping(state.get("investigation_state"))
     is_unified_react_runtime = (
         str(investigation.get("schema_version", "")).strip()
-        == "ifv-unified-react-v1"
+        == REACT_RUNTIME_SCHEMA_VERSION
     )
     judgment = _mapping(
         trace.get("judgment")
@@ -205,26 +280,31 @@ def build_agent_private_gold_candidate(
             investigation.get("objective"),
             limit=1200,
         )
-        result["visual_memory"] = investigation.get("visual_memory", {})
-        result["discoveries"] = _rows(investigation.get("discoveries"))[-40:]
-        result["failures"] = _rows(investigation.get("failures"))[-24:]
-        result["attempted_queries"] = _ids(
-            investigation.get("attempted_queries"),
-            limit=40,
-        )
-        result["visited_urls"] = _ids(
-            investigation.get("visited_urls"),
-            limit=40,
-        )
-        result["recent_actions"] = _rows(investigation.get("recent_actions"))[-12:]
-        result["open_questions"] = _ids(
-            investigation.get("open_questions"),
-            limit=12,
-        )
+        raw_history = _raw_action_history(state)
+        result["react_action_history"] = raw_history
+        result["raw_observation_ids"] = [
+            item["observation_id"]
+            for item in raw_history
+            if item["observation_id"]
+        ]
+        result["successful_observation_ids"] = [
+            item["observation_id"]
+            for item in raw_history
+            if item["tool_success"] and item["observation_id"]
+        ]
+        result["unsuccessful_observation_ids"] = [
+            item["observation_id"]
+            for item in raw_history
+            if not item["tool_success"] and item["observation_id"]
+        ]
         result["action_count"] = int(investigation.get("action_count", 0) or 0)
         result["stop_reason"] = _text(
             investigation.get("stop_reason"),
             limit=100,
+        )
+        result["finish_rationale"] = _text(
+            investigation.get("finish_rationale"),
+            limit=1200,
         )
     return result
 

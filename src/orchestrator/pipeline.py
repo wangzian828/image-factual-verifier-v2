@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """VisualFact-driven image-only factual investigation orchestrator."""
 from __future__ import annotations
 
@@ -8,49 +8,23 @@ import inspect
 import json
 import os
 import time
-from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from src.integrations.gemini import take_runtime_metrics
 from src.integrations.clock.system_clock import SystemClockClient
-from src.orchestrator.discrepancy_coverage import (
-    audit_discrepancy_coverage,
-    compile_discrepancy_verdict_basis,
-)
 from src.orchestrator.runtime_case import verify_case_image
 from src.orchestrator.runtime_events import CaseRuntimeStore, current_case_runtime_store
-from src.orchestrator.progress_control import (
-    record_decision_progress,
-)
 from src.orchestrator.unified_prompts import (
-    UNIFIED_DISCREPANCY_DECISION_PROMPT_VERSION,
-    UNIFIED_DISCREPANCY_DECISION_SYSTEM_PROMPT,
     UNIFIED_JUDGMENT_PROMPT_VERSION,
     UNIFIED_JUDGMENT_SYSTEM_PROMPT,
     UNIFIED_REACT_PROMPT_VERSION,
     UNIFIED_REACT_SYSTEM_PROMPT,
-    UNIFIED_REFLECTION_PROMPT_VERSION,
-    UNIFIED_REFLECTION_SYSTEM_PROMPT,
-)
-from src.orchestrator.unified_context import (
-    compile_fact_check_evidence_citations,
-    render_unified_discrepancy_decision_context,
-    render_unified_judgment_context,
-    render_unified_react_context,
-    render_unified_reflection_context,
 )
 from src.orchestrator.investigation_models import (
-    ClaimAssessmentProposal,
-    DiscrepancyDecisionProposalOutput,
-    DiscrepancyDecisionOutput,
     DiscrepancyJudgment,
-    DiscrepancyJudgmentOutput,
-    FactCheckEvidenceCitation,
-    ImageOnlyInvestigationState,
     InvestigationSegmentOutput,
-    UnifiedReflectionOutput,
-    build_discrepancy_decision_output_schema,
+    RawHistoryJudgmentOutput,
 )
 from src.orchestrator.llm_backend import APIBackend
 from src.orchestrator.stage_runner import (
@@ -61,12 +35,8 @@ from src.orchestrator.stage_runner import (
 from src.orchestrator.tool_execution import run_tool_with_timeout
 from src.orchestrator.source_access import SourceAccessPolicy
 from src.orchestrator.state import (
-    Entity,
     ImageOnlyRuntimeCase,
-    PerceptionRelation,
     PerceptionReport,
-    TEXT_ROLE_VALUES,
-    TextRegion,
     VerificationState,
 )
 from src.orchestrator.tool_cache import (
@@ -79,37 +49,17 @@ from src.orchestrator.tool_registry import (
     build_all_tools_with_health,
 )
 from src.orchestrator.tool_result import parse_tool_result, serialize_tool_result
-from src.orchestrator.unified_react import (
-    UNIFIED_REACT_POLICY_VERSION,
-    build_unified_react_tools,
-    new_unified_react_state,
-    reduce_unified_react_action,
-    reduce_visual_bootstrap_action,
-    route_local_replan_candidate,
-    unified_react_delta,
-    validate_unified_react_action,
-)
 from src.orchestrator.react_runtime import (
     UnifiedReactState as RuntimeReactState,
     MAX_REACT_ACTIONS,
+    UNIFIED_REACT_RUNTIME_POLICY_VERSION as UNIFIED_REACT_POLICY_VERSION,
     build_react_runtime_tools,
     compile_react_judgment_basis,
     new_unified_react_runtime_state,
-    reduce_react_action,
+    record_react_action,
     render_react_judgment_context,
     render_react_runtime_context,
-    update_react_visual_memory,
     validate_react_action,
-)
-from src.orchestrator.task_store import (
-    MAX_TOOL_ACTIONS,
-    REFLECTION_INTERVAL,
-    apply_discrepancy_decision,
-    bind_discrepancy_decision_runtime_ids,
-    claim_owned_visual_evidence_requirements,
-    discrepancy_decision_checkpoint_reason,
-    discrepancy_decision_evidence_ids,
-    remaining_claim_hypothesis_routes,
 )
 from src.storage import default_tool_cache_dir
 
@@ -559,30 +509,6 @@ class Orchestrator:
                 investigation.stop_reason = "meaningful_routes_exhausted"
                 break
 
-            observation_update: Dict[str, Any] = {}
-
-            def observation_callback(
-                step: StageStep,
-                _steps: List[StageStep],
-            ) -> Dict[str, Any]:
-                nonlocal observation_update
-                tool_name = str(step.tool_name).strip()
-                call_id = str(
-                    (step.metadata or {}).get("function_call_id", "")
-                ).strip()
-                update = self._apply_react_observation(
-                    state,
-                    investigation,
-                    step=step,
-                    tool_name=tool_name,
-                    call_id=call_id or f"action-{investigation.action_count}",
-                )
-                step.metadata["react_state_delta"] = dict(update)
-                step.metadata["investigation_state_update"] = dict(update)
-                observation_update = dict(update)
-                self._sync_image_only_state(state, investigation)
-                return dict(update)
-
             runner = StageRunner(
                 llm=self.llm,
                 system_prompt=self._sp(UNIFIED_REACT_SYSTEM_PROMPT),
@@ -615,7 +541,6 @@ class Orchestrator:
                 generation_config=self._stage_generation_config(
                     "UNIFIED_REACT"
                 ),
-                observation_callback=observation_callback,
                 source_access_policy=self.source_access_policy,
                 visual_call_validator=lambda tool_name, tool_args: (
                     validate_react_action(
@@ -647,7 +572,14 @@ class Orchestrator:
                     list(getattr(exc, "stage_steps", []) or []),
                 )
                 raise
-            self._record_stage_steps(state, steps)
+            action_step = next(
+                (
+                    item
+                    for item in steps
+                    if item.action_type == "tool_call"
+                ),
+                None,
+            )
             protocol_boundary = any(
                 bool(
                     (item.metadata or {}).get(
@@ -657,10 +589,11 @@ class Orchestrator:
                 for item in steps
             )
             if parsed is None:
+                self._record_stage_steps(state, steps)
                 raise RuntimeError(
                     "ReAct stage returned no structured boundary or action output"
                 )
-            if not observation_update and protocol_boundary:
+            if action_step is None and protocol_boundary:
                 # No tool action was accepted in this StageRunner instance.
                 # This is a bounded protocol-repair outcome, not a failed
                 # investigation. Hand the accumulated state to the existing
@@ -668,18 +601,25 @@ class Orchestrator:
                 investigation.stop_reason = (
                     "protocol_correction_budget_exhausted"
                 )
+                self._record_stage_steps(state, steps)
                 self._sync_image_only_state(state, investigation)
                 break
-            if not observation_update:
+            if action_step is None:
+                self._record_stage_steps(state, steps)
                 raise RuntimeError(
                     "ReAct did not complete one accepted action"
                 )
-            if observation_update.get("fatal_runtime_error"):
-                investigation.stop_reason = "engineering_error"
-                self._sync_image_only_state(state, investigation)
-                raise RuntimeError(
-                    "ReAct encountered an unrecoverable runtime error"
-                )
+            call_id = str(
+                (action_step.metadata or {}).get("function_call_id", "")
+            ).strip()
+            record_react_action(
+                investigation,
+                tool_name=str(action_step.tool_name).strip(),
+                tool_args=dict(action_step.tool_args or {}),
+                call_id=call_id or f"action-{investigation.action_count}",
+            )
+            self._record_stage_steps(state, steps)
+            self._sync_image_only_state(state, investigation)
             if investigation.action_count >= MAX_REACT_ACTIONS:
                 investigation.stop_reason = "hard_budget_exhausted"
                 break
@@ -687,7 +627,7 @@ class Orchestrator:
         state.stage_timings["unified_react"] = round(time.time() - started, 2)
         if not investigation.stop_reason:
             investigation.stop_reason = "meaningful_routes_exhausted"
-        basis = compile_react_judgment_basis(investigation)
+        basis = compile_react_judgment_basis(investigation, state.all_steps)
         judgment_started = time.perf_counter()
         try:
             judgment = await self._run_react_judgment(
@@ -722,7 +662,7 @@ class Orchestrator:
             system_prompt=self._sp(UNIFIED_JUDGMENT_SYSTEM_PROMPT),
             prompt_version=UNIFIED_JUDGMENT_PROMPT_VERSION,
             tools=[],
-            output_schema=DiscrepancyJudgmentOutput,
+            output_schema=RawHistoryJudgmentOutput,
             max_rounds=1,
             image_path=image_path,
             stage_name="unified_judgment",
@@ -759,461 +699,14 @@ class Orchestrator:
         if not valid:
             raise RuntimeError("ReAct final Judgment failed validation: " + validation_error)
 
-        citations: list[FactCheckEvidenceCitation] = []
-        evidence_rows = {
-            str(item.get("evidence_id", "")): item
-            for item in investigation.evidence
-        }
-        for evidence_id in basis.get("evidence_ids", [])[:40]:
-            row = evidence_rows.get(str(evidence_id))
-            if not row:
-                continue
-            kind = str(row.get("evidence_kind", "")).strip()
-            if kind not in {"web_span", "image_region", "reference_comparison"}:
-                kind = "image_region"
-            evidence_class = str(row.get("evidence_class", "")).strip()
-            relation_stance = {
-                "decision_capable_support": "supports",
-                "decision_capable_refute": "contradicts",
-                "context_only": "background",
-            }.get(evidence_class, "unclear")
-            citations.append(
-                FactCheckEvidenceCitation(
-                    evidence_id=str(evidence_id),
-                    source_url=str(row.get("source_url", ""))[:4000],
-                    source_family=str(row.get("tool_name", "runtime"))[:300],
-                    evidence_kind=kind,
-                    relation_stance=relation_stance,
-                    excerpt=str(row.get("excerpt", "observation"))[:2400],
-                )
-            )
         return DiscrepancyJudgment(
             verdict=parsed.verdict,
             confidence=parsed.confidence,
             policy_rule_id=UNIFIED_REACT_POLICY_VERSION,
             overall_assessment=parsed.overall_assessment,
             fact_check_report=parsed.fact_check_report,
-            evidence_citations=citations,
-            selected_evidence_ids=list(basis.get("evidence_ids", []))[:40],
-            verdict_evidence_ids=list(parsed.verdict_evidence_ids),
-            unresolved_gaps=list(basis.get("open_questions", []))[:12],
-        )
-
-    async def _run_unified_react_policy(
-        self,
-        state: VerificationState,
-        *,
-        image_path: str,
-        runtime_case: ImageOnlyRuntimeCase,
-    ) -> tuple[
-        ImageOnlyInvestigationState,
-        DiscrepancyJudgment,
-        Any,
-        Optional[Dict[str, Any]],
-    ]:
-        """Run the production unified-react-v1 path from an empty workspace."""
-
-        self._validate_image_only_bootstrap_configuration()
-        investigation = new_unified_react_state(runtime_case)
-        state.investigation_state = investigation
-        state.perception = PerceptionReport(scene_description="")
-        self._sync_image_only_state(state, investigation)
-        started = time.time()
-        interaction_session = InteractionSession()
-        last_reflection_action = 0
-        route_local_replan_boundary: tuple[str, str] | None = None
-
-        try:
-            while not investigation.stop_reason:
-                self._check_timeout(started, state)
-                if investigation.action_count >= MAX_TOOL_ACTIONS and investigation.target_facts:
-                    await self._run_unified_discrepancy_decision(
-                        state,
-                        investigation,
-                        trigger="before_unresolved",
-                    )
-                    audit_discrepancy_coverage(
-                        investigation,
-                        decision_checkpoint=True,
-                    )
-                    break
-
-                tools = build_unified_react_tools(
-                    investigation,
-                    self.all_tools,
-                    excluded_tool_names=self._exhausted_unified_react_tools(
-                        state.all_steps
-                    ),
-                    route_local_replan_boundary=route_local_replan_boundary,
-                )
-                if not tools:
-                    if not investigation.target_facts:
-                        raise RuntimeError(
-                            "unified ReAct has no available tool before the "
-                            "initial investigation action"
-                        )
-                    await self._run_unified_discrepancy_decision(
-                        state,
-                        investigation,
-                        trigger="before_unresolved",
-                    )
-                    audit_discrepancy_coverage(
-                        investigation,
-                        decision_checkpoint=True,
-                    )
-                    if not investigation.stop_reason:
-                        investigation.stop_reason = "information_saturated"
-                        audit_discrepancy_coverage(
-                            investigation,
-                            decision_checkpoint=True,
-                        )
-                    break
-
-                observation_update: Dict[str, Any] = {}
-
-                def observation_callback(
-                    step: StageStep,
-                    _steps: List[StageStep],
-                ) -> Dict[str, Any]:
-                    nonlocal observation_update
-                    nonlocal route_local_replan_boundary
-                    tool_name = str(step.tool_name).strip()
-                    if tool_name == "route_local_replan":
-                        if route_local_replan_boundary is None:
-                            update = {
-                                "accepted": False,
-                                "rejected_reason": (
-                                    "route_local_replan was executed without "
-                                    "a pending runtime boundary"
-                                ),
-                            }
-                        else:
-                            step.metadata["route_local_replan_trigger"] = (
-                                route_local_replan_boundary[1]
-                            )
-                            update = reduce_unified_react_action(
-                                investigation,
-                                step=step,
-                                runtime_case=runtime_case,
-                                source_access_policy=self.source_access_policy,
-                            )
-                    elif tool_name == "perceive_scene":
-                        scene = self._parse_perception_result(step.tool_result)
-                        prior = state.perception or PerceptionReport(
-                            scene_description=""
-                        )
-                        state.perception = PerceptionReport(
-                            entities=scene.entities,
-                            relations=scene.relations,
-                            notable_details=scene.notable_details,
-                            uncertainties=scene.uncertainties,
-                            text_regions=list(prior.text_regions),
-                            scene_description=scene.scene_description,
-                            image_type=scene.image_type,
-                        )
-                        update = reduce_visual_bootstrap_action(
-                            investigation,
-                            step=step,
-                            runtime_case=runtime_case,
-                            perception=state.perception,
-                        )
-                    elif tool_name == "ocr_with_position" and not (
-                        set(investigation.unified_react_bootstrap_tools_completed)
-                        == {"perceive_scene", "ocr_with_position"}
-                    ):
-                        state.perception = self._merge_ocr(
-                            state.perception or PerceptionReport(
-                                scene_description=""
-                            ),
-                            step.tool_result,
-                        )
-                        update = reduce_visual_bootstrap_action(
-                            investigation,
-                            step=step,
-                            runtime_case=runtime_case,
-                            perception=state.perception,
-                        )
-                    else:
-                        update = reduce_unified_react_action(
-                            investigation,
-                            step=step,
-                            runtime_case=runtime_case,
-                            source_access_policy=self.source_access_policy,
-                        )
-                    if not update.get("accepted", False):
-                        raise RuntimeError(
-                            "unified ReAct reducer rejected an executed action: "
-                            + str(update.get("rejected_reason", update))
-                        )
-                    delta = unified_react_delta(step=step, update=update)
-                    step.metadata["unified_react_delta"] = delta
-                    step.metadata["investigation_state_update"] = delta
-                    observation_update = update
-                    self._sync_image_only_state(state, investigation)
-                    return delta
-
-                runner = StageRunner(
-                    llm=self.llm,
-                    system_prompt=self._sp(UNIFIED_REACT_SYSTEM_PROMPT),
-                    prompt_version=UNIFIED_REACT_PROMPT_VERSION,
-                    tools=tools,
-                    output_schema=InvestigationSegmentOutput,
-                    max_rounds=1,
-                    image_path=image_path,
-                    stage_name="unified_react",
-                    runtime_store=state.runtime_store,
-                    handoff_state=investigation,
-                    attach_image=(
-                        bool(image_path) and self._main_llm_attaches_image()
-                    ),
-                    prior_steps=[
-                        step
-                        for step in state.all_steps
-                        if getattr(step, "stage_name", "") == "unified_react"
-                    ],
-                    tool_cache=self.tool_cache,
-                    cacheable_tools=list(self.cacheable_tools),
-                    tool_call_limits=self.verification_tool_limits,
-                    min_tool_calls=1,
-                    should_stop=lambda steps: any(
-                        item.action_type == "tool_call" for item in steps
-                    ),
-                    max_output_tokens=self._stage_output_tokens(
-                        "UNIFIED_REACT",
-                        8192,
-                    ),
-                    generation_config=self._stage_generation_config(
-                        "UNIFIED_REACT"
-                    ),
-                    observation_callback=observation_callback,
-                    source_access_policy=self.source_access_policy,
-                    visual_call_validator=lambda tool_name, tool_args: (
-                        validate_unified_react_action(
-                            investigation,
-                            tool_name=tool_name,
-                            tool_args=tool_args,
-                            source_access_policy=self.source_access_policy,
-                            route_local_replan_boundary=(
-                                route_local_replan_boundary
-                            ),
-                        )
-                    ),
-                    max_protocol_corrections=4,
-                    max_tool_calls_per_turn=1,
-                    force_tool_each_round=True,
-                    protocol_exhaustion_boundary=True,
-                    stop_output_factory=lambda: InvestigationSegmentOutput(
-                        segment_summary=(
-                            "The unified-ReAct action selection correction "
-                            "budget was exhausted."
-                        ),
-                        ready_for_reflection=True,
-                    ),
-                    interaction_session=interaction_session,
-                    request_timeout_seconds=self.stage_request_timeout_seconds,
-                    tool_timeout_seconds=self.tool_action_timeout_seconds,
-                )
-                try:
-                    parsed, steps = await runner.run(
-                        render_unified_react_context(
-                            investigation,
-                            route_local_replan_boundary=(
-                                route_local_replan_boundary
-                            ),
-                        )
-                    )
-                except Exception as exc:
-                    self._record_stage_steps(
-                        state,
-                        list(getattr(exc, "stage_steps", []) or []),
-                    )
-                    raise
-                self._record_stage_steps(state, steps)
-                if parsed is None or not observation_update:
-                    raise RuntimeError(
-                        "unified ReAct did not complete one accepted action"
-                    )
-                if investigation.stop_reason == "engineering_error":
-                    if observation_update.get("fatal_engineering_error"):
-                        raise RuntimeError(
-                            "unified ReAct encountered a fatal tool result "
-                            "contract error"
-                        )
-                    raise RuntimeError("a required visual bootstrap tool failed")
-                if (
-                    route_local_replan_boundary is not None
-                    and any(
-                        str(getattr(item, "tool_name", "")).strip()
-                        == "route_local_replan"
-                        and item.action_type == "tool_call"
-                        for item in steps
-                    )
-                ):
-                    route_local_replan_boundary = None
-                if not investigation.target_facts:
-                    continue
-
-                decision_trigger = discrepancy_decision_checkpoint_reason(
-                    investigation,
-                    update=observation_update,
-                )
-                if not decision_trigger and not remaining_claim_hypothesis_routes(
-                    investigation
-                ):
-                    decision_trigger = "before_unresolved"
-                if decision_trigger:
-                    await self._run_unified_discrepancy_decision(
-                        state,
-                        investigation,
-                        trigger=decision_trigger,
-                    )
-                    audit_discrepancy_coverage(
-                        investigation,
-                        decision_checkpoint=True,
-                    )
-                else:
-                    audit_discrepancy_coverage(investigation)
-
-                if investigation.stop_reason:
-                    break
-                route_local_replan_boundary = route_local_replan_candidate(
-                    investigation,
-                    observation_update=observation_update,
-                )
-                if (
-                    investigation.action_count
-                    and investigation.action_count % REFLECTION_INTERVAL == 0
-                    and investigation.action_count != last_reflection_action
-                ):
-                    await self._run_unified_global_reflection(
-                        state,
-                        investigation,
-                        image_path=image_path,
-                    )
-                    last_reflection_action = investigation.action_count
-                    self._sync_image_only_state(state, investigation)
-        finally:
-            state.stage_timings["unified_react"] = round(
-                time.time() - started,
-                2,
-            )
-
-        if not investigation.target_facts:
-            raise RuntimeError(
-                "unified ReAct completed visual bootstrap without an "
-                "investigation target"
-            )
-        if not investigation.stop_reason:
-            await self._run_unified_discrepancy_decision(
-                state,
-                investigation,
-                trigger="before_unresolved",
-            )
-            audit_discrepancy_coverage(
-                investigation,
-                decision_checkpoint=True,
-            )
-        if not investigation.stop_reason:
-            investigation.stop_reason = "information_saturated"
-            audit_discrepancy_coverage(
-                investigation,
-                decision_checkpoint=True,
-            )
-        compiled_verdict, basis = compile_discrepancy_verdict_basis(
-            investigation,
-            policy_rule_id=UNIFIED_REACT_POLICY_VERSION,
-        )
-        judgment_started = time.perf_counter()
-        try:
-            judgment = await self._run_unified_judgment(
-                state,
-                investigation,
-                compiled_verdict,
-                basis,
-                image_path=image_path,
-                final_visual_audit=None,
-                interaction_session=None,
-                attach_image=(
-                    bool(image_path) and self._main_llm_attaches_image()
-                ),
-                policy_rule_id=UNIFIED_REACT_POLICY_VERSION,
-                system_prompt=UNIFIED_JUDGMENT_SYSTEM_PROMPT,
-                prompt_version=UNIFIED_JUDGMENT_PROMPT_VERSION,
-            )
-        finally:
-            state.stage_timings["judgment"] = round(
-                time.perf_counter() - judgment_started,
-                2,
-            )
-        investigation.discrepancy_judgment = judgment
-        state.judgment = judgment
-        self._sync_image_only_state(state, investigation)
-        return investigation, judgment, basis, None
-
-    async def _run_unified_global_reflection(
-        self,
-        state: VerificationState,
-        investigation: ImageOnlyInvestigationState,
-        *,
-        image_path: str = "",
-    ) -> UnifiedReflectionOutput:
-        """Record one low-frequency global strategy review without route mutation."""
-
-        runner = StageRunner(
-            llm=self.llm,
-            system_prompt=self._sp(UNIFIED_REFLECTION_SYSTEM_PROMPT),
-            prompt_version=UNIFIED_REFLECTION_PROMPT_VERSION,
-            tools=[],
-            output_schema=UnifiedReflectionOutput,
-            max_rounds=2,
-            image_path=image_path or state.image_path,
-            stage_name="unified_reflection",
-            runtime_store=state.runtime_store,
-            handoff_state=investigation,
-            attach_image=(
-                bool(image_path or state.image_path)
-                and self._main_llm_attaches_image()
-            ),
-            max_output_tokens=self._stage_output_tokens(
-                "UNIFIED_REFLECTION",
-                8192,
-            ),
-            generation_config=self._stage_generation_config(
-                "UNIFIED_REFLECTION"
-            ),
-            request_timeout_seconds=self.stage_request_timeout_seconds,
-        )
-        parsed, steps = await runner.run(
-            render_unified_reflection_context(investigation)
-        )
-        self._record_stage_steps(state, steps)
-        if parsed is None:
-            raise RuntimeError(
-                "unified global Reflection did not produce valid structured output"
-            )
-        return parsed
-
-    async def _run_unified_discrepancy_decision(
-        self,
-        state: VerificationState,
-        investigation: ImageOnlyInvestigationState,
-        *,
-        trigger: str,
-    ) -> Dict[str, Any]:
-        """Run the sparse semantic checkpoint retained by unified ReAct."""
-
-        return await self._run_unified_discrepancy_decision_impl(
-            state,
-            investigation,
-            reviewed_evidence_ids=discrepancy_decision_evidence_ids(
-                investigation
-            ),
-            trigger=trigger,
-            interaction_session=None,
-            stage_name="unified_discrepancy_decision",
-            system_prompt=UNIFIED_DISCREPANCY_DECISION_SYSTEM_PROMPT,
-            prompt_version=UNIFIED_DISCREPANCY_DECISION_PROMPT_VERSION,
-            allow_new_hypotheses=False,
+            selected_observation_ids=list(basis.get("observation_ids", []))[:40],
+            verdict_observation_ids=list(parsed.verdict_observation_ids),
         )
 
     def _validate_image_only_bootstrap_configuration(self) -> None:
@@ -1238,736 +731,30 @@ class Orchestrator:
                     )
                 )
 
-    async def _run_unified_discrepancy_decision_impl(
-        self,
-        state: VerificationState,
-        investigation: ImageOnlyInvestigationState,
-        *,
-        reviewed_evidence_ids: Sequence[str],
-        trigger: str,
-        interaction_session: InteractionSession,
-        stage_name: str = "unified_discrepancy_decision",
-        system_prompt: str = UNIFIED_DISCREPANCY_DECISION_SYSTEM_PROMPT,
-        prompt_version: str = "",
-        allow_new_hypotheses: bool = False,
-    ) -> Dict[str, Any]:
-        """Run and atomically apply the unified sparse semantic checkpoint."""
-
-        before_signature = self._discrepancy_progress_signature(investigation)
-        decision_output_schema = build_discrepancy_decision_output_schema(
-            claim_ids=[
-                claim.claim_id for claim in investigation.target_facts
-            ],
-            evidence_ids=list(reviewed_evidence_ids),
-            hypothesis_ids=[
-                hypothesis.hypothesis_id
-                for hypothesis in investigation.search_hypotheses
-            ],
-            allow_new_hypotheses=allow_new_hypotheses,
-        )
-
-        runner = StageRunner(
-            llm=self.llm,
-            system_prompt=self._sp(system_prompt),
-            tools=[],
-            output_schema=decision_output_schema,
-            max_rounds=3,
-            stage_name=stage_name,
-            runtime_store=state.runtime_store,
-            handoff_state=investigation,
-            image_path=state.image_path,
-            attach_image=(
-                bool(state.image_path) and self._main_llm_attaches_image()
-            ),
-            interaction_session=interaction_session,
-            output_validator=lambda parsed, _steps: (
-                self._validate_discrepancy_decision(
-                    investigation,
-                    parsed,
-                    reviewed_evidence_ids=reviewed_evidence_ids,
-                    trigger=trigger,
-                    source_access_policy=self.source_access_policy,
-                    allow_new_hypotheses=allow_new_hypotheses,
-                )
-            ),
-            max_output_tokens=self._stage_output_tokens(
-                "UNIFIED_DISCREPANCY_DECISION",
-                8192,
-            ),
-            generation_config=self._stage_generation_config(
-                "UNIFIED_DISCREPANCY_DECISION"
-            ),
-            protocol_exhaustion_boundary=True,
-            stop_output_factory=lambda: decision_output_schema(
-                verdict_proposal="continue",
-                rationale=(
-                    "No atomic Decision update was accepted; continue with the "
-                    "recorded workspace and unresolved gaps."
-                ),
-            ),
-            request_timeout_seconds=self.stage_request_timeout_seconds,
-            prompt_version=prompt_version or f"{stage_name}-v1",
-        )
-        parsed, steps = await runner.run(
-            render_unified_discrepancy_decision_context(
-                investigation,
-                reviewed_evidence_ids=reviewed_evidence_ids,
-                trigger=trigger,
-                allow_new_hypotheses=allow_new_hypotheses,
-            )
-        )
-        self._record_stage_steps(state, steps)
-        exhaustion_reason = self._protocol_exhaustion_rejection_reason(steps)
-        if exhaustion_reason:
-            fallback_update = self._apply_discrepancy_decision_fallback(
-                state,
-                investigation,
-                reviewed_evidence_ids=reviewed_evidence_ids,
-                rejected_reason=exhaustion_reason,
-                before_signature=before_signature,
-                trigger=trigger,
-                exhaustion_boundary=True,
-            )
-            if fallback_update is not None:
-                return fallback_update
-            self._sync_image_only_state(state, investigation)
-            raise RuntimeError(
-                "Discrepancy Decision exhausted protocol correction budget: "
-                + exhaustion_reason
-            )
-        if parsed is None:
-            self._sync_image_only_state(state, investigation)
-            raise RuntimeError(
-                "Discrepancy Decision did not produce a valid atomic update"
-            )
-        bound, binding_error = bind_discrepancy_decision_runtime_ids(
-            investigation,
-            parsed,
-            reviewed_evidence_ids=reviewed_evidence_ids,
-        )
-        if bound is None:
-            self._sync_image_only_state(state, investigation)
-            raise RuntimeError(
-                "Discrepancy Decision lost its runtime ID binding: "
-                + binding_error
-            )
-        update = apply_discrepancy_decision(
-            investigation,
-            bound,
-            reviewed_evidence_ids=reviewed_evidence_ids,
-            trigger=trigger,
-            source_access_policy=self.source_access_policy,
-        )
-        if not update.get("accepted", False):
-            rejected_reason = str(
-                update.get("rejected_reason", "unknown validation error")
-            )
-            fallback_update = self._apply_discrepancy_decision_fallback(
-                state,
-                investigation,
-                reviewed_evidence_ids=reviewed_evidence_ids,
-                rejected_reason=rejected_reason,
-                before_signature=before_signature,
-                trigger=trigger,
-                exhaustion_boundary=False,
-            )
-            if fallback_update is not None:
-                return fallback_update
-            self._sync_image_only_state(state, investigation)
-            raise RuntimeError(
-                "Discrepancy Decision failed deterministic application: "
-                + rejected_reason
-            )
-        progress = (
-            record_decision_progress(investigation, update)
-            if self._discrepancy_progress_signature(investigation)
-            != before_signature
-            else None
-        )
-        if progress is not None:
-            update["progress"] = progress.model_dump(mode="json")
-        self._sync_image_only_state(state, investigation)
-        return update
-
-    @staticmethod
-    def _protocol_exhaustion_rejection_reason(
-        steps: Sequence[StageStep],
-    ) -> str:
-        if not any(
-            bool(step.metadata.get("protocol_correction_exhaustion_boundary"))
-            for step in steps
-        ):
-            return ""
-        for step in reversed(steps):
-            reason = str(step.metadata.get("rejection_reason", "")).strip()
-            if reason:
-                return reason
-        return "protocol correction budget exhausted before an accepted Decision"
-
-    def _apply_discrepancy_decision_fallback(
-        self,
-        state: VerificationState,
-        investigation: ImageOnlyInvestigationState,
-        *,
-        reviewed_evidence_ids: Sequence[str],
-        rejected_reason: str,
-        before_signature: tuple[Any, ...],
-        trigger: str,
-        exhaustion_boundary: bool,
-    ) -> Optional[Dict[str, Any]]:
-        fallback = self._resolved_visual_consumption_fallback(
-            investigation,
-            reviewed_evidence_ids=reviewed_evidence_ids,
-            rejected_reason=rejected_reason,
-        )
-        fallback_kind = "visual_consumption"
-        if fallback is None and exhaustion_boundary:
-            fallback = self._decision_correction_exhaustion_fallback(
-                investigation,
-                reviewed_evidence_ids=reviewed_evidence_ids,
-                rejected_reason=rejected_reason,
-            )
-            fallback_kind = "decision_correction_exhaustion"
-        if fallback is None and exhaustion_boundary:
-            fallback = DiscrepancyDecisionOutput(
-                verdict_proposal="continue",
-                rationale=(
-                    "Deterministic correction-exhaustion boundary: preserve the "
-                    "current workspace and continue without applying an invalid "
-                    "Decision update."
-                ),
-            )
-            fallback_kind = "empty_continue"
-        if fallback is None:
-            return None
-
-        update = apply_discrepancy_decision(
-            investigation,
-            fallback,
-            reviewed_evidence_ids=reviewed_evidence_ids,
-            trigger=trigger,
-            allow_empty_continue=fallback_kind == "empty_continue",
-        )
-        if not update.get("accepted", False):
-            return None
-        if fallback_kind == "visual_consumption":
-            update["deterministic_visual_consumption_fallback"] = True
-        elif fallback_kind == "decision_correction_exhaustion":
-            update["deterministic_decision_exhaustion_fallback"] = True
-        else:
-            update["deterministic_empty_continue_fallback"] = True
-        update["fallback_rejected_reason"] = rejected_reason
-        if exhaustion_boundary:
-            update["protocol_correction_exhaustion_boundary"] = True
-        progress = (
-            record_decision_progress(investigation, update)
-            if self._discrepancy_progress_signature(investigation)
-            != before_signature
-            else None
-        )
-        if progress is not None:
-            update["progress"] = progress.model_dump(mode="json")
-        self._sync_image_only_state(state, investigation)
-        return update
-
-    @staticmethod
-    def _resolved_visual_consumption_fallback(
-        investigation: ImageOnlyInvestigationState,
-        *,
-        reviewed_evidence_ids: Sequence[str],
-        rejected_reason: str,
-    ) -> DiscrepancyDecisionOutput | None:
-        """Conservatively consume resolved pixel Evidence after correction exhaustion.
-
-        This fallback is intentionally non-substantive: it never supports, refutes,
-        creates a discrepancy, retires routes, or proposes a terminal verdict. It
-        only records ``insufficient`` assessments with the exact claim-owned pixel
-        Evidence IDs after the model repeatedly failed the same provenance
-        requirement. That keeps the visual observations auditable without silently
-        downgrading to a source-only Decision.
-        """
-
-        if "claim-owned visual Evidence" not in rejected_reason and (
-            "resolved focused visual Evidence" not in rejected_reason
-        ):
-            return None
-        requirements = claim_owned_visual_evidence_requirements(
-            investigation,
-            reviewed_evidence_ids=reviewed_evidence_ids,
-        )
-        visual_evidence_ids_by_claim: Dict[str, List[str]] = {}
-        for requirement in requirements:
-            visual_evidence_id = str(requirement["evidence_id"])
-            for claim_id in requirement["claim_ids"]:
-                selected_ids = visual_evidence_ids_by_claim.setdefault(
-                    claim_id,
-                    [],
-                )
-                if visual_evidence_id not in selected_ids:
-                    selected_ids.append(visual_evidence_id)
-        assessments: List[ClaimAssessmentProposal] = []
-        for claim_id, evidence_ids in visual_evidence_ids_by_claim.items():
-            # The bounded visual-tool budget keeps this under the model field
-            # limit. Fail closed if a future tool change exceeds it, rather
-            # than quietly dropping a claim-owned pixel record.
-            if len(evidence_ids) > 20:
-                return None
-            assessments.append(
-                ClaimAssessmentProposal(
-                    claim_id=claim_id,
-                    assessment="insufficient",
-                    selected_evidence_ids=evidence_ids,
-                    remaining_gap=(
-                        "Claim-owned pixel Evidence was recorded, but no "
-                        "accepted semantic support/refute/discrepancy update "
-                        "survived runtime validation"
-                    ),
-                    rationale=(
-                        "Deterministic fallback after correction exhaustion: "
-                        "consume all claim-owned pixel Evidence conservatively "
-                        "without changing the Claim to supported or refuted."
-                    ),
-                )
-            )
-            if len(assessments) >= 3:
-                break
-        if not assessments:
-            return None
-        return DiscrepancyDecisionOutput(
-            claim_assessments=assessments,
-            verdict_proposal="continue",
-            rationale=(
-                "Conservative runtime fallback consumed claim-owned visual "
-                "Evidence after model correction exhaustion; no terminal verdict "
-                "or discrepancy was inferred."
-            ),
-        )
-
-    @staticmethod
-    def _decision_correction_exhaustion_fallback(
-        investigation: ImageOnlyInvestigationState,
-        *,
-        reviewed_evidence_ids: Sequence[str],
-        rejected_reason: str,
-    ) -> DiscrepancyDecisionOutput | None:
-        """Record reviewed Evidence conservatively after Decision retry exhaustion.
-
-        This fallback is intentionally non-substantive. It never supports or
-        refutes a Claim, creates a discrepancy, changes routes, or proposes a
-        terminal verdict. It only prevents a correction-exhausted Decision
-        checkpoint from being recorded as a successful empty no-op.
-        """
-
-        if (
-            "must request targeted visual_reinspection before semantically "
-            "using source Evidence"
-            in rejected_reason
-        ):
-            # A source-to-pixel gate is an executable mechanism requirement,
-            # not an optional semantic update. Recording source Evidence as an
-            # ordinary insufficient assessment here would silently skip the
-            # required tool transition, so fail closed at the caller instead.
-            return None
-        reviewed = list(dict.fromkeys(str(item) for item in reviewed_evidence_ids))
-        if not reviewed:
-            return None
-        evidence_by_id = {
-            item.evidence_id: item for item in investigation.evidence
-        }
-        claim_ids_by_fact: Dict[str, List[str]] = {}
-        for claim in investigation.target_facts:
-            claim_ids_by_fact.setdefault(claim.fact_id, []).append(claim.claim_id)
-        claim_evidence_ids: Dict[str, List[str]] = {}
-        for evidence_id in reviewed:
-            evidence = evidence_by_id.get(evidence_id)
-            if evidence is None:
-                continue
-            for fact_id in evidence.fact_ids:
-                for claim_id in claim_ids_by_fact.get(fact_id, []):
-                    claim_evidence_ids.setdefault(claim_id, []).append(evidence_id)
-
-        reason = " ".join(str(rejected_reason).split())
-        if len(reason) > 420:
-            reason = reason[:417].rstrip() + "..."
-        assessments: List[ClaimAssessmentProposal] = []
-        for claim in investigation.target_facts:
-            evidence_ids = list(
-                dict.fromkeys(claim_evidence_ids.get(claim.claim_id, []))
-            )
-            if not evidence_ids:
-                continue
-            assessments.append(
-                ClaimAssessmentProposal(
-                    claim_id=claim.claim_id,
-                    assessment="insufficient",
-                    selected_evidence_ids=evidence_ids[:20],
-                    remaining_gap=(
-                        "Discrepancy Decision correction budget was exhausted "
-                        "before an accepted semantic support/refute/discrepancy "
-                        "update; reviewed Evidence is recorded for follow-up."
-                    ),
-                    rationale=(
-                        "Deterministic fallback after Decision correction "
-                        "exhaustion: preserve reviewed Evidence without "
-                        "inferring support, refutation, discrepancy, or verdict. "
-                        f"Last validator feedback: {reason}"
-                    ),
-                )
-            )
-            if len(assessments) >= 3:
-                break
-        if not assessments:
-            return None
-        return DiscrepancyDecisionOutput(
-            claim_assessments=assessments,
-            verdict_proposal="continue",
-            rationale=(
-                "Conservative runtime fallback recorded reviewed Evidence after "
-                "Decision correction exhaustion; no terminal verdict or "
-                "discrepancy was inferred."
-            ),
-        )
-
-    @staticmethod
-    def _discrepancy_progress_signature(
-        investigation: ImageOnlyInvestigationState,
-    ) -> tuple[Any, ...]:
-        latest = {}
-        for item in investigation.claim_assessments:
-            latest[item.claim_id] = (
-                item.assessment,
-                tuple(item.evidence_ids),
-                item.remaining_gap,
-            )
-        return (
-            tuple(sorted(latest.items())),
-            tuple(
-                (
-                    item.discrepancy_id,
-                    item.status,
-                    item.materiality,
-                    tuple(item.evidence_ids),
-                )
-                for item in investigation.material_discrepancies
-            ),
-            tuple(
-                (item.hypothesis_id, item.status)
-                for item in investigation.search_hypotheses
-            ),
-            tuple(
-                (item.visual_question_id, item.status)
-                for item in investigation.visual_reinspections
-            ),
-            investigation.proposed_verdict,
-        )
-
-    async def _run_unified_judgment(
-        self,
-        state: VerificationState,
-        investigation: ImageOnlyInvestigationState,
-        compiled_verdict: str,
-        basis: Any,
-        *,
-        image_path: str,
-        final_visual_audit: Optional[Dict[str, Any]] = None,
-        interaction_session: InteractionSession,
-        attach_image: Optional[bool] = None,
-        policy_rule_id: str = UNIFIED_REACT_POLICY_VERSION,
-        system_prompt: str = UNIFIED_JUDGMENT_SYSTEM_PROMPT,
-        prompt_version: str = UNIFIED_JUDGMENT_PROMPT_VERSION,
-    ) -> DiscrepancyJudgment:
-        runner = StageRunner(
-            llm=self.llm,
-            system_prompt=self._sp(system_prompt),
-            tools=[],
-            output_schema=DiscrepancyJudgmentOutput,
-            max_rounds=1,
-            image_path=image_path,
-            stage_name="unified_judgment",
-            runtime_store=state.runtime_store,
-            handoff_state=investigation,
-            attach_image=(
-                bool(image_path) and self._main_llm_attaches_image()
-                if attach_image is None
-                else bool(attach_image)
-            ),
-            interaction_session=interaction_session,
-            output_validator=lambda parsed, _steps: (
-                self._validate_discrepancy_judgment(
-                    parsed,
-                    compiled_verdict=compiled_verdict,
-                    basis=basis,
-                )
-            ),
-            max_output_tokens=self._stage_output_tokens(
-                "UNIFIED_JUDGMENT",
-                8192,
-            ),
-            generation_config=self._stage_generation_config(
-                "UNIFIED_JUDGMENT"
-            ),
-            request_timeout_seconds=self.stage_request_timeout_seconds,
-            prompt_version=prompt_version or f"{policy_rule_id}-judgment-v1",
-        )
-        parsed, steps = await runner.run(
-            render_unified_judgment_context(
-                investigation,
-                compiled_verdict,
-                basis,
-                final_visual_audit=final_visual_audit,
-                image_is_attached=(
-                    bool(image_path) and self._main_llm_attaches_image()
-                    if attach_image is None
-                    else bool(attach_image)
-                ),
-            )
-        )
-        self._record_stage_steps(state, steps)
-        if parsed is None:
-            raise RuntimeError(
-                "unified Judgment did not produce a valid binary judgment"
-            )
-        # IDs and unresolved gaps are runtime-owned.  Reconstruct the canonical
-        # record from the compiled basis instead of asking the model to copy a
-        # large, error-prone identifier list.
-        return DiscrepancyJudgment(
-            verdict=parsed.verdict,
-            confidence=parsed.confidence,
-            policy_rule_id=policy_rule_id,
-            overall_assessment=parsed.overall_assessment,
-            fact_check_report=parsed.fact_check_report,
-            evidence_citations=compile_fact_check_evidence_citations(
-                investigation,
-                basis,
-            ),
-            selected_claim_ids=list(basis.claim_ids),
-            selected_discrepancy_ids=list(basis.discrepancy_ids),
-            selected_visual_anchor_fact_ids=list(basis.visual_anchor_fact_ids),
-            selected_finding_ids=list(basis.finding_ids),
-            selected_evidence_ids=list(basis.evidence_ids),
-            verdict_evidence_ids=list(parsed.verdict_evidence_ids),
-            unresolved_gaps=list(basis.unresolved_gaps),
-            terminal_visual_rationale=parsed.terminal_visual_rationale,
-        )
-
     @staticmethod
     def _validate_react_judgment(
-        parsed: DiscrepancyJudgmentOutput,
+        parsed: RawHistoryJudgmentOutput,
         *,
         basis: Mapping[str, Any],
     ) -> tuple[bool, str]:
-        """Keep final reports grounded in the runtime-compiled evidence ledger."""
+        """Keep final reports grounded in retained successful observations."""
 
         allowed = {
             str(item)
-            for item in basis.get("evidence_ids", [])
+            for item in basis.get("observation_ids", [])
             if str(item).strip()
         }
-        cited = [str(item) for item in parsed.verdict_evidence_ids]
+        cited = [str(item) for item in parsed.verdict_observation_ids]
         unknown = [item for item in cited if item not in allowed]
         if unknown:
             return False, (
-                "verdict_evidence_ids contains IDs absent from the final "
-                "investigation evidence ledger: "
+                "verdict_observation_ids contains IDs absent from the retained "
+                "successful tool observations: "
                 + ", ".join(unknown[:6])
             )
-        if allowed and not cited:
-            return False, (
-                "final Judgment must cite at least one evidence ID when the "
-                "investigation evidence ledger is non-empty"
-            )
+        if len(cited) != len(set(cited)):
+            return False, "verdict_observation_ids must be unique"
         return True, ""
-
-    @staticmethod
-    def _validate_discrepancy_decision(
-        investigation: ImageOnlyInvestigationState,
-        parsed: DiscrepancyDecisionProposalOutput,
-        *,
-        reviewed_evidence_ids: Sequence[str],
-        trigger: str,
-        source_access_policy: Optional[SourceAccessPolicy] = None,
-        allow_new_hypotheses: bool = True,
-    ) -> tuple[bool, str]:
-        if not allow_new_hypotheses and parsed.new_hypotheses:
-            return False, (
-                "unified-react-v1 Discrepancy Decision must not create "
-                "new_hypotheses"
-            )
-        bound, binding_error = bind_discrepancy_decision_runtime_ids(
-            investigation,
-            parsed,
-            reviewed_evidence_ids=reviewed_evidence_ids,
-        )
-        if bound is None:
-            return False, binding_error
-        candidate = investigation.model_copy(deep=True)
-        update = apply_discrepancy_decision(
-            candidate,
-            bound,
-            reviewed_evidence_ids=reviewed_evidence_ids,
-            trigger=trigger,
-            source_access_policy=source_access_policy,
-        )
-        if not update.get("accepted", False):
-            return False, str(
-                update.get(
-                    "rejected_reason",
-                    "Discrepancy Decision proposed no valid state update",
-                )
-            )
-        return True, ""
-
-    @staticmethod
-    def _validate_discrepancy_judgment(
-        parsed: DiscrepancyJudgmentOutput,
-        *,
-        compiled_verdict: str,
-        basis: Any,
-    ) -> tuple[bool, str]:
-        if parsed.fact_check_report is None:
-            return False, (
-                "unified Judgment must produce a reader-facing fact_check_report"
-            )
-        allowed_evidence_ids = {
-            str(item) for item in basis.evidence_ids if str(item).strip()
-        }
-        cited_evidence_ids = [str(item) for item in parsed.verdict_evidence_ids]
-        unknown_evidence_ids = [
-            item for item in cited_evidence_ids if item not in allowed_evidence_ids
-        ]
-        if unknown_evidence_ids:
-            return False, (
-                "verdict_evidence_ids contains IDs absent from the compiled "
-                "evidence ledger: "
-                + ", ".join(unknown_evidence_ids[:6])
-            )
-        if allowed_evidence_ids and not cited_evidence_ids:
-            return False, (
-                "unified Judgment must cite at least one evidence ID when the "
-                "compiled evidence ledger is non-empty"
-            )
-        if compiled_verdict and parsed.verdict != compiled_verdict:
-            return False, (
-                f"verdict must be {compiled_verdict}, received {parsed.verdict}"
-            )
-        if not compiled_verdict:
-            rationale = parsed.terminal_visual_rationale
-            if rationale is None:
-                return False, (
-                    "bounded binary judgment requires terminal_visual_rationale"
-                )
-            expected_relation = f"supports_{parsed.verdict}"
-            if rationale.relation_to_verdict != expected_relation:
-                return False, (
-                    "terminal_visual_rationale relation_to_verdict must match "
-                    f"the binary verdict ({expected_relation})"
-                )
-        return True, ""
-
-    @staticmethod
-    def _investigation_status(
-        investigation: Any,
-    ) -> str:
-        if isinstance(investigation, RuntimeReactState):
-            if investigation.stop_reason == "engineering_error":
-                return "engineering_error"
-            if investigation.stop_reason == "hard_budget_exhausted":
-                return "incomplete_budget_exhausted"
-            if investigation.stop_reason:
-                return "complete"
-            return "incomplete"
-        return {
-            "coverage_complete": "complete",
-            "verdict_determined": "complete",
-            "information_saturated": "bounded_unresolved",
-            "hard_budget_exhausted": "incomplete_budget_exhausted",
-        }.get(investigation.stop_reason, "incomplete")
-
-    @staticmethod
-    def _verification_layers(
-        investigation: Any,
-    ) -> Dict[str, Any]:
-        if isinstance(investigation, RuntimeReactState):
-            return {
-                "visual_observation": {
-                    "status": (
-                        "available"
-                        if investigation.visual_memory
-                        else "not_assessed"
-                    ),
-                    "observation_count": len(
-                        investigation.visual_memory.get("entities", [])
-                    )
-                    + len(investigation.visual_memory.get("text_regions", [])),
-                },
-                "web_investigation": {
-                    "status": (
-                        "available"
-                        if investigation.discoveries or investigation.evidence
-                        else "not_assessed"
-                    ),
-                    "discovery_count": len(investigation.discoveries),
-                    "evidence_count": len(investigation.evidence),
-                },
-            }
-        source_facts = [
-            fact
-            for fact in investigation.facts
-            if fact.predicate == "source_record_matches"
-        ]
-        integrity_facts = [
-            fact
-            for fact in investigation.facts
-            if fact.predicate == "visual_integrity"
-        ]
-        if not source_facts and not integrity_facts:
-            return {}
-
-        def layer(
-            facts: Sequence[Any],
-            *,
-            unresolved_reason: str,
-        ) -> Dict[str, Any]:
-            if not facts:
-                return {
-                    "status": "not_assessed",
-                    "fact_ids": [],
-                    "reason": unresolved_reason,
-                }
-            statuses = {fact.status for fact in facts}
-            if "refuted" in statuses:
-                status = "refuted"
-            elif statuses == {"supported"}:
-                status = "supported"
-            elif "conflicted" in statuses:
-                status = "conflicted"
-            else:
-                status = "unresolved"
-            return {
-                "status": status,
-                "fact_ids": [fact.fact_id for fact in facts],
-                "reason": (
-                    "Resolved from qualified evidence."
-                    if status in {"supported", "refuted"}
-                    else unresolved_reason
-                ),
-            }
-
-        return {
-            "source_record_match": layer(
-                source_facts,
-                unresolved_reason=(
-                    "The visible account, text, date, and thread relation were "
-                    "not fully bound to an original or archived public record."
-                ),
-            ),
-            "visible_integrity": layer(
-                integrity_facts,
-                unresolved_reason=(
-                    "Visible manipulation or layout integrity was not resolved."
-                ),
-            ),
-        }
 
     def _exhausted_unified_react_tools(
         self,
@@ -2354,17 +1141,6 @@ class Orchestrator:
         return cache_args
 
     @staticmethod
-    def _restore_react_model(target: Any, snapshot: Any) -> None:
-        """Restore a pydantic runtime model without replacing shared references."""
-
-        for field_name in getattr(type(snapshot), "model_fields", {}):
-            setattr(
-                target,
-                field_name,
-                deepcopy(getattr(snapshot, field_name)),
-            )
-
-    @staticmethod
     def _safe_numeric(value: Any, default: float = 0.0) -> float:
         try:
             numeric = float(value)
@@ -2375,371 +1151,6 @@ class Orchestrator:
             if numeric == numeric and abs(numeric) != float("inf")
             else default
         )
-
-    @staticmethod
-    def _malformed_tool_result(step: StageStep, *, reason: str) -> None:
-        """Make a bad semantic payload visible as a recoverable observation."""
-
-        message = "MalformedToolResult: " + " ".join(str(reason).split())
-        step.metadata["tool_result_normalization_error"] = message[:2400]
-        step.metadata["error_class"] = "recoverable_tool_result_error"
-        step.metadata["tool_success"] = False
-        # StageRunner archives the raw provider result before this callback.
-        # Keep that artifact and send only the structured failure downstream.
-        step.metadata["raw_tool_result_preserved"] = True
-        step.tool_result = json.dumps(
-            {"status": "error", "error": message[:2400]},
-            ensure_ascii=False,
-        )
-
-    def _apply_react_observation(
-        self,
-        state: VerificationState,
-        investigation: RuntimeReactState,
-        *,
-        step: StageStep,
-        tool_name: str,
-        call_id: str,
-    ) -> Dict[str, Any]:
-        """Apply one active ReAct observation transactionally."""
-
-        previous_perception = (
-            state.perception.model_copy(deep=True)
-            if state.perception is not None
-            else None
-        )
-        previous_investigation = investigation.model_copy(deep=True)
-        parsed_perception: Optional[PerceptionReport] = None
-        parse_error = ""
-
-        try:
-            _payload, succeeded = parse_tool_result(step.tool_result)
-        except Exception as exc:
-            succeeded = False
-            parse_error = f"{type(exc).__name__}: {exc}"
-
-        if succeeded and tool_name == "perceive_scene":
-            try:
-                scene = self._parse_perception_result(step.tool_result)
-                prior = state.perception or PerceptionReport(
-                    scene_description=""
-                )
-                parsed_perception = PerceptionReport(
-                    entities=scene.entities,
-                    relations=scene.relations,
-                    notable_details=scene.notable_details,
-                    uncertainties=scene.uncertainties,
-                    text_regions=list(prior.text_regions),
-                    scene_description=scene.scene_description,
-                    image_type=scene.image_type,
-                )
-            except Exception as exc:
-                parse_error = f"{type(exc).__name__}: {exc}"
-        elif succeeded and tool_name == "ocr_with_position":
-            try:
-                parsed_perception = self._merge_ocr(
-                    state.perception or PerceptionReport(
-                        scene_description=""
-                    ),
-                    step.tool_result,
-                )
-            except Exception as exc:
-                parse_error = f"{type(exc).__name__}: {exc}"
-
-        if parse_error:
-            self._malformed_tool_result(step, reason=parse_error)
-            parsed_perception = None
-
-        try:
-            update = reduce_react_action(
-                investigation,
-                tool_name=tool_name,
-                tool_args=dict(step.tool_args or {}),
-                call_id=call_id,
-                serialized_result=step.tool_result,
-                perception=parsed_perception,
-            )
-        except Exception as exc:
-            self._restore_react_model(investigation, previous_investigation)
-            state.perception = (
-                previous_perception.model_copy(deep=True)
-                if previous_perception is not None
-                else None
-            )
-            self._malformed_tool_result(
-                step,
-                reason=f"state update failed: {type(exc).__name__}: {exc}",
-            )
-            fallback_args = dict(step.tool_args or {})
-            fallback_args["investigation_progress"] = dict(
-                investigation.investigation_progress
-            )
-            try:
-                update = reduce_react_action(
-                    investigation,
-                    tool_name=tool_name,
-                    tool_args=fallback_args,
-                    call_id=call_id,
-                    serialized_result=step.tool_result,
-                    perception=None,
-                )
-            except Exception as retry_exc:
-                raise RuntimeError(
-                    "active ReAct state update could not be recovered: "
-                    f"{type(retry_exc).__name__}: {retry_exc}"
-                ) from retry_exc
-
-        if not update.get("accepted", False):
-            rejection = str(
-                update.get("rejected_reason", "observation update rejected")
-            )
-            self._restore_react_model(investigation, previous_investigation)
-            state.perception = (
-                previous_perception.model_copy(deep=True)
-                if previous_perception is not None
-                else None
-            )
-            self._malformed_tool_result(step, reason=rejection)
-            fallback_args = dict(step.tool_args or {})
-            fallback_args["investigation_progress"] = dict(
-                investigation.investigation_progress
-            )
-            update = reduce_react_action(
-                investigation,
-                tool_name=tool_name,
-                tool_args=fallback_args,
-                call_id=call_id,
-                serialized_result=step.tool_result,
-                perception=None,
-            )
-            if not update.get("accepted", False):
-                raise RuntimeError(
-                    "active ReAct observation update remained rejected after "
-                    "runtime recovery: " + rejection
-                )
-
-        if parsed_perception is not None:
-            state.perception = parsed_perception
-        return update
-
-    def _parse_perception_result(self, tool_result: str) -> PerceptionReport:
-        data, succeeded = parse_tool_result(tool_result)
-        if not succeeded:
-            return PerceptionReport(scene_description="")
-        entities: List[Entity] = []
-        for item in data.get("entities", []) or []:
-            if not isinstance(item, dict):
-                continue
-            bbox = self._normalize_entity_bbox(item.get("bbox"))
-            entities.append(
-                Entity(
-                    name=str(item.get("name", "")).strip(),
-                    entity_type=str(item.get("entity_type", "")).strip(),
-                    bbox=bbox,
-                    confidence=max(
-                        0.0,
-                        min(
-                            1.0,
-                            self._safe_numeric(item.get("confidence", 0.0)),
-                        ),
-                    ),
-                    attributes=item.get("attributes", {}) if isinstance(item.get("attributes"), dict) else {},
-                    text_role=self._normalize_text_role(
-                        item.get("text_role", "not_applicable")
-                    ),
-                )
-            )
-        relations: List[PerceptionRelation] = []
-        for item in data.get("relations", []) or []:
-            if not isinstance(item, dict):
-                continue
-            relations.append(
-                PerceptionRelation(
-                    subject=" ".join(str(item.get("subject", "")).split())[:160],
-                    predicate=" ".join(str(item.get("predicate", "")).split())[:160],
-                    object=" ".join(str(item.get("object", "")).split())[:160],
-                    description=" ".join(
-                        str(item.get("description", "")).split()
-                    )[:600],
-                    confidence=max(
-                        0.0,
-                        min(
-                            1.0,
-                            self._safe_numeric(item.get("confidence", 0.0)),
-                        ),
-                    ),
-                )
-            )
-        notable_details = [
-            " ".join(str(item).split())[:400]
-            for item in data.get("notable_details", []) or []
-            if " ".join(str(item).split())
-        ][:16]
-        uncertainties = [
-            " ".join(str(item).split())[:400]
-            for item in data.get("uncertainties", []) or []
-            if " ".join(str(item).split())
-        ][:8]
-        return PerceptionReport(
-            entities=entities,
-            relations=relations[:16],
-            notable_details=notable_details,
-            uncertainties=uncertainties,
-            text_regions=[],
-            scene_description=str(data.get("scene_description", "")).strip(),
-            image_type=str(data.get("image_type", "photo") or "photo").strip(),
-        )
-
-    def _merge_ocr(self, report: PerceptionReport, tool_result: str) -> PerceptionReport:
-        data, succeeded = parse_tool_result(tool_result)
-        if not succeeded:
-            return report.model_copy(deep=True)
-        text_regions = list(report.text_regions)
-        seen = {self._text_region_key(region) for region in text_regions}
-        for item in data.get("text_regions", []) or []:
-            normalized = self._normalize_text_region(item)
-            if normalized is None:
-                continue
-            key = self._text_region_key(normalized)
-            if key in seen:
-                continue
-            seen.add(key)
-            text_regions.append(normalized)
-        text_regions = [
-            self._attach_text_role(region, report.entities)
-            for region in text_regions
-        ]
-        return PerceptionReport(
-            entities=report.entities,
-            relations=report.relations,
-            notable_details=report.notable_details,
-            uncertainties=report.uncertainties,
-            text_regions=text_regions,
-            scene_description=report.scene_description,
-            image_type=report.image_type,
-        )
-
-    @staticmethod
-    def _text_region_key(region: TextRegion) -> str:
-        return json.dumps({"text": region.text, "bbox_quad": region.bbox_quad}, ensure_ascii=False, sort_keys=True)
-
-    @staticmethod
-    def _normalize_text_region(item: Any) -> Optional[TextRegion]:
-        if not isinstance(item, dict):
-            return None
-        bbox_quad = item.get("bbox_quad", [])
-        if not bbox_quad and isinstance(item.get("bbox"), list) and len(item["bbox"]) == 4:
-            try:
-                x1, y1, x2, y2 = [float(value) for value in item["bbox"]]
-            except (TypeError, ValueError):
-                return None
-            bbox_quad = [[x1, y1], [x2, y1], [x2, y2], [x1, y2]]
-        if not isinstance(bbox_quad, list):
-            bbox_quad = []
-        return TextRegion(
-            text=str(item.get("text", "")).strip(),
-            bbox_quad=bbox_quad,
-            confidence=max(
-                0.0,
-                min(
-                    1.0,
-                    Orchestrator._safe_numeric(item.get("confidence", 0.0)),
-                ),
-            ),
-            language=str(item.get("language", "unknown") or "unknown"),
-            text_role=Orchestrator._normalize_text_role(
-                item.get("text_role", "unknown"),
-                default="unknown",
-            ),
-        )
-
-    @staticmethod
-    def _normalize_entity_bbox(value: Any) -> List[float]:
-        if not isinstance(value, list) or len(value) != 4:
-            return []
-        try:
-            bbox = [float(item) for item in value]
-        except (TypeError, ValueError):
-            return []
-        x1, y1, x2, y2 = bbox
-        if not (
-            all(
-                item == item and abs(item) != float("inf")
-                for item in bbox
-            )
-            and 0 <= x1 < x2 <= 1
-            and 0 <= y1 < y2 <= 1
-        ):
-            return []
-        return bbox
-
-    @staticmethod
-    def _normalize_text_role(
-        value: Any,
-        *,
-        default: str = "not_applicable",
-    ) -> str:
-        normalized = str(value or default).strip().lower()
-        return normalized if normalized in TEXT_ROLE_VALUES else "unknown"
-
-    @staticmethod
-    def _bbox_from_quad(value: Any) -> Optional[List[float]]:
-        if not isinstance(value, list) or len(value) != 4:
-            return None
-        points: List[tuple[float, float]] = []
-        for point in value:
-            if (
-                not isinstance(point, list)
-                or len(point) != 2
-                or any(
-                    isinstance(item, bool)
-                    or not isinstance(item, (int, float))
-                    for item in point
-                )
-            ):
-                return None
-            points.append((float(point[0]), float(point[1])))
-        xs = [point[0] for point in points]
-        ys = [point[1] for point in points]
-        bbox = [min(xs), min(ys), max(xs), max(ys)]
-        if not (0 <= bbox[0] < bbox[2] <= 1 and 0 <= bbox[1] < bbox[3] <= 1):
-            return None
-        return bbox
-
-    @classmethod
-    def _attach_text_role(
-        cls,
-        region: TextRegion,
-        entities: Sequence[Entity],
-    ) -> TextRegion:
-        if region.text_role != "unknown":
-            return region
-        region_bbox = cls._bbox_from_quad(region.bbox_quad)
-        if region_bbox is None:
-            return region
-        best_role = "unknown"
-        best_overlap = 0.0
-        for entity in entities:
-            role = entity.text_role
-            if role in {"unknown", "not_applicable"} or not entity.bbox:
-                continue
-            x1 = max(region_bbox[0], entity.bbox[0])
-            y1 = max(region_bbox[1], entity.bbox[1])
-            x2 = min(region_bbox[2], entity.bbox[2])
-            y2 = min(region_bbox[3], entity.bbox[3])
-            if x2 <= x1 or y2 <= y1:
-                continue
-            intersection = (x2 - x1) * (y2 - y1)
-            region_area = (region_bbox[2] - region_bbox[0]) * (
-                region_bbox[3] - region_bbox[1]
-            )
-            overlap = intersection / max(region_area, 1e-9)
-            if overlap > best_overlap:
-                best_overlap = overlap
-                best_role = role
-        if best_role == "unknown":
-            return region
-        return region.model_copy(update={"text_role": best_role})
 
     def _record_stage_steps(self, state: VerificationState, steps: Sequence[StageStep]) -> None:
         if not steps:

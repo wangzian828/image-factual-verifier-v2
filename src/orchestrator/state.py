@@ -117,7 +117,7 @@ class VerificationState:
     runtime_case: Optional[ImageOnlyRuntimeCase] = None
     input_mode: str = "image_only"
     decision_policy_version: str = "unified-react-v1"
-    investigation_state: Optional[ImageOnlyInvestigationState] = None
+    investigation_state: Optional[Any] = None
     investigation_brief: Optional[InvestigationBrief] = None
     visual_entities: List[VisualEntity] = field(default_factory=list)
     visual_facts: List[VisualFact] = field(default_factory=list)

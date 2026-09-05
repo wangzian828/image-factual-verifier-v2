@@ -1674,6 +1674,16 @@ class DiscrepancyJudgmentOutput(StrictModel):
     terminal_visual_rationale: Optional[TerminalVisualRationale] = None
 
 
+class RawHistoryJudgmentOutput(StrictModel):
+    """Final judgment grounded directly in retained tool observations."""
+
+    verdict: Literal["real", "fake"]
+    confidence: float = Field(ge=0.0, le=1.0)
+    verdict_observation_ids: List[str] = Field(default_factory=list, max_length=12)
+    overall_assessment: str = Field(min_length=1, max_length=2000)
+    fact_check_report: FactCheckReport
+
+
 class DiscrepancyJudgment(StrictModel):
     verdict: Literal["real", "fake"]
     confidence: float = Field(ge=0.0, le=1.0)
@@ -1687,6 +1697,8 @@ class DiscrepancyJudgment(StrictModel):
     selected_finding_ids: List[str] = Field(default_factory=list, max_length=20)
     selected_evidence_ids: List[str] = Field(default_factory=list, max_length=40)
     verdict_evidence_ids: List[str] = Field(default_factory=list, max_length=12)
+    selected_observation_ids: List[str] = Field(default_factory=list, max_length=40)
+    verdict_observation_ids: List[str] = Field(default_factory=list, max_length=12)
     overall_assessment: str = Field(min_length=1, max_length=2000)
     fact_check_report: Optional[FactCheckReport] = None
     evidence_citations: List[FactCheckEvidenceCitation] = Field(

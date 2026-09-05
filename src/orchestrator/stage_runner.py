@@ -56,13 +56,6 @@ from src.tools.base import BaseTool
 from src.tools.vision_utils import controlled_image_to_data_url
 
 
-_CLAIM_SCOPED_EVIDENCE_TOOLS = {
-    "visit",
-    "crop_and_search",
-    "compare_with_reference",
-    "crop_and_inspect",
-    "ocr_with_position",
-}
 _MAX_GEMINI_DYNAMIC_ENUM_VALUES = 10
 
 
@@ -134,20 +127,11 @@ class StageRunner:
         generation_config: Optional[Dict[str, Any]] = None,
         final_output_max_tokens: Optional[int] = None,
         final_output_generation_config: Optional[Dict[str, Any]] = None,
-        observation_callback: Optional[Callable[[StageStep, List[StageStep]], Optional[Dict[str, Any]]]] = None,
         visual_call_validator: Optional[Callable[[str, Dict[str, Any]], str]] = None,
-        question_claims: Optional[Dict[str, str]] = None,
-        question_claim_options: Optional[Dict[str, Dict[str, str]]] = None,
-        priority_question_ids: Optional[List[str]] = None,
-        resolved_priority_question_ids: Optional[List[str]] = None,
-        supporting_question_ids: Optional[List[str]] = None,
-        resolved_supporting_question_ids: Optional[List[str]] = None,
         source_access_policy: Optional[SourceAccessPolicy] = None,
-        question_evidence_goals: Optional[Dict[str, str]] = None,
         max_protocol_corrections: int = 4,
         max_tool_calls_per_turn: Optional[int] = None,
         force_tool_each_round: bool = False,
-        question_is_active: Optional[Callable[[str], bool]] = None,
         stop_output_factory: Optional[Callable[[], BaseModel]] = None,
         protocol_exhaustion_boundary: bool = False,
         request_timeout_seconds: Optional[float] = None,
@@ -191,18 +175,9 @@ class StageRunner:
             **self.generation_config,
             **dict(final_output_generation_config or {}),
         }
-        self.active_question_ids: List[str] = []
         self.llm_api_calls = 0
-        self.observation_callback = observation_callback
         self.visual_call_validator = visual_call_validator
-        self.question_claims = dict(question_claims or {})
-        self.question_claim_options = deepcopy(question_claim_options or {})
-        self.priority_question_ids = list(dict.fromkeys(priority_question_ids or []))
-        self.resolved_priority_question_ids = set(resolved_priority_question_ids or [])
-        self.supporting_question_ids = list(dict.fromkeys(supporting_question_ids or []))
-        self.resolved_supporting_question_ids = set(resolved_supporting_question_ids or [])
         self.source_access_policy = source_access_policy or SourceAccessPolicy()
-        self.question_evidence_goals = dict(question_evidence_goals or {})
         self.max_protocol_corrections = max(0, int(max_protocol_corrections))
         self.max_tool_calls_per_turn = (
             max(1, int(max_tool_calls_per_turn))
@@ -210,7 +185,6 @@ class StageRunner:
             else None
         )
         self.force_tool_each_round = bool(force_tool_each_round)
-        self.question_is_active = question_is_active
         self.stop_output_factory = stop_output_factory
         self.protocol_exhaustion_boundary = bool(protocol_exhaustion_boundary)
         self.tool_argument_constraints = deepcopy(
@@ -305,19 +279,6 @@ class StageRunner:
             raise RuntimeError("Gemini stages require wire_api='interactions'.")
         if self.handoff_packet is not None:
             input_context = render_stage_request(self.handoff_packet)
-        configured_question_ids = [
-            question_id
-            for question_id in self.question_claims
-            if not self.question_is_active
-            or self.question_is_active(question_id)
-        ]
-        context_question_ids = re.findall(
-            r"\[((?:q[^\]]*)|(?:task-[^\]]+))\]",
-            input_context,
-        )
-        self.active_question_ids = list(
-            dict.fromkeys(configured_question_ids or context_question_ids)
-        )
         if self._uses_native_interactions():
             try:
                 return await self._run_native_interactions(input_context)
@@ -575,7 +536,7 @@ class StageRunner:
 
                 step.action_type = "tool_call"
                 step.tool_name = tool_name
-                step.tool_args = self._prepare_tool_args(tool_name, dict(tool_args), input_context)
+                step.tool_args = dict(tool_args)
                 step.metadata["policy_action"] = {
                     "type": "tool_call",
                     "name": tool_name,
@@ -586,28 +547,6 @@ class StageRunner:
                     step.metadata["function_call_id"] = str(
                         native_call.get("id", "")
                     ).strip()
-                step.tool_args = self._bind_pending_visual_args(tool_name, step.tool_args)
-                question_error = self._question_id_error(step.tool_args)
-                claim_error = self._claim_id_error(tool_name, step.tool_args)
-                scope_error = question_error or claim_error
-                if scope_error:
-                    step.action_type = "format_error"
-                    step.metadata["error_class"] = "protocol_error"
-                    if question_error:
-                        step.metadata["invalid_question_id"] = True
-                    if claim_error:
-                        step.metadata["invalid_claim_id"] = True
-                    steps.append(step)
-                    history.append({"role": "assistant", "content": content})
-                    history.append(
-                        {
-                            "role": "user",
-                            "content": scope_error,
-                        }
-                    )
-                    if request_chat_protocol_correction(step, scope_error):
-                        continue
-                    break
                 if self._has_duplicate_tool_call(steps, tool_name, step.tool_args):
                     duplicate_message = self._duplicate_tool_message(
                         tool_name,
@@ -696,21 +635,6 @@ class StageRunner:
                         if request_chat_protocol_correction(step, visual_error):
                             continue
                         break
-                coverage_error = self._priority_coverage_error(step.tool_args, steps)
-                if coverage_error:
-                    step.action_type = "format_error"
-                    step.metadata["error_class"] = "protocol_error"
-                    step.metadata["unbalanced_priority_coverage"] = True
-                    step.tool_result = json.dumps(
-                        {"status": "error", "error": coverage_error},
-                        ensure_ascii=False,
-                    )
-                    steps.append(step)
-                    history.append({"role": "assistant", "content": content})
-                    history.append({"role": "user", "content": coverage_error})
-                    if request_chat_protocol_correction(step, coverage_error):
-                        continue
-                    break
                 serialized, tool_metadata = await self._execute_tool(tool_name, dict(step.tool_args))
                 step.tool_result = serialized
                 step.metadata.update(tool_metadata)
@@ -726,14 +650,10 @@ class StageRunner:
                     ),
                 )
                 steps.append(step)
-                state_update = self._record_observation_update(step, steps)
                 evidence_so_far.append(self._summarize_tool_result(tool_name, step.tool_args, serialized))
                 tool_response = self._build_tool_response_message(
-                    tool_name,
-                    step.tool_args,
                     serialized,
                     function_call_id=str(step.metadata["function_call_id"]),
-                    state_update=state_update,
                     native_chat=(
                         native_assistant is not None and native_call is not None
                     ),
@@ -1308,21 +1228,13 @@ class StageRunner:
                     call_id = str(call.get("id", "")).strip()
                     tool_name = str(call.get("name", "")).strip()
                     tool_args = self._coerce_native_arguments(call.get("arguments", {}))
-                    native_args = self._bind_pending_visual_args(
-                        tool_name,
-                        dict(tool_args),
-                    )
                     native_args, runtime_repairs = (
                         self._normalize_runtime_tool_args(
                             tool_name,
-                            native_args,
+                            dict(tool_args),
                         )
                     )
-                    prepared_args = self._prepare_tool_args(
-                        tool_name,
-                        dict(native_args),
-                        input_context,
-                    )
+                    prepared_args = dict(native_args)
                     step = StageStep(
                         round=request_index,
                         stage_name=self.stage_name,
@@ -1403,91 +1315,67 @@ class StageRunner:
                         )
                     else:
                         step.tool_args = prepared_args
-                        question_error = self._question_id_error(prepared_args)
-                        claim_error = self._claim_id_error(tool_name, prepared_args)
-                        scope_error = question_error or claim_error
-                        if scope_error:
-                            step.action_type = "format_error"
-                            step.metadata["error_class"] = "protocol_error"
-                            if question_error:
-                                step.metadata["invalid_question_id"] = True
-                            if claim_error:
-                                step.metadata["invalid_claim_id"] = True
+                        filtered_query_count = self._sanitize_search_queries(
+                            tool_name,
+                            prepared_args,
+                        )
+                        if filtered_query_count:
+                            step.metadata["policy_filtered_query_count"] = (
+                                filtered_query_count
+                            )
+                        search_policy_error = self._search_policy_error(
+                            tool_name,
+                            prepared_args,
+                            rejected_query_count=filtered_query_count,
+                        )
+                        if search_policy_error:
+                            self._record_search_query_rejection(
+                                step,
+                                tool_name,
+                                search_policy_error,
+                            )
                             step.tool_result = json.dumps(
                                 {
                                     "status": "error",
-                                    "error": scope_error,
+                                    "error": search_policy_error,
                                 },
                                 ensure_ascii=False,
                             )
                         else:
-                            filtered_query_count = self._sanitize_search_queries(
+                            step.action_type = "tool_call"
+                            serialized, tool_metadata = await self._execute_tool(
                                 tool_name,
-                                prepared_args,
+                                dict(prepared_args),
                             )
-                            if filtered_query_count:
-                                step.metadata["policy_filtered_query_count"] = (
-                                    filtered_query_count
-                                )
-                            search_policy_error = self._search_policy_error(
-                                tool_name,
-                                prepared_args,
-                                rejected_query_count=filtered_query_count,
+                            step.tool_result = serialized
+                            step.metadata.update(tool_metadata)
+                            self._archive_tool_step(
+                                step,
+                                action_index=(
+                                    len(self.prior_steps) + len(steps) + 1
+                                ),
                             )
-                            if search_policy_error:
-                                self._record_search_query_rejection(
-                                    step,
+                            evidence_so_far.append(
+                                self._summarize_tool_result(
                                     tool_name,
-                                    search_policy_error,
+                                    prepared_args,
+                                    serialized,
                                 )
-                                step.tool_result = json.dumps(
-                                    {
-                                        "status": "error",
-                                        "error": search_policy_error,
-                                    },
-                                    ensure_ascii=False,
-                                )
-                            else:
-                                step.action_type = "tool_call"
-                                serialized, tool_metadata = await self._execute_tool(
-                                    tool_name,
-                                    dict(prepared_args),
-                                )
-                                step.tool_result = serialized
-                                step.metadata.update(tool_metadata)
-                                self._archive_tool_step(
-                                    step,
-                                    action_index=(
-                                        len(self.prior_steps) + len(steps) + 1
-                                    ),
-                                )
-                                evidence_so_far.append(
-                                    self._summarize_tool_result(
-                                        tool_name,
-                                        prepared_args,
-                                        serialized,
-                                    )
-                                )
+                            )
 
                     steps.append(step)
                     response_steps.append(step)
-                    state_update = self._record_observation_update(step, steps)
                     function_results.append(
                         self._build_native_function_result(
                             call_id=call_id,
                             tool_name=tool_name,
-                            tool_args=step.tool_args,
                             result=step.tool_result,
-                            state_update=state_update,
-                            control_step=step,
                         )
                     )
                     follow_up_visual_items.extend(
                         await self._visual_reinjection_items(
                             tool_name,
                             result=step.tool_result,
-                            state_update=state_update,
-                            control_step=step,
                         )
                     )
 
@@ -1934,77 +1822,6 @@ class StageRunner:
             properties.pop("image_input", None)
             required = [name for name in required if name != "image_input"]
             parameters = self._normalize_native_schema(parameters)
-            properties = parameters.setdefault("properties", {})
-            if self.stage_name == "verification":
-                constrained_question_ids = list(
-                    self.tool_argument_constraints.get(tool.name, {}).get(
-                        "question_id",
-                        [],
-                    )
-                )
-                question_schema: Dict[str, Any] = {
-                    "type": "string",
-                    "description": (
-                        "Active runtime task/question id advanced by this call. "
-                        "When enum values are supplied, use one exactly."
-                    ),
-                }
-                if constrained_question_ids:
-                    question_schema["enum"] = constrained_question_ids
-                elif self.active_question_ids:
-                    question_schema["enum"] = self.active_question_ids
-                properties["question_id"] = question_schema
-                if "question_id" not in required:
-                    required.append("question_id")
-                claim_ids = list(
-                    dict.fromkeys(
-                        claim_id
-                        for question_id in (
-                            constrained_question_ids or self.active_question_ids
-                        )
-                        for claim_id in self.question_claim_options.get(
-                            question_id,
-                            {},
-                        )
-                    )
-                )
-                if tool.name in _CLAIM_SCOPED_EVIDENCE_TOOLS and claim_ids:
-                    properties["claim_id"] = {
-                        "type": "string",
-                        "enum": claim_ids,
-                        "description": (
-                            "One runtime-owned ImageClaim whose stance this "
-                            "inspection should evaluate."
-                        ),
-                    }
-                    requires_claim_selection = any(
-                        len(self.question_claim_options.get(question_id, {})) > 1
-                        for question_id in (
-                            constrained_question_ids or self.active_question_ids
-                        )
-                    )
-                    if requires_claim_selection and "claim_id" not in required:
-                        required.append("claim_id")
-                constrained_fields = self.tool_argument_constraints.get(
-                    tool.name,
-                    {},
-                )
-                runtime_bound = {
-                    name
-                    for name in self._runtime_bound_visual_fields(tool.name)
-                    if (
-                        not constrained_fields.get(name)
-                        and self._runtime_visual_binding_available(
-                            tool.name,
-                            name,
-                        )
-                    )
-                }
-                if runtime_bound:
-                    required = [name for name in required if name not in runtime_bound]
-                    for name in runtime_bound:
-                        if name in {"image_claim", "retrieval_goal"}:
-                            properties.pop(name, None)
             parameters["required"] = required
             parameters["additionalProperties"] = False
             schemas.append(
@@ -2543,30 +2360,13 @@ class StageRunner:
         *,
         call_id: str,
         tool_name: str,
-        tool_args: Dict[str, Any],
         result: str,
-        state_update: Optional[Dict[str, Any]] = None,
-        control_step: Optional[StageStep] = None,
     ) -> Dict[str, Any]:
-        recorded_step = control_step or StageStep(
-            action_type="tool_call" if not self._tool_result_is_error(result) else "format_error",
-            tool_name=tool_name,
-            tool_args=dict(tool_args),
-            metadata=(
-                {"investigation_state_update": state_update}
-                if state_update
-                else {}
-            ),
-        )
-        self._control_steps = list(getattr(self, "_control_steps", [])) + [recorded_step]
-        observed_result = self._model_visible_tool_result(tool_name, result)
-        question_id = str(tool_args.get("__question_id", "")).strip()
+        observed_result = self._model_visible_tool_result(result)
         content: Dict[str, Any] = {
             "function_call_id": call_id,
             "result": observed_result,
         }
-        if question_id:
-            content["question_id"] = question_id
         text = json.dumps(content, ensure_ascii=False, default=str)
         return {
             "type": "function_result",
@@ -2589,19 +2389,13 @@ class StageRunner:
         tool_name: str,
         *,
         result: str,
-        state_update: Optional[Dict[str, Any]] = None,
-        control_step: Optional[StageStep] = None,
     ) -> List[Dict[str, Any]]:
         items: List[Dict[str, Any]] = []
         if (
             tool_name in {"focused_visual_inspection", "crop_and_inspect"}
             and self.runtime_store is not None
         ):
-            artifacts = self._visual_view_artifacts(
-                result,
-                state_update=state_update,
-                control_step=control_step,
-            )
+            artifacts = self._visual_view_artifacts(result)
             for artifact in artifacts:
                 descriptor = artifact.get("artifact")
                 if not isinstance(descriptor, dict):
@@ -2727,22 +2521,7 @@ class StageRunner:
         return urls
 
     @staticmethod
-    def _visual_view_artifacts(
-        result: str,
-        *,
-        state_update: Optional[Dict[str, Any]] = None,
-        control_step: Optional[StageStep] = None,
-    ) -> List[Dict[str, Any]]:
-        for source in (
-            state_update,
-            getattr(control_step, "metadata", {}).get("investigation_state_update")
-            if control_step is not None
-            else None,
-        ):
-            if isinstance(source, dict):
-                artifacts = source.get("visual_view_artifacts") or source.get("view_artifacts")
-                if isinstance(artifacts, list) and artifacts:
-                    return [dict(item) for item in artifacts if isinstance(item, dict)]
+    def _visual_view_artifacts(result: str) -> List[Dict[str, Any]]:
         try:
             parsed, succeeded = parse_tool_result(result)
         except Exception:
@@ -3037,17 +2816,6 @@ class StageRunner:
         tool_calls = sum(1 for step in steps if step.action_type == "tool_call")
         if tool_calls < self.min_tool_calls:
             return False, f"at least {self.min_tool_calls} tool calls are required; only {tool_calls} completed"
-        required_question_error = self._required_question_output_error(steps)
-        if required_question_error:
-            suffix = (
-                " No more tool turns remain."
-                if final_attempt and self._available_tool_names(steps=steps)
-                else " This is the final correction attempt for this stage; a "
-                "non-terminal output remains valid."
-                if final_attempt
-                else ""
-            )
-            return False, required_question_error + suffix
         if self.output_validator:
             accepted, reason = self.output_validator(parsed, steps)
             if not accepted:
@@ -3061,231 +2829,6 @@ class StageRunner:
                 )
                 return False, reason + suffix
         return True, ""
-
-    def _prepare_tool_args(
-        self,
-        tool_name: str,
-        tool_args: Dict[str, Any],
-        input_context: str,
-    ) -> Dict[str, Any]:
-        if self.stage_name != "verification":
-            return tool_args
-        question_id = str(tool_args.pop("question_id", "")).strip()
-        if question_id:
-            tool_args["__question_id"] = question_id
-            selected_claim_id = str(tool_args.pop("claim_id", "")).strip()
-            claim_options = self.question_claim_options.get(question_id, {})
-            if not selected_claim_id and len(claim_options) == 1:
-                selected_claim_id = next(iter(claim_options))
-            claim_text = str(
-                claim_options.get(selected_claim_id)
-                or self.question_claims.get(question_id, "")
-            ).strip()
-            if selected_claim_id:
-                tool_args["__claim_id"] = selected_claim_id
-            if claim_text:
-                tool_args["__claim_text"] = claim_text
-            evidence_goal = self.question_evidence_goals.get(question_id, "").strip()
-            if evidence_goal:
-                tool_args["__evidence_goal"] = evidence_goal
-            tool = self.tools.get(tool_name)
-            runtime_properties = (
-                tool.parameters.get("properties", {})
-                if tool is not None
-                else {}
-            )
-            if (
-                tool_name in {"visit", "crop_and_search"}
-                and "image_claim" in runtime_properties
-                and "retrieval_goal" in runtime_properties
-            ):
-                tool_args.pop("goal", None)
-                if claim_text:
-                    tool_args["image_claim"] = claim_text
-                requested_goal = str(tool_args.get("retrieval_goal", "")).strip()
-                if requested_goal or evidence_goal or claim_text:
-                    tool_args["retrieval_goal"] = (
-                        requested_goal or evidence_goal or claim_text
-                    )
-            elif tool_name == "text_search":
-                immutable_goal = evidence_goal or claim_text
-                if immutable_goal:
-                    tool_args["goal"] = immutable_goal
-        return tool_args
-
-    def _bind_pending_visual_args(
-        self,
-        tool_name: str,
-        tool_args: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        bound = dict(tool_args)
-        visual_question_id = str(bound.get("visual_question_id", "")).strip()
-        if self.stage_name != "verification" or not visual_question_id:
-            return bound
-        spec = next(
-            (
-                item
-                for item in self._pending_visual_questions()
-                if str(item.get("visual_question_id", "")).strip() == visual_question_id
-            ),
-            None,
-        )
-        if not spec:
-            return bound
-        question_id = str(bound.get("__question_id", "")).strip()
-        claim_id = str(spec.get("claim_id", "")).strip()
-        if question_id and claim_id and claim_id != f"claim-{question_id}":
-            return bound
-
-        source_evidence_id = str(spec.get("source_evidence_id", "")).strip()
-        source_discovery_id = str(spec.get("source_discovery_id", "")).strip()
-        expected_property = str(spec.get("expected_property", "")).strip()
-        target_bbox = list(spec.get("target_bbox") or [])
-        reference_url = str(spec.get("reference_image_url", "")).strip()
-
-        if source_evidence_id:
-            bound["source_evidence_id"] = source_evidence_id
-        if source_discovery_id:
-            bound["source_discovery_id"] = source_discovery_id
-        if expected_property:
-            bound["expected_property"] = expected_property
-        if target_bbox and tool_name in {"crop_and_inspect", "crop_and_search", "count_objects", "ocr_with_position"}:
-            bound["bbox"] = target_bbox
-        if reference_url and tool_name == "compare_with_reference":
-            bound["reference_url"] = reference_url
-        if expected_property:
-            if tool_name == "crop_and_inspect":
-                bound.setdefault("focus_question", expected_property)
-            elif tool_name == "ocr_with_position":
-                bound.setdefault("goal", expected_property)
-            elif tool_name == "count_objects":
-                bound.setdefault("target_object", expected_property[:200])
-            elif tool_name == "compare_with_reference":
-                bound.setdefault("focus", expected_property[:400])
-        return bound
-
-    def _runtime_bound_visual_fields(self, tool_name: str) -> set[str]:
-        if tool_name == "visit":
-            return (
-                {"image_claim"}
-                if self.question_claim_options
-                else {"image_claim", "retrieval_goal"}
-            )
-        if tool_name == "compare_with_reference":
-            return {"reference_url"}
-        if tool_name == "crop_and_inspect":
-            return {"bbox", "focus_question"}
-        if tool_name == "crop_and_search":
-            return (
-                {"bbox", "image_claim"}
-                if self.question_claim_options
-                else {"bbox", "image_claim", "retrieval_goal"}
-            )
-        if tool_name == "ocr_with_position":
-            return {"bbox", "goal"}
-        if tool_name == "count_objects":
-            return {"bbox", "target_object"}
-        return set()
-
-    def _runtime_visual_binding_available(
-        self,
-        tool_name: str,
-        field_name: str,
-    ) -> bool:
-        """Return whether a pending visual spec can fill a tool field.
-
-        Visual fields must remain model-required for ordinary investigation
-        tasks.  They become runtime-bound only when a concrete pending
-        visual-question record supplies the corresponding value.
-        """
-
-        pending = self._pending_visual_questions()
-        if not pending:
-            return False
-        if field_name == "bbox":
-            return any(
-                isinstance(item.get("target_bbox"), list)
-                and len(item.get("target_bbox") or []) == 4
-                for item in pending
-            )
-        if field_name == "focus_question":
-            return any(
-                str(item.get("expected_property", "")).strip()
-                for item in pending
-            )
-        if field_name == "target_object":
-            return any(
-                str(item.get("expected_property", "")).strip()
-                for item in pending
-            )
-        if field_name == "reference_url":
-            return any(
-                str(item.get("reference_image_url", "")).strip()
-                for item in pending
-            )
-        return False
-
-    def _question_id_error(self, tool_args: Dict[str, Any]) -> str:
-        if self.stage_name != "verification":
-            return ""
-        question_id = str(tool_args.get("__question_id", "")).strip()
-        if not question_id:
-            return "question_id is required for every verification tool call."
-        if self.active_question_ids and question_id not in self.active_question_ids:
-            return (
-                f"Unknown question_id '{question_id}'. Valid ids: "
-                + ", ".join(self.active_question_ids)
-            )
-        if (
-            self.question_is_active is not None
-            and not self.question_is_active(question_id)
-        ):
-            return (
-                f"Task '{question_id}' is already resolved, blocked, or exhausted. "
-                "Choose a currently active task."
-            )
-        return ""
-
-    def _claim_id_error(
-        self,
-        tool_name: str,
-        tool_args: Dict[str, Any],
-    ) -> str:
-        if (
-            self.stage_name != "verification"
-            or tool_name not in _CLAIM_SCOPED_EVIDENCE_TOOLS
-        ):
-            return ""
-        question_id = str(tool_args.get("__question_id", "")).strip()
-        claim_options = self.question_claim_options.get(question_id, {})
-        if not claim_options:
-            return ""
-        claim_id = str(tool_args.get("__claim_id", "")).strip()
-        if not claim_id and len(claim_options) > 1:
-            return (
-                f"claim_id is required for tool {tool_name!r} on multi-Claim "
-                f"task {question_id!r}. Valid ids: "
-                + ", ".join(claim_options)
-            )
-        if claim_id and claim_id not in claim_options:
-            return (
-                f"Unknown claim_id {claim_id!r} for task {question_id!r}. "
-                "Valid ids: "
-                + ", ".join(claim_options)
-            )
-        return ""
-
-    def _priority_coverage_error(
-        self,
-        tool_args: Dict[str, Any],
-        current_steps: List[StageStep],
-    ) -> str:
-        """Keep ReAct tool selection free; coverage is enforced before output."""
-
-        # The outer Coverage Audit validates service and evidence after each iteration.
-        # Enforcing a P1/P2 call order here turns the agent into a fixed scheduler and
-        # creates avoidable rejected turns.
-        return ""
 
     def _search_policy_error(
         self,
@@ -3385,199 +2928,6 @@ class StageRunner:
         if rejected:
             tool_args["queries"] = allowed
         return len(rejected)
-
-    def _resolved_question_ids(self, current_steps: List[StageStep]) -> set[str]:
-        resolved = set(self.resolved_priority_question_ids)
-        resolved.update(self.resolved_supporting_question_ids)
-        for step in [*self.prior_steps, *current_steps, *list(getattr(self, "_control_steps", []))]:
-            update = (step.metadata or {}).get("investigation_state_update", {})
-            if not isinstance(update, dict):
-                continue
-            delta = update.get("belief_delta", {})
-            if not isinstance(delta, dict):
-                continue
-            claim_id = str(delta.get("claim_id", ""))
-            if (
-                claim_id.startswith("claim-")
-                and str(delta.get("new_status", "")) in {"supported", "refuted"}
-            ):
-                resolved.add(claim_id.removeprefix("claim-"))
-        return resolved
-
-    def _required_question_output_error(self, current_steps: List[StageStep]) -> str:
-        if self.stage_name != "verification":
-            return ""
-        resolved = self._resolved_question_ids(current_steps)
-        attempted = {
-            str(step.tool_args.get("__question_id", "")).strip()
-            for step in [*self.prior_steps, *current_steps]
-            if step.action_type == "tool_call"
-            and str(step.tool_args.get("__question_id", "")).strip()
-        }
-        missing_p1 = [
-            item
-            for item in self.priority_question_ids
-            if item not in resolved and item not in attempted
-        ]
-        missing_p2 = [
-            item
-            for item in self.supporting_question_ids
-            if item not in resolved and item not in attempted
-        ]
-        if not missing_p1 and not missing_p2:
-            return ""
-        parts = []
-        if missing_p1:
-            parts.append("untouched P1: " + ", ".join(missing_p1))
-        if missing_p2:
-            parts.append("untouched P2: " + ", ".join(missing_p2))
-        return "required investigation questions still need a tool attempt (" + "; ".join(parts) + ")"
-
-    def _pending_visual_call_is_valid(self, tool_args: Dict[str, Any]) -> bool:
-        visual_question_id = str(tool_args.get("visual_question_id", "")).strip()
-        question_id = str(tool_args.get("__question_id", "")).strip()
-        for step in [*self.prior_steps, *list(getattr(self, "_control_steps", []))]:
-            update = (step.metadata or {}).get("investigation_state_update", {})
-            if not isinstance(update, dict):
-                continue
-            created = update.get("created_visual_questions", []) or []
-            for item in created:
-                if not isinstance(item, dict):
-                    continue
-                if (
-                    str(item.get("visual_question_id", "")) == visual_question_id
-                    and str(item.get("claim_id", "")) == f"claim-{question_id}"
-                    and str(item.get("status", "pending")) == "pending"
-                ):
-                    return visual_question_id in self._pending_visual_question_ids()
-        return False
-
-    def _agent_control_state(self) -> Dict[str, Any]:
-        steps = list(self.prior_steps) + list(getattr(self, "_control_steps", []))
-        attempts = {question_id: 0 for question_id in self.active_question_ids}
-        for step in steps:
-            if step.action_type != "tool_call":
-                continue
-            question_id = str(step.tool_args.get("__question_id", "")).strip()
-            if question_id:
-                attempts[question_id] = attempts.get(question_id, 0) + 1
-        untouched_priority = [
-            question_id
-            for question_id in self.priority_question_ids
-            if attempts.get(question_id, 0) == 0
-        ]
-        untouched_supporting = [
-            question_id
-            for question_id in self.supporting_question_ids
-            if attempts.get(question_id, 0) == 0
-        ]
-        remaining = {}
-        for tool_name, limit in self.tool_call_limits.items():
-            used = sum(
-                1
-                for step in steps
-                if step.action_type == "tool_call" and step.tool_name == tool_name
-            )
-            remaining[tool_name] = max(0, int(limit) - used)
-        claim_states = self._claim_control_states()
-        return {
-            "question_attempts": attempts,
-            "untouched_priority_question_ids": untouched_priority,
-            "untouched_supporting_question_ids": untouched_supporting,
-            "remaining_tool_budgets": remaining,
-            "pending_visual_question_ids": self._pending_visual_question_ids(),
-            "pending_visual_questions": self._pending_visual_questions(),
-            "claim_states": claim_states,
-            "next_action_guidance": self._next_action_guidance(
-                untouched_priority,
-                untouched_supporting,
-                claim_states,
-            ),
-        }
-
-    def _next_action_guidance(
-        self,
-        untouched_priority: List[str],
-        untouched_supporting: List[str],
-        claim_states: Optional[List[Dict[str, Any]]] = None,
-    ) -> str:
-        if untouched_priority:
-            return "Attempt one untouched P1 question before resampling."
-        if untouched_supporting:
-            return "Attempt one untouched P2 question before further P1 resampling."
-        pending = self._pending_visual_questions()
-        if pending:
-            return "Resolve a pending ReInspect specification with its recommended tool."
-        unresolved_priority = [
-            item
-            for item in self.priority_question_ids
-            if item not in self._resolved_question_ids([])
-        ]
-        if unresolved_priority:
-            unresolved_rows = [
-                item for item in (claim_states or [])
-                if item.get("question_id") in unresolved_priority
-            ]
-            if unresolved_rows:
-                details = "; ".join(
-                    f"{item['question_id']}: {item.get('remaining_gap', 'needs decisive evidence')}"
-                    for item in unresolved_rows
-                )
-                return (
-                    "Collect an independent direct official/news source for unresolved P1; "
-                    "do not resubmit rejected or UGC-only evidence. " + details
-                )
-            return (
-                "Choose the highest-value direct-source follow-up for unresolved P1: "
-                + ", ".join(unresolved_priority)
-            )
-        return "Finalize when the evidence ledger can support the required output."
-
-    def _claim_control_states(self) -> List[Dict[str, Any]]:
-        latest: Dict[str, Dict[str, Any]] = {}
-        for step in [*self.prior_steps, *list(getattr(self, "_control_steps", []))]:
-            update = (step.metadata or {}).get("investigation_state_update", {})
-            if not isinstance(update, dict):
-                continue
-            delta = update.get("belief_delta", {})
-            if not isinstance(delta, dict):
-                continue
-            claim_id = str(delta.get("claim_id", "")).strip()
-            if not claim_id.startswith("claim-"):
-                continue
-            question_id = claim_id.removeprefix("claim-")
-            latest[question_id] = {
-                "question_id": question_id,
-                "status": str(delta.get("new_status", "open")),
-                "operation": str(delta.get("operation", "zero")),
-                "remaining_gap": str(delta.get("explanation", ""))[:500],
-            }
-        return [latest[key] for key in sorted(latest)]
-
-    def _pending_visual_question_ids(self) -> List[str]:
-        return [
-            str(item["visual_question_id"])
-            for item in self._pending_visual_questions()
-        ]
-
-    def _pending_visual_questions(self) -> List[Dict[str, Any]]:
-        pending: List[str] = []
-        specs: Dict[str, Dict[str, Any]] = {}
-        for step in [*self.prior_steps, *list(getattr(self, "_control_steps", []))]:
-            update = (step.metadata or {}).get("investigation_state_update", {})
-            if not isinstance(update, dict):
-                continue
-            for item in update.get("created_visual_questions", []) or []:
-                if isinstance(item, dict) and item.get("visual_question_id"):
-                    visual_id = str(item["visual_question_id"])
-                    pending.append(visual_id)
-                    specs[visual_id] = dict(item)
-            for item in update.get("resolved_visual_questions", []) or []:
-                if isinstance(item, dict) and item.get("visual_question_id"):
-                    resolved_id = str(item["visual_question_id"])
-                    pending = [value for value in pending if value != resolved_id]
-                    specs.pop(resolved_id, None)
-        return [specs[value] for value in dict.fromkeys(pending) if value in specs]
 
     @staticmethod
     def _output_format_instructions() -> str:
@@ -3981,13 +3331,6 @@ class StageRunner:
 
         if self.tool_cache and tool_name in self.cacheable_tools:
             cache_tool_args = dict(tool_args)
-            for key in (
-                "__question_id",
-                "__claim_id",
-                "__claim_text",
-                "__evidence_goal",
-            ):
-                cache_tool_args.pop(key, None)
             properties = self.tools[tool_name].parameters.get(
                 "properties",
                 {},
@@ -4007,10 +3350,6 @@ class StageRunner:
         tool_args: Dict[str, Any],
     ) -> Tuple[str, Dict[str, Any]]:
         tool = self.tools[tool_name]
-        tool_args.pop("__question_id", None)
-        tool_args.pop("__claim_id", None)
-        tool_args.pop("__claim_text", None)
-        tool_args.pop("__evidence_goal", None)
         properties = tool.parameters.get("properties", {})
         if "image_input" in properties:
             tool_args["image_input"] = self.image_path
@@ -4268,11 +3607,9 @@ class StageRunner:
             )
         if succeeded:
             parsed_result, _ = parse_tool_result(serialized)
-            canonical = self._canonical_tool_result(
-                tool_name,
-                parsed_result,
+            serialized, succeeded = serialize_tool_result(
+                self._strip_model_media(parsed_result)
             )
-            serialized, succeeded = serialize_tool_result(canonical)
         if succeeded and self.source_access_policy.active:
             parsed_result, _ = parse_tool_result(serialized)
             sanitized, filtered_count = self.source_access_policy.sanitize_payload(parsed_result)
@@ -4323,10 +3660,6 @@ class StageRunner:
 
     def _build_cache_args(self, tool_name: str, tool_args: Dict[str, Any]) -> Dict[str, Any]:
         args = dict(tool_args)
-        args.pop("__question_id", None)
-        args.pop("__claim_id", None)
-        args.pop("__claim_text", None)
-        args.pop("__evidence_goal", None)
         if tool_name in {"compare_with_reference", "analyze_visual_anomalies"} and self.image_path:
             args["__image_input__"] = self.image_path
         if tool_name in {"visit", "crop_and_search"}:
@@ -4335,17 +3668,14 @@ class StageRunner:
 
     def _build_tool_response_message(
         self,
-        tool_name: str,
-        tool_args: Dict[str, Any],
         result: str,
         *,
         function_call_id: str,
-        state_update: Optional[Dict[str, Any]] = None,
         native_chat: bool = False,
     ) -> str:
         payload = {
             "function_call_id": function_call_id,
-            "result": self._model_visible_tool_result(tool_name, result),
+            "result": self._model_visible_tool_result(result),
         }
         text = json.dumps(
             payload,
@@ -4356,25 +3686,6 @@ class StageRunner:
         if native_chat:
             return text
         return f"<tool_response>\n{text}\n</tool_response>"
-
-    def _record_observation_update(
-        self,
-        step: StageStep,
-        steps: List[StageStep],
-    ) -> Optional[Dict[str, Any]]:
-        if self.observation_callback is None or step.action_type != "tool_call":
-            return None
-        update = self.observation_callback(step, list(self.prior_steps) + list(steps))
-        if update:
-            step.metadata["investigation_state_update"] = update
-            memory_id = str(
-                (step.metadata.get("tool_result_artifact") or {}).get(
-                    "memory_id", ""
-                )
-            ).strip()
-            if self.runtime_store is not None and memory_id:
-                self.runtime_store.bind_archive_lineage(memory_id, update)
-        return update
 
     def _archive_tool_step(self, step: StageStep, *, action_index: int) -> None:
         if self.runtime_store is None or step.action_type != "tool_call":
@@ -4399,7 +3710,6 @@ class StageRunner:
 
     def _model_visible_tool_result(
         self,
-        tool_name: str,
         result: str,
     ) -> Any:
         """Return the complete textual observation for the next policy turn.
@@ -4425,12 +3735,7 @@ class StageRunner:
             return {"status": "error", "error": str(result).strip()}
 
         if isinstance(data, (dict, list)):
-            data = self._strip_model_media(data)
-            if tool_name == "visit" and isinstance(data, dict):
-                # Reducer projections are not page observations.
-                data.pop("validated_claim_state", None)
-                data.pop("agent_control_state", None)
-            return data
+            return self._strip_model_media(data)
         return str(result)
 
     @staticmethod
@@ -4456,119 +3761,6 @@ class StageRunner:
         if isinstance(value, tuple):
             return [StageRunner._strip_model_media(item) for item in value]
         return value
-
-    def _canonical_tool_result(
-        self,
-        tool_name: str,
-        data: Any,
-    ) -> Dict[str, Any]:
-        if not isinstance(data, dict):
-            raise ToolResultContractError(
-                f"{tool_name} result must be an object"
-            )
-        status = str(data.get("status", "")).strip().lower()
-        if status != "success":
-            return dict(data)
-        if tool_name in {"text_search", "text_image_search"}:
-            return self._canonical_search_result(data)
-        if tool_name == "visit":
-            return self._canonical_visit_result(data)
-        if tool_name in {"reverse_image_search", "crop_and_search"}:
-            # These tools already produce bounded provider-side result sets.
-            # Keep every textual field of that completed observation.
-            canonical = self._strip_model_media(data)
-            canonical["status"] = "success"
-            return canonical
-        return dict(data)
-
-    @staticmethod
-    def _canonical_search_result(data: Dict[str, Any]) -> Dict[str, Any]:
-        canonical = StageRunner._strip_model_media(data)
-        queries = canonical.get("queries")
-        result_count = 0
-        if isinstance(queries, list):
-            normalized_queries = []
-            for item in queries:
-                if not isinstance(item, dict):
-                    continue
-                normalized = dict(item)
-                rows = [
-                    dict(row)
-                    for row in (item.get("results", []) or [])
-                    if isinstance(row, dict)
-                ]
-                normalized["results"] = rows
-                result_count += len(rows)
-                normalized_queries.append(normalized)
-            canonical["queries"] = normalized_queries
-        elif isinstance(canonical.get("results"), list):
-            result_count = len(canonical["results"])
-        canonical["status"] = "success"
-        canonical["observation_status"] = (
-            "has_results" if result_count else "empty_results"
-        )
-        if not result_count:
-            canonical["observation_note"] = (
-                "The search request completed but returned no candidate results. "
-                "Treat the current question as unresolved."
-            )
-        return canonical
-
-    def _canonical_visit_result(
-        self,
-        data: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        canonical = self._strip_model_media(data)
-        canonical["status"] = "success"
-        for field_name in ("evidence_records", "visits"):
-            values = canonical.get(field_name)
-            if isinstance(values, list):
-                canonical[field_name] = [
-                    self._strip_model_media(item)
-                    for item in values
-                    if isinstance(item, dict)
-                ]
-        # This was a legacy reducer projection, not page content. It duplicated
-        # state in every visit result and could make the next turn look as if
-        # the page itself had asserted those fields.
-        canonical.pop("validated_claim_state", None)
-        has_observation = any(
-            str(canonical.get(key, "")).strip()
-            for key in (
-                "evidence",
-                "evidence_context",
-                "summary",
-                "rationale",
-                "content_status",
-            )
-        ) or bool(canonical.get("evidence_records"))
-        if not has_observation:
-            canonical["observation_status"] = "empty_success_payload"
-            canonical["observation_note"] = (
-                "The page request completed without a usable extracted "
-                "observation; do not treat status=success as evidence."
-            )
-        return canonical
-
-    @staticmethod
-    def _canonical_reverse_image_result(
-        data: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        return {
-            "status": "success",
-            "branch": str(data.get("branch", "lens")),
-            "subcalls": list(data.get("subcalls", []) or []),
-            **StageRunner._compact_reverse_image_result(data),
-        }
-
-    @staticmethod
-    def _canonical_crop_and_search_result(
-        data: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        return {
-            "status": "success",
-            **StageRunner._compact_crop_and_search_result(data),
-        }
 
     def _compact_visit_result(self, data: Any) -> Any:
         if not isinstance(data, dict):
@@ -4666,7 +3858,6 @@ class StageRunner:
             "evidence_eligible": bool(data.get("evidence_eligible", False)),
             "evidence_records": evidence_records,
             "visits": visits,
-            "validated_claim_state": self._claim_control_states(),
         }
 
     @staticmethod
@@ -5058,7 +4249,6 @@ class StageRunner:
         for step in [
             *self.prior_steps,
             *steps,
-            *list(getattr(self, "_control_steps", [])),
         ]:
             if step.action_type != "tool_call":
                 continue
@@ -5116,9 +4306,6 @@ class StageRunner:
     def _normalize_tool_args(tool_args: Dict[str, Any]) -> Dict[str, Any]:
         normalized = {}
         for key, value in sorted(tool_args.items()):
-            if key == "__question_id":
-                normalized["question_id"] = value
-                continue
             if key.startswith("__"):
                 continue
             if isinstance(value, list):

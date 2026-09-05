@@ -7,20 +7,12 @@ import re
 from typing import Any, Dict, Iterable, List, Mapping, Sequence
 from urllib.parse import urlsplit, urlunsplit
 
-from src.orchestrator.evidence_semantics import (
-    evidence_is_qualified_for_stance,
-    required_assessment_stances,
-    same_capture_can_support_visual_claim,
-)
-from src.orchestrator.route_policy import semantic_duplicate_count
 from src.orchestrator.tool_result import parse_tool_result
-from src.orchestrator.investigation_models import target_fact_rows
-from src.orchestrator.unified_react import (  # noqa: E402
-    is_unified_react_budget_action,
+from src.orchestrator.react_runtime import (
+    is_unified_react_runtime_budget_action,
 )
 
 
-FACT_MATCH_THRESHOLD = 0.35
 LABEL_TO_VERDICT = {
     "supported": "real",
     "refuted": "fake",
@@ -548,6 +540,218 @@ def _low_value_action_count(
     return count
 
 
+def _raw_observation_rows(
+    steps: Sequence[Mapping[str, Any]],
+) -> tuple[list[dict[str, Any]], int]:
+    rows: list[dict[str, Any]] = []
+    max_no_match_streak = 0
+    current_no_match_streak = 0
+    for index, step in enumerate(steps):
+        if not is_unified_react_runtime_budget_action(step):
+            continue
+        metadata = _mapping(step.get("metadata"))
+        call_id = str(metadata.get("function_call_id", "")).strip()
+        raw_result = str(step.get("tool_result", ""))
+        tool_name = str(step.get("tool_name", "")).strip()
+        status = "malformed"
+        succeeded = False
+        payload: Mapping[str, Any] = {}
+        try:
+            parsed, succeeded = parse_tool_result(raw_result)
+            payload = parsed
+            status = "success" if succeeded else "error"
+        except Exception:
+            pass
+        result_count = 0
+        for key in (
+            "results",
+            "lens_results",
+            "semantic_results",
+            "reference_image_candidates",
+            "candidate_page_urls",
+            "evidence_records",
+        ):
+            value = payload.get(key)
+            if isinstance(value, list):
+                result_count += len(value)
+        for query_row in payload.get("queries", []) or []:
+            if isinstance(query_row, Mapping):
+                result_count += len(query_row.get("results", []) or [])
+        observation_status = str(
+            payload.get("observation_status", "")
+        ).strip().casefold()
+        is_search = tool_name in {
+            "text_search",
+            "text_image_search",
+            "reverse_image_search",
+        }
+        no_match = bool(
+            succeeded
+            and is_search
+            and (
+                observation_status
+                in {"empty_results", "no_match", "no_results"}
+                or result_count == 0
+            )
+        )
+        if no_match:
+            current_no_match_streak += 1
+            max_no_match_streak = max(max_no_match_streak, current_no_match_streak)
+        else:
+            current_no_match_streak = 0
+        rows.append(
+            {
+                "step_index": index,
+                "observation_id": call_id,
+                "tool_name": tool_name,
+                "status": status,
+                "successful": succeeded,
+                "result_count": result_count,
+                "no_match": no_match,
+            }
+        )
+    return rows, max_no_match_streak
+
+
+def _score_raw_history_trace(
+    trace: Mapping[str, Any],
+    gold: Mapping[str, Any],
+    *,
+    score_metadata: Mapping[str, Any] | None = None,
+) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    state = _mapping(trace.get("state"))
+    steps = _rows(state.get("all_steps"))
+    observations, max_no_match_streak = _raw_observation_rows(steps)
+    successful_ids = [
+        str(item["observation_id"])
+        for item in observations
+        if item["successful"] and item["observation_id"]
+    ]
+    malformed_count = sum(item["status"] == "malformed" for item in observations)
+    error_count = sum(item["status"] == "error" for item in observations)
+    action_count = len(observations)
+    expected_verdict = LABEL_TO_VERDICT.get(
+        str(gold.get("factual_status", "")),
+        "unverifiable",
+    )
+    runtime_verdict = str(trace.get("verdict", "")).strip()
+    engineering_error = bool(
+        str(trace.get("termination", "")).strip() != "success"
+        or str(state.get("termination", "")).strip() not in {"", "success"}
+        or malformed_count
+        or runtime_verdict not in {"real", "fake"}
+    )
+    result_correct = bool(
+        not engineering_error
+        and expected_verdict in {"real", "fake"}
+        and runtime_verdict == expected_verdict
+    )
+    basis = _mapping(trace.get("verdict_basis"))
+    judgment = _mapping(trace.get("judgment") or state.get("judgment"))
+    basis_ids = [
+        str(item).strip()
+        for item in basis.get("observation_ids", []) or []
+        if str(item).strip()
+    ]
+    cited_ids = [
+        str(item).strip()
+        for item in judgment.get("verdict_observation_ids", []) or []
+        if str(item).strip()
+    ]
+    citation_valid = bool(
+        len(cited_ids) == len(set(cited_ids))
+        and set(cited_ids) <= set(successful_ids)
+    )
+    basis_aligned = basis_ids == successful_ids
+    judgment_outputs = [
+        index
+        for index, step in enumerate(steps)
+        if str(step.get("stage", "")).strip() == "unified_judgment"
+        and str(step.get("action_type", "")).strip() == "output"
+    ]
+    terminal_index = judgment_outputs[-1] if judgment_outputs else len(steps)
+    post_verdict_action_count = sum(
+        is_unified_react_runtime_budget_action(step)
+        for step in steps[terminal_index + 1 :]
+    )
+    low_value_action_count = sum(
+        item["tool_name"] == "current_time" for item in observations
+    )
+    first_error = _first_error(trace, steps)
+    exclusion_reasons: list[str] = []
+    if not result_correct:
+        exclusion_reasons.append("incorrect_result")
+    if engineering_error:
+        exclusion_reasons.append("engineering_error")
+    if not basis_aligned:
+        exclusion_reasons.append("verdict_basis_misaligned")
+    if not citation_valid:
+        exclusion_reasons.append("verdict_observation_citation_invalid")
+    if post_verdict_action_count:
+        exclusion_reasons.append("actions_after_judgment")
+    training_eligible = not exclusion_reasons
+    process_metrics = {
+        "schema_version": "ifv-process-metrics-raw-history-v1",
+        "case_id": str(gold.get("case_id") or trace.get("image_id") or ""),
+        "score_metadata": dict(score_metadata or {}),
+        "engineering_error": engineering_error,
+        "expected_verdict": expected_verdict,
+        "runtime_verdict": runtime_verdict,
+        "result_correct": result_correct,
+        "tool_actions": action_count,
+        "raw_observations": observations,
+        "successful_observation_count": len(successful_ids),
+        "error_observation_count": error_count,
+        "malformed_observation_count": malformed_count,
+        "successful_empty_search_count": sum(item["no_match"] for item in observations),
+        "max_successful_no_match_streak": max_no_match_streak,
+        "verdict_basis_alignment": 1.0 if basis_aligned else 0.0,
+        "verdict_observation_citation_validity": 1.0 if citation_valid else 0.0,
+        "post_determination_action_count": post_verdict_action_count,
+        "low_value_action_count": low_value_action_count,
+        "low_value_action_rate": round(
+            low_value_action_count / action_count if action_count else 0.0,
+            6,
+        ),
+        "stop_quality": 1.0 if judgment_outputs and not post_verdict_action_count else 0.0,
+        "premature_finish": not bool(judgment_outputs),
+        "duplicate_action_count": 0,
+        "duplicate_action_rate": 0.0,
+        "llm_api_calls": int(trace.get("llm_api_calls", 0) or 0),
+        "token_usage": dict(_mapping(trace.get("token_usage"))),
+        "latency_seconds": float(trace.get("time_taken", 0.0) or 0.0),
+        "first_error": first_error,
+        "training_eligible": training_eligible,
+        "training_exclusion_reasons": exclusion_reasons,
+    }
+    components = {
+        "result_reward": 1.0 if result_correct else 0.0,
+        "raw_history_grounding_reward": 1.0 if citation_valid else 0.0,
+        "stop_quality_reward": process_metrics["stop_quality"],
+        "protocol_penalty": -1.0 if malformed_count else 0.0,
+        "normalized_cost_penalty": round(-0.25 * min(1.0, action_count / 24.0), 6),
+    }
+    teacher_score = {
+        "schema_version": "ifv-trajectory-score-raw-history-v1",
+        "case_id": process_metrics["case_id"],
+        "score_metadata": dict(score_metadata or {}),
+        "components": components,
+        "total": round(sum(components.values()), 6),
+        "training_eligible": training_eligible,
+        "training_exclusion_reasons": exclusion_reasons,
+        "diagnostics": {
+            "successful_observation_ids": successful_ids,
+            "basis_observation_ids": basis_ids,
+            "verdict_observation_ids": cited_ids,
+            "max_successful_no_match_streak": max_no_match_streak,
+            "error_observation_count": error_count,
+            "malformed_observation_count": malformed_count,
+            "first_error": first_error,
+        },
+    }
+    return process_metrics, teacher_score
+
+
 def score_process_trace(
     trace: Mapping[str, Any],
     gold: Mapping[str, Any],
@@ -563,7 +767,7 @@ def score_process_trace(
         or ""
     )
     if policy_version == "unified-react-v1":
-        return _score_discrepancy_trace(
+        return _score_raw_history_trace(
             trace,
             gold,
             score_metadata=score_metadata,

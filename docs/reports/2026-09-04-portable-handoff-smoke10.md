@@ -170,8 +170,55 @@ trajectory catalog 中另有 6 条 `over_128k_estimate`。它们全部已被 SFT
 0.48–1.19 MB，估算约 161K–398K。若未来有这类轨迹通过质量 gate，必须在接收前跑真实
 processor；当前没有把它们混进训练。
 
+## 2026-09-04 四轮质量重跑
+
+针对上述 10 条 case，按“首轮完成后，仅对未通过 SFT 的 case 逐轮重跑”的规则完成了
+四个候选阶段。首轮使用既有完整 trace 作为候选 1；后面三轮使用提交
+`99bd323` 的当前 Agent 代码。
+
+运行目录：
+
+```text
+/gsdata/home/wza/image-factual-verifier-v2-data/generated/teacher-rollouts/
+portable-handoff-smoke10-20260904-414cb07-four-candidate-reroll-20260904-99bd323/
+```
+
+每轮结果：
+
+| 阶段 | 本轮候选数 | SFT 通过 | 继续重跑 |
+| --- | ---: | ---: | ---: |
+| 首轮候选 1 | 10 | 3 | 7 |
+| quality-reroll-01 候选 2 | 7 | 1 | 6 |
+| quality-reroll-02 候选 3 | 6 | 0 | 6 |
+| quality-reroll-03 候选 4 | 6 | 0 | 0 |
+
+总计 29 条候选全部正常完成，0 工程错误、0 未完成候选。最终结果：
+
+- 选中可用轨迹：4/10；
+- 四轮均未通过、标记为 hard case：6/10；
+- 选中的 case：`main-02728`、`main-02731`、`main-02732`、
+  `main-02733`；
+- `main-02733` 在第一轮重跑中首次通过 SFT；
+- 其余 6 个 case 在最多四个候选后仍未通过。
+
+最终 release 与训练包：
+
+```text
+/gsdata/home/wza/image-factual-verifier-v2-data/generated/teacher-rollouts/
+portable-handoff-smoke10-20260904-414cb07-four-candidate-reroll-20260904-99bd323/
+quality-reroll-release/
+
+/gsdata/home/wza/image-factual-verifier-v2-data/generated/teacher-rollouts/
+portable-handoff-smoke10-20260904-414cb07-four-candidate-reroll-20260904-99bd323/
+quality-reroll-training-package/
+```
+
+训练包包含 4 条 policy、4 条 perception、0 条 action-only；所有轮次的原始 trace、
+SFT artifact 和候选 provenance 均保留。运行结束后 autopilot、rollout、SFT judge
+进程均已退出，服务器 `CLOSE-WAIT=0`。
+
 ## 停止点
 
-已完成本次真实 smoke、结构审计、SFT judge、SFT 导出和真实 processor 验证。全量
+已完成本次真实 smoke、结构审计、SFT judge、四轮质量重跑、SFT 导出和真实 processor 验证。全量
 8,490 条教师 rollout 仍未启动，等待对“开放图片事实调查”和“传播 claim 核查”任务边界的
 人工决定。
