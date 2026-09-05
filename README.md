@@ -27,7 +27,7 @@
 `legacy-v4-pre-unified-cleanup-20260827` 标记及历史文档中保留，不属于当前生产入口。
 
 当前 raw-history 清理进度见
-`docs/plans/2026-09-05-raw-history-cleanup-status.md`。
+`docs/plans/2026-09-06-raw-history-cleanup-status.md`。
 
 本地校验：
 
