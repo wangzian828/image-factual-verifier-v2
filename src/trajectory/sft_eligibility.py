@@ -28,17 +28,17 @@ from src.trajectory.semantic_reward import (
 )
 
 
-SFT_ELIGIBILITY_SCHEMA_VERSION = "ifv-sft-eligibility-v4"
-SFT_ELIGIBILITY_INPUT_VERSION = "ifv-sft-eligibility-input-v10"
-SFT_ELIGIBILITY_PROMPT_VERSION = "ifv-sft-private-image-fact-gate-v7"
+SFT_ELIGIBILITY_SCHEMA_VERSION = "ifv-sft-eligibility-v5"
+SFT_ELIGIBILITY_INPUT_VERSION = "ifv-sft-eligibility-input-v11"
+SFT_ELIGIBILITY_PROMPT_VERSION = "ifv-sft-private-image-fact-gate-v8"
 SFT_ELIGIBILITY_GENERATION_VERSION = "minimal-thinking-4096-v7"
-SFT_ELIGIBILITY_POSTPROCESS_VERSION = "image-fact-safety-gate-v6"
+SFT_ELIGIBILITY_POSTPROCESS_VERSION = "image-fact-safety-gate-v7"
 
 
 SFT_ELIGIBILITY_SYSTEM_PROMPT = (
     "You are a frozen post-rollout SFT eligibility auditor. Judge whether the "
     "completed teacher trajectory correctly determined the factual content expressed "
-    "by the supplied image and found decisive Evidence for that decision. The "
+    "by the supplied image and grounded that decision in retained observations. The "
     "private target describes the image fact and the expected binary verdict. "
     "Do not require the teacher to reproduce the target wording, private-target "
     "wording, a specific runtime ID, URL, original image, source span, or registered "
@@ -57,20 +57,22 @@ SFT_ELIGIBILITY_SYSTEM_PROMPT = (
     "and floating. Use unrelated_fact only when the teacher's central investigation "
     "is a genuinely different image fact, event, entity, or claim. Do not call a "
     "trajectory unrelated_fact merely because it missed a key condition, reached a "
-    "wrong verdict, used weak Evidence, or did not reproduce the target wording. "
-    "Evidence may be a "
-    "successful visual observation, OCR/crop result, source passage, same-image "
-    "context, or a multi-item chain. Retrieval history describes what the teacher "
-    "actually investigated, but is not itself factual Evidence and has no Evidence "
-    "IDs. A lack of matching results may only supplement an image-grounded chain "
+    "wrong verdict, used weak observations, or did not reproduce the target wording. "
+    "A raw observation is one successful tool result identified by its observation_id. "
+    "Select only supplied observation IDs for the decisive and supporting fields. "
+    "Successful empty searches may record that a directed query found no matching "
+    "trace, but an empty search alone cannot support fake. Tool errors, malformed "
+    "results, and access failures are limitations and cannot be selected. Retrieval "
+    "history describes what the teacher actually investigated, but is process context "
+    "rather than evidence by itself. A lack of matching results may only supplement "
+    "an image-grounded chain "
     "when the history targets a named, plausibly authoritative source or bounded "
     "collection; generic web search failure, topical relatedness, or absence of a "
-    "found original never decides the verdict. Select only supplied Evidence IDs. "
-    "If final_visual_audit is present, treat it as a structured VLM observation "
-    "available to the terminal judgment, not as an Evidence record and not as a "
-    "replacement for the cited Evidence chain. "
+    "found original never decides the verdict. If final_visual_audit is present, "
+    "treat it as a structured VLM observation available to the terminal judgment, "
+    "not as a replacement for the cited raw observation chain. "
     "Assess retrieval_quality as effective when the trajectory's retrieval is "
-    "targeted and converted into relevant inspection or Evidence; mixed when its "
+    "targeted and converted into relevant inspection or retained observations; mixed when its "
     "central route is useful despite some noise or corrected turns; poor when its "
     "central route is generic, repeatedly low-yield, premise-led, ignores useful "
     "candidates, or treats non-results as a conclusion. Mark major overclaiming "
@@ -115,11 +117,11 @@ class SFTEligibilityJudgment(_StrictModel):
         "unclear",
     ]
     retrieval_quality: Literal["effective", "mixed", "poor"]
-    decisive_evidence_ids: List[str] = Field(
+    decisive_observation_ids: List[str] = Field(
         default_factory=list,
         max_length=40,
     )
-    supporting_evidence_ids: List[str] = Field(
+    supporting_observation_ids: List[str] = Field(
         default_factory=list,
         max_length=40,
     )
@@ -648,7 +650,7 @@ def _react_action_history(state: Mapping[str, Any]) -> List[Dict[str, Any]]:
         if str(step.get("stage", "")).strip() != "unified_react":
             continue
         tool_name = str(step.get("tool_name", "")).strip()
-        if not tool_name:
+        if not tool_name or tool_name == "finish_investigation":
             continue
         tool_args = {
             str(key): _compact_trace_value(value, max_string=2400)
@@ -658,6 +660,18 @@ def _react_action_history(state: Mapping[str, Any]) -> List[Dict[str, Any]]:
         metadata = _mapping(step.get("metadata"))
         result = _tool_result_mapping(step)
         observation_id = str(metadata.get("function_call_id", "")).strip()
+        status = str(result.get("status", "")).strip().casefold() or "unknown"
+        result_count = _tool_result_count(result)
+        no_match = bool(
+            status == "success"
+            and tool_name
+            in {"text_search", "text_image_search", "reverse_image_search"}
+            and (
+                str(result.get("observation_status", "")).strip().casefold()
+                in {"empty_results", "no_match", "no_results"}
+                or result_count == 0
+            )
+        )
         history.append(
             {
                 "step_index": index,
@@ -667,6 +681,9 @@ def _react_action_history(state: Mapping[str, Any]) -> List[Dict[str, Any]]:
                 "thought": _text(step.get("thought"), limit=4000),
                 "arguments": tool_args,
                 "observation": _project_tool_observation(tool_name, result),
+                "status": status,
+                "result_count": result_count,
+                "no_match": no_match,
                 "tool_success": bool(
                     metadata.get(
                         "tool_success",
@@ -678,6 +695,24 @@ def _react_action_history(state: Mapping[str, Any]) -> List[Dict[str, Any]]:
         if len(history) >= 40:
             break
     return history
+
+
+def _tool_result_count(result: Mapping[str, Any]) -> int:
+    count = 0
+    for key in (
+        "results",
+        "lens_results",
+        "semantic_results",
+        "reference_image_candidates",
+        "candidate_page_urls",
+        "evidence_records",
+    ):
+        count += len(_rows(result.get(key)))
+    for query_row in _rows(result.get("queries")):
+        count += len(_rows(query_row.get("results")))
+    for visit in _rows(result.get("visits")):
+        count += len(_rows(visit.get("evidence_records")))
+    return count
 
 
 def _string_list(value: Any, *, limit: int) -> List[str]:
@@ -999,6 +1034,28 @@ def build_sft_eligibility_input(
         )
         if str(item.get("fact_id", "")).strip()
     ]
+    raw_history = _react_action_history(state) if current_runtime else []
+    raw_observation_ids = _unique(
+        item.get("observation_id")
+        for item in raw_history
+        if item.get("observation_id")
+    )
+    successful_observation_ids = _unique(
+        item.get("observation_id")
+        for item in raw_history
+        if item.get("observation_id") and item.get("tool_success") is True
+    )
+    unsuccessful_observation_ids = _unique(
+        item.get("observation_id")
+        for item in raw_history
+        if item.get("observation_id") and item.get("tool_success") is not True
+    )
+    judgment_observation_ids = _unique(
+        judgment.get("verdict_observation_ids")
+        or judgment.get("selected_observation_ids")
+        or [],
+        limit=12,
+    )
     return {
         "schema_version": SFT_ELIGIBILITY_INPUT_VERSION,
         "case_id": case_id,
@@ -1015,6 +1072,7 @@ def build_sft_eligibility_input(
             "available_to_judge": bool(image_path and image_path.is_file()),
         },
         "candidate": {
+            "runtime_mode": "raw_history" if current_runtime else "legacy",
             "recorded_verdict": str(
                 judgment.get("verdict") or trace.get("verdict") or ""
             ),
@@ -1043,8 +1101,13 @@ def build_sft_eligibility_input(
             "evidence": evidence,
             "discrepancies": discrepancies,
             "react_action_history": (
-                _react_action_history(state) if current_runtime else []
+                raw_history
             ),
+            "raw_observations": raw_history,
+            "raw_observation_ids": raw_observation_ids,
+            "successful_observation_ids": successful_observation_ids,
+            "unsuccessful_observation_ids": unsuccessful_observation_ids,
+            "verdict_observation_ids": judgment_observation_ids,
             "retrieval_history": _retrieval_history(state),
             "rejection_history": _rejection_history(state),
             "final_visual_audit": _mapping(state.get("final_visual_audit")),
@@ -1123,13 +1186,22 @@ def sft_eligibility_metrics(
         for item in _rows(candidate.get("evidence"))
         if str(item.get("evidence_id", "")).strip()
     }
+    raw_observations = _rows(
+        candidate.get("raw_observations") or candidate.get("react_action_history")
+    )
+    raw_by_id = {
+        str(item.get("observation_id", "")).strip(): item
+        for item in raw_observations
+        if str(item.get("observation_id", "")).strip()
+    }
+    raw_mode = str(candidate.get("runtime_mode", "")).strip() == "raw_history"
     if judgment is None:
         judgment_values: Dict[str, Any] = {
             "target_scope": "unclear",
             "decision_support": "unclear",
             "retrieval_quality": "poor",
-            "decisive_evidence_ids": [],
-            "supporting_evidence_ids": [],
+            "decisive_observation_ids": [],
+            "supporting_observation_ids": [],
             "overclaiming": "major",
             "boundary_assessment": "major_issue",
             "trajectory_conduct": "unresolved",
@@ -1139,36 +1211,56 @@ def sft_eligibility_metrics(
     else:
         judgment_values = judgment.model_dump(mode="json")
 
-    selected_ids = _unique(
-        [
-            *judgment_values.get("decisive_evidence_ids", []),
-            *judgment_values.get("supporting_evidence_ids", []),
-        ],
-        limit=40,
-    )
     decisive_ids = _unique(
-        judgment_values.get("decisive_evidence_ids", []),
+        judgment_values.get("decisive_observation_ids", []),
         limit=40,
     )
-    invalid_ids = [
-        evidence_id for evidence_id in selected_ids if evidence_id not in evidence_by_id
-    ]
+    supporting_ids = _unique(
+        judgment_values.get("supporting_observation_ids", []),
+        limit=40,
+    )
+    selected_ids = _unique([*decisive_ids, *supporting_ids], limit=40)
+    selected_by_id = raw_by_id if raw_mode else evidence_by_id
+    invalid_ids = [item for item in selected_ids if item not in selected_by_id]
     failed_ids = [
-        evidence_id
-        for evidence_id in selected_ids
-        if evidence_id in evidence_by_id
+        item
+        for item in selected_ids
+        if item in selected_by_id
         and (
-            not bool(evidence_by_id[evidence_id].get("successful_call"))
-            or not _evidence_has_content(evidence_by_id[evidence_id])
+            not bool(
+                selected_by_id[item].get(
+                    "tool_success",
+                    selected_by_id[item].get("successful_call", False),
+                )
+            )
+            or (
+                not raw_mode
+                and not _evidence_has_content(selected_by_id[item])
+            )
         )
     ]
     valid_decisive_ids = [
-        evidence_id
-        for evidence_id in decisive_ids
-        if evidence_id in evidence_by_id
-        and bool(evidence_by_id[evidence_id].get("successful_call"))
-        and _evidence_has_content(evidence_by_id[evidence_id])
+        item
+        for item in decisive_ids
+        if item in selected_by_id
+        and bool(
+            selected_by_id[item].get(
+                "tool_success",
+                selected_by_id[item].get("successful_call", False),
+            )
+        )
+        and (raw_mode or _evidence_has_content(selected_by_id[item]))
     ]
+    decisive_rows = [selected_by_id[item] for item in valid_decisive_ids]
+    empty_search_only = bool(decisive_rows) and all(
+        bool(item.get("no_match"))
+        or (
+            str(item.get("tool", item.get("tool_name", ""))).strip()
+            in {"text_search", "text_image_search", "reverse_image_search"}
+            and int(item.get("result_count", 0) or 0) == 0
+        )
+        for item in decisive_rows
+    )
     target_scope = str(judgment_values.get("target_scope", "unclear"))
     decision_support = str(judgment_values.get("decision_support", "unclear"))
     retrieval_quality = str(judgment_values.get("retrieval_quality", "poor"))
@@ -1182,12 +1274,12 @@ def sft_eligibility_metrics(
             else []
         ),
         *(
-            ["invalid_judge_evidence_ids"]
+            ["invalid_judge_observation_ids"]
             if invalid_ids
             else []
         ),
         *(
-            ["selected_evidence_not_successful_or_empty"]
+            ["selected_observation_not_successful"]
             if failed_ids
             else []
         ),
@@ -1212,8 +1304,13 @@ def sft_eligibility_metrics(
             else []
         ),
         *(
-            ["no_decisive_evidence"]
+            ["no_decisive_observation"]
             if not valid_decisive_ids
+            else []
+        ),
+        *(
+            ["empty_search_only_cannot_support_fake"]
+            if raw_mode and expected_verdict == "fake" and empty_search_only
             else []
         ),
         *(
@@ -1235,18 +1332,32 @@ def sft_eligibility_metrics(
         warnings.append("boundary_warning")
     if trajectory_conduct == "recovered_minor":
         warnings.append("recovered_policy_rejection")
-    basis_ids = set(_unique(candidate.get("basis_claim_ids", []), limit=12))
-    if basis_ids and not basis_ids.intersection(
-        {
-            claim_id
-            for evidence_id in valid_decisive_ids
-            for claim_id in _unique(
-                evidence_by_id[evidence_id].get("claim_ids", []),
-                limit=12,
+    if raw_mode:
+        basis_observation_ids = set(
+            _unique(
+                candidate.get("verdict_observation_ids")
+                or candidate.get("successful_observation_ids")
+                or [],
+                limit=40,
             )
-        }
-    ):
-        warnings.append("decisive_evidence_not_claim_basis_selected")
+        )
+        if basis_observation_ids and not basis_observation_ids.intersection(
+            valid_decisive_ids
+        ):
+            warnings.append("decisive_observation_not_in_runtime_basis")
+    else:
+        basis_ids = set(_unique(candidate.get("basis_claim_ids", []), limit=12))
+        if basis_ids and not basis_ids.intersection(
+            {
+                claim_id
+                for evidence_id in valid_decisive_ids
+                for claim_id in _unique(
+                    evidence_by_id[evidence_id].get("claim_ids", []),
+                    limit=12,
+                )
+            }
+        ):
+            warnings.append("decisive_evidence_not_claim_basis_selected")
     raw_confidence = float(judgment_values.get("confidence", 0.0) or 0.0)
     normalized_confidence = max(0.0, min(1.0, raw_confidence))
     if normalized_confidence != raw_confidence:
@@ -1266,10 +1377,11 @@ def sft_eligibility_metrics(
         "boundary_assessment": str(
             judgment_values.get("boundary_assessment", "major_issue")
         ),
-        "decisive_evidence_ids": valid_decisive_ids,
-        "selected_evidence_ids": selected_ids,
-        "invalid_judge_evidence_ids": invalid_ids,
-        "failed_selected_evidence_ids": failed_ids,
+        "runtime_mode": str(candidate.get("runtime_mode", "")),
+        "decisive_observation_ids": valid_decisive_ids,
+        "selected_observation_ids": selected_ids,
+        "invalid_judge_observation_ids": invalid_ids,
+        "failed_selected_observation_ids": failed_ids,
         "fatal_errors": _unique(fatal_errors, limit=20),
         "warnings": _unique(warnings, limit=20),
         "confidence": normalized_confidence,
@@ -1294,7 +1406,7 @@ def sft_eligibility_passes(
         and metrics.get("target_scope")
         in {"direct_target", "decisive_subfact"}
         and metrics.get("decision_support") == expected_support
-        and metrics.get("decisive_evidence_ids")
+        and metrics.get("decisive_observation_ids")
         and not metrics.get("fatal_errors")
         and not list(fatal_audit_errors)
     )

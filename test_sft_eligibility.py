@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from src.orchestrator.llm_backend import LLMResponse
+from src.orchestrator.react_runtime import REACT_RUNTIME_SCHEMA_VERSION
 from src.eval import score_sft_eligibility
 from src.eval.score_sft_eligibility import _default_storage_dir, _jsonl_index
 from src.trajectory.sft_eligibility import (
@@ -30,12 +31,20 @@ def _trace(*, verdict: str = "fake") -> dict[str, Any]:
         "image_id": "case-1--teacher-r000",
         "verdict": verdict,
         "termination": "success",
+        "decision_policy_version": "unified-react-v1",
         "verdict_basis": {
-            "claim_ids": ["claim-1"],
-            "discrepancy_ids": ["discrepancy-1"],
-            "evidence_ids": ["evidence-1"],
+            "schema_version": "ifv-verdict-basis-raw-history-v1",
+            "decision_mode": "raw_history",
+            "observation_ids": ["obs-visual", "obs-search", "obs-visit"],
             "verdict_target": "The displayed winner is A, but the official winner is B.",
             "unresolved_gaps": [],
+        },
+        "judgment": {
+            "verdict": verdict,
+            "verdict_observation_ids": ["obs-visit"],
+            "fact_check_report": {
+                "summary": "The official result names B, not A."
+            },
         },
         "state": {
             "image_id": "case-1--teacher-r000",
@@ -44,59 +53,98 @@ def _trace(*, verdict: str = "fake") -> dict[str, Any]:
                 "image_sha256": "a" * 64,
             },
             "investigation_state": {
-                "target_facts": [
-                    {
-                        "claim_id": "claim-1",
-                        "statement": "A won the 2026 final.",
-                        "salience": "high",
-                        "anchor_fact_ids": ["anchor-1"],
-                    }
-                ],
-                "findings": [
-                    {
-                        "finding_id": "finding-1",
-                        "task_id": "task-1",
-                        "fact_ids": ["fact-1"],
-                        "evidence_ids": ["evidence-1"],
-                        "stance": "refute",
-                        "summary": "The official result names B.",
-                    }
-                ],
-                "material_discrepancies": [
-                    {
-                        "discrepancy_id": "discrepancy-1",
-                        "statement": "The official winner was B, not A.",
-                        "affected_claim_ids": ["claim-1"],
-                        "evidence_ids": ["evidence-1"],
-                    }
-                ],
-                "evidence": [
-                    {
-                        "evidence_id": "evidence-1",
-                        "source_url": "https://example.org/final",
-                        "source_family": "example.org",
-                        "exact_text": "B won the 2026 final.",
-                        "directness": "direct",
-                        "claim_binding": "source_assertion",
-                        "relation_scope": "different_scope",
-                        "relation_stance": "contradicts",
-                        "stance": "refute",
-                        "claim_ids": [],
-                        "successful_call": True,
-                    },
-                    {
-                        "evidence_id": "evidence-2",
-                        "source_url": "https://example.org/context",
-                        "exact_text": "The final took place in Berlin.",
-                        "directness": "direct",
-                        "claim_binding": "source_assertion",
-                        "relation_scope": "location",
-                        "relation_stance": "background",
-                        "stance": "neutral",
-                        "successful_call": True,
-                    },
-                ],
+                "schema_version": "ifv-unified-react-raw-history-v1",
+                "objective": "Verify the pictured event and its relationship.",
+                "open_questions": [],
             },
+            "all_steps": [
+                {
+                    "stage": "unified_react",
+                    "action_type": "tool_call",
+                    "tool_name": "focused_visual_inspection",
+                    "thought": "Inspect the displayed winner before checking the event.",
+                    "tool_args": {"question": "Who is displayed as the winner?"},
+                    "tool_result": json.dumps(
+                        {
+                            "status": "success",
+                            "observation": "The scoreboard displays A as the winner.",
+                        }
+                    ),
+                    "metadata": {
+                        "function_call_id": "obs-visual",
+                        "tool_success": True,
+                    },
+                },
+                {
+                    "stage": "unified_react",
+                    "action_type": "tool_call",
+                    "tool_name": "text_search",
+                    "thought": "Search for the official result of the named final.",
+                    "tool_args": {
+                        "queries": ["official 2026 final result"],
+                        "goal": "Find the official final result.",
+                    },
+                    "tool_result": json.dumps(
+                        {
+                            "status": "success",
+                            "queries": [
+                                {
+                                    "query": "official 2026 final result",
+                                    "results": [
+                                        {"url": "https://example.org/final"},
+                                        {"url": "https://example.org/news"},
+                                    ],
+                                }
+                            ],
+                        }
+                    ),
+                    "metadata": {
+                        "function_call_id": "obs-search",
+                        "tool_success": True,
+                    },
+                },
+                {
+                    "stage": "unified_react",
+                    "action_type": "tool_call",
+                    "tool_name": "visit",
+                    "thought": "Read the official result page for the winner.",
+                    "tool_args": {
+                        "url": ["https://example.org/final"],
+                        "question": "Who won the 2026 final?",
+                    },
+                    "tool_result": json.dumps(
+                        {
+                            "status": "success",
+                            "url": "https://example.org/final",
+                            "evidence_records": [
+                                {
+                                    "url": "https://example.org/final",
+                                    "evidence": "B won the 2026 final.",
+                                    "directness": "direct",
+                                }
+                            ],
+                        }
+                    ),
+                    "metadata": {
+                        "function_call_id": "obs-visit",
+                        "tool_success": True,
+                    },
+                },
+                {
+                    "stage": "unified_react",
+                    "action_type": "tool_call",
+                    "tool_name": "text_search",
+                    "thought": "A later query failed at the provider boundary.",
+                    "tool_args": {"queries": ["retry official result"]},
+                    "tool_result": json.dumps(
+                        {"status": "error", "error": "temporary provider failure"}
+                    ),
+                    "metadata": {
+                        "function_call_id": "obs-error",
+                        "tool_success": False,
+                    },
+                },
+            ],
         },
     }
 
@@ -134,13 +182,13 @@ def _judgment(**updates: Any) -> SFTEligibilityJudgment:
         "target_scope": "direct_target",
         "decision_support": "supports_fake",
         "retrieval_quality": "effective",
-        "decisive_evidence_ids": ["evidence-1"],
-        "supporting_evidence_ids": [],
+        "decisive_observation_ids": ["obs-visit"],
+        "supporting_observation_ids": [],
         "overclaiming": "none",
         "boundary_assessment": "respected",
         "trajectory_conduct": "clean",
         "confidence": 0.72,
-        "explanation": "The evidence directly establishes the incorrect winner.",
+        "explanation": "The retained source observation directly establishes the incorrect winner.",
     }
     payload.update(updates)
     return SFTEligibilityJudgment.model_validate(payload)
@@ -410,7 +458,7 @@ def test_packet_includes_compact_retrieval_and_rejection_history() -> None:
 
     packet = build_sft_eligibility_input(trace, _gold())
 
-    assert packet["schema_version"] == "ifv-sft-eligibility-input-v10"
+    assert packet["schema_version"] == "ifv-sft-eligibility-input-v11"
     assert packet["candidate"]["retrieval_history"] == [
         {
             "tool": "text_search",
@@ -483,16 +531,26 @@ def test_target_adapter_accepts_web_chain_without_claim_atom() -> None:
     )
 
 
-def test_packet_exposes_all_valid_evidence_and_basis_is_only_a_flag() -> None:
+def test_packet_exposes_raw_observations_and_success_statuses() -> None:
     packet = _packet()
-    evidence = {
-        row["evidence_id"]: row for row in packet["candidate"]["evidence"]
+    observations = {
+        row["observation_id"]: row
+        for row in packet["candidate"]["raw_observations"]
     }
 
-    assert set(evidence) == {"evidence-1", "evidence-2"}
-    assert evidence["evidence-1"]["basis_selected"] is True
-    assert evidence["evidence-2"]["basis_selected"] is False
-    assert packet["candidate"]["claims"][0]["claim_id"] == "claim-1"
+    assert set(observations) == {
+        "obs-visual",
+        "obs-search",
+        "obs-visit",
+        "obs-error",
+    }
+    assert packet["candidate"]["successful_observation_ids"] == [
+        "obs-visual",
+        "obs-search",
+        "obs-visit",
+    ]
+    assert packet["candidate"]["unsuccessful_observation_ids"] == ["obs-error"]
+    assert observations["obs-error"]["tool_success"] is False
 
 
 def test_unified_packet_exposes_ordered_react_actions_and_image_search_candidates() -> None:
@@ -503,7 +561,7 @@ def test_unified_packet_exposes_ordered_react_actions_and_image_search_candidate
         "open_questions": ["Whether the pictured event occurred as shown."],
     }
     trace["state"]["investigation_state"] = {
-        "schema_version": "ifv-unified-react-v1",
+        "schema_version": REACT_RUNTIME_SCHEMA_VERSION,
         "objective": "Verify the pictured event and its relationship.",
         "visual_memory": {
             "scene_description": "A person stands beside a marked vehicle.",
@@ -558,8 +616,9 @@ def test_unified_packet_exposes_ordered_react_actions_and_image_search_candidate
                     "reference_image_candidates": ["https://cdn.example.org/event.jpg"],
                 }
             ),
-            "metadata": {
-                "tool_success": True,
+                "metadata": {
+                    "function_call_id": "obs-image-search",
+                    "tool_success": True,
                 "react_state_delta": {
                     "accepted": True,
                     "tool_success": True,
@@ -579,9 +638,8 @@ def test_unified_packet_exposes_ordered_react_actions_and_image_search_candidate
     assert action["observation"]["results"][0]["image_url"].endswith(
         "event.jpg"
     )
-    assert packet["candidate"]["discovery_ledger"][0]["candidate_status"] == (
-        "unverified"
-    )
+    assert packet["candidate"]["runtime_mode"] == "raw_history"
+    assert packet["candidate"]["raw_observation_ids"]
     assert packet["candidate"]["evidence"] == []
     assert packet["candidate"]["retrieval_history"][0]["result_count"] == 1
     assert packet["candidate"]["retrieval_history"][0]["candidate_image_count"] == 1
@@ -590,7 +648,7 @@ def test_unified_packet_exposes_ordered_react_actions_and_image_search_candidate
 def test_unified_packet_keeps_nested_visit_evidence_records() -> None:
     trace = _trace()
     trace["state"]["investigation_state"] = {
-        "schema_version": "ifv-unified-react-v1",
+        "schema_version": REACT_RUNTIME_SCHEMA_VERSION,
         "objective": "Verify the pictured event.",
         "visual_memory": {},
         "discoveries": [],
@@ -643,7 +701,7 @@ def test_decisive_subfact_can_pass_without_claim_relation_matching() -> None:
     judgment = _judgment(
         target_scope="decisive_subfact",
         decision_support="supports_fake",
-        decisive_evidence_ids=["evidence-1"],
+        decisive_observation_ids=["obs-visit"],
     )
     metrics = sft_eligibility_metrics(packet, judgment)
 
@@ -804,10 +862,10 @@ def test_invalid_selected_evidence_id_blocks_sft() -> None:
     packet = _packet()
     metrics = sft_eligibility_metrics(
         packet,
-        _judgment(decisive_evidence_ids=["missing-evidence"]),
+        _judgment(decisive_observation_ids=["missing-observation"]),
     )
 
-    assert metrics["invalid_judge_evidence_ids"] == ["missing-evidence"]
+    assert metrics["invalid_judge_observation_ids"] == ["missing-observation"]
     assert not sft_eligibility_passes(
         metrics,
         strict_trace_audit_pass=True,
@@ -815,18 +873,18 @@ def test_invalid_selected_evidence_id_blocks_sft() -> None:
     )
 
 
-def test_no_decisive_evidence_blocks_sft() -> None:
+def test_no_decisive_observation_blocks_sft() -> None:
     packet = _packet()
     metrics = sft_eligibility_metrics(
         packet,
         _judgment(
             decision_support="supporting_only",
-            decisive_evidence_ids=[],
-            supporting_evidence_ids=["evidence-2"],
+            decisive_observation_ids=[],
+            supporting_observation_ids=["obs-visual"],
         ),
     )
 
-    assert "no_decisive_evidence" in metrics["fatal_errors"]
+    assert "no_decisive_observation" in metrics["fatal_errors"]
     assert not sft_eligibility_passes(
         metrics,
         strict_trace_audit_pass=True,

@@ -1201,7 +1201,7 @@ def _bootstrap_completed_initial_pipeline(
                 "target_scope": metrics.get("target_scope"),
                 "decision_support": metrics.get("decision_support"),
                 "retrieval_quality": metrics.get("retrieval_quality"),
-                "decisive_evidence_ids": metrics.get("decisive_evidence_ids") or [],
+                "decisive_observation_ids": metrics.get("decisive_observation_ids") or [],
                 "fatal_errors": metrics.get("fatal_errors") or [],
                 "warnings": metrics.get("warnings") or [],
                 "bootstrapped": True,

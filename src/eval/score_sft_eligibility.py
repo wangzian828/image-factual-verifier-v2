@@ -403,8 +403,8 @@ async def _run(args: argparse.Namespace) -> Dict[str, Any]:
             "retrieval_quality": artifact.get("metrics", {}).get(
                 "retrieval_quality"
             ),
-            "decisive_evidence_ids": artifact.get("metrics", {}).get(
-                "decisive_evidence_ids"
+            "decisive_observation_ids": artifact.get("metrics", {}).get(
+                "decisive_observation_ids"
             ),
             "fatal_errors": artifact.get("metrics", {}).get(
                 "fatal_errors"
