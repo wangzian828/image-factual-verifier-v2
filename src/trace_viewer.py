@@ -185,7 +185,6 @@ def _render_step(step: Dict[str, Any]) -> str:
     body += _labeled_pre("Thought", step.get("thought"))
     body += _labeled_json("Arguments", step.get("tool_args"))
     body += _labeled_pre("Result", step.get("tool_result"))
-    body += _labeled_json("Investigation state update", metadata.get("investigation_state_update"))
     body += _labeled_json("Output", step.get("output"))
     return '<article class="step"><div>' + ''.join(labels) + '</div>' + body + '</article>'
 
@@ -193,6 +192,25 @@ def _render_step(step: Dict[str, Any]) -> str:
 def _render_visual_fact_investigation(investigation: Dict[str, Any]) -> str:
     if not investigation:
         return '<section class="band"><h2>Visual Facts</h2><p>No investigation state.</p></section>'
+    if investigation.get("schema_version") == "ifv-unified-react-raw-history-v1":
+        fields = {
+            key: investigation.get(key)
+            for key in (
+                "schema_version",
+                "case_id",
+                "image_sha256",
+                "objective",
+                "action_count",
+                "stop_reason",
+                "finish_rationale",
+            )
+            if investigation.get(key) not in (None, "", [], {})
+        }
+        return (
+            '<section class="band"><h2>Raw ReAct Runtime</h2>'
+            + _labeled_json("Mechanical state", fields)
+            + '</section>'
+        )
     facts = investigation.get("facts", []) if isinstance(investigation.get("facts"), list) else []
     tasks = investigation.get("tasks", []) if isinstance(investigation.get("tasks"), list) else []
     findings = investigation.get("findings", []) if isinstance(investigation.get("findings"), list) else []

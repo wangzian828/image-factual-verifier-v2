@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import os
 import re
@@ -33,13 +32,6 @@ from src.orchestrator.llm_backend import (
 )
 from src.orchestrator.route_policy import routes_semantically_equivalent
 from src.orchestrator.runtime_events import CaseRuntimeStore
-from src.orchestrator.context_workspace import (
-    StageHandoffPacket,
-    build_stage_handoff,
-    fit_stage_handoff_to_budget,
-    render_stage_handoff,
-    render_stage_request,
-)
 from src.orchestrator.tool_cache import (
     ToolResultCache,
     WEB_EVIDENCE_CONTRACT_VERSION,
@@ -142,8 +134,6 @@ class StageRunner:
         interaction_session: Optional[InteractionSession] = None,
         runtime_store: Optional[CaseRuntimeStore] = None,
         prompt_version: str = "",
-        handoff_packet: Optional[StageHandoffPacket] = None,
-        handoff_state: Optional[Any] = None,
     ):
         self.llm = llm
         self.system_prompt = system_prompt
@@ -196,8 +186,6 @@ class StageRunner:
         self._last_context_request_id = ""
         self._last_interaction_lifecycle_kind = ""
         self._last_image_view: Dict[str, Any] = {}
-        self.handoff_packet = handoff_packet
-        self.handoff_state = handoff_state
         self.request_timeout_seconds = _bounded_timeout(
             request_timeout_seconds,
             env_name="AGENT_STAGE_REQUEST_TIMEOUT_SECONDS",
@@ -211,74 +199,10 @@ class StageRunner:
 
     async def run(self, input_context: str) -> Tuple[Optional[BaseModel], List[StageStep]]:
         """Run the ReAct loop."""
-        recalled_materials = self._recent_recalled_materials()
-        if self.handoff_packet is None and self.handoff_state is not None:
-            self.handoff_packet = build_stage_handoff(
-                self.handoff_state,
-                target_stage=self.stage_name,
-                stage_input=input_context,
-                available_tools=self.tools,
-                output_contract=(
-                    self.output_schema.__name__ if self.output_schema is not None else ""
-                ),
-                recent_steps=self.prior_steps,
-                recalled_materials=recalled_materials,
-            )
-        if self.handoff_packet is not None:
-            budget_result = fit_stage_handoff_to_budget(self.handoff_packet)
-            self.handoff_packet = budget_result.packet
-            if not budget_result.all_protected_items_reachable:
-                raise RuntimeError(
-                    "stage handoff lost protected context: "
-                    + ", ".join(self.handoff_packet.missing_protected_ids)
-                )
-            if self.runtime_store is not None and (
-                budget_result.removed_item_ids
-                or budget_result.protected_context_overflow
-            ):
-                self.runtime_store.append_event(
-                    "context_compaction",
-                    {
-                        "handoff_id": self.handoff_packet.handoff_id,
-                        **self.handoff_packet.compaction,
-                    },
-                )
-        if self.runtime_store is not None and self.handoff_packet is not None:
-            handoff_artifact = self.runtime_store.artifacts.put_text(
-                render_stage_handoff(self.handoff_packet),
-                media_type="application/json; charset=utf-8",
-                suffix=".json",
-                metadata={
-                    "kind": "stage_handoff_shadow",
-                    "handoff_id": self.handoff_packet.handoff_id,
-                    "target_stage": self.handoff_packet.target_stage,
-                },
-            )
-            self.runtime_store.append_event(
-                "stage_handoff_shadow",
-                {
-                    "handoff_id": self.handoff_packet.handoff_id,
-                    "target_stage": self.handoff_packet.target_stage,
-                    "workspace_version": self.handoff_packet.workspace.workspace_version,
-                    "protected_coverage": self.handoff_packet.protected_coverage,
-                    "protected_ids": self.handoff_packet.protected_ids,
-                    "included_protected_ids": self.handoff_packet.included_protected_ids,
-                    "missing_protected_ids": self.handoff_packet.missing_protected_ids,
-                    "estimated_tokens": self.handoff_packet.estimated_tokens,
-                    "compaction": self.handoff_packet.compaction,
-                    "legacy_input_chars": len(str(input_context)),
-                    "legacy_input_sha256": hashlib.sha256(
-                        str(input_context).encode("utf-8")
-                    ).hexdigest(),
-                    "handoff_artifact": handoff_artifact,
-                },
-            )
         if str(getattr(self.llm, "provider", "")).lower() == "gemini" and str(
             getattr(self.llm, "wire_api", "")
         ).lower() != "interactions":
             raise RuntimeError("Gemini stages require wire_api='interactions'.")
-        if self.handoff_packet is not None:
-            input_context = render_stage_request(self.handoff_packet)
         if self._uses_native_interactions():
             try:
                 return await self._run_native_interactions(input_context)
@@ -2990,29 +2914,6 @@ class StageRunner:
             "yes",
             "on",
         }
-
-    def _recent_recalled_materials(self) -> List[Dict[str, Any]]:
-        materials: List[Dict[str, Any]] = []
-        for step in self.prior_steps:
-            if getattr(step, "action_type", "") != "tool_call":
-                continue
-            if getattr(step, "tool_name", "") != "read_evidence":
-                continue
-            try:
-                payload = json.loads(str(getattr(step, "tool_result", "")))
-            except (TypeError, json.JSONDecodeError):
-                continue
-            if isinstance(payload, dict) and payload.get("status") == "success":
-                materials.append(
-                    {
-                        "memory_id": payload.get("memory_id"),
-                        "artifact": payload.get("artifact", {}),
-                        "offset": payload.get("offset", 0),
-                        "end": payload.get("end", 0),
-                        "content": str(payload.get("content", ""))[:24000],
-                    }
-                )
-        return materials[-4:]
 
     def _build_round_messages(
         self,

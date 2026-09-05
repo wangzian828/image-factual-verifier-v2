@@ -198,24 +198,6 @@ def _render_tool_response(content: str) -> list[str]:
     output = ["### 工具结果", ""]
     if isinstance(payload, Mapping) and "result" in payload:
         result = payload.get("result")
-        update = payload.get("investigation_state_update")
-        state_update = update.get("state_update") if isinstance(update, Mapping) else None
-        if isinstance(state_update, Mapping):
-            for key in (
-                "accepted",
-                "phase",
-                "action_count",
-                "completed_tools",
-                "next_available_tools",
-                "created_visual_fact_ids",
-                "created_discovery_ids",
-                "created_evidence_ids",
-                "created_finding_ids",
-                "rejected_reason",
-            ):
-                value = state_update.get(key)
-                if value not in (None, "", [], {}):
-                    _field(output, key, value, limit=6000)
     output.extend(["", "#### 工具观察", ""])
     if isinstance(result, Mapping):
         for key, value in result.items():

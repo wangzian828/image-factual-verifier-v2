@@ -163,26 +163,6 @@ def _render_tool_response(content: str, tool_name: str = "") -> list[str]:
     if isinstance(payload, Mapping) and "result" in payload:
         result = payload.get("result")
         output[0] = f"### Tool result: `{tool_name or payload.get('tool', 'unknown')}`"
-        update = payload.get("investigation_state_update")
-        state_update = update.get("state_update") if isinstance(update, Mapping) else None
-        if isinstance(state_update, Mapping):
-            for key in (
-                "accepted",
-                "phase",
-                "action_count",
-                "completed_tools",
-                "next_available_tools",
-                "created_visual_fact_ids",
-                "created_discovery_ids",
-                "created_evidence_ids",
-                "created_finding_ids",
-                "rejected_reason",
-            ):
-                value = state_update.get(key)
-                if value not in (None, "", [], {}):
-                    output.append(
-                        f"- {key}: `{_json(value) if isinstance(value, (list, dict)) else value}`"
-                    )
 
     output.extend(["**Observed result**", ""])
     if isinstance(result, Mapping):

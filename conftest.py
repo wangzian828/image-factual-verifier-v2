@@ -23,4 +23,10 @@ collect_ignore = [
     "test_v4_historical_replay.py",
     "test_v4_planning.py",
     "test_v4_reducers.py",
+    "test_react_runtime.py",
+    "test_unified_react.py",
+    "test_unified_react_accounting.py",
+    "test_context_workspace.py",
+    "test_progress_control.py",
+    "test_agent_reference_candidate_recovery.py",
 ]
