@@ -167,6 +167,9 @@ fi
 if [[ -n "${IFV_MAX_PIXELS:-}" ]]; then
   args+=(--max_pixels "$IFV_MAX_PIXELS")
 fi
+if [[ -n "${IFV_TRUNCATION_STRATEGY:-}" ]]; then
+  args+=(--truncation_strategy "$IFV_TRUNCATION_STRATEGY")
+fi
 if [[ -n "${IFV_DATALOADER_PERSISTENT_WORKERS:-}" ]]; then
   args+=(--dataloader_persistent_workers "$IFV_DATALOADER_PERSISTENT_WORKERS")
 fi
