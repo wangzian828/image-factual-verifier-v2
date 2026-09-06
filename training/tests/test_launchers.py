@@ -952,6 +952,22 @@ def test_qwen35_batch2_capacity_probe_is_optimizer_only_and_bounded() -> None:
     assert "IFV_MAX_LENGTH=32768" in source
 
 
+def test_qwen35_truncated_smoke_noeval_profile_skips_validation_only() -> None:
+    profile = _source(
+        "configs/sft/"
+        "qwen3.5-full-10step-4gpu-zero3-offload-accum1-bf16params-"
+        "sdpa-checkpointed-8k-truncated-smoke-noeval.env"
+    )
+    launcher = _source("scripts/train/run_sft.sh")
+
+    assert "IFV_EVAL_STRATEGY=no" in profile
+    assert "IFV_MAX_STEPS=10" in profile
+    assert "IFV_SAVE_STEPS=10" in profile
+    assert '--eval_strategy "${IFV_EVAL_STRATEGY:-steps}"' in launcher
+    assert 'if [[ "${IFV_EVAL_STRATEGY:-steps}" != "no" ]]; then' in launcher
+    assert 'args+=(--eval_steps "$IFV_EVAL_STEPS")' in launcher
+
+
 def test_qwen35_batch2_length_grouped_probe_uses_native_sampler() -> None:
     source = _source(
         "configs/sft/qwen3.5-full-10step-batch2-length-grouped.env"

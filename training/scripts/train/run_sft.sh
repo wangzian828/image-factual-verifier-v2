@@ -132,8 +132,7 @@ args=(
   --freeze_aligner "$IFV_FREEZE_ALIGNER"
   --gradient_checkpointing "${IFV_GRADIENT_CHECKPOINTING:-true}"
   --vit_gradient_checkpointing "$IFV_VIT_GRADIENT_CHECKPOINTING"
-  --eval_strategy steps
-  --eval_steps "$IFV_EVAL_STEPS"
+  --eval_strategy "${IFV_EVAL_STRATEGY:-steps}"
   --save_strategy steps
   --save_steps "$IFV_SAVE_STEPS"
   --save_total_limit "$IFV_SAVE_TOTAL_LIMIT"
@@ -148,6 +147,10 @@ args=(
   --dataloader_num_workers "${IFV_DATALOADER_NUM_WORKERS:-2}"
   --report_to tensorboard
 )
+
+if [[ "${IFV_EVAL_STRATEGY:-steps}" != "no" ]]; then
+  args+=(--eval_steps "$IFV_EVAL_STEPS")
+fi
 
 if [[ -n "${IFV_NUM_TRAIN_EPOCHS:-}" ]]; then
   args+=(--num_train_epochs "$IFV_NUM_TRAIN_EPOCHS")
