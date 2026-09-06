@@ -447,8 +447,8 @@ class Orchestrator:
                 citation.model_dump(mode="json")
                 for citation in judgment.evidence_citations
             ],
-            "investigation_status": self._investigation_status(investigation),
-            "verification_layers": self._verification_layers(investigation),
+            "stop_reason": investigation.stop_reason,
+            "action_count": investigation.action_count,
             "verdict_basis": (
                 basis.model_dump(mode="json")
                 if hasattr(basis, "model_dump")

@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from types import SimpleNamespace
 from typing import Any
 
+from src.orchestrator.investigation_models import DiscrepancyJudgment
 from src.orchestrator.pipeline import Orchestrator
+from src.orchestrator.react_runtime import UnifiedReactState
+from src.orchestrator.state import ImageOnlyRuntimeCase
 from src.workflow import VerificationWorkflow
 
 
@@ -108,3 +112,60 @@ def test_run_batch_closes_every_isolated_child() -> None:
     assert [item["verdict"] for item in results] == ["real", "real", "real"]
     assert len(children) == 3
     assert [child.close_calls for child in children] == [1, 1, 1]
+
+
+def test_orchestrator_run_returns_raw_history_terminal_fields(tmp_path: Any) -> None:
+    image_path = tmp_path / "case.jpg"
+    image_path.write_bytes(b"raw-history-terminal-fixture")
+    image_sha256 = hashlib.sha256(image_path.read_bytes()).hexdigest()
+    runtime_case = ImageOnlyRuntimeCase(
+        case_id="case-terminal",
+        image_path=str(image_path),
+        image_sha256=image_sha256,
+    )
+    orchestrator = Orchestrator.__new__(Orchestrator)
+    orchestrator.tool_health_summary = {}
+
+    async def fake_runtime(
+        state: Any,
+        *,
+        image_path: str,
+        runtime_case: ImageOnlyRuntimeCase,
+    ) -> tuple[UnifiedReactState, DiscrepancyJudgment, dict[str, Any], None]:
+        investigation = UnifiedReactState(
+            case_id=runtime_case.case_id,
+            image_sha256=runtime_case.image_sha256,
+            action_count=1,
+            stop_reason="model_finished",
+            finish_rationale="The retained observation is sufficient.",
+        )
+        judgment = DiscrepancyJudgment(
+            verdict="real",
+            confidence=0.9,
+            overall_assessment="The retained observation supports the verdict.",
+            fact_check_report={
+                "headline": "Fixture verdict",
+                "claim_under_review": "The image is factually accurate.",
+                "verdict_summary": "The fixture supports the claim.",
+                "key_findings": ["A retained observation is available."],
+                "evidence_summary": "The retained observation supports the verdict.",
+                "remaining_uncertainties": [],
+            },
+        )
+        return investigation, judgment, {"observation_ids": []}, None
+
+    orchestrator._run_react_runtime_policy = fake_runtime  # type: ignore[method-assign]
+
+    result = run(
+        orchestrator.run(
+            str(image_path),
+            runtime_case,
+            episode_id="episode-terminal",
+        )
+    )
+
+    assert result["termination"] == "success"
+    assert result["stop_reason"] == "model_finished"
+    assert result["action_count"] == 1
+    assert "investigation_status" not in result
+    assert "verification_layers" not in result

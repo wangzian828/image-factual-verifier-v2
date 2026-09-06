@@ -194,7 +194,10 @@ def build_full_event_history(trace: Mapping[str, Any]) -> dict[str, Any]:
             "verdict_basis": basis,
             "judgment": judgment,
             "termination": _text(trace.get("termination")),
-            "investigation_status": _text(trace.get("investigation_status")),
+            "stop_reason": _text(
+                investigation.get("stop_reason") or trace.get("stop_reason")
+            ),
+            "action_count": investigation.get("action_count"),
             "final_visual_audit": trace.get("final_visual_audit"),
         },
     }

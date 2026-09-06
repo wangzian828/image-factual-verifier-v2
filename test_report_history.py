@@ -86,7 +86,6 @@ def _trace() -> dict[str, object]:
                             "arguments": {"query": "A final winner"},
                         },
                         "tool_success": True,
-                        "investigation_state_update": {"new_evidence": "evidence-1"},
                     },
                 },
             ],
@@ -104,8 +103,12 @@ def test_full_report_history_keeps_every_event_without_replaying_workspace() -> 
         "query": "A final winner"
     }
     assert history["chronological_events"][1]["runtime_event"][
-        "investigation_state_update"
-    ] == {"new_evidence": "evidence-1"}
+        "policy_action"
+    ] == {
+        "type": "tool_call",
+        "name": "text_search",
+        "arguments": {"query": "A final winner"},
+    }
     assert history["initial_context"]["stage_instruction"] == "Agent system instruction"
     assert "workspace" not in str(history["initial_context"]["input_payload"])
     assert "policy_input" not in history["chronological_events"][0]

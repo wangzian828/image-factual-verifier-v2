@@ -77,17 +77,13 @@ def main():
     print(f"Image: {args.image_path}")
     print(f"Verdict: {result['verdict']}")
     print(f"Confidence: {result['confidence']:.2f}")
-    print(
-        "Investigation status: "
-        f"{result.get('investigation_status', 'unknown')}"
-    )
+    print(f"Stop reason: {result.get('stop_reason', 'unknown')}")
+    print(f"Actions: {result.get('action_count', result['total_tool_calls'])}")
     print(f"Assessment: {result['overall_assessment']}")
     report = result.get("fact_check_report")
     if isinstance(report, dict):
         print(f"Fact-check headline: {report.get('headline', '')}")
         print(f"Fact-check conclusion: {report.get('verdict_summary', '')}")
-    if result.get("verification_layers"):
-        print(f"Verification layers: {result['verification_layers']}")
     print(f"Time: {result['time_taken']:.1f}s")
     print(f"Tool calls: {result['total_tool_calls']}")
     print(f"Tokens: {result['token_usage']}")
