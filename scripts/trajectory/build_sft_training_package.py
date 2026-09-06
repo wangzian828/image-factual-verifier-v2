@@ -114,9 +114,15 @@ def _build_default_case_split(
             f"ifv-sft-package-fallback:{row.get('case_id', '')}".encode("utf-8")
         ).hexdigest(),
     )
-    validation_count = 0 if all_train else (1 if len(ordered) >= 2 else 0)
+    policy_selected = [
+        row
+        for row in ordered
+        if int(row.get("trajectory_sft_rows", 0) or 0) > 0
+        or "reasoning_sft" in (row.get("training_buckets") or [])
+    ]
+    validation_count = 0 if all_train else (1 if len(policy_selected) >= 2 else 0)
     validation_ids = {
-        str(row.get("case_id", "")) for row in ordered[:validation_count]
+        str(row.get("case_id", "")) for row in policy_selected[:validation_count]
     }
     rows: list[dict[str, Any]] = []
     for row in sorted(selected, key=lambda item: str(item.get("case_id", ""))):

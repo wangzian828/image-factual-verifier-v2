@@ -6,6 +6,7 @@ import shutil
 from pathlib import Path
 
 from scripts.trajectory.export_dataset import export_dataset
+from scripts.trajectory.build_sft_training_package import _build_default_case_split
 
 
 def _write_jsonl(path: Path, rows: list[dict]) -> None:
@@ -143,3 +144,57 @@ def test_action_only_release_keeps_perception_training_example(tmp_path: Path) -
     assert json.loads(
         (output / "action_only.jsonl").read_text(encoding="utf-8")
     )["episode_id"] == "case-action-only"
+
+
+def test_default_case_split_chooses_validation_from_policy_rows(tmp_path: Path) -> None:
+    release = tmp_path / "accepted-release"
+    (release / "traces").mkdir(parents=True)
+    selected = [
+        {
+            "case_id": "case-action-only",
+            "episode_id": "case-action-only",
+            "training_buckets": ["action_only"],
+            "trajectory_sft_rows": 0,
+        },
+        {
+            "case_id": "case-policy-a",
+            "episode_id": "case-policy-a",
+            "training_buckets": ["reasoning_sft"],
+            "trajectory_sft_rows": 1,
+        },
+        {
+            "case_id": "case-policy-b",
+            "episode_id": "case-policy-b",
+            "training_buckets": ["reasoning_sft"],
+            "trajectory_sft_rows": 1,
+        },
+    ]
+    (release / "selected_episodes.jsonl").write_text(
+        "".join(json.dumps(row) + "\n" for row in selected),
+        encoding="utf-8",
+    )
+    for row in selected:
+        trace = {
+            "state": {
+                "runtime_case": {
+                    "image_sha256": "a" * 64,
+                }
+            }
+        }
+        (release / "traces" / f"{row['episode_id']}.json").write_text(
+            json.dumps(trace),
+            encoding="utf-8",
+        )
+
+    destination = tmp_path / "case-split.jsonl"
+    summary = _build_default_case_split(release, destination)
+    rows = [
+        json.loads(line)
+        for line in destination.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+    assert summary["validation_count"] == 1
+    validation = [row for row in rows if row["split"] == "validation"]
+    assert validation
+    assert validation[0]["case_id"] != "case-action-only"

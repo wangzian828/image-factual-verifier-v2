@@ -7,6 +7,7 @@ import argparse
 import ast
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -66,6 +67,10 @@ def _copy(source: Path, destination: Path) -> None:
     else:
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, destination)
+
+
+def _make_executable(path: Path) -> None:
+    path.chmod(path.stat().st_mode | 0o111)
 
 
 def build_package(
@@ -135,6 +140,7 @@ def build_package(
         "exec python \"$ROOT/runtime/scripts/run_direct_qa_baseline.py\" --prompt-file \"$ROOT/prompt.txt\" \"$@\"\n",
         encoding="utf-8",
     )
+    _make_executable(output_dir / "run_direct_qa.sh")
     (output_dir / "audit_direct_qa.ps1").write_text(
         "$ErrorActionPreference = 'Stop'\n"
         "$root = Split-Path -Parent $MyInvocation.MyCommand.Path\n"
@@ -148,6 +154,7 @@ def build_package(
         "exec python \"$ROOT/runtime/scripts/audit_direct_qa_baseline.py\" \"$@\"\n",
         encoding="utf-8",
     )
+    _make_executable(output_dir / "audit_direct_qa.sh")
     readme = f"""# IFV Direct QA comparison package
 
 This package is evaluator-only and training-prohibited. It contains the exact
