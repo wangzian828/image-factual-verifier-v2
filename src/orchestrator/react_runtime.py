@@ -550,7 +550,6 @@ def render_react_judgment_context(
             "rules": [
                 "Keep the claim faithful to what the image expresses.",
                 "Use raw tool observations without inventing facts.",
-                "A lack of evidence is uncertainty, not proof of fake.",
                 "Visible artifacts or image quality alone are not a factual verdict.",
                 "Search result pages are leads unless returned content directly answers the question.",
             ],
