@@ -361,6 +361,12 @@ def test_sft_launcher_rejects_padding_free_without_flash_attention() -> None:
     assert "IFV_ALLOW_UNDERSIZED_DISTRIBUTED_DATASET" in source
     assert "one train and validation row per visible GPU" in source
 
+    compact_profile = _source(
+        "configs/sft/qwen3.5-full-10step-4gpu-zero3-offload-accum1-bf16params-sdpa-checkpointed-8k.env"
+    )
+    assert "IFV_MAX_LENGTH=8192" in compact_profile
+    assert "IFV_USE_LOGITS_TO_KEEP=true" in compact_profile
+
 
 def test_ms_swift_encode_cache_is_content_addressed_and_fail_closed() -> None:
     source = _source("ifv_training/encode_cache.py")
