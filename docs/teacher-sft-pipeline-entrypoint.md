@@ -30,7 +30,7 @@ scripts/server/run_teacher_sft_pipeline.sh \
   --limit 10 \
   --run-training \
   --training-model-profile "$IFV_REPO_ROOT/training/configs/models/qwen3.5-9b.env" \
-  --training-sft-profile "$IFV_REPO_ROOT/training/configs/sft/qwen3.5-full-10step-4gpu-zero3-offload-sp4-accum1-bf16params-sdpa-checkpointed-16k-logits.env" \
+  --training-sft-profile "$IFV_REPO_ROOT/training/configs/sft/qwen3.5-full-10step-4gpu-zero3-offload-accum1-bf16params-sdpa-checkpointed-16k-logits-512px.env" \
   --training-experiment-id <experiment-id>
 ```
 
@@ -38,9 +38,11 @@ The `padding_free` optimization requires an installed flash-attention
 implementation. The `qwen3.5-full-10step-4gpu-zero3-offload-accum1-bf16params-sdpa-checkpointed-8k.env`
 profile is the portable fallback for environments without flash attention; it
 uses full-parameter ZeRO-3 with CPU optimizer offload, disables `padding_free`,
-uses a 16K sequence limit, sequence parallelism across four GPUs, gradient
-checkpointing, and retains only the logits needed for the supervised labels
-on 40 GiB GPUs.
+uses a 16K sequence limit, caps image preprocessing at 262,144 pixels per
+image, enables gradient checkpointing, and retains only the logits needed for
+the supervised labels on 40 GiB GPUs. Sequence parallelism is not enabled
+because the current ms-swift release does not implement the required training
+step for this model path.
 The launcher rejects an invalid `padding_free`/attention pair and undersized
 multi-GPU datasets before starting distributed workers. The 16K profile is
 chosen because the current smoke package contains rows above 8K tokens.

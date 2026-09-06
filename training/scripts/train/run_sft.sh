@@ -164,6 +164,9 @@ fi
 if [[ -n "${IFV_DATALOADER_PREFETCH_FACTOR:-}" ]]; then
   args+=(--dataloader_prefetch_factor "$IFV_DATALOADER_PREFETCH_FACTOR")
 fi
+if [[ -n "${IFV_MAX_PIXELS:-}" ]]; then
+  args+=(--max_pixels "$IFV_MAX_PIXELS")
+fi
 if [[ -n "${IFV_DATALOADER_PERSISTENT_WORKERS:-}" ]]; then
   args+=(--dataloader_persistent_workers "$IFV_DATALOADER_PERSISTENT_WORKERS")
 fi
