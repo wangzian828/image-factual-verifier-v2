@@ -373,6 +373,13 @@ def test_sft_launcher_rejects_padding_free_without_flash_attention() -> None:
     assert "IFV_MAX_LENGTH=16384" in full_length_profile
     assert "IFV_USE_LOGITS_TO_KEEP=true" in full_length_profile
 
+    sequence_parallel_profile = _source(
+        "configs/sft/qwen3.5-full-10step-4gpu-zero3-offload-sp4-accum1-bf16params-sdpa-checkpointed-16k-logits.env"
+    )
+    assert "IFV_SEQUENCE_PARALLEL_SIZE=4" in sequence_parallel_profile
+    assert "IFV_ATTN_IMPL=sdpa" in sequence_parallel_profile
+    assert "IFV_PADDING_FREE=false" in sequence_parallel_profile
+
 
 def test_ms_swift_encode_cache_is_content_addressed_and_fail_closed() -> None:
     source = _source("ifv_training/encode_cache.py")
