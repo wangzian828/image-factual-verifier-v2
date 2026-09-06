@@ -334,6 +334,19 @@ def test_sft_launchers_support_cached_datasets_and_tunable_dataloaders() -> None
     assert "cache_index" in curriculum
 
 
+def test_sft_launcher_rejects_padding_free_without_flash_attention() -> None:
+    source = _source("scripts/train/run_sft.sh")
+    portable_profile = _source(
+        "configs/sft/qwen3.5-full-10step-4gpu-fsdp2-accum1-bf16params-sdpa.env"
+    )
+
+    assert 'IFV_PADDING_FREE:-false' in source
+    assert 'IFV_ATTN_IMPL,,}' in source
+    assert "requires a flash attention implementation" in source
+    assert "IFV_ATTN_IMPL=sdpa" in portable_profile
+    assert "IFV_PADDING_FREE=false" in portable_profile
+
+
 def test_ms_swift_encode_cache_is_content_addressed_and_fail_closed() -> None:
     source = _source("ifv_training/encode_cache.py")
     bootstrap = _source("ifv_training_bootstrap/sitecustomize.py")

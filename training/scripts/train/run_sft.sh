@@ -27,6 +27,14 @@ require_model_path
 prepare_deepspeed_cpu_adam
 require_value EXPERIMENT_ID
 
+case "${IFV_PADDING_FREE:-false}:${IFV_ATTN_IMPL,,}" in
+  true:flash_attn|true:flash_attention_2|true:flash_attention_3|true:flash_attention_4|false:*) ;;
+  true:*)
+    echo "IFV_PADDING_FREE=true requires a flash attention implementation; use IFV_PADDING_FREE=false with IFV_ATTN_IMPL=${IFV_ATTN_IMPL:-sdpa}." >&2
+    exit 2
+    ;;
+esac
+
 training_backend_args=()
 if [[ -n "${IFV_DEEPSPEED:-}" ]]; then
   training_backend_args+=(--deepspeed "$IFV_DEEPSPEED")
