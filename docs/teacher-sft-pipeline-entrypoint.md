@@ -18,6 +18,15 @@ rejected before training. The final status is written to
 `<output-dir>/audits/pipeline-summary.json`, with processor and training status
 recorded separately.
 
+The no-evaluation profile
+`training/configs/sft/qwen3.5-full-10step-4gpu-zero3-offload-accum1-bf16params-sdpa-checkpointed-8k-truncated-smoke-noeval.env`
+is smoke-only. It is intended to validate forward/backward execution and
+checkpoint writing on a temporary expanded server dataset; it deliberately skips
+validation because the installed Qwen3.5/ms-swift path can fail in the
+multimodal validation collator after left truncation. A checkpoint from this
+profile is a training-chain smoke artifact, not a validated production SFT
+checkpoint.
+
 Example:
 
 ```bash
@@ -35,14 +44,15 @@ scripts/server/run_teacher_sft_pipeline.sh \
 ```
 
 The `padding_free` optimization requires an installed flash-attention
-implementation. The `qwen3.5-full-10step-4gpu-zero3-offload-accum1-bf16params-sdpa-checkpointed-8k.env`
+implementation. The
+`qwen3.5-full-10step-4gpu-zero3-offload-accum1-bf16params-sdpa-checkpointed-8k.env`
 profile is the portable fallback for environments without flash attention; it
 uses full-parameter ZeRO-3 with CPU optimizer offload, disables `padding_free`,
-uses a 16K sequence limit, caps image preprocessing at 262,144 pixels per
-image, enables gradient checkpointing, and retains only the logits needed for
-the supervised labels on 40 GiB GPUs. Sequence parallelism is not enabled
-because the current ms-swift release does not implement the required training
-step for this model path.
+uses an 8K sequence limit, caps image preprocessing at 65,536 pixels per image,
+enables left truncation and gradient checkpointing, and retains only the logits
+needed for the supervised labels on 40 GiB GPUs. Sequence parallelism is not
+enabled because the current ms-swift release does not implement the required
+training step for this model path.
 The launcher rejects an invalid `padding_free`/attention pair and undersized
 multi-GPU datasets before starting distributed workers. The 16K profile is
 chosen because the current smoke package contains rows above 8K tokens.
