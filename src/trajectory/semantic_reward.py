@@ -608,6 +608,50 @@ def _response_format(model: type[_StrictModel]) -> Dict[str, Any]:
     }
 
 
+def _openai_response_format(model: type[_StrictModel]) -> Dict[str, Any]:
+    schema = normalize_json_schema(
+        model.model_json_schema(),
+        require_all_properties=True,
+        strip_validation_constraints=True,
+    )
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": model.__name__,
+            "strict": True,
+            "schema": schema,
+        },
+    }
+
+
+def _json_candidate(text: str) -> str:
+    candidate = str(text or "").strip()
+    if candidate.startswith("```"):
+        lines = candidate.splitlines()
+        if lines and lines[0].strip().startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        candidate = "\n".join(lines).strip()
+    try:
+        parsed = json.loads(candidate)
+    except json.JSONDecodeError:
+        parsed = None
+    if isinstance(parsed, dict):
+        return candidate
+    decoder = json.JSONDecoder()
+    for index, char in enumerate(candidate):
+        if char != "{":
+            continue
+        try:
+            parsed, end = decoder.raw_decode(candidate[index:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return candidate[index : index + end]
+    return candidate
+
+
 def _usage(raw: Mapping[str, Any]) -> Dict[str, int]:
     usage = _mapping(raw.get("usage"))
     return {
@@ -639,6 +683,7 @@ class SemanticRewardJudge:
         provider: str | None = None,
         model: str | None = None,
         max_tokens: int = 4096,
+        enable_thinking: bool | None = None,
     ) -> None:
         self.backend = backend
         self.provider = str(
@@ -646,10 +691,20 @@ class SemanticRewardJudge:
         )
         self.model = str(model or getattr(backend, "model_name", "unknown"))
         self.max_tokens = int(max_tokens)
+        self.enable_thinking = enable_thinking
 
     @property
     def generation_identity(self) -> str:
-        return f"{JUDGE_GENERATION_VERSION}:max_tokens={self.max_tokens}"
+        thinking = (
+            "unset" if self.enable_thinking is None else str(bool(self.enable_thinking)).lower()
+        )
+        wire_api = str(getattr(self.backend, "wire_api", "default"))
+        base_url = str(getattr(self.backend, "base_url", "default"))
+        return (
+            f"{JUDGE_GENERATION_VERSION}:provider={self.provider}:model={self.model}:"
+            f"wire={wire_api}:base={base_url}:max_tokens={self.max_tokens}:"
+            f"thinking={thinking}"
+        )
 
     async def _call(
         self,
@@ -690,13 +745,21 @@ class SemanticRewardJudge:
             text = extract_text(interaction)
             raw = interaction
         else:
+            request_kwargs: Dict[str, Any] = {
+                "max_tokens": self.max_tokens,
+                "temperature": 0.0,
+                "response_format": _openai_response_format(response_model),
+            }
+            if self.enable_thinking is not None:
+                request_kwargs["generation_config"] = {
+                    "enable_thinking": bool(self.enable_thinking),
+                }
             response = await self.backend.get_response(  # type: ignore[attr-defined]
                 [
                     {"role": "system", "content": system_prompt},
                     *messages,
                 ],
-                max_tokens=self.max_tokens,
-                temperature=0.0,
+                **request_kwargs,
             )
             text = response.text
             raw = _mapping(response.raw)
@@ -707,7 +770,7 @@ class SemanticRewardJudge:
                         "output_tokens": response.completion_tokens,
                     }
                 }
-        parsed = response_model.model_validate_json(text)
+        parsed = response_model.model_validate_json(_json_candidate(text))
         audit = {
             "prompt_version": prompt_version,
             "request_sha256": sha256_json(payload),

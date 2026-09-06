@@ -59,3 +59,35 @@ chosen because the current smoke package contains rows above 8K tokens.
 
 The separate Direct QA comparison package is evaluator-only and training-
 prohibited. Build and use it through `docs/direct-qa-portable-package.md`.
+
+## Independent Qwen teacher and judge
+
+The teacher rollout and frozen SFT judge are separate model configurations. A
+server-deployed large Qwen teacher can use its own OpenAI-compatible endpoint:
+
+```bash
+export QWEN_TEACHER_BASE_URL=http://teacher-host:port/v1
+export QWEN_TEACHER_MODEL=served-teacher-model
+export QWEN_TEACHER_VISION_MODEL=served-teacher-vision-model
+export IFV_SFT_ELIGIBILITY_PROVIDER=qwen_local
+export IFV_SFT_ELIGIBILITY_BASE_URL=http://judge-host:port/v1
+export IFV_SFT_ELIGIBILITY_MODEL=served-judge-model
+export IFV_SFT_ELIGIBILITY_WIRE_API=chat_completions
+export IFV_SFT_ELIGIBILITY_ENABLE_THINKING=true
+
+scripts/server/start_teacher_rollout_autopilot.sh \
+  --rollout-profile teacher-qwen-server \
+  --rollout-model "$QWEN_TEACHER_MODEL" \
+  --sft-judge-provider "$IFV_SFT_ELIGIBILITY_PROVIDER" \
+  --sft-model "$IFV_SFT_ELIGIBILITY_MODEL" \
+  --sft-judge-base-url "$IFV_SFT_ELIGIBILITY_BASE_URL" \
+  --sft-judge-wire-api "$IFV_SFT_ELIGIBILITY_WIRE_API" \
+  --sft-judge-enable-thinking
+```
+
+The judge receives the original image and the structured JSON schema. Qwen
+responses that put the final JSON in `reasoning_content` or `reasoning` are
+accepted only after strict JSON validation; provider failures remain audit
+errors and cannot become passing eligibility results. The durable pipeline
+state records teacher and judge provider, model, endpoint, wire protocol, and
+thinking configuration separately.

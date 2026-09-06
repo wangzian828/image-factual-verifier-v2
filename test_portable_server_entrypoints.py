@@ -18,6 +18,7 @@ def test_generic_server_entrypoints_have_no_machine_specific_paths() -> None:
         "scripts/server/start_eval.sh",
         "scripts/server/start_gemini_eval.sh",
         "scripts/server/start_teacher_rollout.sh",
+        "scripts/server/start_teacher_rollout_autopilot.sh",
         "scripts/server/run_teacher_sft_pipeline.sh",
         "scripts/server/eval_worker.sh",
         "scripts/server/poll_eval.sh",
@@ -42,6 +43,7 @@ def test_generic_launcher_uses_explicit_runtime_configuration() -> None:
     runner = _source("scripts/server/run_ifv.sh")
     starter = _source("scripts/server/start_eval.sh")
     rollout = _source("scripts/server/start_teacher_rollout.sh")
+    autopilot = _source("scripts/server/start_teacher_rollout_autopilot.sh")
 
     assert "XDG_DATA_HOME" in env
     assert "IFV_SERVER_PROXY" in env
@@ -51,6 +53,9 @@ def test_generic_launcher_uses_explicit_runtime_configuration() -> None:
     assert "GEMINI_EVAL_MAX_CONCURRENCY" in starter
     assert "GEMINI_MAX_INFLIGHT_REQUESTS" in starter
     assert "IFV_EVAL_MODULE=src.eval.run_cases" in rollout
+    assert "IFV_DATA_ROOT" in autopilot
+    assert "run_teacher_rollout_autopilot.py" in autopilot
+    assert "nohup" in autopilot
 
 
 def test_runtime_template_contains_no_credentials() -> None:

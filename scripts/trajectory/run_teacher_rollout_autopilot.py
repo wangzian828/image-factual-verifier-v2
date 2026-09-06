@@ -77,6 +77,50 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _sft_judge_config(args: argparse.Namespace) -> dict[str, Any]:
+    return {
+        "provider": str(getattr(args, "sft_judge_provider", "gemini")),
+        "model": str(getattr(args, "sft_model", "gemini-3.7-flash")),
+        "base_url": getattr(args, "sft_judge_base_url", None),
+        "wire_api": getattr(args, "sft_judge_wire_api", None),
+        "enable_thinking": getattr(args, "sft_judge_enable_thinking", None),
+    }
+
+
+def _rollout_config(args: argparse.Namespace) -> dict[str, Any]:
+    return {
+        "profile": str(getattr(args, "rollout_profile", "teacher-gemini")),
+        "model": str(getattr(args, "rollout_model", "gemini-3.7-flash")),
+    }
+
+
+def _state_model_config(
+    state: Mapping[str, Any],
+    args: argparse.Namespace,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    configured = state.get("model_config")
+    if not isinstance(configured, Mapping):
+        return _rollout_config(args), _sft_judge_config(args)
+    rollout = configured.get("rollout")
+    judge = configured.get("sft_judge")
+    if not isinstance(rollout, Mapping) or not isinstance(judge, Mapping):
+        return _rollout_config(args), _sft_judge_config(args)
+    rollout_config = {
+        "profile": str(rollout.get("profile") or args.rollout_profile),
+        "model": str(rollout.get("model") or args.rollout_model),
+    }
+    judge_config = {
+        "provider": str(
+            judge.get("provider") or getattr(args, "sft_judge_provider", "gemini")
+        ),
+        "model": str(judge.get("model") or args.sft_model),
+        "base_url": judge.get("base_url"),
+        "wire_api": judge.get("wire_api"),
+        "enable_thinking": judge.get("enable_thinking"),
+    }
+    return rollout_config, judge_config
+
+
 def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -1286,6 +1330,10 @@ def _bootstrap_completed_initial_pipeline(
             "rollout": args.rollout_model,
             "sft_judge": args.sft_model,
         },
+        "model_config": {
+            "rollout": _rollout_config(args),
+            "sft_judge": _sft_judge_config(args),
+        },
         "concurrency": {
             "rollout": args.rollout_concurrency,
             "sft_judge": args.sft_concurrency,
@@ -1316,6 +1364,8 @@ def _run_bootstrapped_initial_pipeline(args: argparse.Namespace) -> dict[str, An
     state_path = pipeline_dir / "pipeline-state.json"
     private_gold = Path(str(preparation["private_gold"])).expanduser().resolve()
     initial_classification_dir = pipeline_dir / "classification"
+    rollout_config = _rollout_config(args)
+    judge_config = _sft_judge_config(args)
     if not (initial_classification_dir / "classification.json").is_file():
         raise FileNotFoundError(
             "bootstrap initial classification is missing: "
@@ -1327,6 +1377,7 @@ def _run_bootstrapped_initial_pipeline(args: argparse.Namespace) -> dict[str, An
         "maximum_rounds": args.quality_reroll_rounds,
         "rollout_concurrency": args.rollout_concurrency,
         "sft_concurrency": args.sft_concurrency,
+        "sft_judge": judge_config,
     }
     state["updated_at"] = _now()
     _write_json(state_path, state)
@@ -1337,9 +1388,13 @@ def _run_bootstrapped_initial_pipeline(args: argparse.Namespace) -> dict[str, An
         initial_run=initial_run,
         initial_audit=initial_audit,
         initial_classification_dir=initial_classification_dir,
-        profile=args.rollout_profile,
+        profile=rollout_config["profile"],
         rollout_concurrency=args.rollout_concurrency,
-        sft_model=args.sft_model,
+        sft_model=judge_config["model"],
+        sft_judge_provider=judge_config["provider"],
+        sft_judge_base_url=judge_config["base_url"],
+        sft_judge_wire_api=judge_config["wire_api"],
+        sft_judge_enable_thinking=judge_config["enable_thinking"],
         sft_concurrency=args.sft_concurrency,
         rollout_timeout=args.rollout_timeout,
         sft_timeout=args.sft_timeout,
@@ -1384,6 +1439,10 @@ def _run_sft_audit(
     pipeline_dir: Path,
     label: str,
     model: str,
+    provider: str,
+    base_url: str | None,
+    wire_api: str | None,
+    enable_thinking: bool | None,
     concurrency: int,
     timeout: float,
     maximum_attempts: int,
@@ -1409,7 +1468,7 @@ def _run_sft_audit(
             "--storage-dir",
             str(eligibility_dir / "automatic-storage"),
             "--provider",
-            "gemini",
+            provider,
             "--model",
             model,
             "--max-tokens",
@@ -1419,6 +1478,14 @@ def _run_sft_audit(
             "--concurrency",
             str(concurrency),
         )
+        if base_url:
+            command.extend(["--base-url", base_url])
+        if wire_api:
+            command.extend(["--wire-api", wire_api])
+        if enable_thinking is not None:
+            command.append(
+                "--enable-thinking" if enable_thinking else "--no-enable-thinking"
+            )
         env = os.environ.copy()
         env.update({"OMP_NUM_THREADS": "1", "PYTHONUNBUFFERED": "1"})
         _run_command(
@@ -1823,6 +1890,10 @@ def _run_quality_rerolls(
     profile: str,
     rollout_concurrency: int,
     sft_model: str,
+    sft_judge_provider: str,
+    sft_judge_base_url: str | None,
+    sft_judge_wire_api: str | None,
+    sft_judge_enable_thinking: bool | None,
     sft_concurrency: int,
     rollout_timeout: float,
     sft_timeout: float,
@@ -1910,6 +1981,10 @@ def _run_quality_rerolls(
                 pipeline_dir=pipeline_dir,
                 label=group_name,
                 model=sft_model,
+                provider=sft_judge_provider,
+                base_url=sft_judge_base_url,
+                wire_api=sft_judge_wire_api,
+                enable_thinking=sft_judge_enable_thinking,
                 concurrency=sft_concurrency,
                 timeout=sft_timeout,
                 maximum_attempts=maximum_sft_audit_attempts,
@@ -2041,6 +2116,7 @@ def _continue_quality_rerolls(args: argparse.Namespace) -> dict[str, Any]:
     if not state_path.is_file():
         raise FileNotFoundError(f"completed pipeline state does not exist: {state_path}")
     state = _read_json(state_path)
+    rollout_config, judge_config = _state_model_config(state, args)
     preparation = state.get("prepared")
     initial = state.get("initial")
     if not isinstance(preparation, Mapping) or not isinstance(initial, Mapping):
@@ -2063,6 +2139,7 @@ def _continue_quality_rerolls(args: argparse.Namespace) -> dict[str, Any]:
         "maximum_rounds": args.quality_reroll_rounds,
         "rollout_concurrency": args.rollout_concurrency,
         "sft_concurrency": args.sft_concurrency,
+        "sft_judge": judge_config,
     }
     state["updated_at"] = _now()
     _write_json(state_path, state)
@@ -2073,9 +2150,13 @@ def _continue_quality_rerolls(args: argparse.Namespace) -> dict[str, Any]:
         initial_run=initial_run,
         initial_audit=initial_audit,
         initial_classification_dir=initial_classification_dir,
-        profile=args.rollout_profile,
+        profile=rollout_config["profile"],
         rollout_concurrency=args.rollout_concurrency,
-        sft_model=args.sft_model,
+        sft_model=judge_config["model"],
+        sft_judge_provider=judge_config["provider"],
+        sft_judge_base_url=judge_config["base_url"],
+        sft_judge_wire_api=judge_config["wire_api"],
+        sft_judge_enable_thinking=judge_config["enable_thinking"],
         sft_concurrency=args.sft_concurrency,
         rollout_timeout=args.rollout_timeout,
         sft_timeout=args.sft_timeout,
@@ -2121,6 +2202,8 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         else dataset_root / "train-manifest.jsonl"
     )
     pipeline_dir = args.output_dir.expanduser().resolve()
+    rollout_config = _rollout_config(args)
+    judge_config = _sft_judge_config(args)
     preparation = prepare_runtime_release(
         dataset_root=dataset_root,
         train_manifest=train_manifest,
@@ -2136,6 +2219,10 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         "models": {
             "rollout": args.rollout_model,
             "sft_judge": args.sft_model,
+        },
+        "model_config": {
+            "rollout": _rollout_config(args),
+            "sft_judge": judge_config,
         },
         "concurrency": {
             "rollout": args.rollout_concurrency,
@@ -2158,7 +2245,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         benchmark=Path(preparation["benchmark"]),
         pipeline_dir=pipeline_dir,
         target_ids=all_case_ids,
-        profile=args.rollout_profile,
+        profile=rollout_config["profile"],
         rollout_concurrency=args.rollout_concurrency,
         base_seed=args.base_seed,
         timeout=args.rollout_timeout,
@@ -2177,7 +2264,11 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         gold=private_gold_path,
         pipeline_dir=pipeline_dir,
         label="initial",
-        model=args.sft_model,
+        model=judge_config["model"],
+        provider=judge_config["provider"],
+        base_url=judge_config["base_url"],
+        wire_api=judge_config["wire_api"],
+        enable_thinking=judge_config["enable_thinking"],
         concurrency=args.sft_concurrency,
         timeout=args.sft_timeout,
         maximum_attempts=args.maximum_sft_audit_attempts,
@@ -2202,9 +2293,13 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         initial_run=initial_run,
         initial_audit=initial_audit,
         initial_classification_dir=pipeline_dir / "classification",
-        profile=args.rollout_profile,
+        profile=rollout_config["profile"],
         rollout_concurrency=args.rollout_concurrency,
-        sft_model=args.sft_model,
+        sft_model=judge_config["model"],
+        sft_judge_provider=judge_config["provider"],
+        sft_judge_base_url=judge_config["base_url"],
+        sft_judge_wire_api=judge_config["wire_api"],
+        sft_judge_enable_thinking=judge_config["enable_thinking"],
         sft_concurrency=args.sft_concurrency,
         rollout_timeout=args.rollout_timeout,
         sft_timeout=args.sft_timeout,
@@ -2277,7 +2372,38 @@ def build_parser() -> argparse.ArgumentParser:
             "teacher-gemini36 are pinned to their provider-profile models"
         ),
     )
-    parser.add_argument("--sft-model", default="gemini-3.7-flash")
+    parser.add_argument(
+        "--sft-model",
+        default=os.getenv("IFV_SFT_ELIGIBILITY_MODEL", "gemini-3.7-flash"),
+    )
+    parser.add_argument(
+        "--sft-judge-provider",
+        default=os.getenv("IFV_SFT_ELIGIBILITY_PROVIDER", "gemini"),
+        choices=("gemini", "qwen", "qwen_local", "lmdeploy"),
+        help="Independent frozen SFT judge provider; does not change teacher rollout.",
+    )
+    parser.add_argument(
+        "--sft-judge-base-url",
+        default=os.getenv("IFV_SFT_ELIGIBILITY_BASE_URL"),
+    )
+    parser.add_argument(
+        "--sft-judge-wire-api",
+        default=os.getenv("IFV_SFT_ELIGIBILITY_WIRE_API"),
+        choices=("chat_completions", "responses", "interactions"),
+    )
+    parser.add_argument(
+        "--sft-judge-enable-thinking",
+        action=argparse.BooleanOptionalAction,
+        default=(
+            os.getenv("IFV_SFT_ELIGIBILITY_ENABLE_THINKING", "")
+            .strip()
+            .lower()
+            in {"1", "true", "yes", "on"}
+            if os.getenv("IFV_SFT_ELIGIBILITY_ENABLE_THINKING") is not None
+            else None
+        ),
+        help="Enable native thinking for a Qwen SFT judge when supported.",
+    )
     parser.add_argument("--rollout-concurrency", type=int, default=10)
     parser.add_argument("--sft-concurrency", type=int, default=10)
     parser.add_argument(

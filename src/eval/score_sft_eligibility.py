@@ -53,10 +53,37 @@ def _parse_args() -> argparse.Namespace:
             "run-specific directory under the data root's generated/sft tree."
         ),
     )
-    parser.add_argument("--provider", default="gemini", choices=["gemini"])
+    parser.add_argument(
+        "--provider",
+        default=os.getenv("IFV_SFT_ELIGIBILITY_PROVIDER", "gemini"),
+        choices=["gemini", "qwen", "qwen_local", "lmdeploy"],
+    )
     parser.add_argument(
         "--model",
         default=os.getenv("IFV_SFT_ELIGIBILITY_MODEL", "gemini-3.7-flash"),
+    )
+    parser.add_argument(
+        "--base-url",
+        default=os.getenv("IFV_SFT_ELIGIBILITY_BASE_URL"),
+        help="Optional judge endpoint override, especially for qwen_local.",
+    )
+    parser.add_argument(
+        "--wire-api",
+        default=os.getenv("IFV_SFT_ELIGIBILITY_WIRE_API"),
+        choices=["chat_completions", "responses", "interactions"],
+    )
+    parser.add_argument(
+        "--enable-thinking",
+        action=argparse.BooleanOptionalAction,
+        default=(
+            os.getenv("IFV_SFT_ELIGIBILITY_ENABLE_THINKING", "")
+            .strip()
+            .lower()
+            in {"1", "true", "yes", "on"}
+            if os.getenv("IFV_SFT_ELIGIBILITY_ENABLE_THINKING") is not None
+            else None
+        ),
+        help="Enable native Qwen thinking for the judge when supported.",
     )
     parser.add_argument("--max-tokens", type=int, default=4096)
     parser.add_argument(
@@ -296,10 +323,15 @@ async def _run(args: argparse.Namespace) -> Dict[str, Any]:
     output_dir.mkdir(parents=True, exist_ok=True)
     cache_dir = (args.cache_dir or output_dir / "cache").expanduser().resolve()
     image_root = args.image_root.expanduser().resolve() if args.image_root else None
+    judge_base_url = getattr(args, "base_url", None)
+    judge_wire_api = getattr(args, "wire_api", None)
+    judge_enable_thinking = getattr(args, "enable_thinking", None)
 
     backend = APIBackend(
         provider=args.provider,
         model_name=args.model,
+        base_url=judge_base_url,
+        wire_api=judge_wire_api,
         temperature=0.0,
         max_tokens=args.max_tokens,
         timeout=args.timeout,
@@ -310,6 +342,7 @@ async def _run(args: argparse.Namespace) -> Dict[str, Any]:
         provider=args.provider,
         model=args.model,
         max_tokens=args.max_tokens,
+        enable_thinking=judge_enable_thinking,
     )
     judge_semaphore = asyncio.Semaphore(args.concurrency)
 
@@ -500,6 +533,11 @@ async def _run(args: argparse.Namespace) -> Dict[str, Any]:
         "private_gold": {"path": str(gold_path), "sha256": sha256_file(gold_path)},
         "provider": args.provider,
         "model": args.model,
+        "judge_config": {
+            "base_url": judge_base_url,
+            "wire_api": judge_wire_api,
+            "enable_thinking": judge_enable_thinking,
+        },
         "episode_count": len(rows),
         "passed_count": len(accepted),
         "storage": {

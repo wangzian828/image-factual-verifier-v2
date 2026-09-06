@@ -3,12 +3,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
+profile="${IFV_TEACHER_ROLLOUT_PROFILE:-teacher-gemini}"
 for arg in "$@"; do
     case "${arg}" in
-        --profile|--profile=*|--provider|--provider=*|--model|--model=*|\
-        --vlm-provider|--vlm-provider=*|--vlm-model|--vlm-model=*|\
-        --llm-wire-api|--llm-wire-api=*|--vlm-wire-api|--vlm-wire-api=*)
-            echo "start_teacher_rollout.sh fixes profile=teacher-gemini." >&2
+        --profile|--profile=*)
+            echo "Use --rollout-profile with the autopilot entrypoint." >&2
             exit 2
             ;;
     esac
@@ -29,4 +28,4 @@ export GEMINI_RETRY_BASE_DELAY_SECONDS="${GEMINI_RETRY_BASE_DELAY_SECONDS:-2}"
 export GEMINI_RETRY_JITTER_SECONDS="${GEMINI_RETRY_JITTER_SECONDS:-1}"
 export GEMINI_RETRY_MAX_DELAY_SECONDS="${GEMINI_RETRY_MAX_DELAY_SECONDS:-10}"
 
-exec "${SCRIPT_DIR}/start_eval.sh" --profile teacher-gemini "$@"
+exec "${SCRIPT_DIR}/start_eval.sh" --profile "${profile}" "$@"

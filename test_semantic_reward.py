@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List
 
+from PIL import Image
+
 from src.orchestrator.llm_backend import LLMResponse
 from src.trajectory.semantic_reward import (
     SemanticRewardCache,
@@ -196,6 +198,23 @@ class _MockJudgeBackend:
         )
 
 
+class _QwenJudgeBackend:
+    provider = "qwen_local"
+    model_name = "qwen-large-judge"
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+        self.kwargs: Dict[str, Any] = {}
+        self.messages: List[List[Dict[str, Any]]] = []
+
+    async def get_response(
+        self, messages: List[Dict[str, Any]], **kwargs: Any
+    ) -> LLMResponse:
+        self.messages.append(messages)
+        self.kwargs = kwargs
+        return LLMResponse(text=self.text, raw={"id": "qwen-judge"})
+
+
 def test_packet_is_episode_aware_and_excludes_hidden_answers() -> None:
     packet = build_semantic_reward_input(_trace())
     assert packet["case_id"] == "case-1"
@@ -246,6 +265,31 @@ def test_frozen_judge_uses_one_blind_trajectory_call() -> None:
         assert artifact["gates"]["semantic_audit_pass"] is True
 
     asyncio.run(run())
+
+
+def test_qwen_judge_sends_image_schema_and_thinking_config(tmp_path: Path) -> None:
+    image_path = tmp_path / "judge.jpg"
+    Image.new("RGB", (2, 2), color=(255, 255, 255)).save(image_path)
+    backend = _QwenJudgeBackend(
+        "<think>check the supplied observations</think>\n"
+        + _judgment().model_dump_json()
+    )
+
+    async def run() -> None:
+        packet = build_semantic_reward_input(_trace())
+        judgment, _audit = await SemanticRewardJudge(
+            backend,
+            provider="qwen_local",
+            model="qwen-large-judge",
+            enable_thinking=True,
+        ).judge(packet, image_path=image_path)
+        assert judgment.predicted_verdict == "fake"
+
+    asyncio.run(run())
+    assert backend.kwargs["response_format"]["type"] == "json_schema"
+    assert backend.kwargs["response_format"]["json_schema"]["strict"] is True
+    assert backend.kwargs["generation_config"] == {"enable_thinking": True}
+    assert backend.messages[0][1]["content"][-1]["type"] == "image_url"
 
 
 def test_unknown_judge_citations_fail_semantic_gate() -> None:

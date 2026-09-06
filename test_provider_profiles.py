@@ -28,6 +28,24 @@ def test_teacher_gemini36_profile_is_fixed_to_gemini36_wire() -> None:
     assert settings.llm_wire_api == "interactions"
     assert settings.vlm_wire_api == "interactions"
 
+
+def test_server_qwen_teacher_profile_is_independent_from_small_qwen_ports() -> None:
+    settings = resolve_provider_settings(
+        profile_id="teacher-qwen-server",
+        environ={
+            "QWEN_TEACHER_MODEL": "qwen-large-teacher",
+            "QWEN_TEACHER_VISION_MODEL": "qwen-large-vision",
+            "QWEN_TEACHER_BASE_URL": "http://qwen-teacher.internal/v1",
+            "QWEN_LOCAL_BASE_URL": "http://127.0.0.1:8899/v1",
+        },
+    )
+
+    assert settings.provider == "qwen_local"
+    assert settings.model_name == "qwen-large-teacher"
+    assert settings.vlm_model == "qwen-large-vision"
+    assert settings.base_url == "http://qwen-teacher.internal/v1"
+    assert settings.vlm_base_url == settings.base_url
+
 def test_local_student_profile_uses_qwen_without_gemini_fallback() -> None:
     settings = resolve_provider_settings(
         profile_id="student-qwen3-vl-local",

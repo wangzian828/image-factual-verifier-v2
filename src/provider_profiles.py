@@ -53,6 +53,18 @@ PROVIDER_PROFILES = {
         llm_wire_api="interactions",
         vlm_wire_api="interactions",
     ),
+    "teacher-qwen-server": ProviderProfile(
+        profile_id="teacher-qwen-server",
+        provider="qwen_local",
+        default_model=None,
+        model_env="QWEN_TEACHER_MODEL",
+        vlm_provider="qwen_local",
+        default_vlm_model=None,
+        vlm_model_env="QWEN_TEACHER_VISION_MODEL",
+        llm_wire_api="chat_completions",
+        vlm_wire_api="chat_completions",
+        base_url_env="QWEN_TEACHER_BASE_URL",
+    ),
     "student-qwen3-vl-local": ProviderProfile(
         profile_id="student-qwen3-vl-local",
         provider="qwen_local",

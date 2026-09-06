@@ -1422,20 +1422,32 @@ class SFTEligibilityJudge:
         provider: str | None = None,
         model: str | None = None,
         max_tokens: int = 4096,
+        enable_thinking: bool | None = None,
     ) -> None:
         self._delegate = SemanticRewardJudge(
             backend,
             provider=provider,
             model=model,
             max_tokens=max_tokens,
+            enable_thinking=enable_thinking,
         )
         self.provider = self._delegate.provider
         self.model = self._delegate.model
         self.max_tokens = int(max_tokens)
+        self.enable_thinking = enable_thinking
 
     @property
     def generation_identity(self) -> str:
-        return f"{SFT_ELIGIBILITY_GENERATION_VERSION}:max_tokens={self.max_tokens}"
+        thinking = (
+            "unset" if self.enable_thinking is None else str(bool(self.enable_thinking)).lower()
+        )
+        wire_api = str(getattr(self._delegate.backend, "wire_api", "default"))
+        base_url = str(getattr(self._delegate.backend, "base_url", "default"))
+        return (
+            f"{SFT_ELIGIBILITY_GENERATION_VERSION}:provider={self.provider}:"
+            f"model={self.model}:wire={wire_api}:base={base_url}:"
+            f"max_tokens={self.max_tokens}:thinking={thinking}"
+        )
 
     async def judge(
         self,
