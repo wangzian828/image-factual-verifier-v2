@@ -74,6 +74,16 @@ if [[ -n "${IFV_CACHED_DATASET:-}" || -n "${IFV_CACHED_VAL_DATASET:-}" ]]; then
 else
   require_dataset "$TRAIN_DATASET"
   require_dataset "$VAL_DATASET"
+  if [[ "${IFV_ALLOW_UNDERSIZED_DISTRIBUTED_DATASET:-false}" != "true" ]]; then
+    IFS=',' read -r -a visible_gpu_ids <<< "${CUDA_VISIBLE_DEVICES:-}"
+    distributed_gpu_count="${#visible_gpu_ids[@]}"
+    train_row_count="$(wc -l < "$TRAIN_DATASET")"
+    val_row_count="$(wc -l < "$VAL_DATASET")"
+    if (( distributed_gpu_count > 1 && (train_row_count < distributed_gpu_count || val_row_count < distributed_gpu_count) )); then
+      echo "distributed SFT requires at least one train and validation row per visible GPU (train=${train_row_count}, validation=${val_row_count}, gpus=${distributed_gpu_count}); use a larger dataset, one GPU, or set IFV_ALLOW_UNDERSIZED_DISTRIBUTED_DATASET=true only for a controlled experiment." >&2
+      exit 2
+    fi
+  fi
   dataset_args+=(--dataset "$TRAIN_DATASET")
   dataset_args+=(--val_dataset "$VAL_DATASET")
 fi

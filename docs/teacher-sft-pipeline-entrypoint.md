@@ -30,17 +30,17 @@ scripts/server/run_teacher_sft_pipeline.sh \
   --limit 10 \
   --run-training \
   --training-model-profile "$IFV_REPO_ROOT/training/configs/models/qwen3.5-9b.env" \
-  --training-sft-profile "$IFV_REPO_ROOT/training/configs/sft/qwen3.5-full-10step-4gpu-fsdp2-accum1-bf16params-sdpa-checkpointed.env" \
+  --training-sft-profile "$IFV_REPO_ROOT/training/configs/sft/qwen3.5-full-10step-4gpu-zero3-offload-accum1-bf16params-sdpa-checkpointed.env" \
   --training-experiment-id <experiment-id>
 ```
 
 The `padding_free` optimization requires an installed flash-attention
 implementation. The `qwen3.5-full-10step-4gpu-fsdp2-accum1-bf16params-sdpa-checkpointed.env`
 profile is the portable fallback for environments without flash attention; it
-keeps full-parameter FSDP2 smoke settings while disabling `padding_free`, uses
-a 16K sequence limit, and enables gradient checkpointing for 40 GiB GPUs. The
-launcher rejects an invalid `padding_free`/attention pair before starting
-distributed workers.
+uses full-parameter ZeRO-3 with CPU optimizer offload, disables `padding_free`,
+uses a 16K sequence limit, and enables gradient checkpointing for 40 GiB GPUs.
+The launcher rejects an invalid `padding_free`/attention pair and undersized
+multi-GPU datasets before starting distributed workers.
 
 The separate Direct QA comparison package is evaluator-only and training-
 prohibited. Build and use it through `docs/direct-qa-portable-package.md`.
