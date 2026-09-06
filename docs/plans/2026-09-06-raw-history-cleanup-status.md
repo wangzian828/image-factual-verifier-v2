@@ -112,7 +112,7 @@ as rejected.
 The final evaluator-only migration package is local at:
 
 ```text
-C:\Users\wangza\ifv-direct-qa-portable-final-20260906-r7
+C:\Users\wangza\ifv-direct-qa-portable-final-20260906-r8
 ```
 
 It was built from commit `a563daa`, contains two test-set tar shards, prompt,
@@ -122,10 +122,9 @@ the Direct QA comparison after an API model key is supplied.
 
 ## Validation
 
-- `PYTHONPATH=training python -m pytest training/tests -q`: 116 passed.
+- `PYTHONPATH=training python -m pytest training/tests -q`: 117 passed.
 - `python -m pytest test_direct_qa_portable_package.py -q`: 2 passed.
-- `python -m compileall -q src scripts training/ifv_training`: passed before the
-  final documentation-only update.
+- `python -m compileall -q src scripts training/ifv_training`: passed.
 - The known full legacy suite failures belong to removed reducer/graph fixtures
   and old runtime API assumptions; those interfaces are not restored.
 
