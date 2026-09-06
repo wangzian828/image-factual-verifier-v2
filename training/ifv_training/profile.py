@@ -447,6 +447,7 @@ def summarize_training_log(
     )
     eval_strategy = _command_value(launch_command, "eval_strategy") or ""
     save_strategy = _command_value(launch_command, "save_strategy") or ""
+    smoke_only = eval_strategy.lower() == "no"
     validation_required = bool(eval_strategy and eval_strategy.lower() != "no")
     checkpoint_required = bool(save_strategy and save_strategy.lower() != "no")
     save_only_model = (
@@ -568,6 +569,7 @@ def summarize_training_log(
             not detected_errors,
             clean_exit,
             training_steps_complete,
+            not smoke_only,
             validation_passed or not validation_required,
             checkpoint_passed or not checkpoint_required,
             resume_advanced or not resume_requested,
@@ -610,6 +612,8 @@ def summarize_training_log(
         "detected_errors": detected_errors,
         "passed_basic_log_gate": not detected_errors,
         "passed_production_gate": passed_production_gate,
+        "smoke_only": smoke_only,
+        "run_mode": "smoke_only" if smoke_only else "production_candidate",
         "steps": {
             "observed": steps,
             "last": last_step,

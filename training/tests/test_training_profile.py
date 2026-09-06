@@ -270,3 +270,29 @@ def test_scheduler_warning_requires_wrapper_false_positive_audit(
     )
 
     assert resolved["scheduler_order"]["passed"] is True
+
+
+def test_noeval_training_profile_is_explicitly_smoke_only(tmp_path: Path) -> None:
+    train_log = tmp_path / "train.log"
+    train_log.write_text(
+        "\n".join(
+            [
+                "Executing: swift sft --eval_strategy no --save_strategy steps "
+                "--save_steps 1 --max_steps 1",
+                "{'loss': '0.10', 'global_step/max_steps': '1/1', "
+                "'train_speed(s/it)': '1.0'}",
+                "[INFO:swift] Saving model checkpoint to "
+                f"{tmp_path / 'checkpoint-1'}",
+                "[INFO:swift] End time of running main: 2026-09-06 12:00:00",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = summarize_training_log(train_log, train_exit_code=0)
+
+    assert result["smoke_only"] is True
+    assert result["run_mode"] == "smoke_only"
+    assert result["validation"]["required"] is False
+    assert result["passed_production_gate"] is False

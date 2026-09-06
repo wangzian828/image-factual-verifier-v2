@@ -91,8 +91,8 @@ The resulting checkpoint is:
 
 The run completed 10/10 steps with exit code 0, final logged loss `0.007511`,
 complete checkpoint I/O, and no residual training processes. The profile records
-zero validation rows by design; its configured smoke checks pass, but that must
-not be interpreted as production SFT validation. The four scheduler warnings
+`smoke_only=true`, `run_mode=smoke_only`, and zero validation rows by design;
+`passed_production_gate=false` is intentional. The four scheduler warnings
 were independently audited as `wrapper_false_positive`: DeepSpeed global step
 10, scheduler epoch 10, skipped steps 0, and the expected learning-rate
 sequence.
@@ -112,7 +112,7 @@ as rejected.
 The final evaluator-only migration package is local at:
 
 ```text
-C:\Users\wangza\ifv-direct-qa-portable-final-20260906-r6
+C:\Users\wangza\ifv-direct-qa-portable-final-20260906-r7
 ```
 
 It was built from commit `a563daa`, contains two test-set tar shards, prompt,
