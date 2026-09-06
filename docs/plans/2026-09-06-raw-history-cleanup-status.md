@@ -83,6 +83,20 @@ raw-history-smoke10-a563daa-sft10-zero3-sdpa-8k-truncated-smoke-noeval-20260906
 It uses only the temporary expanded smoke dataset under the server data root;
 the formal SFT package is unchanged.
 
+The resulting checkpoint is:
+
+```text
+/gsdata/home/wza/image-factual-verifier-v2-data/training/checkpoints/raw-history-smoke10-a563daa-sft10-zero3-sdpa-8k-truncated-smoke-noeval-20260906/v0-20260906-180347/checkpoint-10
+```
+
+The run completed 10/10 steps with exit code 0, final logged loss `0.007511`,
+complete checkpoint I/O, and no residual training processes. The profile records
+zero validation rows by design; its configured smoke checks pass, but that must
+not be interpreted as production SFT validation. The four scheduler warnings
+were independently audited as `wrapper_false_positive`: DeepSpeed global step
+10, scheduler epoch 10, skipped steps 0, and the expected learning-rate
+sequence.
+
 ## Direct QA
 
 The server Direct QA smoke is stored at:
@@ -98,7 +112,7 @@ as rejected.
 The final evaluator-only migration package is local at:
 
 ```text
-C:\Users\wangza\ifv-direct-qa-portable-final-20260906-r4
+C:\Users\wangza\ifv-direct-qa-portable-final-20260906-r6
 ```
 
 It was built from commit `a563daa`, contains two test-set tar shards, prompt,
