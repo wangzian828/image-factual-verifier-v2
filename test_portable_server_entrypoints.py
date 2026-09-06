@@ -18,6 +18,7 @@ def test_generic_server_entrypoints_have_no_machine_specific_paths() -> None:
         "scripts/server/start_eval.sh",
         "scripts/server/start_gemini_eval.sh",
         "scripts/server/start_teacher_rollout.sh",
+        "scripts/server/run_teacher_sft_pipeline.sh",
         "scripts/server/eval_worker.sh",
         "scripts/server/poll_eval.sh",
         "scripts/server/doctor.py",
@@ -58,3 +59,13 @@ def test_runtime_template_contains_no_credentials() -> None:
     assert "GEMINI_API_KEY=" in template
     assert "SERPER_API_KEY=" in template
     assert "000000" not in template
+
+
+def test_teacher_sft_pipeline_requires_explicit_output_and_processor_opt_in() -> None:
+    source = _source("scripts/server/run_teacher_sft_pipeline.sh")
+    assert "--output-dir is required" in source
+    assert "IFV_REQUIRE_PROCESSOR" in source
+    assert "IFV_MODEL_ID" in source
+    assert "IFV_TRAINING_PYTHON" in source
+    assert "--run-training" in source
+    assert "training_status" in source

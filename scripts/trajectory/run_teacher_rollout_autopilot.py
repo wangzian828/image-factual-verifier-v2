@@ -2017,7 +2017,6 @@ def _build_package(
         str(accepted_release),
         "--output-dir",
         str(package_dir),
-        "--all-train",
         "--minimum-accepted-cases",
         "1",
     )
