@@ -346,6 +346,12 @@ def test_sft_launcher_rejects_padding_free_without_flash_attention() -> None:
     assert "IFV_ATTN_IMPL=sdpa" in portable_profile
     assert "IFV_PADDING_FREE=false" in portable_profile
 
+    checkpointed_profile = _source(
+        "configs/sft/qwen3.5-full-10step-4gpu-fsdp2-accum1-bf16params-sdpa-checkpointed.env"
+    )
+    assert "IFV_GRADIENT_CHECKPOINTING=true" in checkpointed_profile
+    assert "IFV_MAX_LENGTH=16384" in checkpointed_profile
+
 
 def test_ms_swift_encode_cache_is_content_addressed_and_fail_closed() -> None:
     source = _source("ifv_training/encode_cache.py")
