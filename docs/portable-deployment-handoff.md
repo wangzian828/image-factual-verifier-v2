@@ -91,6 +91,25 @@ QWEN_TEACHER_API_KEY=none
 QWEN_TEACHER_MODEL=served-teacher-model
 QWEN_TEACHER_VISION_MODEL=served-teacher-model
 
+# The launcher reuses this same Qwen endpoint for webpage Evidence extraction.
+BROWSE_EXTRACT_PROVIDER=qwen_local
+BROWSE_EXTRACT_MODEL=served-teacher-model
+BROWSE_EXTRACT_BASE_URL=http://teacher-host:port/v1
+BROWSE_EXTRACT_WIRE_API=chat_completions
+
+SERPER_API_KEY=provided-out-of-band
+BROWSE_FETCH_PROVIDER=jina
+JINA_API_KEY=provided-out-of-band
+OCR_BACKEND=baidu
+BAIDU_OCR_API_KEY=provided-out-of-band
+BAIDU_OCR_SECRET_KEY=provided-out-of-band
+VISUAL_SEARCH_PROVIDER=serper_lens
+IMAGE_UPLOAD_PROVIDER=oss
+OSS_ACCESS_KEY_ID=provided-out-of-band
+OSS_ACCESS_KEY_SECRET=provided-out-of-band
+OSS_ENDPOINT=https://oss-endpoint
+OSS_BUCKET_NAME=private-upload-bucket
+
 IFV_SFT_ELIGIBILITY_PROVIDER=qwen_local
 IFV_SFT_ELIGIBILITY_BASE_URL=http://judge-host:port/v1
 IFV_SFT_ELIGIBILITY_MODEL=served-judge-model
@@ -119,6 +138,9 @@ scripts/server/start_teacher_rollout_portable.sh --full
 
 命令返回 PID、日志和输出目录。不要把 endpoint 凭据写进命令行、Git、trace
 或 pipeline state。
+
+本流程不使用 Gemini API，不允许 EasyOCR、本地 OCR 或 OCR fallback。图片上传服务
+可以按目标服务器条件显式选择 OSS、custom 或 temp。
 
 ## 6. Rollout 小测
 

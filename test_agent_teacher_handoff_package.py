@@ -27,6 +27,12 @@ def test_build_agent_teacher_handoff_package_is_code_only(tmp_path: Path) -> Non
         for path in output.iterdir()
         if path.is_file()
     )
+    assert "本流程不需要 Gemini API" in rendered
+    assert "OCR_BACKEND=easyocr" in rendered
+    assert "OCR 自动 fallback" in rendered
+    assert "SERPER_API_KEY" in rendered
+    assert "JINA_API_KEY" in rendered
+    assert "OSS_ACCESS_KEY_ID" in rendered
     assert "ms-4647" not in rendered
     assert "000000" not in rendered
     parsed = json.loads((output / "MANIFEST.json").read_text(encoding="utf-8"))

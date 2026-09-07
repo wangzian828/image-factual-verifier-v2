@@ -87,13 +87,6 @@ if [[ -n "${limit}" && ! "${limit}" =~ ^[1-9][0-9]*$ ]]; then
     exit 2
 fi
 dataset_root="$(realpath -m -- "${dataset_root}")"
-if [[ ! -f "${dataset_root}/train-manifest.jsonl" ]] \
-    || [[ ! -d "${dataset_root}/images" ]] \
-    || [[ ! -f "${dataset_root}/evaluator_private/private-gold-v1/train-private-gold.jsonl" ]]; then
-    "${SCRIPT_DIR}/prepare_factcheck_dataset.sh" \
-        --split train \
-        --output-dir "${dataset_root}"
-fi
 
 rollout_profile="${IFV_TEACHER_ROLLOUT_PROFILE:-teacher-qwen-server}"
 rollout_model="${IFV_TEACHER_ROLLOUT_MODEL:-${QWEN_TEACHER_MODEL:-}}"
@@ -108,6 +101,11 @@ if [[ "${rollout_profile}" == "teacher-qwen-server" ]]; then
     : "${QWEN_TEACHER_MODEL:?QWEN_TEACHER_MODEL is required}"
     rollout_model="${rollout_model:-${QWEN_TEACHER_MODEL}}"
     export QWEN_LOCAL_API_KEY="${QWEN_TEACHER_API_KEY:-${QWEN_LOCAL_API_KEY:-none}}"
+    export BROWSE_EXTRACT_PROVIDER="qwen_local"
+    export BROWSE_EXTRACT_MODEL="${QWEN_TEACHER_MODEL}"
+    export BROWSE_EXTRACT_BASE_URL="${QWEN_TEACHER_BASE_URL}"
+    export BROWSE_EXTRACT_API_KEY="${QWEN_TEACHER_API_KEY:-none}"
+    export BROWSE_EXTRACT_WIRE_API="chat_completions"
 fi
 if [[ -z "${rollout_model}" ]]; then
     echo "IFV_TEACHER_ROLLOUT_MODEL or the selected profile model is required." >&2
@@ -120,6 +118,64 @@ fi
 if [[ -z "${judge_key_env}" && -n "${IFV_SFT_ELIGIBILITY_API_KEY:-}" ]]; then
     judge_key_env="IFV_SFT_ELIGIBILITY_API_KEY"
 fi
+
+require_agent_env() {
+    local name="$1"
+    local value
+    value="$(printenv "${name}" 2>/dev/null || true)"
+    if [[ -z "${value}" ]]; then
+        echo "${name} is required for the Agent toolchain." >&2
+        exit 2
+    fi
+}
+
+validate_agent_tool_configuration() {
+    if [[ "${OCR_BACKEND:-baidu}" != "baidu" ]]; then
+        echo "OCR_BACKEND=baidu is required; local OCR and OCR fallback are prohibited." >&2
+        exit 2
+    fi
+    if [[ -z "${BAIDU_OCR_ACCESS_TOKEN:-}" ]]; then
+        require_agent_env BAIDU_OCR_API_KEY
+        require_agent_env BAIDU_OCR_SECRET_KEY
+    fi
+
+    if [[ -z "${SERPER_API_KEY:-${SERPER_KEY_ID:-}}" ]]; then
+        echo "SERPER_API_KEY is required for text, image, and Lens search." >&2
+        exit 2
+    fi
+    if [[ "${BROWSE_FETCH_PROVIDER:-jina}" != "jina" ]]; then
+        echo "BROWSE_FETCH_PROVIDER=jina is required for this handoff." >&2
+        exit 2
+    fi
+    if [[ -z "${JINA_API_KEY:-${JINA_API_KEYS:-}}" ]]; then
+        echo "JINA_API_KEY is required for page fetch and search reranking." >&2
+        exit 2
+    fi
+    if [[ "${VISUAL_SEARCH_PROVIDER:-serper_lens}" != "serper_lens" ]]; then
+        echo "VISUAL_SEARCH_PROVIDER=serper_lens is required for this handoff." >&2
+        exit 2
+    fi
+
+    case "${IMAGE_UPLOAD_PROVIDER:-}" in
+        oss)
+            require_agent_env OSS_ACCESS_KEY_ID
+            require_agent_env OSS_ACCESS_KEY_SECRET
+            require_agent_env OSS_ENDPOINT
+            require_agent_env OSS_BUCKET_NAME
+            ;;
+        custom)
+            require_agent_env IMAGE_UPLOAD_API_URL
+            ;;
+        temp)
+            ;;
+        *)
+            echo "IMAGE_UPLOAD_PROVIDER must be explicitly set to oss, custom, or temp." >&2
+            exit 2
+            ;;
+    esac
+}
+
+validate_agent_tool_configuration
 
 preflight_endpoint() {
     local label="$1"
@@ -181,6 +237,14 @@ if [[ "${IFV_SKIP_MODEL_ENDPOINT_PREFLIGHT:-0}" != "1" ]]; then
         "${judge_base_url}" \
         "${judge_model}" \
         "${judge_key}"
+fi
+
+if [[ ! -f "${dataset_root}/train-manifest.jsonl" ]] \
+    || [[ ! -d "${dataset_root}/images" ]] \
+    || [[ ! -f "${dataset_root}/evaluator_private/private-gold-v1/train-private-gold.jsonl" ]]; then
+    "${SCRIPT_DIR}/prepare_factcheck_dataset.sh" \
+        --split train \
+        --output-dir "${dataset_root}"
 fi
 
 mode="full"

@@ -85,6 +85,16 @@ IFV_TEACHER_ROLLOUT_MODEL=served-teacher-model
 如果 teacher 服务需要鉴权，把 `QWEN_TEACHER_API_KEY` 设置为目标服务器提供的
 凭据；不要写入 Git、命令行、日志、trace 或交接包。
 
+同一个大型 Qwen teacher API 固定承担以下三项工作：
+
+1. 主 Agent 的 ReAct 与最终 Judgment；
+2. `perceive_scene`、局部视觉检查和参考图比较等视觉工具；
+3. `visit` 抓取网页后的结构化 Evidence 抽取。
+
+`start_teacher_rollout_portable.sh` 会把网页 Evidence 抽取器强制配置为同一
+`QWEN_TEACHER_BASE_URL`、`QWEN_TEACHER_MODEL` 和 `QWEN_TEACHER_API_KEY`。
+本流程不需要 Gemini API，也不得因代码中的通用默认值而切换到 Gemini。
+
 ## SFT Judge API 契约
 
 judge 可以与 teacher 共用 endpoint，也可以独立部署。它必须支持图片输入和严格
@@ -102,14 +112,51 @@ IFV_SFT_ELIGIBILITY_API_KEY=provided-out-of-band
 
 pipeline state 只记录 `IFV_SFT_ELIGIBILITY_API_KEY` 这个变量名，不记录变量值。
 
-## 工具侧配置
+## Agent 工具 API 清单
 
-Teacher API 不是唯一外部依赖。目标服务器还必须配置项目实际启用的搜索、网页读取、
-OCR、图片上传和视觉搜索服务。至少运行：
+除大型 Qwen teacher API 外，目标服务器必须为 Agent 提供：
+
+1. **Serper API**：`text_search`、`text_image_search` 和 Serper Lens；
+2. **Jina API**：网页抓取，并同时启用搜索候选 rerank；
+3. **百度通用 OCR API**：唯一允许的 OCR 后端；
+4. **私有图片上传服务**：供 Serper Lens 和反向图片搜索读取当前图片。
+
+推荐的完整配置：
+
+```bash
+SERPER_API_KEY=provided-out-of-band
+
+BROWSE_FETCH_PROVIDER=jina
+JINA_API_KEY=provided-out-of-band
+
+OCR_BACKEND=baidu
+BAIDU_OCR_API_KEY=provided-out-of-band
+BAIDU_OCR_SECRET_KEY=provided-out-of-band
+
+VISUAL_SEARCH_PROVIDER=serper_lens
+IMAGE_UPLOAD_PROVIDER=oss
+OSS_ACCESS_KEY_ID=provided-out-of-band
+OSS_ACCESS_KEY_SECRET=provided-out-of-band
+OSS_ENDPOINT=https://oss-endpoint
+OSS_BUCKET_NAME=private-upload-bucket
+OSS_KEY_PREFIX=image-search
+```
+
+百度 OCR 也可使用一个受控的 `BAIDU_OCR_ACCESS_TOKEN` 代替 API key/secret 对。
+`OCR_BACKEND=easyocr`、任何本地 OCR 和 OCR 自动 fallback 均禁止。图片上传可以显式
+使用 `IMAGE_UPLOAD_PROVIDER=temp`；它不是 OCR fallback。若没有 OSS，也可以显式设置
+`IMAGE_UPLOAD_PROVIDER=custom` 与 `IMAGE_UPLOAD_API_URL`，但该服务必须返回 Serper
+可访问的临时图片 URL。
+
+`MODELSCOPE_API_TOKEN` 只用于下载训练集归档，不是 Agent 工具 API。SFT judge
+默认可复用大型 Qwen teacher API；只有目标服务器明确提供独立 judge 时才配置第二个
+模型 endpoint。
+
+启动器会在下载数据和启动任务前检查上述工具配置。随后至少运行：
 
 ```bash
 source scripts/server/ifv_env.sh
-scripts/server/run_ifv.sh python scripts/server/doctor.py --require-provider local --json
+scripts/server/start_teacher_rollout_portable.sh --help
 ```
 
 随后用一个真实 case 验证所有 required tools。工具访问失败、空搜索或 endpoint

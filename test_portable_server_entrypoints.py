@@ -67,6 +67,13 @@ def test_generic_launcher_uses_explicit_runtime_configuration() -> None:
     assert "run_teacher_sft_pipeline.sh" in portable
     assert "QWEN_TEACHER_BASE_URL" in portable
     assert "--sft-judge-api-key-env" in portable
+    assert 'export BROWSE_EXTRACT_PROVIDER="qwen_local"' in portable
+    assert 'export BROWSE_EXTRACT_BASE_URL="${QWEN_TEACHER_BASE_URL}"' in portable
+    assert "OCR_BACKEND=baidu is required" in portable
+    assert "local OCR and OCR fallback are prohibited" in portable
+    assert "SERPER_API_KEY is required" in portable
+    assert "JINA_API_KEY is required" in portable
+    assert "IMAGE_UPLOAD_PROVIDER must be explicitly set to oss, custom, or temp" in portable
 
 
 def test_runtime_template_contains_no_credentials() -> None:
@@ -74,6 +81,10 @@ def test_runtime_template_contains_no_credentials() -> None:
 
     assert "GEMINI_API_KEY=" in template
     assert "SERPER_API_KEY=" in template
+    assert "OCR_BACKEND=baidu" in template
+    assert "BAIDU_OCR_API_KEY=" in template
+    assert "BROWSE_FETCH_PROVIDER=jina" in template
+    assert "IMAGE_UPLOAD_PROVIDER=oss" in template
     assert "000000" not in template
 
 
