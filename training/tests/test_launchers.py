@@ -234,7 +234,7 @@ def test_qwen35_is_the_primary_training_profile() -> None:
     assert "IFV_QWEN35_MODEL" in primary
     assert "primary_student" in primary
     assert "IFV_ENABLE_THINKING=false" in primary
-    assert "IFV_ADD_NON_THINKING_PREFIX=true" in primary
+    assert "IFV_ADD_NON_THINKING_PREFIX=false" in primary
 
 
 def test_qwen35_full_parameter_step_profiles_exist() -> None:
