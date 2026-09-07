@@ -80,8 +80,9 @@ scripts/server/prepare_factcheck_dataset.sh --split train
 
 ## 5. 一键教师 Rollout
 
-教师 API、10 条 smoke、全量 rollout、SFT judge、processor 验证和 GPU SFT 的完整
-交接流程见 [`teacher-rollout-and-sft-handoff.md`](teacher-rollout-and-sft-handoff.md)。
+教师 API、10 条 smoke、全量 rollout、SFT judge 和 SFT package 导出的完整交接流程见
+[`teacher-rollout-and-sft-handoff.md`](teacher-rollout-and-sft-handoff.md)。该接手任务在
+导出完成后停止，不包含 processor verification 或 GPU SFT。
 `teacher-rollout-api-handoff.md` 只保留旧版 API 摘要。
 
 大型开源 Qwen 通过 OpenAI-compatible endpoint 提供服务。配置：

@@ -20,9 +20,12 @@ checkpoint 都留在目标服务器，不放入 Git，也不经当前工作站�
   -> 最多三轮 quality reroll
   -> accepted release
   -> policy/perception SFT package
-  -> 真实 Qwen processor verification
-  -> 人工确认后 GPU SFT
 ```
+
+接手 Codex 的**唯一任务**止于已审计的 `policy/perception` SFT package 导出。
+它不负责 GPU SFT 训练、RL、Direct QA、测试集实验、模型部署、源码改动或任何与
+训练集教师轨迹无关的工作。导出包和审计产物交回后，由后续训练负责人另行决定是否
+做目标 checkpoint 的 processor verification 与实际训练。
 
 - 仅 `jiashuhong/factcheck_train` 可进入 teacher rollout、SFT 或 RL。
 - 测试集、测试图片和测试 private gold 绝不能进入上述链路。
@@ -67,7 +70,6 @@ sha256: 485dba3b8b3947913f372b57f85dbe30b456894022b3fa467c9460dcb8847ea5
 ```bash
 export IFV_REPO_ROOT=/absolute/path/to/image-factual-verifier-v2
 export IFV_DATA_ROOT=/absolute/path/to/ifv-data
-export IFV_MODEL_ID=/absolute/path/to/target-qwen-checkpoint
 
 git clone --branch main git@github.com:wangzian828/image-factual-verifier-v2.git "$IFV_REPO_ROOT"
 cd "$IFV_REPO_ROOT"
@@ -274,7 +276,7 @@ scripts/server/start_teacher_rollout_portable.sh --full \
 成功 trace 和已完成 judge 不应被无意义重跑。失败 attempt、工程错误和 judge 拒绝由
 入口的 retry/reroll 规则处理，所有原始 trace 和 interaction archive 都必须保留。
 
-## 7. 产物、审计与 processor 验证
+## 7. 产物、审计与导出验收
 
 完整 pipeline 至少包含：
 
@@ -299,7 +301,8 @@ python -m ifv_training audit --strict \
 cat <pipeline-dir>/audits/pipeline-summary.json
 ```
 
-使用最终要训练的真实 checkpoint 做 processor verification：
+交接任务在以上审计和导出完成后停止。需要训练时，后续训练负责人用最终目标
+checkpoint 另行执行 processor verification：
 
 ```bash
 python training/scripts/probe/verify_ms_swift_agent_dataset.py \
@@ -310,34 +313,12 @@ python training/scripts/probe/verify_ms_swift_agent_dataset.py \
   --max-context 131072
 ```
 
-只有报告 `passed=true` 才允许训练。它必须确认图片可接收、工具调用被目标模板正确
-渲染、工具结果进入上下文、`<think>` 位于可训练 labels、每行存在非空 labels 且没有
-超出上下文。换 checkpoint、processor、chat template 或 ms-swift 版本后必须重跑。
+该验证必须确认图片可接收、工具调用被目标模板正确渲染、工具结果进入上下文、
+`<think>` 位于可训练 labels、每行存在非空 labels 且没有超出上下文；但它不属于
+本次接手 Codex 的任务。换 checkpoint、processor、chat template 或 ms-swift 版本后，
+由训练负责人重新验证。
 
-## 8. 显式启动 GPU SFT
-
-一键 teacher pipeline 默认不启动训练。processor verification 通过并确认空闲 GPU、
-模型 profile、SFT profile 和实验名后，才执行：
-
-```bash
-export IFV_TRAINING_PYTHON=/absolute/path/to/ms-swift-env/bin/python
-export IFV_MODEL_ID=/absolute/path/to/target-qwen-checkpoint
-export CUDA_VISIBLE_DEVICES=0,1,2,3
-
-scripts/server/run_teacher_sft_pipeline.sh \
-  --dataset-root <train-dataset-root> \
-  --output-dir <pipeline-dir> \
-  --run-training \
-  --training-model-profile "$IFV_REPO_ROOT/training/configs/models/<model>.env" \
-  --training-sft-profile "$IFV_REPO_ROOT/training/configs/sft/<sft-profile>.env" \
-  --training-experiment-id <new-experiment-id>
-```
-
-启动器会拒绝缺少 profile、实验名、GPU、train split 或 validation split 的请求。
-训练状态写入 `<pipeline-dir>/audits/pipeline-summary.json`。无 validation 的 smoke
-profile 只能验证训练链路，不能作为生产 SFT 验收。
-
-## 9. 失败处理
+## 8. 失败处理
 
 - `/v1/models` 不含配置 model ID：停止，修正模型配置，不硬编码绕过。
 - teacher 请求失败：保留原错误和已有 trace，按工程 retry 规则恢复。
@@ -345,10 +326,9 @@ profile 只能验证训练链路，不能作为生产 SFT 验收。
 - Jina/Serper/OCR/OSS 失败：是工具访问失败，不是事实证据。
 - judge 非法 JSON 或请求失败：该条不能进入 accepted release；修复后用同一 trace/cache 重试。
 - strict audit failure：查看对应 trace 和 audit JSON；不绕过审计、不手改产物。
-- processor failure：停止 GPU SFT，修正 checkpoint、模板、图片或上下文设置后验证整包。
 - 服务器 checkout dirty：停止运行，确认差异来源；不得在服务器直接编辑源码。
 
-## 10. 给另一个 Codex 的检查清单
+## 9. 给另一个 Codex 的检查清单
 
 ```bash
 cd "$IFV_REPO_ROOT"
@@ -360,6 +340,7 @@ scripts/server/start_teacher_rollout_portable.sh --help
 ```
 
 随后依次完成：配置 API 和路径、下载训练集、运行并审计 10 条 smoke、启动全量
-rollout、验证 accepted release 和双 SFT package、执行真实 processor verification，
-最后经人工确认启动 SFT。最终记录准确 commit、数据 SHA、模型 ID、endpoint、并发、
-产物路径和 SHA-256；不得记录任何密钥、密码、private gold 或私有服务器地址。
+rollout、验证 accepted release 和双 SFT package，并交付完整审计与哈希清单。到此
+停止；不要启动 processor verification、GPU SFT、RL、Direct QA 或测试集实验。最终
+记录准确 commit、数据 SHA、teacher model ID、endpoint、并发、产物路径和 SHA-256；
+不得记录任何密钥、密码、private gold 或私有服务器地址。
