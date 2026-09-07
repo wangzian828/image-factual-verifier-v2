@@ -6,10 +6,16 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List
 
+import pytest
+
 from src.orchestrator.llm_backend import LLMResponse
 from src.orchestrator.react_runtime import REACT_RUNTIME_SCHEMA_VERSION
 from src.eval import score_sft_eligibility
-from src.eval.score_sft_eligibility import _default_storage_dir, _jsonl_index
+from src.eval.score_sft_eligibility import (
+    _api_key_from_env,
+    _default_storage_dir,
+    _jsonl_index,
+)
 from src.trajectory.sft_eligibility import (
     SFT_ELIGIBILITY_SYSTEM_PROMPT,
     SFTEligibilityJudge,
@@ -24,6 +30,24 @@ from scripts.trajectory.stage_accepted_teacher_release import (
     _eligible as stage_eligible,
     sft_candidate_rank,
 )
+
+
+def test_sft_judge_uses_explicit_api_key_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PRIVATE_JUDGE_KEY", "judge-secret")
+
+    assert _api_key_from_env("PRIVATE_JUDGE_KEY") == "judge-secret"
+    assert _api_key_from_env(None) is None
+
+
+def test_sft_judge_rejects_empty_explicit_api_key_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("MISSING_JUDGE_KEY", raising=False)
+
+    with pytest.raises(ValueError, match="MISSING_JUDGE_KEY"):
+        _api_key_from_env("MISSING_JUDGE_KEY")
 
 
 def _trace(*, verdict: str = "fake") -> dict[str, Any]:

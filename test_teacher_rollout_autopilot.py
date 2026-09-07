@@ -17,6 +17,7 @@ from scripts.trajectory.run_teacher_rollout_autopilot import (
     _merge_successful_attempts,
     _quality_reroll_case_ids,
     _read_jsonl,
+    _state_model_config,
     _successful_trace_sources,
     prepare_runtime_release,
 )
@@ -62,6 +63,38 @@ def _trace(case_id: str, *, early_judgment: bool) -> dict[str, Any]:
             "all_steps": steps,
         },
     }
+
+
+def test_old_pipeline_state_accepts_new_judge_key_environment() -> None:
+    args = Namespace(
+        rollout_profile="teacher-qwen-server",
+        rollout_model="teacher-model",
+        sft_judge_provider="qwen_local",
+        sft_model="judge-model",
+        sft_judge_base_url="http://judge.test/v1",
+        sft_judge_api_key_env="PRIVATE_JUDGE_KEY",
+        sft_judge_wire_api="chat_completions",
+        sft_judge_enable_thinking=True,
+    )
+    state = {
+        "model_config": {
+            "rollout": {
+                "profile": "teacher-qwen-server",
+                "model": "teacher-model",
+            },
+            "sft_judge": {
+                "provider": "qwen_local",
+                "model": "judge-model",
+                "base_url": "http://judge.test/v1",
+                "wire_api": "chat_completions",
+                "enable_thinking": True,
+            },
+        }
+    }
+
+    _, judge = _state_model_config(state, args)
+
+    assert judge["api_key_env"] == "PRIVATE_JUDGE_KEY"
 
 
 def test_prepare_runtime_release_projects_only_runtime_fields(tmp_path: Path) -> None:

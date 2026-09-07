@@ -19,6 +19,8 @@ def test_generic_server_entrypoints_have_no_machine_specific_paths() -> None:
         "scripts/server/start_gemini_eval.sh",
         "scripts/server/start_teacher_rollout.sh",
         "scripts/server/start_teacher_rollout_autopilot.sh",
+        "scripts/server/start_teacher_rollout_portable.sh",
+        "scripts/server/prepare_factcheck_dataset.sh",
         "scripts/server/run_teacher_sft_pipeline.sh",
         "scripts/server/eval_worker.sh",
         "scripts/server/poll_eval.sh",
@@ -44,6 +46,8 @@ def test_generic_launcher_uses_explicit_runtime_configuration() -> None:
     starter = _source("scripts/server/start_eval.sh")
     rollout = _source("scripts/server/start_teacher_rollout.sh")
     autopilot = _source("scripts/server/start_teacher_rollout_autopilot.sh")
+    portable = _source("scripts/server/start_teacher_rollout_portable.sh")
+    dataset = _source("scripts/server/prepare_factcheck_dataset.sh")
 
     assert "XDG_DATA_HOME" in env
     assert "IFV_SERVER_PROXY" in env
@@ -56,6 +60,13 @@ def test_generic_launcher_uses_explicit_runtime_configuration() -> None:
     assert "IFV_DATA_ROOT" in autopilot
     assert "run_teacher_rollout_autopilot.py" in autopilot
     assert "nohup" in autopilot
+    assert "factcheck_train-8490-20260907.tar.gz" in dataset
+    assert "2fda3ca7144d899e355fcbbaa4e6b93350878dbf5225ab423402123d5e37a448" in dataset
+    assert 'limit="10"' in portable
+    assert "--full" in portable
+    assert "run_teacher_sft_pipeline.sh" in portable
+    assert "QWEN_TEACHER_BASE_URL" in portable
+    assert "--sft-judge-api-key-env" in portable
 
 
 def test_runtime_template_contains_no_credentials() -> None:

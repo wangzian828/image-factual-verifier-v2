@@ -82,6 +82,7 @@ def _sft_judge_config(args: argparse.Namespace) -> dict[str, Any]:
         "provider": str(getattr(args, "sft_judge_provider", "gemini")),
         "model": str(getattr(args, "sft_model", "gemini-3.7-flash")),
         "base_url": getattr(args, "sft_judge_base_url", None),
+        "api_key_env": getattr(args, "sft_judge_api_key_env", None),
         "wire_api": getattr(args, "sft_judge_wire_api", None),
         "enable_thinking": getattr(args, "sft_judge_enable_thinking", None),
     }
@@ -115,6 +116,10 @@ def _state_model_config(
         ),
         "model": str(judge.get("model") or args.sft_model),
         "base_url": judge.get("base_url"),
+        "api_key_env": (
+            judge.get("api_key_env")
+            or getattr(args, "sft_judge_api_key_env", None)
+        ),
         "wire_api": judge.get("wire_api"),
         "enable_thinking": judge.get("enable_thinking"),
     }
@@ -1393,6 +1398,7 @@ def _run_bootstrapped_initial_pipeline(args: argparse.Namespace) -> dict[str, An
         sft_model=judge_config["model"],
         sft_judge_provider=judge_config["provider"],
         sft_judge_base_url=judge_config["base_url"],
+        sft_judge_api_key_env=judge_config["api_key_env"],
         sft_judge_wire_api=judge_config["wire_api"],
         sft_judge_enable_thinking=judge_config["enable_thinking"],
         sft_concurrency=args.sft_concurrency,
@@ -1441,6 +1447,7 @@ def _run_sft_audit(
     model: str,
     provider: str,
     base_url: str | None,
+    api_key_env: str | None,
     wire_api: str | None,
     enable_thinking: bool | None,
     concurrency: int,
@@ -1480,6 +1487,8 @@ def _run_sft_audit(
         )
         if base_url:
             command.extend(["--base-url", base_url])
+        if api_key_env:
+            command.extend(["--api-key-env", api_key_env])
         if wire_api:
             command.extend(["--wire-api", wire_api])
         if enable_thinking is not None:
@@ -1892,6 +1901,7 @@ def _run_quality_rerolls(
     sft_model: str,
     sft_judge_provider: str,
     sft_judge_base_url: str | None,
+    sft_judge_api_key_env: str | None,
     sft_judge_wire_api: str | None,
     sft_judge_enable_thinking: bool | None,
     sft_concurrency: int,
@@ -1983,6 +1993,7 @@ def _run_quality_rerolls(
                 model=sft_model,
                 provider=sft_judge_provider,
                 base_url=sft_judge_base_url,
+                api_key_env=sft_judge_api_key_env,
                 wire_api=sft_judge_wire_api,
                 enable_thinking=sft_judge_enable_thinking,
                 concurrency=sft_concurrency,
@@ -2155,6 +2166,7 @@ def _continue_quality_rerolls(args: argparse.Namespace) -> dict[str, Any]:
         sft_model=judge_config["model"],
         sft_judge_provider=judge_config["provider"],
         sft_judge_base_url=judge_config["base_url"],
+        sft_judge_api_key_env=judge_config["api_key_env"],
         sft_judge_wire_api=judge_config["wire_api"],
         sft_judge_enable_thinking=judge_config["enable_thinking"],
         sft_concurrency=args.sft_concurrency,
@@ -2267,6 +2279,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         model=judge_config["model"],
         provider=judge_config["provider"],
         base_url=judge_config["base_url"],
+        api_key_env=judge_config["api_key_env"],
         wire_api=judge_config["wire_api"],
         enable_thinking=judge_config["enable_thinking"],
         concurrency=args.sft_concurrency,
@@ -2298,6 +2311,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         sft_model=judge_config["model"],
         sft_judge_provider=judge_config["provider"],
         sft_judge_base_url=judge_config["base_url"],
+        sft_judge_api_key_env=judge_config["api_key_env"],
         sft_judge_wire_api=judge_config["wire_api"],
         sft_judge_enable_thinking=judge_config["enable_thinking"],
         sft_concurrency=args.sft_concurrency,
@@ -2385,6 +2399,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--sft-judge-base-url",
         default=os.getenv("IFV_SFT_ELIGIBILITY_BASE_URL"),
+    )
+    parser.add_argument(
+        "--sft-judge-api-key-env",
+        default=os.getenv("IFV_SFT_ELIGIBILITY_API_KEY_ENV"),
+        help="Environment-variable name containing the independent judge key.",
     )
     parser.add_argument(
         "--sft-judge-wire-api",

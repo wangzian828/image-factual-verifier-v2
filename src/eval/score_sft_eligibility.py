@@ -68,6 +68,14 @@ def _parse_args() -> argparse.Namespace:
         help="Optional judge endpoint override, especially for qwen_local.",
     )
     parser.add_argument(
+        "--api-key-env",
+        default=os.getenv("IFV_SFT_ELIGIBILITY_API_KEY_ENV"),
+        help=(
+            "Optional environment-variable name containing the judge API key. "
+            "The variable name is recorded; the credential value is not."
+        ),
+    )
+    parser.add_argument(
         "--wire-api",
         default=os.getenv("IFV_SFT_ELIGIBILITY_WIRE_API"),
         choices=["chat_completions", "responses", "interactions"],
@@ -179,6 +187,18 @@ def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
         encoding="utf-8",
     )
     pending.replace(path)
+
+
+def _api_key_from_env(variable_name: str | None) -> str | None:
+    name = str(variable_name or "").strip()
+    if not name:
+        return None
+    value = os.getenv(name, "").strip()
+    if not value:
+        raise ValueError(
+            f"SFT judge API key environment variable is empty: {name}"
+        )
+    return value
 
 
 def _write_jsonl(path: Path, rows: list[Mapping[str, Any]]) -> None:
@@ -324,12 +344,14 @@ async def _run(args: argparse.Namespace) -> Dict[str, Any]:
     cache_dir = (args.cache_dir or output_dir / "cache").expanduser().resolve()
     image_root = args.image_root.expanduser().resolve() if args.image_root else None
     judge_base_url = getattr(args, "base_url", None)
+    judge_api_key = _api_key_from_env(getattr(args, "api_key_env", None))
     judge_wire_api = getattr(args, "wire_api", None)
     judge_enable_thinking = getattr(args, "enable_thinking", None)
 
     backend = APIBackend(
         provider=args.provider,
         model_name=args.model,
+        api_key=judge_api_key,
         base_url=judge_base_url,
         wire_api=judge_wire_api,
         temperature=0.0,

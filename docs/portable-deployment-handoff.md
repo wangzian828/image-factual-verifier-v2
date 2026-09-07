@@ -56,7 +56,68 @@ scripts/server/run_ifv.sh python scripts/server/doctor.py \
 
 若不用 Gemini，将 `--require-provider` 改成 `qwen`、`local` 或 `none`。
 
-## 4. Rollout 小测
+## 4. ModelScope 数据归档
+
+训练集使用单一权威归档，避免托管平台逐张审核时产生静默缺图：
+
+```text
+dataset: jiashuhong/factcheck_train
+file: factcheck_train-8490-20260907.tar.gz
+sha256: 2fda3ca7144d899e355fcbbaa4e6b93350878dbf5225ab423402123d5e37a448
+```
+
+配置 `MODELSCOPE_API_TOKEN` 后，可自动下载、校验、解压并验证 8,490 条
+manifest、私有 gold 和图片引用：
+
+```bash
+source scripts/server/ifv_env.sh
+scripts/server/prepare_factcheck_dataset.sh --split train
+```
+
+测试集归档位于 `jiashuhong/factcheck_test`，文件
+`factcheck_test-1682-20260907.tar.gz`，SHA-256 为
+`485dba3b8b3947913f372b57f85dbe30b456894022b3fa467c9460dcb8847ea5`。
+
+## 5. 一键教师 Rollout
+
+大型开源 Qwen 通过 OpenAI-compatible endpoint 提供服务。配置：
+
+```bash
+QWEN_TEACHER_BASE_URL=http://teacher-host:port/v1
+QWEN_TEACHER_API_KEY=none
+QWEN_TEACHER_MODEL=served-teacher-model
+QWEN_TEACHER_VISION_MODEL=served-teacher-model
+
+IFV_SFT_ELIGIBILITY_PROVIDER=qwen_local
+IFV_SFT_ELIGIBILITY_BASE_URL=http://judge-host:port/v1
+IFV_SFT_ELIGIBILITY_MODEL=served-judge-model
+IFV_SFT_ELIGIBILITY_ENABLE_THINKING=true
+```
+
+judge 使用独立凭据时，只保存环境变量名：
+
+```bash
+IFV_SFT_ELIGIBILITY_API_KEY_ENV=IFV_SFT_ELIGIBILITY_API_KEY
+IFV_SFT_ELIGIBILITY_API_KEY=provided-out-of-band
+```
+
+默认命令运行 10 条 smoke，并在后台完成 rollout、strict trace audit、
+SFT judge、quality reroll、accepted release 和 SFT package：
+
+```bash
+scripts/server/start_teacher_rollout_portable.sh
+```
+
+显式启动全部 8,490 条：
+
+```bash
+scripts/server/start_teacher_rollout_portable.sh --full
+```
+
+命令返回 PID、日志和输出目录。不要把 endpoint 凭据写进命令行、Git、trace
+或 pipeline state。
+
+## 6. Rollout 小测
 
 先确认 checkout、数据、API 和工具，不直接启动全量：
 
@@ -83,7 +144,7 @@ scripts/server/poll_eval.sh handoff-smoke-10 --tail 100
 - 工具结果不是仅剩 transport status；
 - 最终 Judgment 能看到完整 provider interaction 历史。
 
-## 5. SFT 包
+## 7. SFT 包
 
 从 accepted release 构建：
 
@@ -113,7 +174,7 @@ python training/scripts/probe/verify_ms_swift_agent_dataset.py \
 
 只有报告 `passed=true` 后才允许训练。
 
-## 6. Qwen 教师与 `<think>`
+## 8. Qwen 教师与 `<think>`
 
 更换大型 Qwen 教师时：
 
@@ -124,7 +185,7 @@ python training/scripts/probe/verify_ms_swift_agent_dataset.py \
 5. 使用目标 checkpoint 的 processor 重新编码整包；
 6. 确认 `<think>` token 位于 labels，而工具结果只作为条件输入。
 
-## 7. 交给另一个 Codex
+## 9. 交给另一个 Codex
 
 新的 Codex 首先读取：
 
@@ -153,7 +214,7 @@ python -m pytest -q
 服务器 fast-forward。不得把真实密码、API key 或私有 gold 写入 prompt、trace、
 脚本、文档或提交。
 
-## 8. 明确停止点
+## 10. 明确停止点
 
 完成环境、10 条 smoke、SFT 导出、严格审计和真实 processor 验证后停止。全量教师
 rollout 必须由数据负责人单独确认模型、并发、预算、输入 manifest 和输出目录后启动。
