@@ -1,6 +1,10 @@
-# IFV Agent 教师轨迹 API 交接
+# IFV Agent 教师轨迹 API 摘要（已归档）
 
 Updated: 2026-09-07
+
+> 当前权威交接手册为
+> [`teacher-rollout-and-sft-handoff.md`](teacher-rollout-and-sft-handoff.md)。
+> 本文件保留历史 API 摘要，不能替代新服务器的完整执行、验收和 SFT 流程。
 
 ## 目标
 

@@ -9,6 +9,7 @@
 - [SFT Canonical Release 工作流](sft-canonical-release-workflow.md)
 - [轨迹产物说明](trajectory-artifact-guide.md)
 - [Teacher Rollout 自动流程](teacher-rollout-autopilot.md)
+- [教师轨迹与 SFT 完整交接](teacher-rollout-and-sft-handoff.md)
 - [Qwen / ms-swift 部署说明](qwen-ms-swift-deployment.md)
 - [新服务器部署与 Codex 交接](portable-deployment-handoff.md)
 
