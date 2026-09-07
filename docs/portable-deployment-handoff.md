@@ -80,6 +80,9 @@ scripts/server/prepare_factcheck_dataset.sh --split train
 
 ## 5. 一键教师 Rollout
 
+API 服务器交接的完整契约、验收项和接手 Codex 顺序见
+`docs/teacher-rollout-api-handoff.md`。
+
 大型开源 Qwen 通过 OpenAI-compatible endpoint 提供服务。配置：
 
 ```bash
