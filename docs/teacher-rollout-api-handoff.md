@@ -21,6 +21,11 @@ OpenAI-compatible API，完成：
 本交接不部署模型，不携带 API key，也不启动当前机器上的模型服务。目标服务器的
 Codex 负责确认 endpoint、model ID、并发和配额。
 
+当前交付到“代码、启动入口、数据定位和验收契约均已准备完成”为止。由于当前机器
+没有大型 Qwen teacher/judge API，真实 endpoint 预检、10 条 smoke、全量 rollout
+和 SFT judge 均有意留给目标服务器上的 Codex 执行；这不是缺失项，也不得在当前
+机器上改用小 Qwen 或其他模型代跑。
+
 ## 固定代码版本
 
 ```text
@@ -28,6 +33,9 @@ repository: git@github.com:wangzian828/image-factual-verifier-v2.git
 branch: codex/gpu13-canary-20260804-plan-relaxation-01
 minimum commit: 5317d9a
 ```
+
+交接包的 `MANIFEST.json` 和 `bootstrap.sh` 会固定生成该包时的精确 commit；实际
+接手必须使用该精确 commit，而不是只停留在 minimum commit。
 
 服务器不得直接修改源码。需要修改时，在开发工作树提交并推送，再在服务器
 fast-forward。
@@ -169,6 +177,9 @@ processor verification 通过后，才允许显式向 `run_teacher_sft_pipeline.
 传递 `--run-training` 及训练 profile。
 
 ## 给接手 Codex
+
+以下步骤全部在具备大型 Qwen API 的目标服务器执行。当前机器无需、也不应执行
+teacher/judge API 调用。
 
 接手后按顺序执行：
 

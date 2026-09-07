@@ -18,7 +18,10 @@ def test_build_agent_teacher_handoff_package_is_code_only(tmp_path: Path) -> Non
     assert (output / "runtime.env.example").is_file()
     assert "--limit 10" in (output / "run_smoke.sh").read_text(encoding="utf-8")
     assert "--full" in (output / "run_full.sh").read_text(encoding="utf-8")
-    assert "git clone" in (output / "bootstrap.sh").read_text(encoding="utf-8")
+    bootstrap = (output / "bootstrap.sh").read_text(encoding="utf-8")
+    assert "git clone" in bootstrap
+    assert "Refusing to update a dirty checkout" in bootstrap
+    assert "status --porcelain" in bootstrap
     rendered = "\n".join(
         path.read_text(encoding="utf-8", errors="ignore")
         for path in output.iterdir()

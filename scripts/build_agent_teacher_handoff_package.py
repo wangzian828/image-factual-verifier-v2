@@ -81,7 +81,11 @@ REPO_ROOT="${{IFV_REPO_ROOT:-${{PWD}}/image-factual-verifier-v2}}"
 if [[ ! -d "${{REPO_ROOT}}/.git" ]]; then
     git clone --branch "${{BRANCH}}" "${{REPOSITORY}}" "${{REPO_ROOT}}"
 fi
-git -C "${{REPO_ROOT}}" status --short
+if [[ -n "$(git -C "${{REPO_ROOT}}" status --porcelain)" ]]; then
+    echo "Refusing to update a dirty checkout: ${{REPO_ROOT}}" >&2
+    git -C "${{REPO_ROOT}}" status --short >&2
+    exit 2
+fi
 git -C "${{REPO_ROOT}}" fetch origin "${{BRANCH}}"
 git -C "${{REPO_ROOT}}" checkout "${{BRANCH}}"
 git -C "${{REPO_ROOT}}" merge --ff-only "${{COMMIT}}"
