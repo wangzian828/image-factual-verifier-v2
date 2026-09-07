@@ -4,7 +4,7 @@ Updated: 2026-09-06
 
 ## Active Boundary
 
-The active branch is `codex/gpu13-canary-20260804-plan-relaxation-01`.
+The active branch is `main`.
 The production path is:
 
 ```text

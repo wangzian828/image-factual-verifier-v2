@@ -39,7 +39,7 @@ judge 或 rollout 若遇到 API 不可用，只能暂停该运行；已经完成
 
 | 项目 | 当前状态 |
 |---|---|
-| 本地/服务器分支 | `codex/gpu13-canary-20260804-plan-relaxation-01` |
+| 本地/服务器分支 | `main` |
 | 服务器工作树 | `/gs/home/wza/projects/image-factual-verifier-v2-worktrees/gpu13-canary-20260804-plan-relaxation-01` |
 | 最近一次服务器真实 Agent smoke 的行为 commit | `414cb07 fix: add dedicated teacher rollout launcher` |
 | 本地/GitHub 当前发布 HEAD | `414cb07 fix: add dedicated teacher rollout launcher` |
@@ -327,7 +327,7 @@ SFT。该条仍有有效 perception 目标，因此独立 perception SFT 应为 
 - 本地结果：主仓库 `481 passed`；training `112 passed`；用户提供的真实
   `train_traj_0427_tools_swift_sample_182.json` 已完成转换和严格结构审计。
 - 代码提交：`d54edc7`（包含导出实现 `329b94e`），已推送到
-  `codex/gpu13-canary-20260804-plan-relaxation-01`。
+  `main`。
 - 服务器状态：截至 2026-09-04，转发恢复、`hostname=gpu-13`、`id -un=wza`、
   `OMP_NUM_THREADS=1` 已重新核验；下一步 fast-forward 当前发布候选并执行真实
   processor 验证，不能用本地结果代替。

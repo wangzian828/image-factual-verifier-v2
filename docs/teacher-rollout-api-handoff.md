@@ -30,7 +30,7 @@ Codex 负责确认 endpoint、model ID、并发和配额。
 
 ```text
 repository: git@github.com:wangzian828/image-factual-verifier-v2.git
-branch: codex/gpu13-canary-20260804-plan-relaxation-01
+branch: main
 minimum commit: 5317d9a
 ```
 

@@ -1,7 +1,7 @@
 # Raw-history cleanup checkpoint
 
 Date: 2026-09-06
-Branch: codex/gpu13-canary-20260804-plan-relaxation-01
+Branch: main
 Base commit: 7aa74cb
 
 ## Active production path

@@ -48,7 +48,7 @@ The only supported branch for current Agent evaluation, Gemini teacher runs, and
 gpu-13 rollout work is:
 
 ```text
-codex/gpu13-canary-20260804-plan-relaxation-01
+main
 ```
 
 The maintained local source checkout is
@@ -639,7 +639,7 @@ manifests only.
 Push the desired branch from the local repository first:
 
 ```powershell
-git push -u origin codex/gpu13-canary-20260804-plan-relaxation-01
+git push -u origin main
 ```
 
 Then execute the following on gpu-13 through Jupyter or an approved terminal. The
@@ -652,7 +652,7 @@ export OMP_NUM_THREADS=1
 
 mkdir -p /gs/home/wza/projects/image-factual-verifier-v2-worktrees
 checkout=/gs/home/wza/projects/image-factual-verifier-v2-worktrees/gpu13-canary-20260804-plan-relaxation-01
-git clone --branch codex/gpu13-canary-20260804-plan-relaxation-01 \
+git clone --branch main \
   https://github.com/wangzian828/image-factual-verifier-v2.git \
   "$checkout"
 cd "$checkout"
@@ -670,8 +670,7 @@ The former `/gs/home/wza/projects/image-factual-verifier-v2` and
 not valid runtime paths and must not be recreated for normal work. The
 `run_gpu13.sh` wrapper now rejects any non-canonical path or branch before starting
 a project process.
-The currently verified canary branch is
-`codex/gpu13-canary-20260804-plan-relaxation-01`; its exact HEAD is intentionally
+The currently verified branch is `main`; its exact HEAD is intentionally
 not recorded here because it changes after every deployment. The server source tree
 must not be reset or reused when it is dirty or on a different branch than the
 committed local work.
@@ -711,7 +710,7 @@ After each local commit and push:
 
 ```bash
 cd /gs/home/wza/projects/image-factual-verifier-v2-worktrees/gpu13-canary-20260804-plan-relaxation-01
-bash scripts/server/update_gpu13_checkout.sh codex/gpu13-canary-20260804-plan-relaxation-01
+bash scripts/server/update_gpu13_checkout.sh main
 bash scripts/server/bootstrap_gpu13.sh
 ```
 
@@ -971,7 +970,7 @@ the real evaluator, requires successful search/visit/visual tool classes, and ru
 strict trace audit:
 
 ```bash
-cd /gs/home/wza/projects/image-factual-verifier-v2-worktrees/gpu13-canary-20260804-plan-relaxation-01
+cd /gs/home/wza/projects/image-factual-verifier-v2-worktrees/main
 run_id="runtime-canary-$(date -u +%Y%m%dT%H%M%SZ)"
 scripts/server/run_gpu13.sh conda run --no-capture-output -n ifv-agent \
   python scripts/run_real_canary.py \

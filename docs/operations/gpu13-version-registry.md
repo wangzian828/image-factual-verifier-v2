@@ -15,7 +15,7 @@ Qwen3.5 processor 对新导出的 3 条 policy / 3 条 perception 数据通过�
 
 | 项目 | 值 |
 |---|---|
-| canonical branch | `codex/gpu13-canary-20260804-plan-relaxation-01` |
+| canonical branch | `main` |
 | 最近部署的 OCR 实现 commit | `3168f1c`（bounded JPEG upload、10s/120s timeouts、non-JSON diagnostics；global-4 pure OCR probe 10/10） |
 | 最近一次行为测试 commit | `d34cf63` |
 | 模型 | `gemini-3.7-flash` |

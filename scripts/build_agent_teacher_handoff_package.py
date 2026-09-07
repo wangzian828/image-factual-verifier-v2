@@ -15,7 +15,7 @@ from typing import Iterable
 
 SCHEMA_VERSION = "ifv-agent-teacher-handoff-v1"
 SOURCE_REPOSITORY = "git@github.com:wangzian828/image-factual-verifier-v2.git"
-SOURCE_BRANCH = "codex/gpu13-canary-20260804-plan-relaxation-01"
+SOURCE_BRANCH = "main"
 TRAIN_DATASET = "jiashuhong/factcheck_train"
 TRAIN_ARCHIVE = "factcheck_train-8490-20260907.tar.gz"
 TRAIN_ARCHIVE_SHA256 = (

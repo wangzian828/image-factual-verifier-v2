@@ -39,3 +39,4 @@ def test_build_agent_teacher_handoff_package_is_code_only(tmp_path: Path) -> Non
     assert parsed["source"]["repository"].endswith(
         "wangzian828/image-factual-verifier-v2.git"
     )
+    assert parsed["source"]["branch"] == "main"

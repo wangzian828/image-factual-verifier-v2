@@ -1,7 +1,7 @@
 # unified ReAct / SFT judge / 训练集 100 条四轮重跑总计划
 
 更新时间：2026-09-02  
-当前分支：`codex/gpu13-canary-20260804-plan-relaxation-01`  
+当前分支：`main`
 当前基线提交：`a398578`
 当前本地 checkout：`C:\Users\wangza\ifv-gpu13-canary-20260804-01`  
 明确停止点：本计划全部完成后，停在启动全量 8,490 条教师 rollout 之前。
