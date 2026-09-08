@@ -147,7 +147,18 @@ smoke 完成后必须检查正式 `accepted-release/trajectory_sft.jsonl` 和
 `<image>` marker 数量和过程图片均必须正确。runtime archive 必须能在不依赖原 rollout
 目录的情况下恢复 candidate、crop 和 focused-view 图片。
 
-只有这些检查全部通过，才启动全部 8,490 条：
+检查完成后先制作 smoke 结果包，不得直接启动全量。结果包至少包含
+`pipeline-state.json`、`preparation.json`、`rollouts/`、`classification/`、
+完整 `accepted-release/`、完整 `sft-training-package/`、
+`audits/`、从正式 `trajectory_sft.jsonl` 生成的 `readable-episodes-zh/`、
+`SMOKE-RESULTS.md` 和覆盖全部文件的 `SHA256SUMS`。将结果包压缩为 `.tar.gz`，
+向用户报告路径、字节大小和 SHA-256。
+
+结果包中的 judge 结论使用 accepted release 内已冻结的 selected/rejected
+eligibility artifact；不得额外复制顶层 `sft-eligibility/cache/`、judge 原始请求
+缓存、private gold、evaluator sidecar、API key、token、环境变量转储、测试集数据
+或手工修改的轨迹。另一个 Codex 必须在交付结果包后停止并等待用户检查；只有用户
+明确批准，才启动全部 8,490 条：
 
 ```bash
 scripts/server/start_teacher_rollout_portable.sh \
@@ -252,9 +263,12 @@ python -m pytest -q
 3. 不得手工拆分 rollout、reroll、judge 或 SFT 导出步骤；
 4. 检查完整轨迹内容、`<think>` 格式、tool 时序、顶层
    `tools/messages/images` 以及全部过程图片；
-5. smoke 全部确认通过后启动 8,490 条全量；
-6. 持续运行至全量 accepted release、SFT 导出和最终审计完成；
-7. 仅在 `audits/final-delivery.json` 的 `final_delivery=true` 后结束。
+5. 从正式 smoke 产物制作并压缩结果包，生成中文可读轨迹、`SMOKE-RESULTS.md`
+   和全部文件 SHA-256；
+6. 把结果包路径、大小和 SHA-256 交给用户，然后停止等待；
+7. 只有用户明确批准后才启动 8,490 条全量；
+8. 持续运行至全量 accepted release、SFT 导出和最终审计完成；
+9. 仅在 `audits/final-delivery.json` 的 `final_delivery=true` 后结束。
 
 不得在服务器 checkout 直接改源码。修改应在开发工作树完成、提交并推送，再由目标
 服务器 fast-forward。不得把真实密码、API key 或私有 gold 写入 prompt、trace、
@@ -262,9 +276,11 @@ python -m pytest -q
 
 ## 10. 明确停止点
 
-本交接任务已经获得全量运行授权。默认入口会在 10 条 smoke 通过后自动继续运行全部 8,490 条，
-完成 SFT eligibility judge、quality reroll、accepted release、policy/perception SFT
-package 和严格审计。只有 `audits/final-delivery.json` 中
+本交接任务当前只获得 10 条 smoke、结果包制作和结果包交付授权。不得使用无参数默认
+入口自动衔接全量；必须使用 `--smoke-only`，交付结果包并等待用户明确批准。获得批准后
+才可使用 `--full` 运行全部 8,490 条，并完成 SFT eligibility judge、quality reroll、
+accepted release、policy/perception SFT package 和严格审计。只有
+`audits/final-delivery.json` 中
 `final_delivery=true` 才能停止和交付；不得用 smoke、单个 attempt、手工预览包或仅有
 raw trace 的目录代替。
 

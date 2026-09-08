@@ -288,14 +288,88 @@ find <smoke-output-dir>/audits -maxdepth 3 -type f -name '*.json' -print
    `runtime_store_archive.selected_count == accepted_case_count`；
 8. SFT 只导出通过 judge 的 accepted 轨迹，不得把拒绝轨迹写入训练数据。
 
-只有以上 rollout、reroll、SFT 导出、结构审计和轨迹格式检查全部通过，才能把
-smoke 标记为确认完成并进入全量阶段。任一项失败都应停在 smoke，修复代码、提交、
-更新服务器 checkout 后从已有输出恢复，不得绕过检查。
+### 6.2.1 全量前 smoke 结果包
+
+以上一体化 smoke 流水线结束后，另一个 Codex 必须先制作并交付一个完整结果包，
+供用户检查实际轨迹和 SFT 格式。**结果包交付并得到用户明确确认之前，不得启动全量。**
+
+结果包必须来自正式 smoke pipeline，不得重新运行 converter、手工修改轨迹或从
+`attempt/traces` 拼接 preview。结果包至少包含：
+
+```text
+SMOKE-RESULTS.md
+pipeline-state.json
+preparation.json
+rollouts/
+classification/
+accepted-release/
+sft-training-package/
+audits/
+readable-episodes-zh/
+SHA256SUMS
+```
+
+具体要求：
+
+1. `rollouts/`：保留 10 条首轮以及流水线自动产生的 reroll 轨迹、run manifest、
+   score 和工程失败记录；
+2. `accepted-release/`：必须完整包含 selected/rejected trace、正式冻结的
+   selected/rejected eligibility 审计、
+   `trajectory_sft.jsonl`、`runtime-stores/` 和 `runtime_store_index.jsonl`；
+3. 不要复制顶层 `sft-eligibility/cache/`、judge 原始请求缓存或 private-gold
+   sidecar；结果包所需的 judge 结论以 accepted release 内冻结的 eligibility
+   artifact 为准；
+4. `sft-training-package/`：完整包含 provider-neutral accepted dataset、
+   ms-swift policy/perception 数据、manifest 和严格审计；
+5. `readable-episodes-zh/`：只能由正式
+   `accepted-release/trajectory_sft.jsonl` 使用
+   `render_sft_episodes_zh_readable.py` 生成；
+6. `audits/`：包含 strict trace audit、pipeline summary、policy/perception
+   audit 和其他 smoke 阶段已产生的审计文件；
+7. `SMOKE-RESULTS.md`：记录 commit、训练集 SHA、teacher/judge model、
+   并发、初始与 reroll 轮次、成功/拒绝/工程失败数量、accepted SFT 行数、
+   每条 SFT 的 messages/tool calls/images 数量及格式检查结论；
+8. `SHA256SUMS`：覆盖结果包中的全部文件；最终 `.tar.gz` 另行提供文件大小和
+   SHA-256。
+
+可读视图必须从正式导出生成：
+
+```bash
+python scripts/trajectory/render_sft_episodes_zh_readable.py \
+  --input <smoke-output-dir>/accepted-release/trajectory_sft.jsonl \
+  --output-dir <smoke-review-dir>/readable-episodes-zh
+```
+
+结果包不得包含：
+
+- private gold、evaluator sidecar 或构造标签；
+- API key、token、密码、完整环境变量转储；
+- 手工修改后的 trace、手工补写的 thought 或非正式 preview；
+- 测试集数据或测试集结果。
+
+最终交付给用户时必须给出：
+
+```text
+smoke output directory
+review directory
+review tar.gz path
+review tar.gz byte size
+review tar.gz SHA-256
+smoke commit
+teacher model
+judge model
+accepted SFT row count
+audit/format result
+```
+
+任一 rollout、reroll、SFT 导出、结构审计、过程图片或轨迹格式检查失败，都应停在
+smoke，修复代码、提交并更新服务器 checkout 后从已有输出恢复。结果包交付后等待
+用户检查；只有用户明确回复可以开始全量，才能进入下一节。
 
 ### 6.3 全量 8,490 条 rollout
 
-确认 10 条 smoke 使用同一 commit、teacher model、judge model 和工具配置全部通过后，
-立即启动完整 8,490 条训练集：
+用户检查 smoke 结果包并明确批准后，使用与 smoke 相同的 commit、teacher model、
+judge model 和工具配置，启动完整 8,490 条训练集：
 
 ```bash
 scripts/server/start_teacher_rollout_portable.sh \
@@ -432,13 +506,15 @@ scripts/server/start_teacher_rollout_portable.sh --help
    `<think>`、tool-call/tool-response 时序及二元 Judgment 均正确；
 4. 检查正式 SFT 导出格式及所有过程图片，确认 runtime archive 可独立恢复
    candidate、crop 和 focused-view 图片；禁止使用手工 preview 代替；
-5. 运行 policy/perception 严格结构审计。只有 smoke 的全部检查通过，才能执行
-   `--full`；
-6. 使用同一 commit、模型和 API 配置启动 8,490 条全量 rollout，并持续监控，不得
+5. 运行 policy/perception 严格结构审计；
+6. 按第 6.2.1 节制作完整 smoke 结果包，生成中文可读轨迹、汇总说明、全部文件哈希
+   和压缩包，并把路径、大小和 SHA-256 交给用户；
+7. 停止并等待用户检查结果包；没有用户明确批准时不得执行 `--full`；
+8. 用户批准后，使用同一 commit、模型和 API 配置启动 8,490 条全量 rollout，并持续监控，不得
    只启动进程后立即结束任务；
-7. 等待全量工程 retry、SFT judge、最多 3 轮 quality reroll、accepted release
+9. 等待全量工程 retry、SFT judge、最多 3 轮 quality reroll、accepted release
    和双 SFT package 全部完成；
-8. 验证 `audits/final-delivery.json` 中 `final_delivery=true`，再交付完整审计与
+10. 验证 `audits/final-delivery.json` 中 `final_delivery=true`，再交付完整审计与
    哈希清单。
 
 到此停止；不要启动 processor verification、GPU SFT、RL、Direct QA 或测试集实验。
