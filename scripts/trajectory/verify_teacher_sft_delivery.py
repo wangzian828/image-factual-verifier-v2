@@ -90,10 +90,40 @@ def verify_teacher_sft_delivery(
         accepted_count > 0 and accepted_count == selected_count,
         f"accepted={accepted_count} selected={selected_count}",
     )
+    record(
+        "accepted_release_schema_is_portable",
+        accepted.get("schema_version") == "ifv-accepted-teacher-release-v4",
+        f"schema_version={accepted.get('schema_version')!r}",
+    )
+    runtime_archive = accepted.get("runtime_store_archive")
+    runtime_archive = (
+        runtime_archive if isinstance(runtime_archive, Mapping) else {}
+    )
+    archived_runtime_count = int(
+        runtime_archive.get("selected_count", 0) or 0
+    )
+    record(
+        "accepted_runtime_stores_complete",
+        accepted_count > 0 and archived_runtime_count == accepted_count,
+        (
+            f"archived_runtime_stores={archived_runtime_count} "
+            f"accepted={accepted_count}"
+        ),
+    )
+    record(
+        "accepted_runtime_store_directory",
+        (pipeline_dir / "accepted-release/runtime-stores").is_dir(),
+        (
+            "present"
+            if (pipeline_dir / "accepted-release/runtime-stores").is_dir()
+            else "missing"
+        ),
+    )
 
     required_nonempty_files = (
         "accepted-release/selected_episodes.jsonl",
         "accepted-release/trajectory_sft.jsonl",
+        "accepted-release/runtime_store_index.jsonl",
         "sft-training-package/ms-swift-policy/train.jsonl",
         "sft-training-package/ms-swift-policy/validation.jsonl",
     )
@@ -134,6 +164,25 @@ def verify_teacher_sft_delivery(
         (
             f"package_selected={package_selected} policy={policy_rows} "
             f"action_only={action_only_rows} long_holdout={long_holdout_rows} "
+            f"accepted={accepted_count}"
+        ),
+    )
+    package_release = package.get("accepted_release")
+    package_release = (
+        package_release if isinstance(package_release, Mapping) else {}
+    )
+    package_runtime = package_release.get("runtime_store_archive")
+    package_runtime = (
+        package_runtime if isinstance(package_runtime, Mapping) else {}
+    )
+    record(
+        "package_preserves_runtime_archive",
+        package_runtime.get("portable") is True
+        and int(package_runtime.get("selected_count", 0) or 0)
+        == accepted_count,
+        (
+            f"portable={package_runtime.get('portable')!r} "
+            f"selected={package_runtime.get('selected_count')!r} "
             f"accepted={accepted_count}"
         ),
     )

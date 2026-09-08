@@ -29,6 +29,7 @@ ACCEPTED_RELEASE_SCHEMAS = frozenset(
     {
         "ifv-accepted-teacher-release-v2",
         "ifv-accepted-teacher-release-v3",
+        "ifv-accepted-teacher-release-v4",
     }
 )
 # The provider-neutral exporter stores a UTF-8 byte estimate.  The admission
@@ -92,13 +93,25 @@ def _write_jsonl(path: Path, rows: Iterable[Mapping[str, Any]]) -> None:
 
 
 def _export_trace_file_job(
-    job: tuple[str, Path, Dict[str, Any], bool],
+    job: tuple[str, Path, Path | None, Dict[str, Any], bool],
 ) -> tuple[str, TrajectorySFTExample | None, str]:
     """Export one trace while keeping raw trace data out of the coordinator."""
 
-    episode_id, trace_path, source_metadata, allow_incomplete = job
+    (
+        episode_id,
+        trace_path,
+        runtime_store_path,
+        source_metadata,
+        allow_incomplete,
+    ) = job
     try:
         trace = _load_json(trace_path)
+        if runtime_store_path is not None:
+            state = dict(_mapping(trace.get("state")))
+            runtime_store = dict(_mapping(state.get("runtime_store")))
+            runtime_store["runtime_path"] = str(runtime_store_path)
+            state["runtime_store"] = runtime_store
+            trace["state"] = state
         return (
             episode_id,
             export_trajectory_sft_example(
@@ -230,7 +243,7 @@ def _load_gate_artifacts(
 
 def _load_canonical_accepted_release(
     path: Path,
-) -> tuple[Path, Dict[str, Dict[str, Any]]]:
+) -> tuple[Path, Dict[str, Dict[str, Any]], Dict[str, Any]]:
     """Load the one canonical source of frozen teacher examples.
 
     The accepted release already contains the post-judge policy export.  A
@@ -289,7 +302,53 @@ def _load_canonical_accepted_release(
         )
     if not selected_by_episode:
         raise ValueError("accepted-release selected_episodes.jsonl is empty")
-    return root, selected_by_episode
+    return root, selected_by_episode, manifest
+
+
+def _accepted_release_runtime_store(
+    root: Path,
+    row: Mapping[str, Any],
+    *,
+    required: bool,
+) -> Path | None:
+    raw = str(row.get("runtime_store_path", "")).strip()
+    episode_id = str(row.get("episode_id", "")).strip()
+    if not raw:
+        if required:
+            raise ValueError(
+                "accepted-release v4 selected episode has no runtime store: "
+                f"{episode_id}"
+            )
+        return None
+    root = root.resolve()
+    runtime_store = (root / raw).resolve()
+    if runtime_store != root and root not in runtime_store.parents:
+        raise ValueError(
+            "accepted-release runtime store escapes the release root: "
+            f"{episode_id}"
+        )
+    if not runtime_store.is_dir():
+        raise ValueError(
+            "accepted-release runtime store is missing: "
+            f"{episode_id}: {runtime_store}"
+        )
+    if not any((runtime_store / "context").glob("*.json")):
+        raise ValueError(
+            "accepted-release runtime store has no context manifests: "
+            f"{episode_id}"
+        )
+    if not (runtime_store / "artifacts" / "sha256").is_dir():
+        raise ValueError(
+            "accepted-release runtime store has no artifact store: "
+            f"{episode_id}"
+        )
+    expected_files = int(row.get("runtime_store_file_count", 0) or 0)
+    if required and expected_files < 1:
+        raise ValueError(
+            "accepted-release v4 selected episode has invalid runtime store "
+            f"metadata: {episode_id}"
+        )
+    return runtime_store
 
 
 def _deterministic_teacher_quality(score: Mapping[str, Any]) -> Dict[str, Any]:
@@ -374,12 +433,17 @@ def export_dataset(
 ) -> Dict[str, Any]:
     accepted_release: Path | None = None
     accepted_release_rows: Dict[str, Dict[str, Any]] = {}
+    accepted_release_manifest: Dict[str, Any] = {}
     if accepted_release_path is not None:
         if run_dirs:
             raise ValueError(
                 "accepted-release mode cannot be combined with --run-dir"
             )
-        accepted_release, accepted_release_rows = (
+        (
+            accepted_release,
+            accepted_release_rows,
+            accepted_release_manifest,
+        ) = (
             _load_canonical_accepted_release(accepted_release_path)
         )
         run_dirs = [accepted_release]
@@ -439,7 +503,7 @@ def export_dataset(
     action_only_by_episode: Dict[str, Dict[str, Any]] = {}
     episode_metadata: Dict[str, Dict[str, Any]] = {}
     export_jobs: Dict[
-        str, tuple[str, Path, Dict[str, Any], bool]
+        str, tuple[str, Path, Path | None, Dict[str, Any], bool]
     ] = {}
     score_by_episode: Dict[str, Dict[str, Any]] = {}
     source_runs: List[Dict[str, Any]] = []
@@ -484,6 +548,7 @@ def export_dataset(
                 if accepted_release is not None
                 else None
             )
+            runtime_store_path: Path | None = None
             if accepted_release is not None:
                 if accepted_release_row is None:
                     raise ValueError(
@@ -497,6 +562,21 @@ def export_dataset(
                         "accepted-release trace SHA-256 mismatch: "
                         f"{episode_id}"
                     )
+                runtime_store_path = _accepted_release_runtime_store(
+                    accepted_release,
+                    accepted_release_row,
+                    required=(
+                        accepted_release_manifest.get("schema_version")
+                        == "ifv-accepted-teacher-release-v4"
+                        and str(
+                            accepted_release_row.get(
+                                "decision_policy_version",
+                                "",
+                            )
+                        )
+                        == "unified-react-v1"
+                    ),
+                )
                 buckets = accepted_release_row.get(
                     "training_buckets",
                     ["reasoning_sft"],
@@ -512,6 +592,11 @@ def export_dataset(
                         "case_id": case_id,
                         "source_run_id": manifest.get("run_id"),
                         "source_trace": str(trace_path),
+                        "runtime_store_path": (
+                            str(runtime_store_path)
+                            if runtime_store_path is not None
+                            else None
+                        ),
                     }
                     continue
                 score = {
@@ -645,6 +730,11 @@ def export_dataset(
                     )
                     or ""
                 ),
+                "runtime_store_path": (
+                    str(runtime_store_path)
+                    if runtime_store_path is not None
+                    else None
+                ),
             }
             sft_judge_passed = (
                 _mapping(eligibility.get("gates")).get(
@@ -655,6 +745,7 @@ def export_dataset(
             export_jobs[episode_id] = (
                 episode_id,
                 trace_path,
+                runtime_store_path,
                 {
                     "source_run_id": manifest.get("run_id"),
                     "runtime_commit": manifest.get("git_commit"),
@@ -1089,6 +1180,12 @@ def export_dataset(
                         "manifest_sha256": _sha256(
                             accepted_release
                             / "accepted_release_manifest.json"
+                        ),
+                        "schema_version": accepted_release_manifest.get(
+                            "schema_version"
+                        ),
+                        "runtime_store_archive": accepted_release_manifest.get(
+                            "runtime_store_archive"
                         ),
                     }
                     if accepted_release is not None

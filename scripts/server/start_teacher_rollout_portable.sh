@@ -31,6 +31,7 @@ dataset_root="${IFV_TEACHER_DATASET_ROOT:-${IFV_DATA_ROOT}/datasets/factcheck_tr
 output_dir=""
 run_mode="smoke_then_full"
 smoke_limit="${IFV_SMOKE_CASE_COUNT:-10}"
+quality_reroll_rounds="3"
 limit=""
 background="1"
 forward=()
@@ -301,6 +302,7 @@ pipeline_args=(
     --sft-judge-provider "${judge_provider}"
     --sft-model "${judge_model}"
     --sft-judge-wire-api "${judge_wire_api}"
+    --quality-reroll-rounds "${quality_reroll_rounds}"
 )
 if [[ -n "${judge_base_url}" ]]; then
     pipeline_args+=(--sft-judge-base-url "${judge_base_url}")

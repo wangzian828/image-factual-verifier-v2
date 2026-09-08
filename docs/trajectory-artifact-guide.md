@@ -41,6 +41,12 @@ assistant: <think>...</think><answer>{...}</answer>
 data URI。导出器按 runtime context artifact 恢复初始原图以及工具后新出现的候选图、
 裁剪图和聚焦视图，按 SHA-256 去重，并保证 `<image>` marker 与顶层图片一一对应。
 
+正式 `accepted-release` 必须使用 `ifv-accepted-teacher-release-v4`，并包含
+`runtime-stores/` 与 `runtime_store_index.jsonl`。不要从 rollout 的
+`attempt/traces` 手工复制 JSON 制作 preview；这种做法会丢失 request
+context 和过程图片。人工审阅视图只能由正式 smoke pipeline 已生成的
+`accepted-release/trajectory_sft.jsonl` 或 SFT package 再渲染得到。
+
 ## 3. 中文阅读目录
 
 ```powershell

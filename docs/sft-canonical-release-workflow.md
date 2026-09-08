@@ -1,6 +1,6 @@
 # SFT Canonical Release 工作流
 
-当前版本（2026-09-03）的唯一训练发布链路：
+当前版本（2026-09-08）的唯一训练发布链路：
 
 ```text
 teacher rollout
@@ -21,12 +21,23 @@ teacher rollout
 - `selected_episodes.jsonl`
 - `traces/`
 - `eligibility/`
+- `runtime-stores/`
+- `runtime_store_index.jsonl`
 - 质量分桶和来源校验记录
 
 它固定每条入选 episode 的 trace SHA-256、judge 结果、split、runtime commit 和
 图像路径。后续导出只读这个 release，不回到原始 rollout 目录重新拼接数据。
 
 原始 trace、拒绝项和 holdout 不删除；它们只是不进入本次训练输入。
+
+`ifv-accepted-teacher-release-v4` 同时冻结每条入选轨迹的 runtime context
+和 artifact store。原始 trace 字节及 `source_trace_sha256` 保持不变；
+converter 只在内存中把 `state.runtime_store.runtime_path` 重绑定到 release
+内副本，因此删除原 rollout 目录后仍可恢复初始图片、候选图片、裁剪图和聚焦图。
+
+禁止从 `attempt/traces` 手工拼装 preview 或训练样本。10 条 smoke 的审阅产物
+必须直接取自 `<smoke-pipeline>/accepted-release/trajectory_sft.jsonl` 或
+`<smoke-pipeline>/sft-training-package/ms-swift-policy/`。
 
 ## 2. 生成训练数据
 

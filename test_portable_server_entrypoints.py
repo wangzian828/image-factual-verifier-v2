@@ -69,6 +69,8 @@ def test_generic_launcher_uses_explicit_runtime_configuration() -> None:
     assert "--smoke-only" in portable
     assert "--smoke-then-full" in portable
     assert "--validation-count" in portable
+    assert 'quality_reroll_rounds="3"' in portable
+    assert '--quality-reroll-rounds "${quality_reroll_rounds}"' in portable
     assert "run_teacher_sft_pipeline.sh" in portable
     assert 'delivery_scope="smoke_not_final"' in portable
     assert "IFV_REQUIRE_FULL_TEACHER_DELIVERY" in portable

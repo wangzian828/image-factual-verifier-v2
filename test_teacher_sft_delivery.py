@@ -27,10 +27,16 @@ def _complete_pipeline(root: Path) -> None:
     )
     _write_json(
         root / "accepted-release/accepted_release_manifest.json",
-        {"accepted_case_count": 2},
+        {
+            "schema_version": "ifv-accepted-teacher-release-v4",
+            "accepted_case_count": 2,
+            "runtime_store_archive": {"selected_count": 2},
+        },
     )
     _write_text(root / "accepted-release/selected_episodes.jsonl")
     _write_text(root / "accepted-release/trajectory_sft.jsonl")
+    _write_text(root / "accepted-release/runtime_store_index.jsonl")
+    (root / "accepted-release/runtime-stores").mkdir(parents=True)
     _write_text(root / "accepted-release/perception_trajectories.jsonl", "")
     _write_text(root / "sft-training-package/ms-swift-policy/train.jsonl")
     _write_text(root / "sft-training-package/ms-swift-policy/validation.jsonl")
@@ -50,6 +56,12 @@ def _complete_pipeline(root: Path) -> None:
                 "policy_rows": 2,
                 "action_only_rows": 0,
                 "long_holdout_rows": 0,
+            },
+            "accepted_release": {
+                "runtime_store_archive": {
+                    "portable": True,
+                    "selected_count": 2,
+                }
             },
             "audits": {
                 "policy": {"passed": True},

@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -31,7 +32,7 @@ from src.trajectory.exporter import (
 from src.trajectory.perception_exporter import export_perception_example
 
 
-SCHEMA_VERSION = "ifv-accepted-teacher-release-v3"
+SCHEMA_VERSION = "ifv-accepted-teacher-release-v4"
 DETERMINISTIC_FATAL_TEACHER_REASONS = frozenset(
     {
         "incorrect_result",
@@ -87,6 +88,115 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _runtime_store_root(trace: Mapping[str, Any]) -> Path | None:
+    state = trace.get("state")
+    if not isinstance(state, Mapping):
+        return None
+    runtime_store = state.get("runtime_store")
+    if not isinstance(runtime_store, Mapping):
+        return None
+    raw = str(runtime_store.get("runtime_path", "")).strip()
+    if not raw:
+        return None
+    path = Path(raw).expanduser()
+    return path.resolve() if path.is_dir() else None
+
+
+def _stage_runtime_store(
+    *,
+    output_dir: Path,
+    trace: Mapping[str, Any],
+    episode_id: str,
+    trace_sha256: str,
+    relative_root: Path,
+    required: bool,
+) -> Dict[str, Any]:
+    source = _runtime_store_root(trace)
+    if source is None:
+        if required:
+            raise ValueError(
+                "accepted unified-ReAct trace has no available runtime store: "
+                f"{episode_id}"
+            )
+        return {}
+    if not any((source / "context").glob("*.json")):
+        if required:
+            raise ValueError(
+                "accepted unified-ReAct runtime store has no context manifests: "
+                f"{episode_id}"
+            )
+        return {"runtime_store_error": "runtime store has no context manifests"}
+    if not (source / "artifacts" / "sha256").is_dir():
+        if required:
+            raise ValueError(
+                "accepted unified-ReAct runtime store has no artifact store: "
+                f"{episode_id}"
+            )
+        return {"runtime_store_error": "runtime store has no artifact store"}
+
+    safe_episode = hashlib.sha256(episode_id.encode("utf-8")).hexdigest()[:12]
+    destination = (
+        output_dir
+        / relative_root
+        / f"{trace_sha256[:12]}--{safe_episode}"
+    )
+    if destination.exists():
+        raise FileExistsError(f"runtime store destination already exists: {destination}")
+
+    tree_digest = hashlib.sha256()
+    file_count = 0
+    byte_count = 0
+    hardlink_count = 0
+    copy_count = 0
+    for source_path in sorted(
+        source.rglob("*"),
+        key=lambda path: path.relative_to(source).as_posix(),
+    ):
+        relative = source_path.relative_to(source)
+        destination_path = destination / relative
+        if source_path.is_symlink():
+            raise ValueError(
+                f"runtime store cannot contain symbolic links: {source_path}"
+            )
+        if source_path.is_dir():
+            destination_path.mkdir(parents=True, exist_ok=True)
+            continue
+        if not source_path.is_file():
+            raise ValueError(
+                f"runtime store contains unsupported entry: {source_path}"
+            )
+        destination_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.link(source_path, destination_path)
+            hardlink_count += 1
+        except OSError:
+            shutil.copy2(source_path, destination_path)
+            copy_count += 1
+        digest = _sha256(destination_path)
+        size = destination_path.stat().st_size
+        tree_digest.update(relative.as_posix().encode("utf-8"))
+        tree_digest.update(b"\0")
+        tree_digest.update(digest.encode("ascii"))
+        tree_digest.update(b"\0")
+        tree_digest.update(str(size).encode("ascii"))
+        tree_digest.update(b"\n")
+        file_count += 1
+        byte_count += size
+
+    if required and file_count < 1:
+        raise ValueError(f"accepted runtime store is empty: {episode_id}")
+    return {
+        "runtime_store_path": destination.relative_to(output_dir).as_posix(),
+        "runtime_store_tree_sha256": tree_digest.hexdigest(),
+        "runtime_store_file_count": file_count,
+        "runtime_store_byte_count": byte_count,
+        "runtime_store_materialization": {
+            "hardlink_files": hardlink_count,
+            "copied_files": copy_count,
+        },
+    }
 
 
 def _gate_index(root: Path, suffix: str) -> Dict[str, Dict[str, Any]]:
@@ -277,7 +387,7 @@ def _stage_rejected_trace(
     trace_path: Path,
     eligibility_path: Path | None,
     trace_sha256: str,
-) -> Dict[str, str]:
+) -> Dict[str, Any]:
     trace_destination = (
         output_dir
         / "rejected"
@@ -289,6 +399,17 @@ def _stage_rejected_trace(
     result = {
         "trace_path": trace_destination.relative_to(output_dir).as_posix(),
     }
+    trace = _load_json(trace_path)
+    result.update(
+        _stage_runtime_store(
+            output_dir=output_dir,
+            trace=trace,
+            episode_id=str(trace.get("image_id") or trace_path.stem),
+            trace_sha256=trace_sha256,
+            relative_root=Path("rejected") / "runtime-stores",
+            required=False,
+        )
+    )
     if eligibility_path is not None and eligibility_path.is_file():
         eligibility_destination = (
             output_dir / "rejected" / "eligibility" / eligibility_path.name
@@ -634,6 +755,14 @@ def stage_release(
             perception_rows.append(
                 exported_perception.model_dump(mode="json")
             )
+        runtime_store = _stage_runtime_store(
+            output_dir=output_dir,
+            trace=trace,
+            episode_id=candidate["episode_id"],
+            trace_sha256=candidate["trace_sha256"],
+            relative_root=Path("runtime-stores"),
+            required=candidate["decision_policy_version"] == "unified-react-v1",
+        )
         selected_rows.append(
             {
                 "case_id": case_id,
@@ -665,6 +794,7 @@ def stage_release(
                 "tool_call_count": exported_trajectory.tool_call_count,
                 "perception_example_count": int(exported_perception is not None),
                 "perception_export_error": perception_export_error,
+                **runtime_store,
             }
         )
 
@@ -709,6 +839,25 @@ def stage_release(
     _write_json(output_dir / "run_manifest.json", first_manifest)
     _write_jsonl(output_dir / "selected_episodes.jsonl", selected_rows)
     _write_jsonl(output_dir / "rejected_episodes.jsonl", rejected_rows)
+    runtime_store_rows = [
+        {
+            "case_id": row.get("case_id"),
+            "episode_id": row.get("episode_id"),
+            "selected": selected,
+            "runtime_store_path": row.get("runtime_store_path"),
+            "runtime_store_tree_sha256": row.get("runtime_store_tree_sha256"),
+            "runtime_store_file_count": row.get("runtime_store_file_count"),
+            "runtime_store_byte_count": row.get("runtime_store_byte_count"),
+            "runtime_store_materialization": row.get(
+                "runtime_store_materialization"
+            ),
+            "runtime_store_error": row.get("runtime_store_error"),
+        }
+        for selected, rows in ((True, selected_rows), (False, rejected_rows))
+        for row in rows
+        if row.get("runtime_store_path") or row.get("runtime_store_error")
+    ]
+    _write_jsonl(output_dir / "runtime_store_index.jsonl", runtime_store_rows)
     manifest = {
         "schema_version": SCHEMA_VERSION,
         "accepted_case_count": len(selected_rows),
@@ -727,6 +876,20 @@ def stage_release(
             "trajectory_sft": "trajectory_sft.jsonl",
             "action_only": "action_only.jsonl",
             "rl_candidates": "rl_candidates.jsonl",
+            "runtime_store_index": "runtime_store_index.jsonl",
+            "runtime_stores_dir": "runtime-stores",
+            "rejected_runtime_stores_dir": "rejected/runtime-stores",
+        },
+        "runtime_store_archive": {
+            "selected_count": sum(
+                1 for row in selected_rows if row.get("runtime_store_path")
+            ),
+            "rejected_count": sum(
+                1 for row in rejected_rows if row.get("runtime_store_path")
+            ),
+            "missing_or_invalid_rejected_count": sum(
+                1 for row in rejected_rows if row.get("runtime_store_error")
+            ),
         },
         "canonical_training_source": {
             "trajectory_sft_export": "canonical_trace",

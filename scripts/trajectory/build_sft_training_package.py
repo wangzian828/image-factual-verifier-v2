@@ -74,11 +74,25 @@ def _copy_into_package(source: Path, destination: Path) -> Path:
     if source.is_dir():
         if destination.exists():
             raise FileExistsError(f"package destination already exists: {destination}")
-        shutil.copytree(source, destination)
+        shutil.copytree(
+            source,
+            destination,
+            copy_function=_hardlink_or_copy,
+        )
     else:
         destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, destination)
+        _hardlink_or_copy(source, destination)
     return destination
+
+
+def _hardlink_or_copy(source: str | Path, destination: str | Path) -> str:
+    source_path = Path(source)
+    destination_path = Path(destination)
+    try:
+        os.link(source_path, destination_path)
+    except OSError:
+        shutil.copy2(source_path, destination_path)
+    return str(destination_path)
 
 
 def _load_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -87,6 +101,73 @@ def _load_jsonl(path: Path) -> list[dict[str, Any]]:
         for line in path.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
+
+
+def _load_json(path: Path) -> dict[str, Any]:
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError(f"expected JSON object: {path}")
+    return value
+
+
+def _release_runtime_archive(release_path: Path) -> dict[str, Any]:
+    manifest = _load_json(release_path / "accepted_release_manifest.json")
+    schema_version = str(manifest.get("schema_version", "")).strip()
+    archive = manifest.get("runtime_store_archive")
+    archive = dict(archive) if isinstance(archive, Mapping) else {}
+    selected_rows = _load_jsonl(release_path / "selected_episodes.jsonl")
+    archived_rows = 0
+    missing_rows: list[str] = []
+    for row in selected_rows:
+        episode_id = str(row.get("episode_id", "")).strip()
+        relative = str(row.get("runtime_store_path", "")).strip()
+        if not relative:
+            missing_rows.append(episode_id)
+            continue
+        runtime_store = (release_path / relative).resolve()
+        release_root = release_path.resolve()
+        if runtime_store != release_root and release_root not in runtime_store.parents:
+            raise ValueError(
+                "accepted release runtime store escapes release root: "
+                f"{episode_id}"
+            )
+        if (
+            not runtime_store.is_dir()
+            or not any((runtime_store / "context").glob("*.json"))
+            or not (runtime_store / "artifacts" / "sha256").is_dir()
+        ):
+            missing_rows.append(episode_id)
+            continue
+        archived_rows += 1
+    if schema_version == "ifv-accepted-teacher-release-v4" and missing_rows:
+        raise ValueError(
+            "accepted release v4 is missing portable runtime stores for "
+            + ", ".join(missing_rows[:10])
+        )
+    declared_selected = int(archive.get("selected_count", 0) or 0)
+    if (
+        schema_version == "ifv-accepted-teacher-release-v4"
+        and declared_selected != archived_rows
+    ):
+        raise ValueError(
+            "accepted release runtime-store count mismatch: "
+            f"manifest={declared_selected} actual={archived_rows}"
+        )
+    return {
+        "schema_version": schema_version,
+        "portable": (
+            schema_version == "ifv-accepted-teacher-release-v4"
+            and archived_rows == len(selected_rows)
+        ),
+        "selected_count": archived_rows,
+        "selected_release_count": len(selected_rows),
+        "index_path": (
+            "runtime_store_index.jsonl"
+            if (release_path / "runtime_store_index.jsonl").is_file()
+            else None
+        ),
+        "manifest": archive,
+    }
 
 
 def _build_default_case_split(
@@ -612,6 +693,7 @@ workflows.
 ## Reproducibility and audit artifacts
 
 - `accepted-release/`: frozen selected traces and the eligibility artifacts used for selection.
+- `accepted-release/runtime-stores/`: archived request context and media needed to reproduce candidate/crop images without the original rollout directory.
 - `all-trajectories/`: every staged teacher trajectory, including rejected and engineering-error traces.
 - `trajectory-buckets/`: quality copies and length indexes.  Bucket membership never deletes the source trace.
 - `trajectory_catalog.jsonl`: one audit row per complete trajectory with quality and length dimensions.
@@ -634,6 +716,7 @@ def build_package(args: argparse.Namespace) -> dict[str, Any]:
     _assert_new_or_empty(package_dir)
 
     release_path, selection = _build_release(args, package_dir)
+    runtime_archive = _release_runtime_archive(release_path)
     catalog = _build_trajectory_catalog(release_path, package_dir)
     split_destination = package_dir / "case-split" / "case_split.jsonl"
     if args.case_split is not None:
@@ -712,6 +795,7 @@ def build_package(args: argparse.Namespace) -> dict[str, Any]:
             "manifest_sha256": sha256_file(
                 release_path / "accepted_release_manifest.json"
             ),
+            "runtime_store_archive": runtime_archive,
         },
         "trajectory_catalog": catalog,
         "case_split": split_info,

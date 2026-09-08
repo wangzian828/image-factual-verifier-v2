@@ -308,8 +308,19 @@ sft-training-package/
 audits/
 ```
 
+`accepted-release/` 必须是 `ifv-accepted-teacher-release-v4`，其中每条入选
+轨迹都要有对应的 `runtime_store_path`，且
+`runtime_store_archive.selected_count == accepted_case_count`。这保证原始
+rollout runtime 删除或迁移后，正式 converter 仍能恢复完整过程图片。
+
+不要从 `rollouts/*/attempt-*/traces` 手工制作 preview。10 条 smoke 审阅包
+直接使用 `<smoke-output>/accepted-release/trajectory_sft.jsonl`，或从
+`<smoke-output>/sft-training-package/ms-swift-policy/` 生成可读视图。
+
 ```bash
 test -f <pipeline-dir>/accepted-release/selected_episodes.jsonl
+test -f <pipeline-dir>/accepted-release/runtime_store_index.jsonl
+test -d <pipeline-dir>/accepted-release/runtime-stores
 test -f <pipeline-dir>/case-split/case_split.jsonl
 test -d <pipeline-dir>/sft-training-package/ms-swift-policy
 test -d <pipeline-dir>/sft-training-package/ms-swift-perception
