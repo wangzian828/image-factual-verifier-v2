@@ -796,19 +796,19 @@ def export_dataset(
                 "frozen SFT export accepted too few cases: "
                 f"{len(accepted_case_ids)} < {minimum_accepted_cases}"
             )
-            if require_all_validation_cases:
-                policy_case_ids = {
-                    str(episode_metadata[episode_id]["case_id"])
-                    for episode_id in all_episodes
-                }
-                expected_validation = {
-                    case_id
-                    for case_id, row in (fixed_split or {}).items()
-                    if (
-                        row.get("split") == "validation"
-                        and case_id in policy_case_ids
-                    )
-                }
+        if require_all_validation_cases:
+            policy_case_ids = {
+                str(episode_metadata[episode_id]["case_id"])
+                for episode_id in all_episodes
+            }
+            expected_validation = {
+                case_id
+                for case_id, row in (fixed_split or {}).items()
+                if (
+                    row.get("split") == "validation"
+                    and case_id in policy_case_ids
+                )
+            }
             missing_validation = sorted(expected_validation - accepted_case_ids)
             if missing_validation:
                 raise ValueError(

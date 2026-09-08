@@ -2,22 +2,31 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import json
 from copy import deepcopy
 from io import BytesIO
 from pathlib import Path
+from typing import Any
 
+import pytest
 from PIL import Image
 
-from src.integrations.gemini import normalize_json_schema
+from src.integrations.gemini import RUNTIME_METRICS_KEY
 from src.orchestrator.evidence_semantics import derive_edit_evidence_summary
 from src.tools.compare_reference import (
     COMPARE_RESPONSE_SCHEMA,
+    DEFAULT_REFERENCE_COMPARE_MAX_OUTPUT_TOKENS,
+    SYSTEM_INSTRUCTION,
     CompareWithReferenceTool,
 )
 
 
-def valid_comparison() -> dict:
+RUNTIME_METRICS = {
+    "llm_api_calls": 1,
+    "tokens": {"prompt": 101, "completion": 17, "thought": 0},
+}
+
+
+def valid_comparison() -> dict[str, Any]:
     return {
         "same_subject_or_scene": True,
         "same_capture_or_near_duplicate": True,
@@ -43,48 +52,37 @@ def _reference_data_url() -> str:
     ).decode("ascii")
 
 
-def interaction(output: object, *, status: str = "completed") -> dict:
-    return {
-        "id": "compare-interaction-1",
-        "status": status,
-        "usage": {
-            "total_input_tokens": 101,
-            "total_output_tokens": 17,
-            "total_thought_tokens": 0,
-        },
-        "steps": [
-            {
-                "type": "model_output",
-                "content": [{"type": "text", "text": json.dumps(output)}],
-            }
-        ],
-    }
+def _payload(output: dict[str, Any]) -> dict[str, Any]:
+    return {**output, RUNTIME_METRICS_KEY: RUNTIME_METRICS}
 
 
-class FakeBackend:
-    provider = "gemini"
-    wire_api = "interactions"
-
-    def __init__(self, payload: dict | Exception) -> None:
+class FakeVisionClient:
+    def __init__(
+        self,
+        payload: Any,
+        *,
+        provider: str = "qwen_local",
+    ) -> None:
         self.payload = payload
-        self.requests = []
-        self.legacy_called = False
+        self.provider = provider
+        self.requests: list[dict[str, Any]] = []
 
-    async def create_interaction(self, **kwargs):
+    def create_images_json(self, **kwargs: Any) -> Any:
         self.requests.append(kwargs)
         if isinstance(self.payload, Exception):
             raise self.payload
         return self.payload
 
-    async def get_response(self, *_args, **_kwargs):
-        self.legacy_called = True
-        raise AssertionError("get_response must not be used")
 
-
-def make_tool(tmp_path: Path, backend: FakeBackend) -> CompareWithReferenceTool:
+def make_tool(tmp_path: Path, client: Any) -> CompareWithReferenceTool:
     image_path = tmp_path / "current.png"
     Image.new("RGB", (4, 4), "white").save(image_path)
-    tool = CompareWithReferenceTool(vlm_backend=backend, image_path=str(image_path))
+    tool = CompareWithReferenceTool(
+        client=client,
+        provider=getattr(client, "provider", "qwen_local"),
+        model_name="served-teacher-model",
+        image_path=str(image_path),
+    )
 
     async def fake_download(_url: str) -> str:
         return _reference_data_url()
@@ -93,72 +91,60 @@ def make_tool(tmp_path: Path, backend: FakeBackend) -> CompareWithReferenceTool:
     return tool
 
 
-def test_compare_uses_two_interactions_content_images_and_exact_schema(tmp_path: Path) -> None:
-    backend = FakeBackend(interaction(valid_comparison()))
-    tool = make_tool(tmp_path, backend)
+@pytest.mark.parametrize("provider", ["gemini", "qwen_local"])
+def test_compare_uses_provider_neutral_multi_image_contract(
+    tmp_path: Path,
+    provider: str,
+) -> None:
+    client = FakeVisionClient(_payload(valid_comparison()), provider=provider)
+    tool = make_tool(tmp_path, client)
 
     result = asyncio.run(
         tool.call_async(
-            {"reference_url": "https://example.test/reference.jpg", "focus": "banner text"}
+            {
+                "reference_url": "https://example.test/reference.jpg",
+                "focus": "banner text",
+            }
         )
     )
 
     assert result["status"] == "success"
     assert result["confidence"] == 0.94
-    assert result["__runtime_metrics__"] == {
-        "llm_api_calls": 1,
-        "tokens": {"prompt": 101, "completion": 17, "thought": 0},
-    }
-    assert backend.legacy_called is False
-    assert len(backend.requests) == 1
+    assert result[RUNTIME_METRICS_KEY] == RUNTIME_METRICS
+    assert len(client.requests) == 1
 
-    request = backend.requests[0]
-    assert request["store"] is True
-    assert request["max_tokens"] == 8192
+    request = client.requests[0]
+    assert request["system_prompt"] == SYSTEM_INSTRUCTION
+    assert "banner text" in request["user_text"]
+    assert len(request["image_inputs"]) == 2
+    assert all(
+        image_input.startswith("data:image/jpeg;base64,")
+        for image_input in request["image_inputs"]
+    )
+    assert request["max_tokens"] == DEFAULT_REFERENCE_COMPARE_MAX_OUTPUT_TOKENS
+    assert request["model_name"] == "served-teacher-model"
     assert request["temperature"] == 0.0
-    assert request["generation_config"] == {"thinking_level": "low"}
-    assert request["response_format"] == {
-        "type": "text",
-        "mime_type": "application/json",
-        "schema": normalize_json_schema(
-            COMPARE_RESPONSE_SCHEMA,
-            require_all_properties=True,
-        ),
-    }
-    assert "edit_evidence_present" not in request["response_format"]["schema"]["properties"]
-    assert "edit_evidence_strength" not in request["response_format"]["schema"]["properties"]
-    assert [item["type"] for item in request["input_payload"]] == [
-        "text",
-        "image",
-        "image",
-    ]
-    reference_image, current_image = request["input_payload"][1:]
-    assert reference_image["type"] == "image"
-    assert reference_image["mime_type"] == "image/jpeg"
-    assert reference_image["data"]
-    assert current_image["type"] == "image"
-    assert current_image["mime_type"] == "image/jpeg"
-    assert current_image["data"]
-    assert "image_url" not in json.dumps(request["input_payload"])
+    assert request["response_schema"] == COMPARE_RESPONSE_SCHEMA
+    assert "edit_evidence_present" not in request["response_schema"]["properties"]
+    assert "edit_evidence_strength" not in request["response_schema"]["properties"]
 
 
 def test_compare_short_circuits_pixel_identical_images_without_vlm(
     tmp_path: Path,
 ) -> None:
-    backend = FakeBackend(
+    client = FakeVisionClient(
         AssertionError("pixel-identical images must not call the VLM")
     )
     image_path = tmp_path / "current.png"
     Image.new("RGB", (8, 8), "white").save(image_path)
     reference_data = image_path.read_bytes()
-    import base64
 
     tool = CompareWithReferenceTool(
-        vlm_backend=backend,
+        client=client,
         image_path=str(image_path),
     )
 
-    async def same_download(_url: str) -> dict:
+    async def same_download(_url: str) -> dict[str, Any]:
         return {
             "data_url": (
                 "data:image/png;base64,"
@@ -180,13 +166,13 @@ def test_compare_short_circuits_pixel_identical_images_without_vlm(
     assert result["comparison_method"] == "deterministic_exact_pixels"
     assert result["same_capture_or_near_duplicate"] is True
     assert result["confidence"] == 1.0
-    assert result["__runtime_metrics__"] == {}
-    assert backend.requests == []
+    assert result[RUNTIME_METRICS_KEY] == {}
+    assert client.requests == []
 
 
-def test_compare_propagates_interactions_failure_as_tool_error(tmp_path: Path) -> None:
-    backend = FakeBackend(RuntimeError("endpoint unavailable"))
-    tool = make_tool(tmp_path, backend)
+def test_compare_propagates_vlm_failure_as_tool_error(tmp_path: Path) -> None:
+    client = FakeVisionClient(RuntimeError("endpoint unavailable"))
+    tool = make_tool(tmp_path, client)
 
     result = asyncio.run(
         tool.call_async({"reference_url": "https://example.test/reference.jpg"})
@@ -194,15 +180,14 @@ def test_compare_propagates_interactions_failure_as_tool_error(tmp_path: Path) -
 
     assert result["status"] == "error"
     assert "endpoint unavailable" in result["error"]
-    assert backend.legacy_called is False
-    assert len(backend.requests) == 1
+    assert len(client.requests) == 1
 
 
 def test_compare_rejects_invalid_output_contract(tmp_path: Path) -> None:
     invalid = deepcopy(valid_comparison())
     invalid["confidence"] = "0.94"
-    backend = FakeBackend(interaction(invalid))
-    tool = make_tool(tmp_path, backend)
+    client = FakeVisionClient(_payload(invalid))
+    tool = make_tool(tmp_path, client)
 
     result = asyncio.run(
         tool.call_async({"reference_url": "https://example.test/reference.jpg"})
@@ -210,15 +195,15 @@ def test_compare_rejects_invalid_output_contract(tmp_path: Path) -> None:
 
     assert result["status"] == "error"
     assert "confidence' must be a number" in result["error"]
-    assert result["__runtime_metrics__"]["llm_api_calls"] == 1
+    assert result[RUNTIME_METRICS_KEY]["llm_api_calls"] == 1
 
 
 def test_compare_repairs_edit_present_without_typed_difference(tmp_path: Path) -> None:
     invalid = deepcopy(valid_comparison())
     invalid["edit_evidence_present"] = True
     invalid["edit_evidence_strength"] = "strong"
-    backend = FakeBackend(interaction(invalid))
-    tool = make_tool(tmp_path, backend)
+    client = FakeVisionClient(_payload(invalid))
+    tool = make_tool(tmp_path, client)
 
     result = asyncio.run(
         tool.call_async({"reference_url": "https://example.test/reference.jpg"})
@@ -234,14 +219,11 @@ def test_compare_repairs_edit_present_without_typed_difference(tmp_path: Path) -
 
 
 def test_compare_repairs_redundant_edit_summary_without_failing(tmp_path: Path) -> None:
-    # Gemini has returned this exact shape in a real comparison: no typed edit
-    # difference, but a stale non-none strength.  The edit summary is derived
-    # from differences by the runtime, so this is safe to canonicalize.
     invalid = deepcopy(valid_comparison())
     invalid["edit_evidence_present"] = False
     invalid["edit_evidence_strength"] = "moderate"
-    backend = FakeBackend(interaction(invalid))
-    tool = make_tool(tmp_path, backend)
+    client = FakeVisionClient(_payload(invalid))
+    tool = make_tool(tmp_path, client)
 
     result = asyncio.run(
         tool.call_async({"reference_url": "https://example.test/reference.jpg"})
@@ -270,8 +252,8 @@ def test_compare_derives_edit_flag_from_difference_type(tmp_path: Path) -> None:
             "significance": "high",
         }
     ]
-    backend = FakeBackend(interaction(output))
-    tool = make_tool(tmp_path, backend)
+    client = FakeVisionClient(_payload(output))
+    tool = make_tool(tmp_path, client)
 
     result = asyncio.run(
         tool.call_async({"reference_url": "https://example.test/reference.jpg"})
@@ -288,8 +270,8 @@ def test_compare_rejects_malformed_legacy_edit_summary_without_keyerror(
 ) -> None:
     output = deepcopy(valid_comparison())
     output["edit_evidence_present"] = "false"
-    backend = FakeBackend(interaction(output))
-    tool = make_tool(tmp_path, backend)
+    client = FakeVisionClient(_payload(output))
+    tool = make_tool(tmp_path, client)
 
     result = asyncio.run(
         tool.call_async({"reference_url": "https://example.test/reference.jpg"})
@@ -344,8 +326,8 @@ def test_compare_accepts_an_unrelated_reference_image(tmp_path: Path) -> None:
             ),
         }
     )
-    backend = FakeBackend(interaction(output))
-    tool = make_tool(tmp_path, backend)
+    client = FakeVisionClient(_payload(output))
+    tool = make_tool(tmp_path, client)
 
     result = asyncio.run(
         tool.call_async({"reference_url": "https://example.test/unrelated.jpg"})
@@ -356,15 +338,14 @@ def test_compare_accepts_an_unrelated_reference_image(tmp_path: Path) -> None:
     assert result["likely_different_original_capture"] is True
 
 
-def test_compare_requires_create_interaction_without_legacy_fallback(tmp_path: Path) -> None:
-    class LegacyOnlyBackend:
-        async def get_response(self, *_args, **_kwargs):
-            raise AssertionError("legacy backend must not be called")
+def test_compare_requires_structured_multi_image_client(tmp_path: Path) -> None:
+    class UnsupportedClient:
+        provider = "qwen_local"
 
     image_path = tmp_path / "current.png"
     Image.new("RGB", (4, 4), "white").save(image_path)
     tool = CompareWithReferenceTool(
-        vlm_backend=LegacyOnlyBackend(),
+        client=UnsupportedClient(),
         image_path=str(image_path),
     )
 
@@ -374,7 +355,7 @@ def test_compare_requires_create_interaction_without_legacy_fallback(tmp_path: P
 
     assert result == {
         "status": "error",
-        "error": "Gemini Interactions backend not configured for image comparison.",
+        "error": "VLM client does not support structured multi-image comparison.",
     }
 
 

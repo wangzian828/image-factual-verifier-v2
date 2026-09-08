@@ -58,7 +58,6 @@ def build_all_tools_with_health(
     tools: Dict[str, BaseTool] = {}
     health: Dict[str, ToolHealth] = {}
 
-    from src.orchestrator.llm_backend import APIBackend
     from src.integrations.browse.jina_reader import JinaReaderClient
     from src.integrations.search.serper import (
         SerperImageSearchClient,
@@ -72,17 +71,6 @@ def build_all_tools_with_health(
     request_max_retries = int(
         os.getenv("VLM_TOOL_REQUEST_MAX_RETRIES", "3")
     )
-    vlm_backend = APIBackend(
-        provider=vlm_provider,
-        model_name=vlm_model,
-        base_url=vlm_base_url,
-        wire_api=vlm_wire_api,
-        temperature=0.0,
-        max_tokens=4096,
-        timeout=request_timeout,
-        max_retries=request_max_retries,
-    )
-
     def sync_vlm_client() -> Any:
         client = build_vlm_client(
             provider=vlm_provider,
@@ -239,13 +227,17 @@ def build_all_tools_with_health(
     register(
         "analyze_visual_anomalies",
         lambda: __import__("src.tools.visual_anomaly", fromlist=["VisualAnomalyTool"]).VisualAnomalyTool(
-            vlm_backend=vlm_backend,
+            client=shared_sync_vlm_client(),
+            provider=vlm_provider,
+            model_name=vlm_model,
         ),
     )
     register(
         "compare_with_reference",
         lambda: __import__("src.tools.compare_reference", fromlist=["CompareWithReferenceTool"]).CompareWithReferenceTool(
-            vlm_backend=vlm_backend,
+            client=shared_sync_vlm_client(),
+            provider=vlm_provider,
+            model_name=vlm_model,
         ),
     )
 

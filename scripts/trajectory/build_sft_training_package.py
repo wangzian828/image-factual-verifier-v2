@@ -105,6 +105,11 @@ def _build_default_case_split(
     selected = _load_jsonl(release_path / "selected_episodes.jsonl")
     if not selected:
         raise ValueError("accepted release has no selected episodes")
+    if len(selected) > 100 and not all_train:
+        raise ValueError(
+            "large accepted releases require --case-split frozen over the "
+            "pre-rollout candidate population"
+        )
     trace_by_episode = {
         path.stem: json.loads(path.read_text(encoding="utf-8"))
         for path in (release_path / "traces").glob("*.json")
@@ -511,12 +516,17 @@ def _judge_namespace(args: argparse.Namespace, package_dir: Path) -> argparse.Na
     return argparse.Namespace(
         run_dir=args.run_dir.expanduser().resolve(),
         gold=args.gold.expanduser().resolve(),
+        private_gold_sidecar=None,
         output_dir=(package_dir / "sft-eligibility").resolve(),
         cache_dir=(package_dir / "sft-eligibility" / "cache").resolve(),
         image_root=(args.image_root.expanduser().resolve() if args.image_root else None),
         storage_dir=(package_dir / "accepted-release").resolve(),
         provider=args.provider,
         model=args.model,
+        base_url=args.base_url,
+        api_key_env=args.api_key_env,
+        wire_api=args.wire_api,
+        enable_thinking=args.enable_thinking,
         max_tokens=args.judge_max_tokens,
         provider_retries=int(
             os.getenv("SFT_ELIGIBILITY_PROVIDER_RETRIES", "3")
@@ -602,7 +612,7 @@ workflows.
 ## Reproducibility and audit artifacts
 
 - `accepted-release/`: frozen selected traces and the eligibility artifacts used for selection.
-- `all-trajectories/`: every staged Gemini trajectory, including rejected and engineering-error traces.
+- `all-trajectories/`: every staged teacher trajectory, including rejected and engineering-error traces.
 - `trajectory-buckets/`: quality copies and length indexes.  Bucket membership never deletes the source trace.
 - `trajectory_catalog.jsonl`: one audit row per complete trajectory with quality and length dimensions.
 - `accepted-dataset/`: provider-neutral full-trajectory dataset before ms-swift conversion.
@@ -749,6 +759,10 @@ def build_package(args: argparse.Namespace) -> dict[str, Any]:
         training["returncode"] = completed.returncode
         write_json(package_dir / "MANIFEST.json", manifest)
         _write_text(package_dir / "README.md", _package_readme(manifest))
+        if completed.returncode != 0:
+            raise RuntimeError(
+                f"SFT training command failed with exit code {completed.returncode}"
+            )
     return manifest
 
 
@@ -769,8 +783,40 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--image-root", type=Path)
-    parser.add_argument("--provider", choices=("gemini",), default="gemini")
-    parser.add_argument("--model", default="gemini-3.7-flash")
+    parser.add_argument(
+        "--provider",
+        choices=("gemini", "qwen", "qwen_local", "lmdeploy"),
+        default=os.getenv("IFV_SFT_ELIGIBILITY_PROVIDER", "gemini"),
+    )
+    parser.add_argument(
+        "--model",
+        default=os.getenv("IFV_SFT_ELIGIBILITY_MODEL", "gemini-3.7-flash"),
+    )
+    parser.add_argument(
+        "--base-url",
+        default=os.getenv("IFV_SFT_ELIGIBILITY_BASE_URL"),
+    )
+    parser.add_argument(
+        "--api-key-env",
+        default=os.getenv("IFV_SFT_ELIGIBILITY_API_KEY_ENV"),
+    )
+    parser.add_argument(
+        "--wire-api",
+        choices=("chat_completions", "responses", "interactions"),
+        default=os.getenv("IFV_SFT_ELIGIBILITY_WIRE_API"),
+    )
+    parser.add_argument(
+        "--enable-thinking",
+        action=argparse.BooleanOptionalAction,
+        default=(
+            os.getenv("IFV_SFT_ELIGIBILITY_ENABLE_THINKING", "")
+            .strip()
+            .lower()
+            in {"1", "true", "yes", "on"}
+            if os.getenv("IFV_SFT_ELIGIBILITY_ENABLE_THINKING") is not None
+            else None
+        ),
+    )
     parser.add_argument("--judge-max-tokens", type=int, default=4096)
     parser.add_argument("--timeout", type=float, default=180.0)
     parser.add_argument("--concurrency", type=int, default=1)

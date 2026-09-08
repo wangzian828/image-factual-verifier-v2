@@ -98,11 +98,20 @@ judge_key_env="${IFV_SFT_ELIGIBILITY_API_KEY_ENV:-}"
 
 if [[ "${rollout_profile}" == "teacher-qwen-server" ]]; then
     : "${QWEN_TEACHER_BASE_URL:?QWEN_TEACHER_BASE_URL is required}"
-    : "${QWEN_TEACHER_MODEL:?QWEN_TEACHER_MODEL is required}"
-    rollout_model="${rollout_model:-${QWEN_TEACHER_MODEL}}"
-    export QWEN_LOCAL_API_KEY="${QWEN_TEACHER_API_KEY:-${QWEN_LOCAL_API_KEY:-none}}"
+    if [[ -z "${rollout_model}" ]]; then
+        echo "QWEN_TEACHER_MODEL or IFV_TEACHER_ROLLOUT_MODEL is required." >&2
+        exit 2
+    fi
+    configured_vision_model="${QWEN_TEACHER_VISION_MODEL:-${rollout_model}}"
+    if [[ "${configured_vision_model}" != "${rollout_model}" ]]; then
+        echo "QWEN_TEACHER_VISION_MODEL must match the main teacher model." >&2
+        exit 2
+    fi
+    export QWEN_TEACHER_MODEL="${rollout_model}"
+    export QWEN_TEACHER_VISION_MODEL="${rollout_model}"
+    export QWEN_LOCAL_API_KEY="${QWEN_TEACHER_API_KEY:-none}"
     export BROWSE_EXTRACT_PROVIDER="qwen_local"
-    export BROWSE_EXTRACT_MODEL="${QWEN_TEACHER_MODEL}"
+    export BROWSE_EXTRACT_MODEL="${rollout_model}"
     export BROWSE_EXTRACT_BASE_URL="${QWEN_TEACHER_BASE_URL}"
     export BROWSE_EXTRACT_API_KEY="${QWEN_TEACHER_API_KEY:-none}"
     export BROWSE_EXTRACT_WIRE_API="chat_completions"
@@ -279,6 +288,7 @@ else
 fi
 if [[ -n "${limit}" ]]; then
     pipeline_args+=(--limit "${limit}")
+    pipeline_args+=(--validation-count "${IFV_SMOKE_VALIDATION_COUNT:-1}")
 fi
 pipeline_args+=("${forward[@]}")
 

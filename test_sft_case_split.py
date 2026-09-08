@@ -83,3 +83,25 @@ def test_split_rejects_frozen_eval_overlap() -> None:
             seed="fixture",
             prohibited_image_hashes={runtime[4]["image_sha256"]},
         )
+
+
+def test_split_accepts_private_verdict_aliases() -> None:
+    runtime = [
+        {"case_id": "case-real", "image_sha256": "a" * 64},
+        {"case_id": "case-fake", "image_sha256": "b" * 64},
+    ]
+    gold = [
+        {"case_id": "case-real", "expected_verdict": "real"},
+        {"case_id": "case-fake", "expected_verdict": "fake"},
+    ]
+
+    rows, summary = MODULE.build_split(
+        runtime,
+        gold,
+        validation_count=1,
+        validation_supported=1,
+        seed="alias-test",
+    )
+
+    assert len(rows) == 2
+    assert summary["split_label_counts"]["validation"] == {"supported": 1}

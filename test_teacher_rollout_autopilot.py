@@ -17,8 +17,10 @@ from scripts.trajectory.run_teacher_rollout_autopilot import (
     _merge_successful_attempts,
     _quality_reroll_case_ids,
     _read_jsonl,
+    _sft_audit_complete,
     _state_model_config,
     _successful_trace_sources,
+    _validate_rollout_profile_model,
     prepare_runtime_release,
 )
 from scripts.trajectory.build_sft_training_package import _assert_new_or_empty
@@ -97,6 +99,53 @@ def test_old_pipeline_state_accepts_new_judge_key_environment() -> None:
     assert judge["api_key_env"] == "PRIVATE_JUDGE_KEY"
 
 
+def test_rollout_profile_model_must_match_active_qwen_teacher(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("QWEN_TEACHER_MODEL", "actual-teacher")
+    monkeypatch.setenv("QWEN_TEACHER_BASE_URL", "http://teacher.test/v1")
+    monkeypatch.setenv("QWEN_TEACHER_API_KEY", "teacher-key")
+    monkeypatch.setenv("QWEN_LOCAL_API_KEY", "teacher-key")
+    monkeypatch.delenv("QWEN_TEACHER_VISION_MODEL", raising=False)
+
+    _validate_rollout_profile_model(
+        profile="teacher-qwen-server",
+        recorded_model="actual-teacher",
+    )
+    try:
+        _validate_rollout_profile_model(
+            profile="teacher-qwen-server",
+            recorded_model="wrong-teacher",
+        )
+    except ValueError as exc:
+        assert "does not match" in str(exc)
+    else:
+        raise AssertionError("mismatched teacher model must fail closed")
+
+    monkeypatch.setenv("QWEN_TEACHER_VISION_MODEL", "different-vision-model")
+    try:
+        _validate_rollout_profile_model(
+            profile="teacher-qwen-server",
+            recorded_model="actual-teacher",
+        )
+    except ValueError as exc:
+        assert "same model" in str(exc)
+    else:
+        raise AssertionError("teacher visual model drift must fail closed")
+
+    monkeypatch.setenv("QWEN_TEACHER_VISION_MODEL", "actual-teacher")
+    monkeypatch.setenv("QWEN_LOCAL_API_KEY", "stale-local-key")
+    try:
+        _validate_rollout_profile_model(
+            profile="teacher-qwen-server",
+            recorded_model="actual-teacher",
+        )
+    except ValueError as exc:
+        assert "mapped" in str(exc)
+    else:
+        raise AssertionError("stale local Qwen credentials must fail closed")
+
+
 def test_prepare_runtime_release_projects_only_runtime_fields(tmp_path: Path) -> None:
     dataset = tmp_path / "unified-dataset"
     (dataset / "images").mkdir(parents=True)
@@ -140,6 +189,64 @@ def test_prepare_runtime_release_projects_only_runtime_fields(tmp_path: Path) ->
     assert prepared["runtime_cases_sha256"] == _sha256(benchmark)
     assert prepared["limit"] == 1
     assert len(_read_jsonl(Path(str(prepared["private_gold"])))) == 1
+    case_split = Path(str(prepared["case_split"]))
+    assert case_split.is_file()
+    split_rows = _read_jsonl(case_split)
+    assert split_rows[0]["split"] == "train"
+    assert "label" not in split_rows[0]
+
+
+def test_prepare_runtime_release_rejects_mutated_frozen_split(tmp_path: Path) -> None:
+    dataset = tmp_path / "unified-dataset"
+    (dataset / "images").mkdir(parents=True)
+    (dataset / "images" / "one.jpg").write_bytes(b"image-one")
+    (dataset / "images" / "two.jpg").write_bytes(b"image-two")
+    train_manifest = dataset / "train-manifest.jsonl"
+    train_manifest.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    _manifest_row(
+                        "case-one",
+                        factual_status="supported",
+                        image="images/one.jpg",
+                    )
+                ),
+                json.dumps(
+                    _manifest_row(
+                        "case-two",
+                        factual_status="refuted",
+                        image="images/two.jpg",
+                    )
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    output = tmp_path / "pipeline"
+    prepared = prepare_runtime_release(
+        dataset_root=dataset,
+        train_manifest=train_manifest,
+        output_dir=output,
+        validation_count=1,
+    )
+    Path(str(prepared["case_split"])).write_text(
+        '{"case_id":"tampered"}\n',
+        encoding="utf-8",
+    )
+
+    try:
+        prepare_runtime_release(
+            dataset_root=dataset,
+            train_manifest=train_manifest,
+            output_dir=output,
+            validation_count=1,
+        )
+    except ValueError as exc:
+        assert "case split" in str(exc)
+    else:
+        raise AssertionError("mutated frozen split must fail closed")
 
 
 def test_prepare_runtime_release_allows_precreated_logs_only(tmp_path: Path) -> None:
@@ -350,6 +457,63 @@ def test_successful_merge_preserves_source_access_policy_metadata(
     assert manifest["source_access_policy"]["policy_id"] == "fixture-policy"
 
 
+def test_successful_merge_reports_actual_terminal_episode_count(
+    tmp_path: Path,
+) -> None:
+    group = tmp_path / "rollouts" / "initial"
+    attempt = group / "attempt-01"
+    traces = attempt / "traces"
+    traces.mkdir(parents=True)
+    trace = _trace("case-one", early_judgment=True)
+    (traces / "episode.json").write_text(json.dumps(trace), encoding="utf-8")
+    (attempt / "run_manifest.json").write_text(
+        json.dumps({"status": "completed_with_errors"}),
+        encoding="utf-8",
+    )
+
+    _, manifest = _merge_successful_attempts(
+        group_dir=group,
+        group_name="initial",
+        target_ids=["case-one", "case-two"],
+    )
+
+    assert manifest["result"]["num_cases"] == 2
+    assert manifest["result"]["num_episodes"] == 1
+    assert manifest["result"]["num_errors"] == 1
+
+
+def test_sft_audit_completion_is_bound_to_trace_bytes(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    traces = run_dir / "traces"
+    traces.mkdir(parents=True)
+    trace = _trace("case-one", early_judgment=True)
+    trace_path = traces / "episode.json"
+    trace_path.write_text(json.dumps(trace), encoding="utf-8")
+    eligibility = tmp_path / "eligibility"
+    eligibility.mkdir()
+    episode_id = trace["image_id"]
+    artifact_path = eligibility / f"{episode_id}.sft_eligibility.json"
+    artifact = {
+        "episode_id": episode_id,
+        "source_trace": {"sha256": "wrong"},
+    }
+    artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
+    (eligibility / "sft_eligibility_summary.json").write_text(
+        json.dumps(
+            {
+                "run_dir": str(run_dir),
+                "rows": [{"episode_id": episode_id}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert _sft_audit_complete(eligibility, 1, run_dir=run_dir) is False
+    artifact["source_trace"]["sha256"] = _sha256(trace_path)
+    artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
+    assert _sft_audit_complete(eligibility, 1, run_dir=run_dir) is True
+
+
 def test_package_output_allows_autopilot_command_log_only(tmp_path: Path) -> None:
     output = tmp_path / "sft-training-package"
     output.mkdir()
@@ -530,6 +694,14 @@ def test_quality_reroll_queue_is_scoped_to_current_round_targets(
         + "\n",
         encoding="utf-8",
     )
+    (classification / "hard-cases.jsonl").write_text(
+        "\n".join(
+            json.dumps({"case_id": case_id})
+            for case_id in ("case-a", "case-outside")
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     (classification / "incomplete-cases.jsonl").write_text(
         "\n".join(
             json.dumps({"case_id": case_id})
@@ -540,6 +712,39 @@ def test_quality_reroll_queue_is_scoped_to_current_round_targets(
     )
 
     assert _quality_reroll_case_ids(classification) == ["case-a", "case-b"]
+
+
+def test_quality_reroll_queue_skips_case_with_one_selected_candidate(
+    tmp_path: Path,
+) -> None:
+    classification = tmp_path / "classification"
+    classification.mkdir()
+    (classification / "classification.json").write_text(
+        json.dumps(
+            {
+                "target_case_ids": ["case-selected", "case-hard"],
+                "source_run": str(tmp_path / "rollouts" / "initial" / "merged"),
+            }
+        ),
+        encoding="utf-8",
+    )
+    (classification / "sft-rejected.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps({"case_id": "case-selected"}),
+                json.dumps({"case_id": "case-hard"}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (classification / "hard-cases.jsonl").write_text(
+        json.dumps({"case_id": "case-hard"}) + "\n",
+        encoding="utf-8",
+    )
+    (classification / "incomplete-cases.jsonl").write_text("", encoding="utf-8")
+
+    assert _quality_reroll_case_ids(classification) == ["case-hard"]
 
 
 def test_quality_reroll_summary_selects_one_winner_per_case_across_rounds(

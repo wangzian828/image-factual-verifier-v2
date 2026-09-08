@@ -309,12 +309,6 @@ class Orchestrator:
             "GEMINI_VISION_THINKING_LEVEL": os.getenv(
                 "GEMINI_VISION_THINKING_LEVEL", "low"
             ),
-            "GEMINI_REFERENCE_COMPARE_THINKING_LEVEL": os.getenv(
-                "GEMINI_REFERENCE_COMPARE_THINKING_LEVEL", "low"
-            ),
-            "GEMINI_VISUAL_ANOMALY_THINKING_LEVEL": os.getenv(
-                "GEMINI_VISUAL_ANOMALY_THINKING_LEVEL", "low"
-            ),
         }
         for env_name, value in tool_thinking_levels.items():
             normalized_value = value.strip().lower()

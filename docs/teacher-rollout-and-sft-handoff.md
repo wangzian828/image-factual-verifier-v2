@@ -98,7 +98,7 @@ scripts/server/run_ifv.sh python scripts/server/doctor.py --json
 QWEN_TEACHER_BASE_URL=http://teacher-host:port/v1
 QWEN_TEACHER_API_KEY=provided-out-of-band
 QWEN_TEACHER_MODEL=served-teacher-model
-QWEN_TEACHER_VISION_MODEL=served-teacher-vision-model
+QWEN_TEACHER_VISION_MODEL=served-teacher-model
 IFV_TEACHER_ROLLOUT_PROFILE=teacher-qwen-server
 IFV_TEACHER_ROLLOUT_MODEL=served-teacher-model
 ```
@@ -116,6 +116,10 @@ BROWSE_EXTRACT_MODEL=served-teacher-model
 BROWSE_EXTRACT_BASE_URL=http://teacher-host:port/v1
 BROWSE_EXTRACT_WIRE_API=chat_completions
 ```
+
+主 Agent、视觉工具和网页 Evidence 抽取必须使用同一个 teacher model ID。便携启动器
+会拒绝与 `IFV_TEACHER_ROLLOUT_MODEL` 不同的 `QWEN_TEACHER_VISION_MODEL`，并拒绝
+隐式回退到旧的本地 Qwen endpoint 或凭据。
 
 不要配置 Gemini 作为 fallback，也不要混用 `NECODEX_*`、`LMDEPLOY_*` 或小 Qwen 变量。
 
@@ -193,6 +197,12 @@ test -f "$IFV_DATA_ROOT/datasets/factcheck_train-8490-20260907/evaluator_private
 
 验收必须为 8,490 条 manifest 和 8,490 张图片。测试集不得出现在 rollout 的
 `dataset-root`、`train-manifest`、gold sidecar 或 SFT package 中。
+
+在第一次 teacher 请求发出前，autopilot 会从完整训练候选集冻结
+`case-split/case_split.jsonl`。默认 full run 固定 8 个 validation case；10 条 smoke
+固定 1 个。`preparation.json` 同时记录 runtime、private gold 和 case split 的 SHA-256，
+恢复运行时任何一个文件或 split manifest 发生漂移都会直接失败。SFT 导出只消费这份
+预先冻结的 split，不得在 accepted release 之后重新挑 validation case。
 
 ## 6. 启动顺序
 
@@ -282,6 +292,9 @@ scripts/server/start_teacher_rollout_portable.sh --full \
 
 ```text
 pipeline-state.json
+preparation.json
+case-split/case_split.jsonl
+case-split/manifest.json
 rollouts/
 sft-eligibility/
 classification/
@@ -292,6 +305,7 @@ audits/
 
 ```bash
 test -f <pipeline-dir>/accepted-release/selected_episodes.jsonl
+test -f <pipeline-dir>/case-split/case_split.jsonl
 test -d <pipeline-dir>/sft-training-package/ms-swift-policy
 test -d <pipeline-dir>/sft-training-package/ms-swift-perception
 python -m ifv_training audit --strict \
@@ -317,6 +331,13 @@ python training/scripts/probe/verify_ms_swift_agent_dataset.py \
 `<think>` 位于可训练 labels、每行存在非空 labels 且没有超出上下文；但它不属于
 本次接手 Codex 的任务。换 checkpoint、processor、chat template 或 ms-swift 版本后，
 由训练负责人重新验证。
+
+当前 reasoning policy SFT 必须使用
+`training/configs/models/qwen3.5-9b.env` 中的
+`IFV_ADD_NON_THINKING_PREFIX=false`。历史缓存配置
+`training/configs/cache/qwen3.5-pilot30-v3-img512-sdpa.env` 保留的是旧实验契约，
+不得用于新导出的 reasoning SFT package。仓库当前只提供 mock GRPO 工程 smoke，
+不应把它描述为已经打通的正式 RL 训练链路。
 
 ## 8. 失败处理
 

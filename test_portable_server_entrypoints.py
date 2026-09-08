@@ -64,8 +64,13 @@ def test_generic_launcher_uses_explicit_runtime_configuration() -> None:
     assert "2fda3ca7144d899e355fcbbaa4e6b93350878dbf5225ab423402123d5e37a448" in dataset
     assert 'limit="10"' in portable
     assert "--full" in portable
+    assert "--validation-count" in portable
     assert "run_teacher_sft_pipeline.sh" in portable
     assert "QWEN_TEACHER_BASE_URL" in portable
+    assert 'export QWEN_TEACHER_MODEL="${rollout_model}"' in portable
+    assert 'export QWEN_TEACHER_VISION_MODEL="${rollout_model}"' in portable
+    assert "QWEN_TEACHER_VISION_MODEL must match the main teacher model" in portable
+    assert 'export QWEN_LOCAL_API_KEY="${QWEN_TEACHER_API_KEY:-none}"' in portable
     assert "--sft-judge-api-key-env" in portable
     assert 'export BROWSE_EXTRACT_PROVIDER="qwen_local"' in portable
     assert 'export BROWSE_EXTRACT_BASE_URL="${QWEN_TEACHER_BASE_URL}"' in portable

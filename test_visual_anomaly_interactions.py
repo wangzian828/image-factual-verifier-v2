@@ -2,12 +2,17 @@ from __future__ import annotations
 
 import asyncio
 import copy
-import json
 from typing import Any
 
 import pytest
 
-from src.tools.visual_anomaly import VisualAnomalyTool
+from src.integrations.gemini import RUNTIME_METRICS_KEY
+from src.tools.visual_anomaly import (
+    VISUAL_ANOMALY_MAX_OUTPUT_TOKENS,
+    VISUAL_ANOMALY_RESPONSE_SCHEMA,
+    VISUAL_ANOMALY_SYSTEM_INSTRUCTION,
+    VisualAnomalyTool,
+)
 
 
 VALID_RESPONSE = {
@@ -26,69 +31,64 @@ VALID_RESPONSE = {
     "confidence": 0.91,
     "notes": "The anomaly is localized and clearly visible.",
 }
+RUNTIME_METRICS = {
+    "llm_api_calls": 1,
+    "tokens": {"prompt": 91, "completion": 23, "thought": 0},
+}
 
 
-def _interaction_payload(output: Any) -> dict[str, Any]:
-    text = output if isinstance(output, str) else json.dumps(output)
-    return {
-        "id": "interaction-visual-anomaly",
-        "status": "completed",
-        "usage": {
-            "total_input_tokens": 91,
-            "total_output_tokens": 23,
-            "total_thought_tokens": 0,
-        },
-        "steps": [
-            {
-                "type": "model_output",
-                "content": [{"type": "text", "text": text}],
-            }
-        ],
-    }
-
-
-class FakeInteractionsBackend:
+class FakeVisionClient:
     def __init__(
         self,
-        payload: dict[str, Any] | None = None,
+        payload: Any = None,
         error: Exception | None = None,
+        *,
+        provider: str = "qwen_local",
     ) -> None:
         self.payload = payload
         self.error = error
+        self.provider = provider
         self.calls: list[dict[str, Any]] = []
-        self.legacy_calls = 0
 
-    async def create_interaction(self, **kwargs: Any) -> dict[str, Any]:
+    def create_image_json(self, **kwargs: Any) -> Any:
         self.calls.append(kwargs)
         if self.error is not None:
             raise self.error
-        assert self.payload is not None
         return self.payload
 
-    async def get_response(self, *_args: Any, **_kwargs: Any) -> Any:
-        self.legacy_calls += 1
-        raise AssertionError("visual anomaly analysis must not call get_response")
+
+def _payload(output: dict[str, Any]) -> dict[str, Any]:
+    return {**output, RUNTIME_METRICS_KEY: RUNTIME_METRICS}
 
 
 def _run_tool(
     tmp_path,
-    backend: FakeInteractionsBackend,
+    client: Any,
     params: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     image_path = tmp_path / "input.png"
     from PIL import Image
 
     Image.new("RGB", (8, 8), color="white").save(image_path)
-    tool = VisualAnomalyTool(vlm_backend=backend, image_path=str(image_path))
+    tool = VisualAnomalyTool(
+        client=client,
+        provider=getattr(client, "provider", "qwen_local"),
+        model_name="served-teacher-model",
+        image_path=str(image_path),
+    )
     return asyncio.run(tool.call_async(params or {}))
 
 
-def test_visual_anomaly_uses_interactions_with_exact_structured_schema(tmp_path) -> None:
-    backend = FakeInteractionsBackend(_interaction_payload(VALID_RESPONSE))
+@pytest.mark.parametrize("provider", ["gemini", "qwen_local"])
+def test_visual_anomaly_uses_provider_neutral_structured_vision(
+    tmp_path,
+    provider: str,
+) -> None:
+    client = FakeVisionClient(_payload(VALID_RESPONSE), provider=provider)
 
     result = _run_tool(
         tmp_path,
-        backend,
+        client,
         {
             "focus_areas": [" inspect the left hand "],
             "context": "The hand is central to the image claim.",
@@ -100,123 +100,18 @@ def test_visual_anomaly_uses_interactions_with_exact_structured_schema(tmp_path)
         "status": "success",
         "focus_areas": ["inspect the left hand"],
         **VALID_RESPONSE,
-        "__runtime_metrics__": {
-            "llm_api_calls": 1,
-            "tokens": {"prompt": 91, "completion": 23, "thought": 0},
-        },
+        RUNTIME_METRICS_KEY: RUNTIME_METRICS,
     }
-    assert backend.legacy_calls == 0
-    assert len(backend.calls) == 1
+    assert len(client.calls) == 1
 
-    request = backend.calls[0]
-    assert request["store"] is True
-    assert request["background"] is False
-    assert request["max_tokens"] == 8192
+    request = client.calls[0]
+    assert request["system_prompt"] == VISUAL_ANOMALY_SYSTEM_INSTRUCTION
+    assert "inspect the left hand" in request["user_text"]
+    assert request["image_input"].endswith("input.png")
+    assert request["max_tokens"] == VISUAL_ANOMALY_MAX_OUTPUT_TOKENS
+    assert request["model_name"] == "served-teacher-model"
     assert request["temperature"] == 0.0
-    assert request["generation_config"] == {"thinking_level": "low"}
-    assert request["system_instruction"].endswith(
-        "return only one JSON object without markdown or commentary."
-    )
-    assert request["response_format"] == {
-        "type": "text",
-        "mime_type": "application/json",
-        "schema": {
-            "type": "object",
-            "additionalProperties": False,
-            "properties": {
-                "anomalies": {
-                    "type": "array",
-                    "maxItems": 12,
-                    "items": {
-                        "type": "object",
-                        "additionalProperties": False,
-                        "properties": {
-                            "name": {
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 200,
-                            },
-                            "region": {
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 200,
-                            },
-                            "phenomenon": {
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 1200,
-                            },
-                            "reasoning": {
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 1200,
-                            },
-                            "severity": {
-                                "type": "integer",
-                                "minimum": 0,
-                                "maximum": 100,
-                            },
-                            "type": {
-                                "type": "string",
-                                "enum": [
-                                    "physical_inconsistency",
-                                    "logical_inconsistency",
-                                    "relation_mismatch",
-                                    "text_mismatch",
-                                ],
-                            },
-                            "entities_involved": {
-                                "type": "array",
-                                "minItems": 1,
-                                "maxItems": 12,
-                                "items": {
-                                    "type": "string",
-                                    "minLength": 1,
-                                    "maxLength": 160,
-                                },
-                            },
-                        },
-                        "required": [
-                            "name",
-                            "region",
-                            "phenomenon",
-                            "reasoning",
-                            "severity",
-                            "type",
-                            "entities_involved",
-                        ],
-                    },
-                },
-                "target_relation_status": {
-                    "type": "string",
-                    "enum": [
-                        "observed",
-                        "not_observed",
-                        "ambiguous",
-                    ],
-                },
-                "confidence": {
-                    "type": "number",
-                    "minimum": 0.0,
-                    "maximum": 1.0,
-                },
-                "notes": {"type": "string", "maxLength": 1200},
-            },
-            "required": [
-                "anomalies",
-                "target_relation_status",
-                "confidence",
-                "notes",
-            ],
-        },
-    }
-
-    interaction_input = request["input_payload"]
-    assert [item["type"] for item in interaction_input] == ["text", "image"]
-    assert "inspect the left hand" in interaction_input[0]["text"]
-    assert interaction_input[1]["mime_type"] == "image/jpeg"
-    assert interaction_input[1]["data"]
-    assert "image_url" not in interaction_input[1]
+    assert request["response_schema"] == VISUAL_ANOMALY_RESPONSE_SCHEMA
 
 
 def _without_required_field(value: dict[str, Any]) -> None:
@@ -256,43 +151,54 @@ def test_visual_anomaly_rejects_invalid_structured_output(
 ) -> None:
     invalid = copy.deepcopy(VALID_RESPONSE)
     mutate(invalid)
-    backend = FakeInteractionsBackend(_interaction_payload(invalid))
+    client = FakeVisionClient(_payload(invalid))
 
-    result = _run_tool(tmp_path, backend)
+    result = _run_tool(tmp_path, client)
 
     assert result["status"] == "error"
-    assert result["error"]
     assert "failed schema validation" in result["error"]
     assert expected_error in result["error"]
-    assert result["__runtime_metrics__"]["llm_api_calls"] == 1
-    assert len(backend.calls) == 1
-    assert backend.legacy_calls == 0
+    assert result[RUNTIME_METRICS_KEY]["llm_api_calls"] == 1
+    assert len(client.calls) == 1
 
 
-def test_visual_anomaly_does_not_extract_json_from_markdown(tmp_path) -> None:
-    fenced = f"```json\n{json.dumps(VALID_RESPONSE)}\n```"
-    backend = FakeInteractionsBackend(_interaction_payload(fenced))
+def test_visual_anomaly_rejects_non_object_client_response(tmp_path) -> None:
+    client = FakeVisionClient("not-an-object")
 
-    result = _run_tool(tmp_path, backend)
-
-    assert result["status"] == "error"
-    assert result["error"]
-    assert "failed schema validation" in result["error"]
-    assert len(backend.calls) == 1
-    assert backend.legacy_calls == 0
-
-
-def test_visual_anomaly_interactions_failure_has_no_legacy_fallback(tmp_path) -> None:
-    backend = FakeInteractionsBackend(error=RuntimeError("interaction unavailable"))
-
-    result = _run_tool(tmp_path, backend)
+    result = _run_tool(tmp_path, client)
 
     assert result == {
         "status": "error",
         "error": (
-            "Visual anomaly Interactions request failed: "
-            "RuntimeError: interaction unavailable"
+            "Visual anomaly request failed: "
+            "TypeError: VLM response must be a JSON object."
         ),
     }
-    assert len(backend.calls) == 1
-    assert backend.legacy_calls == 0
+    assert len(client.calls) == 1
+
+
+def test_visual_anomaly_request_failure_has_no_fallback(tmp_path) -> None:
+    client = FakeVisionClient(error=RuntimeError("vision endpoint unavailable"))
+
+    result = _run_tool(tmp_path, client)
+
+    assert result == {
+        "status": "error",
+        "error": (
+            "Visual anomaly request failed: "
+            "RuntimeError: vision endpoint unavailable"
+        ),
+    }
+    assert len(client.calls) == 1
+
+
+def test_visual_anomaly_requires_structured_single_image_client(tmp_path) -> None:
+    class UnsupportedClient:
+        provider = "qwen_local"
+
+    result = _run_tool(tmp_path, UnsupportedClient())
+
+    assert result == {
+        "status": "error",
+        "error": "VLM client does not support structured single-image analysis.",
+    }

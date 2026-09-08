@@ -2,7 +2,7 @@
 
 Use `scripts/server/run_teacher_sft_pipeline.sh` for the complete teacher-side
 pipeline. It runs the teacher rollout autopilot, strict trace audits, SFT package
-audits, and the real target ms-swift processor check.
+audits, and records whether the optional real target ms-swift processor check ran.
 
 The entrypoint does not train by default. Add `--run-training` only after setting:
 
@@ -17,6 +17,11 @@ All runs require `OMP_NUM_THREADS=1`. Training inputs must have non-empty policy
 rejected before training. The final status is written to
 `<output-dir>/audits/pipeline-summary.json`, with processor and training status
 recorded separately.
+
+The train/validation assignment is frozen by the rollout autopilot before the
+first teacher request. Full runs default to eight validation candidates and
+bounded smoke runs default to one. Package export consumes that frozen split;
+it must not create a new split from the accepted subset.
 
 The no-evaluation profile
 `training/configs/sft/qwen3.5-full-10step-4gpu-zero3-offload-accum1-bf16params-sdpa-checkpointed-8k-truncated-smoke-noeval.env`
@@ -68,21 +73,14 @@ server-deployed large Qwen teacher can use its own OpenAI-compatible endpoint:
 ```bash
 export QWEN_TEACHER_BASE_URL=http://teacher-host:port/v1
 export QWEN_TEACHER_MODEL=served-teacher-model
-export QWEN_TEACHER_VISION_MODEL=served-teacher-vision-model
+export QWEN_TEACHER_VISION_MODEL=served-teacher-model
 export IFV_SFT_ELIGIBILITY_PROVIDER=qwen_local
 export IFV_SFT_ELIGIBILITY_BASE_URL=http://judge-host:port/v1
 export IFV_SFT_ELIGIBILITY_MODEL=served-judge-model
 export IFV_SFT_ELIGIBILITY_WIRE_API=chat_completions
 export IFV_SFT_ELIGIBILITY_ENABLE_THINKING=true
 
-scripts/server/start_teacher_rollout_autopilot.sh \
-  --rollout-profile teacher-qwen-server \
-  --rollout-model "$QWEN_TEACHER_MODEL" \
-  --sft-judge-provider "$IFV_SFT_ELIGIBILITY_PROVIDER" \
-  --sft-model "$IFV_SFT_ELIGIBILITY_MODEL" \
-  --sft-judge-base-url "$IFV_SFT_ELIGIBILITY_BASE_URL" \
-  --sft-judge-wire-api "$IFV_SFT_ELIGIBILITY_WIRE_API" \
-  --sft-judge-enable-thinking
+scripts/server/start_teacher_rollout_portable.sh --foreground --limit 10
 ```
 
 The judge receives the original image and the structured JSON schema. Qwen

@@ -994,26 +994,28 @@ def test_cache_singleflight_prevents_duplicate_producers(
     asyncio.run(run())
 
 
-def test_compare_reference_rejects_legacy_backend(tmp_path: Path) -> None:
-    class Backend:
+def test_compare_reference_rejects_client_without_multi_image_json(
+    tmp_path: Path,
+) -> None:
+    class Client:
         called = False
 
-        async def get_response(self, _messages: Any, **_kwargs: Any) -> Any:
+        def create_image_json(self, **_kwargs: Any) -> Any:
             self.called = True
-            raise AssertionError("legacy backend must not be called")
+            raise AssertionError("single-image method must not be called")
 
     image_path = tmp_path / "image.png"
     Image.new("RGB", (4, 4), "white").save(image_path)
     tool = CompareWithReferenceTool(
-        vlm_backend=Backend(),
+        client=Client(),
         image_path=str(image_path),
     )
     result = asyncio.run(
         tool.call_async({"reference_url": "https://example.test/ref.png"})
     )
     assert result["status"] == "error"
-    assert "Interactions backend not configured" in result["error"]
-    assert tool.vlm_backend.called is False
+    assert "structured multi-image comparison" in result["error"]
+    assert tool.client.called is False
 
 
 def test_persistence_redacts_credentials_and_signed_urls() -> None:

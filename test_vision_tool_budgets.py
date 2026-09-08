@@ -63,16 +63,16 @@ def test_gemini_vision_output_floor_can_be_overridden(monkeypatch) -> None:
 def test_reference_compare_output_budget_is_bounded_and_configurable(
     monkeypatch,
 ) -> None:
-    monkeypatch.delenv("GEMINI_REFERENCE_COMPARE_MAX_OUTPUT_TOKENS", raising=False)
+    monkeypatch.delenv("VLM_REFERENCE_COMPARE_MAX_OUTPUT_TOKENS", raising=False)
     assert (
         CompareWithReferenceTool._configured_max_output_tokens()
         == DEFAULT_REFERENCE_COMPARE_MAX_OUTPUT_TOKENS
     )
 
-    monkeypatch.setenv("GEMINI_REFERENCE_COMPARE_MAX_OUTPUT_TOKENS", "8192")
+    monkeypatch.setenv("VLM_REFERENCE_COMPARE_MAX_OUTPUT_TOKENS", "8192")
     assert CompareWithReferenceTool._configured_max_output_tokens() == 8192
 
-    monkeypatch.setenv("GEMINI_REFERENCE_COMPARE_MAX_OUTPUT_TOKENS", "bad")
+    monkeypatch.setenv("VLM_REFERENCE_COMPARE_MAX_OUTPUT_TOKENS", "bad")
     assert (
         CompareWithReferenceTool._configured_max_output_tokens()
         == DEFAULT_REFERENCE_COMPARE_MAX_OUTPUT_TOKENS

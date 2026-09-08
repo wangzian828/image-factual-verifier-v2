@@ -1,21 +1,17 @@
 # -*- coding: utf-8 -*-
-"""Legacy visual consistency diagnostic tool."""
+"""Provider-neutral visual consistency diagnostic tool."""
 from __future__ import annotations
 
-import os
+import asyncio
 from dataclasses import dataclass, field
-from typing import Annotated, Any, Dict, Literal
+from typing import Annotated, Any, Dict, Literal, Mapping
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
 
 from src.integrations.gemini import (
     RUNTIME_METRICS_KEY,
-    extract_text,
-    interaction_runtime_metrics,
-    messages_to_input,
+    exception_runtime_metrics,
     normalize_json_schema,
-    require_minimal_thinking,
-    validate_interaction_response,
 )
 from src.tools.base import BaseTool
 
@@ -78,11 +74,6 @@ VISUAL_ANOMALY_RESPONSE_SCHEMA = normalize_json_schema(
     _VisualAnomalyResponse.model_json_schema(by_alias=True),
     require_all_properties=True,
 )
-VISUAL_ANOMALY_RESPONSE_FORMAT = {
-    "type": "text",
-    "mime_type": "application/json",
-    "schema": VISUAL_ANOMALY_RESPONSE_SCHEMA,
-}
 VISUAL_ANOMALY_MAX_OUTPUT_TOKENS = 8192
 VISUAL_ANOMALY_SYSTEM_INSTRUCTION = (
     "You are an expert visual-consistency analyst. Follow the supplied JSON schema "
@@ -202,12 +193,12 @@ class VisualAnomalyTool(BaseTool):
         "required": [],
     })
 
-    vlm_backend: Any = None
+    client: Any = None
+    provider: str = "gemini"
+    model_name: str = "gemini-3.7-flash"
     image_path: str = ""
 
     def call(self, params: Dict[str, Any]) -> Any:
-        import asyncio
-
         try:
             asyncio.get_running_loop()
         except RuntimeError:
@@ -220,8 +211,11 @@ class VisualAnomalyTool(BaseTool):
             return future.result(timeout=120)
 
     async def call_async(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        if not self.vlm_backend:
-            return {"status": "error", "error": "VLM backend not configured for visual anomaly analysis."}
+        if not self.client:
+            return {
+                "status": "error",
+                "error": "VLM client not configured for visual anomaly analysis.",
+            }
 
         raw_focus_areas = params.get("focus_areas", [])
         if not isinstance(raw_focus_areas, list) or any(
@@ -248,11 +242,13 @@ class VisualAnomalyTool(BaseTool):
                 "error": f"check_type must be one of: {', '.join(CHECK_TYPES)}.",
             }
 
-        create_interaction = getattr(self.vlm_backend, "create_interaction", None)
-        if not callable(create_interaction):
+        create_image_json = getattr(self.client, "create_image_json", None)
+        if not callable(create_image_json):
             return {
                 "status": "error",
-                "error": "VLM backend does not support Gemini Interactions.",
+                "error": (
+                    "VLM client does not support structured single-image analysis."
+                ),
             }
 
         normalized_check_type = _LEGACY_CHECK_TYPE_ALIASES.get(
@@ -271,62 +267,37 @@ class VisualAnomalyTool(BaseTool):
                 prompt += f"\n\n## Additional Context\n{context}"
 
         try:
-            runtime_metrics: Dict[str, Any] = {}
-            from src.tools.vision_utils import vision_tool_image_to_data_url
-
-            image_data_url = vision_tool_image_to_data_url(self.image_path)
-            input_payload = messages_to_input(
-                [
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": prompt},
-                            {"type": "image_url", "image_url": {"url": image_data_url}},
-                        ],
-                    }
-                ]
-            )
-            payload = await create_interaction(
-                input_payload=input_payload,
-                system_instruction=VISUAL_ANOMALY_SYSTEM_INSTRUCTION,
-                response_format=VISUAL_ANOMALY_RESPONSE_FORMAT,
-                store=True,
+            parsed = await asyncio.to_thread(
+                create_image_json,
+                system_prompt=VISUAL_ANOMALY_SYSTEM_INSTRUCTION,
+                user_text=prompt,
+                image_input=self.image_path,
                 max_tokens=VISUAL_ANOMALY_MAX_OUTPUT_TOKENS,
+                model_name=self.model_name,
                 temperature=0.0,
-                generation_config={
-                    "thinking_level": require_minimal_thinking(
-                        os.getenv("GEMINI_VISUAL_ANOMALY_THINKING_LEVEL", "low"),
-                        env_name="GEMINI_VISUAL_ANOMALY_THINKING_LEVEL",
-                    )
-                },
-                background=False,
+                response_schema=VISUAL_ANOMALY_RESPONSE_SCHEMA,
             )
-            runtime_metrics = interaction_runtime_metrics(payload)
-            _, interaction_status = validate_interaction_response(payload)
-            if interaction_status != "completed":
-                raise RuntimeError(
-                    "Visual anomaly analysis requires a completed Gemini interaction; "
-                    f"received status={interaction_status}."
-                )
-            content = extract_text(payload).strip()
+            if not isinstance(parsed, Mapping):
+                raise TypeError("VLM response must be a JSON object.")
+            response = dict(parsed)
+            raw_runtime_metrics = response.pop(RUNTIME_METRICS_KEY, {})
+            runtime_metrics = (
+                dict(raw_runtime_metrics)
+                if isinstance(raw_runtime_metrics, Mapping)
+                else {}
+            )
         except Exception as exc:
             error = {
                 "status": "error",
-                "error": self._error_message("Visual anomaly Interactions request failed", exc),
+                "error": self._error_message("Visual anomaly request failed", exc),
             }
-            if runtime_metrics:
-                error[RUNTIME_METRICS_KEY] = runtime_metrics
+            metrics = exception_runtime_metrics(exc)
+            if metrics:
+                error[RUNTIME_METRICS_KEY] = metrics
             return error
 
-        if not content:
-            return {
-                "status": "error",
-                "error": "Gemini Interactions visual anomaly response was empty.",
-                RUNTIME_METRICS_KEY: runtime_metrics,
-            }
-
         try:
-            result = _VisualAnomalyResponse.model_validate_json(content, strict=True)
+            result = _VisualAnomalyResponse.model_validate(response, strict=True)
         except ValidationError as exc:
             details = []
             for error in exc.errors(include_input=False, include_url=False)[:6]:
@@ -335,7 +306,7 @@ class VisualAnomalyTool(BaseTool):
             return {
                 "status": "error",
                 "error": (
-                    "Gemini Interactions visual anomaly response failed schema validation: "
+                    "Visual anomaly response failed schema validation: "
                     + "; ".join(details)
                 ),
                 RUNTIME_METRICS_KEY: runtime_metrics,

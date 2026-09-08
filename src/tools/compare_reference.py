@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
-"""Compare the current image with one reference image using Gemini Interactions."""
+"""Compare the current image with one reference image using a structured VLM."""
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import re
 import base64
@@ -17,11 +16,7 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 from src.integrations.gemini import (
     RUNTIME_METRICS_KEY,
-    extract_text,
-    interaction_runtime_metrics,
-    normalize_json_schema,
-    require_minimal_thinking,
-    validate_interaction_response,
+    exception_runtime_metrics,
 )
 from src.integrations.http_sessions import (
     close_response,
@@ -146,8 +141,9 @@ class CompareWithReferenceTool(BaseTool):
         "required": ["reference_url"],
     })
 
-    # Kept as the injected backend attribute for compatibility with existing wiring.
-    vlm_backend: Any = None
+    client: Any = None
+    provider: str = "gemini"
+    model_name: str = "gemini-3.7-flash"
     image_path: str = ""
     source_access_policy: Any = None
     _reference_cache: OrderedDict[str, tuple[float, Dict[str, Any], int]] = field(
@@ -213,7 +209,7 @@ class CompareWithReferenceTool(BaseTool):
             return future.result(timeout=120)
 
     async def call_async(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Download the reference and compare both images through Interactions."""
+        """Download the reference and compare both images through the configured VLM."""
         reference_url = str(params.get("reference_url", "")).strip()
         source_page_url = str(params.get("source_page_url", "")).strip()
         focus = str(params.get("focus", "general comparison")).strip() or "general comparison"
@@ -230,11 +226,12 @@ class CompareWithReferenceTool(BaseTool):
             return self._error(
                 "Reference source-page URL blocked by the active source access policy."
             )
-        if self.vlm_backend is None:
-            return self._error("VLM backend not configured for image comparison.")
-        if not callable(getattr(self.vlm_backend, "create_interaction", None)):
+        if self.client is None:
+            return self._error("VLM client not configured for image comparison.")
+        create_images_json = getattr(self.client, "create_images_json", None)
+        if not callable(create_images_json):
             return self._error(
-                "Gemini Interactions backend not configured for image comparison."
+                "VLM client does not support structured multi-image comparison."
             )
 
         try:
@@ -321,60 +318,35 @@ class CompareWithReferenceTool(BaseTool):
                 reference_data_url
             )
             vision_current_data_url = vision_tool_image_to_data_url(self.image_path)
-            input_payload = [
-                {"type": "text", "text": COMPARE_PROMPT.format(focus=focus)},
-                self._data_url_to_image_content(reference_data_url),
-                self._data_url_to_image_content(vision_current_data_url),
-            ]
-            schema = normalize_json_schema(
-                COMPARE_RESPONSE_SCHEMA,
-                require_all_properties=True,
-            )
             comparison_attempted = True
             comparison_started = time.perf_counter()
-            payload = await self.vlm_backend.create_interaction(
-                input_payload=input_payload,
-                system_instruction=SYSTEM_INSTRUCTION,
-                response_format={
-                    "type": "text",
-                    "mime_type": "application/json",
-                    "schema": schema,
-                },
-                store=True,
+            parsed = await asyncio.to_thread(
+                create_images_json,
+                system_prompt=SYSTEM_INSTRUCTION,
+                user_text=COMPARE_PROMPT.format(focus=focus),
+                image_inputs=[reference_data_url, vision_current_data_url],
                 max_tokens=self._configured_max_output_tokens(),
+                model_name=self.model_name,
                 temperature=0.0,
-                generation_config={
-                    "thinking_level": require_minimal_thinking(
-                        os.getenv("GEMINI_REFERENCE_COMPARE_THINKING_LEVEL", "low"),
-                        env_name="GEMINI_REFERENCE_COMPARE_THINKING_LEVEL",
-                    )
-                },
+                response_schema=COMPARE_RESPONSE_SCHEMA,
             )
             comparison_duration_ms = round(
                 (time.perf_counter() - comparison_started) * 1000,
                 2,
             )
-            runtime_metrics = interaction_runtime_metrics(payload)
-            _, status = validate_interaction_response(payload)
-            if status != "completed":
-                raise RuntimeError(
-                    "Gemini comparison requires status=completed, "
-                    f"received status={status}."
-                )
-
-            content = extract_text(payload)
-            if not content.strip():
-                raise ValueError("Gemini Interactions comparison response was empty.")
-            try:
-                parsed = json.loads(content)
-            except json.JSONDecodeError as exc:
-                raise ValueError(
-                    "Gemini Interactions comparison response was not valid JSON."
-                ) from exc
+            if not isinstance(parsed, Mapping):
+                raise TypeError("VLM comparison response must be a JSON object.")
+            parsed = dict(parsed)
+            raw_runtime_metrics = parsed.pop(RUNTIME_METRICS_KEY, {})
+            runtime_metrics = (
+                dict(raw_runtime_metrics)
+                if isinstance(raw_runtime_metrics, Mapping)
+                else {}
+            )
             validated = self._validate_response(parsed)
         except Exception as exc:
             error = self._error(
-                "Gemini Interactions comparison failed: "
+                "VLM comparison failed: "
                 f"{type(exc).__name__}: {exc or '<no message>'}"
             )
             error["subcalls"] = [
@@ -384,7 +356,7 @@ class CompareWithReferenceTool(BaseTool):
                         {
                             "kind": "image_compare",
                             "provider": str(
-                                getattr(self.vlm_backend, "provider", "gemini")
+                                getattr(self.client, "provider", self.provider)
                             ),
                             "status": "error",
                             "request_count": 1,
@@ -407,6 +379,10 @@ class CompareWithReferenceTool(BaseTool):
             ]
             if runtime_metrics:
                 error[RUNTIME_METRICS_KEY] = runtime_metrics
+            else:
+                metrics = exception_runtime_metrics(exc)
+                if metrics:
+                    error[RUNTIME_METRICS_KEY] = metrics
             return error
 
         return {
@@ -432,7 +408,7 @@ class CompareWithReferenceTool(BaseTool):
                 {
                     "kind": "image_compare",
                     "provider": str(
-                        getattr(self.vlm_backend, "provider", "gemini")
+                        getattr(self.client, "provider", self.provider)
                     ),
                     "status": "success",
                     "request_count": 1,
@@ -446,7 +422,7 @@ class CompareWithReferenceTool(BaseTool):
     @staticmethod
     def _configured_max_output_tokens() -> int:
         raw = os.getenv(
-            "GEMINI_REFERENCE_COMPARE_MAX_OUTPUT_TOKENS",
+            "VLM_REFERENCE_COMPARE_MAX_OUTPUT_TOKENS",
             str(DEFAULT_REFERENCE_COMPARE_MAX_OUTPUT_TOKENS),
         )
         try:
@@ -992,16 +968,6 @@ class CompareWithReferenceTool(BaseTool):
             return False, f"reference payload could not be decoded as an image: {type(exc).__name__}"
         return True, ""
 
-    @staticmethod
-    def _data_url_to_image_content(data_url: str) -> Dict[str, Any]:
-        if not (data_url.startswith("data:") and ";base64," in data_url):
-            raise ValueError("Comparison images must be base64 data URLs.")
-        header, data = data_url.split(",", 1)
-        mime_type = header[5:].split(";", 1)[0].strip().lower()
-        if not mime_type.startswith("image/") or not data:
-            raise ValueError("Comparison image data URL is invalid.")
-        return {"type": "image", "mime_type": mime_type, "data": data}
-
     @classmethod
     def _validate_response(cls, value: Any) -> Dict[str, Any]:
         if not isinstance(value, dict):
@@ -1010,7 +976,7 @@ class CompareWithReferenceTool(BaseTool):
         expected = set(COMPARE_RESPONSE_SCHEMA["properties"])
         # Older provider adapters emitted these derived fields. Accept them
         # when replaying such a response, but do not include them in the live
-        # Gemini schema; both values are determined from ``differences``.
+        # VLM schema; both values are determined from ``differences``.
         tolerated_legacy_fields = {
             "edit_evidence_present",
             "edit_evidence_strength",

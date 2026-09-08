@@ -46,6 +46,7 @@ from scripts.trajectory.stage_accepted_teacher_release import (
     sft_candidate_rank,
     stage_release,
 )
+from scripts.trajectory.build_sft_case_split import build_split
 from src.eval.release_adapter import (
     DATA_PIPELINE_DECISION_POLICY_VERSION,
     INPUT_MODE,
@@ -54,6 +55,7 @@ from src.eval.release_adapter import (
     RUNTIME_CONTRACT_VERSION,
 )
 from src.eval.evaluator_private_gold import private_gold_index
+from src.provider_profiles import resolve_provider_settings
 
 
 SCHEMA_VERSION = "ifv-teacher-rollout-autopilot-v1"
@@ -93,6 +95,36 @@ def _rollout_config(args: argparse.Namespace) -> dict[str, Any]:
         "profile": str(getattr(args, "rollout_profile", "teacher-gemini")),
         "model": str(getattr(args, "rollout_model", "gemini-3.7-flash")),
     }
+
+
+def _validate_rollout_profile_model(*, profile: str, recorded_model: str) -> None:
+    resolved = resolve_provider_settings(profile_id=profile)
+    if resolved.model_name != recorded_model:
+        raise ValueError(
+            "rollout model does not match the active provider profile: "
+            f"profile={profile!r}, recorded={recorded_model!r}, "
+            f"resolved={resolved.model_name!r}"
+        )
+    if profile != "teacher-qwen-server":
+        return
+    if resolved.vlm_model != recorded_model:
+        raise ValueError(
+            "teacher-qwen-server must use the same model for the main Agent "
+            f"and visual tools: main={recorded_model!r}, "
+            f"vision={resolved.vlm_model!r}"
+        )
+    if not resolved.base_url:
+        raise ValueError(
+            "teacher-qwen-server requires QWEN_TEACHER_BASE_URL; refusing "
+            "an implicit local Qwen endpoint"
+        )
+    teacher_key = os.getenv("QWEN_TEACHER_API_KEY", "none").strip() or "none"
+    local_key = os.getenv("QWEN_LOCAL_API_KEY", "none").strip() or "none"
+    if local_key != teacher_key:
+        raise ValueError(
+            "teacher-qwen-server requires QWEN_LOCAL_API_KEY to be mapped "
+            "from QWEN_TEACHER_API_KEY by the portable launcher"
+        )
 
 
 def _state_model_config(
@@ -256,6 +288,10 @@ def prepare_runtime_release(
     output_dir: Path,
     limit: int | None = None,
     source_access_policy: Path | None = None,
+    validation_count: int = 8,
+    validation_supported: int | None = None,
+    case_split_seed: str = "ifv-qwen35-sft-v1",
+    prohibited_runtime: Path | None = None,
 ) -> dict[str, Any]:
     """Project a train manifest into isolated runtime and private-gold artifacts."""
 
@@ -274,6 +310,7 @@ def prepare_runtime_release(
     release_root = output_dir / "runtime-release"
     benchmark_path = release_root / "runtime_input" / "cases.jsonl"
     gold_path = output_dir / "private-gold" / "private_gold.jsonl"
+    case_split_path = output_dir / "case-split" / "case_split.jsonl"
     preparation_path = output_dir / "preparation.json"
     source_sha256 = _sha256_file(train_manifest)
     policy_path = (
@@ -284,9 +321,23 @@ def prepare_runtime_release(
     if policy_path is not None and not policy_path.is_file():
         raise FileNotFoundError(f"source access policy does not exist: {policy_path}")
     policy_sha256 = _sha256_file(policy_path) if policy_path is not None else ""
+    prohibited_path = (
+        prohibited_runtime.expanduser().resolve()
+        if prohibited_runtime is not None
+        else None
+    )
+    if prohibited_path is not None and not prohibited_path.is_file():
+        raise FileNotFoundError(
+            f"prohibited runtime manifest does not exist: {prohibited_path}"
+        )
+    prohibited_sha256 = (
+        _sha256_file(prohibited_path) if prohibited_path is not None else ""
+    )
 
     if limit is not None and limit < 1:
         raise ValueError("limit must be at least 1 when supplied")
+    if validation_count < 1:
+        raise ValueError("validation_count must be at least 1")
     if preparation_path.is_file():
         prior = _read_json(preparation_path)
         if (
@@ -295,12 +346,52 @@ def prepare_runtime_release(
             or prior.get("limit") != limit
             or prior.get("source_access_policy") != str(policy_path or "")
             or prior.get("source_access_policy_sha256") != policy_sha256
+            or prior.get("requested_validation_count") != validation_count
+            or prior.get("requested_validation_supported") != validation_supported
+            or prior.get("case_split_seed") != case_split_seed
+            or prior.get("prohibited_runtime") != str(prohibited_path or "")
+            or prior.get("prohibited_runtime_sha256") != prohibited_sha256
         ):
             raise ValueError(
                 "existing pipeline output was prepared from a different train manifest"
             )
-        if not benchmark_path.is_file() or not gold_path.is_file():
+        if (
+            not benchmark_path.is_file()
+            or not gold_path.is_file()
+            or not case_split_path.is_file()
+            or not (case_split_path.parent / "manifest.json").is_file()
+        ):
             raise FileNotFoundError("existing preparation is missing its projections")
+        artifact_hashes = (
+            (benchmark_path, "runtime_cases_sha256", "runtime cases"),
+            (gold_path, "private_gold_sha256", "private gold"),
+            (case_split_path, "case_split_sha256", "case split"),
+        )
+        for artifact_path, hash_key, label in artifact_hashes:
+            expected_sha256 = str(prior.get(hash_key) or "").strip()
+            if not expected_sha256:
+                raise ValueError(
+                    f"existing preparation does not record {label} SHA-256"
+                )
+            if _sha256_file(artifact_path) != expected_sha256:
+                raise ValueError(
+                    f"existing prepared {label} no longer matches preparation.json"
+                )
+        split_manifest = _read_json(case_split_path.parent / "manifest.json")
+        split_inputs = split_manifest.get("inputs") or {}
+        split_artifacts = split_manifest.get("artifacts") or {}
+        if (
+            str((split_inputs.get("runtime") or {}).get("sha256") or "")
+            != str(prior["runtime_cases_sha256"])
+            or str((split_inputs.get("gold") or {}).get("sha256") or "")
+            != str(prior["private_gold_sha256"])
+            or str(split_artifacts.get("case_split_sha256") or "")
+            != str(prior["case_split_sha256"])
+        ):
+            raise ValueError(
+                "existing case-split manifest is not bound to the prepared "
+                "runtime, private gold, and split bytes"
+            )
         return prior
 
     if output_dir.exists() and any(output_dir.iterdir()):
@@ -386,6 +477,134 @@ def prepare_runtime_release(
 
     _write_jsonl(benchmark_path, runtime_rows)
     _write_jsonl(gold_path, gold_rows)
+    effective_validation_count = min(validation_count, max(0, len(runtime_rows) - 1))
+    supported_count = sum(
+        _expected_verdict(row) == "real" for row in gold_rows
+    )
+    refuted_count = len(gold_rows) - supported_count
+    requested_supported = (
+        (
+            supported_count * effective_validation_count
+            + len(gold_rows) // 2
+        )
+        // len(gold_rows)
+        if validation_supported is None
+        else validation_supported
+    )
+    if requested_supported < 0:
+        raise ValueError("validation_supported must be non-negative")
+    feasible_supported = [
+        count
+        for count in range(effective_validation_count + 1)
+        if count <= supported_count
+        and effective_validation_count - count <= refuted_count
+    ]
+    if not feasible_supported:
+        raise ValueError("training labels cannot satisfy a validation split")
+    if validation_supported is not None:
+        if validation_supported > effective_validation_count:
+            raise ValueError(
+                "validation_supported cannot exceed the effective validation count"
+            )
+        if validation_supported not in feasible_supported:
+            raise ValueError(
+                "validation_supported cannot be satisfied by the available labels"
+            )
+        supported_targets = [validation_supported]
+    else:
+        supported_targets = sorted(
+            feasible_supported,
+            key=lambda count: (abs(count - requested_supported), count),
+        )
+    prohibited_rows = (
+        _read_jsonl(prohibited_path) if prohibited_path is not None else []
+    )
+    if effective_validation_count:
+        split_error: ValueError | None = None
+        for effective_validation_supported in supported_targets:
+            try:
+                split_rows, split_summary = build_split(
+                    runtime_rows,
+                    gold_rows,
+                    validation_count=effective_validation_count,
+                    validation_supported=effective_validation_supported,
+                    seed=case_split_seed,
+                    prohibited_case_ids={
+                        str(row.get("case_id") or "").strip()
+                        for row in prohibited_rows
+                        if str(row.get("case_id") or "").strip()
+                    },
+                    prohibited_image_hashes={
+                        str(row.get("image_sha256") or "").strip()
+                        for row in prohibited_rows
+                        if str(row.get("image_sha256") or "").strip()
+                    },
+                )
+                break
+            except ValueError as exc:
+                if "group constraints cannot satisfy" not in str(exc):
+                    raise
+                split_error = exc
+        else:
+            raise ValueError(
+                "group constraints cannot produce the requested validation size"
+            ) from split_error
+    else:
+        effective_validation_supported = 0
+        split_rows = [
+            {
+                "schema_version": "ifv-sft-case-split-v1",
+                "case_id": str(row["case_id"]),
+                "image_sha256": str(row["image_sha256"]),
+                "split_group_id": hashlib.sha256(
+                    f"ifv-single-case:{row['case_id']}".encode("utf-8")
+                ).hexdigest()[:20],
+                "split": "train",
+            }
+            for row in runtime_rows
+        ]
+        split_summary = {
+            "schema_version": "ifv-sft-case-split-v1",
+            "seed": case_split_seed,
+            "case_count": len(split_rows),
+            "group_count": len(split_rows),
+            "split_counts": {"train": len(split_rows)},
+            "split_label_counts": {},
+            "validation_group_ids": [],
+        }
+    _write_jsonl(case_split_path, split_rows)
+    _write_json(
+        case_split_path.parent / "manifest.json",
+        {
+            **split_summary,
+            "requested_validation_count": validation_count,
+            "effective_validation_count": effective_validation_count,
+            "requested_validation_supported": validation_supported,
+            "effective_validation_supported": effective_validation_supported,
+            "inputs": {
+                "runtime": {
+                    "path": str(benchmark_path),
+                    "sha256": _sha256_file(benchmark_path),
+                },
+                "gold": {
+                    "path": str(gold_path),
+                    "sha256": _sha256_file(gold_path),
+                },
+                "prohibited_runtime": (
+                    {
+                        "path": str(prohibited_path),
+                        "sha256": prohibited_sha256,
+                    }
+                    if prohibited_path is not None
+                    else None
+                ),
+            },
+            "artifacts": {
+                "case_split": "case_split.jsonl",
+                "case_split_sha256": _sha256_file(case_split_path),
+            },
+        },
+    )
     policy_release_path = None
     if policy_path is not None:
         policy_release_path = (
@@ -439,6 +658,15 @@ def prepare_runtime_release(
         "private_gold_sha256": _sha256_file(gold_path),
         "source_access_policy": str(policy_path or ""),
         "source_access_policy_sha256": policy_sha256,
+        "case_split": str(case_split_path),
+        "case_split_sha256": _sha256_file(case_split_path),
+        "case_split_seed": case_split_seed,
+        "requested_validation_count": validation_count,
+        "effective_validation_count": effective_validation_count,
+        "requested_validation_supported": validation_supported,
+        "effective_validation_supported": effective_validation_supported,
+        "prohibited_runtime": str(prohibited_path or ""),
+        "prohibited_runtime_sha256": prohibited_sha256,
         "runtime_asset_materialization": materialization,
     }
     _write_json(preparation_path, payload)
@@ -695,7 +923,7 @@ def _merge_successful_attempts(
         },
         "result": {
             "num_cases": len(target_ids),
-            "num_episodes": len(target_ids),
+            "num_episodes": len(selected),
             "num_errors": len(unresolved),
             "status_distribution": {
                 "success": len(selected),
@@ -1023,17 +1251,50 @@ def _sft_artifact_index(eligibility_dir: Path) -> dict[str, dict[str, Any]]:
     return indexed
 
 
-def _sft_audit_complete(eligibility_dir: Path, expected_count: int) -> bool:
+def _sft_audit_complete(
+    eligibility_dir: Path,
+    expected_count: int,
+    *,
+    run_dir: Path | None = None,
+) -> bool:
     summary_path = eligibility_dir / "sft_eligibility_summary.json"
     if not summary_path.is_file():
         return False
     summary = _read_json(summary_path)
     rows = summary.get("rows")
-    return (
-        isinstance(rows, list)
-        and len(rows) == expected_count
-        and len(_sft_artifact_index(eligibility_dir)) == expected_count
-    )
+    if not isinstance(rows, list) or len(rows) != expected_count:
+        return False
+    artifacts = _sft_artifact_index(eligibility_dir)
+    if len(artifacts) != expected_count:
+        return False
+    if run_dir is None:
+        return True
+    trace_index: dict[str, Path] = {}
+    for trace_path in _trace_paths(run_dir):
+        trace = _read_json(trace_path)
+        episode_id = _trace_episode_id(trace)
+        if episode_id in trace_index:
+            return False
+        trace_index[episode_id] = trace_path
+    row_episode_ids = {
+        str(row.get("episode_id") or "").strip()
+        for row in rows
+        if isinstance(row, Mapping)
+    }
+    if (
+        len(trace_index) != expected_count
+        or set(artifacts) != set(trace_index)
+        or row_episode_ids != set(trace_index)
+    ):
+        return False
+    summary_run = str(summary.get("run_dir") or "").strip()
+    if summary_run and Path(summary_run).expanduser().resolve() != run_dir.resolve():
+        return False
+    for episode_id, trace_path in trace_index.items():
+        source_trace = artifacts[episode_id].get("source_trace") or {}
+        if str(source_trace.get("sha256") or "") != _sha256_file(trace_path):
+            return False
+    return True
 
 
 def _materialize_bootstrap_file(source: Path, destination: Path) -> str:
@@ -1096,6 +1357,12 @@ def _bootstrap_completed_initial_pipeline(
         output_dir=pipeline_dir,
         limit=args.limit,
         source_access_policy=args.source_access_policy,
+        validation_count=int(getattr(args, "validation_count", 8)),
+        validation_supported=getattr(args, "validation_supported", None),
+        case_split_seed=str(
+            getattr(args, "case_split_seed", "ifv-qwen35-sft-v1")
+        ),
+        prohibited_runtime=getattr(args, "prohibited_runtime", None),
     )
     private_gold = Path(str(preparation["private_gold"])).expanduser().resolve()
     private_gold_rows = _read_jsonl(private_gold)
@@ -1126,7 +1393,11 @@ def _bootstrap_completed_initial_pipeline(
             f"target_only={sorted(set(target_ids) - set(source_case_ids))[:3]}"
         )
 
-    if not _sft_audit_complete(source_eligibility, len(target_ids)):
+    if not _sft_audit_complete(
+        source_eligibility,
+        len(target_ids),
+        run_dir=source_run,
+    ):
         raise ValueError(
             "bootstrap SFT eligibility directory is incomplete for its source "
             f"run: {source_eligibility}"
@@ -1163,7 +1434,11 @@ def _bootstrap_completed_initial_pipeline(
             raise ValueError("existing bootstrap pipeline has inconsistent initial paths")
         if not (initial_run / "run_manifest.json").is_file():
             raise FileNotFoundError("existing bootstrap initial run is missing")
-        if not _sft_audit_complete(initial_eligibility, len(target_ids)):
+        if not _sft_audit_complete(
+            initial_eligibility,
+            len(target_ids),
+            run_dir=initial_run,
+        ):
             raise FileNotFoundError("existing bootstrap initial SFT audit is incomplete")
         return state, preparation, initial_run, initial_eligibility
 
@@ -1360,6 +1635,10 @@ def _bootstrap_completed_initial_pipeline(
 def _run_bootstrapped_initial_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     """Complete ordinary quality rerolls after registering a preserved round 0."""
 
+    _validate_rollout_profile_model(
+        profile=str(getattr(args, "rollout_profile", "teacher-gemini")),
+        recorded_model=str(getattr(args, "rollout_model", "gemini-3.7-flash")),
+    )
     state, preparation, initial_run, initial_audit = (
         _bootstrap_completed_initial_pipeline(args)
     )
@@ -1427,6 +1706,7 @@ def _run_bootstrapped_initial_pipeline(args: argparse.Namespace) -> dict[str, An
     package_dir = _build_package(
         pipeline_dir=pipeline_dir,
         accepted_release=accepted_release,
+        case_split=Path(str(preparation["case_split"])),
         output_name="quality-reroll-training-package",
     )
     state["classification"] = final_classification
@@ -1458,7 +1738,11 @@ def _run_sft_audit(
     if expected_count < 1:
         raise ValueError(f"cannot audit empty merged run: {run_dir}")
     eligibility_dir = pipeline_dir / "sft-eligibility" / label
-    if _sft_audit_complete(eligibility_dir, expected_count):
+    if _sft_audit_complete(
+        eligibility_dir,
+        expected_count,
+        run_dir=run_dir,
+    ):
         return eligibility_dir
     for attempt in range(1, maximum_attempts + 1):
         command = _runtime_command(
@@ -1503,7 +1787,11 @@ def _run_sft_audit(
             log_path=eligibility_dir / "command.log",
             env=env,
         )
-        if _sft_audit_complete(eligibility_dir, expected_count):
+        if _sft_audit_complete(
+            eligibility_dir,
+            expected_count,
+            run_dir=run_dir,
+        ):
             return eligibility_dir
     raise RuntimeError(
         f"{label} SFT audit incomplete after {maximum_attempts} attempts: "
@@ -1715,7 +2003,7 @@ def _classify_initial_outcomes(
 
 
 def _quality_reroll_case_ids(classification_dir: Path) -> list[str]:
-    """Return only cases rejected by SFT, plus cases with no terminal trace."""
+    """Return cases without any selected SFT candidate."""
 
     classification_path = classification_dir / "classification.json"
     if not classification_path.is_file():
@@ -1772,8 +2060,11 @@ def _quality_reroll_case_ids(classification_dir: Path) -> list[str]:
         for case_id in (target_case_ids or [])
         if str(case_id).strip()
     }
-    rejected = _case_ids_from_rows(
-        _read_jsonl(classification_dir / "sft-rejected.jsonl")
+    hard_path = classification_dir / "hard-cases.jsonl"
+    rejected = (
+        _case_ids_from_rows(_read_jsonl(hard_path))
+        if hard_path.is_file()
+        else []
     )
     incomplete_path = classification_dir / "incomplete-cases.jsonl"
     if incomplete_path.is_file():
@@ -2091,6 +2382,7 @@ def _build_package(
     *,
     pipeline_dir: Path,
     accepted_release: Path,
+    case_split: Path,
     output_name: str = "sft-training-package",
 ) -> Path:
     package_dir = pipeline_dir / output_name
@@ -2101,6 +2393,8 @@ def _build_package(
         "scripts/trajectory/build_sft_training_package.py",
         "--accepted-release",
         str(accepted_release),
+        "--case-split",
+        str(case_split),
         "--output-dir",
         str(package_dir),
         "--minimum-accepted-cases",
@@ -2128,6 +2422,10 @@ def _continue_quality_rerolls(args: argparse.Namespace) -> dict[str, Any]:
         raise FileNotFoundError(f"completed pipeline state does not exist: {state_path}")
     state = _read_json(state_path)
     rollout_config, judge_config = _state_model_config(state, args)
+    _validate_rollout_profile_model(
+        profile=rollout_config["profile"],
+        recorded_model=rollout_config["model"],
+    )
     preparation = state.get("prepared")
     initial = state.get("initial")
     if not isinstance(preparation, Mapping) or not isinstance(initial, Mapping):
@@ -2195,6 +2493,7 @@ def _continue_quality_rerolls(args: argparse.Namespace) -> dict[str, Any]:
     package_dir = _build_package(
         pipeline_dir=pipeline_dir,
         accepted_release=accepted_release,
+        case_split=Path(str(preparation["case_split"])),
         output_name="quality-reroll-training-package",
     )
     state["classification"] = final_classification
@@ -2215,6 +2514,10 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     )
     pipeline_dir = args.output_dir.expanduser().resolve()
     rollout_config = _rollout_config(args)
+    _validate_rollout_profile_model(
+        profile=rollout_config["profile"],
+        recorded_model=rollout_config["model"],
+    )
     judge_config = _sft_judge_config(args)
     preparation = prepare_runtime_release(
         dataset_root=dataset_root,
@@ -2222,6 +2525,10 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         output_dir=pipeline_dir,
         limit=args.limit,
         source_access_policy=args.source_access_policy,
+        validation_count=args.validation_count,
+        validation_supported=args.validation_supported,
+        case_split_seed=args.case_split_seed,
+        prohibited_runtime=args.prohibited_runtime,
     )
     state_path = pipeline_dir / "pipeline-state.json"
     state: dict[str, Any] = {
@@ -2343,6 +2650,7 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     package_dir = _build_package(
         pipeline_dir=pipeline_dir,
         accepted_release=accepted_release,
+        case_split=Path(str(preparation["case_split"])),
     )
     state["accepted_release"] = str(accepted_release)
     state["sft_training_package"] = str(package_dir)
@@ -2376,6 +2684,28 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="deterministic case-count cap for an isolated smoke run",
+    )
+    parser.add_argument(
+        "--validation-count",
+        type=int,
+        default=8,
+        help="pre-freeze this many validation cases before teacher rollout",
+    )
+    parser.add_argument(
+        "--validation-supported",
+        type=int,
+        default=None,
+        help="supported validation cases; defaults to the source label proportion",
+    )
+    parser.add_argument(
+        "--case-split-seed",
+        default="ifv-qwen35-sft-v1",
+    )
+    parser.add_argument(
+        "--prohibited-runtime",
+        type=Path,
+        default=None,
+        help="optional evaluator runtime manifest whose IDs/images must not overlap",
     )
     parser.add_argument("--rollout-profile", default="teacher-gemini")
     parser.add_argument(
@@ -2531,6 +2861,10 @@ def main() -> None:
         raise SystemExit("--limit must be at least 1 when supplied")
     if args.quality_reroll_rounds < 0:
         raise SystemExit("--quality-reroll-rounds must be non-negative")
+    if args.validation_count < 1:
+        raise SystemExit("--validation-count must be at least 1")
+    if args.validation_supported is not None and args.validation_supported < 0:
+        raise SystemExit("--validation-supported must be non-negative")
     pinned_rollout_models = {
         "teacher-gemini": "gemini-3.7-flash",
         "teacher-gemini36": "gemini-3.6-flash",

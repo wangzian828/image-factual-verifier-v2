@@ -78,10 +78,19 @@ python -m ifv_training build-run-rewards `
 reward ledger 负责记录工程审计、正确性和过程质量；训练框架负责同 prompt 的组内
 归一化。本项目不实现第二套 trainer。
 
+当前仓库的可执行 RL 入口只有 `training/scripts/rl/run_mock_grpo.sh`，用于验证
+ms-swift/Gym/GRPO 工程接线，不是正式在线 Agent RL。正式 RL 仍需独立实现并验证
+真实 runtime gateway、同 prompt rollout 分组、reward ledger 绑定和训练资源配置。
+
 ## 环境边界
 
 - SFT 和 RL 使用独立环境。
 - 所有目标模型变化都要重新跑真实 processor 验证。
 - `action_only` 不混入 reasoning policy SFT。
+- reasoning policy SFT 使用
+  `training/configs/models/qwen3.5-9b.env`，并保持
+  `IFV_ADD_NON_THINKING_PREFIX=false`。
+- `training/configs/cache/qwen3.5-pilot30-v3-img512-sdpa.env` 是旧缓存实验契约；
+  其 non-thinking prefix 设置不得用于当前新导出的 reasoning SFT 数据。
 - evaluator private gold、judge 字段和 provider 内部协议不得进入模型可见数据。
 - 本目录不保存 rollout、图片或 checkpoint；这些数据放在服务器 `/gsdata`。

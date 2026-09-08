@@ -6,7 +6,11 @@ import shutil
 from pathlib import Path
 
 from scripts.trajectory.export_dataset import export_dataset
-from scripts.trajectory.build_sft_training_package import _build_default_case_split
+from scripts.trajectory.build_sft_training_package import (
+    _build_default_case_split,
+    _judge_namespace,
+    build_parser,
+)
 
 
 def _write_jsonl(path: Path, rows: list[dict]) -> None:
@@ -198,3 +202,64 @@ def test_default_case_split_chooses_validation_from_policy_rows(tmp_path: Path) 
     validation = [row for row in rows if row["split"] == "validation"]
     assert validation
     assert validation[0]["case_id"] != "case-action-only"
+
+
+def test_default_case_split_rejects_large_post_selection_population(
+    tmp_path: Path,
+) -> None:
+    release = tmp_path / "accepted-release"
+    release.mkdir()
+    (release / "selected_episodes.jsonl").write_text(
+        "".join(
+            json.dumps(
+                {
+                    "case_id": f"case-{index:03d}",
+                    "episode_id": f"episode-{index:03d}",
+                }
+            )
+            + "\n"
+            for index in range(101)
+        ),
+        encoding="utf-8",
+    )
+
+    try:
+        _build_default_case_split(release, tmp_path / "case-split.jsonl")
+    except ValueError as exc:
+        assert "require --case-split" in str(exc)
+    else:
+        raise AssertionError("large post-selection split must fail closed")
+
+
+def test_package_entrypoint_supports_qwen_judge_configuration(
+    tmp_path: Path,
+) -> None:
+    args = build_parser().parse_args(
+        [
+            "--run-dir",
+            str(tmp_path / "run"),
+            "--gold",
+            str(tmp_path / "gold.jsonl"),
+            "--output-dir",
+            str(tmp_path / "package"),
+            "--provider",
+            "qwen_local",
+            "--model",
+            "large-qwen",
+            "--base-url",
+            "http://teacher.test/v1",
+            "--api-key-env",
+            "QWEN_TEACHER_API_KEY",
+            "--wire-api",
+            "chat_completions",
+            "--enable-thinking",
+        ]
+    )
+
+    namespace = _judge_namespace(args, tmp_path / "package")
+
+    assert namespace.provider == "qwen_local"
+    assert namespace.model == "large-qwen"
+    assert namespace.base_url == "http://teacher.test/v1"
+    assert namespace.api_key_env == "QWEN_TEACHER_API_KEY"
+    assert namespace.enable_thinking is True

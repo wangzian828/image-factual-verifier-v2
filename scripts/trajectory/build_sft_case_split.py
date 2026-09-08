@@ -40,6 +40,19 @@ def _index(rows: Sequence[Mapping[str, Any]], *, name: str) -> Dict[str, Mapping
     return result
 
 
+def _label(row: Mapping[str, Any]) -> str:
+    label = str(row.get("label") or row.get("factual_status") or "").strip().lower()
+    if label in {"supported", "refuted"}:
+        return label
+    verdict = str(
+        row.get("expected_verdict") or row.get("gold_verdict") or ""
+    ).strip().lower()
+    mapping = {"real": "supported", "fake": "refuted"}
+    if verdict in mapping:
+        return mapping[verdict]
+    raise ValueError("gold labels must be supported/refuted or real/fake")
+
+
 class _UnionFind:
     def __init__(self, values: Iterable[str]) -> None:
         self.parent = {value: value for value in values}
@@ -115,9 +128,7 @@ def build_split(
             f"case_ids={overlap_ids[:5]}, image_hashes={overlap_hashes[:5]}"
         )
 
-    labels = {case_id: str(gold[case_id].get("label") or "") for case_id in gold}
-    if set(labels.values()) - {"supported", "refuted"}:
-        raise ValueError("gold labels must be supported or refuted")
+    labels = {case_id: _label(gold[case_id]) for case_id in gold}
 
     union = _UnionFind(runtime)
     members_by_key: Dict[str, list[str]] = defaultdict(list)
