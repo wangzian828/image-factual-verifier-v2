@@ -125,32 +125,39 @@ IFV_SFT_ELIGIBILITY_API_KEY_ENV=IFV_SFT_ELIGIBILITY_API_KEY
 IFV_SFT_ELIGIBILITY_API_KEY=provided-out-of-band
 ```
 
-默认命令先运行 10 条 smoke；只有 smoke 的 rollout、strict trace audit、SFT judge、
-quality reroll、accepted release 和双 SFT package 全部成功后，才自动启动全部
-8,490 条的相同完整链路：
+无参数默认命令支持自动执行 `smoke -> full`，但本次交给另一个 Codex 时不要直接使用
+自动衔接模式。必须先单独完成并检查 10 条 smoke：
 
 ```bash
-scripts/server/start_teacher_rollout_portable.sh
+scripts/server/start_teacher_rollout_portable.sh \
+  --foreground \
+  --smoke-only \
+  --output-dir <smoke-output-dir>
 ```
 
-返回 PID 只表示 `smoke -> full` 后台链路已启动，不表示任务完成。
-`rollouts/initial/attempt-*` 和从其中手工复制的 trace preview 都不是 accepted release，
-也不是 SFT package。smoke 失败时全量不会启动。
+该单个命令内部自动完成初始 10 条 rollout、逐轮 strict trace audit 与 SFT judge、
+对拒绝或未完成 case 最多 3 轮 quality reroll，以及 accepted release 和
+policy/perception SFT package 导出。另一个 Codex 不得手工逐轮启动、单独调用 judge、
+手工触发 SFT 导出或从中间目录拼接结果。`rollouts/initial/attempt-*` 和从其中手工
+复制的 trace preview 都不是 accepted release，也不是 SFT package。
 
-已单独完成 smoke、需要跳过 smoke 直接启动全部 8,490 条时：
+smoke 完成后必须检查正式 `accepted-release/trajectory_sft.jsonl` 和
+`sft-training-package/ms-swift-policy/*.jsonl`：顶层 `tools/messages/images`、
+真实 `<think>`、最终 `<answer>`、tool-call/tool-response 时序、字符串化 arguments、
+`<image>` marker 数量和过程图片均必须正确。runtime archive 必须能在不依赖原 rollout
+目录的情况下恢复 candidate、crop 和 focused-view 图片。
+
+只有这些检查全部通过，才启动全部 8,490 条：
 
 ```bash
-scripts/server/start_teacher_rollout_portable.sh --full
+scripts/server/start_teacher_rollout_portable.sh \
+  --full \
+  --output-dir <full-output-dir>
 ```
 
-只运行 smoke、不自动启动全量时：
-
-```bash
-scripts/server/start_teacher_rollout_portable.sh --smoke-only
-```
-
-命令返回 PID、日志、最终全量输出目录、smoke 输出目录和 `delivery_scope`。必须持续检查任务直到进程退出，
-并确认 `<output-dir>/audits/final-delivery.json` 中 `final_delivery=true`。不要把
+全量命令返回 PID、日志和输出目录后，另一个 Codex 仍必须持续检查任务直到进程退出，
+完成全量 SFT judge、最多 3 轮 quality reroll、accepted release 和双 SFT package，
+并确认 `<full-output-dir>/audits/final-delivery.json` 中 `final_delivery=true`。不要把
 endpoint 凭据写进命令行、Git、trace 或 pipeline state。
 
 本流程不使用 Gemini API，不允许 EasyOCR、本地 OCR 或 OCR fallback。图片上传服务
@@ -158,30 +165,17 @@ endpoint 凭据写进命令行、Git、trace 或 pipeline state。
 
 ## 6. Rollout 小测
 
-先确认 checkout、数据、API 和工具，不直接启动全量：
+本任务不要使用低层 `start_teacher_rollout.sh` 只生成 raw rollout。唯一 smoke 入口是：
 
 ```bash
-cd "$IFV_REPO_ROOT"
-source scripts/server/ifv_env.sh
-scripts/server/start_teacher_rollout.sh \
-  --benchmark <runtime-cases.jsonl> \
-  --output-dir "$IFV_DATA_ROOT/runs/eval/handoff-smoke-10" \
-  --limit 10 \
-  --concurrency 10 \
-  --rollouts-per-case 1
-scripts/server/poll_eval.sh handoff-smoke-10 --tail 100
+scripts/server/start_teacher_rollout_portable.sh \
+  --foreground \
+  --smoke-only \
+  --output-dir <smoke-output-dir>
 ```
 
-验收：
-
-- `run_manifest.json` 存在；
-- `traces/*.json` 持续增加；
-- `summary.json` 最终存在；
-- 无启动参数错误；
-- 工程错误逐条归因；
-- `text_image_search` 的结果含真实候选时，下一轮 context archive 有对应图片；
-- 工具结果不是仅剩 transport status；
-- 最终 Judgment 能看到完整 provider interaction 历史。
+该入口必须连续完成 Agent rollout、拒绝样本 reroll、SFT judge、accepted release、
+双 SFT package 和轨迹格式检查所需的全部正式产物。
 
 ## 7. SFT 包
 
@@ -249,6 +243,18 @@ python -m pytest -q
   PYTHONPATH=. python -m pytest -q
 )
 ```
+
+其唯一业务任务按以下顺序执行：
+
+1. 只调用一次正式 `--smoke-only` 入口，完整运行 10 条训练集 smoke；
+2. 等待该一体化流水线自动完成拒绝/未完成样本最多 3 轮 reroll、逐轮 SFT judge、
+   accepted release 与双 SFT package；
+3. 不得手工拆分 rollout、reroll、judge 或 SFT 导出步骤；
+4. 检查完整轨迹内容、`<think>` 格式、tool 时序、顶层
+   `tools/messages/images` 以及全部过程图片；
+5. smoke 全部确认通过后启动 8,490 条全量；
+6. 持续运行至全量 accepted release、SFT 导出和最终审计完成；
+7. 仅在 `audits/final-delivery.json` 的 `final_delivery=true` 后结束。
 
 不得在服务器 checkout 直接改源码。修改应在开发工作树完成、提交并推送，再由目标
 服务器 fast-forward。不得把真实密码、API key 或私有 gold 写入 prompt、trace、

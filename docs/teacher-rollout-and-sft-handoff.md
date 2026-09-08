@@ -226,26 +226,35 @@ endpoint、model ID 或权限；不得改代码绕过检查。
 
 ### 6.2 10 条训练集 smoke
 
-默认命令在后台运行完整的 `10 条 smoke -> 8,490 条全量` 链路，并返回 PID、最终
-输出目录、smoke 输出目录、日志和 PID 文件。只有 smoke 完整通过才会启动全量：
+本次交接必须分成两个阶段执行，**不得一开始直接使用无参数默认命令自动衔接全量**。
+先以前台方式完整跑完 10 条训练集 smoke：
 
 ```bash
-scripts/server/start_teacher_rollout_portable.sh
+scripts/server/start_teacher_rollout_portable.sh \
+  --foreground \
+  --smoke-only \
+  --output-dir <smoke-output-dir>
 ```
 
-只在前台运行 10 条 smoke、不自动启动全量：
+上述单个命令会自动执行完整 smoke 流水线。另一个 Codex 不得手工拆分、逐轮启动
+rollout、单独触发 reroll、重复调用 judge 或手工拼接 SFT 导出。流水线内部自动完成：
 
-```bash
-scripts/server/start_teacher_rollout_portable.sh --foreground --smoke-only
-```
+1. 初始 10 条 teacher Agent rollout；
+2. 每轮 rollout 后自动执行 strict trace audit 和 SFT judge；
+3. 对上一轮被 SFT judge 拒绝或未完成的 case 自动执行最多 3 轮 quality reroll；
+4. 每个未解决 case 最多产生 4 轮候选，不要对已经通过的 case 强制重复 rollout；
+5. 自动生成 `accepted-release/`；
+6. 自动生成 policy/perception 两套 `sft-training-package/`；
+7. 完成转换后格式审计和 runtime media 完整性检查。
 
 检查：
 
 ```bash
-cat <output-dir>/pipeline-state.json
-find <output-dir>/rollouts -type f -path '*/traces/*.json' | wc -l
-find <output-dir>/audits -maxdepth 3 -type f -name '*.json' -print
-tail -n 100 <log-file>
+cat <smoke-output-dir>/pipeline-state.json
+cat <smoke-output-dir>/accepted-release/accepted_release_manifest.json
+cat <smoke-output-dir>/sft-training-package/MANIFEST.json
+find <smoke-output-dir>/rollouts -type f -path '*/traces/*.json' | wc -l
+find <smoke-output-dir>/audits -maxdepth 3 -type f -name '*.json' -print
 ```
 
 逐条验收：
@@ -261,14 +270,37 @@ tail -n 100 <log-file>
 9. policy/perception 两套 SFT 数据结构审计通过；
 10. 无 private-gold 泄漏、持续连接泄漏或遗留 rollout 子进程。
 
-10 条未通过时默认链路会停止，不会启动全量。
+轨迹格式还必须单独检查：
+
+1. 只检查正式 `accepted-release/trajectory_sft.jsonl` 和
+   `sft-training-package/ms-swift-policy/*.jsonl`，不得从 `attempt/traces`
+   手工制作 preview；
+2. policy 行顶层使用 `tools`、`messages`、`images`；
+3. assistant reasoning 使用真实 `<think>...</think>`，最终输出包含
+   `<answer>...</answer>`；
+4. tool call 与 tool response 按实际时序交替，tool arguments 保持目标
+   Qwen/ms-swift 契约要求的字符串化 JSON；
+5. `messages` 中 `<image>` 数量与顶层 `images` 数量一致；
+6. 除初始图片外，实际调查中出现的 candidate、crop、focused view 必须能从
+   archived runtime store 恢复；
+7. `accepted-release` schema 必须为
+   `ifv-accepted-teacher-release-v4`，并满足
+   `runtime_store_archive.selected_count == accepted_case_count`；
+8. SFT 只导出通过 judge 的 accepted 轨迹，不得把拒绝轨迹写入训练数据。
+
+只有以上 rollout、reroll、SFT 导出、结构审计和轨迹格式检查全部通过，才能把
+smoke 标记为确认完成并进入全量阶段。任一项失败都应停在 smoke，修复代码、提交、
+更新服务器 checkout 后从已有输出恢复，不得绕过检查。
 
 ### 6.3 全量 8,490 条 rollout
 
-如果 smoke 已由其他同配置任务完成，也可显式跳过 smoke直接执行：
+确认 10 条 smoke 使用同一 commit、teacher model、judge model 和工具配置全部通过后，
+立即启动完整 8,490 条训练集：
 
 ```bash
-scripts/server/start_teacher_rollout_portable.sh --full
+scripts/server/start_teacher_rollout_portable.sh \
+  --full \
+  --output-dir <full-output-dir>
 ```
 
 当前默认 `rollout-concurrency=10`、`sft-concurrency=10`、最多三轮 quality reroll。
@@ -390,11 +422,28 @@ scripts/server/run_ifv.sh python scripts/server/doctor.py --json
 scripts/server/start_teacher_rollout_portable.sh --help
 ```
 
-随后依次完成：配置 API 和路径、下载训练集、运行并审计 10 条 smoke、启动全量
-rollout、验证 accepted release 和双 SFT package，并交付完整审计与哈希清单。到此
-停止；不要启动 processor verification、GPU SFT、RL、Direct QA 或测试集实验。最终
-记录准确 commit、数据 SHA、teacher model ID、endpoint、并发、产物路径和 SHA-256；
-不得记录任何密钥、密码、private gold 或私有服务器地址。
+另一个 Codex 的执行任务必须严格按以下顺序完成：
+
+1. 配置 API、仓库和训练集路径，确认 checkout 干净且使用交接指定 commit；
+2. 只调用一次 `--foreground --smoke-only`；该命令内部自动完成 10 条初始
+   rollout、拒绝样本最多 3 轮 quality reroll、逐轮 SFT judge、accepted release
+   和双 SFT package，不得手工拆分执行；
+3. 检查完整 trace，确认 raw history、工具结果、
+   `<think>`、tool-call/tool-response 时序及二元 Judgment 均正确；
+4. 检查正式 SFT 导出格式及所有过程图片，确认 runtime archive 可独立恢复
+   candidate、crop 和 focused-view 图片；禁止使用手工 preview 代替；
+5. 运行 policy/perception 严格结构审计。只有 smoke 的全部检查通过，才能执行
+   `--full`；
+6. 使用同一 commit、模型和 API 配置启动 8,490 条全量 rollout，并持续监控，不得
+   只启动进程后立即结束任务；
+7. 等待全量工程 retry、SFT judge、最多 3 轮 quality reroll、accepted release
+   和双 SFT package 全部完成；
+8. 验证 `audits/final-delivery.json` 中 `final_delivery=true`，再交付完整审计与
+   哈希清单。
+
+到此停止；不要启动 processor verification、GPU SFT、RL、Direct QA 或测试集实验。
+最终记录准确 commit、数据 SHA、teacher model ID、endpoint、并发、smoke/full 产物
+路径和 SHA-256；不得记录任何密钥、密码、private gold 或私有服务器地址。
 
 最终汇报必须引用 `audits/final-delivery.json`。如果该文件不存在或
 `final_delivery=false`，任务仍未完成，不能把中间 preview 回传为最终结果。
