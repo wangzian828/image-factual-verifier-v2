@@ -151,8 +151,7 @@ smoke 完成后必须检查正式 `accepted-release/trajectory_sft.jsonl` 和
 `pipeline-state.json`、`preparation.json`、`rollouts/`、`classification/`、
 完整 `accepted-release/`、完整 `sft-training-package/`、
 `audits/`、从正式 `trajectory_sft.jsonl` 生成的 `readable-episodes-zh/`、
-`SMOKE-RESULTS.md` 和覆盖全部文件的 `SHA256SUMS`。将结果包压缩为 `.tar.gz`，
-向用户报告路径、字节大小和 SHA-256。
+`SMOKE-RESULTS.md`。将结果包压缩为 `.tar.gz`，向用户报告路径和字节大小。
 
 结果包中的 judge 结论使用 accepted release 内已冻结的 selected/rejected
 eligibility artifact；不得额外复制顶层 `sft-eligibility/cache/`、judge 原始请求
@@ -263,9 +262,9 @@ python -m pytest -q
 3. 不得手工拆分 rollout、reroll、judge 或 SFT 导出步骤；
 4. 检查完整轨迹内容、`<think>` 格式、tool 时序、顶层
    `tools/messages/images` 以及全部过程图片；
-5. 从正式 smoke 产物制作并压缩结果包，生成中文可读轨迹、`SMOKE-RESULTS.md`
-   和全部文件 SHA-256；
-6. 把结果包路径、大小和 SHA-256 交给用户，然后停止等待；
+5. 从正式 smoke 产物制作并压缩结果包，生成中文可读轨迹和
+   `SMOKE-RESULTS.md`；
+6. 把结果包路径和大小交给用户，然后停止等待；
 7. 只有用户明确批准后才启动 8,490 条全量；
 8. 持续运行至全量 accepted release、SFT 导出和最终审计完成；
 9. 仅在 `audits/final-delivery.json` 的 `final_delivery=true` 后结束。

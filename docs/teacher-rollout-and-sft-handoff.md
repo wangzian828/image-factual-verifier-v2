@@ -306,7 +306,6 @@ accepted-release/
 sft-training-package/
 audits/
 readable-episodes-zh/
-SHA256SUMS
 ```
 
 具体要求：
@@ -326,11 +325,9 @@ SHA256SUMS
    `render_sft_episodes_zh_readable.py` 生成；
 6. `audits/`：包含 strict trace audit、pipeline summary、policy/perception
    audit 和其他 smoke 阶段已产生的审计文件；
-7. `SMOKE-RESULTS.md`：记录 commit、训练集 SHA、teacher/judge model、
+7. `SMOKE-RESULTS.md`：记录 commit、训练集版本、teacher/judge model、
    并发、初始与 reroll 轮次、成功/拒绝/工程失败数量、accepted SFT 行数、
-   每条 SFT 的 messages/tool calls/images 数量及格式检查结论；
-8. `SHA256SUMS`：覆盖结果包中的全部文件；最终 `.tar.gz` 另行提供文件大小和
-   SHA-256。
+   每条 SFT 的 messages/tool calls/images 数量及格式检查结论。
 
 可读视图必须从正式导出生成：
 
@@ -354,7 +351,6 @@ smoke output directory
 review directory
 review tar.gz path
 review tar.gz byte size
-review tar.gz SHA-256
 smoke commit
 teacher model
 judge model
@@ -507,8 +503,8 @@ scripts/server/start_teacher_rollout_portable.sh --help
 4. 检查正式 SFT 导出格式及所有过程图片，确认 runtime archive 可独立恢复
    candidate、crop 和 focused-view 图片；禁止使用手工 preview 代替；
 5. 运行 policy/perception 严格结构审计；
-6. 按第 6.2.1 节制作完整 smoke 结果包，生成中文可读轨迹、汇总说明、全部文件哈希
-   和压缩包，并把路径、大小和 SHA-256 交给用户；
+6. 按第 6.2.1 节制作完整 smoke 结果包，生成中文可读轨迹、汇总说明和压缩包，
+   并把路径和大小交给用户；
 7. 停止并等待用户检查结果包；没有用户明确批准时不得执行 `--full`；
 8. 用户批准后，使用同一 commit、模型和 API 配置启动 8,490 条全量 rollout，并持续监控，不得
    只启动进程后立即结束任务；
@@ -518,8 +514,8 @@ scripts/server/start_teacher_rollout_portable.sh --help
    哈希清单。
 
 到此停止；不要启动 processor verification、GPU SFT、RL、Direct QA 或测试集实验。
-最终记录准确 commit、数据 SHA、teacher model ID、endpoint、并发、smoke/full 产物
-路径和 SHA-256；不得记录任何密钥、密码、private gold 或私有服务器地址。
+最终记录准确 commit、数据集版本、teacher model ID、endpoint、并发以及 smoke/full
+产物路径；不得记录任何密钥、密码、private gold 或私有服务器地址。
 
 最终汇报必须引用 `audits/final-delivery.json`。如果该文件不存在或
 `final_delivery=false`，任务仍未完成，不能把中间 preview 回传为最终结果。
