@@ -27,6 +27,10 @@ checkpoint 都留在目标服务器，不放入 Git，也不经当前工作站�
 训练集教师轨迹无关的工作。导出包和审计产物交回后，由后续训练负责人另行决定是否
 做目标 checkpoint 的 processor verification 与实际训练。
 
+**10 条 smoke、任意 `rollouts/initial/attempt-*` 目录、手工抽取的成功 trace 和本地
+preview 都不是最终交付。**最终交付必须覆盖全部 8,490 条训练 case，并生成机器验收
+文件 `audits/final-delivery.json`，其中 `final_delivery` 必须为 `true`。
+
 - 仅 `jiashuhong/factcheck_train` 可进入 teacher rollout、SFT 或 RL。
 - 测试集、测试图片和测试 private gold 绝不能进入上述链路。
 - teacher 必须是支持图像输入的大型开源 Qwen API；不得改用小 Qwen、Gemini 或未授权模型。
@@ -222,16 +226,17 @@ endpoint、model ID 或权限；不得改代码绕过检查。
 
 ### 6.2 10 条训练集 smoke
 
-默认命令运行 10 条训练集并在后台返回 PID、输出目录、日志和 PID 文件：
+默认命令在后台运行完整的 `10 条 smoke -> 8,490 条全量` 链路，并返回 PID、最终
+输出目录、smoke 输出目录、日志和 PID 文件。只有 smoke 完整通过才会启动全量：
 
 ```bash
 scripts/server/start_teacher_rollout_portable.sh
 ```
 
-前台观察：
+只在前台运行 10 条 smoke、不自动启动全量：
 
 ```bash
-scripts/server/start_teacher_rollout_portable.sh --foreground --limit 10
+scripts/server/start_teacher_rollout_portable.sh --foreground --smoke-only
 ```
 
 检查：
@@ -256,11 +261,11 @@ tail -n 100 <log-file>
 9. policy/perception 两套 SFT 数据结构审计通过；
 10. 无 private-gold 泄漏、持续连接泄漏或遗留 rollout 子进程。
 
-10 条未通过前禁止启动全量。
+10 条未通过时默认链路会停止，不会启动全量。
 
 ### 6.3 全量 8,490 条 rollout
 
-smoke 通过后才执行：
+如果 smoke 已由其他同配置任务完成，也可显式跳过 smoke直接执行：
 
 ```bash
 scripts/server/start_teacher_rollout_portable.sh --full
@@ -313,6 +318,20 @@ python -m ifv_training audit --strict \
 python -m ifv_training audit --strict \
   --input <pipeline-dir>/sft-training-package/ms-swift-perception
 cat <pipeline-dir>/audits/pipeline-summary.json
+cat <pipeline-dir>/audits/final-delivery.json
+```
+
+默认 `start_teacher_rollout_portable.sh` 和直接 `--full` 都会在完整 pipeline 结束后自动运行最终交付
+门禁。门禁要求：`preparation.limit=null`、case 数为 8,490、最终 classification
+完整覆盖全部 case、accepted release 与 selection 数量一致、policy train/validation
+均非空、双 SFT 审计通过，且本任务没有误启动 GPU 训练。
+
+也可手工复核已有完整目录：
+
+```bash
+python scripts/trajectory/verify_teacher_sft_delivery.py \
+  --pipeline-dir <pipeline-dir> \
+  --expected-case-count 8490
 ```
 
 交接任务在以上审计和导出完成后停止。需要训练时，后续训练负责人用最终目标
@@ -365,3 +384,6 @@ rollout、验证 accepted release 和双 SFT package，并交付完整审计与�
 停止；不要启动 processor verification、GPU SFT、RL、Direct QA 或测试集实验。最终
 记录准确 commit、数据 SHA、teacher model ID、endpoint、并发、产物路径和 SHA-256；
 不得记录任何密钥、密码、private gold 或私有服务器地址。
+
+最终汇报必须引用 `audits/final-delivery.json`。如果该文件不存在或
+`final_delivery=false`，任务仍未完成，不能把中间 preview 回传为最终结果。

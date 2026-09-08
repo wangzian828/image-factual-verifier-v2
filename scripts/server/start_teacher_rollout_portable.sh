@@ -8,26 +8,30 @@ source "${SCRIPT_DIR}/ifv_env.sh"
 
 usage() {
     cat >&2 <<'EOF'
-usage: start_teacher_rollout_portable.sh [--full | --limit N] [OPTIONS]
+usage: start_teacher_rollout_portable.sh [--full | --smoke-only | --limit N] [OPTIONS]
 
-The default is a 10-case smoke. --full explicitly selects all 8,490 training
-cases. The command prepares the ModelScope training archive when necessary,
-preflights the teacher/judge endpoints, and runs rollout, strict trace audit,
-SFT eligibility, quality rerolls, accepted release, and SFT package export.
+The default runs a 10-case smoke and automatically starts all 8,490 training
+cases only after the smoke pipeline succeeds. --full skips the smoke and starts
+the full set directly. The command prepares the ModelScope archive, preflights
+the teacher/judge endpoints, and runs rollout, strict trace audit, SFT
+eligibility, quality rerolls, accepted release, and SFT package export.
 
 Options:
   --dataset-root DIR  Override the extracted training dataset.
-  --output-dir DIR    Override the pipeline output directory.
+  --output-dir DIR    Override the final full pipeline output directory.
   --foreground        Run in the foreground.
   --background        Run in the background (default).
-  --full              Run all training cases.
-  --limit N           Run a deterministic bounded subset.
+  --full              Skip smoke and run all training cases directly.
+  --smoke-only        Run only the default 10-case smoke.
+  --limit N           Run only a deterministic bounded smoke subset.
 EOF
 }
 
 dataset_root="${IFV_TEACHER_DATASET_ROOT:-${IFV_DATA_ROOT}/datasets/factcheck_train-8490-20260907}"
 output_dir=""
-limit="10"
+run_mode="smoke_then_full"
+smoke_limit="${IFV_SMOKE_CASE_COUNT:-10}"
+limit=""
 background="1"
 forward=()
 while (($#)); do
@@ -51,15 +55,23 @@ while (($#)); do
             shift
             ;;
         --full)
+            run_mode="full"
             limit=""
+            shift
+            ;;
+        --smoke-only)
+            run_mode="smoke"
+            limit="${smoke_limit}"
             shift
             ;;
         --limit)
             (($# >= 2)) || { usage; exit 2; }
+            run_mode="smoke"
             limit="$2"
             shift 2
             ;;
         --limit=*)
+            run_mode="smoke"
             limit="${1#*=}"
             shift
             ;;
@@ -82,7 +94,11 @@ while (($#)); do
     esac
 done
 
-if [[ -n "${limit}" && ! "${limit}" =~ ^[1-9][0-9]*$ ]]; then
+if [[ ! "${smoke_limit}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "IFV_SMOKE_CASE_COUNT must be a positive integer." >&2
+    exit 2
+fi
+if [[ "${run_mode}" == "smoke" && ! "${limit}" =~ ^[1-9][0-9]*$ ]]; then
     echo "--limit must be a positive integer." >&2
     exit 2
 fi
@@ -256,10 +272,21 @@ if [[ ! -f "${dataset_root}/train-manifest.jsonl" ]] \
         --output-dir "${dataset_root}"
 fi
 
-mode="full"
-if [[ -n "${limit}" ]]; then
-    mode="smoke${limit}"
-fi
+case "${run_mode}" in
+    smoke_then_full)
+        mode="full"
+        export IFV_REQUIRE_FULL_TEACHER_DELIVERY=0
+        ;;
+    full)
+        mode="full"
+        export IFV_REQUIRE_FULL_TEACHER_DELIVERY=1
+        export IFV_EXPECTED_TEACHER_CASE_COUNT="${IFV_EXPECTED_TEACHER_CASE_COUNT:-8490}"
+        ;;
+    smoke)
+        mode="smoke${limit}"
+        export IFV_REQUIRE_FULL_TEACHER_DELIVERY=0
+        ;;
+esac
 if [[ -z "${output_dir}" ]]; then
     run_id="${IFV_TEACHER_ROLLOUT_RUN_ID:-teacher-${rollout_profile}-${mode}-$(date -u +%Y%m%dT%H%M%SZ)}"
     output_dir="${IFV_DATA_ROOT}/generated/teacher-rollouts/${run_id}"
@@ -286,14 +313,29 @@ if [[ "${IFV_SFT_ELIGIBILITY_ENABLE_THINKING:-true}" == "true" ]]; then
 else
     pipeline_args+=(--no-sft-judge-enable-thinking)
 fi
-if [[ -n "${limit}" ]]; then
+if [[ "${run_mode}" == "smoke" ]]; then
     pipeline_args+=(--limit "${limit}")
     pipeline_args+=(--validation-count "${IFV_SMOKE_VALIDATION_COUNT:-1}")
+elif [[ "${run_mode}" == "smoke_then_full" ]]; then
+    pipeline_args+=(--smoke-then-full)
+    pipeline_args+=(--smoke-limit "${smoke_limit}")
 fi
 pipeline_args+=("${forward[@]}")
 
 command=("${SCRIPT_DIR}/run_teacher_sft_pipeline.sh" "${pipeline_args[@]}")
+delivery_scope="full_train_set"
+smoke_output_dir=""
+if [[ "${run_mode}" == "smoke" ]]; then
+    delivery_scope="smoke_not_final"
+elif [[ "${run_mode}" == "smoke_then_full" ]]; then
+    delivery_scope="smoke_then_full"
+    smoke_output_dir="${output_dir}-smoke${smoke_limit}"
+fi
 if [[ "${background}" == "0" ]]; then
+    printf 'delivery_scope=%s\n' "${delivery_scope}"
+    if [[ -n "${smoke_output_dir}" ]]; then
+        printf 'smoke_output_dir=%s\n' "${smoke_output_dir}"
+    fi
     exec "${command[@]}"
 fi
 
@@ -306,5 +348,9 @@ pid_file="${pid_root}/teacher-portable-${timestamp}.pid"
 nohup "${command[@]}" </dev/null >"${log_file}" 2>&1 &
 pid=$!
 printf '%s\n' "${pid}" >"${pid_file}"
-printf 'pid=%s\noutput_dir=%s\nlog_file=%s\npid_file=%s\n' \
-    "${pid}" "${output_dir}" "${log_file}" "${pid_file}"
+printf 'pid=%s\noutput_dir=%s\nlog_file=%s\npid_file=%s\ndelivery_scope=%s\n' \
+    "${pid}" "${output_dir}" "${log_file}" "${pid_file}" \
+    "${delivery_scope}"
+if [[ -n "${smoke_output_dir}" ]]; then
+    printf 'smoke_output_dir=%s\n' "${smoke_output_dir}"
+fi

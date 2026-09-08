@@ -12,6 +12,9 @@ fi
 
 output_dir=""
 run_training="0"
+smoke_then_full="0"
+smoke_limit="${IFV_SMOKE_CASE_COUNT:-10}"
+autopilot_has_limit="0"
 training_model_profile="${IFV_TRAINING_MODEL_PROFILE:-}"
 training_sft_profile="${IFV_TRAINING_SFT_PROFILE:-}"
 training_experiment_id="${IFV_TRAINING_EXPERIMENT_ID:-}"
@@ -22,6 +25,22 @@ index=0
 while ((index < ${#args[@]})); do
     argument="${args[index]}"
     case "${argument}" in
+        --smoke-then-full)
+            smoke_then_full="1"
+            index=$((index + 1))
+            ;;
+        --smoke-limit)
+            if ((index + 1 >= ${#args[@]})); then
+                echo "--smoke-limit requires a value." >&2
+                exit 2
+            fi
+            smoke_limit="${args[index + 1]}"
+            index=$((index + 2))
+            ;;
+        --smoke-limit=*)
+            smoke_limit="${argument#*=}"
+            index=$((index + 1))
+            ;;
         --run-training)
             run_training="1"
             index=$((index + 1))
@@ -68,6 +87,20 @@ while ((index < ${#args[@]})); do
             autopilot_args+=("--output-dir=${output_dir}")
             index=$((index + 1))
             ;;
+        --limit)
+            if ((index + 1 >= ${#args[@]})); then
+                echo "--limit requires a value." >&2
+                exit 2
+            fi
+            autopilot_has_limit="1"
+            autopilot_args+=("${argument}" "${args[index + 1]}")
+            index=$((index + 2))
+            ;;
+        --limit=*)
+            autopilot_has_limit="1"
+            autopilot_args+=("${argument}")
+            index=$((index + 1))
+            ;;
         *)
             autopilot_args+=("${argument}")
             index=$((index + 1))
@@ -75,6 +108,18 @@ while ((index < ${#args[@]})); do
     esac
 done
 
+if [[ ! "${smoke_limit}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "--smoke-limit must be a positive integer." >&2
+    exit 2
+fi
+if [[ "${smoke_then_full}" == "1" && "${autopilot_has_limit}" == "1" ]]; then
+    echo "--smoke-then-full cannot be combined with --limit." >&2
+    exit 2
+fi
+if [[ "${smoke_then_full}" == "1" && "${run_training}" == "1" ]]; then
+    echo "--smoke-then-full does not run GPU training; train only after final delivery." >&2
+    exit 2
+fi
 if [[ -z "${output_dir}" ]]; then
     echo "--output-dir is required so the pipeline can be audited." >&2
     exit 2
@@ -90,6 +135,38 @@ for ((index = 0; index < ${#autopilot_args[@]}; index++)); do
             ;;
     esac
 done
+
+if [[ "${smoke_then_full}" == "1" ]]; then
+    smoke_output_dir="${output_dir}-smoke${smoke_limit}"
+    smoke_args=()
+    index=0
+    while ((index < ${#autopilot_args[@]})); do
+        case "${autopilot_args[index]}" in
+            --output-dir)
+                smoke_args+=("--output-dir" "${smoke_output_dir}")
+                index=$((index + 2))
+                ;;
+            --output-dir=*)
+                smoke_args+=("--output-dir=${smoke_output_dir}")
+                index=$((index + 1))
+                ;;
+            *)
+                smoke_args+=("${autopilot_args[index]}")
+                index=$((index + 1))
+                ;;
+        esac
+    done
+    smoke_args+=("--limit" "${smoke_limit}")
+    smoke_args+=("--validation-count" "${IFV_SMOKE_VALIDATION_COUNT:-1}")
+    printf 'phase=smoke output_dir=%s\n' "${smoke_output_dir}"
+    IFV_REQUIRE_FULL_TEACHER_DELIVERY=0 \
+        "${SCRIPT_DIR}/run_teacher_sft_pipeline.sh" "${smoke_args[@]}"
+    printf 'phase=full output_dir=%s\n' "${output_dir}"
+    IFV_REQUIRE_FULL_TEACHER_DELIVERY=1 \
+        IFV_EXPECTED_TEACHER_CASE_COUNT="${IFV_EXPECTED_TEACHER_CASE_COUNT:-8490}" \
+        "${SCRIPT_DIR}/run_teacher_sft_pipeline.sh" "${autopilot_args[@]}"
+    exit 0
+fi
 
 export IFV_SERVER_RUNNER="${IFV_SERVER_RUNNER:-${SCRIPT_DIR}/run_ifv.sh}"
 export PYTHONPATH="${REPO_ROOT}/training${PYTHONPATH:+:${PYTHONPATH}}"
@@ -229,3 +306,11 @@ print(json.dumps(summary, ensure_ascii=False, indent=2))
 if not summary["all_trace_audits_passed"]:
     raise SystemExit(1)
 PY
+
+if [[ "${IFV_REQUIRE_FULL_TEACHER_DELIVERY:-0}" == "1" ]]; then
+    "${IFV_SERVER_RUNNER}" python \
+        "${REPO_ROOT}/scripts/trajectory/verify_teacher_sft_delivery.py" \
+        --pipeline-dir "${output_dir}" \
+        --expected-case-count "${IFV_EXPECTED_TEACHER_CASE_COUNT:-8490}" \
+        --output "${output_dir}/audits/final-delivery.json"
+fi

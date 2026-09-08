@@ -125,21 +125,33 @@ IFV_SFT_ELIGIBILITY_API_KEY_ENV=IFV_SFT_ELIGIBILITY_API_KEY
 IFV_SFT_ELIGIBILITY_API_KEY=provided-out-of-band
 ```
 
-默认命令运行 10 条 smoke，并在后台完成 rollout、strict trace audit、
-SFT judge、quality reroll、accepted release 和 SFT package：
+默认命令先运行 10 条 smoke；只有 smoke 的 rollout、strict trace audit、SFT judge、
+quality reroll、accepted release 和双 SFT package 全部成功后，才自动启动全部
+8,490 条的相同完整链路：
 
 ```bash
 scripts/server/start_teacher_rollout_portable.sh
 ```
 
-显式启动全部 8,490 条：
+返回 PID 只表示 `smoke -> full` 后台链路已启动，不表示任务完成。
+`rollouts/initial/attempt-*` 和从其中手工复制的 trace preview 都不是 accepted release，
+也不是 SFT package。smoke 失败时全量不会启动。
+
+已单独完成 smoke、需要跳过 smoke 直接启动全部 8,490 条时：
 
 ```bash
 scripts/server/start_teacher_rollout_portable.sh --full
 ```
 
-命令返回 PID、日志和输出目录。不要把 endpoint 凭据写进命令行、Git、trace
-或 pipeline state。
+只运行 smoke、不自动启动全量时：
+
+```bash
+scripts/server/start_teacher_rollout_portable.sh --smoke-only
+```
+
+命令返回 PID、日志、最终全量输出目录、smoke 输出目录和 `delivery_scope`。必须持续检查任务直到进程退出，
+并确认 `<output-dir>/audits/final-delivery.json` 中 `final_delivery=true`。不要把
+endpoint 凭据写进命令行、Git、trace 或 pipeline state。
 
 本流程不使用 Gemini API，不允许 EasyOCR、本地 OCR 或 OCR fallback。图片上传服务
 可以按目标服务器条件显式选择 OSS、custom 或 temp。
@@ -216,12 +228,13 @@ python training/scripts/probe/verify_ms_swift_agent_dataset.py \
 
 新的 Codex 首先读取：
 
-1. `docs/portable-deployment-handoff.md`
-2. `docs/agent-structure.md`
-3. `docs/agent-prompt-and-runtime-guide.md`
-4. `docs/sft-training-and-data-construction.md`
-5. `docs/qwen-ms-swift-deployment.md`
-6. `docs/trajectory-artifact-guide.md`
+1. `docs/teacher-rollout-and-sft-handoff.md`
+2. `docs/portable-deployment-handoff.md`
+3. `docs/agent-structure.md`
+4. `docs/agent-prompt-and-runtime-guide.md`
+5. `docs/sft-training-and-data-construction.md`
+6. `docs/qwen-ms-swift-deployment.md`
+7. `docs/trajectory-artifact-guide.md`
 
 然后执行：
 
@@ -243,5 +256,11 @@ python -m pytest -q
 
 ## 10. 明确停止点
 
-完成环境、10 条 smoke、SFT 导出、严格审计和真实 processor 验证后停止。全量教师
-rollout 必须由数据负责人单独确认模型、并发、预算、输入 manifest 和输出目录后启动。
+本交接任务已经获得全量运行授权。默认入口会在 10 条 smoke 通过后自动继续运行全部 8,490 条，
+完成 SFT eligibility judge、quality reroll、accepted release、policy/perception SFT
+package 和严格审计。只有 `audits/final-delivery.json` 中
+`final_delivery=true` 才能停止和交付；不得用 smoke、单个 attempt、手工预览包或仅有
+raw trace 的目录代替。
+
+停止点不包含真实 checkpoint processor verification、GPU SFT、RL、Direct QA 或测试集
+实验；这些由后续训练或评测负责人执行。

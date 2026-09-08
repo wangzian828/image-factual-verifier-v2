@@ -22,6 +22,7 @@ def test_generic_server_entrypoints_have_no_machine_specific_paths() -> None:
         "scripts/server/start_teacher_rollout_portable.sh",
         "scripts/server/prepare_factcheck_dataset.sh",
         "scripts/server/run_teacher_sft_pipeline.sh",
+        "scripts/trajectory/verify_teacher_sft_delivery.py",
         "scripts/server/eval_worker.sh",
         "scripts/server/poll_eval.sh",
         "scripts/server/doctor.py",
@@ -62,10 +63,15 @@ def test_generic_launcher_uses_explicit_runtime_configuration() -> None:
     assert "nohup" in autopilot
     assert "factcheck_train-8490-20260907.tar.gz" in dataset
     assert "2fda3ca7144d899e355fcbbaa4e6b93350878dbf5225ab423402123d5e37a448" in dataset
-    assert 'limit="10"' in portable
+    assert 'run_mode="smoke_then_full"' in portable
+    assert 'smoke_limit="${IFV_SMOKE_CASE_COUNT:-10}"' in portable
     assert "--full" in portable
+    assert "--smoke-only" in portable
+    assert "--smoke-then-full" in portable
     assert "--validation-count" in portable
     assert "run_teacher_sft_pipeline.sh" in portable
+    assert 'delivery_scope="smoke_not_final"' in portable
+    assert "IFV_REQUIRE_FULL_TEACHER_DELIVERY" in portable
     assert "QWEN_TEACHER_BASE_URL" in portable
     assert 'export QWEN_TEACHER_MODEL="${rollout_model}"' in portable
     assert 'export QWEN_TEACHER_VISION_MODEL="${rollout_model}"' in portable
@@ -101,3 +107,7 @@ def test_teacher_sft_pipeline_requires_explicit_output_and_processor_opt_in() ->
     assert "IFV_TRAINING_PYTHON" in source
     assert "--run-training" in source
     assert "training_status" in source
+    assert "verify_teacher_sft_delivery.py" in source
+    assert "final-delivery.json" in source
+    assert 'phase=smoke output_dir=%s\\n' in source
+    assert 'phase=full output_dir=%s\\n' in source
