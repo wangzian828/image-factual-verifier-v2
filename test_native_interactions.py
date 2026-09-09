@@ -203,7 +203,7 @@ def _function_call_response() -> Dict[str, Any]:
                 "id": "call-1",
                 "type": "function_call",
                 "name": "text_search",
-                "arguments": {"question_id": "q1", "queries": ["direct source"]},
+                "arguments": {"queries": ["direct source"]},
             }
         ],
     }
@@ -288,7 +288,6 @@ def test_native_function_call_round_trip() -> None:
     assert parsed is not None
     assert parsed.authenticity_assessment == "authentic"
     assert [step.action_type for step in steps] == ["tool_call", "output"]
-    assert steps[0].tool_args["__question_id"] == "q1"
     assert steps[0].metadata["native_interactions"] is True
     assert steps[0].metadata["previous_interaction_id"] is None
     assert steps[0].metadata["interaction_id"] == "interaction-1"
@@ -300,8 +299,6 @@ def test_native_function_call_round_trip() -> None:
     assert first_request["previous_interaction_id"] is None
     assert first_request["tools"][0]["type"] == "function"
     assert first_request["tools"][0]["name"] == "text_search"
-    assert "question_id" in first_request["tools"][0]["parameters"]["required"]
-    assert first_request["tools"][0]["parameters"]["properties"]["question_id"]["enum"] == ["q0", "q1"]
     assert "image_input" not in first_request["tools"][0]["parameters"]["properties"]
     assert second_request["previous_interaction_id"] == "interaction-1"
     assert second_request["previous_interaction_id"] == steps[0].metadata["interaction_id"]
@@ -318,7 +315,6 @@ def test_native_function_call_round_trip() -> None:
     assert function_result["name"] == "text_search"
     assert function_result["call_id"] == "call-1"
     returned = json.loads(function_result["result"][0]["text"])
-    assert returned["question_id"] == "q1"
     assert returned["function_call_id"] == "call-1"
     assert "directly answers" in json.dumps(returned["result"])
     assert "is_error" not in function_result
@@ -386,7 +382,6 @@ def test_native_follow_up_keeps_candidate_images_outside_function_result(
     function_call = _function_call_response()
     function_call["steps"][0]["name"] = "reverse_image_search"
     function_call["steps"][0]["arguments"] = {
-        "question_id": "q1",
         "branch": "lens",
     }
     backend = NativeFakeBackend([function_call, _completed_response()])
@@ -595,7 +590,6 @@ def test_native_correction_rebuilds_tools_after_budget_boundary() -> None:
     alternate_call["id"] = "interaction-alternate"
     alternate_call["steps"][0]["name"] = "check_consistency"
     alternate_call["steps"][0]["arguments"] = {
-        "question_id": "q1",
         "relation": "bridge and river",
     }
     completed = _completed_response()
@@ -624,7 +618,7 @@ def test_native_correction_rebuilds_tools_after_budget_boundary() -> None:
         ),
     )
 
-    parsed, steps = asyncio.run(runner.run("- [q1] verify"))
+    parsed, steps = asyncio.run(runner.run("verify the relation"))
 
     assert parsed is not None
     assert [item["name"] for item in backend.requests[0]["tools"]] == [
@@ -639,33 +633,6 @@ def test_native_correction_rebuilds_tools_after_budget_boundary() -> None:
         "Tool 'text_search' is not currently executable"
     )
     assert alternate.calls == [{"relation": "bridge and river"}]
-
-
-def test_native_tool_schema_uses_runtime_owned_task_ids_without_bracket_hints() -> None:
-    function_call = _function_call_response()
-    function_call["steps"][0]["arguments"]["question_id"] = "task-live"
-    backend = NativeFakeBackend([function_call, _completed_response()])
-    runner = StageRunner(
-        llm=backend,
-        system_prompt="Investigate with tools.",
-        tools=[RecordingTool()],
-        output_schema=ToolStageOutput,
-        max_rounds=3,
-        stage_name="verification",
-        min_tool_calls=1,
-        attach_image=False,
-        question_claims={"task-live": "The runtime-owned claim."},
-    )
-
-    parsed, steps = asyncio.run(
-        runner.run('{"active_tasks":[{"task_id":"task-live"}]}')
-    )
-
-    assert parsed is not None
-    assert steps[0].tool_args["__question_id"] == "task-live"
-    schema = backend.requests[0]["tools"][0]["parameters"]
-    assert schema["properties"]["question_id"]["enum"] == ["task-live"]
-    assert "q0" not in schema["properties"]["question_id"]["description"]
 
 
 def test_shared_session_carries_pending_function_result_into_next_stage() -> None:
@@ -777,7 +744,7 @@ def test_native_schema_rejects_non_numeric_array_items() -> None:
 
     error = runner._validate_native_tool_args(
         "text_search",
-        {"question_id": "q1", "bbox": ["0.1", "0.2", "0.8", "0.9"]},
+        {"bbox": ["0.1", "0.2", "0.8", "0.9"]},
     )
 
     assert "bbox' for text_search[0] must be a number" in error
@@ -1065,7 +1032,6 @@ def test_force_tool_each_round_defers_output_to_forced_request() -> None:
     second_call["id"] = "interaction-2"
     second_call["steps"][0]["id"] = "call-2"
     second_call["steps"][0]["arguments"] = {
-        "question_id": "q0",
         "queries": ["another direct source"],
     }
     forced = _completed_response()
@@ -1086,7 +1052,7 @@ def test_force_tool_each_round_defers_output_to_forced_request() -> None:
     )
 
     parsed, steps = asyncio.run(
-        runner.run("- [q0] first\n- [q1] second")
+        runner.run("inspect the first and second source")
     )
 
     assert parsed is not None
@@ -1104,139 +1070,6 @@ def test_force_tool_each_round_defers_output_to_forced_request() -> None:
     )
 
 
-def test_native_output_requires_initial_attempt_for_each_required_question() -> None:
-    first_call = _function_call_response()
-    first_call["id"] = "interaction-q0"
-    first_call["steps"][0]["id"] = "call-q0"
-    first_call["steps"][0]["arguments"] = {
-        "question_id": "q0",
-        "queries": ["first direct source"],
-    }
-    premature = _completed_response()
-    premature["id"] = "interaction-premature"
-    premature["steps"][0]["content"][0]["text"] = json.dumps(
-        {
-            **json.loads(
-                _completed_response()["steps"][0]["content"][0]["text"]
-            ),
-            "evidence": [
-                {
-                    "function_call_id": "call-q0",
-                    "source": "https://example.org/q0",
-                    "summary": "The first source answers q0.",
-                    "raw_excerpt": "The first source answers q0.",
-                    "direction": "supports",
-                    "quality": "moderate",
-                    "tool_used": "text_search",
-                    "related_question": "q0",
-                }
-            ],
-        }
-    )
-    second_call = _function_call_response()
-    second_call["id"] = "interaction-q1"
-    second_call["steps"][0]["id"] = "call-q1"
-    second_call["steps"][0]["arguments"] = {
-        "question_id": "q1",
-        "queries": ["second direct source"],
-    }
-    completed = _completed_response()
-    completed["id"] = "interaction-complete"
-    backend = NativeFakeBackend([first_call, premature, second_call, completed])
-    tool = RecordingTool()
-    runner = StageRunner(
-        llm=backend,
-        system_prompt="Investigate with tools.",
-        tools=[tool],
-        output_schema=ToolStageOutput,
-        max_rounds=3,
-        stage_name="verification",
-        min_tool_calls=1,
-        attach_image=False,
-        priority_question_ids=["q0"],
-        supporting_question_ids=["q1"],
-    )
-
-    parsed, steps = asyncio.run(runner.run("- [q0] first\n- [q1] second"))
-
-    assert parsed is not None
-    assert [step.action_type for step in steps] == [
-        "tool_call",
-        "output_rejected",
-        "tool_call",
-        "output",
-    ]
-    assert "untouched P2: q1" in steps[1].metadata["rejection_reason"]
-    assert backend.requests[2]["previous_interaction_id"] == "interaction-premature"
-    assert tool.calls == [
-        {"queries": ["first direct source"]},
-        {"queries": ["second direct source"]},
-    ]
-
-
-def test_native_missing_question_id_is_not_silently_assigned() -> None:
-    missing_id = _function_call_response()
-    missing_id["steps"][0]["arguments"].pop("question_id")
-    corrected = _function_call_response()
-    corrected["id"] = "interaction-2"
-    corrected["steps"][0]["id"] = "call-2"
-    completed = _completed_response()
-    completed["id"] = "interaction-3"
-    backend = NativeFakeBackend([missing_id, corrected, completed])
-    tool = RecordingTool()
-    runner = StageRunner(
-        llm=backend,
-        system_prompt="Investigate with tools.",
-        tools=[tool],
-        output_schema=ToolStageOutput,
-        max_rounds=3,
-        stage_name="verification",
-        min_tool_calls=1,
-        attach_image=False,
-    )
-
-    parsed, steps = asyncio.run(runner.run("- [q0] first\n- [q1] second"))
-
-    assert parsed is not None
-    assert steps[0].action_type == "format_error"
-    assert steps[0].metadata["invalid_tool_arguments"] is True
-    assert tool.calls == [{"queries": ["direct source"]}]
-    first_result = backend.requests[1]["input_payload"][0]
-    assert "Missing required argument(s) for text_search: question_id" in first_result["result"][0]["text"]
-    assert first_result["is_error"] is True
-
-
-def test_native_unknown_question_id_is_rejected() -> None:
-    unknown = _function_call_response()
-    unknown["steps"][0]["arguments"]["question_id"] = "q99"
-    corrected = _function_call_response()
-    corrected["id"] = "interaction-2"
-    corrected["steps"][0]["id"] = "call-2"
-    completed = _completed_response()
-    completed["id"] = "interaction-3"
-    backend = NativeFakeBackend([unknown, corrected, completed])
-    tool = RecordingTool()
-    runner = StageRunner(
-        llm=backend,
-        system_prompt="Investigate with tools.",
-        tools=[tool],
-        output_schema=ToolStageOutput,
-        max_rounds=3,
-        stage_name="verification",
-        min_tool_calls=1,
-        attach_image=False,
-    )
-
-    parsed, steps = asyncio.run(runner.run("- [q0] first\n- [q1] second"))
-
-    assert parsed is not None
-    assert steps[0].action_type == "format_error"
-    assert steps[0].metadata["invalid_tool_arguments"] is True
-    error = backend.requests[1]["input_payload"][0]["result"][0]["text"]
-    assert "must be one of: q0, q1" in error
-    assert tool.calls == [{"queries": ["direct source"]}]
-
-
 def test_native_executes_all_parallel_calls_and_returns_all_results() -> None:
     parallel = _function_call_response()
     parallel["steps"].append(
@@ -1244,7 +1077,7 @@ def test_native_executes_all_parallel_calls_and_returns_all_results() -> None:
             "id": "call-parallel",
             "type": "function_call",
             "name": "text_search",
-            "arguments": {"question_id": "q0", "queries": ["another source"]},
+            "arguments": {"queries": ["another source"]},
         }
     )
     completed = _completed_response()
@@ -1307,11 +1140,9 @@ def test_native_tool_schema_hides_server_image_path() -> None:
         stage_name="verification",
         attach_image=False,
     )
-    runner.active_question_ids = ["q0"]
     schema = runner._build_native_tool_schemas()[0]["parameters"]
     assert "image_input" not in schema["properties"]
     assert "image_input" not in schema["required"]
-    assert schema["properties"]["question_id"]["enum"] == ["q0"]
 
     serialized, _ = asyncio.run(
         runner._execute_tool(
@@ -1347,8 +1178,7 @@ def test_native_tool_schema_constrains_array_items() -> None:
     assert runner._validate_native_tool_args(
         "visit",
             {
-                "question_id": "q0",
-                "url": ["https://example.org/pending"],
+            "url": ["https://example.org/pending"],
                 "image_claim": "The depicted event occurred as shown.",
                 "retrieval_goal": "Find the source event.",
             },
@@ -1356,7 +1186,6 @@ def test_native_tool_schema_constrains_array_items() -> None:
     assert "must be one of" in runner._validate_native_tool_args(
         "visit",
         {
-            "question_id": "q0",
             "url": ["https://example.org/unowned"],
             "image_claim": "The depicted event occurred as shown.",
             "retrieval_goal": "Find the source event.",
@@ -1376,9 +1205,7 @@ def test_native_visit_accepts_equivalent_runtime_url_and_records_repair() -> Non
             }
         },
     )
-    runner.active_question_ids = ["q0"]
     args = {
-        "question_id": "q0",
         "url": ["https://EXAMPLE.org/pending/"],
         "image_claim": "The depicted event occurred as shown.",
         "retrieval_goal": "Find the source event.",
@@ -1413,8 +1240,6 @@ def test_native_tool_schema_drops_large_dynamic_array_enum() -> None:
             }
         },
     )
-    runner.active_question_ids = ["q0"]
-
     schema = runner._build_native_tool_schemas()[0]["parameters"]
     item_schema = schema["properties"]["url"]["items"]
 
@@ -1424,7 +1249,6 @@ def test_native_tool_schema_drops_large_dynamic_array_enum() -> None:
     assert runner._validate_native_tool_args(
         "visit",
         {
-            "question_id": "q0",
             "url": [allowed_urls[-1]],
             "image_claim": "The depicted event occurred as shown.",
             "retrieval_goal": "Find the source event.",
@@ -1433,195 +1257,10 @@ def test_native_tool_schema_drops_large_dynamic_array_enum() -> None:
     assert "must be one of" in runner._validate_native_tool_args(
         "visit",
         {
-            "question_id": "q0",
             "url": ["https://example.org/not-allowed"],
             "image_claim": "The depicted event occurred as shown.",
             "retrieval_goal": "Find the source event.",
         },
-    )
-
-
-def test_native_tool_schema_constrains_question_ids_per_tool() -> None:
-    runner = StageRunner(
-        llm=NativeFakeBackend([]),
-        system_prompt="Inspect the selected candidate.",
-        tools=[VisitTool(), RecordingTool()],
-        stage_name="verification",
-        question_claims={
-            "task-visit": "The depicted event occurred as shown.",
-            "task-search": "The depicted event occurred as shown.",
-        },
-        tool_argument_constraints={
-            "visit": {
-                "url": ["https://example.org/pending"],
-                "question_id": ["task-visit"],
-            },
-            "text_search": {
-                "question_id": ["task-search"],
-            },
-        },
-    )
-    runner.active_question_ids = ["task-visit", "task-search"]
-
-    schemas = {
-        item["name"]: item["parameters"]
-        for item in runner._build_native_tool_schemas()
-    }
-
-    assert schemas["visit"]["properties"]["question_id"]["enum"] == [
-        "task-visit"
-    ]
-    assert schemas["text_search"]["properties"]["question_id"]["enum"] == [
-        "task-search"
-    ]
-
-
-def test_visit_extraction_goal_is_bound_to_runtime_claim() -> None:
-    runner = StageRunner(
-        llm=NativeFakeBackend([]),
-        system_prompt="Inspect the selected candidate.",
-        tools=[VisitTool()],
-        stage_name="verification",
-        question_claims={"task-1": "The subject used a bus during the event."},
-        question_evidence_goals={
-            "task-1": "Find records of the transport actually used."
-        },
-    )
-
-    prepared = runner._prepare_tool_args(
-        "visit",
-        {
-            "question_id": "task-1",
-            "url": ["https://example.org/source"],
-            "retrieval_goal": "Find the event's actual transport.",
-        },
-        "",
-    )
-
-    assert prepared["image_claim"] == "The subject used a bus during the event."
-    assert prepared["retrieval_goal"] == (
-        "Find the event's actual transport."
-    )
-    assert prepared["__claim_text"] == "The subject used a bus during the event."
-    assert prepared["__evidence_goal"] == (
-        "Find records of the transport actually used."
-    )
-
-
-def test_visit_selects_one_runtime_owned_claim_for_stance() -> None:
-    runner = StageRunner(
-        llm=NativeFakeBackend([]),
-        system_prompt="Inspect the selected candidate.",
-        tools=[VisitTool()],
-        stage_name="verification",
-        question_claims={"task-1": "Fallback account summary."},
-        question_claim_options={
-            "task-1": {
-                "claim-text": "The presenter endorses the shown product.",
-                "claim-integrity": "The product photograph is unaltered.",
-            }
-        },
-        question_evidence_goals={"task-1": "Inspect the public statement."},
-        tool_argument_constraints={
-            "visit": {
-                "url": ["https://example.org/statement"],
-                "question_id": ["task-1"],
-            }
-        },
-    )
-    runner.active_question_ids = ["task-1"]
-    schema = runner._build_native_tool_schemas()[0]["parameters"]
-
-    assert schema["properties"]["claim_id"]["enum"] == [
-        "claim-text",
-        "claim-integrity",
-    ]
-    assert "claim_id" in schema["required"]
-    prepared = runner._prepare_tool_args(
-        "visit",
-        {
-            "question_id": "task-1",
-            "claim_id": "claim-text",
-            "url": ["https://example.org/statement"],
-        },
-        "",
-    )
-    assert prepared["image_claim"] == (
-        "The presenter endorses the shown product."
-    )
-    assert prepared["__claim_id"] == "claim-text"
-
-
-def test_visual_evidence_tool_requires_claim_selection_for_multi_claim_task() -> None:
-    runner = StageRunner(
-        llm=NativeFakeBackend([]),
-        system_prompt="Inspect one Claim-scoped visual property.",
-        tools=[VisualInspectTool()],
-        stage_name="verification",
-        question_claim_options={
-            "task-1": {
-                "claim-relation": "The person is holding the shown product.",
-                "claim-text": "The product label contains the shown text.",
-            }
-        },
-        tool_argument_constraints={
-            "crop_and_inspect": {
-                "question_id": ["task-1"],
-            }
-        },
-    )
-    runner.active_question_ids = ["task-1"]
-    schema = runner._build_native_tool_schemas()[0]["parameters"]
-
-    assert schema["properties"]["claim_id"]["enum"] == [
-        "claim-relation",
-        "claim-text",
-    ]
-    assert "claim_id" in schema["required"]
-    prepared = runner._prepare_tool_args(
-        "crop_and_inspect",
-        {
-            "question_id": "task-1",
-            "claim_id": "claim-text",
-        },
-        "",
-    )
-    assert prepared["__claim_id"] == "claim-text"
-    assert (
-        "claim_id is required"
-        in runner._claim_id_error(
-            "crop_and_inspect",
-            {"__question_id": "task-1"},
-        )
-    )
-
-
-def test_crop_and_inspect_keeps_bbox_required_without_pending_visual_binding() -> None:
-    from src.tools.crop_and_inspect import CropAndInspectTool
-
-    runner = StageRunner(
-        llm=NativeFakeBackend([]),
-        system_prompt="Inspect one visual region.",
-        tools=[CropAndInspectTool(client=object())],
-        stage_name="verification",
-        tool_argument_constraints={
-            "crop_and_inspect": {
-                "question_id": ["task-1"],
-            }
-        },
-    )
-    runner.active_question_ids = ["task-1"]
-
-    schema = runner._build_native_tool_schemas()[0]["parameters"]
-
-    assert "bbox" in schema["required"]
-    assert "focus_question" in schema["required"]
-    assert (
-        "Missing required argument(s) for crop_and_inspect: bbox, focus_question"
-        in runner._validate_native_tool_args(
-            "crop_and_inspect",
-            {"question_id": "task-1"},
-        )
     )
 
 
@@ -1656,58 +1295,6 @@ def test_visit_route_signature_distinguishes_atomic_claim_targets() -> None:
         "whether",
     }
     assert first != second
-
-
-def test_canonical_reverse_image_result_preserves_validated_references() -> None:
-    reference_url = "https://example.org/reference.jpg"
-
-    result = StageRunner._canonical_reverse_image_result(
-        {
-            "status": "success",
-            "branch": "lens",
-            "candidate_page_urls": ["https://example.org/page"],
-            "reference_image_candidates": [reference_url],
-            "lens_results": [
-                {
-                    "title": "Reference",
-                    "url": "https://example.org/page",
-                    "image_url": reference_url,
-                }
-            ],
-        }
-    )
-
-    assert result["reference_image_candidates"] == [reference_url]
-    assert result["lens_results"][0]["image_url"] == reference_url
-
-
-def test_canonical_reverse_image_result_exposes_three_candidates() -> None:
-    result = StageRunner._canonical_reverse_image_result(
-        {
-            "status": "success",
-            "branch": "lens",
-            "candidate_page_urls": [
-                f"https://example.org/page-{index}"
-                for index in range(5)
-            ],
-            "reference_image_candidates": [
-                f"https://example.org/reference-{index}.jpg"
-                for index in range(5)
-            ],
-            "lens_results": [
-                {
-                    "title": f"Reference {index}",
-                    "url": f"https://example.org/page-{index}",
-                    "image_url": f"https://example.org/reference-{index}.jpg",
-                }
-                for index in range(5)
-            ],
-        }
-    )
-
-    assert len(result["candidate_page_urls"]) == 3
-    assert len(result["reference_image_candidates"]) == 3
-    assert len(result["lens_results"]) == 3
 
 
 def test_tool_internal_llm_usage_is_private_and_attached_to_step_metadata() -> None:
@@ -1751,33 +1338,6 @@ def test_tool_internal_llm_usage_is_private_and_attached_to_step_metadata() -> N
         "completion": 30,
         "thought": 0,
     }
-
-
-def test_priority_two_can_be_resampled_after_all_required_questions_are_served() -> None:
-    runner = StageRunner(
-        llm=NativeFakeBackend([]),
-        system_prompt="Investigate.",
-        tools=[RecordingTool()],
-        output_schema=ToolStageOutput,
-        stage_name="verification",
-        attach_image=False,
-        prior_steps=[
-            StageStep(
-                action_type="tool_call",
-                tool_name="text_search",
-                tool_args={"__question_id": "q0", "queries": ["primary statement"]},
-            ),
-            StageStep(
-                action_type="tool_call",
-                tool_name="text_search",
-                tool_args={"__question_id": "q1", "queries": ["image source"]},
-            ),
-        ],
-        priority_question_ids=["q0"],
-        supporting_question_ids=["q1"],
-    )
-
-    assert runner._priority_coverage_error({"__question_id": "q1"}, []) == ""
 
 
 @pytest.mark.parametrize(
@@ -2189,7 +1749,6 @@ def test_function_result_keeps_complete_result_and_provenance_id() -> None:
     item = runner._build_native_function_result(
         call_id="call-large",
         tool_name="text_search",
-        tool_args={"__question_id": "q1"},
         result=json.dumps(
             {
                 "status": "success",
@@ -2206,130 +1765,13 @@ def test_function_result_keeps_complete_result_and_provenance_id() -> None:
 
     returned = json.loads(item["result"][0]["text"])
     assert returned["function_call_id"] == "call-large"
-    assert returned["question_id"] == "q1"
     assert len(returned["result"]["queries"][0]["summary"]) == 5000
     assert len(returned["result"]["queries"][0]["evidence"]) == 5000
-
-
-def test_native_visual_question_runtime_binds_required_crop_args() -> None:
-    visual_call = {
-        "id": "interaction-visual-1",
-        "status": "requires_action",
-        "steps": [
-            {
-                "id": "call-visual-1",
-                "type": "function_call",
-                "name": "crop_and_inspect",
-                "arguments": {"question_id": "q1", "visual_question_id": "vq0"},
-            }
-        ],
-    }
-    completed = _completed_response()
-    completed["id"] = "interaction-visual-2"
-    completed["steps"][0]["content"][0]["text"] = json.dumps(
-        {
-            "evidence": [
-                {
-                    "function_call_id": "call-visual-1",
-                    "source": "crop_and_inspect",
-                    "summary": "The cropped region matches the expected property.",
-                    "raw_excerpt": "The cropped region matches the expected property.",
-                    "direction": "neutral",
-                    "quality": "moderate",
-                    "tool_used": "crop_and_inspect",
-                    "related_question": "q1",
-                }
-            ],
-            "visual_anomalies": [],
-            "authenticity_assessment": "uncertain",
-            "key_findings": ["Visual revisit completed."],
-            "source_findings": [],
-            "visual_evidence": [],
-            "world_model": {},
-            "question_resolutions": [],
-            "coverage_complete": False,
-            "unresolved_priority_questions": [],
-            "exhausted_priority_questions": [],
-            "iteration_count": 1,
-        }
-    )
-    backend = NativeFakeBackend([visual_call, completed])
-    tool = VisualInspectTool()
-    runner = StageRunner(
-        llm=backend,
-        system_prompt="Investigate.",
-        tools=[tool],
-        output_schema=ToolStageOutput,
-        max_rounds=2,
-        stage_name="verification",
-        min_tool_calls=1,
-        attach_image=False,
-        visual_call_validator=lambda _tool_name, _args: "",
-    )
-    runner._control_steps = [
-        StageStep(
-            action_type="tool_call",
-            tool_name="visit",
-            tool_args={"__question_id": "q1"},
-            metadata={
-                "investigation_state_update": {
-                    "created_visual_questions": [
-                        {
-                            "visual_question_id": "vq0",
-                            "claim_id": "claim-q1",
-                            "source_evidence_id": "ev-1",
-                            "target_bbox": [0.1, 0.2, 0.8, 0.9],
-                            "expected_property": "Whether the target image region is consistent with: cited text",
-                            "recommended_tools": ["crop_and_inspect"],
-                            "status": "pending",
-                        }
-                    ],
-                    "resolved_visual_questions": [],
-                }
-            },
-        )
-    ]
-
-    parsed, steps = asyncio.run(runner.run("- [q1] inspect region"))
-
-    assert parsed is not None
-    assert steps[0].action_type == "tool_call"
-    assert steps[0].tool_args["bbox"] == [0.1, 0.2, 0.8, 0.9]
-    assert steps[0].tool_args["source_evidence_id"] == "ev-1"
-    assert steps[0].tool_args["focus_question"].startswith("Whether the target image region is consistent with:")
-    assert tool.calls == [
-        {
-            "bbox": [0.1, 0.2, 0.8, 0.9],
-            "focus_question": "Whether the target image region is consistent with: cited text",
-            "visual_question_id": "vq0",
-            "source_evidence_id": "ev-1",
-            "expected_property": "Whether the target image region is consistent with: cited text",
-        }
-    ]
-
-
-def test_native_schema_allows_visual_question_without_explicit_bound_crop_fields() -> None:
-    runner = StageRunner(
-        llm=NativeFakeBackend([]),
-        system_prompt="",
-        tools=[VisualInspectTool()],
-        stage_name="verification",
-    )
-    runner.active_question_ids = ["q1"]
-
-    error = runner._validate_native_tool_args(
-        "crop_and_inspect",
-        {"question_id": "q1", "visual_question_id": "vq0"},
-    )
-
-    assert error == ""
 
 
 if __name__ == "__main__":
     test_native_function_call_round_trip()
     test_native_output_before_tools_is_rejected()
-    test_native_missing_question_id_is_not_silently_assigned()
-    test_native_unknown_question_id_is_rejected()
     test_native_executes_all_parallel_calls_and_returns_all_results()
     test_native_tool_schema_hides_server_image_path()
     test_native_invalid_final_schema_is_rejected()

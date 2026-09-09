@@ -92,6 +92,7 @@ class InteractionSession:
 
     previous_interaction_id: Optional[str] = None
     pending_input: List[Dict[str, Any]] = field(default_factory=list)
+    chat_history: List[Dict[str, Any]] = field(default_factory=list)
 
 
 class StageRunner:
@@ -134,6 +135,12 @@ class StageRunner:
         interaction_session: Optional[InteractionSession] = None,
         runtime_store: Optional[CaseRuntimeStore] = None,
         prompt_version: str = "",
+        native_history: Optional[List[Dict[str, Any]]] = None,
+        native_system_instruction: Optional[str] = None,
+        native_history_includes_pending_user: bool = False,
+        question_claims: Optional[Dict[str, str]] = None,
+        capture_policy_tokens: Optional[bool] = None,
+        policy_topk: Optional[int] = None,
     ):
         self.llm = llm
         self.system_prompt = system_prompt
@@ -183,9 +190,19 @@ class StageRunner:
         self.interaction_session = interaction_session
         self.runtime_store = runtime_store
         self.prompt_version = prompt_version or f"{stage_name or 'stage'}-v1"
+        self.native_history = deepcopy(native_history or [])
+        self.native_system_instruction = native_system_instruction
+        self.native_history_includes_pending_user = bool(
+            native_history_includes_pending_user
+        )
+        self.question_claims = dict(question_claims or {})
+        self.capture_policy_tokens = capture_policy_tokens
+        self.policy_topk = policy_topk
+        self.last_native_history: List[Dict[str, Any]] = []
         self._last_context_request_id = ""
         self._last_interaction_lifecycle_kind = ""
         self._last_image_view: Dict[str, Any] = {}
+        self._session_chat_history_start = 0
         self.request_timeout_seconds = _bounded_timeout(
             request_timeout_seconds,
             env_name="AGENT_STAGE_REQUEST_TIMEOUT_SECONDS",
@@ -222,13 +239,32 @@ class StageRunner:
         system_msg = {
             "role": "system",
             "content": (
-                self._build_native_chat_system_content()
+                self.native_system_instruction
+                if native_chat and self.native_system_instruction is not None
+                else self._build_native_chat_system_content()
                 if native_chat
                 else self._build_system_content()
             ),
         }
         user_msg = self._build_user_message(input_context)
-        history: List[Dict[str, Any]] = [system_msg, user_msg]
+        if native_chat and self.native_history:
+            history: List[Dict[str, Any]] = [
+                system_msg,
+                *deepcopy(self.native_history),
+            ]
+            if not self.native_history_includes_pending_user:
+                history.append(user_msg)
+            self._session_chat_history_start = len(self.native_history)
+        elif native_chat and self.interaction_session is not None:
+            shared_history = deepcopy(self.interaction_session.chat_history)
+            history: List[Dict[str, Any]] = [
+                system_msg,
+                *shared_history,
+                user_msg,
+            ]
+            self._session_chat_history_start = len(shared_history)
+        else:
+            history = [system_msg, user_msg]
         evidence_so_far: List[str] = []
 
         # Chat Completions has no provider-side Interaction lifecycle to
@@ -559,7 +595,10 @@ class StageRunner:
                         if request_chat_protocol_correction(step, visual_error):
                             continue
                         break
-                serialized, tool_metadata = await self._execute_tool(tool_name, dict(step.tool_args))
+                serialized, tool_metadata = await self._execute_tool(
+                    tool_name,
+                    self._execution_tool_args(step.tool_args),
+                )
                 step.tool_result = serialized
                 step.metadata.update(tool_metadata)
                 self._archive_tool_step(
@@ -615,6 +654,7 @@ class StageRunner:
                                 },
                             )
                         )
+                        self._commit_native_chat_history(history)
                         return parsed, steps
                     break
                 next_lifecycle_kind = "tool_roundtrip"
@@ -642,6 +682,12 @@ class StageRunner:
                 if parsed is not None:
                     accepted, reason = self._accept_output(parsed, steps)
                     if accepted:
+                        history.append(
+                            native_assistant
+                            if native_assistant is not None
+                            else {"role": "assistant", "content": content}
+                        )
+                        self._commit_native_chat_history(history)
                         return parsed, steps
                     step.action_type = "output_rejected"
                     step.metadata["rejection_reason"] = reason
@@ -706,6 +752,7 @@ class StageRunner:
 
         boundary = self._protocol_exhaustion_stage_boundary(steps)
         if boundary is not None:
+            self._commit_native_chat_history(history)
             return boundary
 
         last_rejection_reason = ""
@@ -793,7 +840,9 @@ class StageRunner:
             )
             boundary = self._protocol_exhaustion_stage_boundary(steps)
             if boundary is not None:
+                self._commit_native_chat_history(history)
                 return boundary
+        self._commit_native_chat_history(history)
         return forced, steps
 
     def _protocol_exhaustion_stage_boundary(
@@ -1269,7 +1318,7 @@ class StageRunner:
                             step.action_type = "tool_call"
                             serialized, tool_metadata = await self._execute_tool(
                                 tool_name,
-                                dict(prepared_args),
+                                self._execution_tool_args(prepared_args),
                             )
                             step.tool_result = serialized
                             step.metadata.update(tool_metadata)
@@ -1697,6 +1746,11 @@ class StageRunner:
             for property_name, allowed_values in (
                 self.tool_argument_constraints.get(tool.name, {}).items()
             ):
+                if property_name == "question_id" and property_name not in properties:
+                    properties[property_name] = {
+                        "type": "string",
+                        "description": "The active runtime question identifier.",
+                    }
                 if property_name not in properties or not allowed_values:
                     continue
                 property_schema = properties[property_name]
@@ -2901,19 +2955,36 @@ class StageRunner:
 
     def _uses_native_chat_completions(self) -> bool:
         return bool(
-            str(getattr(self.llm, "provider", "")).lower() == "qwen_local"
+            str(getattr(self.llm, "provider", "")).lower()
+            in {"qwen_local", "lmdeploy"}
             and str(getattr(self.llm, "wire_api", "")).lower()
             == "chat_completions"
         )
 
-    @staticmethod
-    def _policy_token_capture_enabled() -> bool:
+    def _policy_token_capture_enabled(self) -> bool:
+        if self.capture_policy_tokens is not None:
+            return bool(self.capture_policy_tokens)
         return os.getenv("IFV_CAPTURE_POLICY_TOKENS", "").strip().lower() in {
             "1",
             "true",
             "yes",
             "on",
         }
+
+    def _policy_token_capture_topk(self) -> int:
+        if self.policy_topk is not None:
+            value = int(self.policy_topk)
+            if value < 1 or value > 100:
+                raise ValueError("policy_topk must be between 1 and 100")
+            return value
+        raw = os.getenv("IFV_POLICY_TOPK", "20").strip()
+        try:
+            value = int(raw)
+        except ValueError as exc:
+            raise ValueError("IFV_POLICY_TOPK must be an integer") from exc
+        if value < 1 or value > 100:
+            raise ValueError("IFV_POLICY_TOPK must be between 1 and 100")
+        return value
 
     def _build_round_messages(
         self,
@@ -2922,6 +2993,9 @@ class StageRunner:
         history: List[Dict[str, Any]],
         evidence_so_far: List[str],
     ) -> List[Dict[str, Any]]:
+        if self._uses_native_chat_completions():
+            return [system_msg, *deepcopy(history[1:])]
+
         messages = [system_msg, user_msg]
         if evidence_so_far:
             summary = "\n".join(f"{idx + 1}. {item}" for idx, item in enumerate(evidence_so_far[-8:]))
@@ -2938,6 +3012,21 @@ class StageRunner:
             recent = recent[-(self.recent_rounds_to_keep * 2):]
         messages.extend(recent)
         return messages
+
+    def _commit_native_chat_history(
+        self,
+        history: List[Dict[str, Any]],
+    ) -> None:
+        if (
+            not self._uses_native_chat_completions()
+            or self.interaction_session is None
+        ):
+            if self._uses_native_chat_completions():
+                self.last_native_history = deepcopy(history[1:])
+            return
+        start = 1 + max(0, self._session_chat_history_start)
+        self.interaction_session.chat_history.extend(deepcopy(history[start:]))
+        self.last_native_history = deepcopy(history[1:])
 
     async def _call_llm(
         self,
@@ -2983,6 +3072,7 @@ class StageRunner:
                 request_kwargs["response_format"] = response_format
             if self._policy_token_capture_enabled():
                 request_kwargs["capture_policy_tokens"] = True
+                request_kwargs["policy_topk"] = self._policy_token_capture_topk()
         request_id = ""
         effective_lifecycle_kind = lifecycle_kind.strip() or (
             "tool_roundtrip"
@@ -3109,7 +3199,10 @@ class StageRunner:
             "reasoning_artifact": reasoning_artifact,
         }
         if request_kwargs.get("capture_policy_tokens"):
-            metadata["policy_token_capture"] = extract_policy_token_capture(raw)
+            metadata["policy_token_capture"] = extract_policy_token_capture(
+                raw,
+                topk=int(request_kwargs["policy_topk"]),
+            )
         return response, metadata
 
     async def _create_interaction(self, **kwargs: Any) -> Dict[str, Any]:
@@ -3229,6 +3322,8 @@ class StageRunner:
         tool_args: Dict[str, Any],
     ) -> Tuple[str, Dict[str, Any]]:
         """Execute one tool with cache-miss single-flight protection."""
+
+        tool_args = self._execution_tool_args(tool_args)
 
         if self.tool_cache and tool_name in self.cacheable_tools:
             cache_tool_args = dict(tool_args)
@@ -4207,7 +4302,7 @@ class StageRunner:
     def _normalize_tool_args(tool_args: Dict[str, Any]) -> Dict[str, Any]:
         normalized = {}
         for key, value in sorted(tool_args.items()):
-            if key.startswith("__"):
+            if key.startswith("__") or key == "question_id":
                 continue
             if isinstance(value, list):
                 normalized[key] = value
@@ -4216,6 +4311,16 @@ class StageRunner:
             else:
                 normalized[key] = value
         return normalized
+
+    @staticmethod
+    def _execution_tool_args(tool_args: Dict[str, Any]) -> Dict[str, Any]:
+        """Remove runtime-owned routing fields before invoking a delegate."""
+
+        return {
+            key: value
+            for key, value in tool_args.items()
+            if not key.startswith("__") and key != "question_id"
+        }
 
     def _unknown_tool_message(self, tool_name: str) -> str:
         available = ", ".join(self.tools.keys()) if self.tools else "(none)"

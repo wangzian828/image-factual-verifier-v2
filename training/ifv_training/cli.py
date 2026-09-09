@@ -38,6 +38,8 @@ from .psd import (
 from .psd_candidates import build_psd_candidate_package
 from .psd_datums import build_sparse_topk_package
 from .psd_repairs import assemble_psd_repair_package
+from .opsd import locate_failure_site
+from .opsd_verifier import verify_causal_episode
 from .rewards import (
     build_and_write_ledger,
     build_ledgers_from_run_artifacts,
@@ -215,6 +217,18 @@ def _parser() -> argparse.ArgumentParser:
         dest="balance_kinds",
     )
     psd_datums.set_defaults(balance_kinds=True)
+
+    opsd_locate = subparsers.add_parser("locate-opsd-failure")
+    opsd_locate.add_argument("--trace", type=Path, required=True)
+    opsd_locate.add_argument("--audit", type=Path)
+    opsd_locate.add_argument("--output", type=Path, required=True)
+
+    opsd_verify = subparsers.add_parser("verify-opsd-episode")
+    opsd_verify.add_argument("--trace", type=Path, required=True)
+    opsd_verify.add_argument("--gold", type=Path, required=True)
+    opsd_verify.add_argument("--output", type=Path, required=True)
+    opsd_verify.add_argument("--local-pass", action="store_true")
+    opsd_verify.add_argument("--downstream-patch-count", type=int, default=0)
 
     run_rewards = subparsers.add_parser("build-run-rewards")
     run_rewards.add_argument("--deterministic", type=Path, required=True)
@@ -430,6 +444,38 @@ def main() -> None:
             max_sequence_length=args.max_sequence_length,
             balance_kinds=args.balance_kinds,
         )
+    elif args.command == "locate-opsd-failure":
+        trace = load_json(args.trace)
+        audit = load_json(args.audit) if args.audit else {}
+        site = locate_failure_site(trace, audit)
+        result = {
+            "found": site is not None,
+            "failure_site": site.public_record() if site is not None else None,
+        }
+        write_json(args.output, result)
+    elif args.command == "verify-opsd-episode":
+        trace = load_json(args.trace)
+        gold = load_json(args.gold)
+        verification = verify_causal_episode(
+            trace,
+            gold=gold,
+            local_pass=args.local_pass,
+            downstream_patch_count=args.downstream_patch_count,
+        )
+        result = {
+            "accepted_for_primary_psd": verification.accepted_for_primary_psd,
+            "local_pass": verification.local_pass,
+            "full_episode_pass": verification.full_episode_pass,
+            "strict_trace_audit_pass": verification.strict_trace_audit_pass,
+            "recorded_verdict": verification.recorded_verdict,
+            "expected_verdict": verification.expected_verdict,
+            "repair_tier": verification.repair_tier,
+            "reasons": list(verification.reasons),
+        }
+        write_json(args.output, result)
+        if not verification.accepted_for_primary_psd:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            raise SystemExit(1)
     elif args.command == "build-run-rewards":
         semantic_artifacts = []
         if args.semantic_artifacts:

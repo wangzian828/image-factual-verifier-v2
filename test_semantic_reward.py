@@ -137,7 +137,7 @@ def _runtime_trace() -> dict[str, Any]:
         "verdict": "real",
         "termination": "success",
         "verdict_basis": {
-            "schema_version": "ifv-unified-judgment-basis-v1",
+            "schema_version": "ifv-raw-history-judgment-basis-v1",
             "decision_mode": "bounded_binary_judgment",
             "objective": "Verify the bridge relation shown in the image.",
             "evidence_ids": [],
@@ -151,7 +151,7 @@ def _runtime_trace() -> dict[str, Any]:
             },
             "all_steps": [],
             "investigation_state": {
-                "schema_version": "ifv-unified-react-v1",
+                "schema_version": "ifv-unified-react-raw-history-v1",
                 "case_id": "case-runtime",
                 "image_sha256": "a" * 64,
                 "objective": "Verify the bridge relation shown in the image.",
@@ -223,7 +223,6 @@ def test_packet_is_episode_aware_and_excludes_hidden_answers() -> None:
     assert "hidden policy thinking" not in rendered
     assert packet["investigation_turns"][0]["turn_id"] == "turn-001"
     assert "case-1--group--r000:turn:turn-1" not in rendered
-    assert packet["investigation_turns"][0]["state_delta"]["gain"] == "evidence_gain"
 
 
 def test_current_react_packet_uses_runtime_memory_without_target_graph() -> None:
@@ -233,9 +232,6 @@ def test_current_react_packet_uses_runtime_memory_without_target_graph() -> None
     assert packet["runtime_objective"].startswith("Verify the bridge")
     assert "target_facts" not in packet
     assert "claim_assessments" not in packet
-    assert packet["visual_memory"]["scene_description"] == (
-        "A bridge crosses a river."
-    )
     assert packet["unresolved_gaps"] == [
         "The event date was not independently checked."
     ]

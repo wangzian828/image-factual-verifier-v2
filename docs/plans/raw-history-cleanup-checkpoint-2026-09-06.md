@@ -85,21 +85,15 @@ python -m pytest -q test_sft_eligibility.py test_unified_react_scoring.py test_w
 python -m compileall -q src scripts training/ifv_training
 ```
 
-Expected legacy failure:
-
-```text
-python -m pytest -q test_react_runtime.py
-collection error: reduce_react_action is no longer exported by react_runtime.py
-```
-
-This test targets the removed reducer API and must be migrated or archived; do
-not restore the API merely to make the historical test collect.
+The retired v3/v4 test files and fixtures were removed after the raw-history
+runtime became the only supported entry. Current strict-audit coverage is in
+`test_raw_history_audit.py`; do not restore reducer compatibility merely to
+make historical tests collect.
 
 ## Next work
 
-1. Migrate or archive historical replay/backfill tests and scripts.
-2. Remove unreachable v3/v4 audit and exporter branches after dependency review.
-3. Validate the native StageRunner fallback boundary and remaining fixture failure.
-4. Build the server one-click teacher rollout, audit, SFT, and dual-package path.
-5. Run and audit ten real training traces on the server.
-6. Package the local Direct QA comparison experiment separately.
+1. Review remaining archive-only replay/backfill scripts before any source cleanup.
+2. Remove unreachable v3/v4 audit and exporter branches only after dependency review.
+3. Build the server one-click teacher rollout, audit, SFT, and dual-package path.
+4. Run and audit ten real training traces on the server.
+5. Package the local Direct QA comparison experiment separately.

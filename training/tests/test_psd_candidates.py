@@ -272,3 +272,114 @@ def test_build_psd_candidate_package_requeues_old_trace_without_capture(
         "episode-old:react:react-1",
         "episode-old:judgment:judgment-1",
     ]
+
+
+def test_strict_audit_location_maps_raw_index_to_projected_policy_step(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "run"
+    trace = _trace(case_id="located")
+    trace["state"]["all_steps"].insert(
+        0,
+        {
+            "stage": "runtime_bootstrap",
+            "action_type": "snapshot",
+            "metadata": {},
+        },
+    )
+    _write_json(run_dir / "traces" / "episode-located.json", trace)
+    _write_jsonl(
+        run_dir / "rollout_groups.jsonl",
+        [
+            {
+                "episode_id": "episode-located",
+                "trace_path": "traces/episode-located.json",
+            }
+        ],
+    )
+    _write_jsonl(
+        run_dir / "post_rollout_rewards.jsonl",
+        [
+            {
+                "case_id": "located",
+                "episode_id": "episode-located",
+                "classification_correct": True,
+                "fatal_engineering_error": False,
+                "strict_trace_audit_pass": False,
+                "strict_trace_audit_failures": [
+                    {"location": "state.all_steps[1].metadata.policy_action"}
+                ],
+            }
+        ],
+    )
+    train_cases = tmp_path / "train-cases.jsonl"
+    _write_jsonl(train_cases, [{"case_id": "located", "split": "train"}])
+
+    output = tmp_path / "candidates"
+    build_psd_candidate_package(
+        run_dir=run_dir,
+        train_cases_path=train_cases,
+        output_dir=output,
+    )
+
+    candidate = json.loads(
+        (output / "repair_candidates.jsonl").read_text(
+            encoding="utf-8"
+        ).splitlines()[0]
+    )
+    localization = candidate["failure_localization"]
+    assert localization["repair_anchor_step_index"] == 0
+    assert localization["repair_anchor_source_step_index"] == 1
+    assert localization["repair_anchor_step_id"] == (
+        "episode-located:react:react-1"
+    )
+
+
+def test_terminal_mismatch_requires_privileged_attribution(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "run"
+    _write_json(
+        run_dir / "traces" / "episode-terminal.json",
+        _trace(case_id="terminal"),
+    )
+    _write_jsonl(
+        run_dir / "rollout_groups.jsonl",
+        [
+            {
+                "episode_id": "episode-terminal",
+                "trace_path": "traces/episode-terminal.json",
+            }
+        ],
+    )
+    _write_jsonl(
+        run_dir / "post_rollout_rewards.jsonl",
+        [
+            {
+                "case_id": "terminal",
+                "episode_id": "episode-terminal",
+                "classification_correct": False,
+                "fatal_engineering_error": False,
+                "strict_trace_audit_pass": True,
+            }
+        ],
+    )
+    train_cases = tmp_path / "train-cases.jsonl"
+    _write_jsonl(train_cases, [{"case_id": "terminal", "split": "train"}])
+
+    output = tmp_path / "candidates"
+    build_psd_candidate_package(
+        run_dir=run_dir,
+        train_cases_path=train_cases,
+        output_dir=output,
+    )
+
+    candidate = json.loads(
+        (output / "repair_candidates.jsonl").read_text(
+            encoding="utf-8"
+        ).splitlines()[0]
+    )
+    assert candidate["failure_localization"][
+        "requires_privileged_attribution"
+    ] is True
+    assert candidate["candidate_status"] == "needs_privileged_localization"

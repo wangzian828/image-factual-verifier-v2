@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 from collections import Counter
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -126,6 +127,9 @@ def _policy_token_capture(metadata: Mapping[str, Any]) -> dict[str, Any]:
     prompt_token_ids = _int_list(raw.get("prompt_token_ids"))
     completion_token_ids = _int_list(raw.get("completion_token_ids"))
     completion_logprobs = _float_list(raw.get("completion_logprobs"))
+    topk = raw.get("completion_topk_by_position")
+    if not isinstance(topk, list):
+        topk = []
     missing: list[str] = []
     if _text(raw.get("status")) != "complete":
         missing.append("capture_status_not_complete")
@@ -137,6 +141,8 @@ def _policy_token_capture(metadata: Mapping[str, Any]) -> dict[str, Any]:
         missing.append("completion_logprobs")
     elif len(completion_logprobs) != len(completion_token_ids):
         missing.append("completion_logprob_length_mismatch")
+    if topk and len(topk) != len(completion_token_ids):
+        missing.append("completion_topk_length_mismatch")
     if missing:
         return {
             "status": "incomplete",
@@ -147,6 +153,8 @@ def _policy_token_capture(metadata: Mapping[str, Any]) -> dict[str, Any]:
         "prompt_token_ids": prompt_token_ids,
         "completion_token_ids": completion_token_ids,
         "completion_logprobs": completion_logprobs,
+        "completion_topk_by_position": topk,
+        "topk": int(raw.get("topk", 0) or 0),
     }
 
 
@@ -266,6 +274,12 @@ def _trace_case_id(trace: Mapping[str, Any]) -> str:
     )
 
 
+def _trace_runtime_store_path(trace: Mapping[str, Any]) -> str:
+    state = _mapping(trace.get("state"))
+    runtime_store = _mapping(state.get("runtime_store"))
+    return _text(runtime_store.get("runtime_path"))
+
+
 def _load_train_case_allowlist(path: Path) -> dict[str, str]:
     """Load an explicit train-case manifest, not a generic all-split manifest."""
 
@@ -323,6 +337,97 @@ def _source_metadata(run_manifest: Mapping[str, Any]) -> dict[str, str]:
     return {
         "source_run_id": _text(run_manifest.get("run_id")),
         "runtime_commit": _text(run_manifest.get("git_commit")),
+    }
+
+
+def _step_index_from_location(value: Any) -> int | None:
+    match = re.search(r"all_steps\[(\d+)\]", _text(value))
+    return int(match.group(1)) if match else None
+
+
+def _failure_localization(
+    *,
+    steps: list[dict[str, Any]],
+    reward: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Locate the earliest *observed* failure without pretending to know causality.
+
+    Post-rollout audit reports may carry an exact ``state.all_steps[i]`` path.
+    When they do not, protocol rejection is still directly attributable to its
+    first rejected step.  A terminal label mismatch is intentionally marked as
+    requiring privileged attribution instead of being pinned to the last
+    judgment step; the proposer/verifier must decide whether an earlier action
+    caused it.
+    """
+
+    audit_rows = reward.get("strict_trace_audit_failures", [])
+    if isinstance(audit_rows, list):
+        for item in audit_rows:
+            if not isinstance(item, Mapping):
+                continue
+            index = _step_index_from_location(
+                item.get("location") or item.get("path") or item.get("message")
+            )
+            if index is None:
+                continue
+            projected_index = next(
+                (
+                    projected
+                    for projected, step in enumerate(steps)
+                    if int(step.get("source_step_index", -1)) == index
+                ),
+                None,
+            )
+            if projected_index is None:
+                continue
+            return {
+                "status": "observed_failure",
+                "basis": "strict_trace_audit_location",
+                "requires_privileged_attribution": False,
+                "observed_failure_source_step_indices": [index],
+                "observed_failure_step_indices": [projected_index],
+                "repair_anchor_step_index": projected_index,
+                "repair_anchor_source_step_index": index,
+                "repair_anchor_step_id": steps[projected_index]["step_id"],
+            }
+
+    for index, step in enumerate(steps):
+        if step.get("protocol_rejected"):
+            return {
+                "status": "observed_failure",
+                "basis": "first_protocol_rejection",
+                "requires_privileged_attribution": False,
+                "observed_failure_source_step_indices": [
+                    int(step["source_step_index"])
+                ],
+                "observed_failure_step_indices": [index],
+                "repair_anchor_step_index": index,
+                "repair_anchor_source_step_index": int(
+                    step["source_step_index"]
+                ),
+                "repair_anchor_step_id": step["step_id"],
+            }
+
+    judgment_indices = [
+        index
+        for index, step in enumerate(steps)
+        if step.get("example_type") == "judgment"
+    ]
+    anchor_index = judgment_indices[0] if judgment_indices else (len(steps) - 1)
+    return {
+        "status": "needs_privileged_attribution",
+        "basis": "terminal_outcome_or_unlocated_audit_failure",
+        "requires_privileged_attribution": True,
+        "observed_failure_source_step_indices": [
+            int(steps[index]["source_step_index"])
+            for index in judgment_indices[:1]
+        ],
+        "observed_failure_step_indices": judgment_indices[:1],
+        "repair_anchor_step_index": anchor_index,
+        "repair_anchor_source_step_index": int(
+            steps[anchor_index]["source_step_index"]
+        ),
+        "repair_anchor_step_id": steps[anchor_index]["step_id"],
     }
 
 
@@ -463,6 +568,7 @@ def build_psd_candidate_package(
             **source,
             "source_trace_path": trace_path.relative_to(run_dir).as_posix(),
             "source_trace_sha256": trace_sha256,
+            "source_runtime_store_path": _trace_runtime_store_path(trace),
         }
         if classification_correct and strict_audit_pass:
             incomplete_steps = [
@@ -507,10 +613,15 @@ def build_psd_candidate_package(
         protocol_steps = [step for step in steps if step["protocol_rejected"]]
         if protocol_steps:
             repair_signal, repair_site = "protocol_rejection", protocol_steps[0]
-        elif not strict_audit_pass:
-            repair_signal, repair_site = "strict_trace_audit_failure", steps[-1]
         else:
-            repair_signal, repair_site = "terminal_outcome_mismatch", steps[-1]
+            localization = _failure_localization(steps=steps, reward=reward)
+            repair_index = int(localization["repair_anchor_step_index"])
+            repair_signal = (
+                "strict_trace_audit_failure"
+                if not strict_audit_pass
+                else "terminal_outcome_mismatch"
+            )
+            repair_site = steps[repair_index]
         if repair_site["rollout_token_capture"]["status"] != "complete":
             token_capture_requeue.append(
                 {
@@ -539,6 +650,30 @@ def build_psd_candidate_package(
                 "case_id": case_id,
                 "episode_id": episode_id,
                 "repair_signal": repair_signal,
+                "failure_localization": (
+                    {
+                        **_failure_localization(steps=steps, reward=reward),
+                        "repair_signal": repair_signal,
+                    }
+                    if not protocol_steps
+                    else {
+                        "status": "observed_failure",
+                        "basis": "first_protocol_rejection",
+                        "requires_privileged_attribution": False,
+                        "observed_failure_source_step_indices": [
+                            int(protocol_steps[0]["source_step_index"])
+                        ],
+                        "observed_failure_step_indices": [
+                            steps.index(protocol_steps[0])
+                        ],
+                        "repair_anchor_step_index": steps.index(protocol_steps[0]),
+                        "repair_anchor_source_step_index": int(
+                            protocol_steps[0]["source_step_index"]
+                        ),
+                        "repair_anchor_step_id": protocol_steps[0]["step_id"],
+                        "repair_signal": repair_signal,
+                    }
+                ),
                 "strict_trace_audit_failure_codes": [
                     _text(value)
                     for value in reward.get("strict_trace_audit_failure_codes", [])

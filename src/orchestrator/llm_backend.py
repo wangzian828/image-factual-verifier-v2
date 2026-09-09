@@ -9,6 +9,8 @@ import json
 import os
 import atexit
 import asyncio
+import math
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 import threading
@@ -78,7 +80,70 @@ def _completion_logprob_values(value: Any) -> list[float]:
     return result
 
 
-def extract_policy_token_capture(payload: Mapping[str, Any]) -> Dict[str, Any]:
+def _top_logprob_token_id(value: Mapping[str, Any]) -> int | None:
+    for key in ("token_id", "tokenId"):
+        raw = value.get(key)
+        if isinstance(raw, bool):
+            continue
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            pass
+    token = value.get("token")
+    if not isinstance(token, str):
+        return None
+    match = re.fullmatch(r"<?token_id:(\d+)>?", token.strip())
+    return int(match.group(1)) if match else None
+
+
+def _completion_topk_values(value: Any, *, topk: int) -> list[list[dict[str, Any]]]:
+    """Normalize numeric per-token top-logprob entries from local Qwen servers."""
+
+    if not isinstance(value, Mapping):
+        return []
+    content = value.get("content")
+    if not isinstance(content, list):
+        return []
+    result: list[list[dict[str, Any]]] = []
+    for position in content:
+        if not isinstance(position, Mapping):
+            return []
+        raw_entries = position.get("top_logprobs")
+        if not isinstance(raw_entries, list):
+            return []
+        entries: list[dict[str, Any]] = []
+        for raw_entry in raw_entries[: max(1, int(topk))]:
+            if not isinstance(raw_entry, Mapping):
+                continue
+            token_id = _top_logprob_token_id(raw_entry)
+            try:
+                logprob = float(raw_entry.get("logprob"))
+            except (TypeError, ValueError):
+                continue
+            if token_id is None or not math.isfinite(logprob):
+                continue
+            entries.append({"token_id": token_id, "logprob": logprob})
+        if len(entries) != max(1, int(topk)):
+            return []
+        max_logprob = max(item["logprob"] for item in entries)
+        weights = [math.exp(item["logprob"] - max_logprob) for item in entries]
+        total = sum(weights)
+        if not math.isfinite(total) or total <= 0:
+            return []
+        result.append(
+            [
+                {"token_id": item["token_id"], "probability": weight / total}
+                for item, weight in zip(entries, weights)
+            ]
+        )
+    return result
+
+
+def extract_policy_token_capture(
+    payload: Mapping[str, Any],
+    *,
+    topk: int = 20,
+) -> Dict[str, Any]:
     """Extract a fail-closed numeric token record from a Qwen server response."""
 
     choices = payload.get("choices")
@@ -98,6 +163,10 @@ def extract_policy_token_capture(payload: Mapping[str, Any]) -> Dict[str, Any]:
     completion_logprobs = _completion_logprob_values(
         choice.get("logprobs") if isinstance(choice, Mapping) else None
     )
+    completion_topk = _completion_topk_values(
+        choice.get("logprobs") if isinstance(choice, Mapping) else None,
+        topk=topk,
+    )
     missing: list[str] = []
     if not prompt_token_ids:
         missing.append("prompt_token_ids")
@@ -113,6 +182,8 @@ def extract_policy_token_capture(payload: Mapping[str, Any]) -> Dict[str, Any]:
         "prompt_token_ids": prompt_token_ids,
         "completion_token_ids": completion_token_ids,
         "completion_logprobs": completion_logprobs,
+        "completion_topk_by_position": completion_topk,
+        "topk": topk if completion_topk else 0,
         "missing": missing,
     }
 
@@ -423,11 +494,24 @@ class APIBackend(LLMBackend):
                     "policy token capture is only supported for local "
                     "Qwen-compatible chat completions"
                 )
+            policy_topk = max(
+                1,
+                min(
+                    100,
+                    int(
+                        kwargs.get(
+                            "policy_topk",
+                            os.getenv("IFV_POLICY_TOPK", "20"),
+                        )
+                    ),
+                ),
+            )
             body.update(
                 {
                     "return_token_ids": True,
+                    "return_tokens_as_token_ids": True,
                     "logprobs": True,
-                    "top_logprobs": 0,
+                    "top_logprobs": policy_topk,
                 }
             )
         generation_config = kwargs.get("generation_config")

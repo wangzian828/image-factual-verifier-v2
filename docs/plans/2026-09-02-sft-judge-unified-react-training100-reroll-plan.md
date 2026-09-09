@@ -80,7 +80,7 @@ src/orchestrator/pipeline.py::Orchestrator.run()
 - 注册：`src/orchestrator/tool_registry.py`
 - ReAct 工具列表和预算：`src/orchestrator/react_runtime.py`
 - pipeline 工具预算和缓存集合：`src/orchestrator/pipeline.py`
-- 当前已有单测：`test_text_image_search.py`、`test_react_runtime.py`
+- 当前已有单测：`test_text_image_search.py`、`test_raw_history_audit.py`
 
 因此工具本身已经注册并可执行，但主 Agent prompt 之前没有单独说明：
 

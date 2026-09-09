@@ -228,7 +228,7 @@ def test_real_canary_accepts_current_claimless_react_artifacts(
                 "decision_policy_version": "unified-react-v1",
                 "verdict": "real",
                 "verdict_basis": {
-                    "schema_version": "ifv-unified-judgment-basis-v1",
+                    "schema_version": "ifv-raw-history-judgment-basis-v1",
                     "decision_mode": "bounded_binary_judgment",
                     "evidence_ids": ["evidence-1"],
                 },
@@ -242,7 +242,7 @@ def test_real_canary_accepts_current_claimless_react_artifacts(
                 "llm_api_calls": 3,
                 "state": {
                     "investigation_state": {
-                        "schema_version": "ifv-unified-react-v1",
+                        "schema_version": "ifv-unified-react-raw-history-v1",
                         "action_count": 1,
                         "visual_memory": {},
                     },

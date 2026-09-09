@@ -128,6 +128,7 @@ def route_signature(tool_name: str, tool_args: Mapping[str, Any]) -> dict[str, A
                 "image_input",
                 "__claim_text",
                 "__evidence_goal",
+                "question_id",
             }
             and not key.startswith("__")
         }

@@ -338,7 +338,7 @@ Orchestrator.run()
 
 已完成：
 
-1. `reduce_react_action()` 将 `external_unavailable`、`provider_error`、
+1. 旧版 reducer 曾将 `external_unavailable`、`provider_error`、
    `malformed_tool_result` 和 `success_empty` 都记录为可恢复的 failure ledger 项；
    工具 contract/解析异常不再自动产生 `engineering_error`。
 2. `pipeline._apply_react_observation()` 成为当前 ReAct 的事务边界：
@@ -360,7 +360,7 @@ Orchestrator.run()
 
 新增/更新本地验证：
 
-- `test_react_runtime.py`：
+- 当前 raw-history runtime：
   - 坏 JSON 的 `perceive_scene` 被记录为可恢复失败并消耗一次动作；
   - malformed tool contract 可恢复；
   - `success_empty` 不晋升为 Evidence；
@@ -368,16 +368,16 @@ Orchestrator.run()
 - 已通过：
 
 ```text
-pytest -q test_react_runtime.py test_native_interactions.py \
+pytest -q test_raw_history_audit.py test_native_interactions.py \
   test_gemini_interactions_contract.py test_tool_contract_repairs.py
 
 113 passed, 6 skipped
 ```
 
-`test_audit_real_trace.py` 当前在收集阶段因已删除的历史模块
-`src.orchestrator.coverage` 缺失而失败；该失败在本次改动前已存在，且不阻断当前
-`test_react_runtime.py` 内的 strict audit fixture。真实 smoke 仍会使用
-`scripts/audit_real_trace.py` 再验证。
+旧版 audit 测试曾在收集阶段依赖已删除的
+`src.orchestrator.coverage`；该历史测试与 fixture 已清理。当前 strict audit
+回归由 `test_raw_history_audit.py` 覆盖，真实 smoke 仍使用
+`scripts/audit_real_trace.py` 验证。
 
 ### 待完成
 

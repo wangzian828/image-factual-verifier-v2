@@ -17,7 +17,11 @@ from src.orchestrator.llm_backend import (
     extract_policy_token_capture,
 )
 from src.orchestrator.runtime_events import CaseRuntimeStore
-from src.orchestrator.stage_runner import StageRunner, StageStep
+from src.orchestrator.stage_runner import (
+    InteractionSession,
+    StageRunner,
+    StageStep,
+)
 from src.tools.base import BaseTool
 
 
@@ -285,6 +289,62 @@ def test_qwen_native_function_round_trip_uses_tool_role() -> None:
     assert assistant["tool_calls"][0]["id"] == "call-qwen-1"
     assert tool_result["tool_call_id"] == "call-qwen-1"
     assert json.loads(tool_result["content"])["function_call_id"] == "call-qwen-1"
+
+
+def test_qwen_interaction_session_retains_raw_history_across_stage_runners() -> None:
+    session = InteractionSession()
+    first_backend = QwenFakeBackend([_tool_response()])
+    first_runner = StageRunner(
+        llm=first_backend,
+        system_prompt="Investigate the relevant fact.",
+        tools=[LookupTool()],
+        output_schema=AnswerOutput,
+        max_rounds=1,
+        min_tool_calls=1,
+        force_tool_each_round=True,
+        should_stop=lambda steps: any(
+            step.action_type == "tool_call" for step in steps
+        ),
+        stop_output_factory=lambda: AnswerOutput(answer="boundary"),
+        stage_name="unified_react",
+        attach_image=False,
+        interaction_session=session,
+    )
+
+    parsed, _ = asyncio.run(first_runner.run("First action context."))
+
+    assert parsed == AnswerOutput(answer="boundary")
+    assert [item["role"] for item in session.chat_history] == [
+        "user",
+        "assistant",
+        "tool",
+    ]
+
+    second_backend = QwenFakeBackend([_output_response()])
+    second_runner = StageRunner(
+        llm=second_backend,
+        system_prompt="Return the final result.",
+        tools=[],
+        output_schema=AnswerOutput,
+        max_rounds=1,
+        stage_name="unified_judgment",
+        attach_image=False,
+        interaction_session=session,
+    )
+
+    final, steps = asyncio.run(second_runner.run("Final judgment context."))
+
+    assert final == AnswerOutput(answer="ceremonial coach")
+    messages = second_backend.requests[0]["messages"]
+    assert [item["role"] for item in messages] == [
+        "system",
+        "user",
+        "assistant",
+        "tool",
+        "user",
+    ]
+    assert messages[-1]["content"] == "Final judgment context."
+    assert steps[0].metadata["policy_input"]["input_payload"] == messages[1:]
 
 
 def test_qwen_protocol_correction_does_not_consume_action_round() -> None:
@@ -954,8 +1014,32 @@ def test_qwen_policy_token_capture_forwards_and_validates_native_tokens() -> Non
                         "token_ids": [4, 5],
                         "logprobs": {
                             "content": [
-                                {"token": "{", "logprob": -0.1},
-                                {"token": "}", "logprob": -0.2},
+                                {
+                                    "token": "token_id:4",
+                                    "logprob": -0.1,
+                                    "top_logprobs": [
+                                        {
+                                            "token": f"token_id:{token_id}",
+                                            "logprob": -0.1 - rank,
+                                        }
+                                        for rank, token_id in enumerate(
+                                            range(4, 24)
+                                        )
+                                    ],
+                                },
+                                {
+                                    "token": "token_id:5",
+                                    "logprob": -0.2,
+                                    "top_logprobs": [
+                                        {
+                                            "token_id": token_id,
+                                            "logprob": -0.2 - rank,
+                                        }
+                                        for rank, token_id in enumerate(
+                                            range(5, 25)
+                                        )
+                                    ],
+                                },
                             ]
                         },
                     }
@@ -984,16 +1068,30 @@ def test_qwen_policy_token_capture_forwards_and_validates_native_tokens() -> Non
     response = asyncio.run(run())
 
     assert captured["return_token_ids"] is True
+    assert captured["return_tokens_as_token_ids"] is True
     assert captured["logprobs"] is True
-    assert captured["top_logprobs"] == 0
-    assert extract_policy_token_capture(response.raw or {}) == {
+    assert captured["top_logprobs"] == 20
+    capture = extract_policy_token_capture(response.raw or {})
+    assert capture == {
         "schema_version": "ifv-policy-token-capture-v1",
         "status": "complete",
         "prompt_token_ids": [1, 2, 3],
         "completion_token_ids": [4, 5],
         "completion_logprobs": [-0.1, -0.2],
+        "completion_topk_by_position": capture["completion_topk_by_position"],
+        "topk": 20,
         "missing": [],
     }
+    assert len(capture["completion_topk_by_position"]) == 2
+    assert all(
+        len(entries) == 20
+        for entries in capture["completion_topk_by_position"]
+    )
+    assert capture["completion_topk_by_position"][0][0]["token_id"] == 4
+    assert sum(
+        item["probability"]
+        for item in capture["completion_topk_by_position"][0]
+    ) == pytest.approx(1.0)
 
 
 def test_qwen_stage_archives_requested_policy_token_capture(
@@ -1008,7 +1106,20 @@ def test_qwen_stage_archives_requested_policy_token_capture(
                     "content": '{"answer":"ceremonial coach"}',
                     "gen_tokens": [12],
                 },
-                "logprobs": {"content": [{"logprob": -0.2}]},
+                "logprobs": {
+                    "content": [
+                        {
+                            "logprob": -0.2,
+                            "top_logprobs": [
+                                {
+                                    "token": f"token_id:{token_id}",
+                                    "logprob": -rank,
+                                }
+                                for rank, token_id in enumerate(range(12, 32))
+                            ],
+                        }
+                    ]
+                },
             }
         ],
     }
@@ -1036,8 +1147,38 @@ def test_qwen_stage_archives_requested_policy_token_capture(
 
     assert parsed == AnswerOutput(answer="ceremonial coach")
     assert backend.requests[0]["capture_policy_tokens"] is True
+    assert backend.requests[0]["policy_topk"] == 20
     assert steps[0].metadata["policy_token_capture"]["status"] == "complete"
     assert steps[0].metadata["policy_token_capture"]["completion_token_ids"] == [12]
+    assert steps[0].metadata["policy_token_capture"]["topk"] == 20
+
+
+def test_qwen_policy_topk_fails_closed_without_numeric_token_ids() -> None:
+    payload = {
+        "prompt_token_ids": [1],
+        "choices": [
+            {
+                "token_ids": [2],
+                "logprobs": {
+                    "content": [
+                        {
+                            "token": "ordinary text",
+                            "logprob": -0.1,
+                            "top_logprobs": [
+                                {"token": "ordinary text", "logprob": -0.1}
+                            ],
+                        }
+                    ]
+                },
+            }
+        ],
+    }
+
+    capture = extract_policy_token_capture(payload, topk=1)
+
+    assert capture["status"] == "complete"
+    assert capture["topk"] == 0
+    assert capture["completion_topk_by_position"] == []
 
 
 def test_qwen_reasoning_is_archived_but_not_reintroduced(

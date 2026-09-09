@@ -40,6 +40,6 @@ smoke，成功后自动启动全部 8,490 条；完整交付以
 
 ```powershell
 python -m compileall -q src scripts training/ifv_training
-python -m pytest -q test_unified_react.py test_workflow_lifecycle.py
+python -m pytest -q test_raw_history_audit.py test_workflow_lifecycle.py
 python -m pytest -q training/tests
 ```

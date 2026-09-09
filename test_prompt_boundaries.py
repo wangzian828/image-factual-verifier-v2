@@ -13,7 +13,7 @@ def test_active_prompts_are_current_and_semantically_bounded() -> None:
     prompts = {
         "browse extraction": (EXTRACT_PROMPT, 1400),
         "unified react": (UNIFIED_REACT_SYSTEM_PROMPT, 7000),
-        "unified judgment": (UNIFIED_JUDGMENT_SYSTEM_PROMPT, 1200),
+        "unified judgment": (UNIFIED_JUDGMENT_SYSTEM_PROMPT, 1600),
     }
 
     for name, (prompt, maximum_length) in prompts.items():
@@ -28,21 +28,15 @@ def test_active_prompts_are_current_and_semantically_bounded() -> None:
     assert "Established:" in react_prompt
     assert "Open:" in react_prompt
     assert "Action:" in react_prompt
-    assert "concrete image-grounded clue" in react_prompt
-    assert "generic real/fake label" in react_prompt
+    assert "Ground every route and finding in concrete image facts" in react_prompt
+    assert "generic visual impression" in react_prompt
     assert "Use a reverse-image result for image or scene correspondence" in react_prompt
-    assert "direct answer, direct contradiction, background context" in react_prompt
-    assert "decision_capable_support" in react_prompt
-    assert "decision_capable_refute" in react_prompt
+    assert "directly addresses the open question" in react_prompt
     assert "global action budget is exhausted" in react_prompt
     assert "finish_investigation" in react_prompt
-    assert "The runtime records evidence, IDs, and state" in react_prompt
-    assert "generic visual impression" in react_prompt
-    assert "text-bearing layer" in react_prompt
-    assert "read its exact visible content with" in react_prompt
-    assert "added text is a direct trigger" in react_prompt
-    assert "only a short fragment" in react_prompt
-    assert "focused_visual_inspection" in react_prompt
+    assert "successful, directed search with no matching result" in react_prompt
+    assert "reassess the complete event claim" in react_prompt
+    assert "Tool errors, malformed results, and external access failures" in react_prompt
 
     browse_prompt = " ".join(EXTRACT_PROMPT.split())
     assert "missing mention is not refutation" in browse_prompt

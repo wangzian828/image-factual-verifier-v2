@@ -4,38 +4,14 @@ from concurrent.futures import ThreadPoolExecutor
 import inspect
 import json
 import threading
-from types import SimpleNamespace
 
 import pytest
 
 from src.integrations.vlm.qwen_vl import QwenVLClient
-from src.orchestrator.react_runtime import (
-    new_unified_react_runtime_state,
-    reduce_react_action,
-)
 from src.orchestrator.stage_runner import StageRunner
 from src.orchestrator.tool_registry import build_all_tools_with_health
 from src.tools.crop_and_inspect import CropAndInspectTool, INSPECT_SCHEMA
 from src.tools.ocr_with_position import OCRWithPositionTool
-
-
-def _runtime_state():
-    from src.orchestrator.state import ImageOnlyRuntimeCase
-
-    case = ImageOnlyRuntimeCase(
-        case_id="case-state-machine",
-        image_path="fixture.jpg",
-        image_sha256="a" * 64,
-    )
-    return case, new_unified_react_runtime_state(case)
-
-
-def _progress() -> dict[str, str]:
-    return {
-        "status": "investigating",
-        "basis": "The factual question remains unresolved.",
-    }
-
 
 def test_qwen_structured_vision_accepts_and_validates_response_schema(
     monkeypatch: pytest.MonkeyPatch,
@@ -104,38 +80,6 @@ def test_qwen_health_requires_credentials(
     assert all("QWEN_API_KEY" in health[name].error for name in structured)
 
 
-def test_error_search_payload_cannot_create_discovery() -> None:
-    case, state = _runtime_state()
-    update = reduce_react_action(
-        state,
-        tool_name="text_search",
-        tool_args={"queries": "partial", "investigation_progress": _progress()},
-        call_id="call-error-partial",
-        serialized_result=json.dumps(
-            {
-                "status": "error",
-                "error": "provider failed after returning partial rows",
-                "queries": [
-                    {
-                        "query": "partial",
-                        "results": [
-                            {
-                                "title": "must not land",
-                                "url": "https://example.test/partial",
-                                "snippet": "partial row",
-                            }
-                        ],
-                    }
-                ],
-            }
-        ),
-    )
-
-    assert update["accepted"] is True
-    assert update["failure"]["code"] == "provider_error"
-    assert state.discoveries == []
-
-
 def test_search_runtime_payload_is_the_same_payload_shown_to_model() -> None:
     runner = object.__new__(StageRunner)
     raw = {
@@ -156,18 +100,15 @@ def test_search_runtime_payload_is_the_same_payload_shown_to_model() -> None:
         ],
     }
 
-    canonical = runner._canonical_tool_result("text_search", raw)
-    serialized = json.dumps(canonical)
+    serialized = json.dumps(raw)
+    visible = runner._model_visible_tool_result(serialized)
 
-    assert runner._model_visible_tool_result(
-        "text_search",
-        serialized,
-    ) == canonical
-    assert len(canonical["queries"][0]["results"]) == 10
-    assert canonical["queries"][0]["results"][-1]["url"] == (
+    assert visible == raw
+    assert len(visible["queries"][0]["results"]) == 10
+    assert visible["queries"][0]["results"][-1]["url"] == (
         "https://example.test/9"
     )
-    assert "top_results" not in canonical["queries"][0]
+    assert "top_results" not in visible["queries"][0]
 
 
 def test_visit_canonical_payload_preserves_exact_passage_and_span() -> None:
@@ -225,7 +166,7 @@ def test_visit_canonical_payload_preserves_exact_passage_and_span() -> None:
         ],
     }
 
-    canonical = runner._canonical_tool_result("visit", raw)
+    canonical = runner._model_visible_tool_result(json.dumps(raw))
 
     assert canonical["evidence"] == evidence
     assert len(canonical["evidence"]) == (

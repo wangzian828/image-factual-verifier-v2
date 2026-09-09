@@ -951,6 +951,7 @@ class ContextLedger:
             reconstructed[str(item.get("kind", ""))] = self._restore_media(value)
         return reconstructed
 
+
     def _externalize_media(self, value: Any) -> tuple[Any, list[Dict[str, Any]]]:
         media: list[Dict[str, Any]] = []
 
@@ -1040,6 +1041,48 @@ class ContextLedger:
                 return {"type": "image_url", "image_url": {"url": data_url}}
             return {"type": value.get("type", "image"), "data": data_url}
         return {str(key): self._restore_media(item) for key, item in value.items()}
+
+
+def reconstruct_archived_request(
+    runtime_root: str | Path,
+    request_id: str,
+) -> Dict[str, Any]:
+    """Read one archived provider request without creating a new attempt."""
+
+    root = Path(runtime_root).expanduser().resolve()
+    if not root.is_dir():
+        raise FileNotFoundError(f"runtime archive does not exist: {root}")
+    manifest_path = root / "context" / f"{str(request_id).strip()}.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if not isinstance(manifest, Mapping):
+        raise ValueError("runtime context manifest must be an object")
+    store = ContentAddressedArtifactStore(root / "artifacts" / "sha256")
+
+    def restore(value: Any) -> Any:
+        if isinstance(value, list):
+            return [restore(item) for item in value]
+        if not isinstance(value, Mapping):
+            return value
+        descriptor = value.get("artifact_ref")
+        if isinstance(descriptor, Mapping):
+            content = store.read_bytes(descriptor)
+            media_type = str(value.get("media_type", "application/octet-stream"))
+            if str(value.get("encoding", "")) == "raw_base64":
+                return {"type": value.get("type", "image"), "mime_type": media_type,
+                        "data": base64.b64encode(content).decode("ascii")}
+            data_url = f"data:{media_type};base64," + base64.b64encode(content).decode("ascii")
+            if str(value.get("type", "")).lower() == "image_url":
+                return {"type": "image_url", "image_url": {"url": data_url}}
+            return {"type": value.get("type", "image"), "data": data_url}
+        return {str(key): restore(child) for key, child in value.items()}
+
+    result: Dict[str, Any] = {}
+    for item in manifest.get("context_items", []) or []:
+        if not isinstance(item, Mapping):
+            continue
+        raw = store.read_bytes(item.get("artifact", {}))
+        result[str(item.get("kind", ""))] = restore(json.loads(raw.decode("utf-8")))
+    return result
 
 
 def _usage_int(usage: Mapping[str, Any], *names: str) -> Optional[int]:
