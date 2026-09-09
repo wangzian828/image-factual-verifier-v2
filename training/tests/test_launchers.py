@@ -300,6 +300,10 @@ def test_sft_launchers_support_cached_datasets_and_tunable_dataloaders() -> None
         assert "run_with_resource_monitor.py" in source
         assert "resource-summary.json" in source
         assert "resource-samples.jsonl" in source
+        assert "monitor-latest.json" in source
+        assert "watch_sft.py" in source
+        assert "IFV_SFT_WATCHDOG_ENABLED" in source
+        assert "IFV_SFT_BEHAVIOR_METRICS" in source
         assert "--train-exit-code" in source
         assert "--resource-summary" in source
         assert "--cached_dataset" in source

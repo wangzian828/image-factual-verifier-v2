@@ -29,6 +29,7 @@ from .perception import (
 )
 from .policy import convert_policy_dataset
 from .profile import write_training_profile
+from .watchdog import build_sft_watchdog_snapshot
 from .psd import (
     audit_psd_hints,
     build_psd_target_package,
@@ -274,6 +275,16 @@ def _parser() -> argparse.ArgumentParser:
     checkpoint_profile = subparsers.add_parser("checkpoint-io-profile")
     checkpoint_profile.add_argument("--checkpoint", type=Path, required=True)
     checkpoint_profile.add_argument("--output", type=Path, required=True)
+
+    monitor_sft = subparsers.add_parser("monitor-sft")
+    monitor_sft.add_argument("--train-log", type=Path, required=True)
+    monitor_sft.add_argument("--checkpoint-root", type=Path)
+    monitor_sft.add_argument("--resource-samples", type=Path)
+    monitor_sft.add_argument("--behavior-metrics", type=Path)
+    monitor_sft.add_argument("--output", type=Path)
+    monitor_sft.add_argument("--stale-seconds", type=float, default=900.0)
+    monitor_sft.add_argument("--trend-window", type=int, default=5)
+    monitor_sft.add_argument("--strict", action="store_true")
     return parser
 
 
@@ -494,6 +505,19 @@ def main() -> None:
         result = checkpoint_io_profile(args.checkpoint)
         write_checkpoint_json(args.output, result)
         if not result["passed"]:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            raise SystemExit(1)
+    elif args.command == "monitor-sft":
+        result = build_sft_watchdog_snapshot(
+            train_log=args.train_log,
+            checkpoint_root=args.checkpoint_root,
+            resource_samples=args.resource_samples,
+            behavior_metrics=args.behavior_metrics,
+            output=args.output,
+            stale_seconds=args.stale_seconds,
+            trend_window=args.trend_window,
+        )
+        if args.strict and result["health"] == "critical":
             print(json.dumps(result, ensure_ascii=False, indent=2))
             raise SystemExit(1)
     else:

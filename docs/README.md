@@ -11,6 +11,7 @@
 - [Teacher Rollout 自动流程](teacher-rollout-autopilot.md)
 - [教师轨迹与 SFT 完整交接](teacher-rollout-and-sft-handoff.md)
 - [Qwen / ms-swift 部署说明](qwen-ms-swift-deployment.md)
+- [SFT 机器监控与语义看门狗](sft-monitoring-and-semantic-watchdog.md)
 - [新服务器部署与 Codex 交接](portable-deployment-handoff.md)
 
 ## Prompt 与运行时

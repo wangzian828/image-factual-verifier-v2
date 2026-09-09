@@ -272,6 +272,35 @@ export IMAGE_MAX_TOKEN_NUM="$IFV_IMAGE_MAX_TOKEN_NUM"
 print_command "${args[@]}"
 RESOURCE_SUMMARY="$LOG_DIR/resource-summary.json"
 RESOURCE_SAMPLES="$LOG_DIR/resource-samples.jsonl"
+WATCHDOG_OUTPUT="$LOG_DIR/monitor-latest.json"
+WATCHDOG_LOG="$LOG_DIR/monitor.log"
+WATCHDOG_PID=""
+touch "$LOG_DIR/train.log"
+export PYTHONPATH="$REPO_ROOT/training${PYTHONPATH:+:$PYTHONPATH}"
+watchdog_args=(
+  python "$SCRIPT_DIR/watch_sft.py"
+  --train-log "$LOG_DIR/train.log"
+  --checkpoint-root "$OUTPUT_DIR"
+  --resource-samples "$RESOURCE_SAMPLES"
+  --output "$WATCHDOG_OUTPUT"
+  --interval-seconds "${IFV_SFT_WATCHDOG_INTERVAL_SECONDS:-60}"
+  --stale-seconds "${IFV_SFT_WATCHDOG_STALE_SECONDS:-900}"
+)
+if [[ -n "${IFV_SFT_BEHAVIOR_METRICS:-}" ]]; then
+  watchdog_args+=(--behavior-metrics "$IFV_SFT_BEHAVIOR_METRICS")
+fi
+stop_watchdog() {
+  if [[ -n "$WATCHDOG_PID" ]] && kill -0 "$WATCHDOG_PID" 2>/dev/null; then
+    kill "$WATCHDOG_PID" 2>/dev/null || true
+    wait "$WATCHDOG_PID" 2>/dev/null || true
+  fi
+  WATCHDOG_PID=""
+}
+if [[ "${IFV_SFT_WATCHDOG_ENABLED:-true}" == "true" ]]; then
+  "${watchdog_args[@]}" >"$WATCHDOG_LOG" 2>&1 &
+  WATCHDOG_PID="$!"
+  trap stop_watchdog EXIT
+fi
 set +e
 python "$SCRIPT_DIR/run_with_resource_monitor.py" \
   --summary-output "$RESOURCE_SUMMARY" \
@@ -281,6 +310,10 @@ python "$SCRIPT_DIR/run_with_resource_monitor.py" \
   -- "${args[@]}" 2>&1 | tee "$LOG_DIR/train.log"
 train_status="${PIPESTATUS[0]}"
 set -e
+stop_watchdog
+trap - EXIT
+final_watchdog_args=("${watchdog_args[@]}" --once)
+"${final_watchdog_args[@]}" >>"$WATCHDOG_LOG" 2>&1 || true
 encode_cache_status=0
 if [[ -n "$ENCODE_CACHE_REPORT" ]]; then
   IFV_ENCODE_CACHE_ENABLED=false python -m ifv_training encode-cache-report \
