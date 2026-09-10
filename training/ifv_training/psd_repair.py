@@ -19,6 +19,7 @@ from src.orchestrator.runtime_events import reconstruct_archived_request
 
 
 PSD_ATTEMPT_SCHEMA_VERSION = "ifv-psd-repair-attempt-v1"
+PSD_LOCAL_VERIFICATION_SCHEMA_VERSION = "ifv-psd-local-verification-v1"
 PSD_SEMANTIC_LOCALIZATION_SCHEMA_VERSION = "ifv-psd-semantic-localization-v1"
 TRAINABLE_HINT_LEVELS = frozenset({1, 2, 3})
 SEMANTIC_FAILURE_CATEGORIES = frozenset(
@@ -308,6 +309,8 @@ def locate_failure_site(
         return None
     if report.get("passed") is not True:
         return None
+    if _text(report.get("source_trace_canonical_sha256")) != _sha(trace):
+        return None
     valid: list[tuple[Mapping[str, Any], Mapping[str, Any]]] = []
     for candidate in _rows(report.get("candidates")):
         if candidate.get("recoverable") is not True:
@@ -527,6 +530,7 @@ def build_psd_attempt_record(
     hint: HintProposal,
     model_roles: PSDModelRoles,
     verification: VerificationResult,
+    local_verification: Mapping[str, Any] | None,
     student_prompt_ids: Sequence[int] = (),
     teacher_prompt_ids: Sequence[int] = (),
     completion_ids: Sequence[int] = (),
@@ -538,6 +542,16 @@ def build_psd_attempt_record(
 ) -> dict[str, Any]:
     if verification.accepted_for_primary_psd and l5_scaffold:
         raise ValueError("L5 scaffold cannot be a primary PSD repair")
+    local_artifact = _mapping(local_verification)
+    if verification.accepted_for_primary_psd and (
+        local_artifact.get("schema_version")
+        != PSD_LOCAL_VERIFICATION_SCHEMA_VERSION
+        or local_artifact.get("passed") is not True
+        or _text(local_artifact.get("repair_step_id")) != failure_site.step_id
+    ):
+        raise ValueError(
+            "accepted PSD repair requires its bound local task-verifier artifact"
+        )
     return {
         "schema_version": PSD_ATTEMPT_SCHEMA_VERSION,
         "candidate_id": _text(candidate_id),
@@ -574,6 +588,7 @@ def build_psd_attempt_record(
             "expected_verdict": verification.expected_verdict,
             "reasons": list(verification.reasons),
         },
+        "local_verification": dict(local_artifact),
         "accepted": verification.accepted_for_primary_psd,
         "scaffold_only": bool(l5_scaffold),
         "student_prompt_ids": list(student_prompt_ids),

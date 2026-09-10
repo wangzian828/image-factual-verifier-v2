@@ -144,6 +144,8 @@ def _validate_attempt(
     attempt: Mapping[str, Any],
     candidate: Mapping[str, Any],
 ) -> dict[str, Any]:
+    if _text(attempt.get("schema_version")) != "ifv-psd-repair-attempt-v1":
+        raise ValueError("repair_attempt_schema_invalid")
     candidate_id = _text(candidate.get("candidate_id"))
     attempt_id = _text(attempt.get("attempt_id"))
     if not attempt_id:
@@ -215,6 +217,39 @@ def _validate_attempt(
             "hint_audit_failed:" + ",".join(hint_audit["errors"])
         )
 
+    local_verification = _mapping(attempt.get("local_verification"))
+    if (
+        local_verification.get("schema_version")
+        != "ifv-psd-local-verification-v1"
+    ):
+        raise ValueError("local_verification_schema_invalid")
+    if local_verification.get("passed") is not True:
+        raise ValueError("local_verification_pass_required")
+    if _text(local_verification.get("repair_step_id")) != step_id:
+        raise ValueError("local_verification_repair_step_mismatch")
+    if _text(local_verification.get("source_trace_sha256")) != source_trace_sha256:
+        raise ValueError("local_verification_source_trace_mismatch")
+    if _text(local_verification.get("hint_sha256")) != hint_audit["hint_sha256"]:
+        raise ValueError("local_verification_hint_mismatch")
+    local_verifier = _mapping(local_verification.get("verifier"))
+    if (
+        _text(local_verifier.get("kind")) != "task"
+        or not _text(local_verifier.get("name"))
+        or not _text(local_verifier.get("version"))
+    ):
+        raise ValueError("local_task_verifier_identity_invalid")
+    local_checks = local_verification.get("checks")
+    if not isinstance(local_checks, list) or not local_checks:
+        raise ValueError("local_verification_checks_missing")
+    if any(
+        not isinstance(check, Mapping) or check.get("passed") is not True
+        for check in local_checks
+    ):
+        raise ValueError("local_verification_check_failed")
+    local_evidence = local_verification.get("evidence")
+    if not isinstance(local_evidence, list) or not local_evidence:
+        raise ValueError("local_verification_evidence_missing")
+
     student_prompt_ids = _candidate_student_prompt_ids(candidate)
     teacher_prompt_ids, completion_ids = _attempt_token_ids(attempt)
     if teacher_prompt_ids == student_prompt_ids:
@@ -234,6 +269,7 @@ def _validate_attempt(
         ),
         "verification": dict(verification),
         "model_roles": dict(model_roles),
+        "local_verification": dict(local_verification),
     }
 
 
@@ -265,6 +301,9 @@ def _repair_row(
         "row_weight": float(selected["row_weight"]),
         "verification": dict(_mapping(selected.get("verification"))),
         "model_roles": dict(_mapping(selected.get("model_roles"))),
+        "local_verification": dict(
+            _mapping(selected.get("local_verification"))
+        ),
         **source,
     }
 

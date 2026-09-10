@@ -17,7 +17,7 @@ from .checkpoint_io import (
 )
 from .checkpoint_selection import validate_checkpoints
 from .encode_cache import aggregate_encode_cache_metrics
-from .io import load_json, load_jsonl, write_json, write_jsonl
+from .io import load_json, load_jsonl, sha256_file, write_json, write_jsonl
 from .manifests import (
     cached_dataset_manifest,
     write_cached_dataset_verification,
@@ -228,6 +228,7 @@ def _parser() -> argparse.ArgumentParser:
     psd_verify.add_argument("--gold", type=Path, required=True)
     psd_verify.add_argument("--local-verification", type=Path, required=True)
     psd_verify.add_argument("--repair-step-id", required=True)
+    psd_verify.add_argument("--hint-sha256", required=True)
     psd_verify.add_argument("--output", type=Path, required=True)
     psd_verify.add_argument("--downstream-patch-count", type=int, default=0)
 
@@ -473,9 +474,11 @@ def main() -> None:
         verification = verify_causal_episode(
             hinted_trace,
             source_trace=source_trace,
+            source_trace_sha256=sha256_file(args.source_trace),
             gold=gold,
             local_verification=local_verification,
             repair_step_id=args.repair_step_id,
+            hint_sha256=args.hint_sha256,
             downstream_patch_count=args.downstream_patch_count,
         )
         result = {

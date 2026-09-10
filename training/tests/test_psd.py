@@ -45,6 +45,24 @@ def _repair_row(**overrides: object) -> dict:
             "hinted_episode_pass": True,
             "hinted_strict_trace_audit_pass": True,
         },
+        "model_roles": {
+            "hint_constructor": {
+                "provider": "frontier",
+                "model": "strong-hint-constructor",
+                "supplies_training_distribution": False,
+            },
+            "frozen_self_teacher": {
+                "provider": "qwen_local",
+                "model": "qwen-round-start",
+                "round_start_checkpoint": "checkpoint-round-0",
+                "supplies_training_distribution": True,
+            },
+            "trainable_student": {
+                "provider": "qwen_local",
+                "model": "qwen-round-start",
+                "initial_checkpoint": "checkpoint-round-0",
+            },
+        },
     }
     row.update(overrides)
     return row
@@ -71,6 +89,12 @@ def test_repair_target_is_pending_until_teacher_topk_exists() -> None:
     assert target["schema_version"] == PSD_TARGET_SCHEMA_VERSION
     assert target["target_status"] == "pending_topk"
     assert target["teacher_topk_by_position"] == []
+    assert target["model_roles"]["hint_constructor"]["model"] == (
+        "strong-hint-constructor"
+    )
+    assert target["model_roles"]["frozen_self_teacher"]["model"] == (
+        "qwen-round-start"
+    )
 
 
 def test_topk_validation_requires_exact_length_and_normalized_mass() -> None:

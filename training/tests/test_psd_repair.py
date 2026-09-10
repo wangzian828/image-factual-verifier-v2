@@ -5,8 +5,10 @@ from pathlib import Path
 import pytest
 
 from ifv_training.psd_repair import (
+    PSD_LOCAL_VERIFICATION_SCHEMA_VERSION,
     PSDModelRoles,
     PSD_SEMANTIC_LOCALIZATION_SCHEMA_VERSION,
+    _sha,
     build_hint_proposal,
     build_psd_attempt_record,
     build_proposer_prompt,
@@ -18,7 +20,6 @@ from ifv_training.psd_repair import (
 )
 import ifv_training.psd_repair_verifier as verifier_module
 from ifv_training.psd_repair_verifier import (
-    PSD_LOCAL_VERIFICATION_SCHEMA_VERSION,
     merge_suffix_into_trace,
     validate_local_verification,
     verify_continuation_pair,
@@ -42,10 +43,18 @@ def _roles() -> PSDModelRoles:
     )
 
 
-def _local_verification(step_id: str, *, passed: bool = True) -> dict:
+def _local_verification(
+    step_id: str,
+    *,
+    passed: bool = True,
+    source_trace_sha256: str = "source-trace-sha",
+    hint_sha256: str = "b" * 64,
+) -> dict:
     return {
         "schema_version": PSD_LOCAL_VERIFICATION_SCHEMA_VERSION,
         "repair_step_id": step_id,
+        "source_trace_sha256": source_trace_sha256,
+        "hint_sha256": hint_sha256,
         "passed": passed,
         "verifier": {
             "kind": "task",
@@ -199,6 +208,7 @@ def test_hint_boundary_and_primary_repair_gate() -> None:
         ),
         model_roles=_roles(),
         verification=verification,
+        local_verification=_local_verification(site.step_id),
     )
     assert attempt["accepted"] is True
     assert attempt["scaffold_only"] is False
@@ -236,6 +246,7 @@ def test_attempt_record_preserves_case_and_episode_identity() -> None:
             hinted_strict_trace_audit_pass=True,
             hinted_episode_pass=True,
         ),
+        local_verification=_local_verification(site.step_id),
     )
     assert record["case_id"] == "case-1"
     assert record["episode_id"] == "episode-1"
@@ -250,6 +261,7 @@ def test_semantic_verifier_selects_a_student_reached_recoverable_step() -> None:
     report = {
         "schema_version": PSD_SEMANTIC_LOCALIZATION_SCHEMA_VERSION,
         "passed": True,
+        "source_trace_canonical_sha256": _sha(_trace()),
         "candidates": [
             {
                 "source_step_index": 0,
@@ -281,6 +293,7 @@ def test_verdict_mismatch_alone_cannot_select_judgment() -> None:
     report = {
         "schema_version": PSD_SEMANTIC_LOCALIZATION_SCHEMA_VERSION,
         "passed": True,
+        "source_trace_canonical_sha256": _sha(_trace()),
         "candidates": [
             {
                 "source_step_index": 1,
@@ -359,8 +372,11 @@ def test_failed_source_and_passing_hinted_teacher_are_accepted_even_if_student_f
 ) -> None:
     _patch_episode_verifiers(monkeypatch)
     repair_step_id = "episode-1:unified_react:call-1"
+    source_trace = {"image_id": "source-fail", "state": {"all_steps": []}}
+    hint_sha256 = "b" * 64
     result, artifacts = verify_continuation_pair(
-        base_trace={"image_id": "source-fail", "state": {"all_steps": []}},
+        base_trace=source_trace,
+        source_trace_sha256="a" * 64,
         teacher_steps=[StageStep(action_type="tool_call", tool_name="text_search")],
         student_steps=[StageStep(action_type="tool_call", tool_name="text_search")],
         hinted_teacher_episode_trace=_complete_episode(
@@ -370,8 +386,13 @@ def test_failed_source_and_passing_hinted_teacher_are_accepted_even_if_student_f
             image_id="student-still-fails", verdict="real"
         ),
         gold={"factual_status": "fake", "case_id": "episode-1"},
-        local_verification=_local_verification(repair_step_id),
+        local_verification=_local_verification(
+            repair_step_id,
+            source_trace_sha256="a" * 64,
+            hint_sha256=hint_sha256,
+        ),
         repair_step_id=repair_step_id,
+        hint_sha256=hint_sha256,
     )
 
     assert result.source_rollout_failed is True
@@ -387,9 +408,12 @@ def test_hinted_continuation_that_fails_task_verification_is_rejected(
 ) -> None:
     _patch_episode_verifiers(monkeypatch)
     repair_step_id = "episode-1:unified_react:call-1"
+    source_trace = {"image_id": "source-fail", "state": {"all_steps": []}}
+    hint_sha256 = "b" * 64
 
     result, _artifacts = verify_continuation_pair(
-        base_trace={"image_id": "source-fail", "state": {"all_steps": []}},
+        base_trace=source_trace,
+        source_trace_sha256="a" * 64,
         teacher_steps=[StageStep(action_type="tool_call", tool_name="text_search")],
         student_steps=[StageStep(action_type="tool_call", tool_name="text_search")],
         hinted_teacher_episode_trace=_complete_episode(
@@ -397,8 +421,14 @@ def test_hinted_continuation_that_fails_task_verification_is_rejected(
         ),
         unhinted_student_episode_trace=None,
         gold={"factual_status": "fake", "case_id": "episode-1"},
-        local_verification=_local_verification(repair_step_id, passed=False),
+        local_verification=_local_verification(
+            repair_step_id,
+            passed=False,
+            source_trace_sha256="a" * 64,
+            hint_sha256=hint_sha256,
+        ),
         repair_step_id=repair_step_id,
+        hint_sha256=hint_sha256,
     )
 
     assert result.hinted_local_pass is False
@@ -410,6 +440,8 @@ def test_tool_calls_alone_cannot_become_local_pass() -> None:
     result = validate_local_verification(
         {"passed": True, "tool_call_count": 2},
         repair_step_id="episode-1:unified_react:call-1",
+        source_trace_sha256="source-sha",
+        hint_sha256="b" * 64,
     )
 
     assert result["valid"] is False

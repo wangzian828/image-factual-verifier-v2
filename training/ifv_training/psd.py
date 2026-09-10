@@ -398,6 +398,20 @@ def build_repair_target(
                 "causal_episode_pass requires verified PSD repair fields: "
                 + ",".join(missing)
             )
+    model_roles = _mapping(row.get("model_roles"))
+    constructor_role = _mapping(model_roles.get("hint_constructor"))
+    teacher_role = _mapping(model_roles.get("frozen_self_teacher"))
+    student_role = _mapping(model_roles.get("trainable_student"))
+    if constructor_role.get("supplies_training_distribution") is not False:
+        raise ValueError("hint constructor cannot supply PSD training targets")
+    if teacher_role.get("supplies_training_distribution") is not True:
+        raise ValueError("frozen self-teacher must supply PSD training targets")
+    if _text(teacher_role.get("model")) != _text(student_role.get("model")):
+        raise ValueError("PSD self-teacher/student policy mismatch")
+    if _text(teacher_role.get("round_start_checkpoint")) != _text(
+        student_role.get("initial_checkpoint")
+    ):
+        raise ValueError("PSD self-teacher/student checkpoint mismatch")
 
     row_weight = float(row.get("row_weight", 1.0))
     if not math.isfinite(row_weight) or row_weight <= 0:
@@ -431,7 +445,7 @@ def build_repair_target(
         "completion_ids": completion_ids,
         "teacher_topk_by_position": teacher_topk,
         "row_weight": row_weight,
-        "model_roles": dict(_mapping(row.get("model_roles"))),
+        "model_roles": dict(model_roles),
         "verification": {
             "source_rollout_failed": verification.get("source_rollout_failed"),
             "hinted_local_pass": verification.get("hinted_local_pass"),

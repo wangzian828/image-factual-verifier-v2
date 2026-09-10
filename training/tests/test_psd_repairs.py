@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -48,6 +49,7 @@ def _attempt(
     **overrides: object,
 ) -> dict:
     row = {
+        "schema_version": "ifv-psd-repair-attempt-v1",
         "candidate_id": "candidate-1",
         "attempt_id": attempt_id,
         "case_id": "case-1",
@@ -83,6 +85,20 @@ def _attempt(
                 "model": "qwen-round-start",
                 "initial_checkpoint": "checkpoint-round-0",
             },
+        },
+        "local_verification": {
+            "schema_version": "ifv-psd-local-verification-v1",
+            "repair_step_id": "episode-1:react:1",
+            "source_trace_sha256": "trace-sha",
+            "hint_sha256": hashlib.sha256(hint.encode("utf-8")).hexdigest(),
+            "passed": True,
+            "verifier": {
+                "kind": "task",
+                "name": "ifv-fact-check-local-verifier",
+                "version": "v1",
+            },
+            "checks": [{"name": "repair_resolved", "passed": True}],
+            "evidence": [{"observation_id": "search-1"}],
         },
     }
     row.update(overrides)

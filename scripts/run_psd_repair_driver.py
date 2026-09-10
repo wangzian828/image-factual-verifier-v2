@@ -19,12 +19,9 @@ if str(TRAINING_ROOT) not in sys.path:
 from src.orchestrator.pipeline import Orchestrator
 from src.orchestrator.llm_backend import APIBackend
 from src.orchestrator.runtime_events import CaseRuntimeStore
-from src.trajectory.scoring import score_process_trace
-
-from ifv_training.io import load_json, write_json, write_jsonl
+from ifv_training.io import load_json, sha256_file, write_json, write_jsonl
 from ifv_training.psd_repair import (
     PSDModelRoles,
-    _sha,
     build_psd_attempt_record,
     locate_failure_site,
 )
@@ -146,6 +143,7 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
             + ",".join(source_verification["reasons"])
         )
     verification_rows = _load_verification_bundle(args.verification_bundle)
+    source_trace_sha256 = sha256_file(args.trace)
     output_dir = args.output_dir
     output_dir.mkdir(parents=True, exist_ok=False)
     runtime_root = output_dir / "runtime"
@@ -210,7 +208,9 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
                 max_suffix_actions=args.max_suffix_actions,
             )
             bound = verification_rows.get(index, {})
-            expected_hint_sha = _sha(hint.text)
+            expected_hint_sha = _text(hint.audit.get("hint_sha256"))
+            if not expected_hint_sha:
+                raise RuntimeError("audited hint is missing its SHA-256 binding")
             if bound and _text(bound.get("hint_sha256")) != expected_hint_sha:
                 raise ValueError(
                     f"verification bundle hint hash mismatch at index {index}"
@@ -234,6 +234,7 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
             )
             verification, artifacts = verify_continuation_pair(
                 base_trace=trace,
+                source_trace_sha256=source_trace_sha256,
                 teacher_steps=continuation.teacher_steps,
                 student_steps=continuation.student_steps,
                 hinted_teacher_episode_trace=hinted_teacher_episode_trace,
@@ -241,6 +242,7 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
                 gold=gold,
                 local_verification=local_verification,
                 repair_step_id=site.step_id,
+                hint_sha256=expected_hint_sha,
             )
             teacher_capture = _capture_from_steps(continuation.teacher_steps)
             teacher_prompt_ids, completion_ids = _step_ids(teacher_capture)
@@ -255,11 +257,12 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
                 hint=hint,
                 model_roles=model_roles,
                 verification=verification,
+                local_verification=local_verification,
                 student_prompt_ids=student_prompt_ids,
                 teacher_prompt_ids=teacher_prompt_ids,
                 completion_ids=completion_ids,
                 teacher_token_capture=teacher_capture,
-                source_trace_sha256=_sha(trace),
+                source_trace_sha256=source_trace_sha256,
             )
             record["continuation"] = {
                 "teacher_complete": continuation.teacher_complete,
@@ -275,7 +278,6 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
                 ],
                 "unhinted_student_affects_acceptance": False,
             }
-            record["local_verification"] = dict(local_verification or {})
             records.append(record)
         write_jsonl(output_dir / "repair_attempts.jsonl", records)
         result = {

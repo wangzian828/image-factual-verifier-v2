@@ -6,17 +6,20 @@ import copy
 import json
 import tempfile
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 from . import _repo_import  # noqa: F401
 from scripts.audit_real_trace import audit_trace
 from src.trajectory.scoring import score_process_trace
 from src.orchestrator.stage_runner import StageStep
 
-from .psd_repair import VerificationResult, _sha, _text, verify_repair
-
-
-PSD_LOCAL_VERIFICATION_SCHEMA_VERSION = "ifv-psd-local-verification-v1"
+from .psd_repair import (
+    PSD_LOCAL_VERIFICATION_SCHEMA_VERSION,
+    VerificationResult,
+    _sha,
+    _text,
+    verify_repair,
+)
 
 
 _PRIVATE_KEYS = frozenset(
@@ -130,6 +133,8 @@ def validate_local_verification(
     value: Mapping[str, Any] | None,
     *,
     repair_step_id: str,
+    source_trace_sha256: str,
+    hint_sha256: str,
 ) -> dict[str, Any]:
     """Validate a task-verifier artifact; model activity is never a proxy."""
 
@@ -139,6 +144,12 @@ def validate_local_verification(
         errors.append("local_verifier_schema_invalid")
     if _text(artifact.get("repair_step_id")) != _text(repair_step_id):
         errors.append("local_verifier_repair_step_mismatch")
+    if _text(artifact.get("source_trace_sha256")) != _text(
+        source_trace_sha256
+    ):
+        errors.append("local_verifier_source_trace_mismatch")
+    if _text(artifact.get("hint_sha256")) != _text(hint_sha256):
+        errors.append("local_verifier_hint_mismatch")
     verifier = _mapping(artifact.get("verifier"))
     if _text(verifier.get("kind")) != "task":
         errors.append("local_verifier_kind_not_task")
@@ -209,9 +220,11 @@ def verify_causal_episode(
     hinted_trace: Mapping[str, Any],
     *,
     source_trace: Mapping[str, Any],
+    source_trace_sha256: str,
     gold: Mapping[str, Any],
     local_verification: Mapping[str, Any] | None,
     repair_step_id: str,
+    hint_sha256: str,
     downstream_patch_count: int = 0,
     score_metadata: Mapping[str, Any] | None = None,
 ) -> VerificationResult:
@@ -232,6 +245,8 @@ def verify_causal_episode(
     local_result = validate_local_verification(
         local_verification,
         repair_step_id=repair_step_id,
+        source_trace_sha256=source_trace_sha256,
+        hint_sha256=hint_sha256,
     )
     path = _write_trace(hinted_trace)
     reasons: list[str] = []
@@ -301,6 +316,7 @@ def verify_causal_episode(
 def verify_continuation_pair(
     *,
     base_trace: Mapping[str, Any],
+    source_trace_sha256: str,
     teacher_steps: Sequence[StageStep],
     student_steps: Sequence[StageStep],
     hinted_teacher_episode_trace: Mapping[str, Any] | None,
@@ -308,6 +324,7 @@ def verify_continuation_pair(
     gold: Mapping[str, Any],
     local_verification: Mapping[str, Any] | None,
     repair_step_id: str,
+    hint_sha256: str,
 ) -> tuple[VerificationResult, dict[str, Any]]:
     """Verify the hinted teacher; keep the unhinted student as diagnostics."""
 
@@ -326,6 +343,8 @@ def verify_continuation_pair(
         local_result = validate_local_verification(
             local_verification,
             repair_step_id=repair_step_id,
+            source_trace_sha256=source_trace_sha256,
+            hint_sha256=hint_sha256,
         )
         reasons = [*source_result["reasons"]]
         reasons.extend(f"local:{item}" for item in local_result["errors"])
@@ -343,9 +362,11 @@ def verify_continuation_pair(
         result = verify_causal_episode(
             hinted_teacher_episode_trace,
             source_trace=base_trace,
+            source_trace_sha256=source_trace_sha256,
             gold=gold,
             local_verification=local_verification,
             repair_step_id=repair_step_id,
+            hint_sha256=hint_sha256,
         )
     student_diagnostic = None
     if unhinted_student_episode_trace is not None:

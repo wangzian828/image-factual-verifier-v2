@@ -47,7 +47,8 @@ candidate pending/rejected rather than being inferred from text.
 - The original no-hint source rollout must be explicitly scored as failed.
 - `hinted_local_pass` must come from an `ifv-psd-local-verification-v1`
   task-verifier artifact bound to the selected repair step. Tool-call presence
-  is not a verifier.
+  is not a verifier. The artifact also binds the source-trace hash and exact
+  hint hash, and contains named checks plus observed evidence.
 - The complete hinted episode must match the private expected verdict, pass
   strict trace audit, and require no downstream patch.
 - L5/exact-action scaffolds are never primary PSD targets.
@@ -97,6 +98,7 @@ python -m ifv_training verify-psd-episode `
   --gold <private-gold-row.json> `
   --local-verification <local-task-verification.json> `
   --repair-step-id <student-reached-step-id> `
+  --hint-sha256 <exact-hint-sha256> `
   --output <verification.json>
 ```
 
