@@ -51,11 +51,21 @@ export OMP_NUM_THREADS=1
 prepare_base() {
   local prefix="$1"
   local cuda_nvcc_version="$2"
+  local incomplete_marker="$3"
   if [[ -e "$prefix" ]]; then
-    echo "refusing to modify an existing environment: $prefix" >&2
-    exit 2
+    if [[ "${IFV_RESUME_INCOMPLETE_ENV:-0}" != "1" ]]; then
+      echo "refusing to modify an existing environment: $prefix" >&2
+      exit 2
+    fi
+    if [[ ! -f "$prefix/$incomplete_marker" || ! -x "$prefix/bin/python" ]]; then
+      echo "refusing to resume an unmarked or invalid environment: $prefix" >&2
+      exit 2
+    fi
+    echo "resuming marked incomplete environment: $prefix" >&2
+  else
+    "$CONDA" create -y -p "$prefix" python=3.12 pip=25.2
+    touch "$prefix/$incomplete_marker"
   fi
-  "$CONDA" create -y -p "$prefix" python=3.12 pip=25.2
   "$CONDA" install -y -p "$prefix" -c nvidia "cuda-nvcc=$cuda_nvcc_version"
 }
 
@@ -132,7 +142,8 @@ PY
 }
 
 install_sft() {
-  prepare_base "$SFT_PREFIX" 12.8.93
+  local incomplete_marker=".ifv-qwen35-sft-bootstrap-incomplete"
+  prepare_base "$SFT_PREFIX" 12.8.93 "$incomplete_marker"
   "$SFT_PREFIX/bin/python" -m pip install \
     torch==2.10.0 torchvision==0.25.0 torchaudio==2.10.0
   CUDA_HOME="$SFT_PREFIX" PATH="$SFT_PREFIX/bin:$PATH" \
@@ -145,22 +156,42 @@ install_sft() {
   "$SFT_PREFIX/bin/swift" sft --help >/dev/null
   CUDA_HOME="$SFT_PREFIX" PATH="$SFT_PREFIX/bin:$PATH" \
     "$SFT_PREFIX/bin/deepspeed" --help >/dev/null
+  rm -f "$SFT_PREFIX/$incomplete_marker"
   touch "$SFT_PREFIX/.ifv-qwen35-sft-ready"
 }
 
+install_long_cuda_extensions() {
+  local prefix="$1"
+  local runtime_ld="$prefix/lib:$prefix/lib/python3.12/site-packages/nvidia/curand/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+  "$prefix/bin/python" -m pip uninstall -y flash-attn causal-conv1d || true
+  CUDA_HOME="$prefix" PATH="$prefix/bin:$PATH" \
+    LD_LIBRARY_PATH="$runtime_ld" \
+    CC="$prefix/bin/x86_64-conda-linux-gnu-cc" \
+    CXX="$prefix/bin/x86_64-conda-linux-gnu-c++" \
+    TORCH_CUDA_ARCH_LIST="${IFV_TORCH_CUDA_ARCH_LIST:-8.0}" \
+    MAX_JOBS="${IFV_EXTENSION_MAX_JOBS:-4}" \
+    NVCC_THREADS="${IFV_EXTENSION_NVCC_THREADS:-1}" \
+    FLASH_ATTENTION_FORCE_BUILD=TRUE \
+    CAUSAL_CONV1D_FORCE_BUILD=TRUE \
+    PIP_NO_CACHE_DIR=1 \
+    "$prefix/bin/python" -m pip install \
+    --no-build-isolation \
+    --no-cache-dir \
+    --no-deps \
+    --force-reinstall \
+    --no-binary=:all: \
+    --requirement "$REPO_ROOT/requirements/train-qwen35-long-context.txt"
+}
+
 install_long_sft() {
-  prepare_base "$LONG_SFT_PREFIX" 12.8.93
+  local incomplete_marker=".ifv-qwen35-sft-long-bootstrap-incomplete"
+  prepare_base "$LONG_SFT_PREFIX" 12.8.93 "$incomplete_marker"
   "$LONG_SFT_PREFIX/bin/python" -m pip install \
     torch==2.10.0 torchvision==0.25.0 torchaudio==2.10.0
   CUDA_HOME="$LONG_SFT_PREFIX" PATH="$LONG_SFT_PREFIX/bin:$PATH" \
     "$LONG_SFT_PREFIX/bin/python" -m pip install \
     --no-build-isolation --requirement "$REPO_ROOT/requirements/train-qwen35.txt"
-  CUDA_HOME="$LONG_SFT_PREFIX" PATH="$LONG_SFT_PREFIX/bin:$PATH" \
-    MAX_JOBS="${IFV_EXTENSION_MAX_JOBS:-4}" \
-    "$LONG_SFT_PREFIX/bin/python" -m pip install \
-    --no-build-isolation \
-    --no-binary flash-attn,causal-conv1d \
-    --requirement "$REPO_ROOT/requirements/train-qwen35-long-context.txt"
+  install_long_cuda_extensions "$LONG_SFT_PREFIX"
   "$LONG_SFT_PREFIX/bin/python" -m pip install \
     --no-deps --editable "$REPO_ROOT"
   link_torch_cuda_runtime "$LONG_SFT_PREFIX"
@@ -196,11 +227,13 @@ install_long_sft() {
     --expected-gpu-memory-mib "${IFV_EXPECTED_GPU_MEMORY_MIB:-40960}" \
     --output "$ARTIFACT_ROOT/logs/environments/ifv-qwen35-sft-long-ms-swift442/environment-preflight.json"
   "$LONG_SFT_PREFIX/bin/swift" sft --help >/dev/null
+  rm -f "$LONG_SFT_PREFIX/$incomplete_marker"
   touch "$LONG_SFT_PREFIX/.ifv-qwen35-sft-long-ready"
 }
 
 install_rl() {
-  prepare_base "$RL_PREFIX" 13.0.88
+  local incomplete_marker=".ifv-qwen35-rl-bootstrap-incomplete"
+  prepare_base "$RL_PREFIX" 13.0.88 "$incomplete_marker"
   "$RL_PREFIX/bin/python" -m pip install \
     torch==2.11.0 torchvision==0.26.0 torchaudio==2.11.0
   CUDA_HOME="$RL_PREFIX" "$RL_PREFIX/bin/python" -m pip install \
@@ -209,6 +242,7 @@ install_rl() {
   freeze_env "$RL_PREFIX" ifv-qwen35-rl-ms-swift442-vllm0221
   "$RL_PREFIX/bin/swift" rlhf --help >/dev/null
   "$RL_PREFIX/bin/vllm" serve --help >/dev/null
+  rm -f "$RL_PREFIX/$incomplete_marker"
   touch "$RL_PREFIX/.ifv-qwen35-rl-ready"
 }
 

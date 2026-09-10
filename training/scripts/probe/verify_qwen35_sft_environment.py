@@ -8,6 +8,7 @@ import inspect
 import json
 import os
 import platform
+import re
 import subprocess
 import sys
 from collections import Counter
@@ -26,6 +27,10 @@ MODULES = {
     "flash-linear-attention": "fla",
     "causal-conv1d": "causal_conv1d",
     "liger-kernel": "liger_kernel",
+}
+NATIVE_EXTENSION_MODULES = {
+    "flash-attn": "flash_attn_2_cuda",
+    "causal-conv1d": "causal_conv1d_cuda",
 }
 TEMPLATE_PARAMETERS = {
     "max_length",
@@ -103,6 +108,57 @@ def parse_gpu_inventory(output: str) -> dict[int, dict[str, Any]]:
     return result
 
 
+def parse_glibc_versions(output: str) -> list[str]:
+    versions = {
+        match.group(1)
+        for match in re.finditer(r"\bGLIBC_(\d+(?:\.\d+)+)\b", output)
+    }
+    return sorted(versions, key=_version_tuple)
+
+
+def _version_tuple(value: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in value.split("."))
+
+
+def inspect_native_extension(module_name: str) -> dict[str, Any]:
+    spec = importlib.util.find_spec(module_name)
+    if spec is None or not spec.origin:
+        raise RuntimeError(f"native extension module is missing: {module_name}")
+    path = Path(spec.origin).resolve()
+    if path.suffix != ".so":
+        raise RuntimeError(
+            f"native extension does not resolve to a shared object: {path}"
+        )
+    process = subprocess.run(
+        ["readelf", "--version-info", "--wide", str(path)],
+        capture_output=True,
+        check=False,
+        text=True,
+        timeout=30,
+    )
+    if process.returncode != 0:
+        detail = process.stderr.strip() or process.stdout.strip()
+        raise RuntimeError(f"readelf failed for {path}: {detail}")
+    required_versions = parse_glibc_versions(process.stdout)
+    libc_name, host_version = platform.libc_ver()
+    if libc_name != "glibc" or not host_version:
+        raise RuntimeError(
+            f"could not determine host glibc version: {libc_name!r} {host_version!r}"
+        )
+    maximum_required = required_versions[-1] if required_versions else ""
+    compatible = not maximum_required or (
+        _version_tuple(maximum_required) <= _version_tuple(host_version)
+    )
+    return {
+        "module": module_name,
+        "path": str(path),
+        "host_glibc": host_version,
+        "required_glibc_versions": required_versions,
+        "maximum_required_glibc": maximum_required,
+        "compatible": compatible,
+    }
+
+
 def read_model_contract(model: Path) -> dict[str, Any]:
     config_path = model / "config.json"
     if not config_path.is_file():
@@ -162,6 +218,7 @@ def verify(
     errors: list[str] = []
     packages: dict[str, dict[str, Any]] = {}
     imported_modules: dict[str, dict[str, str]] = {}
+    native_extensions: dict[str, dict[str, Any]] = {}
 
     actual_python = f"{sys.version_info.major}.{sys.version_info.minor}"
     if actual_python != expected_python:
@@ -199,6 +256,25 @@ def verify(
             "module": module_name,
             "path": str(getattr(module, "__file__", "") or ""),
         }
+
+    for package, module_name in NATIVE_EXTENSION_MODULES.items():
+        if package not in required_packages:
+            continue
+        try:
+            native_contract = inspect_native_extension(module_name)
+        except Exception as exc:  # pragma: no cover - depends on target env
+            errors.append(
+                f"failed to inspect native extension for {package}: "
+                f"{type(exc).__name__}: {exc}"
+            )
+            continue
+        native_extensions[package] = native_contract
+        if not native_contract["compatible"]:
+            errors.append(
+                f"native extension for {package} requires GLIBC_"
+                f"{native_contract['maximum_required_glibc']}, but the host has "
+                f"glibc {native_contract['host_glibc']}"
+            )
 
     torch_cuda = ""
     torch_cuda_available = False
@@ -335,6 +411,7 @@ def verify(
         },
         "packages": packages,
         "required_package_imports": imported_modules,
+        "native_extensions": native_extensions,
         "torch_cuda": {
             "expected": expected_torch_cuda,
             "actual": torch_cuda,

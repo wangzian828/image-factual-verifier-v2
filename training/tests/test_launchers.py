@@ -275,7 +275,15 @@ def test_qwen35_training_bootstrap_is_fresh_pinned_and_isolated() -> None:
     assert "pip freeze --all" in source
     assert "Qwen3_5ForConditionalGeneration" in source
     assert "verify_qwen35_sft_environment.py" in source
-    assert "--no-binary flash-attn,causal-conv1d" in source
+    assert "FLASH_ATTENTION_FORCE_BUILD=TRUE" in source
+    assert "CAUSAL_CONV1D_FORCE_BUILD=TRUE" in source
+    assert "PIP_NO_CACHE_DIR=1" in source
+    assert "--no-cache-dir" in source
+    assert "--force-reinstall" in source
+    assert "--no-binary=:all:" in source
+    assert 'TORCH_CUDA_ARCH_LIST="${IFV_TORCH_CUDA_ARCH_LIST:-8.0}"' in source
+    assert "IFV_RESUME_INCOMPLETE_ENV" in source
+    assert "refusing to resume an unmarked or invalid environment" in source
     assert "ms-swift==4.4.2" in sft
     assert "transformers==5.12.1" in sft
     assert "liger-kernel==0.8.0" in sft

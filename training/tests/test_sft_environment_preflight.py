@@ -51,6 +51,13 @@ def test_preflight_parses_gpu_inventory() -> None:
     }
 
 
+def test_preflight_parses_and_orders_native_glibc_requirements() -> None:
+    assert MODULE.parse_glibc_versions(
+        "Name: GLIBC_2.17 Flags: none  Name: GLIBC_2.32 "
+        "Name: GLIBC_2.9 Name: GLIBCXX_3.4.30"
+    ) == ["2.9", "2.17", "2.32"]
+
+
 def test_preflight_reads_qwen35_hybrid_context_contract(tmp_path: Path) -> None:
     (tmp_path / "config.json").write_text(
         json.dumps(
@@ -92,3 +99,7 @@ def test_preflight_requires_long_context_sft_argument_contract() -> None:
         "use_logits_to_keep",
         "resume_from_checkpoint",
     }.issubset(MODULE.SFT_ARGUMENT_FIELDS)
+    assert MODULE.NATIVE_EXTENSION_MODULES == {
+        "flash-attn": "flash_attn_2_cuda",
+        "causal-conv1d": "causal_conv1d_cuda",
+    }
