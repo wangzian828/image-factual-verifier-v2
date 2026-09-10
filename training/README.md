@@ -90,7 +90,7 @@ ms-swift/Gym/GRPO 工程接线，不是正式在线 Agent RL。正式 RL 仍需�
 - reasoning policy SFT 使用
   `training/configs/models/qwen3.5-9b.env`，并保持
   `IFV_ADD_NON_THINKING_PREFIX=false`。
-- `training/configs/cache/qwen3.5-pilot30-v3-img512-sdpa.env` 是旧缓存实验契约；
-  其 non-thinking prefix 设置不得用于当前新导出的 reasoning SFT 数据。
+- 当前只保留 production、portable 8K 和 smoke-noeval 三个经过记录的 SFT profile；
+  历史硬件/并发 sweep 可从 Git 标签 `pre-deep-cleanup-20260910` 恢复。
 - evaluator private gold、judge 字段和 provider 内部协议不得进入模型可见数据。
 - 本目录不保存 rollout、图片或 checkpoint；这些数据放在服务器 `/gsdata`。

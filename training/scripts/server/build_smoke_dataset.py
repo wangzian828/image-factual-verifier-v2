@@ -62,8 +62,8 @@ def main() -> None:
     _write_jsonl(args.output / "validation.jsonl", [row])
     digest = hashlib.sha256(image_path.read_bytes()).hexdigest()
     manifest = {
-        "schema_version": "ifv-qwen3-vl-smoke-dataset-v1",
-        "dataset_version": "ifv-qwen3-vl-smoke-v1",
+        "schema_version": "ifv-multimodal-smoke-dataset-v1",
+        "dataset_version": "ifv-multimodal-smoke-v1",
         "synthetic": True,
         "image": {"path": image_path.name, "sha256": digest},
         "splits": {"train": 2, "validation": 1},

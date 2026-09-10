@@ -23,7 +23,7 @@ def test_checkpoint_and_serving_manifests(tmp_path: Path) -> None:
     checkpoint.mkdir()
     write_json(checkpoint / "adapter_config.json", {"r": 16})
     (checkpoint / "adapter_model.safetensors").write_bytes(b"adapter")
-    write_json(checkpoint / "args.json", {"model": "Qwen/Qwen3-VL-8B"})
+    write_json(checkpoint / "args.json", {"model": "Qwen/Qwen3.5-9B"})
     write_json(checkpoint / "trainer_state.json", {"global_step": 25})
     (checkpoint / "optimizer.pt").write_bytes(b"optimizer")
     (checkpoint / "scheduler.pt").write_bytes(b"scheduler")
@@ -39,7 +39,7 @@ def test_checkpoint_and_serving_manifests(tmp_path: Path) -> None:
         checkpoint_dir=checkpoint,
         dataset_manifest_path=dataset_manifest,
         output_path=checkpoint_manifest_path,
-        base_model_id="Qwen/Qwen3-VL-8B",
+        base_model_id="Qwen/Qwen3.5-9B",
         model_revision="main",
         processor_revision="main",
         method="lora",

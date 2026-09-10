@@ -466,9 +466,8 @@ python training/scripts/probe/verify_ms_swift_agent_dataset.py \
 
 当前 reasoning policy SFT 必须使用
 `training/configs/models/qwen3.5-9b.env` 中的
-`IFV_ADD_NON_THINKING_PREFIX=false`。历史缓存配置
-`training/configs/cache/qwen3.5-pilot30-v3-img512-sdpa.env` 保留的是旧实验契约，
-不得用于新导出的 reasoning SFT package。仓库当前只提供 mock GRPO 工程 smoke，
+`IFV_ADD_NON_THINKING_PREFIX=false`。历史缓存配置已归档到 Git 标签
+`pre-deep-cleanup-20260910`，不得用于新导出的 reasoning SFT package。仓库当前只提供 mock GRPO 工程 smoke，
 不应把它描述为已经打通的正式 RL 训练链路。
 
 ## 8. 失败处理

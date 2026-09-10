@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "image-factual-verifier-training"
 version = "0.1.0"
-description = "Qwen3-VL deployment, full-parameter SFT, and Agent RL infrastructure for Visual Fact Discrepancy Agent v4"
+description = "Qwen3.5 SFT, PSD, and Agent RL infrastructure for the IFV raw-history runtime"
 requires-python = ">=3.10,<3.13"
 dependencies = []
 
