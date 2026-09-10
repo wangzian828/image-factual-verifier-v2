@@ -182,9 +182,10 @@ fi
 if [[ -n "${IFV_SEQUENCE_PARALLEL_SIZE:-}" ]]; then
   args+=(--sequence_parallel_size "$IFV_SEQUENCE_PARALLEL_SIZE")
 fi
-if [[ "${IFV_ADD_NON_THINKING_PREFIX:-false}" == "true" ]]; then
-  args+=(--add_non_thinking_prefix true)
+if [[ -n "${IFV_ENABLE_THINKING:-}" ]]; then
+  args+=(--enable_thinking "$IFV_ENABLE_THINKING")
 fi
+args+=(--add_non_thinking_prefix "${IFV_ADD_NON_THINKING_PREFIX:-false}")
 if [[ -n "${IFV_GROUP_BY_LENGTH:-}" ]]; then
   args+=(--group_by_length "$IFV_GROUP_BY_LENGTH")
 fi

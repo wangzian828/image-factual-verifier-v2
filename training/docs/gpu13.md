@@ -49,6 +49,15 @@ ENV=/gsdata/home/wza/conda/envs/ifv-qwen35-sft-ms-swift442
   --model <qwen-checkpoint> \
   --policy-dir <ms-swift-policy> \
   --perception-dir <ms-swift-perception> \
+  --max-context 131072 \
+  --max-pixels 262144 \
+  --truncation-strategy raise \
+  --padding-free true \
+  --sequence-parallel-size 8 \
+  --loss-scale ignore_empty_think \
+  --enable-thinking false \
+  --add-non-thinking-prefix false \
+  --image-max-token-num 1024 \
   --output <processor-verification.json>
 ```
 

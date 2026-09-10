@@ -194,18 +194,44 @@ if [[ ! -x "${training_python}" ]]; then
     echo "training Python does not exist: ${training_python}" >&2
     exit 2
 fi
+if [[ "${run_training}" == "1" ]]; then
+    for training_profile in "${training_model_profile}" "${training_sft_profile}"; do
+        if [[ -z "${training_profile}" || ! -s "${training_profile}" ]]; then
+            echo "training profile does not exist or is empty: ${training_profile:-unset}" >&2
+            exit 2
+        fi
+        set -a
+        # shellcheck disable=SC1090
+        source "${training_profile}"
+        set +a
+    done
+fi
 "${training_python}" -m ifv_training audit --strict --input "${package_dir}/ms-swift-policy"
 "${training_python}" -m ifv_training audit --strict --input "${package_dir}/ms-swift-perception"
 
 processor_status="not_run"
 if [[ -n "${IFV_MODEL_ID:-}" && "${IFV_SKIP_PROCESSOR:-0}" != "1" ]] \
     && "${training_python}" -c 'import swift' >/dev/null 2>&1; then
-    "${training_python}" "${REPO_ROOT}/training/scripts/probe/verify_ms_swift_agent_dataset.py" \
-        --model "${IFV_MODEL_ID}" \
-        --policy-dir "${package_dir}/ms-swift-policy" \
-        --perception-dir "${package_dir}/ms-swift-perception" \
-        --output "${package_dir}/audits/processor-verification.json" \
-        --max-context "${IFV_PROCESSOR_MAX_CONTEXT:-131072}"
+    processor_args=(
+        "${training_python}"
+        "${REPO_ROOT}/training/scripts/probe/verify_ms_swift_agent_dataset.py"
+        --model "${IFV_MODEL_ID}"
+        --policy-dir "${package_dir}/ms-swift-policy"
+        --perception-dir "${package_dir}/ms-swift-perception"
+        --output "${package_dir}/audits/processor-verification.json"
+        --max-context "${IFV_MAX_LENGTH:-${IFV_PROCESSOR_MAX_CONTEXT:-131072}}"
+        --truncation-strategy "${IFV_TRUNCATION_STRATEGY:-raise}"
+        --padding-free "${IFV_PADDING_FREE:-false}"
+        --sequence-parallel-size "${IFV_SEQUENCE_PARALLEL_SIZE:-1}"
+        --loss-scale "${IFV_LOSS_SCALE:-ignore_empty_think}"
+        --enable-thinking "${IFV_ENABLE_THINKING:-false}"
+        --add-non-thinking-prefix "${IFV_ADD_NON_THINKING_PREFIX:-false}"
+        --image-max-token-num "${IFV_IMAGE_MAX_TOKEN_NUM:-1024}"
+    )
+    if [[ -n "${IFV_MAX_PIXELS:-}" ]]; then
+        processor_args+=(--max-pixels "${IFV_MAX_PIXELS}")
+    fi
+    "${processor_args[@]}"
     processor_status="passed"
 elif [[ "${IFV_REQUIRE_PROCESSOR:-0}" == "1" ]]; then
     echo "processor verification requested but IFV_MODEL_ID or swift is unavailable." >&2

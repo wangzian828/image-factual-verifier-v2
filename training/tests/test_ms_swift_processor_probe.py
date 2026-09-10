@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+from argparse import Namespace
 from pathlib import Path
 
 import pytest
@@ -61,3 +62,38 @@ def test_verify_rendered_tool_calls_rejects_missing_parameter() -> None:
             messages,
             "<function=text_search></function>",
         )
+
+
+def test_template_contract_matches_training_controls() -> None:
+    args = Namespace(
+        max_context=131072,
+        truncation_strategy="raise",
+        max_pixels=262144,
+        padding_free=True,
+        sequence_parallel_size=8,
+        loss_scale="ignore_empty_think",
+        enable_thinking=False,
+        add_non_thinking_prefix=False,
+    )
+
+    assert MODULE._template_kwargs(args) == {
+        "max_length": 131072,
+        "truncation_strategy": "raise",
+        "max_pixels": 262144,
+        "padding_free": True,
+        "sequence_parallel_size": 8,
+        "loss_scale": "ignore_empty_think",
+        "enable_thinking": False,
+        "add_non_thinking_prefix": False,
+    }
+
+
+def test_file_record_binds_processor_report_to_exact_dataset(tmp_path: Path) -> None:
+    dataset = tmp_path / "train.jsonl"
+    dataset.write_text('{"messages": []}\n', encoding="utf-8")
+
+    record = MODULE._file_record(dataset)
+
+    assert record["path"] == str(dataset.resolve())
+    assert record["size"] == dataset.stat().st_size
+    assert len(record["sha256"]) == 64

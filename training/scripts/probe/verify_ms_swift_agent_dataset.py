@@ -9,13 +9,54 @@ their images.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import os
 import re
 import statistics
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
+
+
+def _boolean(value: str) -> bool:
+    normalized = value.strip().lower()
+    if normalized == "true":
+        return True
+    if normalized == "false":
+        return False
+    raise argparse.ArgumentTypeError("expected true or false")
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _file_record(path: Path) -> dict[str, Any]:
+    resolved = path.expanduser().resolve()
+    return {
+        "path": str(resolved),
+        "size": resolved.stat().st_size,
+        "sha256": _sha256(resolved),
+    }
+
+
+def _template_kwargs(args: argparse.Namespace) -> dict[str, Any]:
+    return {
+        "max_length": args.max_context,
+        "truncation_strategy": args.truncation_strategy,
+        "max_pixels": args.max_pixels,
+        "padding_free": args.padding_free,
+        "sequence_parallel_size": args.sequence_parallel_size,
+        "loss_scale": args.loss_scale,
+        "enable_thinking": args.enable_thinking,
+        "add_non_thinking_prefix": args.add_non_thinking_prefix,
+    }
 
 
 def _rows(path: Path) -> Iterable[tuple[int, dict[str, Any]]]:
@@ -212,12 +253,39 @@ def main() -> None:
     parser.add_argument("--perception-dir", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--max-context", type=int, default=131072)
+    parser.add_argument("--max-pixels", type=int)
+    parser.add_argument(
+        "--truncation-strategy",
+        choices=("raise", "left", "right", "split"),
+        default="raise",
+    )
+    parser.add_argument("--padding-free", type=_boolean, default=False)
+    parser.add_argument("--sequence-parallel-size", type=int, default=1)
+    parser.add_argument("--loss-scale", default="ignore_empty_think")
+    parser.add_argument("--enable-thinking", type=_boolean, default=False)
+    parser.add_argument(
+        "--add-non-thinking-prefix",
+        type=_boolean,
+        default=False,
+    )
+    parser.add_argument("--image-max-token-num", type=int, default=1024)
     args = parser.parse_args()
+    if args.max_context < 1:
+        parser.error("--max-context must be positive")
+    if args.max_pixels is not None and args.max_pixels < 1:
+        parser.error("--max-pixels must be positive")
+    if args.sequence_parallel_size < 1:
+        parser.error("--sequence-parallel-size must be positive")
+    if args.image_max_token_num < 1:
+        parser.error("--image-max-token-num must be positive")
+
+    os.environ["IMAGE_MAX_TOKEN_NUM"] = str(args.image_max_token_num)
 
     from swift import get_processor, get_template
 
     processor = get_processor(args.model)
-    template = get_template(processor, loss_scale="default+ignore_empty_think")
+    template_contract = _template_kwargs(args)
+    template = get_template(processor, **template_contract)
     template.set_mode("train")
     tokenizer = getattr(processor, "tokenizer", None)
     if tokenizer is None:
@@ -240,8 +308,10 @@ def main() -> None:
     by_kind: dict[str, list[int]] = {"policy": [], "perception": []}
     checks = Counter()
     longest: list[dict[str, Any]] = []
+    dataset_files: list[dict[str, Any]] = []
 
     for kind, path in datasets:
+        dataset_files.append({"kind": kind, **_file_record(path)})
         for row_index, row in _rows(path):
             location = f"{path.name}[{row_index}]"
             try:
@@ -328,12 +398,17 @@ def main() -> None:
                 )
 
     report = {
-        "schema_version": "ifv-ms-swift-agent-processor-verification-v1",
+        "schema_version": "ifv-ms-swift-agent-processor-verification-v2",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "model": str(Path(args.model).expanduser().resolve()),
         "processor_class": type(processor).__name__,
         "template_class": type(template).__name__,
+        "template_contract": {
+            **template_contract,
+            "image_max_token_num": args.image_max_token_num,
+        },
         "max_context": args.max_context,
+        "dataset_files": dataset_files,
         "passed": not errors,
         "error_count": len(errors),
         "errors": errors,

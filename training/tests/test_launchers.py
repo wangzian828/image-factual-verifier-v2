@@ -26,6 +26,31 @@ def test_training_launchers_delegate_to_ms_swift() -> None:
     assert "audit_deepspeed_scheduler.py" in single
     assert "checkpoint-storage-preflight" in single
     assert "checkpoint-io-profile" in single
+    assert 'args+=(--enable_thinking "$IFV_ENABLE_THINKING")' in single
+    assert (
+        'args+=(--add_non_thinking_prefix '
+        '"${IFV_ADD_NON_THINKING_PREFIX:-false}")' in single
+    )
+
+
+def test_teacher_pipeline_binds_processor_probe_to_training_profile() -> None:
+    pipeline = (ROOT.parent / "scripts/server/run_teacher_sft_pipeline.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'source "${training_profile}"' in pipeline
+    for option in (
+        "--max-context",
+        "--max-pixels",
+        "--truncation-strategy",
+        "--padding-free",
+        "--sequence-parallel-size",
+        "--loss-scale",
+        "--enable-thinking",
+        "--add-non-thinking-prefix",
+        "--image-max-token-num",
+    ):
+        assert option in pipeline
 
 
 def test_current_qwen35_profiles_are_explicit_and_bounded() -> None:

@@ -56,11 +56,21 @@ python scripts/probe/verify_ms_swift_agent_dataset.py `
   --model <target Qwen checkpoint> `
   --policy-dir <ms-swift-policy> `
   --perception-dir <ms-swift-perception> `
+  --max-context 131072 `
+  --max-pixels 262144 `
+  --truncation-strategy raise `
+  --padding-free true `
+  --sequence-parallel-size 8 `
+  --loss-scale ignore_empty_think `
+  --enable-thinking false `
+  --add-non-thinking-prefix false `
+  --image-max-token-num 1024 `
   --output <processor-verification.json>
 ```
 
 验证脚本会实际调用 processor，确认原生 `<think>` 在 labels 中、工具调用和工具
-结果进入输入、图片未丢失，并检查上下文长度。
+结果进入输入、图片未丢失，并使用与训练完全相同的 template 参数检查上下文长度。
+报告记录输入 JSONL 的绝对路径、大小和 SHA-256，供训练启动门禁绑定。
 
 ## RL
 
