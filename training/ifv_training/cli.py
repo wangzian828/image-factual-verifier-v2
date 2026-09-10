@@ -38,8 +38,6 @@ from .psd import (
 from .psd_candidates import build_psd_candidate_package
 from .psd_datums import build_sparse_topk_package
 from .psd_repairs import assemble_psd_repair_package
-from .opsd import locate_failure_site
-from .opsd_verifier import verify_causal_episode
 from .rewards import (
     build_and_write_ledger,
     build_ledgers_from_run_artifacts,
@@ -445,6 +443,8 @@ def main() -> None:
             balance_kinds=args.balance_kinds,
         )
     elif args.command == "locate-opsd-failure":
+        from .opsd import locate_failure_site
+
         trace = load_json(args.trace)
         audit = load_json(args.audit) if args.audit else {}
         site = locate_failure_site(trace, audit)
@@ -454,6 +454,8 @@ def main() -> None:
         }
         write_json(args.output, result)
     elif args.command == "verify-opsd-episode":
+        from .opsd_verifier import verify_causal_episode
+
         trace = load_json(args.trace)
         gold = load_json(args.gold)
         verification = verify_causal_episode(
