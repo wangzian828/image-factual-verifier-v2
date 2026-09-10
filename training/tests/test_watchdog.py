@@ -199,3 +199,55 @@ def test_watchdog_marks_completed_run(tmp_path: Path) -> None:
     assert result["lifecycle"] == "completed"
     assert result["status"] == "completed"
     assert result["recommendation"] == "select_checkpoint"
+
+
+def test_watchdog_reports_memory_headroom_balance_and_utilization(
+    tmp_path: Path,
+) -> None:
+    train_log = tmp_path / "train.log"
+    train_log.write_text(
+        "Executing: swift sft --max_steps 10\n"
+        "{'loss': '0.8', 'global_step/max_steps': '2/10'}\n",
+        encoding="utf-8",
+    )
+    resources = tmp_path / "resource-samples.jsonl"
+    rows = []
+    for utilization in (75, 80, 70):
+        rows.append(
+            {
+                "timestamp_epoch": 100.0,
+                "root_alive": True,
+                "gpu": {
+                    "whole_gpu_memory_mib_by_physical_gpu": {
+                        "0": 35000,
+                        "1": 39200,
+                    },
+                    "utilization_percent_by_physical_gpu": {
+                        "0": utilization,
+                        "1": 95,
+                    },
+                },
+            }
+        )
+    resources.write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n",
+        encoding="utf-8",
+    )
+
+    result = build_sft_watchdog_snapshot(
+        train_log=train_log,
+        resource_samples=resources,
+        gpu_memory_target_min_mib=36000,
+        gpu_memory_target_max_mib=38912,
+        gpu_memory_max_imbalance_mib=1024,
+        gpu_utilization_target_min_percent=85,
+        now_epoch=train_log.stat().st_mtime,
+    )
+
+    codes = {alert["code"] for alert in result["alerts"]}
+    assert "gpu_memory_below_target" in codes
+    assert "gpu_memory_headroom_low" in codes
+    assert "gpu_memory_rank_imbalance" in codes
+    assert "gpu_utilization_below_target" in codes
+    assert result["health"] == "critical"
+    assert result["resources"]["gpu_memory_imbalance_mib"] == 4200

@@ -525,9 +525,22 @@ def summarize_training_log(
         or resource_exit_code is None
         or resource_exit_code == train_exit_code
     )
+    resource_acceptance = (
+        resource_payload.get("acceptance")
+        if isinstance(resource_payload, dict)
+        else None
+    )
+    resource_acceptance_passed = (
+        resource_acceptance.get("passed") is True
+        if isinstance(resource_acceptance, dict)
+        and resource_acceptance.get("required") is True
+        else True
+    )
     resource_required = resource_summary is not None
     resource_passed = (
-        isinstance(resource_payload, dict) and resource_exit_matches
+        isinstance(resource_payload, dict)
+        and resource_exit_matches
+        and resource_acceptance_passed
         if resource_required
         else True
     )
@@ -714,6 +727,7 @@ def summarize_training_log(
         "resources": {
             "required": resource_required,
             "passed": resource_passed,
+            "acceptance_passed": resource_acceptance_passed,
             "summary_path": str(resource_summary) if resource_summary else "",
             "summary": resource_payload,
         },

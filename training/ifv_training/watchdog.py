@@ -377,6 +377,10 @@ def build_sft_watchdog_snapshot(
     eval_loss_regression_fraction: float = 0.10,
     semantic_accuracy_drop: float = 0.10,
     semantic_evidence_drop: float = 0.15,
+    gpu_memory_target_min_mib: int | None = None,
+    gpu_memory_target_max_mib: int | None = None,
+    gpu_memory_max_imbalance_mib: int | None = None,
+    gpu_utilization_target_min_percent: float | None = None,
     now_epoch: float | None = None,
 ) -> dict[str, Any]:
     train_log = train_log.expanduser().resolve()
@@ -444,6 +448,106 @@ def build_sft_watchdog_snapshot(
                 "severity": "critical",
                 "code": name,
                 "message": f"{name} detected at log lines {lines}",
+            }
+        )
+
+    latest_gpu = last_resource.get("gpu")
+    latest_gpu = latest_gpu if isinstance(latest_gpu, Mapping) else {}
+    raw_memory = latest_gpu.get("whole_gpu_memory_mib_by_physical_gpu")
+    raw_memory = raw_memory if isinstance(raw_memory, Mapping) else {}
+    gpu_memory = {
+        str(key): value
+        for key, raw in raw_memory.items()
+        if (value := _number(raw)) is not None
+    }
+    gpu_memory_values = list(gpu_memory.values())
+    gpu_memory_min = min(gpu_memory_values) if gpu_memory_values else None
+    gpu_memory_max = max(gpu_memory_values) if gpu_memory_values else None
+    gpu_memory_imbalance = (
+        gpu_memory_max - gpu_memory_min
+        if gpu_memory_min is not None and gpu_memory_max is not None
+        else None
+    )
+    utilization_by_gpu: dict[str, list[float]] = {}
+    for resource_row in resource_rows:
+        gpu = resource_row.get("gpu")
+        gpu = gpu if isinstance(gpu, Mapping) else {}
+        raw_utilization = gpu.get("utilization_percent_by_physical_gpu")
+        raw_utilization = (
+            raw_utilization if isinstance(raw_utilization, Mapping) else {}
+        )
+        for key, raw in raw_utilization.items():
+            value = _number(raw)
+            if value is not None:
+                utilization_by_gpu.setdefault(str(key), []).append(value)
+    gpu_utilization_median = {
+        key: median(values) for key, values in utilization_by_gpu.items() if values
+    }
+    resource_targets_active = current_step is not None and current_step >= 1
+    if (
+        resource_targets_active
+        and gpu_memory_target_min_mib is not None
+        and gpu_memory_min is not None
+        and gpu_memory_min < gpu_memory_target_min_mib
+    ):
+        alerts.append(
+            {
+                "severity": "warning",
+                "code": "gpu_memory_below_target",
+                "message": (
+                    f"lowest GPU memory is {gpu_memory_min:.0f} MiB, below "
+                    f"the tuning target {gpu_memory_target_min_mib} MiB"
+                ),
+            }
+        )
+    if (
+        resource_targets_active
+        and gpu_memory_target_max_mib is not None
+        and gpu_memory_max is not None
+        and gpu_memory_max > gpu_memory_target_max_mib
+    ):
+        alerts.append(
+            {
+                "severity": "critical",
+                "code": "gpu_memory_headroom_low",
+                "message": (
+                    f"highest GPU memory is {gpu_memory_max:.0f} MiB, above "
+                    f"the safety ceiling {gpu_memory_target_max_mib} MiB"
+                ),
+            }
+        )
+    if (
+        resource_targets_active
+        and gpu_memory_max_imbalance_mib is not None
+        and gpu_memory_imbalance is not None
+        and gpu_memory_imbalance > gpu_memory_max_imbalance_mib
+    ):
+        alerts.append(
+            {
+                "severity": "warning",
+                "code": "gpu_memory_rank_imbalance",
+                "message": (
+                    f"GPU memory spread is {gpu_memory_imbalance:.0f} MiB, above "
+                    f"the rank-balance limit {gpu_memory_max_imbalance_mib} MiB"
+                ),
+            }
+        )
+    if (
+        resource_targets_active
+        and gpu_utilization_target_min_percent is not None
+        and gpu_utilization_median
+        and min(gpu_utilization_median.values())
+        < gpu_utilization_target_min_percent
+    ):
+        alerts.append(
+            {
+                "severity": "warning",
+                "code": "gpu_utilization_below_target",
+                "message": (
+                    "lowest rolling median GPU utilization is "
+                    f"{min(gpu_utilization_median.values()):.1f}%, below "
+                    f"{gpu_utilization_target_min_percent:.1f}%"
+                ),
             }
         )
 
@@ -642,6 +746,19 @@ def build_sft_watchdog_snapshot(
         "resources": {
             "available": bool(resource_rows),
             "latest": last_resource,
+            "gpu_memory_mib_by_physical_gpu": gpu_memory,
+            "gpu_memory_min_mib": gpu_memory_min,
+            "gpu_memory_max_mib": gpu_memory_max,
+            "gpu_memory_imbalance_mib": gpu_memory_imbalance,
+            "gpu_utilization_rolling_median_percent_by_physical_gpu": (
+                gpu_utilization_median
+            ),
+            "targets": {
+                "memory_min_mib": gpu_memory_target_min_mib,
+                "memory_max_mib": gpu_memory_target_max_mib,
+                "memory_max_imbalance_mib": gpu_memory_max_imbalance_mib,
+                "utilization_min_percent": gpu_utilization_target_min_percent,
+            },
         },
         "checkpoints": {
             "count": len(checkpoints),
@@ -677,6 +794,16 @@ def concise_watchdog_status(snapshot: Mapping[str, Any]) -> str:
     latest_checkpoint = (
         latest_checkpoint if isinstance(latest_checkpoint, Mapping) else {}
     )
+    resources = snapshot.get("resources")
+    resources = resources if isinstance(resources, Mapping) else {}
+    memory_min = resources.get("gpu_memory_min_mib")
+    memory_max = resources.get("gpu_memory_max_mib")
+    memory_text = (
+        f"{float(memory_min) / 1024:.1f}-{float(memory_max) / 1024:.1f}GiB"
+        if isinstance(memory_min, (int, float))
+        and isinstance(memory_max, (int, float))
+        else "?"
+    )
     step = progress.get("current_step")
     maximum = progress.get("maximum_step")
     step_text = f"{step}/{maximum}" if step is not None and maximum else str(step or "?")
@@ -686,6 +813,7 @@ def concise_watchdog_status(snapshot: Mapping[str, Any]) -> str:
         f"loss={optimization.get('latest_loss')} "
         f"eval_loss={optimization.get('latest_eval_loss')} "
         f"grad_norm={optimization.get('latest_grad_norm')} "
+        f"gpu_memory={memory_text} "
         f"eta={progress.get('remaining_time')} "
         f"checkpoint={latest_checkpoint.get('global_step')} "
         f"alerts={len(snapshot.get('alerts') or [])}"

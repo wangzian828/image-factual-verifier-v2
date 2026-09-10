@@ -89,24 +89,37 @@ def _run_nvidia_smi(query: str) -> list[list[str]]:
 
 def _gpu_snapshot(selected_gpu_ids: list[int], pids: set[int]) -> dict[str, Any]:
     gpu_rows = _run_nvidia_smi(
-        "gpu=index,uuid,memory.used,utilization.gpu"
+        "gpu=index,uuid,memory.total,memory.used,utilization.gpu,temperature.gpu,power.draw"
     )
     uuid_to_index: dict[str, int] = {}
+    total_memory: dict[str, int] = {}
     whole_gpu_memory: dict[str, int] = {}
     utilization: dict[str, int] = {}
+    temperature: dict[str, int] = {}
+    power_draw: dict[str, float] = {}
     for row in gpu_rows:
-        if len(row) != 4:
+        if len(row) != 7:
             continue
         try:
             index = int(row[0])
-            memory_used = int(row[2])
-            gpu_utilization = int(row[3])
+            memory_total = int(row[2])
+            memory_used = int(row[3])
+            gpu_utilization = int(row[4])
         except ValueError:
             continue
         uuid_to_index[row[1]] = index
         if index in selected_gpu_ids:
+            total_memory[str(index)] = memory_total
             whole_gpu_memory[str(index)] = memory_used
             utilization[str(index)] = gpu_utilization
+            try:
+                temperature[str(index)] = int(row[5])
+            except ValueError:
+                pass
+            try:
+                power_draw[str(index)] = float(row[6])
+            except ValueError:
+                pass
 
     process_memory = {str(index): 0 for index in selected_gpu_ids}
     for row in _run_nvidia_smi("compute-apps=gpu_uuid,pid,used_memory"):
@@ -122,8 +135,11 @@ def _gpu_snapshot(selected_gpu_ids: list[int], pids: set[int]) -> dict[str, Any]
             process_memory[str(index)] += memory_used
     return {
         "process_memory_mib_by_physical_gpu": process_memory,
+        "total_memory_mib_by_physical_gpu": total_memory,
         "whole_gpu_memory_mib_by_physical_gpu": whole_gpu_memory,
         "utilization_percent_by_physical_gpu": utilization,
+        "temperature_c_by_physical_gpu": temperature,
+        "power_draw_w_by_physical_gpu": power_draw,
     }
 
 
@@ -154,13 +170,24 @@ def summarize_resource_samples(
     finished_at: str,
     wall_seconds: float,
     selected_gpu_ids: list[int],
+    memory_target_min_mib: int | None = None,
+    memory_target_max_mib: int | None = None,
+    memory_max_imbalance_mib: int | None = None,
 ) -> dict[str, Any]:
     rows = list(samples)
     peak_process_memory = {str(index): 0 for index in selected_gpu_ids}
     peak_whole_memory = {str(index): 0 for index in selected_gpu_ids}
+    total_memory = {str(index): 0 for index in selected_gpu_ids}
     utilization_values: dict[str, list[int]] = {
         str(index): [] for index in selected_gpu_ids
     }
+    temperature_values: dict[str, list[int]] = {
+        str(index): [] for index in selected_gpu_ids
+    }
+    power_values: dict[str, list[float]] = {
+        str(index): [] for index in selected_gpu_ids
+    }
+    active_memory_imbalances: list[float] = []
     for row in rows:
         gpu = row.get("gpu")
         gpu = gpu if isinstance(gpu, dict) else {}
@@ -169,6 +196,13 @@ def summarize_resource_samples(
         ).items():
             peak_process_memory[str(key)] = max(
                 peak_process_memory.get(str(key), 0),
+                int(value),
+            )
+        for key, value in (
+            gpu.get("total_memory_mib_by_physical_gpu") or {}
+        ).items():
+            total_memory[str(key)] = max(
+                total_memory.get(str(key), 0),
                 int(value),
             )
         for key, value in (
@@ -182,6 +216,28 @@ def summarize_resource_samples(
             gpu.get("utilization_percent_by_physical_gpu") or {}
         ).items():
             utilization_values.setdefault(str(key), []).append(int(value))
+        for key, value in (
+            gpu.get("temperature_c_by_physical_gpu") or {}
+        ).items():
+            temperature_values.setdefault(str(key), []).append(int(value))
+        for key, value in (
+            gpu.get("power_draw_w_by_physical_gpu") or {}
+        ).items():
+            power_values.setdefault(str(key), []).append(float(value))
+        current_memory = gpu.get("whole_gpu_memory_mib_by_physical_gpu") or {}
+        selected_values = [
+            float(current_memory[str(index)])
+            for index in selected_gpu_ids
+            if str(index) in current_memory
+        ]
+        if (
+            len(selected_values) == len(selected_gpu_ids)
+            and selected_values
+            and max(selected_values) >= 1024
+        ):
+            active_memory_imbalances.append(
+                max(selected_values) - min(selected_values)
+            )
     process_cpu_core_equivalents: list[float] = []
     for previous, current in zip(rows, rows[1:]):
         elapsed = float(current.get("timestamp_epoch") or 0.0) - float(
@@ -211,8 +267,50 @@ def summarize_resource_samples(
         }
         for key, values in utilization_values.items()
     }
+    selected_peak_values = [
+        peak_whole_memory[str(index)] for index in selected_gpu_ids
+    ]
+    peak_memory_imbalance = (
+        max(selected_peak_values) - min(selected_peak_values)
+        if selected_peak_values
+        else None
+    )
+    target_required = any(
+        value is not None
+        for value in (
+            memory_target_min_mib,
+            memory_target_max_mib,
+            memory_max_imbalance_mib,
+        )
+    )
+    target_checks: dict[str, bool | None] = {
+        "all_selected_gpus_observed": (
+            all(total_memory[str(index)] > 0 for index in selected_gpu_ids)
+            if selected_gpu_ids
+            else False
+        ),
+        "minimum_peak_memory_reached": (
+            min(selected_peak_values) >= memory_target_min_mib
+            if selected_peak_values and memory_target_min_mib is not None
+            else None
+        ),
+        "maximum_peak_memory_respected": (
+            max(selected_peak_values) <= memory_target_max_mib
+            if selected_peak_values and memory_target_max_mib is not None
+            else None
+        ),
+        "peak_memory_imbalance_respected": (
+            peak_memory_imbalance <= memory_max_imbalance_mib
+            if peak_memory_imbalance is not None
+            and memory_max_imbalance_mib is not None
+            else None
+        ),
+    }
+    target_passed = all(
+        value is not False for value in target_checks.values()
+    )
     return {
-        "schema_version": "ifv-training-resource-summary-v1",
+        "schema_version": "ifv-training-resource-summary-v2",
         "command": command,
         "started_at": started_at,
         "finished_at": finished_at,
@@ -257,11 +355,64 @@ def summarize_resource_samples(
             ),
         },
         "gpu_peak_process_memory_mib_by_physical_gpu": peak_process_memory,
+        "gpu_total_memory_mib_by_physical_gpu": total_memory,
         "gpu_peak_whole_memory_mib_by_physical_gpu": peak_whole_memory,
+        "gpu_peak_memory_fraction_by_physical_gpu": {
+            str(index): (
+                round(
+                    peak_whole_memory[str(index)] / total_memory[str(index)],
+                    6,
+                )
+                if total_memory[str(index)] > 0
+                else None
+            )
+            for index in selected_gpu_ids
+        },
+        "gpu_peak_memory_imbalance_mib": peak_memory_imbalance,
+        "gpu_active_memory_imbalance_mib": {
+            "count": len(active_memory_imbalances),
+            "median": (
+                round(median(active_memory_imbalances), 3)
+                if active_memory_imbalances
+                else None
+            ),
+            "p90": (
+                round(float(_quantile(active_memory_imbalances, 0.90)), 3)
+                if active_memory_imbalances
+                else None
+            ),
+            "max": (
+                round(max(active_memory_imbalances), 3)
+                if active_memory_imbalances
+                else None
+            ),
+        },
         "gpu_mean_utilization_percent_by_physical_gpu": {
             key: value["mean"] for key, value in gpu_distributions.items()
         },
         "gpu_utilization_percent_by_physical_gpu": gpu_distributions,
+        "gpu_temperature_c_by_physical_gpu": {
+            key: {
+                "mean": round(mean(values), 3) if values else None,
+                "max": max(values) if values else None,
+            }
+            for key, values in temperature_values.items()
+        },
+        "gpu_power_draw_w_by_physical_gpu": {
+            key: {
+                "mean": round(mean(values), 3) if values else None,
+                "max": round(max(values), 3) if values else None,
+            }
+            for key, values in power_values.items()
+        },
+        "acceptance": {
+            "required": target_required,
+            "passed": target_passed,
+            "memory_target_min_mib": memory_target_min_mib,
+            "memory_target_max_mib": memory_target_max_mib,
+            "memory_max_imbalance_mib": memory_max_imbalance_mib,
+            "checks": target_checks,
+        },
     }
 
 
@@ -272,6 +423,9 @@ def run_with_resource_monitor(
     samples_output: Path,
     selected_gpu_ids: list[int],
     sample_interval: float,
+    memory_target_min_mib: int | None = None,
+    memory_target_max_mib: int | None = None,
+    memory_max_imbalance_mib: int | None = None,
 ) -> int:
     if not command:
         raise ValueError("resource monitor command is empty")
@@ -302,6 +456,9 @@ def run_with_resource_monitor(
         finished_at=finished_at,
         wall_seconds=time.monotonic() - started,
         selected_gpu_ids=selected_gpu_ids,
+        memory_target_min_mib=memory_target_min_mib,
+        memory_target_max_mib=memory_target_max_mib,
+        memory_max_imbalance_mib=memory_max_imbalance_mib,
     )
     summary_output.write_text(
         json.dumps(summary, ensure_ascii=False, indent=2) + "\n",

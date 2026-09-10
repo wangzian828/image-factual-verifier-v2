@@ -64,3 +64,87 @@ def test_resource_summary_aggregates_process_tree_and_gpu_peaks() -> None:
         "max": 60,
         "busy_fraction_ge_80": 0.0,
     }
+
+
+def test_resource_summary_enforces_memory_tuning_envelope() -> None:
+    samples = [
+        {
+            "timestamp_epoch": 10.0,
+            "gpu": {
+                "total_memory_mib_by_physical_gpu": {
+                    "0": 40960,
+                    "1": 40960,
+                },
+                "whole_gpu_memory_mib_by_physical_gpu": {
+                    "0": 37000,
+                    "1": 37200,
+                },
+                "process_memory_mib_by_physical_gpu": {
+                    "0": 36900,
+                    "1": 37100,
+                },
+                "utilization_percent_by_physical_gpu": {"0": 95, "1": 96},
+                "temperature_c_by_physical_gpu": {"0": 66, "1": 67},
+                "power_draw_w_by_physical_gpu": {"0": 350.5, "1": 352.0},
+            },
+        }
+    ]
+
+    result = summarize_resource_samples(
+        samples,
+        command=["swift", "sft"],
+        exit_code=0,
+        started_at="start",
+        finished_at="finish",
+        wall_seconds=3.0,
+        selected_gpu_ids=[0, 1],
+        memory_target_min_mib=36000,
+        memory_target_max_mib=38912,
+        memory_max_imbalance_mib=1024,
+    )
+
+    assert result["acceptance"]["passed"] is True
+    assert result["gpu_peak_memory_imbalance_mib"] == 200
+    assert result["gpu_peak_memory_fraction_by_physical_gpu"]["0"] == round(
+        37000 / 40960,
+        6,
+    )
+    assert result["gpu_temperature_c_by_physical_gpu"]["1"]["max"] == 67
+
+
+def test_resource_summary_rejects_low_or_imbalanced_memory() -> None:
+    samples = [
+        {
+            "timestamp_epoch": 10.0,
+            "gpu": {
+                "total_memory_mib_by_physical_gpu": {
+                    "0": 40960,
+                    "1": 40960,
+                },
+                "whole_gpu_memory_mib_by_physical_gpu": {
+                    "0": 34000,
+                    "1": 37200,
+                },
+            },
+        }
+    ]
+
+    result = summarize_resource_samples(
+        samples,
+        command=["swift", "sft"],
+        exit_code=0,
+        started_at="start",
+        finished_at="finish",
+        wall_seconds=3.0,
+        selected_gpu_ids=[0, 1],
+        memory_target_min_mib=36000,
+        memory_target_max_mib=38912,
+        memory_max_imbalance_mib=1024,
+    )
+
+    assert result["acceptance"]["passed"] is False
+    assert result["acceptance"]["checks"]["minimum_peak_memory_reached"] is False
+    assert (
+        result["acceptance"]["checks"]["peak_memory_imbalance_respected"]
+        is False
+    )

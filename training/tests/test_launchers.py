@@ -26,6 +26,10 @@ def test_training_launchers_delegate_to_ms_swift() -> None:
     assert "audit_deepspeed_scheduler.py" in single
     assert "checkpoint-storage-preflight" in single
     assert "checkpoint-io-profile" in single
+    assert "IFV_GPU_MEMORY_TARGET_MIN_MIB" in single
+    assert "IFV_GPU_MEMORY_TARGET_MAX_MIB" in single
+    assert "IFV_GPU_MEMORY_MAX_IMBALANCE_MIB" in single
+    assert "IFV_GPU_UTILIZATION_TARGET_MIN_PERCENT" in single
     assert 'args+=(--enable_thinking "$IFV_ENABLE_THINKING")' in single
     assert (
         'args+=(--add_non_thinking_prefix '

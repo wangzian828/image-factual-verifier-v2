@@ -296,3 +296,37 @@ def test_noeval_training_profile_is_explicitly_smoke_only(tmp_path: Path) -> Non
     assert result["run_mode"] == "smoke_only"
     assert result["validation"]["required"] is False
     assert result["passed_production_gate"] is False
+
+
+def test_training_profile_rejects_failed_resource_acceptance(
+    tmp_path: Path,
+) -> None:
+    train_log = tmp_path / "train.log"
+    train_log.write_text(
+        "Executing: swift sft --max_steps 1 --eval_strategy no "
+        "--save_strategy no\n"
+        "{'loss': '0.8', 'global_step/max_steps': '1/1'}\n"
+        "[INFO:swift] End time of running main: 2026-09-10 12:00:00\n",
+        encoding="utf-8",
+    )
+    resource_summary = tmp_path / "resource-summary.json"
+    resource_summary.write_text(
+        json.dumps(
+            {
+                "schema_version": "ifv-training-resource-summary-v2",
+                "exit_code": 0,
+                "acceptance": {"required": True, "passed": False},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = summarize_training_log(
+        train_log,
+        resource_summary=resource_summary,
+        train_exit_code=0,
+    )
+
+    assert result["resources"]["acceptance_passed"] is False
+    assert result["resources"]["passed"] is False
+    assert result["passed_production_gate"] is False

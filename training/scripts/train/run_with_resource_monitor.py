@@ -31,8 +31,25 @@ def main() -> None:
         default=_gpu_ids(os.environ.get("CUDA_VISIBLE_DEVICES", "")),
     )
     parser.add_argument("--sample-interval", type=float, default=2.0)
+    parser.add_argument("--memory-target-min-mib", type=int)
+    parser.add_argument("--memory-target-max-mib", type=int)
+    parser.add_argument("--memory-max-imbalance-mib", type=int)
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
+    for name in (
+        "memory_target_min_mib",
+        "memory_target_max_mib",
+        "memory_max_imbalance_mib",
+    ):
+        value = getattr(args, name)
+        if value is not None and value < 1:
+            parser.error(f"--{name.replace('_', '-')} must be positive")
+    if (
+        args.memory_target_min_mib is not None
+        and args.memory_target_max_mib is not None
+        and args.memory_target_min_mib >= args.memory_target_max_mib
+    ):
+        parser.error("--memory-target-min-mib must be below --memory-target-max-mib")
     command = list(args.command)
     if command and command[0] == "--":
         command = command[1:]
@@ -43,6 +60,9 @@ def main() -> None:
             samples_output=args.samples_output,
             selected_gpu_ids=args.gpu_ids,
             sample_interval=args.sample_interval,
+            memory_target_min_mib=args.memory_target_min_mib,
+            memory_target_max_mib=args.memory_target_max_mib,
+            memory_max_imbalance_mib=args.memory_max_imbalance_mib,
         )
     )
 

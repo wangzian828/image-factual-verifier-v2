@@ -108,3 +108,30 @@ template 生成。
 - 数据集 manifest SHA-256；
 - 并发、重试和超时设置；
 - 输出目录和审计报告路径。
+
+## 7. 训练监控与显存验收
+
+`run_sft.sh` 自动启动 watchdog 和进程树资源采样，持续写入：
+
+```text
+<training-data-root>/logs/<experiment-id>/resource-samples.jsonl
+<training-data-root>/logs/<experiment-id>/resource-summary.json
+<training-data-root>/logs/<experiment-id>/monitor-latest.json
+<training-data-root>/logs/<experiment-id>/monitor.log
+<training-data-root>/logs/<experiment-id>/profile.json
+```
+
+8 卡 128K canary 使用以下验收目标：
+
+```text
+IFV_GPU_MEMORY_TARGET_MIN_MIB=36000
+IFV_GPU_MEMORY_TARGET_MAX_MIB=38912
+IFV_GPU_MEMORY_MAX_IMBALANCE_MIB=1024
+IFV_GPU_UTILIZATION_TARGET_MIN_PERCENT=85
+```
+
+低于显存目标表示仍有空间可用于减少重计算；超过上限表示安全余量不足。任何一张卡
+越界或卡间峰值差超过限制都会写入 watchdog 告警，配置了目标的 run 若未通过资源
+验收，也不能通过最终 production gate。资源报告同时记录各卡显存比例、利用率、温度、
+功率和活跃期显存差。显存目标用于调优，不替代 OOM、NaN、验证、checkpoint 与 resume
+检查。

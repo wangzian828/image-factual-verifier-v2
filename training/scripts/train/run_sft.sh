@@ -239,6 +239,21 @@ watchdog_args=(
   --interval-seconds "${IFV_SFT_WATCHDOG_INTERVAL_SECONDS:-60}"
   --stale-seconds "${IFV_SFT_WATCHDOG_STALE_SECONDS:-900}"
 )
+if [[ -n "${IFV_GPU_MEMORY_TARGET_MIN_MIB:-}" ]]; then
+  watchdog_args+=(--gpu-memory-target-min-mib "$IFV_GPU_MEMORY_TARGET_MIN_MIB")
+fi
+if [[ -n "${IFV_GPU_MEMORY_TARGET_MAX_MIB:-}" ]]; then
+  watchdog_args+=(--gpu-memory-target-max-mib "$IFV_GPU_MEMORY_TARGET_MAX_MIB")
+fi
+if [[ -n "${IFV_GPU_MEMORY_MAX_IMBALANCE_MIB:-}" ]]; then
+  watchdog_args+=(--gpu-memory-max-imbalance-mib "$IFV_GPU_MEMORY_MAX_IMBALANCE_MIB")
+fi
+if [[ -n "${IFV_GPU_UTILIZATION_TARGET_MIN_PERCENT:-}" ]]; then
+  watchdog_args+=(
+    --gpu-utilization-target-min-percent
+    "$IFV_GPU_UTILIZATION_TARGET_MIN_PERCENT"
+  )
+fi
 if [[ -n "${IFV_SFT_BEHAVIOR_METRICS:-}" ]]; then
   watchdog_args+=(--behavior-metrics "$IFV_SFT_BEHAVIOR_METRICS")
 fi
@@ -254,13 +269,27 @@ if [[ "${IFV_SFT_WATCHDOG_ENABLED:-true}" == "true" ]]; then
   WATCHDOG_PID="$!"
   trap stop_watchdog EXIT
 fi
+resource_monitor_args=(
+  python "$SCRIPT_DIR/run_with_resource_monitor.py"
+  --summary-output "$RESOURCE_SUMMARY"
+  --samples-output "$RESOURCE_SAMPLES"
+  --gpu-ids "$CUDA_VISIBLE_DEVICES"
+  --sample-interval "${IFV_RESOURCE_SAMPLE_INTERVAL:-2}"
+)
+if [[ -n "${IFV_GPU_MEMORY_TARGET_MIN_MIB:-}" ]]; then
+  resource_monitor_args+=(--memory-target-min-mib "$IFV_GPU_MEMORY_TARGET_MIN_MIB")
+fi
+if [[ -n "${IFV_GPU_MEMORY_TARGET_MAX_MIB:-}" ]]; then
+  resource_monitor_args+=(--memory-target-max-mib "$IFV_GPU_MEMORY_TARGET_MAX_MIB")
+fi
+if [[ -n "${IFV_GPU_MEMORY_MAX_IMBALANCE_MIB:-}" ]]; then
+  resource_monitor_args+=(
+    --memory-max-imbalance-mib
+    "$IFV_GPU_MEMORY_MAX_IMBALANCE_MIB"
+  )
+fi
 set +e
-python "$SCRIPT_DIR/run_with_resource_monitor.py" \
-  --summary-output "$RESOURCE_SUMMARY" \
-  --samples-output "$RESOURCE_SAMPLES" \
-  --gpu-ids "$CUDA_VISIBLE_DEVICES" \
-  --sample-interval "${IFV_RESOURCE_SAMPLE_INTERVAL:-2}" \
-  -- "${args[@]}" 2>&1 | tee "$LOG_DIR/train.log"
+"${resource_monitor_args[@]}" -- "${args[@]}" 2>&1 | tee "$LOG_DIR/train.log"
 train_status="${PIPESTATUS[0]}"
 set -e
 stop_watchdog

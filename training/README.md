@@ -104,3 +104,6 @@ ms-swift/Gym/GRPO 工程接线，不是正式在线 Agent RL。正式 RL 仍需�
   历史硬件/并发 sweep 可从 Git 标签 `pre-deep-cleanup-20260910` 恢复。
 - evaluator private gold、judge 字段和 provider 内部协议不得进入模型可见数据。
 - 本目录不保存 rollout、图片或 checkpoint；这些数据放在服务器 `/gsdata`。
+- `run_sft.sh` 默认记录逐卡显存、利用率、温度、功率、进程树 CPU/RSS、步耗时、
+  checkpoint 和 watchdog 状态；设置 `IFV_GPU_MEMORY_TARGET_*` 后，资源目标成为
+  production gate 的一部分。
