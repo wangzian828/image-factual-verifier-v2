@@ -416,12 +416,14 @@ if [[ "$train_status" -eq 0 ]]; then
       checkpoint-io-profile \
       --checkpoint "$latest_checkpoint" \
       --output "$CHECKPOINT_IO_PROFILE" || checkpoint_io_status="$?"
-    SCHEDULER_AUDIT="$EXPERIMENT_DIR/scheduler-order-audit.json"
-    IFV_ENCODE_CACHE_ENABLED=false python \
-      "$REPO_ROOT/training/scripts/probe/audit_deepspeed_scheduler.py" \
-      --train-log "$LOG_DIR/train.log" \
-      --checkpoint "$latest_checkpoint" \
-      --output "$SCHEDULER_AUDIT" || scheduler_audit_status="$?"
+    if [[ -n "${IFV_DEEPSPEED:-}" ]]; then
+      SCHEDULER_AUDIT="$EXPERIMENT_DIR/scheduler-order-audit.json"
+      IFV_ENCODE_CACHE_ENABLED=false python \
+        "$REPO_ROOT/training/scripts/probe/audit_deepspeed_scheduler.py" \
+        --train-log "$LOG_DIR/train.log" \
+        --checkpoint "$latest_checkpoint" \
+        --output "$SCHEDULER_AUDIT" || scheduler_audit_status="$?"
+    fi
   fi
 fi
 profile_status=0

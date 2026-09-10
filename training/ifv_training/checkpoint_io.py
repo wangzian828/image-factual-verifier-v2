@@ -85,6 +85,11 @@ def _all_files(checkpoint: Path) -> list[Path]:
 def _category(path: Path) -> str:
     name = path.name
     lowered = name.casefold()
+    lowered_parts = [part.casefold() for part in path.parts]
+    if any(part.startswith("optimizer_") for part in lowered_parts):
+        return "optimizer_state"
+    if any(part.startswith("pytorch_model_fsdp_") for part in lowered_parts):
+        return "model_export"
     if (
         lowered.startswith("model-")
         and lowered.endswith(".safetensors")

@@ -81,3 +81,14 @@ def test_preflight_reads_qwen35_hybrid_context_contract(tmp_path: Path) -> None:
         "full_attention": 1,
         "linear_attention": 3,
     }
+
+
+def test_preflight_requires_long_context_sft_argument_contract() -> None:
+    assert {
+        "fsdp",
+        "attn_impl",
+        "padding_free",
+        "sequence_parallel_size",
+        "use_logits_to_keep",
+        "resume_from_checkpoint",
+    }.issubset(MODULE.SFT_ARGUMENT_FIELDS)

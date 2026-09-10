@@ -47,6 +47,42 @@ def test_checkpoint_io_profile_separates_model_optimizer_and_metadata(
     assert result["write_window_seconds"] == 5.2
 
 
+def test_checkpoint_io_profile_accepts_fsdp2_distributed_state(
+    tmp_path: Path,
+) -> None:
+    checkpoint = tmp_path / "checkpoint-10"
+    _touch(
+        checkpoint / "pytorch_model_fsdp_0" / ".metadata",
+        11,
+        1_000_000_000,
+    )
+    _touch(
+        checkpoint / "pytorch_model_fsdp_0" / "__0_0.distcp",
+        13,
+        2_000_000_000,
+    )
+    _touch(
+        checkpoint / "optimizer_0" / ".metadata",
+        3,
+        3_000_000_000,
+    )
+    _touch(
+        checkpoint / "optimizer_0" / "__0_0.distcp",
+        101,
+        5_000_000_000,
+    )
+    _touch(checkpoint / "scheduler.pt", 2, 6_000_000_000)
+    _touch(checkpoint / "rng_state_0.pth", 2, 6_100_000_000)
+    _touch(checkpoint / "trainer_state.json", 2, 6_200_000_000)
+
+    result = checkpoint_io_profile(checkpoint)
+
+    assert result["passed"] is True
+    assert result["categories"]["model_export"]["bytes"] == 24
+    assert result["categories"]["optimizer_state"]["bytes"] == 104
+    assert result["optimizer_rank_file_count"] == 2
+
+
 def test_checkpoint_storage_preflight_checks_reserve(tmp_path: Path) -> None:
     free_bytes = int(shutil.disk_usage(tmp_path).free)
 

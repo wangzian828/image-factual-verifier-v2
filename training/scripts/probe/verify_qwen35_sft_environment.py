@@ -11,6 +11,7 @@ import platform
 import subprocess
 import sys
 from collections import Counter
+from dataclasses import fields
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -35,6 +36,21 @@ TEMPLATE_PARAMETERS = {
     "sequence_parallel_size",
     "enable_thinking",
     "add_non_thinking_prefix",
+}
+SFT_ARGUMENT_FIELDS = {
+    "fsdp",
+    "max_length",
+    "attn_impl",
+    "padding_free",
+    "sequence_parallel_size",
+    "use_logits_to_keep",
+    "gradient_checkpointing",
+    "vit_gradient_checkpointing",
+    "save_strategy",
+    "resume_from_checkpoint",
+    "add_non_thinking_prefix",
+    "max_pixels",
+    "loss_scale",
 }
 
 
@@ -225,6 +241,23 @@ def verify(
             f"{type(exc).__name__}: {exc}"
         )
 
+    training_argument_fields: list[str] = []
+    try:
+        from swift.arguments import SftArguments
+
+        training_argument_fields = [field.name for field in fields(SftArguments)]
+        missing = sorted(SFT_ARGUMENT_FIELDS.difference(training_argument_fields))
+        if missing:
+            errors.append(
+                "ms-swift SftArguments is missing required fields: "
+                + ", ".join(missing)
+            )
+    except Exception as exc:  # pragma: no cover - depends on target env
+        errors.append(
+            f"failed to inspect ms-swift SFT argument contract: "
+            f"{type(exc).__name__}: {exc}"
+        )
+
     model_contract: dict[str, Any] = {}
     try:
         model_contract = read_model_contract(model)
@@ -311,6 +344,10 @@ def verify(
         "template_contract": {
             "required_parameters": sorted(TEMPLATE_PARAMETERS),
             "actual_parameters": template_parameters,
+        },
+        "sft_argument_contract": {
+            "required_fields": sorted(SFT_ARGUMENT_FIELDS),
+            "actual_fields": training_argument_fields,
         },
         "model": model_contract,
         "requested_max_context": max_context,
