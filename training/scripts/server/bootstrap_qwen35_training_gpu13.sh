@@ -46,6 +46,7 @@ fi
 export NO_PROXY="127.0.0.1,localhost"
 export no_proxy="$NO_PROXY"
 export PIP_DISABLE_PIP_VERSION_CHECK=1
+export PIP_PROGRESS_BAR=off
 export OMP_NUM_THREADS=1
 
 prepare_base() {
@@ -74,7 +75,7 @@ freeze_env() {
   local role="$2"
   local out="$ARTIFACT_ROOT/logs/environments/$role"
   mkdir -p "$out"
-  local runtime_ld="$prefix/lib:$prefix/lib/python3.12/site-packages/nvidia/curand/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+  local runtime_ld="$prefix/targets/x86_64-linux/lib:$prefix/lib:$prefix/lib/python3.12/site-packages/nvidia/curand/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
   LD_LIBRARY_PATH="$runtime_ld" "$prefix/bin/python" -m pip check
   LD_LIBRARY_PATH="$runtime_ld" "$prefix/bin/python" -m pip freeze --all >"$out/pip-freeze.txt"
   sha256sum "$out/pip-freeze.txt" >"$out/pip-freeze.sha256"
@@ -131,7 +132,7 @@ link_torch_cuda_runtime() {
 prebuild_cpu_adam() {
   local prefix="$1"
   CUDA_HOME="$prefix" PATH="$prefix/bin:$PATH" \
-    LD_LIBRARY_PATH="$prefix/lib:$prefix/lib/python3.12/site-packages/nvidia/curand/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+    LD_LIBRARY_PATH="$prefix/targets/x86_64-linux/lib:$prefix/lib:$prefix/lib/python3.12/site-packages/nvidia/curand/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
     MAX_JOBS=4 "$prefix/bin/python" - <<'PY'
 from deepspeed.ops.op_builder.cpu_adam import CPUAdamBuilder
 
@@ -162,10 +163,17 @@ install_sft() {
 
 install_long_cuda_extensions() {
   local prefix="$1"
-  local runtime_ld="$prefix/lib:$prefix/lib/python3.12/site-packages/nvidia/curand/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+  local cuda_target="$prefix/targets/x86_64-linux"
+  local runtime_ld="$cuda_target/lib:$prefix/lib:$prefix/lib/python3.12/site-packages/nvidia/curand/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+  if [[ ! -f "$cuda_target/include/cuda_runtime.h" ]]; then
+    echo "CUDA runtime headers are missing below $cuda_target/include" >&2
+    exit 2
+  fi
   "$prefix/bin/python" -m pip uninstall -y flash-attn causal-conv1d || true
   CUDA_HOME="$prefix" PATH="$prefix/bin:$PATH" \
     LD_LIBRARY_PATH="$runtime_ld" \
+    CPATH="$cuda_target/include${CPATH:+:$CPATH}" \
+    LIBRARY_PATH="$cuda_target/lib${LIBRARY_PATH:+:$LIBRARY_PATH}" \
     CC="$prefix/bin/x86_64-conda-linux-gnu-cc" \
     CXX="$prefix/bin/x86_64-conda-linux-gnu-c++" \
     TORCH_CUDA_ARCH_LIST="${IFV_TORCH_CUDA_ARCH_LIST:-8.0}" \
@@ -197,7 +205,7 @@ install_long_sft() {
     --no-deps --editable "$REPO_ROOT"
   link_torch_cuda_runtime "$LONG_SFT_PREFIX"
   freeze_env "$LONG_SFT_PREFIX" ifv-qwen35-sft-long-ms-swift442
-  local runtime_ld="$LONG_SFT_PREFIX/lib:$LONG_SFT_PREFIX/lib/python3.12/site-packages/nvidia/curand/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+  local runtime_ld="$LONG_SFT_PREFIX/targets/x86_64-linux/lib:$LONG_SFT_PREFIX/lib:$LONG_SFT_PREFIX/lib/python3.12/site-packages/nvidia/curand/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
   CUDA_HOME="$LONG_SFT_PREFIX" PATH="$LONG_SFT_PREFIX/bin:$PATH" \
     LD_LIBRARY_PATH="$runtime_ld" \
     CUDA_VISIBLE_DEVICES="${IFV_BOOTSTRAP_GPU_ID:-0}" \
