@@ -308,9 +308,9 @@ def _repair_tier(row: Mapping[str, Any]) -> str:
     if tier:
         return tier
     verification = _mapping(row.get("verification"))
-    if verification.get("full_episode_pass") is True:
+    if verification.get("hinted_episode_pass") is True:
         return "causal_episode_pass"
-    if verification.get("local_pass") is True:
+    if verification.get("hinted_local_pass") is True:
         return "local_pass_downstream"
     return ""
 
@@ -385,8 +385,19 @@ def build_repair_target(
     if not case_id or not episode_id or not step_id:
         raise ValueError("repair row requires case_id, episode_id and repair step ID")
     verification = _mapping(row.get("verification"))
-    if tier == "causal_episode_pass" and verification.get("full_episode_pass") is not True:
-        raise ValueError("causal_episode_pass requires verification.full_episode_pass")
+    if tier == "causal_episode_pass":
+        required = (
+            "source_rollout_failed",
+            "hinted_local_pass",
+            "hinted_episode_pass",
+            "hinted_strict_trace_audit_pass",
+        )
+        missing = [name for name in required if verification.get(name) is not True]
+        if missing:
+            raise ValueError(
+                "causal_episode_pass requires verified PSD repair fields: "
+                + ",".join(missing)
+            )
 
     row_weight = float(row.get("row_weight", 1.0))
     if not math.isfinite(row_weight) or row_weight <= 0:
@@ -420,10 +431,14 @@ def build_repair_target(
         "completion_ids": completion_ids,
         "teacher_topk_by_position": teacher_topk,
         "row_weight": row_weight,
+        "model_roles": dict(_mapping(row.get("model_roles"))),
         "verification": {
-            "local_pass": verification.get("local_pass"),
-            "full_episode_pass": verification.get("full_episode_pass"),
-            "strict_trace_audit_pass": verification.get("strict_trace_audit_pass"),
+            "source_rollout_failed": verification.get("source_rollout_failed"),
+            "hinted_local_pass": verification.get("hinted_local_pass"),
+            "hinted_episode_pass": verification.get("hinted_episode_pass"),
+            "hinted_strict_trace_audit_pass": verification.get(
+                "hinted_strict_trace_audit_pass"
+            ),
         },
         "source": {
             "source_run_id": _text(row.get("source_run_id")),

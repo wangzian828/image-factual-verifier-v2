@@ -40,9 +40,10 @@ def _repair_row(**overrides: object) -> dict:
             "source_url": "https://private.example/item",
         },
         "verification": {
-            "local_pass": True,
-            "full_episode_pass": True,
-            "strict_trace_audit_pass": True,
+            "source_rollout_failed": True,
+            "hinted_local_pass": True,
+            "hinted_episode_pass": True,
+            "hinted_strict_trace_audit_pass": True,
         },
     }
     row.update(overrides)

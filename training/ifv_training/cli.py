@@ -216,17 +216,20 @@ def _parser() -> argparse.ArgumentParser:
     )
     psd_datums.set_defaults(balance_kinds=True)
 
-    opsd_locate = subparsers.add_parser("locate-opsd-failure")
-    opsd_locate.add_argument("--trace", type=Path, required=True)
-    opsd_locate.add_argument("--audit", type=Path)
-    opsd_locate.add_argument("--output", type=Path, required=True)
+    psd_locate = subparsers.add_parser("locate-psd-failure")
+    psd_locate.add_argument("--trace", type=Path, required=True)
+    psd_locate.add_argument("--audit", type=Path)
+    psd_locate.add_argument("--semantic-verification", type=Path)
+    psd_locate.add_argument("--output", type=Path, required=True)
 
-    opsd_verify = subparsers.add_parser("verify-opsd-episode")
-    opsd_verify.add_argument("--trace", type=Path, required=True)
-    opsd_verify.add_argument("--gold", type=Path, required=True)
-    opsd_verify.add_argument("--output", type=Path, required=True)
-    opsd_verify.add_argument("--local-pass", action="store_true")
-    opsd_verify.add_argument("--downstream-patch-count", type=int, default=0)
+    psd_verify = subparsers.add_parser("verify-psd-episode")
+    psd_verify.add_argument("--source-trace", type=Path, required=True)
+    psd_verify.add_argument("--hinted-trace", type=Path, required=True)
+    psd_verify.add_argument("--gold", type=Path, required=True)
+    psd_verify.add_argument("--local-verification", type=Path, required=True)
+    psd_verify.add_argument("--repair-step-id", required=True)
+    psd_verify.add_argument("--output", type=Path, required=True)
+    psd_verify.add_argument("--downstream-patch-count", type=int, default=0)
 
     run_rewards = subparsers.add_parser("build-run-rewards")
     run_rewards.add_argument("--deterministic", type=Path, required=True)
@@ -444,34 +447,46 @@ def main() -> None:
             max_sequence_length=args.max_sequence_length,
             balance_kinds=args.balance_kinds,
         )
-    elif args.command == "locate-opsd-failure":
-        from .opsd import locate_failure_site
+    elif args.command == "locate-psd-failure":
+        from .psd_repair import locate_failure_site
 
         trace = load_json(args.trace)
         audit = load_json(args.audit) if args.audit else {}
-        site = locate_failure_site(trace, audit)
+        semantic_verification = (
+            load_json(args.semantic_verification)
+            if args.semantic_verification
+            else None
+        )
+        site = locate_failure_site(trace, audit, semantic_verification)
         result = {
             "found": site is not None,
             "failure_site": site.public_record() if site is not None else None,
         }
         write_json(args.output, result)
-    elif args.command == "verify-opsd-episode":
-        from .opsd_verifier import verify_causal_episode
+    elif args.command == "verify-psd-episode":
+        from .psd_repair_verifier import verify_causal_episode
 
-        trace = load_json(args.trace)
+        source_trace = load_json(args.source_trace)
+        hinted_trace = load_json(args.hinted_trace)
         gold = load_json(args.gold)
+        local_verification = load_json(args.local_verification)
         verification = verify_causal_episode(
-            trace,
+            hinted_trace,
+            source_trace=source_trace,
             gold=gold,
-            local_pass=args.local_pass,
+            local_verification=local_verification,
+            repair_step_id=args.repair_step_id,
             downstream_patch_count=args.downstream_patch_count,
         )
         result = {
             "accepted_for_primary_psd": verification.accepted_for_primary_psd,
-            "local_pass": verification.local_pass,
-            "full_episode_pass": verification.full_episode_pass,
-            "strict_trace_audit_pass": verification.strict_trace_audit_pass,
-            "recorded_verdict": verification.recorded_verdict,
+            "source_rollout_failed": verification.source_rollout_failed,
+            "hinted_local_pass": verification.hinted_local_pass,
+            "hinted_episode_pass": verification.hinted_episode_pass,
+            "hinted_strict_trace_audit_pass": (
+                verification.hinted_strict_trace_audit_pass
+            ),
+            "hinted_recorded_verdict": verification.hinted_recorded_verdict,
             "expected_verdict": verification.expected_verdict,
             "repair_tier": verification.repair_tier,
             "reasons": list(verification.reasons),

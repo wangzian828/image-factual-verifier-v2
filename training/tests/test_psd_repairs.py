@@ -61,9 +61,28 @@ def _attempt(
         "teacher_prompt_ids": teacher_prompt_ids or [1, 2, 3, 4],
         "completion_ids": [5, 6],
         "verification": {
-            "local_pass": True,
-            "full_episode_pass": True,
-            "strict_trace_audit_pass": True,
+            "source_rollout_failed": True,
+            "hinted_local_pass": True,
+            "hinted_episode_pass": True,
+            "hinted_strict_trace_audit_pass": True,
+        },
+        "model_roles": {
+            "hint_constructor": {
+                "provider": "frontier",
+                "model": "strong-hint-constructor",
+                "supplies_training_distribution": False,
+            },
+            "frozen_self_teacher": {
+                "provider": "qwen_local",
+                "model": "qwen-round-start",
+                "round_start_checkpoint": "checkpoint-round-0",
+                "supplies_training_distribution": True,
+            },
+            "trainable_student": {
+                "provider": "qwen_local",
+                "model": "qwen-round-start",
+                "initial_checkpoint": "checkpoint-round-0",
+            },
         },
     }
     row.update(overrides)
@@ -198,9 +217,10 @@ def test_assembler_rejects_identity_verifier_and_hint_leaks(
                 hint="Inspect another route.",
                 hint_level=1,
                 verification={
-                    "local_pass": True,
-                    "full_episode_pass": False,
-                    "strict_trace_audit_pass": True,
+                    "source_rollout_failed": True,
+                    "hinted_local_pass": True,
+                    "hinted_episode_pass": False,
+                    "hinted_strict_trace_audit_pass": True,
                 },
             ),
             _attempt(
@@ -230,7 +250,7 @@ def test_assembler_rejects_identity_verifier_and_hint_leaks(
     }
     assert reasons == {
         "source_trace_sha256_mismatch",
-        "verification_full_episode_pass_required",
+        "verification_hinted_episode_pass_required",
         "hint_audit_failed:binary_verdict_leak",
     }
 

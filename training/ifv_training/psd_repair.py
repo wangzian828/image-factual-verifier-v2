@@ -1,4 +1,4 @@
-"""Provider-neutral contracts for IFV on-policy privileged self-distillation.
+"""Provider-neutral contracts for IFV Privileged On-Policy Self-Distillation repairs.
 
 This module owns the boundary between a privileged repair controller and the
 student-visible raw-history runtime.  It does not run private gold through the
@@ -18,8 +18,18 @@ from .psd import audit_hint
 from src.orchestrator.runtime_events import reconstruct_archived_request
 
 
-OPSD_SCHEMA_VERSION = "ifv-opsd-v1"
+PSD_ATTEMPT_SCHEMA_VERSION = "ifv-psd-repair-attempt-v1"
+PSD_SEMANTIC_LOCALIZATION_SCHEMA_VERSION = "ifv-psd-semantic-localization-v1"
 TRAINABLE_HINT_LEVELS = frozenset({1, 2, 3})
+SEMANTIC_FAILURE_CATEGORIES = frozenset(
+    {
+        "wrong_search_direction",
+        "incomplete_event_verification",
+        "unsupported_similarity_extrapolation",
+        "ignored_repeated_no_match",
+        "evidence_interpretation_error",
+    }
+)
 _PRIVATE_CONTEXT_KEYS = frozenset(
     {
         "gold", "evaluation_gold", "factual_status", "expected_verdict",
@@ -72,6 +82,10 @@ class FailureSite:
     source_step_index: int | None = None
     context_request_id: str = ""
     runtime_store_path: str = ""
+    localization_kind: str = "observed_runtime_failure"
+    semantic_category: str = ""
+    localization_verifier: str = ""
+    localization_basis_sha256: str = ""
 
     def public_record(self) -> dict[str, Any]:
         return {
@@ -83,6 +97,10 @@ class FailureSite:
             "policy_input_sha256": _sha(self.policy_input),
             "policy_action_sha256": _sha(self.policy_action),
             "context_request_id": self.context_request_id,
+            "localization_kind": self.localization_kind,
+            "semantic_category": self.semantic_category,
+            "localization_verifier": self.localization_verifier,
+            "localization_basis_sha256": self.localization_basis_sha256,
         }
 
 
@@ -97,11 +115,84 @@ class HintProposal:
 
 
 @dataclass(frozen=True)
+class PSDModelRoles:
+    """Bind hint construction and self-distillation to their actual models."""
+
+    hint_constructor_provider: str
+    hint_constructor_model: str
+    frozen_self_teacher_provider: str
+    frozen_self_teacher_model: str
+    round_start_checkpoint: str
+    trainable_student_provider: str
+    trainable_student_model: str
+    trainable_student_initial_checkpoint: str
+
+    def __post_init__(self) -> None:
+        values = {
+            name: _text(getattr(self, name))
+            for name in (
+                "hint_constructor_provider",
+                "hint_constructor_model",
+                "frozen_self_teacher_provider",
+                "frozen_self_teacher_model",
+                "round_start_checkpoint",
+                "trainable_student_provider",
+                "trainable_student_model",
+                "trainable_student_initial_checkpoint",
+            )
+        }
+        missing = sorted(name for name, value in values.items() if not value)
+        if missing:
+            raise ValueError("PSD model roles are incomplete: " + ", ".join(missing))
+        if (
+            values["round_start_checkpoint"]
+            != values["trainable_student_initial_checkpoint"]
+        ):
+            raise ValueError(
+                "frozen self-teacher and trainable student must share the "
+                "round-start checkpoint"
+            )
+        if (
+            values["frozen_self_teacher_model"]
+            != values["trainable_student_model"]
+        ):
+            raise ValueError(
+                "frozen self-teacher and trainable student must identify the "
+                "same round-start policy"
+            )
+
+    def record(self) -> dict[str, Any]:
+        return {
+            "hint_constructor": {
+                "provider": _text(self.hint_constructor_provider),
+                "model": _text(self.hint_constructor_model),
+                "supplies_training_distribution": False,
+            },
+            "frozen_self_teacher": {
+                "provider": _text(self.frozen_self_teacher_provider),
+                "model": _text(self.frozen_self_teacher_model),
+                "round_start_checkpoint": _text(self.round_start_checkpoint),
+                "sees_hint": True,
+                "supplies_training_distribution": True,
+            },
+            "trainable_student": {
+                "provider": _text(self.trainable_student_provider),
+                "model": _text(self.trainable_student_model),
+                "initial_checkpoint": _text(
+                    self.trainable_student_initial_checkpoint
+                ),
+                "sees_hint": False,
+            },
+        }
+
+
+@dataclass(frozen=True)
 class VerificationResult:
-    local_pass: bool
-    full_episode_pass: bool
-    strict_trace_audit_pass: bool
-    recorded_verdict: str
+    source_rollout_failed: bool
+    hinted_local_pass: bool
+    hinted_episode_pass: bool
+    hinted_strict_trace_audit_pass: bool
+    hinted_recorded_verdict: str
     expected_verdict: str
     repair_tier: str
     reasons: tuple[str, ...] = ()
@@ -110,11 +201,12 @@ class VerificationResult:
     def accepted_for_primary_psd(self) -> bool:
         return (
             self.repair_tier == "causal_episode_pass"
-            and self.local_pass
-            and self.full_episode_pass
-            and self.strict_trace_audit_pass
-            and bool(_text(self.recorded_verdict))
-            and _text(self.recorded_verdict).casefold()
+            and self.source_rollout_failed
+            and self.hinted_local_pass
+            and self.hinted_episode_pass
+            and self.hinted_strict_trace_audit_pass
+            and bool(_text(self.hinted_recorded_verdict))
+            and _text(self.hinted_recorded_verdict).casefold()
             == _text(self.expected_verdict).casefold()
         )
 
@@ -169,8 +261,9 @@ def project_policy_steps(trace: Mapping[str, Any]) -> list[dict[str, Any]]:
 def locate_failure_site(
     trace: Mapping[str, Any],
     audit: Mapping[str, Any] | None = None,
+    semantic_verification: Mapping[str, Any] | None = None,
 ) -> FailureSite | None:
-    """Locate an observed failure; terminal mismatch alone stays unattributed."""
+    """Locate a student-reached, verifier-grounded recoverable decision."""
 
     steps = project_policy_steps(trace)
     if not steps:
@@ -194,6 +287,7 @@ def locate_failure_site(
                     policy_action=step["policy_action"],
                     context_request_id=step["context_request_id"],
                     runtime_store_path=step["runtime_store_path"],
+                    localization_kind="strict_trace_audit",
                 )
     for index, step in enumerate(steps):
         if step["action_type"] in {"format_error", "output_rejected", "policy_replan"}:
@@ -204,10 +298,83 @@ def locate_failure_site(
                 stage=step["stage"],
                 example_type=step["example_type"],
                 policy_input=step["policy_input"],
-                    policy_action=step["policy_action"],
-                    context_request_id=step["context_request_id"],
-                    runtime_store_path=step["runtime_store_path"],
+                policy_action=step["policy_action"],
+                context_request_id=step["context_request_id"],
+                runtime_store_path=step["runtime_store_path"],
+                localization_kind="runtime_action_failure",
             )
+    report = _mapping(semantic_verification)
+    if report.get("schema_version") != PSD_SEMANTIC_LOCALIZATION_SCHEMA_VERSION:
+        return None
+    if report.get("passed") is not True:
+        return None
+    valid: list[tuple[Mapping[str, Any], Mapping[str, Any]]] = []
+    for candidate in _rows(report.get("candidates")):
+        if candidate.get("recoverable") is not True:
+            continue
+        source_index = candidate.get("source_step_index")
+        if not isinstance(source_index, int) or isinstance(source_index, bool):
+            continue
+        category = _text(candidate.get("category"))
+        if category not in SEMANTIC_FAILURE_CATEGORIES:
+            continue
+        verifier = _mapping(candidate.get("verifier"))
+        if (
+            _text(verifier.get("kind")) != "task"
+            or not _text(verifier.get("name"))
+            or not _text(verifier.get("version"))
+        ):
+            continue
+        observed_basis = candidate.get("observed_basis")
+        if not isinstance(observed_basis, list) or not observed_basis:
+            continue
+        step = next(
+            (
+                item
+                for item in steps
+                if item["source_step_index"] == source_index
+            ),
+            None,
+        )
+        if step is None:
+            continue
+        if (
+            step["stage"] == "unified_judgment"
+            and category != "evidence_interpretation_error"
+        ):
+            continue
+        valid.append((candidate, step))
+    selected = [item for item in valid if item[0].get("selected") is True]
+    if len(selected) == 1:
+        candidate, step = selected[0]
+    elif not selected and len(valid) == 1:
+        candidate, step = valid[0]
+    else:
+        return None
+    verifier = _mapping(candidate.get("verifier"))
+    basis = {
+        "category": _text(candidate.get("category")),
+        "observed_basis": candidate.get("observed_basis"),
+        "source_step_index": candidate.get("source_step_index"),
+        "verifier": dict(verifier),
+    }
+    return FailureSite(
+        step_index=steps.index(step),
+        source_step_index=step["source_step_index"],
+        step_id=step["step_id"],
+        stage=step["stage"],
+        example_type=step["example_type"],
+        policy_input=step["policy_input"],
+        policy_action=step["policy_action"],
+        context_request_id=step["context_request_id"],
+        runtime_store_path=step["runtime_store_path"],
+        localization_kind="semantic_task_verifier",
+        semantic_category=_text(candidate.get("category")),
+        localization_verifier=(
+            f"{_text(verifier.get('name'))}:{_text(verifier.get('version'))}"
+        ),
+        localization_basis_sha256=_sha(basis),
+    )
     return None
 
 
@@ -277,7 +444,9 @@ def build_hint_proposal(
     )
     if audit.get("passed") is not True:
         raise ValueError("hint audit failed: " + ",".join(audit.get("errors", [])))
-    proposal_id = "opsd-hint:" + _sha({"candidate_id": candidate_id, "hint": text, "level": level})
+    proposal_id = "psd-repair-hint:" + _sha(
+        {"candidate_id": candidate_id, "hint": text, "level": level}
+    )
     return HintProposal(
         text=_text(text),
         level=level,
@@ -312,11 +481,12 @@ def build_student_messages(failure_site: FailureSite) -> list[dict[str, Any]]:
 
 def verify_repair(
     *,
-    local_pass: bool,
-    recorded_verdict: str,
+    source_rollout_failed: bool,
+    hinted_local_pass: bool,
+    hinted_recorded_verdict: str,
     expected_verdict: str,
-    strict_trace_audit_pass: bool,
-    full_episode_pass: bool,
+    hinted_strict_trace_audit_pass: bool,
+    hinted_episode_pass: bool,
     downstream_patch_count: int = 0,
     scaffold_only: bool = False,
     reasons: Iterable[str] = (),
@@ -324,34 +494,38 @@ def verify_repair(
     if scaffold_only:
         tier = "scaffold_only"
     elif (
-        full_episode_pass
-        and strict_trace_audit_pass
+        source_rollout_failed
+        and hinted_local_pass
+        and hinted_episode_pass
+        and hinted_strict_trace_audit_pass
         and downstream_patch_count == 0
-        and bool(_text(recorded_verdict))
-        and _text(recorded_verdict).casefold()
+        and bool(_text(hinted_recorded_verdict))
+        and _text(hinted_recorded_verdict).casefold()
         == _text(expected_verdict).casefold()
     ):
         tier = "causal_episode_pass"
-    elif local_pass:
+    elif hinted_local_pass:
         tier = "local_pass_downstream"
     else:
         tier = "unrepairable"
     return VerificationResult(
-        local_pass=bool(local_pass),
-        full_episode_pass=bool(full_episode_pass),
-        strict_trace_audit_pass=bool(strict_trace_audit_pass),
-        recorded_verdict=_text(recorded_verdict),
+        source_rollout_failed=bool(source_rollout_failed),
+        hinted_local_pass=bool(hinted_local_pass),
+        hinted_episode_pass=bool(hinted_episode_pass),
+        hinted_strict_trace_audit_pass=bool(hinted_strict_trace_audit_pass),
+        hinted_recorded_verdict=_text(hinted_recorded_verdict),
         expected_verdict=_text(expected_verdict),
         repair_tier=tier,
         reasons=tuple(_text(item) for item in reasons if _text(item)),
     )
 
 
-def build_opsd_attempt_record(
+def build_psd_attempt_record(
     *,
     candidate_id: str,
     failure_site: FailureSite,
     hint: HintProposal,
+    model_roles: PSDModelRoles,
     verification: VerificationResult,
     student_prompt_ids: Sequence[int] = (),
     teacher_prompt_ids: Sequence[int] = (),
@@ -365,17 +539,21 @@ def build_opsd_attempt_record(
     if verification.accepted_for_primary_psd and l5_scaffold:
         raise ValueError("L5 scaffold cannot be a primary PSD repair")
     return {
-        "schema_version": OPSD_SCHEMA_VERSION,
+        "schema_version": PSD_ATTEMPT_SCHEMA_VERSION,
         "candidate_id": _text(candidate_id),
         "attempt_id": hint.proposal_id,
         "case_id": _text(case_id),
         "episode_id": _text(episode_id),
         "repair_step_id": failure_site.step_id,
+        "model_roles": model_roles.record(),
         "repair_site": failure_site.public_record(),
         "repair_tier": verification.repair_tier,
-        "local_pass": verification.local_pass,
-        "full_episode_pass": verification.full_episode_pass,
-        "strict_trace_audit_pass": verification.strict_trace_audit_pass,
+        "source_rollout_failed": verification.source_rollout_failed,
+        "hinted_local_pass": verification.hinted_local_pass,
+        "hinted_episode_pass": verification.hinted_episode_pass,
+        "hinted_strict_trace_audit_pass": (
+            verification.hinted_strict_trace_audit_pass
+        ),
         "hint_record": {
             "text": hint.text,
             "level": hint.level,
@@ -385,11 +563,14 @@ def build_opsd_attempt_record(
             "audit": dict(hint.audit),
         },
         "verification": {
-            "local_pass": verification.local_pass,
-            "full_episode_pass": verification.full_episode_pass,
-            "strict_trace_audit_pass": verification.strict_trace_audit_pass,
+            "source_rollout_failed": verification.source_rollout_failed,
+            "hinted_local_pass": verification.hinted_local_pass,
+            "hinted_episode_pass": verification.hinted_episode_pass,
+            "hinted_strict_trace_audit_pass": (
+                verification.hinted_strict_trace_audit_pass
+            ),
             "repair_tier": verification.repair_tier,
-            "recorded_verdict": verification.recorded_verdict,
+            "hinted_recorded_verdict": verification.hinted_recorded_verdict,
             "expected_verdict": verification.expected_verdict,
             "reasons": list(verification.reasons),
         },

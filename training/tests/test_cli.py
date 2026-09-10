@@ -20,12 +20,12 @@ def _write_jsonl(path: Path, values: list[dict[str, object]]) -> None:
     )
 
 
-def test_cli_keeps_runtime_only_opsd_imports_lazy() -> None:
+def test_cli_keeps_runtime_only_psd_repair_imports_lazy() -> None:
     source = Path(cli.__file__).read_text(encoding="utf-8")
     module_imports = source.split("def _parser", 1)[0]
 
-    assert "from .opsd import" not in module_imports
-    assert "from .opsd_verifier import" not in module_imports
+    assert "from .psd_repair import" not in module_imports
+    assert "from .psd_repair_verifier import" not in module_imports
 
 
 def test_build_run_rewards_cli_executes_real_branch(

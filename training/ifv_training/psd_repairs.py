@@ -176,12 +176,29 @@ def _validate_attempt(
     if repair_tier != "causal_episode_pass":
         raise ValueError("repair_tier_not_causal_episode_pass")
     verification = _mapping(attempt.get("verification"))
-    if verification.get("local_pass") is not True:
-        raise ValueError("verification_local_pass_required")
-    if verification.get("full_episode_pass") is not True:
-        raise ValueError("verification_full_episode_pass_required")
-    if verification.get("strict_trace_audit_pass") is not True:
-        raise ValueError("verification_strict_trace_audit_pass_required")
+    if verification.get("source_rollout_failed") is not True:
+        raise ValueError("verification_source_rollout_failure_required")
+    if verification.get("hinted_local_pass") is not True:
+        raise ValueError("verification_hinted_local_pass_required")
+    if verification.get("hinted_episode_pass") is not True:
+        raise ValueError("verification_hinted_episode_pass_required")
+    if verification.get("hinted_strict_trace_audit_pass") is not True:
+        raise ValueError("verification_hinted_strict_trace_audit_pass_required")
+
+    model_roles = _mapping(attempt.get("model_roles"))
+    constructor = _mapping(model_roles.get("hint_constructor"))
+    teacher = _mapping(model_roles.get("frozen_self_teacher"))
+    student = _mapping(model_roles.get("trainable_student"))
+    if constructor.get("supplies_training_distribution") is not False:
+        raise ValueError("hint_constructor_distribution_must_not_train_student")
+    if teacher.get("supplies_training_distribution") is not True:
+        raise ValueError("frozen_self_teacher_distribution_required")
+    if _text(teacher.get("round_start_checkpoint")) != _text(
+        student.get("initial_checkpoint")
+    ):
+        raise ValueError("self_teacher_student_checkpoint_mismatch")
+    if _text(teacher.get("model")) != _text(student.get("model")):
+        raise ValueError("self_teacher_student_policy_mismatch")
 
     hint_record = _mapping(attempt.get("hint_record"))
     hint = _text(hint_record.get("text") or attempt.get("hint"))
@@ -216,6 +233,7 @@ def _validate_attempt(
             field="row_weight",
         ),
         "verification": dict(verification),
+        "model_roles": dict(model_roles),
     }
 
 
@@ -246,6 +264,7 @@ def _repair_row(
         "completion_ids": list(selected["completion_ids"]),
         "row_weight": float(selected["row_weight"]),
         "verification": dict(_mapping(selected.get("verification"))),
+        "model_roles": dict(_mapping(selected.get("model_roles"))),
         **source,
     }
 

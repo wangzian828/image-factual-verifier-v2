@@ -1,4 +1,4 @@
-"""Qwen Chat Completions continuation adapter for IFV OPSD.
+"""Qwen Chat Completions continuation adapter for IFV PSD repairs.
 
 The adapter intentionally delegates model calls and tool execution to the
 existing runtime StageRunner.  It is not a second tool protocol and it does
@@ -19,9 +19,10 @@ from src.orchestrator.stage_runner import StageRunner, StageStep
 from src.orchestrator.tool_cache import ToolResultCache
 from src.tools.base import BaseTool
 
-from .opsd import (
+from .psd_repair import (
     FailureSite,
     HintProposal,
+    PSDModelRoles,
     build_proposer_prompt,
     build_student_messages,
     build_teacher_messages,
@@ -49,7 +50,9 @@ class QwenContinuationAdapter:
     def __init__(
         self,
         *,
-        llm: Any,
+        policy_llm: Any,
+        hint_constructor_llm: Any,
+        model_roles: PSDModelRoles,
         tools: Sequence[BaseTool],
         image_path: str,
         runtime_store: Any = None,
@@ -65,13 +68,32 @@ class QwenContinuationAdapter:
         source_runtime_store_path: str = "",
         policy_topk: int = 20,
     ) -> None:
-        provider = str(getattr(llm, "provider", "")).strip().lower()
-        wire_api = str(getattr(llm, "wire_api", "")).strip().lower()
+        provider = str(getattr(policy_llm, "provider", "")).strip().lower()
+        wire_api = str(getattr(policy_llm, "wire_api", "")).strip().lower()
         if provider not in {"qwen_local", "lmdeploy"} or wire_api != "chat_completions":
             raise ValueError(
-                "OPSD continuation requires a Qwen-compatible Chat Completions backend"
+                "PSD repair continuation requires a Qwen-compatible Chat Completions backend"
             )
-        self.llm = llm
+        hint_provider = str(
+            getattr(hint_constructor_llm, "provider", "")
+        ).strip().lower()
+        hint_model = str(
+            getattr(hint_constructor_llm, "model_name", "")
+        ).strip()
+        policy_model = str(getattr(policy_llm, "model_name", "")).strip()
+        if (
+            provider != model_roles.frozen_self_teacher_provider.strip().lower()
+            or policy_model != model_roles.frozen_self_teacher_model.strip()
+        ):
+            raise ValueError("policy backend does not match frozen self-teacher role")
+        if (
+            hint_provider != model_roles.hint_constructor_provider.strip().lower()
+            or hint_model != model_roles.hint_constructor_model.strip()
+        ):
+            raise ValueError("hint backend does not match hint-constructor role")
+        self.policy_llm = policy_llm
+        self.hint_constructor_llm = hint_constructor_llm
+        self.model_roles = model_roles
         self.tools = list(tools)
         self.image_path = image_path
         self.runtime_store = runtime_store
@@ -111,7 +133,7 @@ class QwenContinuationAdapter:
         prior_steps: Sequence[StageStep] = (),
     ) -> StageRunner:
         return StageRunner(
-            llm=self.llm,
+            llm=self.policy_llm,
             system_prompt=_text(site.policy_input.get("system_instruction")),
             tools=list(self.tools),
             output_schema=InvestigationSegmentOutput,
@@ -130,7 +152,7 @@ class QwenContinuationAdapter:
             ),
             force_tool_each_round=True,
             stop_output_factory=lambda: InvestigationSegmentOutput(
-                segment_summary="OPSD continuation action completed.",
+                segment_summary="PSD repair continuation action completed.",
                 action_completed=True,
             ),
             protocol_exhaustion_boundary=True,
@@ -188,8 +210,16 @@ class QwenContinuationAdapter:
                     build_hint_proposal(
                         text=text,
                         level=hint_level,
-                        provider=str(getattr(self.llm, "provider", "qwen_local")),
-                        model=str(getattr(self.llm, "model_name", "")),
+                        provider=str(
+                            getattr(
+                                self.hint_constructor_llm,
+                                "provider",
+                                "",
+                            )
+                        ),
+                        model=str(
+                            getattr(self.hint_constructor_llm, "model_name", "")
+                        ),
                         candidate_id=candidate_id,
                         public_failure_context={
                             "failure_site": failure_site.public_record(),
@@ -213,7 +243,7 @@ class QwenContinuationAdapter:
         generation_config = {"enable_thinking": False}
         if self.runtime_store is not None:
             request_id = self.runtime_store.context_ledger.begin_request(
-                stage="opsd_proposer",
+                stage="psd_proposer",
                 lifecycle_kind="privileged_proposer",
                 system_instruction=messages[0].get("content", "") if messages else "",
                 input_payload=messages[1:] if len(messages) > 1 else messages,
@@ -221,12 +251,14 @@ class QwenContinuationAdapter:
                 response_format=response_format,
                 generation_config=generation_config,
                 max_output_tokens=min(self.max_output_tokens, 2048),
-                model=str(getattr(self.llm, "model_name", "")),
-                prompt_version="ifv-opsd-proposer-v1",
+                model=str(
+                    getattr(self.hint_constructor_llm, "model_name", "")
+                ),
+                prompt_version="ifv-psd-repair-proposer-v1",
             )
         started = time.perf_counter()
         try:
-            response = await self.llm.get_response(
+            response = await self.hint_constructor_llm.get_response(
                 messages,
                 max_tokens=min(self.max_output_tokens, 2048),
                 response_format=response_format,
@@ -239,7 +271,7 @@ class QwenContinuationAdapter:
                     status="error",
                     error=f"{type(exc).__name__}: {exc}",
                     response_metadata={
-                        "opsd_proposer": True,
+                        "psd_proposer": True,
                         "duration_ms": round((time.perf_counter() - started) * 1000, 2),
                     },
                 )
@@ -255,7 +287,7 @@ class QwenContinuationAdapter:
                 usage=usage,
                 status="completed",
                 response_metadata={
-                    "opsd_proposer": True,
+                    "psd_proposer": True,
                     "duration_ms": round((time.perf_counter() - started) * 1000, 2),
                     "response_content_chars": len(str(getattr(response, "text", "") or "")),
                 },
@@ -275,7 +307,7 @@ class QwenContinuationAdapter:
             site=failure_site,
             history=teacher_history,
             include_hint_as_pending_user=True,
-            stage_name="opsd_teacher_repair",
+            stage_name="psd_teacher_repair",
             prior_steps=prior_steps,
         )
         _, teacher_steps = await teacher_runner.run("")
@@ -289,7 +321,7 @@ class QwenContinuationAdapter:
             site=failure_site,
             history=student_history,
             include_hint_as_pending_user=True,
-            stage_name="opsd_student_continuation",
+            stage_name="psd_student_continuation",
             prior_steps=list(prior_steps),
         )
         _, student_steps = await student_runner.run("")
@@ -333,7 +365,7 @@ class QwenContinuationAdapter:
                 site=site,
                 history=teacher_history,
                 include_hint_as_pending_user=True,
-                stage_name="opsd_teacher_repair",
+                stage_name="psd_teacher_repair",
                 prior_steps=[*prior_steps, *teacher_steps],
             )
             _, steps = await runner.run("")
@@ -350,7 +382,7 @@ class QwenContinuationAdapter:
                 site=site,
                 history=student_history,
                 include_hint_as_pending_user=True,
-                stage_name="opsd_student_continuation",
+                stage_name="psd_student_continuation",
                 prior_steps=[*prior_steps, *student_steps],
             )
             _, steps = await runner.run("")
