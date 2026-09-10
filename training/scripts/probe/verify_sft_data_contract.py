@@ -68,6 +68,7 @@ def verify_sft_data_contract(
     processor_report_path: Path,
     model: str,
     expected_template_contract: Mapping[str, Any],
+    minimum_train_input_tokens: int | None = None,
 ) -> dict[str, Any]:
     errors: list[str] = []
     train_record = _file_record(train_jsonl)
@@ -90,6 +91,27 @@ def verify_sft_data_contract(
         expected_template_contract
     ):
         errors.append("processor template contract does not match the training profile")
+
+    train_input_tokens_max: int | None = None
+    if minimum_train_input_tokens is not None:
+        exact_train_path = str(train_jsonl.expanduser().resolve())
+        by_dataset = processor_report.get("input_tokens_by_dataset")
+        by_dataset = by_dataset if isinstance(by_dataset, Mapping) else {}
+        train_distribution = by_dataset.get(exact_train_path)
+        if isinstance(train_distribution, Mapping) and isinstance(
+            train_distribution.get("max"), int
+        ):
+            train_input_tokens_max = int(train_distribution["max"])
+        if train_input_tokens_max is None:
+            errors.append(
+                "processor report does not expose the absolute-path train token distribution"
+            )
+        elif train_input_tokens_max < minimum_train_input_tokens:
+            errors.append(
+                "processor train rows do not reach the required long-context "
+                f"boundary: required>={minimum_train_input_tokens}, "
+                f"observed={train_input_tokens_max}"
+            )
 
     reported_files = processor_report.get("dataset_files")
     reported_files = reported_files if isinstance(reported_files, list) else []
@@ -160,6 +182,18 @@ def verify_sft_data_contract(
             "schema_version": processor_report.get("schema_version"),
             "passed": processor_report.get("passed"),
         },
+        "long_context_boundary": {
+            "required": minimum_train_input_tokens is not None,
+            "minimum_train_input_tokens": minimum_train_input_tokens,
+            "observed_train_input_tokens_max": train_input_tokens_max,
+            "passed": (
+                train_input_tokens_max is not None
+                and minimum_train_input_tokens is not None
+                and train_input_tokens_max >= minimum_train_input_tokens
+                if minimum_train_input_tokens is not None
+                else True
+            ),
+        },
     }
 
 
@@ -188,9 +222,15 @@ def main() -> int:
         required=True,
     )
     parser.add_argument("--image-max-token-num", type=int, required=True)
+    parser.add_argument("--minimum-train-input-tokens", type=int)
     args = parser.parse_args()
     if args.max_context < 1 or args.sequence_parallel_size < 1:
         parser.error("context and sequence parallel sizes must be positive")
+    if (
+        args.minimum_train_input_tokens is not None
+        and args.minimum_train_input_tokens < 1
+    ):
+        parser.error("--minimum-train-input-tokens must be positive")
 
     result = verify_sft_data_contract(
         train_jsonl=args.train_jsonl,
@@ -199,6 +239,7 @@ def main() -> int:
         processor_report_path=args.processor_report,
         model=args.model,
         expected_template_contract=_expected_template_contract(args),
+        minimum_train_input_tokens=args.minimum_train_input_tokens,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(

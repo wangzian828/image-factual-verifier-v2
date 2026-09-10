@@ -77,6 +77,34 @@ def _processor_report(
                     MODULE._file_record(train),
                     MODULE._file_record(validation),
                 ],
+                "longest_rows": [
+                    {
+                        "path": str(train.resolve()),
+                        "input_tokens": 125000,
+                    },
+                    {
+                        "path": str(validation.resolve()),
+                        "input_tokens": 1000,
+                    },
+                ],
+                "input_tokens_by_dataset": {
+                    str(train.resolve()): {
+                        "count": 1,
+                        "min": 125000,
+                        "p50": 125000,
+                        "p95": 125000,
+                        "max": 125000,
+                        "mean": 125000.0,
+                    },
+                    str(validation.resolve()): {
+                        "count": 1,
+                        "min": 1000,
+                        "p50": 1000,
+                        "p95": 1000,
+                        "max": 1000,
+                        "mean": 1000.0,
+                    },
+                },
             }
         ),
         encoding="utf-8",
@@ -106,6 +134,43 @@ def test_raw_data_gate_binds_manifest_processor_and_profile(tmp_path: Path) -> N
 
     assert result["passed"] is True
     assert result["dataset_audit"]["passed"] is True
+
+
+def test_raw_data_gate_requires_a_real_long_train_row(tmp_path: Path) -> None:
+    train, validation = _dataset(tmp_path)
+    model = tmp_path / "model"
+    model.mkdir()
+    processor_report = tmp_path / "processor.json"
+    _processor_report(
+        processor_report,
+        train=train,
+        validation=validation,
+        model=model,
+    )
+
+    accepted = MODULE.verify_sft_data_contract(
+        train_jsonl=train,
+        validation_jsonl=validation,
+        dataset_dir=tmp_path,
+        processor_report_path=processor_report,
+        model=str(model),
+        expected_template_contract=CONTRACT,
+        minimum_train_input_tokens=120000,
+    )
+    rejected = MODULE.verify_sft_data_contract(
+        train_jsonl=train,
+        validation_jsonl=validation,
+        dataset_dir=tmp_path,
+        processor_report_path=processor_report,
+        model=str(model),
+        expected_template_contract=CONTRACT,
+        minimum_train_input_tokens=128000,
+    )
+
+    assert accepted["long_context_boundary"]["passed"] is True
+    assert rejected["passed"] is False
+    assert rejected["long_context_boundary"]["passed"] is False
+    assert any("required long-context boundary" in error for error in rejected["errors"])
 
 
 def test_raw_data_gate_rejects_data_drift_after_processor_audit(

@@ -79,6 +79,18 @@ def test_current_qwen35_profiles_are_explicit_and_bounded() -> None:
         "configs/sft/qwen3.5-full-10step-4gpu-zero3-offload-accum1-"
         "bf16params-sdpa-checkpointed-8k-truncated-smoke-noeval.env"
     )
+    memory_probe = _source(
+        "configs/sft/qwen3.5-full-1step-8gpu-fsdp2-sp8-flash-"
+        "128k-memory-probe.env"
+    )
+    canary_128k = _source(
+        "configs/sft/qwen3.5-full-10step-8gpu-fsdp2-sp8-flash-"
+        "128k-canary.env"
+    )
+    resume_128k = _source(
+        "configs/sft/qwen3.5-full-11step-8gpu-fsdp2-sp8-flash-"
+        "128k-resume.env"
+    )
 
     assert "IFV_QWEN35_MODEL" in model
     assert "IFV_MODEL_ROLE=primary_student" in model
@@ -98,6 +110,35 @@ def test_current_qwen35_profiles_are_explicit_and_bounded() -> None:
     assert "IFV_MAX_LENGTH=8192" in portable
     assert "IFV_EVAL_STRATEGY=no" in smoke
     assert "IFV_TRUNCATION_STRATEGY=left" in smoke
+
+    for profile in (memory_probe, canary_128k, resume_128k):
+        assert "IFV_TUNER_TYPE=full" in profile
+        assert "IFV_FSDP=fsdp2" in profile
+        assert "IFV_FSDP_VERSION=2" in profile
+        assert "IFV_ATTN_IMPL=flash_attn" in profile
+        assert "IFV_MAX_LENGTH=131072" in profile
+        assert "IFV_TRUNCATION_STRATEGY=raise" in profile
+        assert "IFV_MIN_PROCESSOR_TRAIN_INPUT_TOKENS=120000" in profile
+        assert "IFV_PADDING_FREE=true" in profile
+        assert "IFV_SEQUENCE_PARALLEL_SIZE=8" in profile
+        assert "IFV_USE_LOGITS_TO_KEEP=false" in profile
+        assert "CELOSS_PARALLEL_SIZE=2048" in profile
+        assert "IFV_GRADIENT_CHECKPOINTING=true" in profile
+        assert "IFV_REQUIRE_TRAINING_ENV_PREFLIGHT=true" in profile
+        assert "IFV_EXPECTED_GPU_COUNT=8" in profile
+        assert "IFV_GPU_MEMORY_TARGET_MIN_MIB=36000" in profile
+        assert "IFV_GPU_MEMORY_TARGET_MAX_MIB=38912" in profile
+        assert "IFV_GPU_MEMORY_MAX_IMBALANCE_MIB=1024" in profile
+
+    assert "IFV_MAX_STEPS=1" in memory_probe
+    assert "IFV_EVAL_STRATEGY=no" in memory_probe
+    assert "IFV_SAVE_STRATEGY=no" in memory_probe
+    assert "IFV_MAX_STEPS=10" in canary_128k
+    assert "IFV_SAVE_STEPS=10" in canary_128k
+    assert "IFV_EVAL_STEPS=10" in canary_128k
+    assert "IFV_MAX_STEPS=11" in resume_128k
+    assert "IFV_SAVE_STEPS=11" in resume_128k
+    assert "IFV_EVAL_STEPS=11" in resume_128k
 
 
 def test_deepspeed_optimizer_offload_keeps_model_parameters_on_gpu() -> None:
@@ -170,6 +211,10 @@ def test_gpu_runtime_policy_is_shared_by_serving_and_training() -> None:
     assert "export OMP_NUM_THREADS=1" in common
     assert "NCCL_CUMEM_HOST_ENABLE" in common
     assert "between one and eight GPUs" in common
+    assert "IFV_DATA_PARALLEL_SIZE" in common
+    assert "must be divisible by IFV_SEQUENCE_PARALLEL_SIZE" in common
+    assert "sequence parallel training requires IFV_PADDING_FREE=true" in common
+    assert "sequence parallel training requires a positive CELOSS_PARALLEL_SIZE" in common
     assert "$1 + 0 >= 4 && $1 + 0 <= 7" in selector
     assert "measure_gpu_io.py" in diagnose
     assert "physical_gpu" in measure

@@ -103,6 +103,10 @@ export IFV_PROCESSOR_VERIFICATION=<processor-verification.json>
 模型路径和 template 参数。processor 审计后修改任何输入文件或训练 profile 都必须
 重新审计。
 
+128K probe/canary 还要求 processor 报告证明训练 split 至少有一条编码后不短于
+120,000 token 的真实样本。只设置 `IFV_MAX_LENGTH=131072`、但所有样本都很短，不算
+128K 容量验证。
+
 ## 4. 数据格式
 
 policy 行：
@@ -169,3 +173,42 @@ IFV_GPU_UTILIZATION_TARGET_MIN_PERCENT=85
 验收，也不能通过最终 production gate。资源报告同时记录各卡显存比例、利用率、温度、
 功率和活跃期显存差。显存目标用于调优，不替代 OOM、NaN、验证、checkpoint 与 resume
 检查。
+
+## 8. 8 卡 128K 验收顺序
+
+三个 profile 都固定为 FSDP2 + SP8：8 张卡共同处理一条序列，数据并行度为 1；使用
+FlashAttention、padding-free、gradient checkpointing 和分块交叉熵。不要直接把
+memory probe 当成正式训练结果。
+
+```bash
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+export IFV_ALLOWED_GPU_IDS=0,1,2,3,4,5,6,7
+export IFV_OMP_NUM_THREADS=1
+export IFV_CUDA_HOME=<long-context-env>
+export IFV_TRAINING_DATA_ROOT=<training-data-root>
+export IFV_PROCESSOR_VERIFICATION=<processor-verification.json>
+
+# 1. 一步、无 eval、无 checkpoint，只测真实 120K+ 样本的峰值与首步稳定性
+bash training/scripts/train/run_sft.sh \
+  training/configs/models/qwen3.5-9b.env \
+  training/configs/sft/qwen3.5-full-1step-8gpu-fsdp2-sp8-flash-128k-memory-probe.env \
+  <train.jsonl> <validation.jsonl> <unique-memory-probe-id>
+
+# 2. 十步、带 eval 和完整训练状态 checkpoint
+bash training/scripts/train/run_sft.sh \
+  training/configs/models/qwen3.5-9b.env \
+  training/configs/sft/qwen3.5-full-10step-8gpu-fsdp2-sp8-flash-128k-canary.env \
+  <train.jsonl> <validation.jsonl> <unique-canary-id>
+
+# 3. 从 checkpoint-10 恢复并前进一步，写入新的实验目录
+bash training/scripts/train/run_sft.sh \
+  training/configs/models/qwen3.5-9b.env \
+  training/configs/sft/qwen3.5-full-11step-8gpu-fsdp2-sp8-flash-128k-resume.env \
+  <train.jsonl> <validation.jsonl> <unique-resume-id> \
+  <canary-checkpoint-10>
+```
+
+第一阶段的 `profile.json` 必须明确是 `smoke_only`，它只决定是否值得进入第二阶段。
+第二、三阶段都必须通过环境、数据、资源、验证、checkpoint I/O 和 resume 门禁。正式
+epoch 数、是否减少 activation 重计算以及最终吞吐目标，要等最终数据的 token 长度分布
+和上述实测结果后再冻结；当前不提供未经真实 128K canary 验证的全量训练 profile。

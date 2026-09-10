@@ -21,7 +21,11 @@ def test_training_profile_summarizes_ms_swift_metric_lines(tmp_path: Path) -> No
                 "'elapsed_time': '58s', 'memory(GiB)': '22.0', "
                 "'train_speed(s/it)': '28.8'}",
                 "{'eval_loss': '0.52', 'global_step/max_steps': '2/10'}",
-                "{'train_runtime': '88.0', 'global_step/max_steps': '2/10', "
+                "{'train_runtime': '88.0', "
+                "'train_samples_per_second': '0.045', "
+                "'train_steps_per_second': '0.023', "
+                "'num_tokens': '64000', "
+                "'global_step/max_steps': '2/10', "
                 "'train_speed(s/it)': '44.0'}",
                 '{"train_dataset": "size=445"}',
             ]
@@ -68,6 +72,12 @@ def test_training_profile_summarizes_ms_swift_metric_lines(tmp_path: Path) -> No
     assert result["throughput"]["observed_unique_samples"] == 4
     assert result["throughput"]["unique_samples_per_second"] == 0.069444
     assert result["throughput"]["steady_unique_samples_per_second"] == 0.069444
+    assert result["throughput"]["reported_by_trainer"] == {
+        "train_samples_per_second": 0.045,
+        "train_steps_per_second": 0.023,
+        "train_tokens_per_second": None,
+        "num_tokens": 64000.0,
+    }
     assert result["runtime_seconds"]["train_runtime"] == 88.0
     assert result["memory_gib"]["max"] == 22.0
     assert result["loss"]["last"] == 1.2

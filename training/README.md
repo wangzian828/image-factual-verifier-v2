@@ -113,8 +113,9 @@ ms-swift/Gym/GRPO 工程接线，不是正式在线 Agent RL。正式 RL 仍需�
 - reasoning policy SFT 使用
   `training/configs/models/qwen3.5-9b.env`，并保持
   `IFV_ADD_NON_THINKING_PREFIX=false`。
-- 当前只保留 production、portable 8K 和 smoke-noeval 三个经过记录的 SFT profile；
-  历史硬件/并发 sweep 可从 Git 标签 `pre-deep-cleanup-20260910` 恢复。
+- 当前保留 16K production、portable 8K、smoke-noeval，以及 8 卡 128K 的 memory
+  probe、10-step canary、11-step resume 三个验收 profile；历史硬件/并发 sweep 可从
+  Git 标签 `pre-deep-cleanup-20260910` 恢复。
 - evaluator private gold、judge 字段和 provider 内部协议不得进入模型可见数据。
 - 本目录不保存 rollout、图片或 checkpoint；这些数据放在服务器 `/gsdata`。
 - `run_sft.sh` 默认记录逐卡显存、利用率、温度、功率、进程树 CPU/RSS、步耗时、
@@ -123,3 +124,6 @@ ms-swift/Gym/GRPO 工程接线，不是正式在线 Agent RL。正式 RL 仍需�
 - 长上下文 profile 在创建训练进程前还会生成 `environment-preflight.json`，严格核对
   Python/CUDA/核心包版本、CUDA 扩展可导入性、ms-swift template 参数、模型 128K
   上限和所选 8 张 A100 的型号与显存。
+- 128K 验收 profile 还拒绝没有 120,000+ token 训练样本的 processor 报告，避免用短
+  样本冒充长上下文容量测试。完整的 probe -> canary -> resume 顺序见
+  `docs/gpu13.md`。

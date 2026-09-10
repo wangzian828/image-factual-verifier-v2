@@ -20,6 +20,7 @@ RESUME_CHECKPOINT="${6:-}"
 load_profile "$MODEL_PROFILE"
 load_profile "$SFT_PROFILE"
 export PYTHONPATH="$REPO_ROOT/training${PYTHONPATH:+:$PYTHONPATH}"
+export IMAGE_MAX_TOKEN_NUM="$IFV_IMAGE_MAX_TOKEN_NUM"
 configure_training_runtime
 require_idle_gpus
 require_full_parameter_profile
@@ -90,11 +91,11 @@ else
   fi
   if [[ "${IFV_ALLOW_UNDERSIZED_DISTRIBUTED_DATASET:-false}" != "true" ]]; then
     IFS=',' read -r -a visible_gpu_ids <<< "${CUDA_VISIBLE_DEVICES:-}"
-    distributed_gpu_count="${#visible_gpu_ids[@]}"
+    distributed_gpu_count="${IFV_DATA_PARALLEL_SIZE:-${#visible_gpu_ids[@]}}"
     train_row_count="$(wc -l < "$TRAIN_DATASET")"
     val_row_count="$(wc -l < "$VAL_DATASET")"
     if (( distributed_gpu_count > 1 && (train_row_count < distributed_gpu_count || val_row_count < distributed_gpu_count) )); then
-      echo "distributed SFT requires at least one train and validation row per visible GPU (train=${train_row_count}, validation=${val_row_count}, gpus=${distributed_gpu_count}); use a larger dataset, one GPU, or set IFV_ALLOW_UNDERSIZED_DISTRIBUTED_DATASET=true only for a controlled experiment." >&2
+      echo "distributed SFT requires at least one train and validation row per data-parallel replica (train=${train_row_count}, validation=${val_row_count}, data_parallel=${distributed_gpu_count}); use a larger dataset, reduce data parallelism, or set IFV_ALLOW_UNDERSIZED_DISTRIBUTED_DATASET=true only for a controlled experiment." >&2
       exit 2
     fi
   fi
@@ -195,6 +196,12 @@ if [[ "$raw_dataset_mode" == "true" ]]; then
   )
   if [[ -n "${IFV_MAX_PIXELS:-}" ]]; then
     raw_gate_args+=(--max-pixels "$IFV_MAX_PIXELS")
+  fi
+  if [[ -n "${IFV_MIN_PROCESSOR_TRAIN_INPUT_TOKENS:-}" ]]; then
+    raw_gate_args+=(
+      --minimum-train-input-tokens
+      "$IFV_MIN_PROCESSOR_TRAIN_INPUT_TOKENS"
+    )
   fi
   "${raw_gate_args[@]}"
 fi
@@ -314,7 +321,6 @@ if [[ -n "$RESUME_CHECKPOINT" ]]; then
   args+=(--resume_from_checkpoint "$RESUME_CHECKPOINT")
 fi
 
-export IMAGE_MAX_TOKEN_NUM="$IFV_IMAGE_MAX_TOKEN_NUM"
 print_command "${args[@]}"
 RESOURCE_SUMMARY="$LOG_DIR/resource-summary.json"
 RESOURCE_SAMPLES="$LOG_DIR/resource-samples.jsonl"

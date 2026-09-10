@@ -306,6 +306,7 @@ def main() -> None:
     lengths: list[int] = []
     trainable_lengths: list[int] = []
     by_kind: dict[str, list[int]] = {"policy": [], "perception": []}
+    by_dataset: dict[str, list[int]] = {}
     checks = Counter()
     longest: list[dict[str, Any]] = []
     dataset_files: list[dict[str, Any]] = []
@@ -375,10 +376,13 @@ def main() -> None:
                 lengths.append(len(input_ids))
                 trainable_lengths.append(len(loss_positions))
                 by_kind.setdefault(kind, []).append(len(input_ids))
+                by_dataset.setdefault(
+                    str(path.expanduser().resolve()), []
+                ).append(len(input_ids))
                 longest.append(
                     {
                         "kind": kind,
-                        "path": path.name,
+                        "path": str(path.expanduser().resolve()),
                         "row_index": row_index,
                         "input_tokens": len(input_ids),
                         "trainable_tokens": len(loss_positions),
@@ -418,6 +422,10 @@ def main() -> None:
         "trainable_tokens": _distribution(trainable_lengths),
         "input_tokens_by_kind": {
             kind: _distribution(values) for kind, values in sorted(by_kind.items())
+        },
+        "input_tokens_by_dataset": {
+            path: _distribution(values)
+            for path, values in sorted(by_dataset.items())
         },
         "longest_rows": sorted(
             longest,

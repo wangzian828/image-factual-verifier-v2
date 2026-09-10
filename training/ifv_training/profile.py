@@ -37,6 +37,10 @@ METRIC_KEYS = {
     "learning_rate",
     "epoch",
     "train_runtime",
+    "train_samples_per_second",
+    "train_steps_per_second",
+    "train_tokens_per_second",
+    "num_tokens",
     "eval_runtime",
 }
 
@@ -620,6 +624,28 @@ def summarize_training_log(
     eval_runtime = (
         _metric_value(eval_metrics[-1], "eval_runtime") if eval_metrics else None
     )
+    trainer_throughput = {
+        "train_samples_per_second": (
+            _metric_value(summary_metrics[-1], "train_samples_per_second")
+            if summary_metrics
+            else None
+        ),
+        "train_steps_per_second": (
+            _metric_value(summary_metrics[-1], "train_steps_per_second")
+            if summary_metrics
+            else None
+        ),
+        "train_tokens_per_second": (
+            _metric_value(summary_metrics[-1], "train_tokens_per_second")
+            if summary_metrics
+            else None
+        ),
+        "num_tokens": (
+            _metric_value(summary_metrics[-1], "num_tokens")
+            if summary_metrics
+            else None
+        ),
+    }
     post_train_eval_finalize_seconds = None
     if train_runtime is not None and train_elapsed is not None:
         post_train_eval_finalize_seconds = round(
@@ -693,6 +719,7 @@ def summarize_training_log(
             "steady_unique_samples_per_second": (
                 steady_unique_samples_per_second
             ),
+            "reported_by_trainer": trainer_throughput,
         },
         "memory_gib": {
             "count": len(memory_values),

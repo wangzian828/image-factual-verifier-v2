@@ -186,6 +186,32 @@ require_visible_gpus() {
     seen+="$device,"
   done
   export NPROC_PER_NODE="${#devices[@]}"
+  local sequence_parallel_size="${IFV_SEQUENCE_PARALLEL_SIZE:-1}"
+  if [[ ! "$sequence_parallel_size" =~ ^[1-9][0-9]*$ ]]; then
+    echo "IFV_SEQUENCE_PARALLEL_SIZE must be a positive integer: $sequence_parallel_size" >&2
+    exit 2
+  fi
+  if (( NPROC_PER_NODE % sequence_parallel_size != 0 )); then
+    echo "visible GPU count ($NPROC_PER_NODE) must be divisible by IFV_SEQUENCE_PARALLEL_SIZE ($sequence_parallel_size)" >&2
+    exit 2
+  fi
+  export IFV_DATA_PARALLEL_SIZE=$((NPROC_PER_NODE / sequence_parallel_size))
+  if (( sequence_parallel_size > 1 )); then
+    local padding_free="${IFV_PADDING_FREE:-false}"
+    local use_logits_to_keep="${IFV_USE_LOGITS_TO_KEEP:-false}"
+    if [[ "${padding_free,,}" != "true" ]]; then
+      echo "sequence parallel training requires IFV_PADDING_FREE=true" >&2
+      exit 2
+    fi
+    if [[ "${use_logits_to_keep,,}" == "true" ]]; then
+      echo "sequence parallel training does not support IFV_USE_LOGITS_TO_KEEP=true" >&2
+      exit 2
+    fi
+    if [[ ! "${CELOSS_PARALLEL_SIZE:-}" =~ ^[1-9][0-9]*$ ]]; then
+      echo "sequence parallel training requires a positive CELOSS_PARALLEL_SIZE" >&2
+      exit 2
+    fi
+  fi
   local omp_threads="${IFV_OMP_NUM_THREADS:-1}"
   if [[ "$omp_threads" != "1" ]]; then
     echo "server policy requires IFV_OMP_NUM_THREADS=1; got: $omp_threads" >&2

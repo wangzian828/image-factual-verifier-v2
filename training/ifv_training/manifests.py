@@ -48,6 +48,21 @@ MS_SWIFT_RELEASE = {
     "git_commit": "98a09c18cdf95ff07051324b9b8cc90f5184b24b",
 }
 
+TRAINING_RUNTIME_ENVIRONMENT = (
+    "CUDA_VISIBLE_DEVICES",
+    "OMP_NUM_THREADS",
+    "CUDA_HOME",
+    "NPROC_PER_NODE",
+    "IFV_DATA_PARALLEL_SIZE",
+    "ACCELERATE_USE_FSDP",
+    "FSDP_VERSION",
+    "CELOSS_PARALLEL_SIZE",
+    "NCCL_CUMEM_HOST_ENABLE",
+    "PYTORCH_CUDA_ALLOC_CONF",
+    "PYTORCH_ALLOC_CONF",
+    "IMAGE_MAX_TOKEN_NUM",
+)
+
 
 def _version(name: str) -> str | None:
     try:
@@ -110,6 +125,9 @@ def environment_manifest(repo_root: Path) -> dict[str, Any]:
         "conda_environment": os.getenv("CONDA_DEFAULT_ENV", ""),
         "cuda_visible_devices": os.getenv("CUDA_VISIBLE_DEVICES", ""),
         "omp_num_threads": os.getenv("OMP_NUM_THREADS", ""),
+        "training_runtime_environment": {
+            name: os.getenv(name, "") for name in TRAINING_RUNTIME_ENVIRONMENT
+        },
         "packages": {name: _version(name) for name in TRACKED_PACKAGES},
         "package_lock": {
             "algorithm": "sha256",

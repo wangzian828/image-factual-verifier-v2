@@ -82,6 +82,8 @@ def test_environment_manifest_records_framework_and_lock(tmp_path: Path) -> None
     assert "flash-attn" in manifest["packages"]
     assert "flash-linear-attention" in manifest["packages"]
     assert "causal-conv1d" in manifest["packages"]
+    assert "CELOSS_PARALLEL_SIZE" in manifest["training_runtime_environment"]
+    assert "FSDP_VERSION" in manifest["training_runtime_environment"]
 
 
 def test_full_checkpoint_component_candidates_include_merger_bias_and_projection() -> None:
