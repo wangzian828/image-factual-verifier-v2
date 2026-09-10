@@ -28,7 +28,7 @@ from src.trajectory.semantic_reward import (
 
 
 SFT_ELIGIBILITY_SCHEMA_VERSION = "ifv-sft-eligibility-v5"
-SFT_ELIGIBILITY_INPUT_VERSION = "ifv-sft-eligibility-input-v11"
+SFT_ELIGIBILITY_INPUT_VERSION = "ifv-sft-eligibility-input-v12"
 SFT_ELIGIBILITY_PROMPT_VERSION = "ifv-sft-private-image-fact-gate-v8"
 SFT_ELIGIBILITY_GENERATION_VERSION = "minimal-thinking-4096-v7"
 SFT_ELIGIBILITY_POSTPROCESS_VERSION = "image-fact-safety-gate-v7"
@@ -574,7 +574,7 @@ def _project_tool_observation(
     return _compact_trace_value(dict(result))
 
 
-def _react_action_history(state: Mapping[str, Any]) -> List[Dict[str, Any]]:
+def _raw_action_history(state: Mapping[str, Any]) -> List[Dict[str, Any]]:
     """Project raw unified-ReAct actions in actual episode order."""
 
     history: List[Dict[str, Any]] = []
@@ -815,9 +815,6 @@ def _rejection_history(state: Mapping[str, Any]) -> Dict[str, Any]:
     for index, step in enumerate(_rows(state.get("all_steps"))):
         action_type = str(step.get("action_type", "")).strip()
         metadata = _mapping(step.get("metadata"))
-        if action_type in {"planning_revision", "evidence_decision_revision"}:
-            # Internal revisions are not emitted as policy targets.
-            continue
         rejected = (
             action_type in {"format_error", "output_rejected"}
             or str(metadata.get("error_class", "")).strip() == "protocol_error"
@@ -880,30 +877,17 @@ def build_sft_eligibility_input(
             f"trace case_id {case_id!r} is not present in private target aliases"
         )
 
-    basis = dict(
-        _mapping(
-            trace.get("verdict_basis")
-            or investigation.get("discrepancy_verdict_basis")
-        )
-    )
+    basis = dict(_mapping(trace.get("verdict_basis")))
     if str(investigation.get("schema_version", "")).strip() != (
         REACT_RUNTIME_SCHEMA_VERSION
     ):
         raise ValueError("SFT eligibility requires the raw-history runtime schema")
-    basis_claim_ids: List[str] = []
-    basis_discrepancy_ids: List[str] = []
     judgment = _mapping(
         trace.get("judgment")
         or state.get("judgment")
-        or investigation.get("discrepancy_judgment")
     )
 
-    claims: List[Dict[str, Any]] = []
-    evidence: List[Dict[str, Any]] = []
-    findings: List[Dict[str, Any]] = []
-    discrepancies: List[Dict[str, Any]] = []
-    visual_facts: List[Dict[str, Any]] = []
-    raw_history = _react_action_history(state)
+    raw_history = _raw_action_history(state)
     raw_observation_ids = _unique(
         item.get("observation_id")
         for item in raw_history
@@ -964,14 +948,6 @@ def build_sft_eligibility_input(
                 for item in _rows(judgment.get("evidence_citations"))
                 if str(item.get("evidence_id", "")).strip()
             ],
-            "claims": claims,
-            "visual_facts": visual_facts,
-            "findings": findings,
-            "evidence": evidence,
-            "discrepancies": discrepancies,
-            "react_action_history": (
-                raw_history
-            ),
             "raw_observations": raw_history,
             "raw_observation_ids": raw_observation_ids,
             "successful_observation_ids": successful_observation_ids,
@@ -980,18 +956,14 @@ def build_sft_eligibility_input(
             "retrieval_history": _retrieval_history(state),
             "rejection_history": _rejection_history(state),
             "final_visual_audit": _mapping(state.get("final_visual_audit")),
-            "basis_claim_ids": basis_claim_ids,
-            "basis_discrepancy_ids": basis_discrepancy_ids,
             "verdict_target": _text(
                 basis.get("verdict_target"),
                 basis.get("objective"),
-                investigation.get("objective"),
                 limit=4000,
             ),
             "unresolved_gaps": _unique(
                 basis.get("unresolved_gaps")
                 or basis.get("open_questions")
-                or investigation.get("open_questions")
                 or [],
                 limit=12,
             ),
@@ -1041,9 +1013,7 @@ def sft_eligibility_metrics(
     expected_support = (
         "supports_real" if expected_verdict == "real" else "supports_fake"
     )
-    raw_observations = _rows(
-        candidate.get("raw_observations") or candidate.get("react_action_history")
-    )
+    raw_observations = _rows(candidate.get("raw_observations"))
     raw_by_id = {
         str(item.get("observation_id", "")).strip(): item
         for item in raw_observations

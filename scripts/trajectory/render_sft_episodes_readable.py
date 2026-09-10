@@ -133,22 +133,10 @@ def _render_stage_control(content: str) -> list[str]:
             input_payload = json.loads(input_payload)
         except json.JSONDecodeError:
             pass
-    if isinstance(input_payload, Mapping):
-        for key in (
-            "phase",
-            "action_count",
-            "stop_reason",
-            "proposed_verdict",
-            "target_facts",
-            "open_gaps",
-            "recent_observations",
-            "recent_state_deltas",
-        ):
-            value = input_payload.get(key)
-            if value not in (None, "", [], {}):
-                output.extend(
-                    ["", f"**{key}**", "", f"```json\n{_json(value, limit=6000)}\n```"]
-                )
+    if isinstance(input_payload, Mapping) and input_payload:
+        output.extend(
+            ["", "**input_payload**", "", f"```json\n{_json(input_payload, limit=6000)}\n```"]
+        )
     return output
 
 

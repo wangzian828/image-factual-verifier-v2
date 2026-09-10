@@ -29,12 +29,11 @@ def _trace() -> dict[str, Any]:
         "verdict": "fake",
         "termination": "success",
         "verdict_basis": {
-            "decision_mode": "evidence_determined",
-            "verdict_target": "The image says A won the final.",
-            "claim_ids": ["claim-1"],
-            "finding_ids": ["finding-1"],
-            "evidence_ids": ["evidence-1"],
-            "unresolved_gaps": ["The exact venue was not checked."],
+            "schema_version": "ifv-raw-history-judgment-basis-v1",
+            "decision_mode": "bounded_binary_judgment",
+            "objective": "Verify the displayed winner.",
+            "observation_ids": ["observation-1"],
+            "open_questions": ["The exact venue was not checked."],
         },
         "judgment": {
             "verdict": "fake",
@@ -62,51 +61,28 @@ def _trace() -> dict[str, Any]:
         },
         "state": {
             "investigation_state": {
-                "target_facts": [
-                    {
-                        "claim_id": "claim-1",
-                        "statement": "A won the final.",
-                        "status": "refuted",
-                        "anchor_fact_ids": ["anchor-1"],
-                    }
-                ],
-                "findings": [
-                    {
-                        "finding_id": "finding-1",
-                        "fact_ids": ["fact-1"],
-                        "evidence_ids": ["evidence-1"],
-                        "stance": "refute",
-                        "summary": "The official result names B.",
-                    }
-                ],
-                "evidence": [
-                    {
-                        "evidence_id": "evidence-1",
-                        "successful_call": True,
-                        "tool_name": "visit",
-                        "evidence_kind": "web_span",
-                        "source_url": "https://example.org/final",
-                        "source_family": "example.org",
-                        "source_class": "official",
-                        "exact_text": "B won the final.",
-                        "stance": "refute",
-                        "quality": "strong",
-                        "directness": "direct",
-                        "claim_binding": "source_assertion",
-                        "relation_scope": "same_relation",
-                        "relation_stance": "contradicts",
+                "schema_version": REACT_RUNTIME_SCHEMA_VERSION,
+                "case_id": "case-article",
+                "image_sha256": "a" * 64,
+                "objective": "Verify the displayed winner.",
+                "action_count": 1,
+                "stop_reason": "meaningful_routes_exhausted",
+                "finish_rationale": "The official result is sufficient.",
+            },
+            "all_steps": [
+                {
+                    "stage": "unified_react",
+                    "action_type": "tool_call",
+                    "thought": "Inspect the official result.",
+                    "tool_name": "visit",
+                    "tool_args": {"url": "https://example.org/final"},
+                    "tool_result": '{"status":"success","evidence":"B won the final."}',
+                    "metadata": {
+                        "function_call_id": "observation-1",
+                        "tool_success": True,
                     },
-                    {
-                        "evidence_id": "evidence-failed",
-                        "successful_call": False,
-                        "tool_name": "visit",
-                        "evidence_kind": "web_span",
-                        "source_url": "https://example.org/failed",
-                        "source_family": "example.org",
-                        "exact_text": "This must not be shown to the judge.",
-                    },
-                ],
-            }
+                }
+            ],
         },
     }
 
@@ -116,12 +92,7 @@ def test_agent_private_gold_projection_uses_actual_successful_trace_evidence() -
 
     assert candidate["recorded_verdict"] == "fake"
     assert candidate["fact_check_report"]["headline"].startswith("The displayed")
-    assert [item["evidence_id"] for item in candidate["selected_evidence"]] == [
-        "evidence-1"
-    ]
-    assert [
-        item["evidence_id"] for item in candidate["successful_evidence"]
-    ] == ["evidence-1"]
+    assert candidate["successful_observation_ids"] == ["observation-1"]
     assert candidate["runtime_evidence_citations"][0]["source_url"].endswith(
         "/final"
     )
@@ -136,7 +107,7 @@ def test_agent_private_gold_projection_uses_actual_successful_trace_evidence() -
     }
 
 
-def test_agent_private_gold_projection_supports_raw_history_runtime() -> None:
+def test_agent_private_gold_projection_keeps_raw_history_runtime() -> None:
     trace = _trace()
     trace["verdict_basis"] = {
         "schema_version": "ifv-raw-history-judgment-basis-v1",
@@ -174,7 +145,7 @@ def test_agent_private_gold_projection_supports_raw_history_runtime() -> None:
     assert candidate["runtime_mode"] == "image_grounded_react"
     assert candidate["runtime_objective"] == "Verify the displayed winner."
     assert candidate["successful_observation_ids"] == ["observation-1"]
-    assert candidate["react_action_history"][0]["observation"]["evidence"] == (
+    assert candidate["raw_observations"][0]["observation"]["evidence"] == (
         "B won the final."
     )
     assert candidate["verdict_basis"]["unresolved_gaps"] == [
@@ -185,7 +156,6 @@ def test_agent_private_gold_projection_supports_raw_history_runtime() -> None:
 def test_agent_candidate_answer_uses_terminal_assessment_before_internal_target() -> None:
     trace = _trace()
     trace["judgment"].pop("fact_check_report")
-    trace["verdict_basis"]["verdict_target"] = "A person gave a speech."
     trace["judgment"]["overall_assessment"] = (
         "The speech is by Vikas Lakhera at LBSNAA, not Vinod Sharma."
     )

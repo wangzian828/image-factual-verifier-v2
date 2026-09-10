@@ -394,7 +394,7 @@ def _policy_rejected_step_for_path(
     metadata = _mapping(step.get("metadata"))
     if (
         str(step.get("action_type", ""))
-        in {*REJECTION_ACTIONS, "planning_revision"}
+        in REJECTION_ACTIONS
         or metadata.get("search_policy_rejection") is True
         or int(metadata.get("policy_filtered_query_count", 0) or 0) > 0
     ):
@@ -660,11 +660,6 @@ def _audit_rejections(
 
     for index, step in enumerate(steps):
         metadata = _mapping(step.get("metadata"))
-        if str(step.get("action_type", "")) in {
-            "planning_revision",
-            "evidence_decision_revision",
-        }:
-            continue
         if not rejected(step):
             continue
         corrected = eventually_corrected(index, step)
@@ -1153,11 +1148,6 @@ def _audit_current_react_runtime_trace(
     report.stats.update(
         {
             "unified_react_actions": action_count,
-            "unified_react_target_facts": 0,
-            "unified_react_routes": 0,
-            "unified_react_tasks": 0,
-            "unified_react_reflections": 0,
-            "unified_react_decisions": 0,
             "react_runtime_observations": len(observation_rows),
             "react_runtime_successful_observations": len(
                 successful_observation_ids

@@ -46,29 +46,6 @@ def test_server_qwen_teacher_profile_is_independent_from_small_qwen_ports() -> N
     assert settings.base_url == "http://qwen-teacher.internal/v1"
     assert settings.vlm_base_url == settings.base_url
 
-def test_local_student_profile_uses_qwen_without_gemini_fallback() -> None:
-    settings = resolve_provider_settings(
-        profile_id="student-qwen3-vl-local",
-        environ={
-            "QWEN3_VL_LOCAL_MODEL": "ifv-qwen3-vl-8b-thinking-smoke"
-        },
-    )
-    backend = APIBackend(
-        provider=settings.provider,
-        model_name=settings.model_name,
-        wire_api=settings.llm_wire_api,
-    )
-
-    assert settings.provider == "qwen_local"
-    assert settings.vlm_provider == "qwen_local"
-    assert settings.model_name == "ifv-qwen3-vl-8b-thinking-smoke"
-    assert backend.provider == "qwen_local"
-    assert backend.base_url == "http://127.0.0.1:8899/v1"
-    assert backend.wire_api == "chat_completions"
-    assert settings.base_url == "http://127.0.0.1:8899/v1"
-    assert settings.vlm_base_url == settings.base_url
-
-
 def test_qwen35_local_profile_uses_one_multimodal_model() -> None:
     settings = resolve_provider_settings(
         profile_id="student-qwen3.5-local",
@@ -251,12 +228,7 @@ def test_gemini_stage_output_budgets_are_balanced(
     orchestrator = Orchestrator.__new__(Orchestrator)
     orchestrator.provider = "gemini"
 
-    for stage in (
-        "UNIFIED_REACT",
-        "UNIFIED_REFLECTION",
-        "UNIFIED_DISCREPANCY_DECISION",
-        "UNIFIED_JUDGMENT",
-    ):
+    for stage in ("UNIFIED_REACT", "UNIFIED_JUDGMENT"):
         assert orchestrator._stage_output_tokens(stage, 8192) == 8192
 
     monkeypatch.setenv(
@@ -300,12 +272,6 @@ def test_qwen35_uses_hybrid_stage_reasoning_defaults() -> None:
         "repetition_penalty": 1.0,
         "thinking_token_budget": 2048,
     }
-    assert orchestrator._stage_generation_config("UNIFIED_DISCREPANCY_DECISION")[
-        "thinking_token_budget"
-    ] == 2048
-    assert orchestrator._stage_generation_config("UNIFIED_REFLECTION")[
-        "thinking_token_budget"
-    ] == 1536
     judgment = orchestrator._stage_generation_config("UNIFIED_JUDGMENT")
     assert judgment["enable_thinking"] is True
     assert judgment["thinking_token_budget"] == 1024

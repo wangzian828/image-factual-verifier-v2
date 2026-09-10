@@ -120,17 +120,6 @@ def text_targets_verdict_or_media_origin(value: str) -> bool:
     )
 
 
-def neutralize_planning_route_text(value: str) -> str:
-    """Normalize route text without deleting legitimate identity terms.
-
-    Policy checks run on the resulting text and reject a prohibited route as a
-    whole.  We intentionally do not strip bare ``AI`` or source metadata: those
-    may be part of the subject or useful retrieval context.
-    """
-
-    return " ".join(str(value or "").split()).strip(" \t\r\n-:;,")
-
-
 def goal_has_as_of_constraint(goal: str) -> bool:
     """Return whether a browse goal carries an explicit historical cutoff."""
 

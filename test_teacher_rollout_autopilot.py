@@ -43,12 +43,7 @@ def _manifest_row(case_id: str, *, factual_status: str, image: str) -> dict[str,
 
 
 def _trace(case_id: str, *, early_judgment: bool) -> dict[str, Any]:
-    steps: list[dict[str, Any]] = [
-        {
-            "stage": "unified_discrepancy_decision",
-            "output": {"verdict_proposal": "fake"},
-        }
-    ]
+    steps: list[dict[str, Any]] = []
     if early_judgment:
         steps.append(
             {
@@ -582,7 +577,7 @@ def test_success_scan_ignores_provider_error_without_case_identity(
     assert set(grouped) == {"case-one"}
 
 
-def test_early_bucket_requires_strict_discrepancy_judgment(tmp_path: Path) -> None:
+def test_early_bucket_requires_terminal_judgment(tmp_path: Path) -> None:
     proposal_only = _trace("case-proposal", early_judgment=False)
     explicit_judgment = _trace("case-judgment", early_judgment=True)
     assert _has_early_correct_judgment(proposal_only, "fake") is False

@@ -40,7 +40,7 @@ def _trace(
     }
     if private:
         policy_input["evaluation_gold"] = {"expected_verdict": "fake"}
-    planning = {
+    react = {
         "stage": "unified_react",
         "action_type": "tool_call",
         "metadata": {
@@ -73,7 +73,7 @@ def _trace(
         "image_id": f"episode-{case_id}",
         "state": {
             "runtime_case": {"case_id": case_id},
-            "all_steps": [planning, judgment],
+            "all_steps": [react, judgment],
         },
     }
 

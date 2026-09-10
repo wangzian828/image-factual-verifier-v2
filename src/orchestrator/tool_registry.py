@@ -4,35 +4,12 @@ from __future__ import annotations
 
 import os
 import inspect
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 from src.integrations.vlm.factory import build_vlm_client
 from src.orchestrator.tool_health import ToolHealth
 from src.tools.base import BaseTool
 
-
-STAGE_TOOLS: Dict[str, List[str]] = {
-    "perception": [
-        "perceive_scene",
-        "ocr_with_position",
-    ],
-    "planning": [],
-    "verification": [
-        "current_time",
-        "ocr_with_position",
-        "reverse_image_search",
-        "text_image_search",
-        "text_search",
-        "visit",
-        "compare_with_reference",
-        "check_consistency",
-        "analyze_visual_anomalies",
-        "crop_and_inspect",
-        "recall_evidence",
-        "read_evidence",
-    ],
-    "judgment": [],
-}
 
 REQUIRED_TOOLS = (
     "perceive_scene",
@@ -43,12 +20,6 @@ REQUIRED_TOOLS = (
     "visit",
     "reverse_image_search",
 )
-
-
-def build_stage_tools(stage_name: str, all_tools: Dict[str, BaseTool]) -> List[BaseTool]:
-    return [all_tools[name] for name in STAGE_TOOLS.get(stage_name, []) if name in all_tools]
-
-
 def build_all_tools_with_health(
     vlm_provider: str = "gemini",
     vlm_model: str = "gemini-3.7-flash",

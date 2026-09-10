@@ -118,10 +118,6 @@ def _observation_refs(policy_input: Mapping[str, Any]) -> List[str]:
 def _example_type(stage: str) -> str | None:
     if stage == "unified_react":
         return "react"
-    if stage == "unified_reflection":
-        return "reflection"
-    if stage == "unified_discrepancy_decision":
-        return "discrepancy_decision"
     if stage == "unified_judgment":
         return "judgment"
     return None
@@ -306,9 +302,9 @@ def _stage_control_packet(
 
     The first stage needs its complete input projection because it introduces
     the case.  After that, the full event history already contains the prior
-    assistant actions, tool observations, and reducer deltas.  Replaying each
-    stage's cumulative runtime packet would therefore duplicate state dozens
-    of times.  Keep only the current stage contract and active tool boundary.
+    assistant actions and raw tool observations. Replaying each stage's
+    cumulative provider history would duplicate observations. Keep only the
+    current stage contract and active tool boundary.
     """
 
     payload: dict[str, Any] = {
@@ -337,7 +333,6 @@ def _trajectory_candidate_steps(
     candidates: list[tuple[int, Mapping[str, Any], str]] = []
     for index, step in enumerate(_rows(state.get("all_steps"))):
         if str(step.get("action_type", "")) in {
-            "planning_revision",
             "format_error",
             "output_rejected",
             "policy_replan",
@@ -393,7 +388,6 @@ def export_trajectory_sft_example(
     *,
     tokenizer: TokenizerAdapter | None = None,
     source_metadata: Mapping[str, Any] | None = None,
-    allow_incomplete_verdict_chain: bool = False,
     require_provider_thought: bool = True,
 ) -> TrajectorySFTExample | ActionOnlyTrajectoryExample:
     """Export one complete accepted episode as one prefix-preserving SFT row.
@@ -632,7 +626,6 @@ def export_trajectory_action_only_example(
     *,
     tokenizer: TokenizerAdapter | None = None,
     source_metadata: Mapping[str, Any] | None = None,
-    allow_incomplete_verdict_chain: bool = False,
 ) -> ActionOnlyTrajectoryExample:
     """Export a unified trace with executable actions but no thought targets."""
 
@@ -640,7 +633,6 @@ def export_trajectory_action_only_example(
         trace,
         tokenizer=tokenizer,
         source_metadata=source_metadata,
-        allow_incomplete_verdict_chain=allow_incomplete_verdict_chain,
         require_provider_thought=False,
     )
     if not isinstance(exported, ActionOnlyTrajectoryExample):
@@ -667,21 +659,18 @@ def _unified_react_quality_gate(
         raise ValueError(
             "unified-react policy export requires the raw-history runtime schema"
         )
-    retired_stages = {
-        "perception",
-        "image_account_planning",
-        "image_only_planning",
-        "image_only_investigation",
-        "image_only_discrepancy_investigation",
-        "image_only_query_concept_extraction",
-        "image_only_query_replan",
-        "image_only_route_local_replan",
-        "image_only_evidence_decision",
-        "image_only_discrepancy_judgment",
-    }
     steps = _rows(state.get("all_steps"))
-    if any(str(step.get("stage", "")) in retired_stages for step in steps):
-        raise ValueError("unified-react trace contains a retired policy stage")
+    invalid_stages = {
+        str(step.get("stage", "")).strip()
+        for step in steps
+        if str(step.get("stage", "")).strip()
+        not in {"unified_react", "unified_judgment"}
+    }
+    if invalid_stages:
+        raise ValueError(
+            "unified-react trace contains unsupported policy stages: "
+            + ", ".join(sorted(invalid_stages))
+        )
     actions = [
         step
         for step in steps
@@ -760,16 +749,8 @@ def export_policy_examples(
     *,
     tokenizer: TokenizerAdapter | None = None,
     source_metadata: Mapping[str, Any] | None = None,
-    allow_incomplete_verdict_chain: bool = False,
 ) -> List[PolicyExample]:
-    """Export actual model-visible requests/actions from one canonical trace.
-
-    ``allow_incomplete_verdict_chain`` is reserved for the post-rollout SFT
-    release path after the frozen SFT judge has accepted the episode.  It only
-    relaxes the final Finding/Evidence closure check; protocol validity,
-    private-data isolation, judgment/basis consistency, and post-verdict
-    action checks remain enforced.
-    """
+    """Export actual model-visible requests/actions from one canonical trace."""
 
     state = _mapping(trace.get("state"))
     if str(trace.get("input_mode") or state.get("input_mode") or "") != (
@@ -796,7 +777,6 @@ def export_policy_examples(
     candidates: List[tuple[int, Mapping[str, Any], str]] = []
     for index, step in enumerate(_rows(state.get("all_steps"))):
         if str(step.get("action_type", "")) in {
-            "planning_revision",
             "format_error",
             "output_rejected",
             "policy_replan",

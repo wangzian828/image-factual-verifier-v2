@@ -131,7 +131,7 @@ class QwenContinuationAdapter:
             force_tool_each_round=True,
             stop_output_factory=lambda: InvestigationSegmentOutput(
                 segment_summary="OPSD continuation action completed.",
-                ready_for_reflection=True,
+                action_completed=True,
             ),
             protocol_exhaustion_boundary=True,
             max_tool_calls_per_turn=1,

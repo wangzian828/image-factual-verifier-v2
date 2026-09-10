@@ -65,8 +65,7 @@ class ClaimSemanticReview(_StrictModel):
 
 
 class TrajectorySemanticJudgment(_StrictModel):
-    # Legacy target-graph traces contain one review per ImageClaim.  The active
-    # unified ReAct trace has no model-authored claim graph, so its blind judge
+    # Raw-history rollouts have no model-authored claim graph. The blind judge
     # evaluates the episode objective and may legitimately return no rows here.
     claim_reviews: List[ClaimSemanticReview] = Field(
         default_factory=list,
@@ -141,10 +140,6 @@ def _policy_example_type(stage: str) -> str | None:
 
     if stage == "unified_react":
         return "react"
-    if stage == "unified_reflection":
-        return "reflection"
-    if stage == "unified_discrepancy_decision":
-        return "discrepancy_decision"
     if stage == "unified_judgment":
         return "judgment"
     return None
@@ -154,8 +149,6 @@ def _policy_step_ids(trace: Mapping[str, Any], episode_id: str) -> List[str]:
     state = _mapping(trace.get("state"))
     step_ids: List[str] = []
     for index, step in enumerate(_rows(state.get("all_steps"))):
-        if str(step.get("action_type", "")) == "planning_revision":
-            continue
         example_type = _policy_example_type(str(step.get("stage", "")))
         metadata = _mapping(step.get("metadata"))
         if example_type is None:
@@ -306,12 +299,7 @@ def build_semantic_reward_input(
         REACT_RUNTIME_SCHEMA_VERSION
     ):
         raise ValueError("semantic reward requires the raw-history runtime schema")
-    basis = dict(
-        _mapping(
-            trace.get("verdict_basis")
-            or investigation.get("discrepancy_verdict_basis")
-        )
-    )
+    basis = dict(_mapping(trace.get("verdict_basis")))
     judgment = _mapping(trace.get("judgment") or state.get("judgment"))
     verdict = str(trace.get("verdict") or judgment.get("verdict") or "").strip()
     if verdict not in {"real", "fake"}:

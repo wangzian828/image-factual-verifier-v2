@@ -19,16 +19,6 @@ FORBIDDEN_MODEL_VISIBLE_KEYS = frozenset(
     }
 )
 
-ALLOWED_STAGES = frozenset(
-    {
-        "unified_react",
-        "unified_reflection",
-        "unified_discrepancy_decision",
-        "unified_judgment",
-    }
-)
-
-
 def private_paths(value: Any, path: str = "") -> list[str]:
     found: list[str] = []
     if isinstance(value, Mapping):

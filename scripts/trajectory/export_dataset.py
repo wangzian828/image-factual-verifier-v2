@@ -93,7 +93,7 @@ def _write_jsonl(path: Path, rows: Iterable[Mapping[str, Any]]) -> None:
 
 
 def _export_trace_file_job(
-    job: tuple[str, Path, Path | None, Dict[str, Any], bool],
+    job: tuple[str, Path, Path | None, Dict[str, Any]],
 ) -> tuple[str, TrajectorySFTExample | None, str]:
     """Export one trace while keeping raw trace data out of the coordinator."""
 
@@ -102,7 +102,6 @@ def _export_trace_file_job(
         trace_path,
         runtime_store_path,
         source_metadata,
-        allow_incomplete,
     ) = job
     try:
         trace = _load_json(trace_path)
@@ -117,7 +116,6 @@ def _export_trace_file_job(
             export_trajectory_sft_example(
                 trace,
                 source_metadata=source_metadata,
-                allow_incomplete_verdict_chain=allow_incomplete,
             ),
             "",
         )
@@ -503,7 +501,7 @@ def export_dataset(
     action_only_by_episode: Dict[str, Dict[str, Any]] = {}
     episode_metadata: Dict[str, Dict[str, Any]] = {}
     export_jobs: Dict[
-        str, tuple[str, Path, Path | None, Dict[str, Any], bool]
+        str, tuple[str, Path, Path | None, Dict[str, Any]]
     ] = {}
     score_by_episode: Dict[str, Dict[str, Any]] = {}
     source_runs: List[Dict[str, Any]] = []
@@ -736,12 +734,6 @@ def export_dataset(
                     else None
                 ),
             }
-            sft_judge_passed = (
-                _mapping(eligibility.get("gates")).get(
-                    "sft_eligibility_pass"
-                )
-                is True
-            )
             export_jobs[episode_id] = (
                 episode_id,
                 trace_path,
@@ -760,7 +752,6 @@ def export_dataset(
                         "",
                     ),
                 },
-                sft_judge_passed,
             )
 
     ordered_jobs = [

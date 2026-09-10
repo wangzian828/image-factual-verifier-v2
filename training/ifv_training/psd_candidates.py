@@ -47,12 +47,10 @@ _FORBIDDEN_PRIVATE_KEYS = frozenset(
     }
 )
 _REJECTED_ACTION_TYPES = frozenset(
-    {"planning_revision", "format_error", "output_rejected", "policy_replan"}
+    {"format_error", "output_rejected", "policy_replan"}
 )
 _STAGE_EXAMPLE_TYPES = {
     "unified_react": "react",
-    "unified_reflection": "reflection",
-    "unified_discrepancy_decision": "discrepancy_decision",
     "unified_judgment": "judgment",
 }
 

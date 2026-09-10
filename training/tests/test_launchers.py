@@ -12,26 +12,20 @@ def _source(relative: str) -> str:
 
 def test_training_launchers_delegate_to_ms_swift() -> None:
     single = _source("scripts/train/run_sft.sh")
-    curriculum = _source("scripts/train/run_curriculum_sft.sh")
 
-    for source in (single, curriculum):
-        assert "swift sft" in source
-        assert "Trainer" not in source
-        assert "torchrun" not in source
-        assert "--resume_from_checkpoint" in source
-        assert "configure_distributed_backend" in source
-        assert 'training_backend_args+=(--deepspeed "$IFV_DEEPSPEED")' in source
-        assert 'training_backend_args+=(--fsdp "$IFV_FSDP")' in source
-        assert "verify_cached_dataset_gate" in source
-        assert "run_with_resource_monitor.py" in source
-        assert "watch_sft.py" in source
-        assert "audit_deepspeed_scheduler.py" in source
-        assert "checkpoint-storage-preflight" in source
-        assert "checkpoint-io-profile" in source
-
-    assert "candidate_weights=(0.20 0.15 0.35 0.20 0.05 0.05)" in curriculum
-    assert "Skipping absent curriculum channel" in curriculum
-    assert '--interleave_prob "${interleave_prob[@]}"' in curriculum
+    assert "swift sft" in single
+    assert "Trainer" not in single
+    assert "torchrun" not in single
+    assert "--resume_from_checkpoint" in single
+    assert "configure_distributed_backend" in single
+    assert 'training_backend_args+=(--deepspeed "$IFV_DEEPSPEED")' in single
+    assert 'training_backend_args+=(--fsdp "$IFV_FSDP")' in single
+    assert "verify_cached_dataset_gate" in single
+    assert "run_with_resource_monitor.py" in single
+    assert "watch_sft.py" in single
+    assert "audit_deepspeed_scheduler.py" in single
+    assert "checkpoint-storage-preflight" in single
+    assert "checkpoint-io-profile" in single
 
 
 def test_current_qwen35_profiles_are_explicit_and_bounded() -> None:
@@ -149,7 +143,6 @@ def test_cache_and_checkpoint_tools_remain_audited() -> None:
     encode_cache = _source("ifv_training/encode_cache.py")
     bootstrap = _source("ifv_training_bootstrap/sitecustomize.py")
     prewarm = _source("scripts/train/prewarm_encode_cache.py")
-    cache_export = _source("scripts/train/cache_curriculum_sft.sh")
     registrar = _source("scripts/train/register_cached_dataset.sh")
     fsdp_export = _source("scripts/export/register_fsdp2_checkpoint.sh")
     full_export = _source("scripts/export/register_full_checkpoint.sh")
@@ -160,9 +153,6 @@ def test_cache_and_checkpoint_tools_remain_audited() -> None:
     assert "os._exit(70)" in bootstrap
     assert "torch.equal" in prewarm
 
-    assert "swift export" in cache_export
-    assert "source-dataset-fingerprints.tsv" in cache_export
-    assert "cached-dataset-manifest" in cache_export
     assert "refusing to replace existing cached dataset manifest" in registrar
     assert '"model_profile"' in registrar
     assert '"sft_profile"' in registrar

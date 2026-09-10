@@ -548,7 +548,7 @@ class Orchestrator:
                 protocol_exhaustion_boundary=True,
                 stop_output_factory=lambda: InvestigationSegmentOutput(
                     segment_summary="One ReAct action completed.",
-                    ready_for_reflection=True,
+                    action_completed=True,
                 ),
                 interaction_session=interaction_session,
                 request_timeout_seconds=self.stage_request_timeout_seconds,
@@ -835,24 +835,17 @@ class Orchestrator:
         normalized_stage = stage_name.strip().upper()
         if self.provider in {"qwen_local", "lmdeploy"}:
             # Qwen3.5 uses one checkpoint for both thinking and direct-response
-            # modes. Keep deliberation at semantic checkpoints and use direct
-            # responses for frequent tool routing. Older Qwen3-VL behavior is
-            # retained only for its explicit diagnostic profile.
+            # modes. Both active policy stages retain visible reasoning.
             qwen35 = "qwen3.5" in str(
                 getattr(self, "model_name", "")
             ).lower()
             if qwen35:
-                thinking_stages = {
-                    "UNIFIED_REACT",
-                    "UNIFIED_REFLECTION",
-                    "UNIFIED_DISCREPANCY_DECISION",
-                    "UNIFIED_JUDGMENT",
-                }
+                thinking_stages = {"UNIFIED_REACT", "UNIFIED_JUDGMENT"}
                 default = (
                     "true" if normalized_stage in thinking_stages else "false"
                 )
             else:
-                default = "false" if normalized_stage == "PLANNING" else "true"
+                default = "true"
             raw = os.getenv(
                 f"QWEN_{normalized_stage}_ENABLE_THINKING",
                 default,
@@ -882,8 +875,6 @@ class Orchestrator:
                 if enable_thinking:
                     default_budget = {
                         "UNIFIED_REACT": 2048,
-                        "UNIFIED_REFLECTION": 1536,
-                        "UNIFIED_DISCREPANCY_DECISION": 2048,
                         "UNIFIED_JUDGMENT": 1024,
                     }.get(normalized_stage, 1024)
                     env_name = f"QWEN_{normalized_stage}_THINKING_TOKEN_BUDGET"

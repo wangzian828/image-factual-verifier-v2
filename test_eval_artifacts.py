@@ -410,9 +410,11 @@ def test_v03_eval_keeps_gold_post_rollout_and_writes_scorer_predictions(
         "unified-react-v1"
     )
     assert manifest["agent"]["stage_thinking_levels"]["unified_react"] == "high"
-    assert manifest["agent"]["stage_thinking_levels"][
-        "unified_discrepancy_decision"
-    ] == "low"
+    assert manifest["agent"]["stage_thinking_levels"]["unified_judgment"] == "low"
+    assert set(manifest["agent"]["stage_thinking_levels"]) == {
+        "unified_react",
+        "unified_judgment",
+    }
     assert manifest["agent"]["qwen_stage_enable_thinking"]["unified_react"] == "false"
     assert manifest["agent"]["qwen_stage_enable_thinking"][
         "unified_judgment"
@@ -466,9 +468,11 @@ def test_scoring_release_keeps_gold_post_rollout_and_requires_structured_gate(
                             "runtime_case": case.model_dump(),
                             "all_steps": [],
                             "investigation_state": {
-                                "target_facts": [],
-                                "evidence": [],
-                                "findings": [],
+                                "schema_version": "ifv-unified-react-raw-history-v1",
+                                "case_id": episode_id,
+                                "image_sha256": case.image_sha256,
+                                "objective": "Verify the factual content expressed by the image.",
+                                "action_count": 0,
                             },
                         },
                     }

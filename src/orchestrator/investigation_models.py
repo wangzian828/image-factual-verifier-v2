@@ -72,4 +72,4 @@ class InvestigationSegmentOutput(StrictModel):
     """Deterministic boundary object for one accepted ReAct action."""
 
     segment_summary: str = Field(default="", max_length=1200)
-    ready_for_reflection: bool = True
+    action_completed: bool = True

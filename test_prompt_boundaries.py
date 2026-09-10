@@ -1,6 +1,5 @@
 from src.integrations.browse.jina_reader import EXTRACT_PROMPT, EXTRACT_SCHEMA
 from src.orchestrator.evidence_policy import (
-    neutralize_planning_route_text,
     text_targets_verdict_or_media_origin,
 )
 from src.orchestrator.unified_prompts import (
@@ -58,10 +57,6 @@ def test_active_prompts_are_current_and_semantically_bounded() -> None:
     }
     assert "stance" not in EXTRACT_SCHEMA["properties"]
 
-    assert (
-        neutralize_planning_route_text("AI Governance Framework")
-        == "AI Governance Framework"
-    )
     assert not text_targets_verdict_or_media_origin(
         "Find the original creator and publication date for the depicted event"
     )

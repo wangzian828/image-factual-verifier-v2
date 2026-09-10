@@ -50,8 +50,6 @@ RUN_SCHEMA_VERSION = "ifv-eval-run-v2"
 ROLLOUT_MEMBER_SCHEMA_VERSION = "ifv-rollout-group-member-v1"
 ACTIVE_POLICY_STAGES = (
     "UNIFIED_REACT",
-    "UNIFIED_REFLECTION",
-    "UNIFIED_DISCREPANCY_DECISION",
     "UNIFIED_JUDGMENT",
 )
 
@@ -712,8 +710,6 @@ async def _run_eval(args: argparse.Namespace) -> Dict[str, Any]:
             "vlm_wire_api": config.vlm_wire_api,
             "timeout_seconds": args.timeout,
             "max_tool_actions": 24,
-            "reflection_interval": 4,
-            "max_reflections": 6,
             "stage_thinking_levels": stage_thinking_levels,
             "qwen_stage_enable_thinking": qwen_stage_thinking,
             "concurrency": max(1, args.concurrency),

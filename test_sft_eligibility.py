@@ -474,15 +474,11 @@ def test_packet_includes_compact_retrieval_and_rejection_history() -> None:
                 {"status": "error", "error": "duplicate tool call"}
             ),
         },
-        {
-            "action_type": "planning_revision",
-            "metadata": {"rejection_reason": "Internal plan correction."},
-        },
     ]
 
     packet = build_sft_eligibility_input(trace, _gold())
 
-    assert packet["schema_version"] == "ifv-sft-eligibility-input-v11"
+    assert packet["schema_version"] == "ifv-sft-eligibility-input-v12"
     assert packet["candidate"]["retrieval_history"] == [
         {
             "tool": "text_search",
@@ -655,16 +651,15 @@ def test_unified_packet_exposes_ordered_react_actions_and_image_search_candidate
 
     packet = build_sft_eligibility_input(trace, _gold())
 
-    assert packet["candidate"]["react_action_history"][0]["tool"] == (
+    assert packet["candidate"]["raw_observations"][0]["tool"] == (
         "text_image_search"
     )
-    action = packet["candidate"]["react_action_history"][0]
+    action = packet["candidate"]["raw_observations"][0]
     assert action["observation"]["results"][0]["image_url"].endswith(
         "event.jpg"
     )
     assert packet["candidate"]["runtime_mode"] == "raw_history"
     assert packet["candidate"]["raw_observation_ids"]
-    assert packet["candidate"]["evidence"] == []
     assert packet["candidate"]["retrieval_history"][0]["result_count"] == 1
     assert packet["candidate"]["retrieval_history"][0]["candidate_image_count"] == 1
 
@@ -713,7 +708,7 @@ def test_unified_packet_keeps_nested_visit_evidence_records() -> None:
 
     packet = build_sft_eligibility_input(trace, _gold())
 
-    action = packet["candidate"]["react_action_history"][0]
+    action = packet["candidate"]["raw_observations"][0]
     assert action["observation"]["evidence_records"][0]["evidence"] == (
         "The page documents the event."
     )

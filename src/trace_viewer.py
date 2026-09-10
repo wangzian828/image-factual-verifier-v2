@@ -5,7 +5,7 @@ import base64
 import html
 import json
 import os
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict
 
 from src.redaction import sanitize_for_persistence
 
@@ -29,13 +29,11 @@ def _render_trace_html(trace_data: Dict[str, Any]) -> str:
         judgment = state["judgment"]
     steps = state.get("all_steps", []) if isinstance(state.get("all_steps"), list) else []
     investigation = state.get("investigation_state", {}) if isinstance(state.get("investigation_state"), dict) else {}
-    audits = investigation.get("discrepancy_coverage_audits", []) if isinstance(investigation.get("discrepancy_coverage_audits"), list) else []
     timings = state.get("stage_timings", {}) if isinstance(state.get("stage_timings"), dict) else {}
     token_usage = trace_data.get("token_usage") or state.get("token_usage") or {}
     embedded = _embed_local_image(image_path)
     stage_flow = (
-        '<div class="stage">Unified ReAct</div><span class="arrow">&#8596;</span>'
-        '<div class="stage">Reflection / Decision</div><span class="arrow">&#8594;</span>'
+        '<div class="stage">Unified ReAct</div><span class="arrow">&#8594;</span>'
         '<div class="stage">unified-react Judgment</div>'
     )
 
@@ -63,8 +61,10 @@ table{{border-collapse:collapse;width:100%;font-size:12px}}th,td{{border:1px sol
 <body><main class="wrap">
 <section class="band"><h1>Image Verification Trace</h1>{_render_meta(trace_data, state, judgment, image_path, token_usage)}</section>
 <section class="band"><h2>Stage Flow</h2><div class="pipeline">{stage_flow}</div></section>
-<div class="two"><div>{_render_image(embedded)}{_render_judgment(judgment, trace_data)}{_render_timings(timings)}</div><div>{_render_audits(audits)}</div></div>
-{_render_visual_fact_investigation(investigation)}
+<div class="two"><div>{_render_image(embedded)}</div><div>
+{_render_judgment(judgment, trace_data)}{_render_timings(timings)}
+</div></div>
+{_render_runtime_state(investigation)}
 <section class="band"><h2>Agent Trajectory</h2>{''.join(_render_step(step) for step in steps if isinstance(step, dict)) or '<p>No recorded steps.</p>'}</section>
 </main></body></html>"""
 
@@ -111,55 +111,9 @@ def _render_judgment(judgment: Dict[str, Any], trace: Dict[str, Any]) -> str:
         '<section class="band"><h2>Final Judgment</h2>'
         + f'<p>{_e(assessment)}</p>'
         + report_html
-        + _pre(judgment.get("reasoning_chain"))
-        + _list("Key Evidence", judgment.get("key_evidence"))
-        + _list("Anomalies", judgment.get("anomalies"))
         + _labeled_json("Verdict Basis", basis)
         + '</section>'
     )
-
-
-def _render_audits(audits: List[Any]) -> str:
-    blocks: List[str] = []
-    for audit in audits:
-        if not isinstance(audit, dict):
-            continue
-        complete = bool(audit.get("complete"))
-        stop_reason = str(
-            audit.get("stop_reason") or ("complete" if complete else "continue")
-        )
-        resolutions = audit.get("question_resolutions", []) if isinstance(audit.get("question_resolutions"), list) else []
-        fact_resolutions = audit.get("facts", []) if isinstance(audit.get("facts"), list) else []
-        rows = ''.join(
-            f'<tr><td>{_e(item.get("question_id", ""))}</td><td>{_status(item.get("status", ""))}</td><td>{_e(item.get("tool_attempts", 0))}</td><td>{_e(item.get("evidence_count", 0))}</td><td>{_e(item.get("remaining_gap", ""))}</td></tr>'
-            for item in resolutions if isinstance(item, dict)
-        )
-        if fact_resolutions:
-            rows = ''.join(
-                f'<tr><td><code>{_e(item.get("fact_id", ""))}</code></td>'
-                f'<td>{_status(item.get("status", ""))}</td>'
-                f'<td>{_e(len(item.get("finding_ids", []) or []))}</td>'
-                f'<td>{_e(len(item.get("evidence_ids", []) or []))}</td>'
-                f'<td>{_e(item.get("reason", ""))}</td></tr>'
-                for item in fact_resolutions if isinstance(item, dict)
-            )
-        labels = {
-            "coverage_complete": "coverage complete",
-            "verdict_determined": "verdict determined",
-            "complete": "complete",
-            "information_saturated": "information saturated",
-            "hard_budget_exhausted": "hard budget exhausted",
-            "continue": "continue investigation",
-        }
-        badge = 'ok' if complete else 'warn'
-        iteration = audit.get("iteration", audit.get("action_count", 0))
-        gain = audit.get("information_gain", audit.get("substantive_gain", False))
-        streak = audit.get("low_information_gain_streak", audit.get("low_gain_intervals", 0))
-        first_column = "Fact" if fact_resolutions else "Question"
-        third_column = "Findings" if fact_resolutions else "Attempts"
-        fifth_column = "Reason" if fact_resolutions else "Gap"
-        blocks.append(f'<div class="audit"><span class="badge {badge}">Iteration {_e(iteration)}: {_e(labels.get(stop_reason, stop_reason))}</span><span class="badge">information gain: {_e(gain)}</span><span class="badge">low-gain streak: {_e(streak)}</span><p>{_e(audit.get("reason", ""))}</p><table><thead><tr><th>{first_column}</th><th>Status</th><th>{third_column}</th><th>Evidence</th><th>{fifth_column}</th></tr></thead><tbody>{rows}</tbody></table></div>')
-    return f'<section class="band"><h2>Coverage Audits</h2>{"".join(blocks) or "<p>No coverage audits.</p>"}</section>'
 
 
 def _render_step(step: Dict[str, Any]) -> str:
@@ -189,75 +143,29 @@ def _render_step(step: Dict[str, Any]) -> str:
     return '<article class="step"><div>' + ''.join(labels) + '</div>' + body + '</article>'
 
 
-def _render_visual_fact_investigation(investigation: Dict[str, Any]) -> str:
+def _render_runtime_state(investigation: Dict[str, Any]) -> str:
     if not investigation:
-        return '<section class="band"><h2>Visual Facts</h2><p>No investigation state.</p></section>'
-    if investigation.get("schema_version") == "ifv-unified-react-raw-history-v1":
-        fields = {
-            key: investigation.get(key)
-            for key in (
-                "schema_version",
-                "case_id",
-                "image_sha256",
-                "objective",
-                "action_count",
-                "stop_reason",
-                "finish_rationale",
-            )
-            if investigation.get(key) not in (None, "", [], {})
-        }
         return (
             '<section class="band"><h2>Raw ReAct Runtime</h2>'
-            + _labeled_json("Mechanical state", fields)
-            + '</section>'
+            '<p>No investigation state.</p></section>'
         )
-    facts = investigation.get("facts", []) if isinstance(investigation.get("facts"), list) else []
-    tasks = investigation.get("tasks", []) if isinstance(investigation.get("tasks"), list) else []
-    findings = investigation.get("findings", []) if isinstance(investigation.get("findings"), list) else []
-    evidence = investigation.get("evidence", []) if isinstance(investigation.get("evidence"), list) else []
-    discoveries = investigation.get("discoveries", []) if isinstance(investigation.get("discoveries"), list) else []
-    reflections = investigation.get("reflections", []) if isinstance(investigation.get("reflections"), list) else []
-    decisive = set(investigation.get("decisive_fact_ids", []) or [])
-    fact_rows = ''.join(
-        f'<tr><td><code>{_e(item.get("fact_id", ""))}</code></td>'
-        f'<td>{_e(item.get("kind", ""))}</td><td>{_status(item.get("status", ""))}</td>'
-        f'<td>{_e("decisive" if item.get("fact_id") in decisive else item.get("decision_relevance", ""))}</td>'
-        f'<td>{_e(item.get("statement", ""))}</td></tr>'
-        for item in facts if isinstance(item, dict)
-    )
-    task_rows = ''.join(
-        f'<tr><td><code>{_e(item.get("task_id", ""))}</code></td>'
-        f'<td>P{_e(item.get("priority", ""))}</td><td>{_status(item.get("status", ""))}</td>'
-        f'<td>{_e(item.get("attempt_count", 0))}</td><td>{_e(item.get("question", ""))}</td></tr>'
-        for item in tasks if isinstance(item, dict)
-    )
-    finding_rows = ''.join(
-        f'<tr><td><code>{_e(item.get("finding_id", ""))}</code></td>'
-        f'<td><code>{_e(item.get("task_id", ""))}</code></td><td>{_e(item.get("stance", ""))}</td>'
-        f'<td>{_e(", ".join(item.get("evidence_ids", []) or []))}</td>'
-        f'<td>{_e(item.get("statement", ""))}</td></tr>'
-        for item in findings if isinstance(item, dict)
-    )
+    fields = {
+        key: investigation.get(key)
+        for key in (
+            "schema_version",
+            "case_id",
+            "image_sha256",
+            "objective",
+            "action_count",
+            "stop_reason",
+            "finish_rationale",
+        )
+        if investigation.get(key) not in (None, "", [], {})
+    }
     return (
-        '<section class="band"><h2>Visual Facts</h2>'
-        '<table><thead><tr><th>ID</th><th>Kind</th><th>Status</th><th>Role</th><th>Statement</th></tr></thead><tbody>'
-        + fact_rows + '</tbody></table></section>'
-        '<section class="band"><h2>Research Tasks</h2>'
-        '<table><thead><tr><th>ID</th><th>Priority</th><th>Status</th><th>Attempts</th><th>Question</th></tr></thead><tbody>'
-        + task_rows + '</tbody></table></section>'
-        '<section class="band"><h2>Findings &amp; Evidence</h2>'
-        '<table><thead><tr><th>Finding</th><th>Task</th><th>Stance</th><th>Evidence IDs</th><th>Statement</th></tr></thead><tbody>'
-        + finding_rows + '</tbody></table>'
-        + _labeled_json("Evidence", evidence)
-        + _labeled_json("Discoveries (not Evidence)", discoveries)
-        + '</section>'
-        '<section class="band"><h2>Reflection Checkpoints</h2>'
-        + (_labeled_json("Reflections", reflections) or '<p>No Reflection checkpoints.</p>')
-        + '</section>'
-        '<section class="band"><h2>Verdict Basis</h2>'
-        + (_pre(json.dumps(investigation.get("verdict_basis"), ensure_ascii=False, indent=2))
-           if investigation.get("verdict_basis") else '<p>No verdict basis.</p>')
-        + '</section>'
+        '<section class="band"><h2>Raw ReAct Runtime</h2>'
+        + _labeled_json("Mechanical state", fields)
+        + "</section>"
     )
 
 

@@ -1,7 +1,7 @@
 """把一行一个 episode 的 SFT JSONL 渲染成人类可读的中文审阅目录。
 
 只翻译阅读视图的标题和字段名；canonical JSONL、模型 thought、工具参数和工具观察
-均按原文保留。当前格式和历史格式都支持。
+均按原文保留。
 """
 
 from __future__ import annotations
@@ -23,14 +23,6 @@ FIELD_LABELS = {
     "tool_call_count": "工具调用数",
     "token_count_estimate": "Token 估算",
     "input_mode": "输入模式",
-    "phase": "阶段",
-    "action_count": "动作数",
-    "stop_reason": "停止原因",
-    "proposed_verdict": "拟议判断",
-    "target_facts": "目标事实",
-    "open_gaps": "未解决问题",
-    "recent_observations": "最近观察",
-    "recent_state_deltas": "最近状态变化",
     "authorized_tool_names": "允许使用的工具",
     "accepted": "是否接受",
     "completed_tools": "已完成工具",
@@ -171,20 +163,8 @@ def _render_stage_control(content: str) -> list[str]:
             input_payload = json.loads(input_payload)
         except json.JSONDecodeError:
             pass
-    if isinstance(input_payload, Mapping):
-        for key in (
-            "phase",
-            "action_count",
-            "stop_reason",
-            "proposed_verdict",
-            "target_facts",
-            "open_gaps",
-            "recent_observations",
-            "recent_state_deltas",
-        ):
-            value = input_payload.get(key)
-            if value not in (None, "", [], {}):
-                _field(output, key, value, limit=6000)
+    if isinstance(input_payload, Mapping) and input_payload:
+        _field(output, "input_payload", input_payload, limit=6000)
     return output
 
 

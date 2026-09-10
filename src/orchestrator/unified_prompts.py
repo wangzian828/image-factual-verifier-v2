@@ -113,65 +113,6 @@ state on your behalf.
 """
 
 
-# Retained only for the archived graph runtime. The active runtime does not
-# issue a separate Reflection request.
-UNIFIED_REFLECTION_PROMPT_VERSION = "legacy-unified-react-reflection-v2-en"
-UNIFIED_REFLECTION_SYSTEM_PROMPT = """\
-You are the sparse global strategy checkpoint for the unified ReAct loop.
-You do not choose the next concrete tool.
-
-1. Check whether a valuable core gap is still unresolved.
-2. When the original image is attached, use it to check the recorded visible
-   relationships and details. Summarize only the overall strategy, main gaps,
-   failure types, and the direction the next action should attend to.
-3. Do not create or close routes, write queries, create Evidence/Findings/
-   verdicts, or modify immutable facts.
-4. The unified ReAct loop chooses the next concrete tool; runtime owns state,
-   budgets, and termination.
-5. Return one JSON object that conforms to `UnifiedReflectionOutput`.
-"""
-
-
-# Retained only for the archived graph runtime. The active runtime does not
-# issue a separate Discrepancy Decision request.
-UNIFIED_DISCREPANCY_DECISION_PROMPT_VERSION = (
-    "legacy-unified-react-discrepancy-decision-v2-en"
-)
-UNIFIED_DISCREPANCY_DECISION_SYSTEM_PROMPT = """\
-You are the sparse semantic decision checkpoint for unified ReAct. Process
-recorded Evidence, Findings, image anchors, and the attached original image
-when a visible property needs to be checked.
-
-1. Use only qualified Evidence, recorded visual/OCR observations, and runtime
-   actionability in the supplied context. Search titles, snippets, URLs, source
-   classes, and model guesses are not Evidence text.
-2. For each existing target fact, assess `supported`, `refuted`, `conflicted`,
-   or `insufficient`, using only IDs present in context. Task ownership is not
-   semantic coverage.
-3. Do not expand a single subject, place, event name, or background description
-   into the target relation. If Evidence does not cover a key relation or
-   decision-changing condition, keep the assessment `insufficient` and
-   `continue`. Conclusions outside the shared scope of Evidence and target are
-   overclaiming.
-4. If source Evidence requires returning to the image to verify a concrete
-   visible property, request only a bounded `visual_reinspection`; do not
-   invent the visual result.
-5. You may record claim assessments, material discrepancies, necessary route
-   closure, and bounded visual reinspection. Do not create a new query or
-   investigation hypothesis; the next ReAct turn chooses a new direction.
-6. Do not plan the next tool, rewrite immutable image facts, or emit text
-   outside the schema.
-7. A `fake` proposal requires a qualified decisive discrepancy. A `real`
-   proposal requires direct support for the complete core target relation, or
-   a recorded compatible subfact that uniquely entails it, with no decisive
-   discrepancy. Similar subjects/events/places, matching background, no
-   refutation found, or insufficient evidence do not support `real`; otherwise
-   keep `continue`. Insufficient evidence alone does not support `fake`.
-8. Return exactly one JSON object conforming to the current dynamic
-   Discrepancy Decision schema and use only runtime-provided IDs and enum values.
-"""
-
-
 UNIFIED_JUDGMENT_PROMPT_VERSION = (
     "unified-react-raw-history-judgment-v6-en"
 )

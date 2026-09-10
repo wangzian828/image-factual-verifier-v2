@@ -663,12 +663,6 @@ def stage_release(
         (output_dir / "semantic_rewards").mkdir(parents=True, exist_ok=True)
     for case_id, candidate in sorted(selected.items()):
         trace = _load_json(candidate["trace_path"])
-        sft_judge_passed = (
-            (candidate["eligibility"].get("gates") or {}).get(
-                "sft_eligibility_pass"
-            )
-            is True
-        )
         training_buckets = (
             unified_react_training_buckets(trace)
             if candidate["decision_policy_version"] == "unified-react-v1"
@@ -679,13 +673,11 @@ def stage_release(
                 export_trajectory_sft_example(
                     trace,
                     source_metadata=candidate["source_metadata"],
-                    allow_incomplete_verdict_chain=sft_judge_passed,
                 )
                 if "reasoning_sft" in training_buckets
                 else export_trajectory_action_only_example(
                     trace,
                     source_metadata=candidate["source_metadata"],
-                    allow_incomplete_verdict_chain=sft_judge_passed,
                 )
             )
         except ValueError as exc:
@@ -830,7 +822,6 @@ def stage_release(
                 "trajectory_sft_export": "canonical_trace",
                 "action_only_export": "canonical_trace",
                 "rl_candidate_manifest": "rl_candidates.jsonl",
-                "allow_incomplete_verdict_chain": True,
                 "perception_export": "canonical_trace",
                 "legacy_step_policy_export": "disabled",
             },
@@ -895,7 +886,6 @@ def stage_release(
             "trajectory_sft_export": "canonical_trace",
             "action_only_export": "canonical_trace",
             "rl_candidate_manifest": "rl_candidates.jsonl",
-            "allow_incomplete_verdict_chain": True,
             "perception_export": "canonical_trace",
             "legacy_step_policy_export": "disabled",
         },
