@@ -217,7 +217,7 @@ def evidence_is_qualified_for_stance(evidence: Any, stance: str) -> bool:
     Qualification and direction are separate checks.  ``evidence_is_qualified``
     validates provenance/quality/risk, while ``evidence_direction_is_coherent``
     validates the recorded stance and any reference-comparison constraints.
-    Keeping this small composition here lets reducers, audits, and exporters use
+    Keeping this small composition here lets tools, audits, and exporters use
     one semantic gate without duplicating either rule.
     """
 

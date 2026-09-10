@@ -13,7 +13,7 @@ from src.integrations.gemini import (
     interaction_runtime_metrics,
     missing_required_paths,
     normalize_json_schema,
-    require_minimal_thinking,
+    require_low_thinking,
 )
 from src.integrations.llm.openai_compatible import (
     OpenAICompatibleChatClient,
@@ -264,7 +264,7 @@ class OpenAIVisionClient:
                 generation_config={
                     "max_output_tokens": max_tokens,
                     "temperature": temperature,
-                    "thinking_level": require_minimal_thinking(
+                    "thinking_level": require_low_thinking(
                         os.getenv("GEMINI_VISION_THINKING_LEVEL", "low"),
                         env_name="GEMINI_VISION_THINKING_LEVEL",
                     ),

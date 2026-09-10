@@ -29,7 +29,7 @@ from src.tools.vision_utils import controlled_image_to_data_url
 SEMANTIC_REWARD_SCHEMA_VERSION = "ifv-semantic-reward-v2"
 SEMANTIC_REWARD_INPUT_VERSION = "ifv-semantic-reward-input-v4"
 TRAJECTORY_PROMPT_VERSION = "ifv-semantic-trajectory-blind-v2"
-JUDGE_GENERATION_VERSION = "minimal-thinking-4096-v5"
+JUDGE_GENERATION_VERSION = "low-thinking-4096-v5"
 SEMANTIC_REWARD_POSTPROCESS_VERSION = "trajectory-semantic-audit-v2"
 
 TRAJECTORY_SYSTEM_PROMPT = (

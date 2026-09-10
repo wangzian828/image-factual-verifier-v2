@@ -243,7 +243,7 @@ def test_semantic_reward_cache_is_versioned_and_content_addressed(
             "reward_input_sha256": "b" * 64,
             "provider": "gemini",
             "model": "judge-model",
-            "generation_version": "minimal-thinking-4096-v5",
+            "generation_version": "low-thinking-4096-v5",
             "postprocess_version": "trajectory-semantic-audit-v2",
             "prompt_versions": ["ifv-semantic-trajectory-blind-v2"],
         }

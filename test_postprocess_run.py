@@ -140,7 +140,7 @@ def test_run_cases_then_postprocess_splits_runtime_and_gold_steps(
                     {
                         "image_id": episode_id,
                         "input_mode": "image_only",
-                        "decision_policy_version": "discrepancy-first-v4",
+                        "decision_policy_version": "unified-react-v1",
                         "verdict": "real",
                         "termination": "success",
                         "state": {

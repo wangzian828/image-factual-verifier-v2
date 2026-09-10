@@ -139,7 +139,7 @@ def test_run_cases_writes_minimal_artifacts_without_private_gold(
                     {
                         "image_id": episode_id,
                         "input_mode": "image_only",
-                        "decision_policy_version": "discrepancy-first-v4",
+                        "decision_policy_version": "unified-react-v1",
                         "verdict": "real",
                         "termination": "success",
                         "state": {"stage_timings": {"total": 1.25}},

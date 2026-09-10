@@ -24,7 +24,7 @@ from src.integrations.gemini import (
     extract_text,
     interaction_runtime_metrics,
     normalize_json_schema,
-    require_minimal_thinking,
+    require_low_thinking,
 )
 from src.integrations.async_runtime import PersistentAsyncRuntime
 from src.integrations.http_sessions import (
@@ -1853,7 +1853,7 @@ class JinaReaderClient:
             generation_config={
                 "max_output_tokens": max_output_tokens,
                 "temperature": 0.0,
-                "thinking_level": require_minimal_thinking(
+                "thinking_level": require_low_thinking(
                     os.getenv("GEMINI_BROWSE_THINKING_LEVEL", "low"),
                     env_name="GEMINI_BROWSE_THINKING_LEVEL",
                 ),

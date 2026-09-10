@@ -1,12 +1,11 @@
 [project]
 name = "image-factual-verifier"
 version = "4.0.0"
-description = "Discrepancy-first multimodal image factual verification runtime"
+description = "Raw-history multimodal image factual verification runtime"
 requires-python = ">=3.11"
 dependencies = [
     "httpx>=0.25.0",
     "requests>=2.28",
-    "beautifulsoup4>=4.11",
     "pydantic>=2.0",
     "python-dotenv>=1.0",
     "oss2>=2.18",

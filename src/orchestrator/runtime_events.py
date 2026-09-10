@@ -619,32 +619,7 @@ class CaseRuntimeStore:
             if memory_id not in by_id:
                 ordered_ids.append(memory_id)
                 by_id[memory_id] = item
-            elif item.get("record_type") == "lineage":
-                by_id[memory_id]["lineage"] = dict(item.get("lineage", {}) or {})
         return [by_id[memory_id] for memory_id in ordered_ids]
-
-    def bind_archive_lineage(
-        self,
-        memory_id: str,
-        lineage: Mapping[str, Any],
-    ) -> None:
-        """Append the reducer-created IDs after the immutable raw write."""
-
-        if not str(memory_id).strip() or not lineage:
-            return
-        self._append_archive_item(
-            {
-                "schema_version": "ifv-investigation-archive-v1",
-                "record_type": "lineage",
-                "memory_id": str(memory_id),
-                "lineage": dict(lineage),
-                "created_at": utc_now_iso(),
-            }
-        )
-        self.append_event(
-            "archive_lineage_bound",
-            {"memory_id": str(memory_id), "lineage": dict(lineage)},
-        )
 
     def _append_archive_item(self, item: Mapping[str, Any]) -> None:
         self.archive_index_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1142,10 +1117,6 @@ def _archive_item_matches(
                 actual = tool_args.get(key)
                 if actual is None and key == "task_id":
                     actual = tool_args.get("__question_id")
-        if actual is None:
-            lineage = item.get("lineage", {})
-            if isinstance(lineage, Mapping):
-                actual = lineage.get(key)
         expected_values = expected if isinstance(expected, list) else [expected]
         actual_values = actual if isinstance(actual, list) else [actual]
         if not {

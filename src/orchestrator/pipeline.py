@@ -311,8 +311,6 @@ class Orchestrator:
         }
         for env_name, value in tool_thinking_levels.items():
             normalized_value = value.strip().lower()
-            if normalized_value == "minimal":
-                normalized_value = "low"
             if normalized_value != "low":
                 raise ValueError(
                     f"{env_name} must be 'low' for the active agent."
@@ -815,8 +813,6 @@ class Orchestrator:
             f"GEMINI_{normalized_stage}_THINKING_LEVEL",
             fallback,
         ).strip().lower()
-        if value == "minimal":
-            value = "low"
         # Keep the existing low-only policy for non-ReAct stages.  The main
         # ReAct loop is the one stage under experiment where Gemini high
         # thinking is useful for selecting and sequencing investigation tools.

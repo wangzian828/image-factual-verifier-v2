@@ -173,7 +173,7 @@ def test_qwen_reasoning_only_invalid_schema_retries_once_in_direct_mode() -> Non
         tools=[],
         output_schema=AnswerOutput,
         max_rounds=2,
-        stage_name="image_account_planning",
+        stage_name="unified_judgment",
         attach_image=False,
         generation_config={
             "enable_thinking": True,
@@ -201,7 +201,7 @@ def test_qwen_reasoning_only_valid_schema_is_accepted_without_direct_retry() -> 
         tools=[],
         output_schema=AnswerOutput,
         max_rounds=2,
-        stage_name="image_account_planning",
+        stage_name="unified_judgment",
         attach_image=False,
         generation_config={"enable_thinking": True, "thinking_token_budget": 1024},
     )
@@ -553,7 +553,7 @@ def test_qwen_no_tool_stage_uses_json_schema_and_redacts_image(
         output_schema=AnswerOutput,
         max_rounds=1,
         image_path=str(image_path),
-        stage_name="image_account_planning",
+        stage_name="unified_judgment",
         attach_image=True,
         generation_config={"enable_thinking": False},
     )
@@ -1215,7 +1215,7 @@ def test_qwen_reasoning_is_archived_but_not_reintroduced(
         tools=[],
         output_schema=AnswerOutput,
         max_rounds=1,
-        stage_name="image_account_planning",
+        stage_name="unified_judgment",
         runtime_store=store,
         generation_config={"enable_thinking": True, "thinking_token_budget": 1024},
     )
@@ -1293,7 +1293,7 @@ def test_qwen_reasoning_only_candidate_switches_to_direct_schema_correction(
         tools=[],
         output_schema=AnswerOutput,
         max_rounds=2,
-        stage_name="image_only_discrepancy_decision",
+        stage_name="unified_judgment",
         runtime_store=CaseRuntimeStore(
             tmp_path,
             case_id="reasoning-correction-case",

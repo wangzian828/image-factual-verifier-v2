@@ -844,7 +844,7 @@ def test_native_structured_output_returns_opt_in_exhaustion_boundary(
         tools=[],
         output_schema=NativeStructuredOutput,
         max_rounds=1,
-        stage_name="image_only_discrepancy_decision",
+        stage_name="unified_judgment",
         attach_image=False,
         protocol_exhaustion_boundary=True,
         runtime_store=CaseRuntimeStore(

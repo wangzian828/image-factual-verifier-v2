@@ -30,7 +30,7 @@ from src.trajectory.semantic_reward import (
 SFT_ELIGIBILITY_SCHEMA_VERSION = "ifv-sft-eligibility-v5"
 SFT_ELIGIBILITY_INPUT_VERSION = "ifv-sft-eligibility-input-v12"
 SFT_ELIGIBILITY_PROMPT_VERSION = "ifv-sft-private-image-fact-gate-v8"
-SFT_ELIGIBILITY_GENERATION_VERSION = "minimal-thinking-4096-v7"
+SFT_ELIGIBILITY_GENERATION_VERSION = "low-thinking-4096-v7"
 SFT_ELIGIBILITY_POSTPROCESS_VERSION = "image-fact-safety-gate-v7"
 
 

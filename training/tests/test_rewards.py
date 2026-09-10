@@ -23,7 +23,7 @@ def _semantic_artifact(episode_id: str = "episode-1") -> dict:
         "case_id": "case-reward-1",
         "source_trace": {
             "sha256": "a" * 64,
-            "decision_policy_version": "discrepancy-first-v4",
+            "decision_policy_version": "unified-react-v1",
         },
         "reward_input": {
             "schema_version": "ifv-semantic-reward-input-v2",

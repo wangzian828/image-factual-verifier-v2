@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from dotenv import load_dotenv
-load_dotenv()
 
 from src.workflow import VerificationWorkflow, WorkflowConfig
 from src.provider_profiles import PROFILE_IDS
@@ -13,7 +11,7 @@ from src.storage import default_trace_dir
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Image Factual Verifier v3")
+    parser = argparse.ArgumentParser(description="Image Factual Verifier v4")
     parser.add_argument("image_path", help="Path to the image to verify")
     parser.add_argument(
         "--profile",

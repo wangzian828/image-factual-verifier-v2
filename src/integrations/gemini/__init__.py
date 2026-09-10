@@ -22,7 +22,7 @@ from .runtime_metrics import (
     attach_runtime_metrics,
     exception_runtime_metrics,
     interaction_runtime_metrics,
-    require_minimal_thinking,
+    require_low_thinking,
     take_runtime_metrics,
 )
 
@@ -47,6 +47,6 @@ __all__ = [
     "attach_runtime_metrics",
     "exception_runtime_metrics",
     "interaction_runtime_metrics",
-    "require_minimal_thinking",
+    "require_low_thinking",
     "take_runtime_metrics",
 ]

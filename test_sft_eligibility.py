@@ -636,17 +636,11 @@ def test_unified_packet_exposes_ordered_react_actions_and_image_search_candidate
                     "reference_image_candidates": ["https://cdn.example.org/event.jpg"],
                 }
             ),
-                "metadata": {
-                    "function_call_id": "obs-image-search",
-                    "tool_success": True,
-                "react_state_delta": {
-                    "accepted": True,
-                    "tool_success": True,
-                    "substantive_gain": True,
-                    "created_discovery_ids": ["discovery-image-1"],
-                },
+            "metadata": {
+                "function_call_id": "obs-image-search",
+                "tool_success": True,
             },
-        }
+        },
     ]
 
     packet = build_sft_eligibility_input(trace, _gold())

@@ -175,14 +175,6 @@ def test_archive_recall_then_exact_read_preserves_raw_result(tmp_path: Path) -> 
             }
         ),
     )
-    store.bind_archive_lineage(
-        descriptor["memory_id"],
-        {
-            "task_id": "task-1",
-            "created_evidence_ids": ["evidence-1"],
-        },
-    )
-
     recalled = store.recall_archive(
         query="ceremonial coach",
         filters={"task_id": "task-1", "tool": "visit"},
@@ -220,7 +212,7 @@ def test_recovery_reuses_only_successful_archived_tool_results(
         ensure_ascii=False,
     )
     source.archive_tool_result(
-        stage="image_only_discrepancy_investigation",
+        stage="unified_react",
         action_index=2,
         tool_name="visit",
         tool_args={
@@ -230,7 +222,7 @@ def test_recovery_reuses_only_successful_archived_tool_results(
         tool_result=successful,
     )
     source.archive_tool_result(
-        stage="image_only_discrepancy_investigation",
+        stage="unified_react",
         action_index=3,
         tool_name="text_search",
         tool_args={"query": "unstable request"},
@@ -246,14 +238,14 @@ def test_recovery_reuses_only_successful_archived_tool_results(
         resume_from=tmp_path,
     )
     reused = retry.reuse_tool_result(
-        stage="image_only_discrepancy_investigation",
+        stage="unified_react",
         tool_name="visit",
         tool_args={"url": "https://example.org/source"},
     )
     assert reused is not None
     assert reused["result"] == successful
     assert retry.reuse_tool_result(
-        stage="image_only_discrepancy_investigation",
+        stage="unified_react",
         tool_name="text_search",
         tool_args={"query": "unstable request"},
     ) is None

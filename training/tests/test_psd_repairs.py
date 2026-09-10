@@ -22,7 +22,7 @@ def _repair_candidate(candidate_id: str = "candidate-1") -> dict:
         "episode_id": "episode-1",
         "repair_site": {
             "step_id": "episode-1:react:1",
-            "stage": "image_only_investigation",
+            "stage": "unified_react",
             "example_type": "react",
             "rollout_token_capture": {
                 "status": "complete",
@@ -85,9 +85,9 @@ def _preservation_candidate() -> dict:
         },
         "preservation_steps": [
             {
-                "step_id": "episode-pass:planning:1",
-                "stage": "image_only_planning",
-                "example_type": "planning",
+                "step_id": "episode-pass:react:1",
+                "stage": "unified_react",
+                "example_type": "react",
                 "rollout_token_capture": {
                     "status": "complete",
                     "prompt_token_ids": [10, 11],
@@ -96,9 +96,9 @@ def _preservation_candidate() -> dict:
                 },
             },
             {
-                "step_id": "episode-pass:react:2",
-                "stage": "image_only_investigation",
-                "example_type": "react",
+                "step_id": "episode-pass:judgment:2",
+                "stage": "unified_judgment",
+                "example_type": "judgment",
                 "rollout_token_capture": {
                     "status": "complete",
                     "prompt_token_ids": [10, 11, 12, 13],

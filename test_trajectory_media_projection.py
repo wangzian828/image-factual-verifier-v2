@@ -78,11 +78,6 @@ def _step(
                 ),
             },
             "policy_action": policy_action,
-            "react_state_delta": (
-                {"progress": "updated"}
-                if stage == "unified_react"
-                else None
-            ),
         },
     }
 
