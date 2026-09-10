@@ -1183,32 +1183,18 @@ def sft_eligibility_metrics(
         warnings.append("boundary_warning")
     if trajectory_conduct == "recovered_minor":
         warnings.append("recovered_policy_rejection")
-    if raw_mode:
-        basis_observation_ids = set(
-            _unique(
-                candidate.get("verdict_observation_ids")
-                or candidate.get("successful_observation_ids")
-                or [],
-                limit=40,
-            )
+    basis_observation_ids = set(
+        _unique(
+            candidate.get("verdict_observation_ids")
+            or candidate.get("successful_observation_ids")
+            or [],
+            limit=40,
         )
-        if basis_observation_ids and not basis_observation_ids.intersection(
-            valid_decisive_ids
-        ):
-            warnings.append("decisive_observation_not_in_runtime_basis")
-    else:
-        basis_ids = set(_unique(candidate.get("basis_claim_ids", []), limit=12))
-        if basis_ids and not basis_ids.intersection(
-            {
-                claim_id
-                for evidence_id in valid_decisive_ids
-                for claim_id in _unique(
-                    evidence_by_id[evidence_id].get("claim_ids", []),
-                    limit=12,
-                )
-            }
-        ):
-            warnings.append("decisive_evidence_not_claim_basis_selected")
+    )
+    if basis_observation_ids and not basis_observation_ids.intersection(
+        valid_decisive_ids
+    ):
+        warnings.append("decisive_observation_not_in_runtime_basis")
     raw_confidence = float(judgment_values.get("confidence", 0.0) or 0.0)
     normalized_confidence = max(0.0, min(1.0, raw_confidence))
     if normalized_confidence != raw_confidence:

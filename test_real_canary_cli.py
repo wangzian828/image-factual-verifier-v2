@@ -89,13 +89,12 @@ def test_real_canary_rejects_retrieval_without_evidence_inspection() -> None:
     ) == ["search"]
 
 
-def _write_v4_canary_artifacts(
+def _write_current_canary_artifacts(
     tmp_path,
     *,
     data_policy: str = "reinspect-v2",
     agent_policy: str = "unified-react-v1",
     trace_policy: str = "unified-react-v1",
-    decision_mode: str = "evidence_determined",
 ) -> None:
     (tmp_path / "traces").mkdir()
     (tmp_path / "run_manifest.json").write_text(
@@ -120,51 +119,48 @@ def _write_v4_canary_artifacts(
         json.dumps({"num_errors": 0}),
         encoding="utf-8",
     )
-    (tmp_path / "traces" / "case-v4.json").write_text(
+    (tmp_path / "traces" / "case-react.json").write_text(
         json.dumps(
             {
-                "image_id": "case-v4",
+                "image_id": "case-react",
                 "input_mode": "image_only",
                 "decision_policy_version": trace_policy,
                 "verdict": "fake",
                 "verdict_basis": {
-                    "decision_mode": decision_mode,
-                    "claim_ids": ["claim-v4"],
-                    "discrepancy_ids": (
-                        ["discrepancy-v4"]
-                        if decision_mode == "evidence_determined"
-                        else []
-                    ),
-                    "unresolved_gaps": (
-                        []
-                        if decision_mode == "evidence_determined"
-                        else ["The material route ended without decisive Evidence."]
-                    ),
+                    "schema_version": "ifv-raw-history-judgment-basis-v1",
+                    "decision_mode": "bounded_binary_judgment",
+                    "observation_ids": ["observation-search", "observation-visit"],
+                },
+                "judgment": {
+                    "policy_rule_id": "unified-react-v1",
+                    "fact_check_report": {"headline": "A bounded report"},
                 },
                 "termination": "success",
                 "llm_api_calls": 2,
                 "state": {
                     "investigation_state": {
-                        "core_verdict_fact_id": None,
-                        "stop_reason": (
-                            "verdict_determined"
-                            if decision_mode == "evidence_determined"
-                            else "meaningful_routes_exhausted"
-                        ),
-                        "target_facts": [
-                            {"claim_id": "claim-v4", "salience": "high"}
-                        ],
+                        "schema_version": run_real_canary.REACT_RUNTIME_SCHEMA_VERSION,
+                        "case_id": "case-react",
+                        "image_sha256": "a" * 64,
+                        "objective": "Verify the image.",
+                        "action_count": 2,
+                        "stop_reason": "meaningful_routes_exhausted",
+                        "finish_rationale": "The retained observations are sufficient.",
                     },
                     "all_steps": [
                         {
                             "action_type": "tool_call",
+                            "stage": "unified_react",
                             "tool_name": "text_search",
                             "tool_result": json.dumps({"status": "success"}),
+                            "metadata": {"function_call_id": "observation-search"},
                         },
                         {
                             "action_type": "tool_call",
+                            "stage": "unified_react",
                             "tool_name": "visit",
                             "tool_result": json.dumps({"status": "success"}),
+                            "metadata": {"function_call_id": "observation-visit"},
                         },
                     ],
                 },
@@ -178,7 +174,7 @@ def test_real_canary_accepts_unified_react_artifacts(
     tmp_path,
     monkeypatch,
 ) -> None:
-    _write_v4_canary_artifacts(tmp_path)
+    _write_current_canary_artifacts(tmp_path)
     monkeypatch.setattr(
         run_real_canary,
         "audit_trace",
@@ -279,12 +275,12 @@ def test_real_canary_accepts_current_claimless_react_artifacts(
 
 
 def test_trace_discovery_excludes_nested_runtime_json_artifacts(tmp_path) -> None:
-    _write_v4_canary_artifacts(tmp_path)
+    _write_current_canary_artifacts(tmp_path)
     runtime_artifact = (
         tmp_path
         / "traces"
         / "runtime"
-        / "case-v4"
+        / "case-react"
         / "artifacts"
         / "sha256"
         / "ab"
@@ -294,10 +290,10 @@ def test_trace_discovery_excludes_nested_runtime_json_artifacts(tmp_path) -> Non
     runtime_artifact.write_text(json.dumps({"status": "success"}), encoding="utf-8")
 
     assert discover_trace_files(tmp_path / "traces") == [
-        tmp_path / "traces" / "case-v4.json"
+        tmp_path / "traces" / "case-react.json"
     ]
     assert discover_trace_files(tmp_path) == [
-        tmp_path / "traces" / "case-v4.json"
+        tmp_path / "traces" / "case-react.json"
     ]
 
 
@@ -305,10 +301,7 @@ def test_real_canary_accepts_bounded_binary_fake_artifacts(
     tmp_path,
     monkeypatch,
 ) -> None:
-    _write_v4_canary_artifacts(
-        tmp_path,
-        decision_mode="bounded_binary_judgment",
-    )
+    _write_current_canary_artifacts(tmp_path)
     monkeypatch.setattr(
         run_real_canary,
         "audit_trace",
@@ -324,7 +317,7 @@ def test_real_canary_rejects_agent_policy_mismatch(
     tmp_path,
     monkeypatch,
 ) -> None:
-    _write_v4_canary_artifacts(
+    _write_current_canary_artifacts(
         tmp_path,
         agent_policy="reinspect-v2",
     )
@@ -342,7 +335,7 @@ def test_real_canary_rejects_data_pipeline_policy_mismatch(
     tmp_path,
     monkeypatch,
 ) -> None:
-    _write_v4_canary_artifacts(
+    _write_current_canary_artifacts(
         tmp_path,
         data_policy="unified-react-v1",
     )

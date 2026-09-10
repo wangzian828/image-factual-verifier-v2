@@ -77,7 +77,7 @@ def _trace(*, verdict: str = "fake") -> dict[str, Any]:
                 "image_sha256": "a" * 64,
             },
             "investigation_state": {
-                "schema_version": "ifv-unified-react-raw-history-v1",
+                "schema_version": REACT_RUNTIME_SCHEMA_VERSION,
                 "objective": "Verify the pictured event and its relationship.",
                 "open_questions": [],
             },
