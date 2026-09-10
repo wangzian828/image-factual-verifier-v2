@@ -165,6 +165,14 @@ def _runtime_trace() -> dict[str, Any]:
                     "metadata": {
                         "function_call_id": "observation-1",
                         "tool_success": True,
+                        "policy_action": {
+                            "thought": "Inspect the visible bridge relation.",
+                            "action": {
+                                "type": "tool_call",
+                                "tool_name": "perceive_scene",
+                                "tool_args": {},
+                            },
+                        },
                     },
                 }
             ],
