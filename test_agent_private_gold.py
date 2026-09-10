@@ -102,7 +102,6 @@ def test_agent_private_gold_projection_uses_actual_successful_trace_evidence() -
         "reason": "Fake: the official result names B.\n\n"
         "The selected official result directly contradicts the displayed winner.\n\n"
         "The result page identifies B as the winner.\n\n"
-        "The official result names B.\n\n"
         "Official results name B rather than A.",
     }
 
