@@ -108,12 +108,63 @@ LOG_DIR="$EXPERIMENT_DIR"
 new_output_dir "$OUTPUT_DIR"
 new_output_dir "$EXPERIMENT_DIR"
 record_environment "$EXPERIMENT_DIR"
-CHECKPOINT_PREFLIGHT="$EXPERIMENT_DIR/checkpoint-storage-preflight.json"
-python -m ifv_training checkpoint-storage-preflight \
-  --output-dir "$OUTPUT_DIR" \
-  --estimated-checkpoint-bytes "${IFV_CHECKPOINT_ESTIMATED_BYTES:-150000000000}" \
-  --reserve-multiplier "${IFV_CHECKPOINT_RESERVE_MULTIPLIER:-1.25}" \
-  --output "$CHECKPOINT_PREFLIGHT"
+ENVIRONMENT_PREFLIGHT=""
+if [[ "${IFV_REQUIRE_TRAINING_ENV_PREFLIGHT:-false}" == "true" ]]; then
+  for name in \
+    IFV_EXPECTED_GPU_COUNT \
+    IFV_EXPECTED_GPU_NAME \
+    IFV_EXPECTED_GPU_MEMORY_MIB \
+    IFV_EXPECTED_PYTHON \
+    IFV_EXPECTED_TORCH_CUDA \
+    IFV_EXPECTED_TORCH_VERSION \
+    IFV_EXPECTED_TRANSFORMERS_VERSION \
+    IFV_EXPECTED_MS_SWIFT_VERSION \
+    IFV_EXPECTED_DEEPSPEED_VERSION \
+    IFV_EXPECTED_FLASH_ATTN_VERSION \
+    IFV_EXPECTED_FLA_VERSION \
+    IFV_EXPECTED_CAUSAL_CONV1D_VERSION \
+    IFV_EXPECTED_LIGER_VERSION
+  do
+    require_value "$name"
+  done
+  ENVIRONMENT_PREFLIGHT="$EXPERIMENT_DIR/environment-preflight.json"
+  python "$REPO_ROOT/training/scripts/probe/verify_qwen35_sft_environment.py" \
+    --model "$IFV_MODEL_ID" \
+    --max-context "$IFV_MAX_LENGTH" \
+    --expected-package-version "torch=$IFV_EXPECTED_TORCH_VERSION" \
+    --expected-package-version "transformers=$IFV_EXPECTED_TRANSFORMERS_VERSION" \
+    --expected-package-version "ms-swift=$IFV_EXPECTED_MS_SWIFT_VERSION" \
+    --expected-package-version "deepspeed=$IFV_EXPECTED_DEEPSPEED_VERSION" \
+    --expected-package-version "flash-attn=$IFV_EXPECTED_FLASH_ATTN_VERSION" \
+    --expected-package-version "flash-linear-attention=$IFV_EXPECTED_FLA_VERSION" \
+    --expected-package-version "causal-conv1d=$IFV_EXPECTED_CAUSAL_CONV1D_VERSION" \
+    --expected-package-version "liger-kernel=$IFV_EXPECTED_LIGER_VERSION" \
+    --required-package torch \
+    --required-package transformers \
+    --required-package ms-swift \
+    --required-package deepspeed \
+    --required-package flash-attn \
+    --required-package flash-linear-attention \
+    --required-package causal-conv1d \
+    --required-package liger-kernel \
+    --expected-python "$IFV_EXPECTED_PYTHON" \
+    --expected-torch-cuda "$IFV_EXPECTED_TORCH_CUDA" \
+    --expected-gpu-count "$IFV_EXPECTED_GPU_COUNT" \
+    --expected-gpu-name "$IFV_EXPECTED_GPU_NAME" \
+    --expected-gpu-memory-mib "$IFV_EXPECTED_GPU_MEMORY_MIB" \
+    --gpu-memory-tolerance-mib "${IFV_GPU_MEMORY_TOLERANCE_MIB:-128}" \
+    --output "$ENVIRONMENT_PREFLIGHT"
+fi
+SAVE_STRATEGY="${IFV_SAVE_STRATEGY:-steps}"
+CHECKPOINT_PREFLIGHT=""
+if [[ "$SAVE_STRATEGY" != "no" ]]; then
+  CHECKPOINT_PREFLIGHT="$EXPERIMENT_DIR/checkpoint-storage-preflight.json"
+  python -m ifv_training checkpoint-storage-preflight \
+    --output-dir "$OUTPUT_DIR" \
+    --estimated-checkpoint-bytes "${IFV_CHECKPOINT_ESTIMATED_BYTES:-150000000000}" \
+    --reserve-multiplier "${IFV_CHECKPOINT_RESERVE_MULTIPLIER:-1.25}" \
+    --output "$CHECKPOINT_PREFLIGHT"
+fi
 CACHE_VERIFICATION=""
 if [[ "${#cached_train_datasets[@]}" -gt 0 ]]; then
   CACHE_VERIFICATION="$EXPERIMENT_DIR/cached-dataset-gate.json"
@@ -172,9 +223,7 @@ args=(
   --gradient_checkpointing "${IFV_GRADIENT_CHECKPOINTING:-true}"
   --vit_gradient_checkpointing "$IFV_VIT_GRADIENT_CHECKPOINTING"
   --eval_strategy "${IFV_EVAL_STRATEGY:-steps}"
-  --save_strategy steps
-  --save_steps "$IFV_SAVE_STEPS"
-  --save_total_limit "$IFV_SAVE_TOTAL_LIMIT"
+  --save_strategy "$SAVE_STRATEGY"
   --logging_steps "$IFV_LOGGING_STEPS"
   --max_length "$IFV_MAX_LENGTH"
   --attn_impl "$IFV_ATTN_IMPL"
@@ -186,6 +235,11 @@ args=(
   --dataloader_num_workers "${IFV_DATALOADER_NUM_WORKERS:-2}"
   --report_to tensorboard
 )
+
+if [[ "$SAVE_STRATEGY" != "no" ]]; then
+  args+=(--save_steps "$IFV_SAVE_STEPS")
+  args+=(--save_total_limit "$IFV_SAVE_TOTAL_LIMIT")
+fi
 
 if [[ "${IFV_EVAL_STRATEGY:-steps}" != "no" ]]; then
   args+=(--eval_steps "$IFV_EVAL_STEPS")
@@ -381,13 +435,18 @@ fi
 if [[ -n "$RAW_DATASET_VERIFICATION" ]]; then
   profile_args+=(--dataset-verification "$RAW_DATASET_VERIFICATION")
 fi
+if [[ -n "$ENVIRONMENT_PREFLIGHT" ]]; then
+  profile_args+=(--environment-preflight "$ENVIRONMENT_PREFLIGHT")
+fi
 if [[ -n "$ENCODE_CACHE_REPORT" ]]; then
   profile_args+=(--encode-cache-report "$ENCODE_CACHE_REPORT")
 fi
 if [[ -n "$SCHEDULER_AUDIT" ]]; then
   profile_args+=(--scheduler-audit "$SCHEDULER_AUDIT")
 fi
-profile_args+=(--checkpoint-preflight "$CHECKPOINT_PREFLIGHT")
+if [[ -n "$CHECKPOINT_PREFLIGHT" ]]; then
+  profile_args+=(--checkpoint-preflight "$CHECKPOINT_PREFLIGHT")
+fi
 if [[ -n "$CHECKPOINT_IO_PROFILE" ]]; then
   profile_args+=(--checkpoint-io-profile "$CHECKPOINT_IO_PROFILE")
 fi

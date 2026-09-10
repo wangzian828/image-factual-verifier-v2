@@ -5,7 +5,7 @@ checkpoint 写入 `/gsdata`，不写入 Git checkout。
 
 ## 1. 环境
 
-当前已验证的 SFT 环境：
+当前冻结的 SDPA SFT 环境：
 
 ```text
 Python       3.12
@@ -15,6 +15,30 @@ torch        2.10.0
 datasets     4.8.4
 环境路径     /gsdata/home/wza/conda/envs/ifv-qwen35-sft-ms-swift442
 ```
+
+该环境不包含 128K padding-free/SP8 必需的 FlashAttention 与
+causal-conv1d CUDA 扩展，不能用于长上下文 profile。历史 32K FSDP2/SP4 实验验证过
+以下扩展组合：
+
+```text
+flash-attn              2.8.3
+flash-linear-attention  0.5.1
+causal-conv1d           1.6.2.post1
+liger-kernel            0.8.0
+```
+
+正式 128K 环境使用全新前缀创建，不修改上述环境或历史实验环境：
+
+```bash
+export IFV_QWEN35_MODEL=/gsdata/home/wza/models/Qwen3.5-9B
+export IFV_QWEN35_SFT_LONG_ENV_PREFIX=<new-empty-conda-prefix>
+export IFV_TRAINING_DATA_ROOT=<training-data-root>
+bash training/scripts/server/bootstrap_qwen35_training_gpu13.sh sft-long
+```
+
+gpu-13 的 glibc 为 2.28，长上下文 bootstrap 会固定版本并从源码编译两个 CUDA
+扩展。完成后必须存在 `.ifv-qwen35-sft-long-ready`，且环境目录中的
+`environment-preflight.json` 必须通过；构建失败时不得回退到 SDPA 启动 128K。
 
 模型名称和 checkpoint 路径以实际任务配置为准。换模型时必须用该模型自己的
 processor 重新验证，不能只复用旧环境的通过结果。

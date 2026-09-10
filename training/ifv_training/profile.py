@@ -243,6 +243,7 @@ def summarize_training_log(
     resource_summary: Path | None = None,
     cache_verification: Path | None = None,
     dataset_verification: Path | None = None,
+    environment_preflight: Path | None = None,
     encode_cache_report: Path | None = None,
     scheduler_audit: Path | None = None,
     checkpoint_preflight: Path | None = None,
@@ -494,6 +495,7 @@ def summarize_training_log(
     resource_payload = _load_sidecar(resource_summary)
     cache_payload = _load_sidecar(cache_verification)
     dataset_verification_payload = _load_sidecar(dataset_verification)
+    environment_preflight_payload = _load_sidecar(environment_preflight)
     encode_cache_payload = _load_sidecar(encode_cache_report)
     scheduler_audit_payload = _load_sidecar(scheduler_audit)
     checkpoint_preflight_payload = _load_sidecar(checkpoint_preflight)
@@ -559,6 +561,12 @@ def summarize_training_log(
         if isinstance(dataset_verification_payload, dict)
         else not raw_dataset_required
     )
+    environment_preflight_required = environment_preflight is not None
+    environment_preflight_passed = (
+        environment_preflight_payload.get("passed") is True
+        if isinstance(environment_preflight_payload, dict)
+        else not environment_preflight_required
+    )
     encode_cache_required = encode_cache_report is not None
     encode_cache_passed = (
         encode_cache_payload.get("passed") is True
@@ -597,6 +605,7 @@ def summarize_training_log(
             resource_passed,
             cache_passed,
             raw_dataset_passed,
+            environment_preflight_passed,
             encode_cache_passed,
             scheduler_audit_passed,
             checkpoint_preflight_passed,
@@ -756,6 +765,14 @@ def summarize_training_log(
             "passed": raw_dataset_passed,
             "verification": dataset_verification_payload,
         },
+        "environment_preflight": {
+            "required": environment_preflight_required,
+            "report_path": (
+                str(environment_preflight) if environment_preflight else ""
+            ),
+            "passed": environment_preflight_passed,
+            "report": environment_preflight_payload,
+        },
         "encoded_processor_cache": {
             "required": encode_cache_required,
             "report_path": (
@@ -801,6 +818,7 @@ def write_training_profile(
     resource_summary: Path | None = None,
     cache_verification: Path | None = None,
     dataset_verification: Path | None = None,
+    environment_preflight: Path | None = None,
     encode_cache_report: Path | None = None,
     scheduler_audit: Path | None = None,
     checkpoint_preflight: Path | None = None,
@@ -815,6 +833,7 @@ def write_training_profile(
         resource_summary=resource_summary,
         cache_verification=cache_verification,
         dataset_verification=dataset_verification,
+        environment_preflight=environment_preflight,
         encode_cache_report=encode_cache_report,
         scheduler_audit=scheduler_audit,
         checkpoint_preflight=checkpoint_preflight,

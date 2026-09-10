@@ -5,24 +5,29 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 MODE="${1:-all}"
 CONDA="${IFV_CONDA_BIN:-$(command -v conda || true)}"
 SFT_PREFIX="${IFV_QWEN35_SFT_ENV_PREFIX:-}"
+LONG_SFT_PREFIX="${IFV_QWEN35_SFT_LONG_ENV_PREFIX:-}"
 RL_PREFIX="${IFV_QWEN35_RL_ENV_PREFIX:-}"
 MODEL="${IFV_QWEN35_MODEL:-${IFV_MODEL_ID:-}}"
 ARTIFACT_ROOT="${IFV_TRAINING_DATA_ROOT:-${IFV_DATA_ROOT:+${IFV_DATA_ROOT}/training}}"
 ARTIFACT_ROOT="${ARTIFACT_ROOT:-${XDG_DATA_HOME:-${HOME}/.local/share}/image-factual-verifier/training}"
 
-if [[ "$MODE" != "sft" && "$MODE" != "rl" && "$MODE" != "all" ]]; then
-  echo "usage: $0 [sft|rl|all]" >&2
+if [[ "$MODE" != "sft" && "$MODE" != "sft-long" && "$MODE" != "rl" && "$MODE" != "all" ]]; then
+  echo "usage: $0 [sft|sft-long|rl|all]" >&2
   exit 2
 fi
 if [[ ! -x "$CONDA" ]]; then
   echo "conda is required: $CONDA" >&2
   exit 2
 fi
-if [[ "$MODE" != "rl" && -z "$SFT_PREFIX" ]]; then
+if [[ ( "$MODE" == "sft" || "$MODE" == "all" ) && -z "$SFT_PREFIX" ]]; then
   echo "set IFV_QWEN35_SFT_ENV_PREFIX" >&2
   exit 2
 fi
-if [[ "$MODE" != "sft" && -z "$RL_PREFIX" ]]; then
+if [[ "$MODE" == "sft-long" && -z "$LONG_SFT_PREFIX" ]]; then
+  echo "set IFV_QWEN35_SFT_LONG_ENV_PREFIX" >&2
+  exit 2
+fi
+if [[ ( "$MODE" == "rl" || "$MODE" == "all" ) && -z "$RL_PREFIX" ]]; then
   echo "set IFV_QWEN35_RL_ENV_PREFIX" >&2
   exit 2
 fi
@@ -59,12 +64,15 @@ freeze_env() {
   local role="$2"
   local out="$ARTIFACT_ROOT/logs/environments/$role"
   mkdir -p "$out"
-  "$prefix/bin/python" -m pip check
-  "$prefix/bin/python" -m pip freeze --all >"$out/pip-freeze.txt"
+  local runtime_ld="$prefix/lib:$prefix/lib/python3.12/site-packages/nvidia/curand/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+  LD_LIBRARY_PATH="$runtime_ld" "$prefix/bin/python" -m pip check
+  LD_LIBRARY_PATH="$runtime_ld" "$prefix/bin/python" -m pip freeze --all >"$out/pip-freeze.txt"
   sha256sum "$out/pip-freeze.txt" >"$out/pip-freeze.sha256"
-  CUDA_VISIBLE_DEVICES="${IFV_BOOTSTRAP_GPU_ID:-0}" "$prefix/bin/python" -m ifv_training environment-manifest \
+  LD_LIBRARY_PATH="$runtime_ld" \
+    CUDA_VISIBLE_DEVICES="${IFV_BOOTSTRAP_GPU_ID:-0}" \
+    "$prefix/bin/python" -m ifv_training environment-manifest \
     --repo-root "$REPO_ROOT" --output "$out/environment.json"
-  IFV_BOOTSTRAP_MODEL="$MODEL" \
+  LD_LIBRARY_PATH="$runtime_ld" IFV_BOOTSTRAP_MODEL="$MODEL" \
     CUDA_VISIBLE_DEVICES="${IFV_BOOTSTRAP_GPU_ID:-0}" \
     "$prefix/bin/python" - <<'PY' >"$out/qwen35-import-gate.json"
 import json
@@ -139,6 +147,56 @@ install_sft() {
   touch "$SFT_PREFIX/.ifv-qwen35-sft-ready"
 }
 
+install_long_sft() {
+  prepare_base "$LONG_SFT_PREFIX" 12.8.93
+  "$LONG_SFT_PREFIX/bin/python" -m pip install \
+    torch==2.10.0 torchvision==0.25.0 torchaudio==2.10.0
+  CUDA_HOME="$LONG_SFT_PREFIX" PATH="$LONG_SFT_PREFIX/bin:$PATH" \
+    "$LONG_SFT_PREFIX/bin/python" -m pip install \
+    --no-build-isolation --requirement "$REPO_ROOT/requirements/train-qwen35.txt"
+  CUDA_HOME="$LONG_SFT_PREFIX" PATH="$LONG_SFT_PREFIX/bin:$PATH" \
+    MAX_JOBS="${IFV_EXTENSION_MAX_JOBS:-4}" \
+    "$LONG_SFT_PREFIX/bin/python" -m pip install \
+    --no-build-isolation \
+    --no-binary flash-attn,causal-conv1d \
+    --requirement "$REPO_ROOT/requirements/train-qwen35-long-context.txt"
+  "$LONG_SFT_PREFIX/bin/python" -m pip install \
+    --no-deps --editable "$REPO_ROOT"
+  link_torch_cuda_runtime "$LONG_SFT_PREFIX"
+  freeze_env "$LONG_SFT_PREFIX" ifv-qwen35-sft-long-ms-swift442
+  local runtime_ld="$LONG_SFT_PREFIX/lib:$LONG_SFT_PREFIX/lib/python3.12/site-packages/nvidia/curand/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+  LD_LIBRARY_PATH="$runtime_ld" \
+    CUDA_VISIBLE_DEVICES="${IFV_BOOTSTRAP_GPU_ID:-0}" \
+    "$LONG_SFT_PREFIX/bin/python" \
+    "$REPO_ROOT/scripts/probe/verify_qwen35_sft_environment.py" \
+    --model "$MODEL" \
+    --max-context 131072 \
+    --expected-package-version torch=2.10.0 \
+    --expected-package-version transformers=5.12.1 \
+    --expected-package-version ms-swift=4.4.2 \
+    --expected-package-version deepspeed=0.19.2 \
+    --expected-package-version flash-attn=2.8.3 \
+    --expected-package-version flash-linear-attention=0.5.1 \
+    --expected-package-version causal-conv1d=1.6.2.post1 \
+    --expected-package-version liger-kernel=0.8.0 \
+    --required-package torch \
+    --required-package transformers \
+    --required-package ms-swift \
+    --required-package deepspeed \
+    --required-package flash-attn \
+    --required-package flash-linear-attention \
+    --required-package causal-conv1d \
+    --required-package liger-kernel \
+    --expected-python 3.12 \
+    --expected-torch-cuda 12.8 \
+    --expected-gpu-count 1 \
+    --expected-gpu-name "${IFV_EXPECTED_GPU_NAME:-NVIDIA A100-SXM4-40GB}" \
+    --expected-gpu-memory-mib "${IFV_EXPECTED_GPU_MEMORY_MIB:-40960}" \
+    --output "$ARTIFACT_ROOT/logs/environments/ifv-qwen35-sft-long-ms-swift442/environment-preflight.json"
+  "$LONG_SFT_PREFIX/bin/swift" sft --help >/dev/null
+  touch "$LONG_SFT_PREFIX/.ifv-qwen35-sft-long-ready"
+}
+
 install_rl() {
   prepare_base "$RL_PREFIX" 13.0.88
   "$RL_PREFIX/bin/python" -m pip install \
@@ -154,6 +212,9 @@ install_rl() {
 
 if [[ "$MODE" == "sft" || "$MODE" == "all" ]]; then
   install_sft
+fi
+if [[ "$MODE" == "sft-long" ]]; then
+  install_long_sft
 fi
 if [[ "$MODE" == "rl" || "$MODE" == "all" ]]; then
   install_rl

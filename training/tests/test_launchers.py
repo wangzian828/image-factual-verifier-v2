@@ -33,6 +33,11 @@ def test_training_launchers_delegate_to_ms_swift() -> None:
     assert "IFV_GPU_MEMORY_TARGET_MAX_MIB" in single
     assert "IFV_GPU_MEMORY_MAX_IMBALANCE_MIB" in single
     assert "IFV_GPU_UTILIZATION_TARGET_MIN_PERCENT" in single
+    assert "verify_qwen35_sft_environment.py" in single
+    assert "environment-preflight.json" in single
+    assert "IFV_REQUIRE_TRAINING_ENV_PREFLIGHT" in single
+    assert 'SAVE_STRATEGY="${IFV_SAVE_STRATEGY:-steps}"' in single
+    assert 'if [[ "$SAVE_STRATEGY" != "no" ]]' in single
     assert 'args+=(--enable_thinking "$IFV_ENABLE_THINKING")' in single
     assert (
         'args+=(--add_non_thinking_prefix '
@@ -216,12 +221,17 @@ def test_qwen35_training_bootstrap_is_fresh_pinned_and_isolated() -> None:
     rl = _source("requirements/rl-qwen35.txt")
 
     assert 'MODE="${1:-all}"' in source
+    assert "sft-long" in source
+    assert "IFV_QWEN35_SFT_LONG_ENV_PREFIX" in source
     assert "python=3.12" in source
     assert "refusing to modify an existing environment" in source
     assert "ifv-qwen35-sft-ms-swift442" in source
     assert "ifv-qwen35-rl-ms-swift442-vllm0221" in source
     assert "pip freeze --all" in source
     assert "Qwen3_5ForConditionalGeneration" in source
+    assert "verify_qwen35_sft_environment.py" in source
+    assert "--no-binary flash-attn,causal-conv1d" in source
     assert "ms-swift==4.4.2" in sft
     assert "transformers==5.12.1" in sft
+    assert "liger-kernel==0.8.0" in sft
     assert "vllm==0.22.1" in rl

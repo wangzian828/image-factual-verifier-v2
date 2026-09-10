@@ -352,3 +352,31 @@ def test_training_profile_requires_raw_dataset_gate(tmp_path: Path) -> None:
     )
 
     assert accepted["raw_dataset_gate"]["passed"] is True
+
+
+def test_training_profile_rejects_failed_environment_preflight(
+    tmp_path: Path,
+) -> None:
+    train_log = tmp_path / "train.log"
+    train_log.write_text(
+        "Executing: swift sft --max_steps 1 --eval_strategy no "
+        "--save_strategy no\n"
+        "{'loss': '0.8', 'global_step/max_steps': '1/1'}\n"
+        "[INFO:swift] End time of running main: 2026-09-10 12:00:00\n",
+        encoding="utf-8",
+    )
+    preflight = tmp_path / "environment-preflight.json"
+    preflight.write_text(
+        json.dumps({"passed": False, "errors": ["flash-attn missing"]}),
+        encoding="utf-8",
+    )
+
+    result = summarize_training_log(
+        train_log,
+        environment_preflight=preflight,
+        train_exit_code=0,
+    )
+
+    assert result["environment_preflight"]["required"] is True
+    assert result["environment_preflight"]["passed"] is False
+    assert result["passed_production_gate"] is False

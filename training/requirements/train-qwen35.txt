@@ -8,5 +8,5 @@ flash-linear-attention==0.5.1
 # require a newer glibc, while Qwen3.5/Transformers provide the supported
 # PyTorch causal-convolution fallback and the training profile freezes SDPA.
 # Do not install metadata-visible but unloadable optional CUDA extensions.
-liger-kernel
+liger-kernel==0.8.0
 huggingface-hub>=0.34,<2

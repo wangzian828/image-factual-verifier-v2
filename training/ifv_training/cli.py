@@ -246,6 +246,7 @@ def _parser() -> argparse.ArgumentParser:
     training_profile.add_argument("--resource-summary", type=Path)
     training_profile.add_argument("--cache-verification", type=Path)
     training_profile.add_argument("--dataset-verification", type=Path)
+    training_profile.add_argument("--environment-preflight", type=Path)
     training_profile.add_argument("--encode-cache-report", type=Path)
     training_profile.add_argument("--scheduler-audit", type=Path)
     training_profile.add_argument("--checkpoint-preflight", type=Path)
@@ -514,6 +515,7 @@ def main() -> None:
             resource_summary=args.resource_summary,
             cache_verification=args.cache_verification,
             dataset_verification=args.dataset_verification,
+            environment_preflight=args.environment_preflight,
             encode_cache_report=args.encode_cache_report,
             scheduler_audit=args.scheduler_audit,
             checkpoint_preflight=args.checkpoint_preflight,

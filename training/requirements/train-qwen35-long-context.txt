@@ -1,0 +1,5 @@
+# CUDA extensions required by Qwen3.5 128K padding-free sequence parallelism.
+# gpu-13 is Rocky Linux 8/glibc 2.28, so the bootstrap installs these pinned
+# releases from source with --no-build-isolation and --no-binary.
+flash-attn==2.8.3
+causal-conv1d==1.6.2.post1

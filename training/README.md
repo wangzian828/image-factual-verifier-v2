@@ -106,6 +106,8 @@ ms-swift/Gym/GRPO 工程接线，不是正式在线 Agent RL。正式 RL 仍需�
 ## 环境边界
 
 - SFT 和 RL 使用独立环境。
+- 128K SFT 还使用独立的 long-context 环境；通过 `sft-long` bootstrap 从源码构建
+  固定版本的 FlashAttention/causal-conv1d，不改写现有 SDPA 或历史环境。
 - 所有目标模型变化都要重新跑真实 processor 验证。
 - `action_only` 不混入 reasoning policy SFT。
 - reasoning policy SFT 使用
@@ -118,3 +120,6 @@ ms-swift/Gym/GRPO 工程接线，不是正式在线 Agent RL。正式 RL 仍需�
 - `run_sft.sh` 默认记录逐卡显存、利用率、温度、功率、进程树 CPU/RSS、步耗时、
   checkpoint 和 watchdog 状态；设置 `IFV_GPU_MEMORY_TARGET_*` 后，资源目标成为
   production gate 的一部分。
+- 长上下文 profile 在创建训练进程前还会生成 `environment-preflight.json`，严格核对
+  Python/CUDA/核心包版本、CUDA 扩展可导入性、ms-swift template 参数、模型 128K
+  上限和所选 8 张 A100 的型号与显存。
