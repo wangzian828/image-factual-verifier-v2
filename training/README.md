@@ -72,6 +72,17 @@ python scripts/probe/verify_ms_swift_agent_dataset.py `
 结果进入输入、图片未丢失，并使用与训练完全相同的 template 参数检查上下文长度。
 报告记录输入 JSONL 的绝对路径、大小和 SHA-256，供训练启动门禁绑定。
 
+直接用 raw JSONL 调用 `run_sft.sh` 时必须设置：
+
+```text
+IFV_PROCESSOR_VERIFICATION=<processor-verification.json>
+```
+
+启动器会再次执行 dataset `manifest.json` 严格审计，并核对 train/validation
+文件哈希、模型路径和全部 template 参数。任何数据或 profile 在 processor 审计后发生
+变化都会在创建 GPU 训练进程前失败。`run_teacher_sft_pipeline.sh --run-training`
+会自动传递该报告。
+
 ## RL
 
 标准 GRPO 入口消费 `post_rollout_rewards.jsonl`：

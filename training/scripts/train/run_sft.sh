@@ -19,6 +19,7 @@ RESUME_CHECKPOINT="${6:-}"
 
 load_profile "$MODEL_PROFILE"
 load_profile "$SFT_PROFILE"
+export PYTHONPATH="$REPO_ROOT/training${PYTHONPATH:+:$PYTHONPATH}"
 configure_training_runtime
 require_idle_gpus
 require_full_parameter_profile
@@ -46,6 +47,8 @@ fi
 dataset_args=()
 cached_train_datasets=()
 cached_val_datasets=()
+raw_dataset_mode=false
+raw_dataset_dir=""
 if [[ -n "${IFV_CACHED_DATASET:-}" || -n "${IFV_CACHED_VAL_DATASET:-}" ]]; then
   if [[ -z "${IFV_CACHED_DATASET:-}" || -z "${IFV_CACHED_VAL_DATASET:-}" ]]; then
     echo "cached training requires both IFV_CACHED_DATASET and IFV_CACHED_VAL_DATASET" >&2
@@ -72,8 +75,19 @@ if [[ -n "${IFV_CACHED_DATASET:-}" || -n "${IFV_CACHED_VAL_DATASET:-}" ]]; then
   dataset_args+=(--cached_dataset "${cached_train_datasets[@]}")
   dataset_args+=(--cached_val_dataset "${cached_val_datasets[@]}")
 else
+  raw_dataset_mode=true
   require_dataset "$TRAIN_DATASET"
   require_dataset "$VAL_DATASET"
+  require_value IFV_PROCESSOR_VERIFICATION
+  if [[ ! -s "$IFV_PROCESSOR_VERIFICATION" ]]; then
+    echo "processor verification report does not exist or is empty: $IFV_PROCESSOR_VERIFICATION" >&2
+    exit 2
+  fi
+  raw_dataset_dir="${IFV_RAW_DATASET_DIR:-$(dirname "$TRAIN_DATASET")}"
+  if [[ ! -s "$raw_dataset_dir/manifest.json" ]]; then
+    echo "raw SFT dataset manifest does not exist or is empty: $raw_dataset_dir/manifest.json" >&2
+    exit 2
+  fi
   if [[ "${IFV_ALLOW_UNDERSIZED_DISTRIBUTED_DATASET:-false}" != "true" ]]; then
     IFS=',' read -r -a visible_gpu_ids <<< "${CUDA_VISIBLE_DEVICES:-}"
     distributed_gpu_count="${#visible_gpu_ids[@]}"
@@ -107,6 +121,31 @@ if [[ "${#cached_train_datasets[@]}" -gt 0 ]]; then
     "$CACHE_VERIFICATION" \
     cached_train_datasets \
     cached_val_datasets
+fi
+RAW_DATASET_VERIFICATION=""
+if [[ "$raw_dataset_mode" == "true" ]]; then
+  RAW_DATASET_VERIFICATION="$EXPERIMENT_DIR/raw-dataset-gate.json"
+  raw_gate_args=(
+    python "$REPO_ROOT/training/scripts/probe/verify_sft_data_contract.py"
+    --train-jsonl "$TRAIN_DATASET"
+    --validation-jsonl "$VAL_DATASET"
+    --dataset-dir "$raw_dataset_dir"
+    --processor-report "$IFV_PROCESSOR_VERIFICATION"
+    --model "$IFV_MODEL_ID"
+    --output "$RAW_DATASET_VERIFICATION"
+    --max-context "$IFV_MAX_LENGTH"
+    --truncation-strategy "${IFV_TRUNCATION_STRATEGY:-raise}"
+    --padding-free "${IFV_PADDING_FREE:-false}"
+    --sequence-parallel-size "${IFV_SEQUENCE_PARALLEL_SIZE:-1}"
+    --loss-scale "$IFV_LOSS_SCALE"
+    --enable-thinking "${IFV_ENABLE_THINKING:-false}"
+    --add-non-thinking-prefix "${IFV_ADD_NON_THINKING_PREFIX:-false}"
+    --image-max-token-num "$IFV_IMAGE_MAX_TOKEN_NUM"
+  )
+  if [[ -n "${IFV_MAX_PIXELS:-}" ]]; then
+    raw_gate_args+=(--max-pixels "$IFV_MAX_PIXELS")
+  fi
+  "${raw_gate_args[@]}"
 fi
 ENCODE_CACHE_REPORT=""
 if [[ "${IFV_ENCODE_CACHE_ENABLED:-false}" == "true" ]]; then
@@ -229,7 +268,6 @@ WATCHDOG_OUTPUT="$LOG_DIR/monitor-latest.json"
 WATCHDOG_LOG="$LOG_DIR/monitor.log"
 WATCHDOG_PID=""
 touch "$LOG_DIR/train.log"
-export PYTHONPATH="$REPO_ROOT/training${PYTHONPATH:+:$PYTHONPATH}"
 watchdog_args=(
   python "$SCRIPT_DIR/watch_sft.py"
   --train-log "$LOG_DIR/train.log"
@@ -339,6 +377,9 @@ profile_args=(
 )
 if [[ -n "$CACHE_VERIFICATION" ]]; then
   profile_args+=(--cache-verification "$CACHE_VERIFICATION")
+fi
+if [[ -n "$RAW_DATASET_VERIFICATION" ]]; then
+  profile_args+=(--dataset-verification "$RAW_DATASET_VERIFICATION")
 fi
 if [[ -n "$ENCODE_CACHE_REPORT" ]]; then
   profile_args+=(--encode-cache-report "$ENCODE_CACHE_REPORT")

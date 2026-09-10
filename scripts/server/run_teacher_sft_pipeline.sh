@@ -210,6 +210,7 @@ fi
 "${training_python}" -m ifv_training audit --strict --input "${package_dir}/ms-swift-perception"
 
 processor_status="not_run"
+processor_report="${package_dir}/audits/processor-verification.json"
 if [[ -n "${IFV_MODEL_ID:-}" && "${IFV_SKIP_PROCESSOR:-0}" != "1" ]] \
     && "${training_python}" -c 'import swift' >/dev/null 2>&1; then
     processor_args=(
@@ -218,7 +219,7 @@ if [[ -n "${IFV_MODEL_ID:-}" && "${IFV_SKIP_PROCESSOR:-0}" != "1" ]] \
         --model "${IFV_MODEL_ID}"
         --policy-dir "${package_dir}/ms-swift-policy"
         --perception-dir "${package_dir}/ms-swift-perception"
-        --output "${package_dir}/audits/processor-verification.json"
+        --output "${processor_report}"
         --max-context "${IFV_MAX_LENGTH:-${IFV_PROCESSOR_MAX_CONTEXT:-131072}}"
         --truncation-strategy "${IFV_TRUNCATION_STRATEGY:-raise}"
         --padding-free "${IFV_PADDING_FREE:-false}"
@@ -281,6 +282,7 @@ PY
     set +e
     PATH="$(dirname "${training_python}"):${PATH}" \
         OMP_NUM_THREADS=1 IFV_MODEL_ID="${IFV_MODEL_ID}" \
+        IFV_PROCESSOR_VERIFICATION="${processor_report}" \
         bash "${training_script}" "${training_args[@]}"
     training_returncode="$?"
     set -e

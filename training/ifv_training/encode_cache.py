@@ -282,7 +282,10 @@ def _template_contract(encode_func: Callable[..., Any]) -> dict[str, Any]:
                 os.environ.get("IMAGE_MAX_TOKEN_NUM", ""),
             ),
             "image_min_token_num": os.environ.get("IMAGE_MIN_TOKEN_NUM", ""),
-            "max_pixels": os.environ.get("MAX_PIXELS", ""),
+            "max_pixels": os.environ.get(
+                "IFV_MAX_PIXELS",
+                os.environ.get("MAX_PIXELS", ""),
+            ),
         },
     }
     return contract

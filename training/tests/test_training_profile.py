@@ -330,3 +330,25 @@ def test_training_profile_rejects_failed_resource_acceptance(
     assert result["resources"]["acceptance_passed"] is False
     assert result["resources"]["passed"] is False
     assert result["passed_production_gate"] is False
+
+
+def test_training_profile_requires_raw_dataset_gate(tmp_path: Path) -> None:
+    train_log = tmp_path / "train.log"
+    train_log.write_text(
+        "Executing: swift sft --dataset /data/train.jsonl --max_steps 1\n",
+        encoding="utf-8",
+    )
+
+    missing = summarize_training_log(train_log)
+
+    assert missing["raw_dataset_gate"]["required"] is True
+    assert missing["raw_dataset_gate"]["passed"] is False
+
+    verification = tmp_path / "raw-dataset-gate.json"
+    verification.write_text(json.dumps({"passed": True}), encoding="utf-8")
+    accepted = summarize_training_log(
+        train_log,
+        dataset_verification=verification,
+    )
+
+    assert accepted["raw_dataset_gate"]["passed"] is True

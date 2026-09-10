@@ -22,7 +22,7 @@ processor 重新验证，不能只复用旧环境的通过结果。
 ## 2. 从 GitHub 更新
 
 ```bash
-cd /gs/home/wza/projects/image-factual-verifier-training
+cd /gs/home/wza/projects/image-factual-verifier-v2-worktrees/gpu13-canary-20260804-plan-relaxation-01
 git fetch origin
 git pull --ff-only
 ```
@@ -68,6 +68,16 @@ processor 验证必须确认：
 - 图片被 processor 接收；
 - 每行存在可训练 assistant token；
 - 编码长度没有超过目标模型上下文上限。
+
+raw JSONL 训练还必须把本次报告传给启动器：
+
+```bash
+export IFV_PROCESSOR_VERIFICATION=<processor-verification.json>
+```
+
+训练启动器会 fail-closed 核对报告、dataset manifest、train/validation SHA-256、
+模型路径和 template 参数。processor 审计后修改任何输入文件或训练 profile 都必须
+重新审计。
 
 ## 4. 数据格式
 

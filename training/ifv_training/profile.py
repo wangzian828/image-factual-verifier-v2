@@ -242,6 +242,7 @@ def summarize_training_log(
     profile_id: str = "",
     resource_summary: Path | None = None,
     cache_verification: Path | None = None,
+    dataset_verification: Path | None = None,
     encode_cache_report: Path | None = None,
     scheduler_audit: Path | None = None,
     checkpoint_preflight: Path | None = None,
@@ -492,6 +493,7 @@ def summarize_training_log(
     )
     resource_payload = _load_sidecar(resource_summary)
     cache_payload = _load_sidecar(cache_verification)
+    dataset_verification_payload = _load_sidecar(dataset_verification)
     encode_cache_payload = _load_sidecar(encode_cache_report)
     scheduler_audit_payload = _load_sidecar(scheduler_audit)
     checkpoint_preflight_payload = _load_sidecar(checkpoint_preflight)
@@ -545,11 +547,17 @@ def summarize_training_log(
         else True
     )
     detected_errors = {name: lines for name, lines in errors.items() if lines}
-    cache_required = "--cached_dataset" in launch_command
+    cache_required = _command_value(launch_command, "cached_dataset") is not None
     cache_passed = (
         cache_payload.get("passed") is True
         if isinstance(cache_payload, dict)
         else not cache_required
+    )
+    raw_dataset_required = _command_value(launch_command, "dataset") is not None
+    raw_dataset_passed = (
+        dataset_verification_payload.get("passed") is True
+        if isinstance(dataset_verification_payload, dict)
+        else not raw_dataset_required
     )
     encode_cache_required = encode_cache_report is not None
     encode_cache_passed = (
@@ -588,6 +596,7 @@ def summarize_training_log(
             resume_advanced or not resume_requested,
             resource_passed,
             cache_passed,
+            raw_dataset_passed,
             encode_cache_passed,
             scheduler_audit_passed,
             checkpoint_preflight_passed,
@@ -739,6 +748,14 @@ def summarize_training_log(
             "passed": cache_passed,
             "verification": cache_payload,
         },
+        "raw_dataset_gate": {
+            "required": raw_dataset_required,
+            "verification_path": (
+                str(dataset_verification) if dataset_verification else ""
+            ),
+            "passed": raw_dataset_passed,
+            "verification": dataset_verification_payload,
+        },
         "encoded_processor_cache": {
             "required": encode_cache_required,
             "report_path": (
@@ -783,6 +800,7 @@ def write_training_profile(
     profile_id: str = "",
     resource_summary: Path | None = None,
     cache_verification: Path | None = None,
+    dataset_verification: Path | None = None,
     encode_cache_report: Path | None = None,
     scheduler_audit: Path | None = None,
     checkpoint_preflight: Path | None = None,
@@ -796,6 +814,7 @@ def write_training_profile(
         profile_id=profile_id,
         resource_summary=resource_summary,
         cache_verification=cache_verification,
+        dataset_verification=dataset_verification,
         encode_cache_report=encode_cache_report,
         scheduler_audit=scheduler_audit,
         checkpoint_preflight=checkpoint_preflight,

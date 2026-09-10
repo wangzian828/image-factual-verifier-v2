@@ -9,6 +9,7 @@ from ifv_training.encode_cache import (
     METRICS_SCHEMA_VERSION,
     CachedEncodeFunction,
     EncodeCacheConfig,
+    _template_contract,
     aggregate_encode_cache_metrics,
 )
 
@@ -70,12 +71,14 @@ def test_content_addressed_encode_cache_preserves_payload_and_invalidates_image(
     monkeypatch.setenv("IFV_MODEL_ID", str(model))  # type: ignore[attr-defined]
     monkeypatch.setenv("IFV_MAX_LENGTH", "32")  # type: ignore[attr-defined]
     monkeypatch.setenv("IFV_IMAGE_MAX_TOKEN_NUM", "8")  # type: ignore[attr-defined]
+    monkeypatch.setenv("IFV_MAX_PIXELS", "262144")  # type: ignore[attr-defined]
     monkeypatch.setenv(  # type: ignore[attr-defined]
         "IFV_ADD_NON_THINKING_PREFIX",
         "true",
     )
 
     template = _Template()
+    assert _template_contract(template.encode)["limits"]["max_pixels"] == "262144"
     cached = CachedEncodeFunction(
         template.encode,
         EncodeCacheConfig(

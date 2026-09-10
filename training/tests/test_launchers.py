@@ -21,6 +21,9 @@ def test_training_launchers_delegate_to_ms_swift() -> None:
     assert 'training_backend_args+=(--deepspeed "$IFV_DEEPSPEED")' in single
     assert 'training_backend_args+=(--fsdp "$IFV_FSDP")' in single
     assert "verify_cached_dataset_gate" in single
+    assert "verify_sft_data_contract.py" in single
+    assert "IFV_PROCESSOR_VERIFICATION" in single
+    assert "raw-dataset-gate.json" in single
     assert "run_with_resource_monitor.py" in single
     assert "watch_sft.py" in single
     assert "audit_deepspeed_scheduler.py" in single
