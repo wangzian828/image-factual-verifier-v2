@@ -15,10 +15,10 @@ from src.eval.private_gold_judge_contract import (
 )
 from src.eval.evaluator_private_gold import private_gold_index
 from src.orchestrator.investigation_models import (
-    DiscrepancyJudgmentOutput,
-    DiscrepancyVerdictBasis,
     FactCheckReport,
+    RawHistoryJudgmentOutput,
 )
+from src.orchestrator.react_runtime import REACT_RUNTIME_SCHEMA_VERSION
 from src.orchestrator.pipeline import Orchestrator
 
 
@@ -136,51 +136,47 @@ def test_agent_private_gold_projection_uses_actual_successful_trace_evidence() -
     }
 
 
-def test_agent_private_gold_projection_supports_current_react_memory() -> None:
+def test_agent_private_gold_projection_supports_raw_history_runtime() -> None:
     trace = _trace()
     trace["verdict_basis"] = {
         "schema_version": "ifv-raw-history-judgment-basis-v1",
         "decision_mode": "bounded_binary_judgment",
         "objective": "Verify the displayed winner.",
-        "evidence_ids": ["evidence-1"],
+        "observation_ids": ["observation-1"],
         "open_questions": ["The venue was not independently checked."],
     }
     trace["state"]["investigation_state"] = {
-        "schema_version": "ifv-unified-react-raw-history-v1",
+        "schema_version": REACT_RUNTIME_SCHEMA_VERSION,
         "case_id": "case-article",
         "image_sha256": "a" * 64,
         "objective": "Verify the displayed winner.",
-        "visual_memory": {
-            "scene_description": "A scoreboard shows a final result.",
-            "entities": [{"name": "scoreboard"}],
-        },
-        "discoveries": [{"discovery_id": "discovery-1", "candidate_status": "unverified"}],
-        "evidence": [
-            {
-                "evidence_id": "evidence-1",
-                "tool_name": "visit",
-                "successful_call": True,
-                "evidence_kind": "web_span",
-                "source_url": "https://example.org/final",
-                "excerpt": "B won the final.",
-                "evidence_class": "decision_capable_refute",
-            }
-        ],
-        "failures": [],
-        "attempted_queries": ["final winner official result"],
-        "visited_urls": ["https://example.org/final"],
-        "attempted_actions": [],
-        "recent_actions": [],
-        "open_questions": ["The venue was not independently checked."],
         "action_count": 1,
         "stop_reason": "meaningful_routes_exhausted",
+        "finish_rationale": "The official result is sufficient.",
     }
+    trace["state"]["all_steps"] = [
+        {
+            "stage": "unified_react",
+            "action_type": "tool_call",
+            "thought": "Inspect the official result.",
+            "tool_name": "visit",
+            "tool_args": {"url": "https://example.org/final"},
+            "tool_result": '{"status":"success","evidence":"B won the final."}',
+            "metadata": {
+                "function_call_id": "observation-1",
+                "tool_success": True,
+            },
+        }
+    ]
 
     candidate = build_agent_private_gold_candidate(trace)
 
     assert candidate["runtime_mode"] == "image_grounded_react"
     assert candidate["runtime_objective"] == "Verify the displayed winner."
-    assert candidate["selected_evidence"][0]["exact_text"] == "B won the final."
+    assert candidate["successful_observation_ids"] == ["observation-1"]
+    assert candidate["react_action_history"][0]["observation"]["evidence"] == (
+        "B won the final."
+    )
     assert candidate["verdict_basis"]["unresolved_gaps"] == [
         "The venue was not independently checked."
     ]
@@ -286,20 +282,17 @@ def test_agent_report_sidecar_is_an_in_memory_overlay() -> None:
 
 
 def test_unified_judgment_requires_reader_facing_report() -> None:
-    basis = DiscrepancyVerdictBasis(
-        decision_mode="evidence_determined",
-        verdict_target="The image says A won the final.",
-    )
     with pytest.raises(ValueError, match="fact_check_report"):
-        DiscrepancyJudgmentOutput(
+        RawHistoryJudgmentOutput(
             verdict="fake",
             confidence=0.8,
             overall_assessment="Official results name B.",
         )
 
-    complete_report = DiscrepancyJudgmentOutput(
+    complete_report = RawHistoryJudgmentOutput(
         verdict="fake",
         confidence=0.8,
+        verdict_observation_ids=["observation-1"],
         overall_assessment="Official results name B.",
         fact_check_report=FactCheckReport(
             headline="Official result contradicts displayed winner",
@@ -309,6 +302,7 @@ def test_unified_judgment_requires_reader_facing_report() -> None:
             evidence_summary="The selected result directly contradicts A winning.",
         ),
     )
-    assert complete_report.fact_check_report.claim_under_review == (
-        "The image says A won the final."
-    )
+    assert Orchestrator._validate_react_judgment(
+        complete_report,
+        basis={"observation_ids": ["observation-1"]},
+    ) == (True, "")

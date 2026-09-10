@@ -230,7 +230,7 @@ def test_real_canary_accepts_current_claimless_react_artifacts(
                 "verdict_basis": {
                     "schema_version": "ifv-raw-history-judgment-basis-v1",
                     "decision_mode": "bounded_binary_judgment",
-                    "evidence_ids": ["evidence-1"],
+                    "observation_ids": ["observation-1"],
                 },
                 "judgment": {
                     "policy_rule_id": "unified-react-v1",
@@ -242,9 +242,13 @@ def test_real_canary_accepts_current_claimless_react_artifacts(
                 "llm_api_calls": 3,
                 "state": {
                     "investigation_state": {
-                        "schema_version": "ifv-unified-react-raw-history-v1",
+                        "schema_version": run_real_canary.REACT_RUNTIME_SCHEMA_VERSION,
+                        "case_id": "case-react",
+                        "image_sha256": "a" * 64,
+                        "objective": "Verify the image.",
                         "action_count": 1,
-                        "visual_memory": {},
+                        "stop_reason": "meaningful_routes_exhausted",
+                        "finish_rationale": "The retained observations are sufficient.",
                     },
                     "all_steps": [
                         {
