@@ -1,4 +1,4 @@
-"""Canonical state models for the v3 image-only runtime."""
+"""Canonical inputs and persisted state for the raw-history runtime."""
 
 from __future__ import annotations
 
@@ -7,16 +7,7 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from src.orchestrator.investigation_models import (
-    DiscrepancyJudgment,
-    Finding,
-    ImageOnlyInvestigationState,
-    InvestigationBrief,
-    ResearchTask,
-    RetrievalAnchor,
-    VisualEntity,
-    VisualFact,
-)
+from src.orchestrator.investigation_models import DiscrepancyJudgment
 from src.redaction import sanitize_for_persistence
 
 
@@ -110,7 +101,7 @@ class PerceptionReport(StrictModel):
 
 @dataclass
 class VerificationState:
-    """Aggregate state persisted in the canonical v3 trace."""
+    """Mechanical runtime state persisted with the raw provider history."""
 
     image_path: str = ""
     image_id: str = ""
@@ -118,14 +109,6 @@ class VerificationState:
     input_mode: str = "image_only"
     decision_policy_version: str = "unified-react-v1"
     investigation_state: Optional[Any] = None
-    investigation_brief: Optional[InvestigationBrief] = None
-    visual_entities: List[VisualEntity] = field(default_factory=list)
-    visual_facts: List[VisualFact] = field(default_factory=list)
-    research_tasks: List[ResearchTask] = field(default_factory=list)
-    findings: List[Finding] = field(default_factory=list)
-    retrieval_anchors: List[RetrievalAnchor] = field(default_factory=list)
-    perception: Optional[PerceptionReport] = None
-    final_visual_audit: Optional[Dict[str, Any]] = None
     judgment: Optional[DiscrepancyJudgment] = None
     all_steps: List[Any] = field(default_factory=list)
     stage_timings: Dict[str, float] = field(default_factory=dict)
@@ -181,30 +164,6 @@ class VerificationState:
                     if self.investigation_state
                     else None
                 ),
-                "investigation_brief": (
-                    self.investigation_brief.model_dump(mode="json")
-                    if self.investigation_brief
-                    else None
-                ),
-                "visual_entities": [
-                    item.model_dump(mode="json") for item in self.visual_entities
-                ],
-                "visual_facts": [
-                    item.model_dump(mode="json") for item in self.visual_facts
-                ],
-                "research_tasks": [
-                    item.model_dump(mode="json") for item in self.research_tasks
-                ],
-                "findings": [
-                    item.model_dump(mode="json") for item in self.findings
-                ],
-                "retrieval_anchors": [
-                    item.model_dump(mode="json") for item in self.retrieval_anchors
-                ],
-                "perception": (
-                    self.perception.model_dump() if self.perception else None
-                ),
-                "final_visual_audit": self.final_visual_audit,
                 "judgment": (
                     self.judgment.model_dump(mode="json")
                     if self.judgment

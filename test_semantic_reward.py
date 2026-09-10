@@ -22,99 +22,12 @@ from src.trajectory.semantic_reward import (
 
 
 def _trace() -> dict[str, Any]:
-    return {
-        "image_id": "case-1--group--r000",
-        "decision_policy_version": "unified-react-v1",
-        "verdict": "fake",
-        "termination": "success",
-        "verdict_basis": {"evidence_ids": ["evidence-1"]},
-        "state": {
-            "image_id": "case-1--group--r000",
-            "runtime_case": {"case_id": "case-1", "image_sha256": ""},
-            "all_steps": [
-                {
-                    "stage": "image_only_discrepancy_investigation",
-                    "action_type": "tool_call",
-                    "tool_name": "text_search",
-                    "tool_args": {"query": "actual object used at event"},
-                    "tool_result": json.dumps(
-                        {"status": "success", "results": [{"title": "Official"}]}
-                    ),
-                    "metadata": {
-                        "interaction_id": "turn-1",
-                        "function_call_id": "observation-1",
-                        "tool_success": True,
-                        "reasoning": "hidden policy thinking",
-                        "policy_input": {"safe": "input"},
-                        "policy_action": {"name": "text_search"},
-                    },
-                },
-                {
-                    "stage": "image_only_discrepancy_judgment",
-                    "action_type": "output",
-                    "metadata": {
-                        "interaction_id": "judgment-1",
-                        "policy_input": {"safe": "input"},
-                        "policy_action": {"verdict": "fake"},
-                    },
-                },
-            ],
-            "investigation_state": {
-                "progress_events": [
-                    {
-                        "action_count": 1,
-                        "gain": "evidence_gain",
-                        "source_ids": ["evidence-1"],
-                    }
-                ],
-                "target_facts": [
-                    {
-                        "claim_id": "claim-1",
-                        "statement": "The pictured relation is factual.",
-                        "salience": "high",
-                        "status": "refuted",
-                        "anchor_fact_ids": ["fact-1"],
-                    }
-                ],
-                "evidence": [
-                    {
-                        "evidence_id": "evidence-1",
-                        "task_id": "task-1",
-                        "fact_ids": ["fact-1"],
-                        "evidence_kind": "web_span",
-                        "source_url": "https://example.org",
-                        "exact_text": "The official record identifies a different object.",
-                        "stance": "refute",
-                        "quality": "strong",
-                        "directness": "direct",
-                    }
-                ],
-                "findings": [
-                    {
-                        "finding_id": "finding-1",
-                        "evidence_ids": ["evidence-1"],
-                        "stance": "refute",
-                        "summary": "Policy-authored summary must stay hidden.",
-                    }
-                ],
-            },
-        },
-    }
+    return _runtime_trace()
 
 
 def _judgment(**updates: Any) -> TrajectorySemanticJudgment:
     payload: Dict[str, Any] = {
-        "claim_reviews": [
-            {
-                "claim_id": "claim-1",
-                "label": "refuted",
-                "confidence": 0.95,
-                "evidence_ids": ["evidence-1"],
-                "entailment_score": 0.9,
-                "citation_fidelity": 0.98,
-                "explanation": "The supplied source contradicts the image claim.",
-            }
-        ],
+        "claim_reviews": [],
         "predicted_verdict": "fake",
         "confidence": 0.94,
         "evidence_sufficient": True,
@@ -124,7 +37,7 @@ def _judgment(**updates: Any) -> TrajectorySemanticJudgment:
         "evidence_use": 0.92,
         "belief_revision": 0.8,
         "overall_process_quality": 0.87,
-        "evidence_ids": ["evidence-1"],
+        "evidence_ids": ["observation-1"],
         "useful_turn_ids": ["turn-001"],
         "problematic_turn_ids": [],
         "explanation": "A productive search yielded decisive official Evidence.",
@@ -135,9 +48,9 @@ def _judgment(**updates: Any) -> TrajectorySemanticJudgment:
 
 def _runtime_trace() -> dict[str, Any]:
     return {
-        "image_id": "case-runtime--group--r000",
+        "image_id": "case-1--group--r000",
         "decision_policy_version": "unified-react-v1",
-        "verdict": "real",
+        "verdict": "fake",
         "termination": "success",
         "verdict_basis": {
             "schema_version": "ifv-raw-history-judgment-basis-v1",
@@ -147,9 +60,9 @@ def _runtime_trace() -> dict[str, Any]:
             "open_questions": ["The event date was not independently checked."],
         },
         "state": {
-            "image_id": "case-runtime--group--r000",
+            "image_id": "case-1--group--r000",
             "runtime_case": {
-                "case_id": "case-runtime",
+                "case_id": "case-1",
                 "image_sha256": "",
             },
             "all_steps": [
@@ -178,7 +91,7 @@ def _runtime_trace() -> dict[str, Any]:
             ],
             "investigation_state": {
                 "schema_version": REACT_RUNTIME_SCHEMA_VERSION,
-                "case_id": "case-runtime",
+                "case_id": "case-1",
                 "image_sha256": "a" * 64,
                 "objective": "Verify the bridge relation shown in the image.",
                 "action_count": 1,

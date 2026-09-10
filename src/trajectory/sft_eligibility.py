@@ -15,7 +15,6 @@ from typing import Any, Dict, Iterable, List, Literal, Mapping, Sequence
 
 from pydantic import Field
 
-from src.orchestrator.investigation_models import target_fact_rows
 from src.orchestrator.react_runtime import REACT_RUNTIME_SCHEMA_VERSION
 from src.tools.vision_utils import controlled_image_to_data_url
 from src.trajectory.semantic_reward import (
@@ -344,71 +343,6 @@ def build_sft_target(row: Mapping[str, Any]) -> Dict[str, Any]:
         "expected_verdict": _expected_verdict(row),
         "image_fact": image_fact,
         "reference_facts": _reference_facts(row),
-    }
-
-
-def _successful_evidence(item: Mapping[str, Any]) -> bool:
-    for key in ("successful_call", "tool_success"):
-        if key in item:
-            return bool(item.get(key))
-    status = str(item.get("status") or item.get("tool_status") or "").lower()
-    if status in {"error", "failed", "failure"}:
-        return False
-    provenance = _mapping(item.get("provenance"))
-    if provenance.get("successful_call") is False:
-        return False
-    return True
-
-
-def _evidence_text(item: Mapping[str, Any]) -> str:
-    return _text(
-        item.get("exact_text"),
-        item.get("excerpt"),
-        item.get("evidence"),
-        item.get("observation"),
-        item.get("summary"),
-        item.get("finding"),
-        limit=8000,
-    )
-
-
-def _project_candidate_evidence(
-    item: Mapping[str, Any],
-    *,
-    basis_evidence_ids: set[str],
-) -> Dict[str, Any]:
-    evidence_id = str(item.get("evidence_id", "")).strip()
-    return {
-        "evidence_id": evidence_id,
-        "task_id": str(item.get("task_id", "")),
-        "fact_ids": _unique(item.get("fact_ids", []), limit=12),
-        "finding_ids": _unique(item.get("finding_ids", []), limit=12),
-        "claim_ids": _unique(item.get("claim_ids", []), limit=12),
-        "evidence_kind": str(item.get("evidence_kind", "")),
-        "source_url": str(
-            item.get("source_url")
-            or item.get("selected_url")
-            or item.get("candidate_url")
-            or ""
-        ),
-        "source_family": str(item.get("source_family", "")),
-        "exact_text": _evidence_text(item),
-        "observation": _text(
-            item.get("observation"),
-            item.get("summary"),
-            limit=4000,
-        ),
-        "successful_call": _successful_evidence(item),
-        "basis_selected": evidence_id in basis_evidence_ids,
-        "directness": str(item.get("directness", "")),
-        "claim_binding": str(item.get("claim_binding", "")),
-        "relation_scope": str(item.get("relation_scope", "")),
-        "relation_stance": str(item.get("relation_stance", "")),
-        "evidence_class": str(item.get("evidence_class", "")),
-        "match_status": str(item.get("match_status", "")),
-        "runtime_stance": str(item.get("stance", "")),
-        "quality": str(item.get("quality", "")),
-        "risk_flags": _unique(item.get("risk_flags", []), limit=12),
     }
 
 
@@ -952,89 +886,24 @@ def build_sft_eligibility_input(
             or investigation.get("discrepancy_verdict_basis")
         )
     )
-    current_runtime = (
-        str(investigation.get("schema_version", "")).strip()
-        == REACT_RUNTIME_SCHEMA_VERSION
-    )
-    basis_claim_ids = (
-        []
-        if current_runtime
-        else _unique(basis.get("claim_ids", []), limit=12)
-    )
-    basis_evidence_ids = set(_unique(basis.get("evidence_ids", []), limit=40))
-    basis_discrepancy_ids = (
-        []
-        if current_runtime
-        else _unique(basis.get("discrepancy_ids", []), limit=12)
-    )
+    if str(investigation.get("schema_version", "")).strip() != (
+        REACT_RUNTIME_SCHEMA_VERSION
+    ):
+        raise ValueError("SFT eligibility requires the raw-history runtime schema")
+    basis_claim_ids: List[str] = []
+    basis_discrepancy_ids: List[str] = []
     judgment = _mapping(
         trace.get("judgment")
         or state.get("judgment")
         or investigation.get("discrepancy_judgment")
     )
 
-    claims = [
-        {
-            "claim_id": str(item.get("claim_id", "")),
-            "statement": _text(item.get("statement"), limit=2400),
-            "salience": str(item.get("salience", "")),
-            "status": str(item.get("status", "")),
-            "anchor_fact_ids": _unique(item.get("anchor_fact_ids", []), limit=12),
-        }
-        for item in target_fact_rows(investigation)
-        if str(item.get("claim_id", "")).strip()
-    ]
-    evidence = [
-        _project_candidate_evidence(
-            item,
-            basis_evidence_ids=basis_evidence_ids,
-        )
-        for item in _rows(investigation.get("evidence"))
-        if str(item.get("evidence_id", "")).strip()
-    ]
-    findings = [
-        {
-            "finding_id": str(item.get("finding_id", "")),
-            "task_id": str(item.get("task_id", "")),
-            "fact_ids": _unique(item.get("fact_ids", []), limit=12),
-            "evidence_ids": _unique(item.get("evidence_ids", []), limit=20),
-            "stance": str(item.get("stance", "")),
-            "summary": _text(item.get("summary"), limit=2400),
-        }
-        for item in _rows(investigation.get("findings"))
-        if str(item.get("finding_id", "")).strip()
-    ]
-    discrepancies = [
-        {
-            "discrepancy_id": str(item.get("discrepancy_id", "")),
-            "statement": _text(item.get("statement"), limit=2400),
-            "affected_claim_ids": _unique(
-                item.get("affected_claim_ids", []),
-                limit=12,
-            ),
-            "visual_anchor_fact_ids": _unique(
-                item.get("visual_anchor_fact_ids", []),
-                limit=12,
-            ),
-            "evidence_ids": _unique(item.get("evidence_ids", []), limit=20),
-            "materiality": str(item.get("materiality", "")),
-            "status": str(item.get("status", "")),
-        }
-        for item in _rows(investigation.get("material_discrepancies"))
-        if str(item.get("discrepancy_id", "")).strip()
-    ]
-    visual_facts = [
-        {
-            "fact_id": str(item.get("fact_id", "")),
-            "statement": _text(item.get("statement"), item.get("description"), limit=1600),
-            "source": str(item.get("source", "")),
-        }
-        for item in _rows(
-            investigation.get("visual_facts") or state.get("visual_facts")
-        )
-        if str(item.get("fact_id", "")).strip()
-    ]
-    raw_history = _react_action_history(state) if current_runtime else []
+    claims: List[Dict[str, Any]] = []
+    evidence: List[Dict[str, Any]] = []
+    findings: List[Dict[str, Any]] = []
+    discrepancies: List[Dict[str, Any]] = []
+    visual_facts: List[Dict[str, Any]] = []
+    raw_history = _react_action_history(state)
     raw_observation_ids = _unique(
         item.get("observation_id")
         for item in raw_history
@@ -1072,7 +941,7 @@ def build_sft_eligibility_input(
             "available_to_judge": bool(image_path and image_path.is_file()),
         },
         "candidate": {
-            "runtime_mode": "raw_history" if current_runtime else "legacy",
+            "runtime_mode": "raw_history",
             "recorded_verdict": str(
                 judgment.get("verdict") or trace.get("verdict") or ""
             ),
@@ -1115,8 +984,8 @@ def build_sft_eligibility_input(
             "basis_discrepancy_ids": basis_discrepancy_ids,
             "verdict_target": _text(
                 basis.get("verdict_target"),
-                basis.get("objective") if current_runtime else "",
-                investigation.get("objective") if current_runtime else "",
+                basis.get("objective"),
+                investigation.get("objective"),
                 limit=4000,
             ),
             "unresolved_gaps": _unique(
@@ -1129,15 +998,6 @@ def build_sft_eligibility_input(
         },
         "private_target": target,
     }
-
-
-def _evidence_has_content(row: Mapping[str, Any]) -> bool:
-    return bool(
-        _text(
-            row.get("exact_text"),
-            row.get("observation"),
-        )
-    )
 
 
 def classify_sft_audit_failures(
@@ -1181,11 +1041,6 @@ def sft_eligibility_metrics(
     expected_support = (
         "supports_real" if expected_verdict == "real" else "supports_fake"
     )
-    evidence_by_id = {
-        str(item.get("evidence_id", "")): item
-        for item in _rows(candidate.get("evidence"))
-        if str(item.get("evidence_id", "")).strip()
-    }
     raw_observations = _rows(
         candidate.get("raw_observations") or candidate.get("react_action_history")
     )
@@ -1194,7 +1049,8 @@ def sft_eligibility_metrics(
         for item in raw_observations
         if str(item.get("observation_id", "")).strip()
     }
-    raw_mode = str(candidate.get("runtime_mode", "")).strip() == "raw_history"
+    if str(candidate.get("runtime_mode", "")).strip() != "raw_history":
+        raise ValueError("SFT metrics require a raw-history candidate")
     if judgment is None:
         judgment_values: Dict[str, Any] = {
             "target_scope": "unclear",
@@ -1220,7 +1076,7 @@ def sft_eligibility_metrics(
         limit=40,
     )
     selected_ids = _unique([*decisive_ids, *supporting_ids], limit=40)
-    selected_by_id = raw_by_id if raw_mode else evidence_by_id
+    selected_by_id = raw_by_id
     invalid_ids = [item for item in selected_ids if item not in selected_by_id]
     failed_ids = [
         item
@@ -1232,10 +1088,6 @@ def sft_eligibility_metrics(
                     "tool_success",
                     selected_by_id[item].get("successful_call", False),
                 )
-            )
-            or (
-                not raw_mode
-                and not _evidence_has_content(selected_by_id[item])
             )
         )
     ]
@@ -1249,7 +1101,6 @@ def sft_eligibility_metrics(
                 selected_by_id[item].get("successful_call", False),
             )
         )
-        and (raw_mode or _evidence_has_content(selected_by_id[item]))
     ]
     decisive_rows = [selected_by_id[item] for item in valid_decisive_ids]
     empty_search_only = bool(decisive_rows) and all(
@@ -1310,7 +1161,7 @@ def sft_eligibility_metrics(
         ),
         *(
             ["empty_search_only_cannot_support_fake"]
-            if raw_mode and expected_verdict == "fake" and empty_search_only
+            if expected_verdict == "fake" and empty_search_only
             else []
         ),
         *(

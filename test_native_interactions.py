@@ -11,9 +11,6 @@ import pytest
 from pydantic import BaseModel, Field
 from PIL import Image
 
-from src.orchestrator.investigation_models import (
-    DiscrepancyDecisionProposalOutput,
-)
 from src.orchestrator.source_access import SourceAccessPolicy
 from src.orchestrator.runtime_events import (
     CaseRuntimeStore,
@@ -815,82 +812,6 @@ def test_native_structured_output_steps_record_request_parent_and_response_id() 
     assert steps[1].metadata["previous_interaction_id"] == "structured-root"
     assert steps[1].metadata["interaction_id"] == "structured-child"
     assert backend.requests[1]["previous_interaction_id"] == steps[1].metadata["previous_interaction_id"]
-
-
-def test_native_structured_output_normalizes_visual_reinspection_only_transition() -> None:
-    def decision_response(
-        interaction_id: str,
-        retire_hypothesis_ids: List[str],
-    ) -> Dict[str, Any]:
-        output = {
-            "claim_assessments": [
-                {
-                    "claim_id": "claim-1",
-                    "assessment": "insufficient",
-                    "selected_evidence_ids": [],
-                    "remaining_gap": "Focused pixels need review first.",
-                    "rationale": "Do not close the claim before reinspection.",
-                }
-            ],
-            "material_discrepancy": None,
-            "retire_hypothesis_ids": retire_hypothesis_ids,
-            "new_hypotheses": [],
-            "visual_reinspection": {
-                "claim_id": "claim-1",
-                "reason": "relation",
-                "scope": "relation",
-                "question": "Does the image show the source-grounded relation?",
-                "expected_property": "the source-grounded relation",
-            },
-            "visual_evidence_disposition": {
-                "disposition": "irrelevant_to_current_claim_or_discrepancy",
-                "evidence_ids": ["evidence-1"],
-                "rationale": "Bookkeeping copied by the policy beside reinspection.",
-            },
-            "verdict_proposal": "continue",
-            "rationale": "Inspect the pixels before changing other state.",
-        }
-        return {
-            "id": interaction_id,
-            "status": "completed",
-            "steps": [
-                {
-                    "type": "model_output",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": json.dumps(output),
-                        }
-                    ],
-                }
-            ],
-        }
-
-    backend = NativeFakeBackend(
-        [
-            decision_response("decision-normalized", ["hypothesis-1"]),
-        ]
-    )
-    runner = StageRunner(
-        llm=backend,
-        system_prompt="Return one atomic discrepancy decision.",
-        tools=[],
-        output_schema=DiscrepancyDecisionProposalOutput,
-        max_rounds=1,
-        stage_name="image_only_discrepancy_decision",
-        attach_image=False,
-    )
-
-    parsed, steps = asyncio.run(runner.run("Review the current evidence."))
-
-    assert parsed is not None
-    assert parsed.visual_reinspection is not None
-    assert parsed.claim_assessments == []
-    assert parsed.retire_hypothesis_ids == []
-    assert parsed.visual_evidence_disposition is None
-    assert parsed.verdict_proposal == "continue"
-    assert steps[0].action_type == "output"
-    assert len(backend.requests) == 1
 
 
 def test_native_structured_output_returns_opt_in_exhaustion_boundary(

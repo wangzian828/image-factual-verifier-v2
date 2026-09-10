@@ -22,7 +22,6 @@ from src.integrations.gemini import (
     validate_interaction_response,
 )
 from src.orchestrator.llm_backend import APIBackend, LLMBackend, LLMResponse
-from src.orchestrator.investigation_models import target_fact_rows
 from src.orchestrator.react_runtime import REACT_RUNTIME_SCHEMA_VERSION
 from src.tools.vision_utils import controlled_image_to_data_url
 
@@ -135,45 +134,6 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
-
-
-def _project_evidence(item: Mapping[str, Any]) -> Dict[str, Any]:
-    exact_text = str(
-        item.get("exact_text")
-        or item.get("excerpt")
-        or item.get("evidence")
-        or item.get("summary")
-        or item.get("details")
-        or item.get("description")
-        or ""
-    ).strip()
-    return {
-        "evidence_id": str(item.get("evidence_id", "")),
-        "task_id": str(item.get("task_id", "")),
-        "fact_ids": [str(value) for value in item.get("fact_ids", [])],
-        "evidence_kind": str(item.get("evidence_kind", "")),
-        "source_url": str(
-            item.get("source_url")
-            or item.get("selected_url")
-            or item.get("candidate_url")
-            or ""
-        ),
-        "source_family": str(item.get("source_family", "")),
-        "source_class": str(item.get("source_class", "unknown")),
-        "exact_text": exact_text[:8000],
-        "artifact_sha256": str(item.get("artifact_sha256", "")),
-        "stance": str(item.get("stance", "neutral")),
-        "quality": str(item.get("quality", "")),
-        "directness": str(item.get("directness", "")),
-        "claim_binding": str(item.get("claim_binding", "")),
-        "evidence_class": str(item.get("evidence_class", "")),
-        "match_status": str(item.get("match_status", "")),
-        "tool_name": str(item.get("tool_name", "")),
-        "successful_call": bool(
-            item.get("successful_call", item.get("tool_success", True))
-        ),
-        "risk_flags": [str(value) for value in item.get("risk_flags", [])],
-    }
 
 
 def _policy_example_type(stage: str) -> str | None:
@@ -342,75 +302,10 @@ def build_semantic_reward_input(
 
     state = _mapping(trace.get("state"))
     investigation = _mapping(state.get("investigation_state"))
-    is_unified_react_runtime = (
-        str(investigation.get("schema_version", "")).strip()
-        == REACT_RUNTIME_SCHEMA_VERSION
-    )
-    claims = [
-        {
-            "claim_id": str(item.get("claim_id", "")),
-            "statement": str(item.get("statement", "")),
-            "salience": str(item.get("salience", "")),
-            "recorded_status": str(item.get("status", "")),
-            "anchor_fact_ids": [
-                str(value) for value in item.get("anchor_fact_ids", [])
-            ],
-        }
-        for item in target_fact_rows(investigation)
-    ]
-    if not is_unified_react_runtime and not claims:
-        raise ValueError("legacy semantic reward requires at least one target fact")
-
-    evidence = [
-        _project_evidence(item)
-        for item in _rows(investigation.get("evidence"))
-        if str(item.get("evidence_id", "")).strip()
-    ]
-    findings = [
-        {
-            "finding_id": str(item.get("finding_id", "")),
-            "task_id": str(item.get("task_id", "")),
-            "fact_ids": [str(value) for value in item.get("fact_ids", [])],
-            "evidence_ids": [
-                str(value) for value in item.get("evidence_ids", [])
-            ],
-            "stance": str(item.get("stance", "")),
-            "summary": str(item.get("summary", ""))[:1600],
-        }
-        for item in _rows(investigation.get("findings"))
-    ]
-    assessments = [
-        {
-            "claim_id": str(item.get("claim_id", "")),
-            "assessment": str(item.get("assessment", "")),
-            "evidence_ids": [
-                str(value) for value in item.get("evidence_ids", [])
-            ],
-            "finding_ids": [
-                str(value) for value in item.get("finding_ids", [])
-            ],
-            "remaining_gap": str(item.get("remaining_gap", "")),
-        }
-        for item in _rows(investigation.get("claim_assessments"))
-    ]
-    discrepancies = [
-        {
-            "discrepancy_id": str(item.get("discrepancy_id", "")),
-            "statement": str(item.get("statement", "")),
-            "affected_claim_ids": [
-                str(value) for value in item.get("affected_claim_ids", [])
-            ],
-            "visual_anchor_fact_ids": [
-                str(value) for value in item.get("visual_anchor_fact_ids", [])
-            ],
-            "evidence_ids": [
-                str(value) for value in item.get("evidence_ids", [])
-            ],
-            "materiality": str(item.get("materiality", "")),
-            "status": str(item.get("status", "")),
-        }
-        for item in _rows(investigation.get("material_discrepancies"))
-    ]
+    if str(investigation.get("schema_version", "")).strip() != (
+        REACT_RUNTIME_SCHEMA_VERSION
+    ):
+        raise ValueError("semantic reward requires the raw-history runtime schema")
     basis = dict(
         _mapping(
             trace.get("verdict_basis")
@@ -452,7 +347,7 @@ def build_semantic_reward_input(
             or ""
         ),
         "image": image_descriptor,
-        "evidence": evidence,
+        "evidence": [],
         "recorded_verdict": verdict,
         "rollout": {
             "episode_id": episode_id,
@@ -471,127 +366,62 @@ def build_semantic_reward_input(
             )
         ],
     }
-    if is_unified_react_runtime:
-        raw_observation_ids = [
-            str(item.get("observation_id", ""))
-            for item in investigation_turns
-            if str(item.get("observation_id", "")).strip()
-        ]
-        successful_observation_ids = [
-            str(item.get("observation_id", ""))
-            for item in investigation_turns
-            if item.get("tool_success")
-            and str(item.get("observation_id", "")).strip()
-        ]
-        unsuccessful_observation_ids = [
-            str(item.get("observation_id", ""))
-            for item in investigation_turns
-            if not item.get("tool_success")
-            and str(item.get("observation_id", "")).strip()
-        ]
-        common.update(
-            {
-                "target_mode": "image_grounded_react",
-                "runtime_objective": str(
-                    investigation.get("objective")
-                    or (
-                        "Verify the factual content expressed by the image and "
-                        "decide whether it should be labeled real or fake."
-                    )
-                )[:1200],
-                "raw_observation_ids": raw_observation_ids[-80:],
-                "successful_observation_ids": successful_observation_ids[-80:],
-                "unsuccessful_observation_ids": unsuccessful_observation_ids[-80:],
-                "action_count": int(investigation.get("action_count", 0) or 0),
-                "stop_reason": str(investigation.get("stop_reason", "")),
-                "finish_rationale": str(
-                    investigation.get("finish_rationale", "")
-                )[:1200],
-            }
-        )
-    else:
-        common.update(
-            {
-                "target_facts": claims,
-                "findings": findings,
-                "claim_assessments": assessments,
-                "material_discrepancies": discrepancies,
-            }
-        )
+    raw_observation_ids = [
+        str(item.get("observation_id", ""))
+        for item in investigation_turns
+        if str(item.get("observation_id", "")).strip()
+    ]
+    successful_observation_ids = [
+        str(item.get("observation_id", ""))
+        for item in investigation_turns
+        if item.get("tool_success")
+        and str(item.get("observation_id", "")).strip()
+    ]
+    unsuccessful_observation_ids = [
+        str(item.get("observation_id", ""))
+        for item in investigation_turns
+        if not item.get("tool_success")
+        and str(item.get("observation_id", "")).strip()
+    ]
+    common.update(
+        {
+            "target_mode": "image_grounded_react",
+            "runtime_objective": str(
+                investigation.get("objective")
+                or (
+                    "Verify the factual content expressed by the image and "
+                    "decide whether it should be labeled real or fake."
+                )
+            )[:1200],
+            "raw_observation_ids": raw_observation_ids[-80:],
+            "successful_observation_ids": successful_observation_ids[-80:],
+            "unsuccessful_observation_ids": unsuccessful_observation_ids[-80:],
+            "action_count": int(investigation.get("action_count", 0) or 0),
+            "stop_reason": str(investigation.get("stop_reason", "")),
+            "finish_rationale": str(
+                investigation.get("finish_rationale", "")
+            )[:1200],
+        }
+    )
     return common
 
 
-def _compact_runtime_value(value: Any) -> Any:
-    """Bound current ReAct state without replaying media or giant payloads."""
-
-    if isinstance(value, Mapping):
-        result: Dict[str, Any] = {}
-        for key, child in list(value.items())[:80]:
-            if str(key).casefold() in {
-                "image_input",
-                "image_url",
-                "data_url",
-                "base64",
-                "raw_html",
-                "html",
-            }:
-                result[str(key)] = "[omitted]"
-            else:
-                result[str(key)] = _compact_runtime_value(child)
-        return result
-    if isinstance(value, list):
-        return [_compact_runtime_value(item) for item in value[:32]]
-    if isinstance(value, str):
-        return value.strip()[:2400]
-    return value
-
-
 def _trajectory_payload(packet: Mapping[str, Any]) -> Dict[str, Any]:
-    if packet.get("target_mode") == "image_grounded_react":
-        return {
-            "case_id": packet.get("case_id"),
-            "target_mode": packet.get("target_mode"),
-            "runtime_objective": packet.get("runtime_objective", ""),
-            "evidence": [
-                {
-                    key: value
-                    for key, value in item.items()
-                    if key not in {"successful_call"}
-                }
-                for item in _rows(packet.get("evidence"))
-            ],
-            "raw_observation_ids": packet.get("raw_observation_ids", []),
-            "successful_observation_ids": packet.get(
-                "successful_observation_ids", []
-            ),
-            "unsuccessful_observation_ids": packet.get(
-                "unsuccessful_observation_ids", []
-            ),
-            "action_count": packet.get("action_count", 0),
-            "stop_reason": packet.get("stop_reason", ""),
-            "finish_rationale": packet.get("finish_rationale", ""),
-            "investigation_turns": packet.get("investigation_turns", []),
-        }
-    claims = [
-        {
-            key: value
-            for key, value in item.items()
-            if key != "recorded_status"
-        }
-        for item in target_fact_rows(packet)
-    ]
-    evidence = [
-        {
-            key: value
-            for key, value in item.items()
-            if key != "stance"
-        }
-        for item in _rows(packet.get("evidence"))
-    ]
     return {
         "case_id": packet.get("case_id"),
-        "target_facts": claims,
-        "evidence": evidence,
+        "target_mode": packet.get("target_mode"),
+        "runtime_objective": packet.get("runtime_objective", ""),
+        "evidence": packet.get("evidence", []),
+        "raw_observation_ids": packet.get("raw_observation_ids", []),
+        "successful_observation_ids": packet.get(
+            "successful_observation_ids", []
+        ),
+        "unsuccessful_observation_ids": packet.get(
+            "unsuccessful_observation_ids", []
+        ),
+        "action_count": packet.get("action_count", 0),
+        "stop_reason": packet.get("stop_reason", ""),
+        "finish_rationale": packet.get("finish_rationale", ""),
         "investigation_turns": packet.get("investigation_turns", []),
     }
 
@@ -813,41 +643,21 @@ class SemanticRewardJudge:
         )
 
 
-def _recorded_claim_label(claim: Mapping[str, Any]) -> str:
-    status = str(claim.get("recorded_status", ""))
-    return {
-        "supported": "supported",
-        "refuted": "refuted",
-        "conflicted": "conflicted",
-        "open": "insufficient",
-        "unresolved": "insufficient",
-    }.get(status, "unclear")
-
-
 def semantic_metrics(
     packet: Mapping[str, Any],
     judgment: TrajectorySemanticJudgment,
 ) -> Dict[str, Any]:
-    claim_by_id = {
-        str(item.get("claim_id", "")): item
-        for item in target_fact_rows(packet)
-    }
     evidence_ids = {
         str(item.get("evidence_id", ""))
         for item in _rows(packet.get("evidence"))
     }
-    agreements: List[float] = []
+    evidence_ids.update(
+        str(item) for item in packet.get("successful_observation_ids", []) or []
+    )
     entailments: List[float] = []
     citation_scores: List[float] = []
     invalid_citations: List[str] = []
     for review in judgment.claim_reviews:
-        claim = claim_by_id.get(review.claim_id)
-        if claim is not None:
-            recorded = _recorded_claim_label(claim)
-            label_matches = review.label == recorded
-            if recorded == "insufficient" and review.label == "unclear":
-                label_matches = True
-            agreements.append(1.0 if label_matches else 0.0)
         entailments.append(float(review.entailment_score))
         unknown = [item for item in review.evidence_ids if item not in evidence_ids]
         invalid_citations.extend(unknown)
@@ -877,9 +687,7 @@ def semantic_metrics(
             if judgment.predicted_verdict == packet.get("recorded_verdict")
             else 0.0
         ),
-        "claim_label_agreement": (
-            sum(agreements) / len(agreements) if agreements else 0.0
-        ),
+        "claim_label_agreement": 0.0,
         "claim_entailment": (
             sum(entailments) / len(entailments) if entailments else 0.0
         ),

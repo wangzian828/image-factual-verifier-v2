@@ -1,5 +1,5 @@
 ﻿# -*- coding: utf-8 -*-
-"""VisualFact-driven image-only factual investigation orchestrator."""
+"""Raw-history image factual investigation orchestrator."""
 from __future__ import annotations
 
 import asyncio
@@ -36,7 +36,6 @@ from src.orchestrator.tool_execution import run_tool_with_timeout
 from src.orchestrator.source_access import SourceAccessPolicy
 from src.orchestrator.state import (
     ImageOnlyRuntimeCase,
-    PerceptionReport,
     VerificationState,
 )
 from src.orchestrator.tool_cache import (
@@ -68,7 +67,7 @@ MAX_MODEL_TASK_CHOICES_PER_ACTION = 3
 
 
 class Orchestrator:
-    """VisualFact-driven image-only unified-ReAct orchestrator."""
+    """One-loop raw-history ReAct orchestrator."""
 
     def __init__(
         self,
@@ -474,10 +473,9 @@ class Orchestrator:
     ]:
         """Run the active one-loop ReAct runtime on one retained Interaction."""
 
-        self._validate_image_only_bootstrap_configuration()
+        self._validate_react_tool_configuration()
         investigation = new_unified_react_runtime_state(runtime_case)
         state.investigation_state = investigation
-        state.perception = PerceptionReport(scene_description="")
         self._sync_image_only_state(state, investigation)
         started = time.time()
         # Keep one provider-side conversation for the complete ReAct episode.
@@ -703,7 +701,7 @@ class Orchestrator:
             verdict_observation_ids=list(parsed.verdict_observation_ids),
         )
 
-    def _validate_image_only_bootstrap_configuration(self) -> None:
+    def _validate_react_tool_configuration(self) -> None:
         """Validate the image tools required by the active ReAct runtime."""
 
         if self.vlm_provider == "gemini" and not (
@@ -774,23 +772,9 @@ class Orchestrator:
     @staticmethod
     def _sync_image_only_state(
         state: VerificationState,
-        investigation: Any,
+        investigation: RuntimeReactState,
     ) -> None:
         state.investigation_state = investigation
-        if isinstance(investigation, RuntimeReactState):
-            state.investigation_brief = None
-            state.visual_entities = []
-            state.visual_facts = []
-            state.research_tasks = []
-            state.findings = []
-            state.retrieval_anchors = []
-        else:
-            state.investigation_brief = investigation.brief
-            state.visual_entities = list(investigation.entities)
-            state.visual_facts = list(investigation.facts)
-            state.research_tasks = list(investigation.tasks)
-            state.findings = list(investigation.findings)
-            state.retrieval_anchors = list(investigation.retrieval_anchors)
         if state.runtime_store is not None:
             state.runtime_store.write_snapshot(
                 "workspace",
