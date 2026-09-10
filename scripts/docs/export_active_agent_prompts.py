@@ -2,17 +2,12 @@
 
 from __future__ import annotations
 
-import sys
+import runpy
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT))
-
-from src.orchestrator.unified_prompts import (
-    UNIFIED_JUDGMENT_PROMPT_VERSION,
-    UNIFIED_JUDGMENT_SYSTEM_PROMPT,
-    UNIFIED_REACT_PROMPT_VERSION,
-    UNIFIED_REACT_SYSTEM_PROMPT,
+PROMPTS = runpy.run_path(
+    str(ROOT / "src" / "orchestrator" / "unified_prompts.py")
 )
 
 
@@ -21,13 +16,13 @@ def main() -> None:
     sections = [
         (
             "Unified ReAct",
-            UNIFIED_REACT_PROMPT_VERSION,
-            UNIFIED_REACT_SYSTEM_PROMPT,
+            PROMPTS["UNIFIED_REACT_PROMPT_VERSION"],
+            PROMPTS["UNIFIED_REACT_SYSTEM_PROMPT"],
         ),
         (
             "Unified Judgment",
-            UNIFIED_JUDGMENT_PROMPT_VERSION,
-            UNIFIED_JUDGMENT_SYSTEM_PROMPT,
+            PROMPTS["UNIFIED_JUDGMENT_PROMPT_VERSION"],
+            PROMPTS["UNIFIED_JUDGMENT_SYSTEM_PROMPT"],
         ),
     ]
     lines = [

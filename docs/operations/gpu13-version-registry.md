@@ -8,8 +8,9 @@
 完成真实验证。当前登记提交为 `414cb07`；服务器 checkout 已 fast-forward，目标
 Qwen3.5 processor 对新导出的 3 条 policy / 3 条 perception 数据通过。
 
-本次真实 smoke 的运行路径、SFT package、token 长度和质量边界见：
-[`../reports/2026-09-04-portable-handoff-smoke10.md`](../reports/2026-09-04-portable-handoff-smoke10.md)。
+本次真实 smoke 的历史记录已归档；需要复核时从 Git 标签
+`pre-deep-cleanup-20260910` 读取
+`docs/reports/2026-09-04-portable-handoff-smoke10.md`。
 
 ## 当前运行基线
 

@@ -164,10 +164,8 @@ ss -tan state close-wait | tail -n +2 | wc -l
 
 恢复扫描期间只有 autopilot 进程、但暂时没有 `run_cases` 子进程是正常的。只要扫描完成，
 它会新建后续 attempt 和 case list。`CLOSE-WAIT` 短暂存在不等于故障；重点是它是否随
-完成 trace 数持续无界增长。相关生命周期事故和修复记录见：
-
-- [`2026-08-23-gemini-rollout-resource-lifecycle.md`](2026-08-23-gemini-rollout-resource-lifecycle.md)
-- [`2026-08-24-close-wait-session-leak-followup.md`](2026-08-24-close-wait-session-leak-followup.md)
+完成 trace 数持续无界增长。历史生命周期事故和修复记录已移至 Git 标签
+`pre-deep-cleanup-20260910`。
 
 2026 年 9 月 2 日复核：此前观测到的 32 个 CLOSE-WAIT 属于我们账号下的旧
 Jupyter kernel（PID `313159`，kernel `d70e049b-9643-4d40-bfc4-7cae6c34b56f`），
@@ -930,7 +928,7 @@ not copied into text history or persisted as base64. The independent final Judgm
 its own controlled image attachment. The context ledger stores only the
 externalized media artifact and image metadata. In `separate_vlm` mode, visual
 tools receive the image and the policy model receives structured observations
-only. Both modes use the same dynamic tool schema, reducer, state delta, and
+only. Both modes use the same dynamic tool schema, raw provider history, and
 trace contract. Mature visual/search/browse tool implementations remain
 unchanged.
 
@@ -953,14 +951,11 @@ Configure them with `AGENT_LLM_REQUEST_TIMEOUT_SECONDS`,
 per-image budget: a transient 429 continues the same stored Interaction instead of
 discarding completed Agent actions, while a provider outage that exceeds the
 bounded retry window still produces a diagnostic error trace.
-Coverage runs after every accepted action and stops when the target fact and its
-required evidence gaps resolve, meaningful routes are exhausted, or the 24-action
-budget is reached. The four active policy stages default to an 8,192-token output
-budget; the active Gemini `unified_react` policy defaults to high thinking while
-the other Gemini policy stages default to low. Qwen policy runs can enable visible thinking for
-`unified_react`, `unified_reflection`, `unified_discrepancy_decision`, and
-`unified_judgment`; the exported ReAct target remains `<think>` plus one native
-tool call. Interactions failures that exhaust the
+The loop stops on `finish_investigation`, protocol exhaustion, or the 24-action
+budget. The two active policy stages default to an 8,192-token output budget;
+Gemini `unified_react` defaults to high thinking and `unified_judgment` to low.
+Qwen policy runs can enable visible thinking for both active stages; the exported
+ReAct target remains `<think>` plus one native tool call. Interaction failures that exhaust the
 bounded retry window remain hard failures, and the error trace retains completed
 calls and retry diagnostics. Evaluation also rejects queries that
 explicitly target policy-excluded fact-check domains before Serper.

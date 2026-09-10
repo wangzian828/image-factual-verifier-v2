@@ -23,8 +23,8 @@ PSD 是 verifier-gated 的局部蒸馏，不是把 Gemini 成功轨迹直接当�
 
 | 组件 | 责任 |
 | --- | --- |
-| Qwen policy | Planning、ReAct、Evidence Decision、Reflection/Replan、Judgment |
-| IFV runtime | 工具执行、状态 reducer、预算、Coverage、严格审计 |
+| Qwen policy | 连续 ReAct 动作选择与最终 Judgment |
+| IFV runtime | 工具执行、raw history 持久化、机械预算和严格审计 |
 | repair proposer | 读取失败轨迹和私有修复信息，生成不带完整答案的短 hint |
 | repair verifier | 验证局部动作和完整 episode 是否真正恢复 |
 | PSD target builder | 构造无 hint student prefix、带 hint teacher prefix、completion 和 top-k target |
@@ -84,9 +84,9 @@ repair proposer 可以看到 private gold；Qwen 部署策略和最终 student p
 3. 从第一个可修复失败点开始定位：
    - protocol/schema；
    - ReAct 路线无效或重复；
-   - Evidence Decision 归属/方向错误；
-   - Reflection/Replan 没有更新路线；
-   - 只有前序 Evidence chain 完整时，才定位 Judgment。
+   - ReAct 没有按最新原始观察调整路线；
+   - ReAct 对工具结果的范围或成功状态解释错误；
+   - 只有前序 raw observation chain 完整时，才定位 Judgment。
 4. provider、网络、工具超时和 runtime 损坏不进入 PSD，自动重跑。
 
 失败定位必须使用真实 `policy_input` 和 `interaction_id`，不能从 canonical state 重新拼出一个不同的伪 prefix。

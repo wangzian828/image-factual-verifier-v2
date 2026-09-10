@@ -3,51 +3,51 @@
 ## 主流程
 
 ```text
-原图 + 固定任务
-  → 紧凑上下文的 ReAct 请求
-  → thought + 一个工具调用
-  → 工具结果
-  → reducer 写入 state delta
-  → 下一轮 ReAct
-  → finish 或预算结束
-  → Judgment 输出 real/fake 与 fact-check report
+公开 case（原图、case_id、SHA-256）
+  → 创建一个 provider InteractionSession
+  → ReAct thought + 一个 native tool call
+  → 原始 function result 追加到同一会话和 canonical trace
+  → 重复，直到 finish、预算耗尽或协议边界停止
+  → Judgment 在同一累计会话中读取完整 raw history
+  → 输出 real/fake、fact-check report 和引用的 observation IDs
 ```
 
-视觉工具没有固定顺序，也不是隐藏的独立阶段。每个 Interaction 的根请求附加受控
-原图，后续请求复用 provider session；独立视觉工具按需要接收受控
-原图；文本上下文只携带有限的视觉记忆、候选、证据、失败和近期动作。
+没有 graph、Claim/Task ownership、Planning/Replan/Reflection 阶段，也没有把工具结果
+归类为 Discovery/Evidence 的 reducer。策略模型直接解释 provider 会话中保留的原始
+观察；runtime 不替模型生成语义摘要或证据结论。
 
 ## 职责边界
 
 | 部件 | 负责 | 不负责 |
 | --- | --- | --- |
-| ReAct policy | thought、工具选择、公开参数 | 修改 state、生成 ID、伪造 Evidence |
-| runtime adapter | 隐藏内部参数、注入图片和运行时上下文 | 改写成熟工具语义 |
-| 成熟工具 | 感知、OCR、搜索、网页提取、图像比较、视觉复查 | 最终二分类 |
-| reducer | 校验动作、去重、预算、失败分类、写入 state delta | 用规则替模型猜标签 |
-| Judgment | 综合已记录上下文并写报告 | 新增工具调用或虚构来源 |
+| ReAct policy | 解释 raw history、形成 thought、选择下一工具 | 修改机械状态、伪造工具结果或内部 ID |
+| runtime adapter | 暴露公开 schema、注入受控图片、校验来源策略 | 改写工具结果语义 |
+| 成熟工具 | OCR、感知、搜索、网页提取、图像检查和比较 | 最终二分类 |
+| mechanical runtime | 动作计数、预算、停止原因、完成说明 | 证据分级、路线图或事实判断 |
+| Judgment | 从完整 raw history 写二分类报告 | 新增调查、来源或观察 |
 
-## 状态与证据
+## 状态和观察
 
-当前 state 使用 `objective`、`visual_memory`、`discoveries`、`evidence`、
-`failures`、查询/URL 历史和预算字段。搜索结果、标题、摘要和反向搜图结果先
-作为 Discovery；只有成功视觉观察、有效比较或已检查页面的具体片段才进入
-Evidence。
+`UnifiedReactState` 只保存 schema 版本、case ID、图片 SHA-256、固定 objective、
+动作数、停止原因和完成说明。每次工具调用的参数、原始结果、thought、provider
+interaction ID 和传输元数据保存在 canonical steps 中；provider-side history 是
+下一轮模型看到先前结果的主要通道。
 
-当前主流程不创建 `target_facts`、`search_hypotheses`、`tasks` 或 Claim
-ownership。旧图状态只用于 legacy trace 回放，不会被 active runtime 调用。
+Judgment context 只增加机械 observation locator（成功状态、工具名、call ID、query
+和请求 URL），便于校验引用。它不复制、裁剪或重写观察正文。最终
+`verdict_observation_ids` 只能引用成功的原始观察。
 
-## 图片 API
+## 图片传递
 
-- `direct_multimodal`：ReAct Interaction 的根请求和独立 Judgment 请求各带一份
-  临时受控原图。
-- `separate_vlm`：图片只交给视觉工具，policy 使用结构化观察。
+- `direct_multimodal`：Interaction 根请求附加一次受控原图；后续轮次复用同一
+  provider history，Judgment 也沿用该 session。
+- `separate_vlm`：主 policy 不直接接收图片，视觉工具接收受控原图并返回观察。
+- 工具新增的裁剪图或候选参考图只在对应 observation 边界附加。
+- canonical text 不保存 base64；媒体通过外部 artifact 和 SHA-256 定位。
 
-两种模式共用工具契约、reducer 和 trace 记录。图片不进入累计文本历史，
-trace 只保存哈希、尺寸和外部化媒体引用。
+## 下游产物
 
-## 产物
-
-- canonical trace：完整请求、thought、工具结果、状态增量和最终报告；
-- SFT：一条完整 episode 一条 Qwen 对话，去掉重复 workspace；
-- RL/reward：读取完整轨迹、视觉记忆、调查证据和动作历史，不重新创建 Claim 图。
+- canonical trace：请求、响应、thought、native call、raw result 和 provider 父链；
+- SFT：按时间顺序导出完整 episode，不按动作拆行，也不制造 reducer 摘要；
+- strict audit：检查单工具轮次、父链、function result 回传和 Judgment 引用；
+- reward/evaluation：从 raw actions、raw observations 和最终报告计算，不恢复旧图状态。

@@ -1,31 +1,20 @@
 # Prompt Boundaries
 
-This page describes the active `unified-react-v1` boundary. Older Claim/Task
-rules remain only in dated historical plans and legacy replay code.
-
-Prompts express semantic judgment. The runtime owns mechanical constraints.
+The active `unified-react-v1` path separates semantic interpretation from
+mechanical enforcement without a reducer or evidence ledger.
 
 | Prompt responsibility | Runtime responsibility |
-|---|---|
-| Choose the next useful action from the image, task, and compact memory. | Expose only public tool arguments, inject the image, enforce one action per turn, deduplication, source policy, budgets, and stopping. |
-| Interpret inspected page passages and visual observations in thought. | Record the original tool result, classify discoveries/evidence/failures, and persist state deltas. |
-| Write the final reader-facing report and bounded binary judgment. | Compile the final basis from immutable runtime state and preserve trace provenance. |
+| --- | --- |
+| Interpret the image and retained raw tool results in their exact scope. | Preserve native calls, raw results, provider history, and artifact provenance. |
+| Choose one useful public tool action or finish. | Hide execution-only fields and enforce schema, source policy, budgets, and one action per turn. |
+| Write a bounded binary report and cite used observations. | Supply valid successful observation IDs and reject invalid citations. |
 
-Do not add a prompt rule merely because a deterministic guard is missing. Add or
-repair the guard in code, then keep the prompt focused on the semantic decision the
-model is uniquely suited to make.
+The image and fixed objective define what is being checked. The policy changes
+direction through its next ReAct action; it does not create a Claim/route/task
+graph. Search results and reverse-image candidates remain leads until returned
+content or a comparison directly addresses the question.
 
-The image and fixed task define what is being checked. The policy may change its
-question or search direction as observations arrive; it does not first create a
-Claim/route/task graph. Search results and reverse-image matches are unverified
-leads until a page, image, or visual observation is independently inspected.
-Only the reducer's recorded Evidence can support the final report.
-
-Visual tools are ordinary ReAct actions. Their order is not fixed, and the
-original image is attached again to each direct-multimodal request without being
-duplicated in the text history.
-
-For webpages, lack of mention is insufficient to refute a goal. A model may mark a
-source as refuting only when the selected passage states a proposition incompatible
-with the positive goal. The runtime records the original span rather than a model
-paraphrase.
+Errors and access failures remain limitations. Successful empty searches remain
+observations about their submitted queries. Neither is automatically evidence
+for a verdict. Runtime guards should enforce deterministic protocol rules while
+the prompt stays focused on interpretation and action choice.

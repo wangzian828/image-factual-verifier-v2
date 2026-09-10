@@ -65,8 +65,7 @@ test-manifest.jsonl
 ## 三、能力格子详细分布
 
 能力格子使用 manifest 中的 `target_capability_cell` 字段。当前有 12 个非空格子：
-`AF1`–`AF4`、`CD1`–`CD4`、`EF1`–`EF4`。这些代号的正式定义来自
-`docs/research/search-agent-paradigm/source_benchmark_plan_v0_2026-06-09.md`。
+`AF1`–`AF4`、`CD1`–`CD4`、`EF1`–`EF4`；定义在下表中完整保留。
 
 ### 能力格子代号的含义
 
