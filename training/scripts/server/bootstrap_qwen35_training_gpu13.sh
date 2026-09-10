@@ -169,6 +169,7 @@ install_long_cuda_extensions() {
     CC="$prefix/bin/x86_64-conda-linux-gnu-cc" \
     CXX="$prefix/bin/x86_64-conda-linux-gnu-c++" \
     TORCH_CUDA_ARCH_LIST="${IFV_TORCH_CUDA_ARCH_LIST:-8.0}" \
+    FLASH_ATTN_CUDA_ARCHS="${IFV_FLASH_ATTN_CUDA_ARCHS:-80}" \
     MAX_JOBS="${IFV_EXTENSION_MAX_JOBS:-4}" \
     NVCC_THREADS="${IFV_EXTENSION_NVCC_THREADS:-1}" \
     FLASH_ATTENTION_FORCE_BUILD=TRUE \
