@@ -68,7 +68,8 @@ freeze_env() {
   LD_LIBRARY_PATH="$runtime_ld" "$prefix/bin/python" -m pip check
   LD_LIBRARY_PATH="$runtime_ld" "$prefix/bin/python" -m pip freeze --all >"$out/pip-freeze.txt"
   sha256sum "$out/pip-freeze.txt" >"$out/pip-freeze.sha256"
-  LD_LIBRARY_PATH="$runtime_ld" \
+  CUDA_HOME="$prefix" PATH="$prefix/bin:$PATH" \
+    LD_LIBRARY_PATH="$runtime_ld" \
     CUDA_VISIBLE_DEVICES="${IFV_BOOTSTRAP_GPU_ID:-0}" \
     "$prefix/bin/python" -m ifv_training environment-manifest \
     --repo-root "$REPO_ROOT" --output "$out/environment.json"
@@ -165,7 +166,8 @@ install_long_sft() {
   link_torch_cuda_runtime "$LONG_SFT_PREFIX"
   freeze_env "$LONG_SFT_PREFIX" ifv-qwen35-sft-long-ms-swift442
   local runtime_ld="$LONG_SFT_PREFIX/lib:$LONG_SFT_PREFIX/lib/python3.12/site-packages/nvidia/curand/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-  LD_LIBRARY_PATH="$runtime_ld" \
+  CUDA_HOME="$LONG_SFT_PREFIX" PATH="$LONG_SFT_PREFIX/bin:$PATH" \
+    LD_LIBRARY_PATH="$runtime_ld" \
     CUDA_VISIBLE_DEVICES="${IFV_BOOTSTRAP_GPU_ID:-0}" \
     "$LONG_SFT_PREFIX/bin/python" \
     "$REPO_ROOT/scripts/probe/verify_qwen35_sft_environment.py" \
