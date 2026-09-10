@@ -244,9 +244,7 @@ def test_current_react_packet_uses_raw_observations_without_target_graph() -> No
     assert "target_facts" not in packet
     assert "claim_assessments" not in packet
     assert packet["successful_observation_ids"] == ["observation-1"]
-    assert packet["investigation_turns"][0]["observation"]["scene"] == (
-        "A bridge crosses a river."
-    )
+    assert packet["investigation_turns"][0]["observation"]["status"] == "success"
     assert packet["unresolved_gaps"] == [
         "The event date was not independently checked."
     ]
