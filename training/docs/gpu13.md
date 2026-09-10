@@ -27,7 +27,24 @@ causal-conv1d           1.6.2.post1
 liger-kernel            0.8.0
 ```
 
-正式 128K 环境使用全新前缀创建，不修改上述环境或历史实验环境：
+2026-09-10 已验收的正式 128K 环境：
+
+```text
+Python                  3.12.14
+ms-swift                4.4.2
+transformers            5.12.1
+torch                   2.10.0+cu128
+flash-attn              2.8.3
+flash-linear-attention  0.5.1
+causal-conv1d           1.6.2.post1
+liger-kernel            0.8.0
+环境路径                /gsdata/home/wza/conda/envs/ifv-qwen35-sft-long-ms-swift442-20260910
+验收报告                /gsdata/home/wza/image-factual-verifier-v2-data/training/logs/environments/ifv-qwen35-sft-long-ms-swift442/environment-preflight.json
+```
+
+验收报告为 `passed=true`、`errors=[]`；两个源码构建的原生扩展最高只要求
+`GLIBC_2.14`，兼容 gpu-13 的 glibc 2.28。重建环境时必须使用全新前缀，不修改上述
+已验收环境或历史实验环境：
 
 ```bash
 export IFV_QWEN35_MODEL=/gsdata/home/wza/models/Qwen3.5-9B
@@ -37,8 +54,9 @@ bash training/scripts/server/bootstrap_qwen35_training_gpu13.sh sft-long
 ```
 
 gpu-13 的 glibc 为 2.28，长上下文 bootstrap 会固定版本并从源码编译两个 CUDA
-扩展。完成后必须存在 `.ifv-qwen35-sft-long-ready`，且环境目录中的
-`environment-preflight.json` 必须通过；构建失败时不得回退到 SDPA 启动 128K。
+扩展。完成后必须存在 `.ifv-qwen35-sft-long-ready`，且
+`<training-data-root>/logs/environments/ifv-qwen35-sft-long-ms-swift442/environment-preflight.json`
+必须通过；构建失败时不得回退到 SDPA 启动 128K。
 
 模型名称和 checkpoint 路径以实际任务配置为准。换模型时必须用该模型自己的
 processor 重新验证，不能只复用旧环境的通过结果。
