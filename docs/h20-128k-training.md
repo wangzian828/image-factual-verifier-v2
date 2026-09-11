@@ -45,6 +45,11 @@ checkpoints remain outside the checkout.
 
 ## Measured configuration (2026-09-11)
 
+Update: the later [68-episode packing comparison](h20-packing-comparison.md)
+favors 64K packing with SP4 over the earlier seven-episode 120K result below.
+Treat the earlier preferred setting as historical; the 131,072 context ceiling
+is unchanged. Short-run throughput is not a production duration guarantee.
+
 Four H20 GPUs reported 97,871 MiB each, with NV18 links between every pair. The
 container CPU quota was 108 cores. The separate environment passed `pip check`:
 Python 3.12, PyTorch 2.10.0+cu128, Transformers 5.12.1, ms-swift 4.4.2,
