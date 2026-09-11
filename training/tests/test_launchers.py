@@ -298,6 +298,9 @@ def test_qwen35_training_bootstrap_is_fresh_pinned_and_isolated() -> None:
     assert "verify_qwen35_sft_environment.py" in source
     assert "FLASH_ATTENTION_FORCE_BUILD=TRUE" in source
     assert "CAUSAL_CONV1D_FORCE_BUILD=TRUE" in source
+    assert "install_cuda_extensions()" in source
+    assert 'install_cuda_extensions "$LONG_SFT_PREFIX"' in source
+    assert 'install_cuda_extensions "$RL_PREFIX"' in source
     assert 'CPATH="$cuda_target/include${CPATH:+:$CPATH}"' in source
     assert 'LIBRARY_PATH="$cuda_target/lib${LIBRARY_PATH:+:$LIBRARY_PATH}"' in source
     assert "PIP_NO_CACHE_DIR=1" in source

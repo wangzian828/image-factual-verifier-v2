@@ -103,10 +103,10 @@ import dataclasses
 import json
 import jiter
 import openai
-from swift.arguments import RlhfArguments
+from swift.arguments import RLHFArguments
 
 required = set({sorted(RLHF_ARGUMENT_FIELDS)!r})
-actual = {{field.name for field in dataclasses.fields(RlhfArguments)}}
+actual = {{field.name for field in dataclasses.fields(RLHFArguments)}}
 print(json.dumps({{
     "field_count": len(actual),
     "required_fields_present": sorted(required.intersection(actual)),

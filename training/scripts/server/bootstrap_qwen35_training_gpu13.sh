@@ -161,7 +161,7 @@ install_sft() {
   touch "$SFT_PREFIX/.ifv-qwen35-sft-ready"
 }
 
-install_long_cuda_extensions() {
+install_cuda_extensions() {
   local prefix="$1"
   local cuda_target="$prefix/targets/x86_64-linux"
   local runtime_ld="$cuda_target/lib:$prefix/lib:$prefix/lib/python3.12/site-packages/nvidia/curand/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
@@ -200,7 +200,7 @@ install_long_sft() {
   CUDA_HOME="$LONG_SFT_PREFIX" PATH="$LONG_SFT_PREFIX/bin:$PATH" \
     "$LONG_SFT_PREFIX/bin/python" -m pip install \
     --no-build-isolation --requirement "$REPO_ROOT/requirements/train-qwen35.txt"
-  install_long_cuda_extensions "$LONG_SFT_PREFIX"
+  install_cuda_extensions "$LONG_SFT_PREFIX"
   "$LONG_SFT_PREFIX/bin/python" -m pip install \
     --no-deps --editable "$REPO_ROOT"
   link_torch_cuda_runtime "$LONG_SFT_PREFIX"
@@ -248,6 +248,7 @@ install_rl() {
     torch==2.11.0 torchvision==0.26.0 torchaudio==2.11.0
   CUDA_HOME="$RL_PREFIX" "$RL_PREFIX/bin/python" -m pip install \
     --no-build-isolation --requirement "$REPO_ROOT/requirements/rl-qwen35.txt"
+  install_cuda_extensions "$RL_PREFIX"
   "$RL_PREFIX/bin/python" -m pip install --no-deps --editable "$REPO_ROOT"
   freeze_env "$RL_PREFIX" ifv-qwen35-rl-ms-swift442-vllm0221
   local rl_preflight="$ARTIFACT_ROOT/logs/environments/ifv-qwen35-rl-ms-swift442-vllm0221/environment-preflight.json"

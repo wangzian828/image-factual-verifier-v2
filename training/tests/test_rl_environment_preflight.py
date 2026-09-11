@@ -34,6 +34,13 @@ def test_rl_preflight_requires_real_online_rl_arguments() -> None:
     assert MODULE.missing_rlhf_fields([]) == sorted(required)
 
 
+def test_rl_preflight_uses_ms_swift_rlhf_arguments_class() -> None:
+    source = SCRIPT.read_text(encoding="utf-8")
+
+    assert "from swift.arguments import RLHFArguments" in source
+    assert "RlhfArguments" not in source
+
+
 def test_rl_preflight_records_command_timeout(monkeypatch) -> None:
     def expire(*args, **kwargs):
         raise subprocess.TimeoutExpired(args[0], kwargs["timeout"])
