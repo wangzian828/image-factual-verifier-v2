@@ -163,6 +163,13 @@ def test_psd_and_grpo_use_framework_entrypoints() -> None:
     assert "--external_plugins" in psd
     assert "ifv_psd_topk_plugin.py" in psd
     assert "--loss_type ifv_psd_topk" in psd
+    assert "verify-psd-datums" in psd
+    assert "psd-input-gate.json" in psd
+    assert "psd_ms_swift_plugin_smoke.py" in psd
+    assert "environment-preflight.json" in psd
+    assert "checkpoint-storage-preflight" in psd
+    assert "--resume_from_checkpoint" in psd
+    assert "run_with_resource_monitor.py" in psd
     assert "Trainer" not in psd
 
     assert "swift rlhf" in grpo

@@ -5,8 +5,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../lib/common.sh
 source "$SCRIPT_DIR/../lib/common.sh"
 
-if [[ "$#" -ne 4 ]]; then
-  echo "usage: $0 MODEL_PROFILE PSD_PROFILE PSD_DATUMS_JSONL EXPERIMENT_ID" >&2
+if [[ "$#" -lt 4 || "$#" -gt 5 ]]; then
+  echo "usage: $0 MODEL_PROFILE PSD_PROFILE PSD_DATUMS_JSONL EXPERIMENT_ID [RESUME_CHECKPOINT]" >&2
   exit 2
 fi
 
@@ -14,6 +14,7 @@ MODEL_PROFILE="$1"
 PSD_PROFILE="$2"
 PSD_DATUMS="$3"
 EXPERIMENT_ID="$4"
+RESUME_CHECKPOINT="${5:-}"
 
 load_profile "$MODEL_PROFILE"
 load_profile "$PSD_PROFILE"
@@ -48,6 +49,72 @@ new_output_dir "$LOG_DIR"
 record_environment "$LOG_DIR"
 
 export PYTHONPATH="$REPO_ROOT/training${PYTHONPATH:+:$PYTHONPATH}"
+PSD_INPUT_GATE="$LOG_DIR/psd-input-gate.json"
+PSD_DATUM_MANIFEST="${IFV_PSD_DATUM_MANIFEST:-$(dirname "$PSD_DATUMS")/manifest.json}"
+python -m ifv_training verify-psd-datums \
+  --datums "$PSD_DATUMS" \
+  --manifest "$PSD_DATUM_MANIFEST" \
+  --expected-topk "${IFV_PSD_TOPK:-20}" \
+  --max-context "$IFV_MAX_LENGTH" \
+  --output "$PSD_INPUT_GATE"
+
+PSD_PLUGIN_PREFLIGHT="$LOG_DIR/psd-plugin-preflight.json"
+python "$REPO_ROOT/training/scripts/probe/psd_ms_swift_plugin_smoke.py" \
+  --plugin "$REPO_ROOT/training/plugins/ifv_psd_topk_plugin.py" \
+  --output "$PSD_PLUGIN_PREFLIGHT"
+
+ENVIRONMENT_PREFLIGHT=""
+if [[ "${IFV_REQUIRE_TRAINING_ENV_PREFLIGHT:-false}" == "true" ]]; then
+  for name in \
+    IFV_EXPECTED_PYTHON \
+    IFV_EXPECTED_TORCH_CUDA \
+    IFV_EXPECTED_TORCH_VERSION \
+    IFV_EXPECTED_TRANSFORMERS_VERSION \
+    IFV_EXPECTED_MS_SWIFT_VERSION \
+    IFV_EXPECTED_DEEPSPEED_VERSION \
+    IFV_EXPECTED_FLASH_ATTN_VERSION \
+    IFV_EXPECTED_FLA_VERSION \
+    IFV_EXPECTED_CAUSAL_CONV1D_VERSION \
+    IFV_EXPECTED_LIGER_VERSION
+  do
+    require_value "$name"
+  done
+  ENVIRONMENT_PREFLIGHT="$LOG_DIR/environment-preflight.json"
+  python "$REPO_ROOT/training/scripts/probe/verify_qwen35_sft_environment.py" \
+    --model "$IFV_MODEL_ID" \
+    --max-context "$IFV_MAX_LENGTH" \
+    --expected-package-version "torch=$IFV_EXPECTED_TORCH_VERSION" \
+    --expected-package-version "transformers=$IFV_EXPECTED_TRANSFORMERS_VERSION" \
+    --expected-package-version "ms-swift=$IFV_EXPECTED_MS_SWIFT_VERSION" \
+    --expected-package-version "deepspeed=$IFV_EXPECTED_DEEPSPEED_VERSION" \
+    --expected-package-version "flash-attn=$IFV_EXPECTED_FLASH_ATTN_VERSION" \
+    --expected-package-version "flash-linear-attention=$IFV_EXPECTED_FLA_VERSION" \
+    --expected-package-version "causal-conv1d=$IFV_EXPECTED_CAUSAL_CONV1D_VERSION" \
+    --expected-package-version "liger-kernel=$IFV_EXPECTED_LIGER_VERSION" \
+    --required-package torch \
+    --required-package transformers \
+    --required-package ms-swift \
+    --required-package deepspeed \
+    --required-package flash-attn \
+    --required-package flash-linear-attention \
+    --required-package causal-conv1d \
+    --required-package liger-kernel \
+    --expected-python "$IFV_EXPECTED_PYTHON" \
+    --expected-torch-cuda "$IFV_EXPECTED_TORCH_CUDA" \
+    --expected-gpu-count "$NPROC_PER_NODE" \
+    --expected-gpu-name "${IFV_EXPECTED_GPU_NAME:-NVIDIA A100-SXM4-40GB}" \
+    --expected-gpu-memory-mib "${IFV_EXPECTED_GPU_MEMORY_MIB:-40960}" \
+    --gpu-memory-tolerance-mib "${IFV_GPU_MEMORY_TOLERANCE_MIB:-128}" \
+    --output "$ENVIRONMENT_PREFLIGHT"
+fi
+
+CHECKPOINT_PREFLIGHT="$LOG_DIR/checkpoint-storage-preflight.json"
+python -m ifv_training checkpoint-storage-preflight \
+  --output-dir "$OUTPUT_DIR" \
+  --estimated-checkpoint-bytes "${IFV_PSD_CHECKPOINT_ESTIMATED_BYTES:-25000000000}" \
+  --reserve-multiplier "${IFV_CHECKPOINT_RESERVE_MULTIPLIER:-1.25}" \
+  --output "$CHECKPOINT_PREFLIGHT"
+
 args=(
   swift sft
   --model "$IFV_MODEL_ID"
@@ -78,6 +145,14 @@ args=(
   --report_to tensorboard
   "${training_backend_args[@]}"
 )
+
+if [[ -n "$RESUME_CHECKPOINT" ]]; then
+  if [[ ! -d "$RESUME_CHECKPOINT" ]]; then
+    echo "resume checkpoint does not exist: $RESUME_CHECKPOINT" >&2
+    exit 2
+  fi
+  args+=(--resume_from_checkpoint "$RESUME_CHECKPOINT")
+fi
 
 if [[ -n "${IFV_NUM_TRAIN_EPOCHS:-}" ]]; then
   args+=(--num_train_epochs "$IFV_NUM_TRAIN_EPOCHS")
@@ -115,6 +190,9 @@ python -m ifv_training training-profile \
   --experiment-id "$EXPERIMENT_ID" \
   --profile-id "$(basename "$PSD_PROFILE")" \
   --resource-summary "$LOG_DIR/resource-summary.json" \
+  --dataset-verification "$PSD_INPUT_GATE" \
+  --environment-preflight "$ENVIRONMENT_PREFLIGHT" \
+  --checkpoint-preflight "$CHECKPOINT_PREFLIGHT" \
   --train-exit-code "$train_status" || true
 
 exit "$train_status"

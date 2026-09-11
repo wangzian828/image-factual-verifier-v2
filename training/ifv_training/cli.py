@@ -38,6 +38,7 @@ from .psd import (
 from .psd_candidates import build_psd_candidate_package
 from .psd_datums import build_sparse_topk_package
 from .psd_repairs import assemble_psd_repair_package
+from .psd_preflight import verify_psd_training_input
 from .rewards import (
     build_and_write_ledger,
     build_ledgers_from_run_artifacts,
@@ -222,6 +223,13 @@ def _parser() -> argparse.ArgumentParser:
         help="Allow a diagnostic/ablation package without both repair and preservation.",
     )
     psd_datums.set_defaults(require_both_kinds=True)
+
+    psd_input = subparsers.add_parser("verify-psd-datums")
+    psd_input.add_argument("--datums", type=Path, required=True)
+    psd_input.add_argument("--manifest", type=Path, required=True)
+    psd_input.add_argument("--expected-topk", type=int, default=20)
+    psd_input.add_argument("--max-context", type=int, required=True)
+    psd_input.add_argument("--output", type=Path, required=True)
 
     psd_locate = subparsers.add_parser("locate-psd-failure")
     psd_locate.add_argument("--trace", type=Path, required=True)
@@ -458,6 +466,17 @@ def main() -> None:
             balance_kinds=args.balance_kinds,
             require_both_kinds=args.require_both_kinds,
         )
+    elif args.command == "verify-psd-datums":
+        result = verify_psd_training_input(
+            datums_path=args.datums,
+            manifest_path=args.manifest,
+            expected_topk=args.expected_topk,
+            max_context=args.max_context,
+        )
+        write_json(args.output, result)
+        if not result["passed"]:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            raise SystemExit(1)
     elif args.command == "locate-psd-failure":
         from .psd_repair import locate_failure_site
 
