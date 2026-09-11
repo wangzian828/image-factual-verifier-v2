@@ -233,6 +233,9 @@ def test_psd_repair_binds_the_served_round_start_checkpoint() -> None:
     assert "--round-start-checkpoint-manifest" in driver
     assert "checkpoint_manifest_sha256" in driver
     assert "round-start checkpoint does not match served model path" in driver
+    assert "--hint-constructor-thinking-level" in driver
+    assert "Gemini PSD hint constructor requires wire_api=interactions" in driver
+    assert "GEMINI_API_KEY or" in driver
     assert "IFV_CHECKPOINT_MANIFEST" in serving
     assert '--checkpoint-manifest "$CHECKPOINT_MANIFEST"' in serving
 

@@ -579,6 +579,83 @@ def test_privileged_proposer_request_is_recorded_in_runtime_ledger(tmp_path) -> 
     assert '"stage": "psd_proposer"' in manifests[0].read_text(encoding="utf-8")
 
 
+def test_gemini_hint_constructor_uses_native_structured_interaction() -> None:
+    class GeminiProposerBackend:
+        provider = "gemini"
+        wire_api = "interactions"
+        model_name = "gemini-3.7-flash"
+
+        def __init__(self) -> None:
+            self.request = None
+
+        async def create_interaction(self, **kwargs):
+            self.request = kwargs
+            return {
+                "id": "interaction-psd-hint",
+                "status": "completed",
+                "output_text": '{"hints":["Check the unresolved event relation."]}',
+                "usage": {
+                    "total_input_tokens": 12,
+                    "total_output_tokens": 8,
+                },
+            }
+
+        async def get_response(self, *_args, **_kwargs):
+            raise AssertionError("Gemini PSD hints must use native Interactions")
+
+    class PolicyBackend:
+        provider = "qwen_local"
+        wire_api = "chat_completions"
+        model_name = "qwen-round-start"
+
+    roles = PSDModelRoles(
+        hint_constructor_provider="gemini",
+        hint_constructor_model="gemini-3.7-flash",
+        frozen_self_teacher_provider="qwen_local",
+        frozen_self_teacher_model="qwen-round-start",
+        round_start_checkpoint="checkpoint-round-0",
+        round_start_checkpoint_manifest_sha256="a" * 64,
+        trainable_student_provider="qwen_local",
+        trainable_student_model="qwen-round-start",
+        trainable_student_initial_checkpoint="checkpoint-round-0",
+    )
+    proposer = GeminiProposerBackend()
+    site = locate_failure_site(
+        _trace(),
+        {"failures": [{"location": "state.all_steps[0]"}]},
+    )
+    assert site is not None
+    adapter = QwenContinuationAdapter(
+        policy_llm=PolicyBackend(),
+        hint_constructor_llm=proposer,
+        model_roles=roles,
+        tools=[],
+        image_path="",
+        require_runtime_archive=False,
+        hint_constructor_thinking_level="low",
+    )
+
+    import asyncio
+
+    proposals = asyncio.run(
+        adapter.propose_hints(
+            failure_site=site,
+            public_trace_context={"observed_failure": "semantic"},
+            hint_count=1,
+        )
+    )
+
+    assert len(proposals) == 1
+    assert proposals[0].provider == "gemini"
+    assert proposer.request is not None
+    assert proposer.request["generation_config"] == {"thinking_level": "low"}
+    assert proposer.request["response_format"]["mime_type"] == "application/json"
+    assert proposer.request["response_format"]["schema"]["required"] == ["hints"]
+    assert proposer.request["store"] is True
+    assert "previous_interaction_id" not in proposer.request
+    assert roles.record()["hint_constructor"]["supplies_training_distribution"] is False
+
+
 def test_model_roles_require_checkpoint_attestation_and_one_policy_provider() -> None:
     with pytest.raises(ValueError, match="manifest SHA-256"):
         PSDModelRoles(

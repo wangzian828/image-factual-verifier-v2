@@ -38,7 +38,10 @@ def _validate_sparse_targets(
     if not torch.isfinite(weights).all() or (weights < 0).any():
         raise ValueError("psd_weights must be finite and non-negative")
     active = weights.sum(dim=-1) > 0
-    if require_active_per_datum and not active.reshape(batch_size, -1).any(dim=1).all():
+    if (
+        require_active_per_datum
+        and not active.reshape(batch_size, -1).any(dim=1).all()
+    ):
         raise ValueError("every PSD datum must contain an active top-k target")
     return active
 

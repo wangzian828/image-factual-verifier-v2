@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Mapping, Sequence
 from . import _repo_import  # noqa: F401
 from src.orchestrator.source_access import SourceAccessPolicy
 from src.orchestrator.investigation_models import InvestigationSegmentOutput
+from src.orchestrator.llm_backend import LLMResponse
 from src.orchestrator.stage_runner import StageRunner, StageStep
 from src.orchestrator.tool_cache import ToolResultCache
 from src.tools.base import BaseTool
@@ -67,6 +68,7 @@ class QwenContinuationAdapter:
         require_runtime_archive: bool = True,
         source_runtime_store_path: str = "",
         policy_topk: int = 20,
+        hint_constructor_thinking_level: str = "low",
     ) -> None:
         provider = str(getattr(policy_llm, "provider", "")).strip().lower()
         wire_api = str(getattr(policy_llm, "wire_api", "")).strip().lower()
@@ -108,6 +110,16 @@ class QwenContinuationAdapter:
         self.require_runtime_archive = bool(require_runtime_archive)
         self.source_runtime_store_path = str(source_runtime_store_path or "").strip()
         self.policy_topk = max(1, min(100, int(policy_topk)))
+        self.hint_constructor_thinking_level = str(
+            hint_constructor_thinking_level or "low"
+        ).strip().lower()
+        if self.hint_constructor_thinking_level not in {
+            "minimal",
+            "low",
+            "medium",
+            "high",
+        }:
+            raise ValueError("unsupported hint-constructor thinking level")
 
     def _site(self, site: FailureSite) -> FailureSite:
         if (
@@ -178,7 +190,7 @@ class QwenContinuationAdapter:
         hint_count: int = 4,
         hint_level: int = 1,
     ) -> list[HintProposal]:
-        """Ask the privileged Qwen endpoint for audited procedural hints."""
+        """Ask the privileged hint constructor for audited procedural hints."""
 
         failure_site = self._site(failure_site)
         prompt = build_proposer_prompt(
@@ -239,8 +251,34 @@ class QwenContinuationAdapter:
         """Call the privileged proposer while preserving an auditable request."""
 
         request_id = ""
-        response_format = {"type": "json_object"}
-        generation_config = {"enable_thinking": False}
+        hint_schema = {
+            "type": "object",
+            "properties": {
+                "hints": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                }
+            },
+            "required": ["hints"],
+            "additionalProperties": False,
+        }
+        is_gemini = str(
+            getattr(self.hint_constructor_llm, "provider", "")
+        ).strip().lower() == "gemini"
+        response_format = (
+            {
+                "type": "text",
+                "mime_type": "application/json",
+                "schema": hint_schema,
+            }
+            if is_gemini
+            else {"type": "json_object"}
+        )
+        generation_config = (
+            {"thinking_level": self.hint_constructor_thinking_level}
+            if is_gemini
+            else {"enable_thinking": False}
+        )
         if self.runtime_store is not None:
             request_id = self.runtime_store.context_ledger.begin_request(
                 stage="psd_proposer",
@@ -254,16 +292,57 @@ class QwenContinuationAdapter:
                 model=str(
                     getattr(self.hint_constructor_llm, "model_name", "")
                 ),
-                prompt_version="ifv-psd-repair-proposer-v1",
+                prompt_version="ifv-psd-repair-proposer-v2",
             )
         started = time.perf_counter()
         try:
-            response = await self.hint_constructor_llm.get_response(
-                messages,
-                max_tokens=min(self.max_output_tokens, 2048),
-                response_format=response_format,
-                generation_config=generation_config,
-            )
+            if is_gemini:
+                from src.integrations.gemini import (
+                    extract_text,
+                    messages_to_input,
+                    validate_interaction_response,
+                )
+
+                interaction = await self.hint_constructor_llm.create_interaction(
+                    input_payload=messages_to_input(messages[1:]),
+                    system_instruction=messages[0].get("content", ""),
+                    response_format=response_format,
+                    store=True,
+                    max_tokens=min(self.max_output_tokens, 2048),
+                    temperature=0.0,
+                    generation_config=generation_config,
+                )
+                _, status = validate_interaction_response(interaction)
+                if status != "completed":
+                    raise RuntimeError(
+                        "Gemini PSD hint constructor requires status=completed, "
+                        f"received status={status}"
+                    )
+                response = LLMResponse(
+                    text=extract_text(interaction),
+                    prompt_tokens=int(
+                        _mapping(interaction.get("usage")).get(
+                            "total_input_tokens",
+                            0,
+                        )
+                        or 0
+                    ),
+                    completion_tokens=int(
+                        _mapping(interaction.get("usage")).get(
+                            "total_output_tokens",
+                            0,
+                        )
+                        or 0
+                    ),
+                    raw=dict(interaction),
+                )
+            else:
+                response = await self.hint_constructor_llm.get_response(
+                    messages,
+                    max_tokens=min(self.max_output_tokens, 2048),
+                    response_format=response_format,
+                    generation_config=generation_config,
+                )
         except Exception as exc:
             if request_id:
                 self.runtime_store.context_ledger.complete_request(
@@ -288,6 +367,16 @@ class QwenContinuationAdapter:
                 status="completed",
                 response_metadata={
                     "psd_proposer": True,
+                    "provider": str(
+                        getattr(self.hint_constructor_llm, "provider", "")
+                    ),
+                    "model": str(
+                        getattr(self.hint_constructor_llm, "model_name", "")
+                    ),
+                    "wire_api": str(
+                        getattr(self.hint_constructor_llm, "wire_api", "")
+                    ),
+                    "interaction_id": _text(raw.get("id")),
                     "duration_ms": round((time.perf_counter() - started) * 1000, 2),
                     "response_content_chars": len(str(getattr(response, "text", "") or "")),
                 },

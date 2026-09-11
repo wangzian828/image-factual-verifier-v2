@@ -143,6 +143,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--hint-constructor-model", required=True)
     parser.add_argument("--hint-constructor-base-url")
     parser.add_argument("--hint-constructor-wire-api")
+    parser.add_argument(
+        "--hint-constructor-thinking-level",
+        choices=("minimal", "low", "medium", "high"),
+        default="low",
+    )
     parser.add_argument("--round-start-checkpoint", required=True)
     parser.add_argument(
         "--round-start-checkpoint-manifest",
@@ -206,6 +211,16 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
         temperature=0.0,
         max_tokens=2048,
     )
+    if args.hint_constructor_provider.strip().lower() == "gemini":
+        if hint_constructor_llm.wire_api != "interactions":
+            raise ValueError(
+                "Gemini PSD hint constructor requires wire_api=interactions"
+            )
+        if not hint_constructor_llm.api_key:
+            raise RuntimeError(
+                "Gemini PSD hint constructor requires GEMINI_API_KEY or "
+                "GOOGLE_API_KEY"
+            )
     model_roles = PSDModelRoles(
         hint_constructor_provider=args.hint_constructor_provider,
         hint_constructor_model=args.hint_constructor_model,
@@ -229,6 +244,7 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
         source_access_policy=policy_orchestrator.source_access_policy,
         tool_call_limits=policy_orchestrator.verification_tool_limits,
         source_runtime_store_path=site.runtime_store_path,
+        hint_constructor_thinking_level=args.hint_constructor_thinking_level,
     )
     try:
         proposals = await adapter.propose_hints(
@@ -329,6 +345,13 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
                 "model_path": _text(policy_profile.get("model_path")),
                 "checkpoint_manifest": str(args.round_start_checkpoint_manifest),
                 "checkpoint_manifest_sha256": checkpoint_manifest_sha256,
+            },
+            "hint_constructor": {
+                "provider": args.hint_constructor_provider,
+                "model": args.hint_constructor_model,
+                "wire_api": hint_constructor_llm.wire_api,
+                "thinking_level": args.hint_constructor_thinking_level,
+                "supplies_training_distribution": False,
             },
             "candidate_count": len(records),
             "accepted_count": sum(1 for row in records if row.get("accepted") is True),

@@ -147,6 +147,25 @@ python scripts/run_psd_repair_driver.py `
   --output-dir <new-server-repair-run>
 ```
 
+For Gemini, use the native Interactions path and provide the credential only
+through the process environment:
+
+```powershell
+$env:GEMINI_API_KEY="<secret>"
+python scripts/run_psd_repair_driver.py `
+  <other arguments> `
+  --hint-constructor-provider gemini `
+  --hint-constructor-model gemini-3.7-flash `
+  --hint-constructor-wire-api interactions `
+  --hint-constructor-thinking-level low
+```
+
+The Gemini request uses a strict `hints[]` JSON response schema and creates no
+interaction-history dependency. It may inspect training-only private context,
+but its outputs still pass the hint-leakage audit. Gemini probabilities never
+enter the PSD target: numeric top-20 supervision must come from the frozen
+round-start Qwen service.
+
 It writes `repair_attempts.jsonl` and a runtime archive. Without a bound
 `ifv-psd-repair-verification-bundle-v1`, attempts remain pending. Bundle rows
 are keyed by hint index and exact hint hash; each may point to a local verifier
