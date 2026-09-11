@@ -8,6 +8,7 @@ import pytest
 from ifv_training.io import load_json, load_jsonl, sha256_file, write_json, write_jsonl
 from ifv_training.psd_repair_search import (
     CHECKS, inspect_round, public_attempt_feedback, revision_context, revision_rejection, run_search, search_lock,
+    validate_live_model,
 )
 from ifv_training.psd_repair import FailureSite, build_proposer_prompt, parse_proposer_response
 
@@ -219,3 +220,25 @@ def test_visual_probe_uses_real_image_binding_and_public_runtime_adapter(tmp_pat
     path.write_bytes(b"changed")
     with pytest.raises(ValueError, match="differs"):
         bound_visual_tool(orchestrator, episode)
+
+
+def test_live_alias_cannot_silently_switch_checkpoint_or_context(tmp_path):
+    profile = {"profile_id": "model", "model_path": str(tmp_path / "base"), "context_length": 131072}
+    row = {"id": "model", "root": profile["model_path"], "max_model_len": 131072}
+    assert validate_live_model(profile, {"data": [row]})["max_model_len"] == 131072
+    with pytest.raises(ValueError, match="checkpoint"):
+        validate_live_model(profile, {"data": [{**row, "root": str(tmp_path / "trained")} ]})
+    with pytest.raises(ValueError, match="context"):
+        validate_live_model(profile, {"data": [{**row, "max_model_len": 65536}]})
+    with pytest.raises(ValueError, match="alias"):
+        validate_live_model(profile, {"data": []})
+
+
+def test_storage_budget_pauses_without_deleting_artifacts_or_generating(tmp_path, monkeypatch):
+    import ifv_training.psd_repair_search as search
+    monkeypatch.setattr(search, "MAX_SEARCH_ARTIFACT_BYTES", 1)
+    async def execute(*args):
+        raise AssertionError("must not consume provider calls")
+    result = run(tmp_path, execute)
+    assert result["status"] == "paused_storage_budget"
+    assert (tmp_path / "search-state.json").exists()

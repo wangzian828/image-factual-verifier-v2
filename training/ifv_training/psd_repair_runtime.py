@@ -165,6 +165,11 @@ class QwenContinuationAdapter:
             require=self.require_runtime_archive,
         )
 
+    async def _guard_policy(self):
+        callback = getattr(self, "before_policy_call", None)
+        if callback is not None:
+            await callback()
+
     def _runner(
         self,
         *,
@@ -604,6 +609,7 @@ class QwenContinuationAdapter:
             stage_name="psd_teacher_repair",
             prior_steps=prior_steps,
         )
+        await self._guard_policy()
         _, teacher_steps = await teacher_runner.run("")
         if not teacher_runner.last_native_history:
             raise RuntimeError("teacher continuation did not retain native history")
@@ -618,6 +624,7 @@ class QwenContinuationAdapter:
             stage_name="psd_student_continuation",
             prior_steps=list(prior_steps),
         )
+        await self._guard_policy()
         _, student_steps = await student_runner.run("")
         return ContinuationResult(
             teacher_steps=teacher_steps,
@@ -688,6 +695,7 @@ class QwenContinuationAdapter:
                         )
                     ),
                 )
+                await self._guard_policy()
                 _, steps = await runner.run(
                     "" if action_index == 0 else render_react_runtime_context(runtime_state)
                 )
@@ -725,6 +733,7 @@ class QwenContinuationAdapter:
             include_pending_user=site.stage == "unified_judgment",
             system_instruction=_text(site.policy_input.get("system_instruction")) if site.stage == "unified_judgment" else None,
         )
+        await self._guard_policy()
         parsed_judgment, judgment_steps = await judgment_runner.run(
             ""
             if site.stage == "unified_judgment"
@@ -763,6 +772,7 @@ class QwenContinuationAdapter:
                     )
                 ),
             )
+            await self._guard_policy()
             _, student_steps = await student_runner.run("")
             student_history = student_runner.last_native_history
             student_complete = False

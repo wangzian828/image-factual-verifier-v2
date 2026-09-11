@@ -45,6 +45,38 @@ New work, not yet real-provider accepted:
   `/volume/ybo/wza/runs/psd-feedback-canary-20260912-r1`. The existing 45-row
   datum bank and its ongoing CPU optimizer diagnostic must not be rewritten.
 
+Further live audit and fixes:
+
+- The first feedback diagnostic (`psd-feedback-canary-20260912-r1`, PID187974)
+  was stopped after finding a PSD-only visual endpoint configuration omission.
+  `llm_base_url` was bound but `vlm_base_url` was not, so visual tools fell back
+  to unused port8899. Main evaluation and the original on-policy canary explicitly
+  use8901 and were not affected. All diagnostic artifacts remain; r1 is NOT a
+  valid repair-quality comparison. No main/CPU process was stopped.
+- `_policy_runtime_kwargs` now binds policy AND visual provider/model/wire API/
+  endpoint to the frozen profile, and forwards the normal runtime timeouts.
+- `psd-visual-endpoint-smoke-20260912-r2/result.json`: **passed**, actual archived
+  visual-tool request returned `status=success`, `answer_status=observed` through
+  the existing public-tool adapter and correct image SHA. The initial standalone
+  probe omitted the runtime's hidden image binding and failed before a provider
+  call; that diagnostic wiring was fixed, not counted as a model failure.
+- Fresh fixed three-case search is running under
+  `/volume/ybo/wza/runs/psd-feedback-canary-20260912-r2` (PID188817 at launch).
+  The first real attempt was rejected for answer-bearing advice and unsuccessful
+  visual reasoning; the actual execution/checker bits reached round01. This is
+  evidence of feedback flow, **not evidence of a successful repair yet**.
+- Server suite at17ff302: **142 passed**. Further local case-pool/live-service/
+  storage-gate tests: **142 non-PyTorch tests passed**, full server rerun pending.
+- Added bounded completion-order asynchronous **case** scheduling, preserving
+  serial dependencies within a case and the fixed checkpoint across the round.
+  Controlled tests prove fast cases progress/refill while the first case waits,
+  and one failed case does not cancel others. Live throughput improvement has
+  NOT been measured. Current in-flight diagnostic remains serial; do not restart
+  paid calls solely to switch its scheduler.
+- Added live model-root/context checks before policy generations and a2GiB
+  per-search artifact soft cap. This is not stale-policy asynchronous RL training;
+  round-end data validation and the training phase remain separate.
+
 Upstream execution sources:
 [agentic strategy](https://github.com/essamsleiman/psd/blob/main/experiments/bfcl/agentic/system_prompt.md),
 [attempt budget](https://github.com/essamsleiman/psd/blob/main/experiments/bfcl/agentic/run_agentic_repair.py),

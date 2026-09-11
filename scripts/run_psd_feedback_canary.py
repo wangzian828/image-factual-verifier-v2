@@ -21,6 +21,7 @@ from ifv_training.psd_repair_storage import load_bound, save_bound
 from ifv_training.psd_repairs import assemble_psd_repair_package
 from ifv_training.psd import build_psd_target_package
 from ifv_training.psd_datums import build_sparse_topk_package
+from ifv_training.psd_case_pool import completed_cases
 from scripts.run_psd_repair_driver import _parser, _run
 
 
@@ -47,11 +48,15 @@ async def run(args):
         if output.exists() and any(output.iterdir()):
             raise ValueError("output must be new or bound to this canary")
         save_bound(marker, identity=identity, payload={"created": True})
-    summary = {"status": "repairing", "training_started": False, "cases": []}
+    if type(args.case_concurrency) is not int or not 1 <= args.case_concurrency <= 64:
+        raise ValueError("case concurrency must be 1..64")
+    summary = {"status": "repairing", "training_started": False, "cases": [],
+               "case_concurrency": args.case_concurrency,
+               "scheduling": "completion_order_within_one_frozen_checkpoint"}
     public = {r["case_id"]: r for r in load_jsonl(benchmark)}
     gold = {r["case_id"]: r for r in load_jsonl(gold_path)}
     merged_candidates, attempts = {}, []
-    for candidate in load_jsonl(candidates_path):
+    async def repair_case(candidate):
         key = hashlib.sha256(candidate["candidate_id"].encode()).hexdigest()[:16]
         inputs, directory = output / "case-inputs" / key, output / "repairs" / key
         case = candidate["case_id"]
@@ -79,20 +84,32 @@ async def run(args):
         if (directory / "search-state.json").exists():
             cli.append("--resume")
         result = await _run(_parser().parse_args(cli))
-        summary["cases"].append({"case_id": case, "directory": str(directory), "result": result})
+        return {"case_id": case, "directory": str(directory), "result": result}
+
+    async for index, candidate, outcome, error in completed_cases(load_jsonl(candidates_path),
+            repair_case, concurrency=args.case_concurrency):
+        if error:
+            summary["cases"].append({"case_id": candidate["case_id"], "input_index": index,
+                "result": {"status": "paused_case_exception", "error_type": error}})
+            _atomic_json(output / "progress.json", summary)
+            continue
+        summary["cases"].append({**outcome, "input_index": index})
+        directory = Path(outcome["directory"])
         for row in load_jsonl(directory / "repair_candidates.jsonl"):
             merged_candidates[row["candidate_id"]] = row
         attempts.extend(load_jsonl(directory / "repair_attempts.jsonl"))
         _atomic_json(output / "progress.json", summary)
     # The original 45-row CPU probe must still be reading exactly the same bytes.
     load_bound(marker, identity={**identity, "inputs": {name: sha256_file(Path(name)) for name in identity["inputs"]}})
+    # Completion order is useful progress, not a nondeterministic dataset order.
+    attempts.sort(key=lambda row: (row["case_id"], row["attempt_id"]))
     summary.update(accepted=sum(r.get("accepted") is True for r in attempts),
                    continuations=len(attempts), original_bank_unchanged=True)
     if any(row["result"]["status"].startswith("paused_") for row in summary["cases"]):
         summary["status"] = "paused_search_requires_resume"
     elif summary["accepted"]:
         merge = output / "merged"
-        write_jsonl(merge / "repair_candidates.jsonl", list(merged_candidates.values()))
+        write_jsonl(merge / "repair_candidates.jsonl", [merged_candidates[k] for k in sorted(merged_candidates)])
         write_jsonl(merge / "repair_attempts.jsonl", attempts)
         assembly, targets, datums = output / "assembled", output / "targets", output / "datums"
         if (datums / "manifest.json").exists():
@@ -122,5 +139,7 @@ if __name__ == "__main__":
     parser.add_argument("--snapshot", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--attempts", type=int, default=6)
+    parser.add_argument("--case-concurrency", type=int, default=1,
+                        help="Bounded asynchronous case pool; keep 1 while prioritizing the main experiment")
     parser.add_argument("--judge-model", default="gemini-3.1-pro-preview")
     print(json.dumps(asyncio.run(run(parser.parse_args())), ensure_ascii=False, indent=2))

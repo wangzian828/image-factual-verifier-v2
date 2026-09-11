@@ -283,6 +283,27 @@ user turns. Additional advice remains at that original anchor; we do not inject
 downstream hints or train patched-prefix states as fresh original-policy data.
 This is a documented domain adaptation, not exact multi-turn slate parity.
 
+`scripts/run_psd_feedback_canary.py --case-concurrency N` schedules independent
+cases in a bounded completion-order pool. A slow case does not block completion
+persistence or the launch of the next queued case. Each case's feedback loop
+remains serial; errors are isolated, and final dataset rows are sorted rather
+than inheriting timing-dependent completion order. The diagnostic default is
+1 while the main experiment has priority; increasing this is a scheduling
+choice, not permission to change the main inference service or Agent.
+
+This is **not** fully asynchronous RL optimization: training still starts from
+the frozen round's completed, validated dataset. There is a round-end barrier;
+finite per-case budgets bound unsuccessful searches, and no slow case is silently
+dropped just to make a throughput number look better. The live serving alias,
+model root and context cap are checked before uncached policy generations, so
+changing the served checkpoint pauses construction instead of mixing rounds.
+The search also pauses at 2 GiB of its own artifacts, checked between rounds;
+shared-filesystem free space must not be mistaken for the user's storage quota.
+
+For comparison, genuinely asynchronous RL systems also need explicit stale-data
+control, e.g. [AReaL](https://arxiv.org/abs/2505.24298). This implementation does
+not import their PPO corrections into PSD or claim their measured speedups.
+
 The search root writes aggregate `repair_candidates.jsonl` and
 `repair_attempts.jsonl`, plus `search-state.json` and an explicit stop manifest.
 Each child under `rounds/round-NN/` preserves its own native archives, proposals,

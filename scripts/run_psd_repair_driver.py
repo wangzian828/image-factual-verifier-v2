@@ -424,6 +424,17 @@ async def _run_single(args: argparse.Namespace) -> dict[str, Any]:
         tool_timeout_seconds=policy_orchestrator.tool_action_timeout_seconds,
     )
     try:
+        async def guard_live_policy():
+            import httpx
+            from ifv_training.psd_repair_search import validate_live_model
+            key = policy_orchestrator.llm.api_key
+            headers = {"Authorization": "Bearer " + key} if key else {}
+            async with httpx.AsyncClient(timeout=20, trust_env=False) as client:
+                response = await client.get(policy_base_url.rstrip("/") + "/models", headers=headers)
+                response.raise_for_status()
+                attestation = validate_live_model(policy_profile, response.json())
+            write_json(output_dir / "live-serving-check.json", attestation)
+        adapter.before_policy_call = guard_live_policy
         if args.search_media:
             from ifv_training.psd_gemini_judge import review_images
             adapter.search_review_images = []

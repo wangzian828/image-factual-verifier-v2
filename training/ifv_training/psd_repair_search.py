@@ -18,6 +18,7 @@ from .psd_repair_storage import load_bound, save_bound
 from .psd_gemini_judge import CHECKS, _atomic_json, trace_steps
 
 VERSION = "ifv-psd-feedback-search-v1"
+MAX_SEARCH_ARTIFACT_BYTES = 2 * 1024 ** 3
 
 
 @contextlib.contextmanager
@@ -97,6 +98,20 @@ def revision_rejection(hint, feedback):
     return ""
 
 
+def validate_live_model(profile, models):
+    """An unchanged alias is not proof that it still serves the round's weights."""
+    rows = [row for row in models.get("data", []) if row.get("id") == profile["profile_id"]]
+    if len(rows) != 1:
+        raise ValueError("live PSD model alias missing or ambiguous")
+    row = rows[0]
+    expected = profile.get("engine_model_path") or profile["model_path"]
+    if not row.get("root") or Path(row["root"]).resolve() != Path(expected).resolve():
+        raise ValueError("live PSD service no longer serves the frozen checkpoint")
+    if row.get("max_model_len") != profile["context_length"]:
+        raise ValueError("live PSD context cap differs from frozen profile")
+    return {"model_id": row["id"], "root": row["root"], "max_model_len": row["max_model_len"]}
+
+
 def inspect_round(directory):
     """Snapshot only a finalized round. Pending votes must not drive search."""
     manifest = load_json(directory / "manifest.json")
@@ -120,7 +135,8 @@ def inspect_round(directory):
     audits = load_json(audits_path).get("proposals", []) if audits_path.exists() else []
     # Keep only procedural audit codes, not raw rejected hints that could leak an answer.
     rejected = [row.get("reason", "hint_audit_failed") for row in audits if not row.get("passed")]
-    for path in (audits_path, directory / "hint-proposals.json", directory / "proposer-response.json"):
+    for path in (audits_path, directory / "hint-proposals.json", directory / "proposer-response.json",
+                 directory / "live-serving-check.json"):
         if path.exists():
             files[str(path.resolve())] = sha256_file(path)
     return {"directory": str(directory.resolve()), "files": files,
@@ -200,6 +216,12 @@ async def run_search(*, root, identity, resume, execute_round, max_attempts=6,
                 return persist("time_budget_exhausted")
             if history and history[-1]["no_further_hint"]:
                 return persist("no_further_grounded_hint")
+            # Shared-filesystem free space is NOT the user's quota. Bound this
+            # diagnostic's own growth conservatively and preserve, never delete,
+            # evidence on exhaustion. One in-flight round may exceed the cap.
+            used = sum(path.stat().st_size for path in root.rglob("*") if path.is_file())
+            if used >= MAX_SEARCH_ARTIFACT_BYTES:
+                return persist("paused_storage_budget")
             index = len(history)
             directory = root / "rounds" / f"round-{index:02d}"
             feedback = revision_context(history)
