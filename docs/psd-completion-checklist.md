@@ -14,8 +14,9 @@ are separate milestones. A component test is not an end-to-end acceptance.
   and final strict audit. Student initialization must match the frozen teacher,
   including the previous-round adapter. Round completion checks real weight
   artifacts and resumable optimizer/scheduler/RNG state.
-- Server regression at `40527ac`: **112 PSD tests passed**. Local focused suite:
-  47 passed. Source edits/commits originate locally; server only fast-forward
+- Server regression at `be8234e`: **116 PSD tests passed**, plus launcher shell
+  syntax and completed-bank offline resume checks. Local focused suites also
+  passed. Source edits/commits originate locally; server only fast-forward
   pulls. Agent implementation is unchanged.
 - Live Gemini `gemini-3.1-pro-preview` repair-judge diagnostic: **25/25 correct**,
   comprising 21 distinct synthetic controls and four repeated inputs. Zero
@@ -55,6 +56,8 @@ are separate milestones. A component test is not an end-to-end acceptance.
   fixture. Until its final `result.json` passes, **do not mark the optimizer
   acceptance gate passed**. H20 capacity, production PSD rounds and held-out
   capability improvement have not been demonstrated by this diagnostic.
+  Last check: process remained actively computing, no final `result.json` yet;
+  the 45-datum immutable input was revalidated successfully without API calls.
 - The live replay found and fixed duplicated leading system messages in the
   archived-request → native-history adapter (vLLM returned HTTP 400). The fix
   removes only the identical transport copy and rejects changed/interior system
