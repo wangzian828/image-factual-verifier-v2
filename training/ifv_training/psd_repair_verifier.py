@@ -535,6 +535,14 @@ def verify_causal_episode(
     reasons.extend(f"local:{item}" for item in local_result["errors"])
     if local_result["valid"] and not local_result["passed"]:
         reasons.append("hinted_local_verifier_failed")
+    if _mapping(_mapping(local_verification).get("verifier")).get("name") == "gemini-psd-repair":
+        artifact = _mapping(local_verification)
+        if artifact.get("teacher_episode_canonical_sha256") != _sha(hinted_trace):
+            local_result["passed"] = False
+            reasons.append("local:teacher_episode_changed_after_review")
+        if artifact.get("private_reference_sha256") != _sha(gold):
+            local_result["passed"] = False
+            reasons.append("local:private_reference_changed_after_review")
     recorded_verdict = _text(hinted_trace.get("verdict"))
     expected_verdict = ""
     strict_pass = False

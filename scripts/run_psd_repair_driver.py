@@ -200,6 +200,10 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-suffix-actions", type=int, default=8)
     parser.add_argument("--run-student-diagnostic", action="store_true")
     parser.add_argument("--verification-bundle", type=Path)
+    parser.add_argument("--train-cases", type=Path, required=True)
+    parser.add_argument("--judge-model", default="gemini-3.1-pro-preview")
+    parser.add_argument("--skip-auto-judge", action="store_true",
+                        help="Persist pending attempts for offline task verification")
     return parser
 
 
@@ -217,30 +221,47 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
     gold = load_json(args.gold)
     public_context = load_json(args.public_context)
     private_context = load_json(args.private_context) if args.private_context else None
-    site = locate_failure_site(trace, audit, semantic_verification)
-    if site is None:
-        raise RuntimeError("no observed PSD repair failure site in trace/audit")
+    from ifv_training.psd_gemini_judge import require_training_case
+    require_training_case(trace, args.train_cases)
     source_verification = verify_source_rollout_failure(trace, gold=gold)
     if source_verification["passed"] is not True:
         raise RuntimeError(
             "source no-hint rollout was not explicitly verified as failed: "
             + ",".join(source_verification["reasons"])
         )
+    output_dir = args.output_dir
+    output_dir.mkdir(parents=True, exist_ok=False)
+    site = locate_failure_site(trace, audit, semantic_verification)
+    if site is None and not args.skip_auto_judge:
+        from ifv_training.psd_gemini_judge import localize_failure
+        from src.integrations.gemini import GeminiInteractionsClient
+        async with GeminiInteractionsClient(timeout=240, max_retries=2) as client:
+            semantic_verification = await localize_failure(client, trace, gold=gold,
+                image_path=args.image, model=args.judge_model, cache_dir=output_dir / "judge-cache")
+        write_json(output_dir / "semantic-localization.json", semantic_verification)
+        site = locate_failure_site(trace, audit, semantic_verification)
+    if site is None:
+        raise RuntimeError("no observed PSD repair failure site in trace/audit")
     verification_rows = _load_verification_bundle(args.verification_bundle)
     source_trace_sha256 = sha256_file(args.trace)
     from ifv_training.psd_candidate_binding import bind_localized_candidate
     candidate, site = bind_localized_candidate(
         load_json(args.candidate), trace, site, source_trace_sha256=source_trace_sha256)
-    output_dir = args.output_dir
-    output_dir.mkdir(parents=True, exist_ok=False)
     write_jsonl(output_dir / "repair_candidates.jsonl", [candidate])
-    runtime_root = output_dir / "runtime"
     runtime_store = CaseRuntimeStore(
-        runtime_root,
+        output_dir,
         case_id=_text(_mapping(trace.get("state")).get("runtime_case", {}).get("case_id"))
         or _text(trace.get("image_id")),
         attempt_id="psd-repair",
     )
+    runtime_root = runtime_store.root
+    # An interrupted run remains inspectable/finalizable after each attempt.
+    write_json(output_dir / "manifest.json", {
+        "schema_version": "ifv-psd-repair-driver-result-v1", "status": "generating",
+        "trace": str(args.trace), "runtime_archive": str(runtime_root),
+        "train_cases_sha256": sha256_file(args.train_cases),
+        "candidate_count": 0, "accepted_count": 0,
+    })
     policy_orchestrator = Orchestrator(
         provider=args.policy_provider,
         model_name=args.policy_model,
@@ -309,6 +330,10 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
             hint_count=args.hint_count,
             hint_level=args.hint_level,
         )
+        write_jsonl(output_dir / "hint-proposals.jsonl", [
+            {"text": hint.text, "level": hint.level, "proposal_id": hint.proposal_id,
+             "provider": hint.provider, "model": hint.model, "audit": dict(hint.audit)}
+            for hint in proposals])
         records: list[dict[str, Any]] = []
         for index, hint in enumerate(proposals):
             continuation = await adapter.run_hinted_episode(
@@ -463,9 +488,16 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
             # Preserve every completed provider/tool attempt immediately.  A
             # resumed offline finalization never repeats successful calls.
             write_jsonl(output_dir / "repair_attempts.jsonl", records)
+            manifest = load_json(output_dir / "manifest.json")
+            manifest.update({"candidate_count": len(records),
+                "accepted_count": sum(row.get("accepted") is True for row in records),
+                "pending_hinted_episode_count": sum(not row.get("local_verification") for row in records)})
+            write_json(output_dir / "manifest.json", manifest)
         write_jsonl(output_dir / "repair_attempts.jsonl", records)
         result = {
             "schema_version": "ifv-psd-repair-driver-result-v1",
+            "status": "generated",
+            "train_cases_sha256": sha256_file(args.train_cases),
             "trace": str(args.trace),
             "runtime_archive": str(runtime_root),
             "policy_serving_attestation": {
@@ -488,12 +520,19 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
             "pending_hinted_episode_count": sum(
                 1
                 for row in records
-                if "full_hinted_teacher_episode_trace_required"
-                in (row.get("verification", {}).get("reasons", []) or [])
+                if not row.get("local_verification")
             ),
             "artifacts": {"repair_attempts": "repair_attempts.jsonl"},
         }
         write_json(output_dir / "manifest.json", result)
+        if not args.skip_auto_judge:
+            from ifv_training.psd_gemini_judge import judge_run
+            from src.integrations.gemini import GeminiInteractionsClient
+            async with GeminiInteractionsClient(timeout=240, max_retries=2) as client:
+                result["task_judge"] = await judge_run(run_dir=output_dir,
+                    source_trace_path=args.trace, gold_path=args.gold, image_path=args.image,
+                    train_cases_path=args.train_cases, model=args.judge_model, client=client)
+            result.update(load_json(output_dir / "manifest.json"))
         return result
     finally:
         await hint_constructor_llm.aclose()

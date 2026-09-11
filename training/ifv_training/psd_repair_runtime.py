@@ -730,6 +730,9 @@ class QwenContinuationAdapter:
             teacher_steps=teacher_steps,
             stop_reason=runtime_state.stop_reason,
         )
+        if self.runtime_store is not None:
+            teacher_episode_trace["state"]["runtime_store"] = dict(self.runtime_store.descriptor)
+            teacher_episode_trace["psd_repair"]["source_runtime_store_path"] = site.runtime_store_path
 
         return ContinuationResult(
             teacher_steps=teacher_steps,
