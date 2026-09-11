@@ -69,7 +69,7 @@ start() {
         --enable-auto-tool-choice \
         --tool-call-parser qwen3_coder \
         --structured-outputs-config '{"backend":"xgrammar","reasoning_parser":"qwen3","disable_any_whitespace":true}' \
-        --limit-mm-per-prompt '{"image":1,"video":0}' \
+        --limit-mm-per-prompt '{"image":32,"video":0}' \
         --enable-tokenizer-info-endpoint \
         --max-log-len 4000 \
         --disable-uvicorn-access-log \
