@@ -154,7 +154,7 @@ def main():
             with (dst/f'{split}.jsonl').open('w') as stream:
                 for i, row in enumerate(data):
                     meta = by_split[split][i]
-                    assert meta['row_id'] == i, 'Index ordering mismatch'
+                    assert meta['source_index'] == i, 'Split-local index ordering mismatch'
                     case = meta.get('case_id') or re.search(r'(main-\d+)', meta['episode_id']).group(1)
                     assert frozen[case]['split'] == split, 'Frozen split mismatch'
                     for field, value in [('case', case), ('group', frozen[case]['split_group_id']),
