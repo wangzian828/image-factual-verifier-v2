@@ -219,6 +219,7 @@ def complete_psd_round(
     training = _load_object(training_profile_path)
     checkpoint = _load_object(output_checkpoint_manifest_path)
     start_checkpoint = _mapping(rollout.get("round_start_checkpoint_manifest"))
+    start_manifest = _load_object(Path(start_checkpoint["path"]))
     output_checkpoint = _mapping(checkpoint.get("checkpoint"))
     checkpoint_dataset = _mapping(checkpoint.get("training_dataset"))
     checkpoint_sha = sha256_file(output_checkpoint_manifest_path)
@@ -231,6 +232,25 @@ def complete_psd_round(
         for item in checkpoint_save.get("states", [])
         if isinstance(item, Mapping)
     }
+    def weights(manifest):
+        return sorted((item.get("path"), item.get("sha256"))
+            for item in manifest.get("artifacts", [])
+            if item.get("scope") == "model"
+            and str(item.get("path", "")).endswith((".safetensors", ".bin")))
+
+    def artifacts_intact(manifest):
+        artifacts = manifest.get("artifacts", [])
+        if not artifacts:
+            return False
+        record = manifest["checkpoint"]
+        for item in artifacts:
+            root = Path(record.get("training_state_path") or record["path"]) if item["scope"] == "training_state" else Path(record["path"])
+            root = root.resolve()
+            path = (root / item["path"]).resolve()
+            if not path.is_relative_to(root) or not path.is_file() or sha256_file(path) != item.get("sha256"):
+                return False
+        return True
+
     checks = {
         "rollout_gate_schema": _check(
             rollout.get("schema_version"), PSD_ROLLOUT_GATE_SCHEMA_VERSION
@@ -262,6 +282,17 @@ def complete_psd_round(
             _text(checkpoint_dataset.get("manifest_sha256")),
             _text(input_manifest.get("sha256")),
         ),
+        "dataset_hash_present": {"passed": bool(_text(input_manifest.get("sha256")))},
+        "input_checkpoint_manifest_unchanged": _check(
+            sha256_file(Path(start_checkpoint["path"])), start_checkpoint.get("sha256")),
+        "optimizer_step_completed": {"passed": type(output_checkpoint.get("global_step")) is int
+            and output_checkpoint["global_step"] > 0},
+        "resumable_training_state": {"passed": all(output_checkpoint.get(name) is True
+            for name in ("optimizer_state_available", "scheduler_state_available", "rng_state_available"))
+            and any(item.get("scope") == "training_state" for item in checkpoint.get("artifacts", []))},
+        "output_artifacts_intact": {"passed": artifacts_intact(checkpoint)},
+        "weight_artifacts_changed": {"passed": bool(weights(checkpoint))
+            and bool(weights(start_manifest)) and weights(checkpoint) != weights(start_manifest)},
         "checkpoint_changed": {
             "passed": checkpoint_sha != _text(start_checkpoint.get("sha256")),
             "actual": checkpoint_sha,

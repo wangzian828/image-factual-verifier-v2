@@ -54,7 +54,8 @@ def prepare(args):
         relative = Path("images") / matches[0].name
         target = staging / relative
         target.parent.mkdir(exist_ok=True)
-        os.link(matches[0], target)  # Same server filesystem; no second image copy.
+        if not target.exists():
+            os.link(matches[0], target)  # Same server filesystem; no second image copy.
         materialized.append({**row, "unified_image_path": relative.as_posix()})
     selected_ids = {_case_id(row) for row in selected}
     gold = [row for row in load_jsonl(args.metadata_root / "evaluator_private/private-gold-v1/train-private-gold.jsonl")

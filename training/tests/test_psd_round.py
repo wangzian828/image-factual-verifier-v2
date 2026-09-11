@@ -62,13 +62,19 @@ def _rollout(
 
 def _checkpoint(path: Path, *, step: int, dataset_sha: str = "dataset-sha") -> Path:
     path.mkdir(parents=True)
+    (path / "model.safetensors").write_bytes(f"test weights {step}".encode())
+    (path / "optimizer.pt").write_bytes(b"test optimizer state")
     manifest = path.parent / f"checkpoint-{step}-manifest.json"
     _write(
         manifest,
         {
             "schema_version": "ifv-qwen-checkpoint-manifest-v1",
-            "checkpoint": {"path": str(path), "global_step": step},
+            "checkpoint": {"path": str(path), "global_step": step,
+                "optimizer_state_available": True, "scheduler_state_available": True,
+                "rng_state_available": True},
             "training_dataset": {"manifest_sha256": dataset_sha},
+            "artifacts": [{"scope": scope, "path": name, "sha256": sha256_file(path / name)}
+                          for scope, name in (("model", "model.safetensors"), ("training_state", "optimizer.pt"))],
         },
     )
     return manifest
@@ -117,6 +123,21 @@ def test_psd_round_chain_requires_fresh_rollout_from_previous_output(
         output=completion1,
     )
     assert completed["passed"] is True
+    for check in ("optimizer_state_available", "scheduler_state_available", "rng_state_available"):
+        changed = json.loads(trained_manifest.read_text())
+        changed["checkpoint"][check] = False
+        tampered = tmp_path / "tampered-manifest.json"
+        _write(tampered, changed)
+        rejected = complete_psd_round(rollout_gate_path=rollout_gate1,
+            training_profile_path=training_profile, output_checkpoint_manifest_path=tampered,
+            output=tmp_path / "rejected.json")
+        assert not rejected["passed"]
+    original_weights = (trained_path / "model.safetensors").read_bytes()
+    (trained_path / "model.safetensors").write_bytes(b"changed after manifest")
+    assert not complete_psd_round(rollout_gate_path=rollout_gate1,
+        training_profile_path=training_profile, output_checkpoint_manifest_path=trained_manifest,
+        output=tmp_path / "rejected.json")["passed"]
+    (trained_path / "model.safetensors").write_bytes(original_weights)
 
     run2, cases2, serving2 = _rollout(
         tmp_path,
