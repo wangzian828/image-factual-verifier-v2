@@ -2,6 +2,15 @@
 
 ## Current phase: pre-training independent judge
 
+04:00 follow-up: judge controller remained active (306 returned judgments,
+zero engineering errors at the snapshot). Do not interpret the controller's
+batch-level `completed: 1` as stalled: in-flight batch progress is in
+`judge-1/audit-results.jsonl`. Read-only production data preflight was rerun at
+03:56 and passed with zero errors:
+`/volume/ybo/wza/training-artifacts/h20-formal-sft-20260912/data-preflight.json`.
+It revalidated the exact train/validation/manifest/processor hashes and SP4,
+131072, image1024/max_pixels262144 template binding. No training was started.
+
 Original run:
 `/volume/ybo/wza/runs/eval/qwen35-base-agent-full1682-c40-pretrain-20260911`.
 Finished 1,682 cases: 1,677 successful, five engineering errors (one malformed
