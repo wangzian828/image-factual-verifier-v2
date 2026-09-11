@@ -63,7 +63,8 @@ start() {
         --max-model-len 131072 \
         --gpu-memory-utilization 0.94 \
         --max-num-seqs 4 \
-        --max-num-batched-tokens 16384 \
+        --max-num-batched-tokens 32768 \
+        --performance-mode throughput \
         --gdn-prefill-backend triton \
         --reasoning-parser qwen3 \
         --enable-auto-tool-choice \
