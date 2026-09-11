@@ -203,6 +203,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-student-diagnostic", action="store_true")
     parser.add_argument("--verification-bundle", type=Path)
     parser.add_argument("--train-cases", type=Path, required=True)
+    parser.add_argument("--source-access-policy", type=Path, required=True,
+                        help="The exact source-access policy used for the original rollout")
     parser.add_argument("--judge-model", default="gemini-3.1-pro-preview")
     parser.add_argument("--skip-auto-judge", action="store_true",
                         help="Persist pending attempts for offline task verification")
@@ -243,7 +245,7 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
               if key not in {"resume", "skip_auto_judge", "generation_retries"}}
     for key in ("trace", "candidate", "audit", "gold", "public_context", "private_context",
                 "image", "train_cases", "policy_serving_profile", "round_start_checkpoint_manifest",
-                "semantic_verification", "verification_bundle"):
+                "semantic_verification", "verification_bundle", "source_access_policy"):
         value = getattr(args, key)
         if value is not None:
             config[key] = {"path": str(value.resolve()), "sha256": sha256_file(value)}
@@ -285,6 +287,10 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
         "train_cases_sha256": sha256_file(args.train_cases),
         "candidate_count": 0, "accepted_count": 0,
         })
+    from src.orchestrator.source_access import SourceAccessPolicy
+    source_policy = SourceAccessPolicy.load(args.source_access_policy)
+    if not source_policy.active:
+        raise ValueError("PSD training repair requires an active source-exclusion policy")
     policy_orchestrator = Orchestrator(
         provider=args.policy_provider,
         model_name=args.policy_model,
@@ -292,6 +298,7 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
         llm_wire_api=args.policy_wire_api,
         image_access_mode="direct_multimodal",
         validate_startup=True,
+        source_access_policy=source_policy,
     )
     hint_constructor_llm = APIBackend(
         provider=args.hint_constructor_provider,
