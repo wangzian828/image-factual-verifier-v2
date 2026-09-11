@@ -20,11 +20,13 @@ def main():
     from PIL import Image
     from transformers import AutoConfig, AutoModelForImageTextToText, AutoProcessor
     from ifv_training.psd_media import bind_media, load_media
+    from ifv_training.psd_hf_teacher import enable_cpu_reference_kernels
     from ifv_training.psd_datums import build_sparse_topk_datum
     from ifv_training.psd_ms_swift import sparse_topk_cross_entropy, install_ms_swift_psd_plugin
     from swift.template.register import TEMPLATE_MAPPING
 
     torch.set_num_threads(4)
+    enable_cpu_reference_kernels()
     torch.manual_seed(42)
     processor = AutoProcessor.from_pretrained(args.model, local_files_only=True)
     processor.image_processor.size = {"shortest_edge": 1024, "longest_edge": 4096}

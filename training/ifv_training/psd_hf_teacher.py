@@ -5,12 +5,24 @@ from typing import Any, Mapping
 from .psd_media import load_media
 
 
+def enable_cpu_reference_kernels():
+    # Transformers selects optional CUDA-only kernels at import time even for
+    # a CPU model. Use its own reference implementations in this process.
+    from transformers.models.qwen3_5 import modeling_qwen3_5 as module
+    for name in ("FusedRMSNormGated", "causal_conv1d_fn", "causal_conv1d_update",
+                 "chunk_gated_delta_rule", "fused_recurrent_gated_delta_rule"):
+        setattr(module, name, None)
+    module.is_fast_path_available = False
+
+
 class FrozenTeacher:
     def __init__(self, profile: Mapping[str, Any], *, device: str = "cuda:0"):
         import torch
         from transformers import AutoModelForImageTextToText
 
         self.device = device
+        if device == "cpu":
+            enable_cpu_reference_kernels()
         path = profile["model_path"]
         base = profile.get("engine_model_path") or path
         self.model = AutoModelForImageTextToText.from_pretrained(
