@@ -134,6 +134,7 @@ def main():
           'image_bytes': dist([i['bytes'] for i in image_stats])})
     source_manifest = json.loads((package/'SOURCE_MANIFEST.json').read_text())
     frozen = {r['case_id']: r for r in rows(package/'case-split/case_split.jsonl')}
+    policy_cases = {r['episode_id']: r['case_id'] for r in rows(package/'ms-swift-policy/index.jsonl')}
     assert sha(package/'case-split/case_split.jsonl') == source_manifest['case_split']['sha256']
     from ifv_training.audit import audit_derived_dataset
     tasks, audits, dataset_files = [], {}, []
@@ -155,7 +156,14 @@ def main():
                 for i, row in enumerate(data):
                     meta = by_split[split][i]
                     assert meta['source_index'] == i, 'Split-local index ordering mismatch'
-                    case = meta.get('case_id') or re.search(r'(main-\d+)', meta['episode_id']).group(1)
+                    case = meta.get('case_id') or policy_cases.get(meta['episode_id'])
+                    if case is None:
+                        # Action-only perception rows have no policy entry. Bind by the
+                        # frozen source-image identity; never assume all IDs are main-N.
+                        candidates = [key for key, value in frozen.items()
+                                      if value['image_sha256'] == meta['image_sha256'] and value['split'] == split]
+                        assert len(candidates) == 1, f'Ambiguous perception case identity: {meta["episode_id"]}'
+                        case = candidates[0]
                     assert frozen[case]['split'] == split, 'Frozen split mismatch'
                     for field, value in [('case', case), ('group', frozen[case]['split_group_id']),
                                          ('source_image', frozen[case]['image_sha256'])]:
