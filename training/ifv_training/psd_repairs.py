@@ -72,7 +72,7 @@ def _source_trace_sha256(row: Mapping[str, Any]) -> str:
     )
 
 
-def _source_fields(candidate: Mapping[str, Any]) -> dict[str, str]:
+def _source_fields(candidate: Mapping[str, Any]) -> dict[str, Any]:
     source = _mapping(candidate.get("source"))
     return {
         "source_run_id": _text(
@@ -82,6 +82,12 @@ def _source_fields(candidate: Mapping[str, Any]) -> dict[str, str]:
             candidate.get("runtime_commit") or source.get("runtime_commit")
         ),
         "source_trace_sha256": _source_trace_sha256(candidate),
+        "psd_round_index": candidate.get("psd_round_index")
+        or source.get("psd_round_index"),
+        "psd_rollout_gate_sha256": _text(
+            candidate.get("psd_rollout_gate_sha256")
+            or source.get("psd_rollout_gate_sha256")
+        ),
     }
 
 
@@ -187,6 +193,15 @@ def _validate_attempt(
     source_trace_sha256 = _source_trace_sha256(candidate)
     if not case_id or not episode_id or not step_id or not source_trace_sha256:
         raise ValueError("candidate_identity_incomplete")
+    source_fields = _source_fields(candidate)
+    round_index = source_fields.get("psd_round_index")
+    if not isinstance(round_index, int) or isinstance(round_index, bool) or round_index < 1:
+        raise ValueError("candidate_psd_round_invalid")
+    rollout_gate_sha256 = _text(source_fields.get("psd_rollout_gate_sha256")).casefold()
+    if len(rollout_gate_sha256) != 64 or any(
+        character not in "0123456789abcdef" for character in rollout_gate_sha256
+    ):
+        raise ValueError("candidate_psd_rollout_gate_invalid")
     if _text(attempt.get("case_id")) != case_id:
         raise ValueError("case_id_mismatch")
     if _text(attempt.get("episode_id")) != episode_id:
@@ -589,6 +604,14 @@ def assemble_psd_repair_package(
     } - {""}
     if len(repair_source_runs) > 1:
         raise ValueError("selected repairs span multiple source rollout runs")
+    repair_rollout_gates = {
+        _text(row.get("psd_rollout_gate_sha256")) for row in repairs
+    } - {""}
+    if len(repair_rollout_gates) != 1 and repairs:
+        raise ValueError("selected repairs do not share one PSD rollout gate")
+    repair_rounds = {row.get("psd_round_index") for row in repairs}
+    if len(repair_rounds) != 1 and repairs:
+        raise ValueError("selected repairs do not share one PSD round")
 
     preservation: list[dict[str, Any]] = []
     preservation_rejections: list[dict[str, Any]] = []
@@ -622,6 +645,13 @@ def assemble_psd_repair_package(
             )
             if repair_source_runs and candidate_run not in repair_source_runs:
                 raise ValueError("preservation_source_run_mismatch")
+            candidate_source = _source_fields(candidate)
+            if repair_rollout_gates and _text(
+                candidate_source.get("psd_rollout_gate_sha256")
+            ) not in repair_rollout_gates:
+                raise ValueError("preservation_rollout_gate_mismatch")
+            if repair_rounds and candidate_source.get("psd_round_index") not in repair_rounds:
+                raise ValueError("preservation_psd_round_mismatch")
             preservation.append(
                 _preservation_row(
                     candidate,

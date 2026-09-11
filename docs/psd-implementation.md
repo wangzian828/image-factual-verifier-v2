@@ -96,9 +96,18 @@ python -m ifv_training locate-psd-failure `
   --semantic-verification <semantic-localization.json> `
   --output <failure-site.json>
 
+python -m ifv_training verify-psd-round-rollout `
+  --round-index 1 `
+  --run-dir <server-run> `
+  --train-cases <train-manifest.jsonl> `
+  --serving-profile <serving-profile.json> `
+  --round-start-checkpoint-manifest <checkpoint-manifest.json> `
+  --output <round-rollout-gate.json>
+
 python -m ifv_training build-psd-candidates `
   --run-dir <server-run> `
   --train-cases <train-manifest.jsonl> `
+  --rollout-gate <round-rollout-gate.json> `
   --output-dir <candidate-package>
 
 python -m ifv_training verify-psd-episode `
@@ -147,6 +156,25 @@ diagnostic trace.
 The rollout, runtime archive, images, and checkpoints stay on the server. Only
 code and documentation belong in this repository.
 
+The rollout gate binds the completed run manifest, reward rows, rollout groups,
+train allowlist, serving profile and immutable round-start checkpoint manifest.
+Candidate construction re-hashes those inputs, so a bank cannot be changed or
+silently reused after admission. After the optimizer run, register its new
+checkpoint manifest and close the round:
+
+```powershell
+python -m ifv_training complete-psd-round `
+  --rollout-gate <round-rollout-gate.json> `
+  --training-profile <psd-run/profile.json> `
+  --output-checkpoint-manifest <new-checkpoint-manifest.json> `
+  --output <round-completion.json>
+```
+
+Round 2 and later must pass the preceding `round-completion.json` to
+`verify-psd-round-rollout --previous-round-completion`. The next round-start
+manifest must be byte-identical to the preceding output manifest and the
+rollout run ID must be new.
+
 ## Sparse loss and launch gate
 
 Teacher top-20 probabilities are multiplied by each target's effective row
@@ -157,6 +185,9 @@ normalized to 1:1 effective row mass.
 
 `training/scripts/train/run_psd_topk.sh` runs the datum-manifest/hash gate,
 ms-swift plugin forward/backward smoke, frozen-environment preflight and
-checkpoint storage preflight before model loading. It also accepts an optional
-resume checkpoint. The current checked-in PSD profile remains an SP1 LoRA
-one-step engineering smoke; 128K SP8 PSD is not yet validated.
+checkpoint storage preflight before model loading. During training it runs the
+same resource sampler and watchdog used by SFT; afterward it validates
+checkpoint I/O and refuses a run that misses the production gate. It also
+accepts an optional resume checkpoint. The current checked-in PSD profile
+remains an SP1 LoRA one-step engineering smoke; 128K SP8 PSD is not yet
+validated.

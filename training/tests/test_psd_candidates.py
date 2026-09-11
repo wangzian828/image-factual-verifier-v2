@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 
 from ifv_training.psd_candidates import build_psd_candidate_package
+from ifv_training.io import sha256_file
+from ifv_training.psd_round import PSD_ROLLOUT_GATE_SCHEMA_VERSION
 
 
 def _write_json(path: Path, value: object) -> None:
@@ -17,6 +19,33 @@ def _write_jsonl(path: Path, values: list[dict[str, object]]) -> None:
         "".join(json.dumps(value, ensure_ascii=False) + "\n" for value in values),
         encoding="utf-8",
     )
+
+
+def _rollout_gate(run_dir: Path, train_cases: Path) -> Path:
+    manifest = run_dir / "run_manifest.json"
+    if not manifest.is_file():
+        _write_json(manifest, {"run_id": run_dir.name, "git_commit": "abc"})
+    gate = run_dir / "psd-rollout-gate.json"
+    _write_json(
+        gate,
+        {
+            "schema_version": PSD_ROLLOUT_GATE_SCHEMA_VERSION,
+            "round_index": 1,
+            "passed": True,
+            "run": {
+                "directory": str(run_dir.resolve()),
+                "manifest_sha256": sha256_file(manifest),
+                "post_rollout_rewards_sha256": sha256_file(
+                    run_dir / "post_rollout_rewards.jsonl"
+                ),
+                "rollout_groups_sha256": sha256_file(
+                    run_dir / "rollout_groups.jsonl"
+                ),
+            },
+            "train_cases": {"sha256": sha256_file(train_cases)},
+        },
+    )
+    return gate
 
 
 def _trace(
@@ -168,6 +197,7 @@ def test_build_psd_candidate_package_separates_public_queues(
     manifest = build_psd_candidate_package(
         run_dir=run_dir,
         train_cases_path=train_cases,
+        rollout_gate_path=_rollout_gate(run_dir, train_cases),
         output_dir=output,
     )
 
@@ -189,6 +219,8 @@ def test_build_psd_candidate_package_separates_public_queues(
         "protocol_rejection",
     ]
     assert repairs[0]["repair_site"]["step_id"] == "episode-repair:judgment:judgment-1"
+    assert repairs[0]["source"]["psd_round_index"] == 1
+    assert len(repairs[0]["source"]["psd_rollout_gate_sha256"]) == 64
     assert repairs[1]["repair_site"]["step_id"] == "episode-protocol:judgment:judgment-1"
     assert "classification_correct" not in repairs[0]
     assert "evaluation_gold" not in (output / "repair_candidates.jsonl").read_text(
@@ -257,6 +289,7 @@ def test_build_psd_candidate_package_requeues_old_trace_without_capture(
     manifest = build_psd_candidate_package(
         run_dir=run_dir,
         train_cases_path=train_cases,
+        rollout_gate_path=_rollout_gate(run_dir, train_cases),
         output_dir=output,
     )
 
@@ -319,6 +352,7 @@ def test_strict_audit_location_maps_raw_index_to_projected_policy_step(
     build_psd_candidate_package(
         run_dir=run_dir,
         train_cases_path=train_cases,
+        rollout_gate_path=_rollout_gate(run_dir, train_cases),
         output_dir=output,
     )
 
@@ -371,6 +405,7 @@ def test_terminal_mismatch_requires_privileged_attribution(
     build_psd_candidate_package(
         run_dir=run_dir,
         train_cases_path=train_cases,
+        rollout_gate_path=_rollout_gate(run_dir, train_cases),
         output_dir=output,
     )
 

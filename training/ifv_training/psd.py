@@ -503,6 +503,10 @@ def build_repair_target(
             "source_run_id": _text(row.get("source_run_id")),
             "runtime_commit": _text(row.get("runtime_commit")),
             "source_trace_sha256": _text(row.get("source_trace_sha256")),
+            "psd_round_index": row.get("psd_round_index"),
+            "psd_rollout_gate_sha256": _text(
+                row.get("psd_rollout_gate_sha256")
+            ),
         },
     }
 
@@ -593,6 +597,10 @@ def build_preservation_targets(
                     "source_run_id": _text(row.get("source_run_id")),
                     "runtime_commit": _text(row.get("runtime_commit")),
                     "source_trace_sha256": _text(row.get("source_trace_sha256")),
+                    "psd_round_index": row.get("psd_round_index"),
+                    "psd_rollout_gate_sha256": _text(
+                        row.get("psd_rollout_gate_sha256")
+                    ),
                 },
             }
         )

@@ -178,6 +178,9 @@ def test_psd_and_grpo_use_framework_entrypoints() -> None:
     assert "checkpoint-storage-preflight" in psd
     assert "--resume_from_checkpoint" in psd
     assert "run_with_resource_monitor.py" in psd
+    assert "watch_sft.py" in psd
+    assert "checkpoint-io-profile" in psd
+    assert "passed_production_gate" in psd
     assert "Trainer" not in psd
 
     assert "swift rlhf" in grpo

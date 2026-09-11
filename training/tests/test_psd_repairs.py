@@ -36,6 +36,8 @@ def _repair_candidate(candidate_id: str = "candidate-1") -> dict:
             "source_run_id": "run-1",
             "runtime_commit": "abc",
             "source_trace_sha256": "trace-sha",
+            "psd_round_index": 1,
+            "psd_rollout_gate_sha256": "b" * 64,
         },
     }
 
@@ -130,6 +132,8 @@ def _preservation_candidate() -> dict:
             "source_run_id": "run-1",
             "runtime_commit": "abc",
             "source_trace_sha256": "pass-sha",
+            "psd_round_index": 1,
+            "psd_rollout_gate_sha256": "b" * 64,
         },
         "preservation_steps": [
             {

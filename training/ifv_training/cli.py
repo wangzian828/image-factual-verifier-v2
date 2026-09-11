@@ -40,6 +40,7 @@ from .psd_candidates import build_psd_candidate_package
 from .psd_datums import build_sparse_topk_package
 from .psd_repairs import assemble_psd_repair_package
 from .psd_preflight import verify_psd_training_input
+from .psd_round import complete_psd_round, verify_psd_round_rollout
 from .rewards import (
     build_and_write_ledger,
     build_ledgers_from_run_artifacts,
@@ -184,7 +185,29 @@ def _parser() -> argparse.ArgumentParser:
     psd_candidates = subparsers.add_parser("build-psd-candidates")
     psd_candidates.add_argument("--run-dir", type=Path, required=True)
     psd_candidates.add_argument("--train-cases", type=Path, required=True)
+    psd_candidates.add_argument("--rollout-gate", type=Path, required=True)
     psd_candidates.add_argument("--output-dir", type=Path, required=True)
+
+    psd_rollout_gate = subparsers.add_parser("verify-psd-round-rollout")
+    psd_rollout_gate.add_argument("--round-index", type=int, required=True)
+    psd_rollout_gate.add_argument("--run-dir", type=Path, required=True)
+    psd_rollout_gate.add_argument("--train-cases", type=Path, required=True)
+    psd_rollout_gate.add_argument("--serving-profile", type=Path, required=True)
+    psd_rollout_gate.add_argument(
+        "--round-start-checkpoint-manifest", type=Path, required=True
+    )
+    psd_rollout_gate.add_argument("--previous-round-completion", type=Path)
+    psd_rollout_gate.add_argument("--output", type=Path, required=True)
+
+    psd_round_completion = subparsers.add_parser("complete-psd-round")
+    psd_round_completion.add_argument("--rollout-gate", type=Path, required=True)
+    psd_round_completion.add_argument(
+        "--training-profile", type=Path, required=True
+    )
+    psd_round_completion.add_argument(
+        "--output-checkpoint-manifest", type=Path, required=True
+    )
+    psd_round_completion.add_argument("--output", type=Path, required=True)
 
     psd_topk = subparsers.add_parser("materialize-psd-topk")
     psd_topk.add_argument("--targets", type=Path, required=True)
@@ -458,8 +481,34 @@ def main() -> None:
         result = build_psd_candidate_package(
             run_dir=args.run_dir,
             train_cases_path=args.train_cases,
+            rollout_gate_path=args.rollout_gate,
             output_dir=args.output_dir,
         )
+    elif args.command == "verify-psd-round-rollout":
+        result = verify_psd_round_rollout(
+            round_index=args.round_index,
+            run_dir=args.run_dir,
+            train_cases_path=args.train_cases,
+            serving_profile_path=args.serving_profile,
+            round_start_checkpoint_manifest_path=(
+                args.round_start_checkpoint_manifest
+            ),
+            previous_round_completion_path=args.previous_round_completion,
+            output=args.output,
+        )
+        if not result["passed"]:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            raise SystemExit(1)
+    elif args.command == "complete-psd-round":
+        result = complete_psd_round(
+            rollout_gate_path=args.rollout_gate,
+            training_profile_path=args.training_profile,
+            output_checkpoint_manifest_path=args.output_checkpoint_manifest,
+            output=args.output,
+        )
+        if not result["passed"]:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            raise SystemExit(1)
     elif args.command == "materialize-psd-topk":
         result = materialize_psd_topk_cache(
             targets_path=args.targets,

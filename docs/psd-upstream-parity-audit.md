@@ -37,6 +37,7 @@ abbreviation; the current public method and this repository use PSD.
 | Resumable, provenance-bound target materialization | target IDs, token hashes, teacher identity, checkpoint and manifest hash are checked | Aligned for imported/online caches |
 | Training refuses incomplete target packages | launcher verifies manifest schema/status, file hash, top-K, context, source kinds and effective mass | Aligned |
 | Finite forward/backward and recoverable checkpoints | plugin rejects non-finite weights/loss; launcher records resources and supports checkpoint resume | Aligned at framework-smoke level |
+| Every new PSD round recollects from the previous round output | rollout gate binds the served round-start checkpoint; round completion binds the new checkpoint; later rounds require that exact prior output and a new run ID | Aligned and fail-closed |
 
 ## Intentional backend differences
 
@@ -80,9 +81,8 @@ The following are not yet empirical claims:
 3. The current PSD training profile is a LoRA, one-step, sequence-parallel-size
    1 engineering smoke. The SFT environment supports 131072 tokens, but that
    does not prove a 131072-token PSD target fits or that PSD can use SP8.
-4. Multi-round PSD still requires a fresh current-policy rollout at the start
-   of every round. No old failure bank may be silently reused as if it were
-   on-policy.
+4. Multi-round chaining is now enforced by immutable rollout and completion
+   gates, but it has not yet been exercised on a real two-round IFV run.
 
 Formal PSD training therefore remains gated on real training data, a real
 five-case repair smoke, complete verifier-bound episodes, top-20 capture, and

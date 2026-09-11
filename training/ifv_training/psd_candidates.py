@@ -26,6 +26,7 @@ from .io import (
     write_json,
     write_jsonl,
 )
+from .psd_round import validate_rollout_gate_for_candidates
 
 
 PSD_CANDIDATE_SCHEMA_VERSION = "ifv-psd-candidate-v1"
@@ -331,10 +332,17 @@ def _load_train_case_allowlist(path: Path) -> dict[str, str]:
     return allowlist
 
 
-def _source_metadata(run_manifest: Mapping[str, Any]) -> dict[str, str]:
+def _source_metadata(
+    run_manifest: Mapping[str, Any],
+    *,
+    rollout_gate: Mapping[str, Any],
+    rollout_gate_path: Path,
+) -> dict[str, Any]:
     return {
         "source_run_id": _text(run_manifest.get("run_id")),
         "runtime_commit": _text(run_manifest.get("git_commit")),
+        "psd_round_index": rollout_gate.get("round_index"),
+        "psd_rollout_gate_sha256": sha256_file(rollout_gate_path),
     }
 
 
@@ -447,6 +455,7 @@ def build_psd_candidate_package(
     *,
     run_dir: Path,
     train_cases_path: Path,
+    rollout_gate_path: Path,
     output_dir: Path,
 ) -> dict[str, Any]:
     """Produce the queues consumed by later PSD localization and repair stages.
@@ -465,6 +474,11 @@ def build_psd_candidate_package(
     require_new_or_empty(output_dir)
 
     train_cases = _load_train_case_allowlist(train_cases_path)
+    rollout_gate = validate_rollout_gate_for_candidates(
+        rollout_gate_path=rollout_gate_path,
+        run_dir=run_dir,
+        train_cases_path=train_cases_path,
+    )
     run_manifest_path = run_dir / "run_manifest.json"
     run_manifest = load_json(run_manifest_path) if run_manifest_path.is_file() else {}
     group_paths = {
@@ -478,7 +492,11 @@ def build_psd_candidate_package(
     engineering_requeue: list[dict[str, Any]] = []
     token_capture_requeue: list[dict[str, Any]] = []
     rejections: list[dict[str, Any]] = []
-    source = _source_metadata(run_manifest)
+    source = _source_metadata(
+        run_manifest,
+        rollout_gate=rollout_gate,
+        rollout_gate_path=rollout_gate_path,
+    )
 
     for row_index, reward in enumerate(load_jsonl(rewards_path)):
         case_id = _text(reward.get("case_id"))
@@ -705,6 +723,8 @@ def build_psd_candidate_package(
             "post_rollout_rewards_sha256": sha256_file(rewards_path),
             "train_cases": str(train_cases_path),
             "train_cases_sha256": sha256_file(train_cases_path),
+            "rollout_gate": str(rollout_gate_path),
+            "rollout_gate_sha256": sha256_file(rollout_gate_path),
             **source,
         },
         "counts": {

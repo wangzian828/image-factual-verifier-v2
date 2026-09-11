@@ -173,26 +173,114 @@ if [[ "${IFV_GRADIENT_CHECKPOINTING:-true}" == "true" ]]; then
 fi
 
 print_command "${args[@]}"
+RESOURCE_SUMMARY="$LOG_DIR/resource-summary.json"
+RESOURCE_SAMPLES="$LOG_DIR/resource-samples.jsonl"
+WATCHDOG_OUTPUT="$LOG_DIR/monitor-latest.json"
+WATCHDOG_LOG="$LOG_DIR/monitor.log"
+WATCHDOG_PID=""
+touch "$LOG_DIR/train.log"
+watchdog_args=(
+  python "$SCRIPT_DIR/watch_sft.py"
+  --train-log "$LOG_DIR/train.log"
+  --checkpoint-root "$OUTPUT_DIR"
+  --resource-samples "$RESOURCE_SAMPLES"
+  --output "$WATCHDOG_OUTPUT"
+  --interval-seconds "${IFV_SFT_WATCHDOG_INTERVAL_SECONDS:-60}"
+  --stale-seconds "${IFV_SFT_WATCHDOG_STALE_SECONDS:-900}"
+)
+stop_watchdog() {
+  if [[ -n "$WATCHDOG_PID" ]] && kill -0 "$WATCHDOG_PID" 2>/dev/null; then
+    kill "$WATCHDOG_PID" 2>/dev/null || true
+    wait "$WATCHDOG_PID" 2>/dev/null || true
+  fi
+  WATCHDOG_PID=""
+}
+if [[ "${IFV_SFT_WATCHDOG_ENABLED:-true}" == "true" ]]; then
+  "${watchdog_args[@]}" >"$WATCHDOG_LOG" 2>&1 &
+  WATCHDOG_PID="$!"
+  trap stop_watchdog EXIT
+fi
+resource_monitor_args=(
+  python "$SCRIPT_DIR/run_with_resource_monitor.py"
+  --summary-output "$RESOURCE_SUMMARY"
+  --samples-output "$RESOURCE_SAMPLES"
+  --gpu-ids "$CUDA_VISIBLE_DEVICES"
+  --sample-interval "${IFV_RESOURCE_SAMPLE_INTERVAL:-2}"
+)
+if [[ -n "${IFV_GPU_MEMORY_TARGET_MIN_MIB:-}" ]]; then
+  resource_monitor_args+=(--memory-target-min-mib "$IFV_GPU_MEMORY_TARGET_MIN_MIB")
+fi
+if [[ -n "${IFV_GPU_MEMORY_TARGET_MAX_MIB:-}" ]]; then
+  resource_monitor_args+=(--memory-target-max-mib "$IFV_GPU_MEMORY_TARGET_MAX_MIB")
+fi
+if [[ -n "${IFV_GPU_MEMORY_MAX_IMBALANCE_MIB:-}" ]]; then
+  resource_monitor_args+=(--memory-max-imbalance-mib "$IFV_GPU_MEMORY_MAX_IMBALANCE_MIB")
+fi
+if [[ -n "${IFV_GPU_UTILIZATION_TARGET_MIN_PERCENT:-}" ]]; then
+  resource_monitor_args+=(
+    --utilization-target-min-percent
+    "$IFV_GPU_UTILIZATION_TARGET_MIN_PERCENT"
+  )
+fi
 set +e
-python "$SCRIPT_DIR/run_with_resource_monitor.py" \
-  --summary-output "$LOG_DIR/resource-summary.json" \
-  --samples-output "$LOG_DIR/resource-samples.jsonl" \
-  --gpu-ids "$CUDA_VISIBLE_DEVICES" \
-  --sample-interval "${IFV_RESOURCE_SAMPLE_INTERVAL:-2}" \
-  -- "${args[@]}" 2>&1 | tee "$LOG_DIR/train.log"
+"${resource_monitor_args[@]}" -- "${args[@]}" 2>&1 | tee "$LOG_DIR/train.log"
 train_status="${PIPESTATUS[0]}"
 set -e
+stop_watchdog
+trap - EXIT
+"${watchdog_args[@]}" --once >>"$WATCHDOG_LOG" 2>&1 || true
 
-python -m ifv_training training-profile \
+checkpoint_io_status=0
+CHECKPOINT_IO_PROFILE=""
+if [[ "$train_status" -eq 0 ]]; then
+  latest_checkpoint="$(
+    find "$OUTPUT_DIR" -type d -name 'checkpoint-*' -print |
+      sort -V |
+      tail -n 1
+  )"
+  if [[ -n "$latest_checkpoint" ]]; then
+    CHECKPOINT_IO_PROFILE="$LOG_DIR/checkpoint-io-profile.json"
+    python -m ifv_training checkpoint-io-profile \
+      --checkpoint "$latest_checkpoint" \
+      --output "$CHECKPOINT_IO_PROFILE" || checkpoint_io_status="$?"
+  fi
+fi
+
+profile_args=(
+  python -m ifv_training training-profile
   --train-log "$LOG_DIR/train.log" \
   --output "$LOG_DIR/profile.json" \
   --steady-window "${IFV_TRAINING_STEADY_WINDOW:-5}" \
   --experiment-id "$EXPERIMENT_ID" \
   --profile-id "$(basename "$PSD_PROFILE")" \
-  --resource-summary "$LOG_DIR/resource-summary.json" \
+  --resource-summary "$RESOURCE_SUMMARY" \
   --dataset-verification "$PSD_INPUT_GATE" \
   --environment-preflight "$ENVIRONMENT_PREFLIGHT" \
   --checkpoint-preflight "$CHECKPOINT_PREFLIGHT" \
-  --train-exit-code "$train_status" || true
+  --train-exit-code "$train_status"
+)
+if [[ -n "$CHECKPOINT_IO_PROFILE" ]]; then
+  profile_args+=(--checkpoint-io-profile "$CHECKPOINT_IO_PROFILE")
+fi
+profile_status=0
+"${profile_args[@]}" || profile_status="$?"
+
+if [[ "$train_status" -eq 0 && "$checkpoint_io_status" -ne 0 ]]; then
+  exit "$checkpoint_io_status"
+fi
+if [[ "$train_status" -eq 0 && "$profile_status" -ne 0 ]]; then
+  exit "$profile_status"
+fi
+if [[ "$train_status" -eq 0 ]]; then
+  python - "$LOG_DIR/profile.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    profile = json.load(handle)
+if profile.get("passed_production_gate") is not True:
+    raise SystemExit("PSD optimizer run did not pass its production gate")
+PY
+fi
 
 exit "$train_status"
