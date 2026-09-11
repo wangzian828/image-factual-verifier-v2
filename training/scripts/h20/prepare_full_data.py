@@ -28,7 +28,9 @@ def sha(path):
 
 
 def rows(path):
-    return [json.loads(line) for line in Path(path).read_text().splitlines() if line.strip()]
+    # JSONL boundaries are LF, not every Unicode separator accepted by splitlines().
+    with Path(path).open(encoding='utf-8') as stream:
+        return [json.loads(line) for line in stream if line.strip()]
 
 
 def write(path, value):
