@@ -86,3 +86,21 @@ or truncating them. Do not increase microbatch at near-full memory without a new
 accounting and resumed-step timing. Each run retains command, source commit, trainer
 logs, sampled GPU utilization/memory, and exit status. Full freeze is kept in the
 server logs directory. Preserve benchmark checkpoints separately from production models.
+
+The 12-step packed stability run completed with finite gradients and no OOM. Steps
+10–12 measured 6,200 effective input tokens/s (12.77 s/step); peak device usage was
+94,560 MiB. Saving FSDP model + optimizer + scheduler + four RNG states took roughly
+35 additional seconds and produced about 105 GiB. A separate process resumed step 12
+and completed steps 13 and 14 (losses 0.171875 and 0.14550781). Extending `max_steps`
+changes the LR schedule: this is a state-restoration smoke test, not an assertion of
+bitwise equivalence to an uninterrupted 14-step run.
+
+Storage is a constraint: shared-filesystem free space is not a user quota. Benchmark
+saving is off by default. After verifying resume, explicitly run
+`environment.sh python <absolute-path>/cleanup_checkpoint.py <completed-run-name>`
+to remove only that successful benchmark's model/optimizer `.distcp` shards. It keeps
+trainer/RNG/scheduler metadata and a deletion inventory, and marks the checkpoint as
+non-resumable. The measured checkpoint shards were removed after testing per the
+user's storage requirement; rerun the bounded save test to reproduce them. Never use
+this cleanup script on a production run. Source models, datasets, and environments
+are not cleanup targets.
