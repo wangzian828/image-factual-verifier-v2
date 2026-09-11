@@ -1,6 +1,6 @@
 # IFV Privileged Self-Distillation / RL 实施计划
 
-更新日期：2026-08-26
+更新日期：2026-09-11
 
 ## 目标
 
@@ -59,6 +59,7 @@ repair proposer 可以看到 private gold；Qwen 部署策略和最终 student p
 - `ifv-training build-psd-targets`
 - `ifv-training build-psd-candidates`
 - `ifv-training materialize-psd-topk`
+- `ifv-training collect-psd-topk`
 - hint 泄漏审计；
 - 从 postprocessed Qwen rollout 的真实 `policy_input` / `policy_action` / `interaction_id`
   建立 repair seed、base-pass preservation、工程错误重跑和拒绝账本；
@@ -110,10 +111,11 @@ local_pass
   当前 stage / ReAct step 恢复
 
 causal_episode_pass
-  恢复后移除 hint，后续继续无 hint，整条 episode 正确且通过审计
+  冻结 self-teacher 在相同 prefix 上保留短 hint，完成整条正确 episode 并通过审计
 ```
 
 只有 `causal_episode_pass` 进入第一版主 repair target。每个 case 可以保留多个失败点，但同一个失败点只保留最短的首个成功 hint。
+额外的无 hint student continuation 只用于确认/诊断原始失败，不是 repair 准入条件。
 
 ## 第四阶段：PSD 训练
 
@@ -128,12 +130,14 @@ L_psd = batch_mean(sum_over_target_tokens(
 L_total = L_psd + λ_preserve * L_preserve
 ```
 
-建议起始配置：
+正式 Qwen3.5 配置按上游公开 recipe 固定：
 
 - top-K：20；
-- LoRA rank：16、32；
-- learning rate：`5e-6`、`1e-5`；
-- 先训练 1 epoch；
+- LoRA rank：32；
+- learning rate：`4e-5`；
+- 32 个 unique target / optimizer step；
+- 5 epochs，gradient clipping 1.0，seed 0；
+- 8 卡 SP8、128K；
 - repair/preservation 都必须存在；按上游最终公开配置逐 target 等权，默认每个
   repair target 和每个 preservation assistant-step target 权重均为 1.0，不再做
   两类 aggregate row mass 的 1:1 重平衡；
@@ -141,7 +145,7 @@ L_total = L_psd + λ_preserve * L_preserve
 - system、user、tool observation 不计 loss；
 - ReAct 保留 Qwen 原生 `<think>` / `<tool_call>` 格式，不自行发明协议。
 
-不要直接照搬上游 Tinker/River 的 `4e-5`；IFV 使用 ms-swift/DeepSpeed/vLLM，优化器、batch 和梯度尺度不同。
+ms-swift 是后端替换，不改变 PSD 的 target 语义和公开优化器 recipe。正式训练前仍必须用真实 target 包完成 8 卡一步 memory probe，验证该后端替换在 A100 40GB 上的容量和吞吐。
 
 ## 第五阶段：对照和多轮
 
@@ -184,13 +188,18 @@ SFT
 
 最终测试集 1684 条不参与 rollout、hint、SFT 或 RL。RL-dev 从训练集内部按 case 划出，不和训练 case 重叠。
 
-## 后续代码阶段
+## 当前状态与剩余实证门禁
 
-1. 完成真实 Qwen rollout group adapter；
-2. 将 IFV canonical trace 投影成 PSD failure site；
-3. 接入 privileged repair proposer；
-4. 扩展 vLLM probe，验证 top-20 prompt logprobs；
-5. 实现 top-k cache；
-6. 接入 PSD loss trainer；
-7. 完成 20–50 case smoke，再做 300 case pilot；
-8. 通过 pilot 后才扩大到完整训练集。
+代码侧已经具备：真实 Qwen rollout candidate 投影、verifier-guided failure
+localization、Gemini privileged hint constructor、冻结 Qwen continuation、严格 episode
+准入、完整 hinted teacher episode 生成、零 provider replay 的离线 verifier 收口、
+可恢复的 vLLM forced-token top-20 collector、target/datum preflight、ms-swift
+sparse loss、SP8/128K profile、训练监控和 checkpoint resume。
+
+剩余工作依赖正式数据和空闲 GPU，不是继续补一套训练语义：
+
+1. 用真实训练 case 完成 5-case repair smoke；
+2. 对 verifier 通过的 repair/preservation 包完成 top-20 collection；
+3. 用同一包完成 8 卡 SP8 一步 memory probe；
+4. 再做 20–50 case 行为 smoke 和 300 case pilot；
+5. pilot 无工程错误且 held-out 指标通过后才扩大到完整训练集。

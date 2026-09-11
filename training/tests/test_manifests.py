@@ -66,10 +66,47 @@ def test_checkpoint_and_serving_manifests(tmp_path: Path) -> None:
     assert checkpoint_manifest["checkpoint"]["rng_state_available"] is True
     assert checkpoint_manifest["training_method"] == "lora"
     assert serving["base_url"] == "http://127.0.0.1:8899/v1"
+    assert serving["engine_model_path"] == "/models/qwen-ifv"
+    assert serving["adapter_path"] is None
+    assert serving["deployment_mode"] == "full_model"
     assert serving["tool_call_parser"] == "qwen3_coder"
     assert serving["thinking_enabled"] is False
     assert len(serving["checkpoint_manifest_sha256"]) == 64
     assert json.loads(serving_path.read_text())["profile_id"] == "student-qwen-local"
+
+
+def test_serving_profile_distinguishes_lora_policy_from_engine_base(
+    tmp_path: Path,
+) -> None:
+    checkpoint_manifest_path = tmp_path / "checkpoint-manifest.json"
+    write_json(
+        checkpoint_manifest_path,
+        {
+            "schema_version": "ifv-qwen-checkpoint-manifest-v1",
+            "checkpoint": {"path": "/adapters/psd-round-1"},
+        },
+    )
+    serving = build_serving_profile(
+        output_path=tmp_path / "serving.json",
+        profile_id="ifv-psd-round-1",
+        model_path="/adapters/psd-round-1",
+        engine_model_path="/models/qwen3.5-9b",
+        adapter_path="/adapters/psd-round-1",
+        engine="vllm",
+        port=8901,
+        tensor_parallel_size=8,
+        dtype="bfloat16",
+        context_length=131072,
+        tool_call_parser="qwen3_coder",
+        reasoning_parser="qwen3",
+        thinking_enabled=True,
+        checkpoint_manifest_path=checkpoint_manifest_path,
+    )
+
+    assert serving["model_path"] == "/adapters/psd-round-1"
+    assert serving["engine_model_path"] == "/models/qwen3.5-9b"
+    assert serving["adapter_path"] == "/adapters/psd-round-1"
+    assert serving["deployment_mode"] == "lora_adapter"
 
 
 def test_environment_manifest_records_framework_and_lock(tmp_path: Path) -> None:

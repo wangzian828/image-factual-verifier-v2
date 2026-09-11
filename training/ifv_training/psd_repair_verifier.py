@@ -12,6 +12,13 @@ from . import _repo_import  # noqa: F401
 from scripts.audit_real_trace import audit_trace
 from src.trajectory.scoring import score_process_trace
 from src.orchestrator.stage_runner import StageStep
+from src.orchestrator.react_runtime import (
+    REACT_RUNTIME_SCHEMA_VERSION,
+    UNIFIED_REACT_RUNTIME_POLICY_VERSION,
+    UnifiedReactState,
+    compile_react_judgment_basis,
+    record_react_action,
+)
 
 from .psd_repair import (
     PSD_LOCAL_VERIFICATION_SCHEMA_VERSION,
@@ -165,6 +172,206 @@ def merge_suffix_into_trace(
         "suffix_step_count": len(suffix_steps),
         "terminal_state_replayed": False,
     }
+    return trace
+
+
+def _runtime_totals(steps: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    token_usage = {"prompt": 0, "completion": 0, "thought": 0}
+    total_tool_subcalls = 0
+    tool_subcalls_by_kind: dict[str, int] = {}
+    llm_api_calls = 0
+    for step in steps:
+        tokens = _mapping(step.get("tokens"))
+        metadata = _mapping(step.get("metadata"))
+        tool_tokens = _mapping(metadata.get("tool_tokens"))
+        for name in token_usage:
+            token_usage[name] += int(tokens.get(name, 0) or 0)
+            token_usage[name] += int(tool_tokens.get(name, 0) or 0)
+        if metadata.get("llm_duration_ms") is not None:
+            llm_api_calls += 1
+        llm_api_calls += int(metadata.get("tool_llm_api_calls", 0) or 0)
+        for raw_subcall in metadata.get("tool_subcalls", []) or []:
+            if not isinstance(raw_subcall, Mapping):
+                continue
+            count = max(0, int(raw_subcall.get("request_count", 1) or 0))
+            kind = _text(raw_subcall.get("kind")) or "unknown"
+            total_tool_subcalls += count
+            tool_subcalls_by_kind[kind] = (
+                tool_subcalls_by_kind.get(kind, 0) + count
+            )
+    return {
+        "token_usage": token_usage,
+        "total_tool_calls": sum(
+            _text(step.get("action_type")) == "tool_call" for step in steps
+        ),
+        "total_tool_subcalls": total_tool_subcalls,
+        "tool_subcalls_by_kind": tool_subcalls_by_kind,
+        "llm_api_calls": llm_api_calls,
+    }
+
+
+def build_complete_hinted_episode_trace(
+    base_trace: Mapping[str, Any],
+    *,
+    failure_site: Any,
+    teacher_steps: Sequence[StageStep],
+    stop_reason: str,
+) -> dict[str, Any]:
+    """Replace the failed decision suffix with one terminal hinted episode.
+
+    ``teacher_steps`` must contain the replacement ReAct actions followed by
+    exactly one real ``RawHistoryJudgmentOutput`` step.  The old failed action
+    and every downstream source step are discarded; otherwise a verifier could
+    accidentally approve a trace containing both the failed and repaired
+    branches.
+    """
+
+    source_index = getattr(failure_site, "source_step_index", None)
+    if not isinstance(source_index, int) or isinstance(source_index, bool):
+        raise ValueError("complete hinted episode requires a source step index")
+    trace = copy.deepcopy(dict(base_trace))
+    state = trace.get("state")
+    if not isinstance(state, dict):
+        raise ValueError("PSD repair trace requires a state object")
+    source_steps = state.get("all_steps")
+    if not isinstance(source_steps, list) or not (0 <= source_index < len(source_steps)):
+        raise ValueError("PSD repair source step index is out of range")
+    source_step = source_steps[source_index]
+    if not isinstance(source_step, Mapping):
+        raise ValueError("PSD repair source step is malformed")
+    source_metadata = _mapping(source_step.get("metadata"))
+    if _sha(source_metadata.get("policy_action")) != _sha(
+        getattr(failure_site, "policy_action", {})
+    ):
+        raise ValueError("PSD repair source policy action changed")
+
+    judgment_steps = [
+        step
+        for step in teacher_steps
+        if step.stage_name == "psd_teacher_judgment"
+        and step.action_type == "output"
+        and isinstance(step.output, Mapping)
+    ]
+    if len(judgment_steps) != 1:
+        raise ValueError("complete hinted episode requires one teacher judgment")
+    canonical_suffix = [
+        _step_row(step, stage="unified_react", role="teacher")
+        for step in teacher_steps
+        if step.stage_name != "psd_teacher_judgment"
+        and not _mapping(step.metadata).get("deterministic_segment_boundary")
+    ]
+    canonical_judgment = _step_row(
+        judgment_steps[0],
+        stage="unified_judgment",
+        role="teacher",
+    )
+    all_steps: list[dict[str, Any]] = [
+        copy.deepcopy(dict(step))
+        for step in source_steps[:source_index]
+        if isinstance(step, Mapping)
+    ]
+    all_steps.extend(canonical_suffix)
+
+    runtime_case = _mapping(state.get("runtime_case"))
+    investigation_source = _mapping(state.get("investigation_state"))
+    case_id = _text(runtime_case.get("case_id") or investigation_source.get("case_id"))
+    image_sha256 = _text(
+        runtime_case.get("image_sha256") or investigation_source.get("image_sha256")
+    )
+    if not case_id or len(image_sha256) != 64:
+        raise ValueError("PSD repair trace lacks a valid runtime case binding")
+    investigation = UnifiedReactState(
+        schema_version=REACT_RUNTIME_SCHEMA_VERSION,
+        case_id=case_id,
+        image_sha256=image_sha256,
+        objective=_text(investigation_source.get("objective"))
+        or UnifiedReactState.model_fields["objective"].default,
+    )
+    for step in all_steps:
+        if (
+            _text(step.get("stage")) == "unified_react"
+            and _text(step.get("action_type")) == "tool_call"
+        ):
+            metadata = _mapping(step.get("metadata"))
+            record_react_action(
+                investigation,
+                tool_name=_text(step.get("tool_name")),
+                tool_args=_mapping(step.get("tool_args")),
+                call_id=_text(metadata.get("function_call_id")) or "missing",
+            )
+    if not investigation.stop_reason:
+        investigation.stop_reason = _text(stop_reason) or "psd_suffix_complete"
+
+    basis = compile_react_judgment_basis(investigation, all_steps)
+    raw_judgment = dict(judgment_steps[0].output or {})
+    verdict_observation_ids = [
+        _text(item)
+        for item in raw_judgment.get("verdict_observation_ids", []) or []
+        if _text(item)
+    ]
+    unknown = sorted(
+        set(verdict_observation_ids) - set(basis.get("observation_ids", []))
+    )
+    if unknown:
+        raise ValueError(
+            "teacher judgment cites unknown observations: " + ",".join(unknown)
+        )
+    judgment = {
+        "verdict": _text(raw_judgment.get("verdict")),
+        "confidence": raw_judgment.get("confidence"),
+        "policy_rule_id": UNIFIED_REACT_RUNTIME_POLICY_VERSION,
+        "selected_observation_ids": list(basis.get("observation_ids", [])),
+        "verdict_observation_ids": verdict_observation_ids,
+        "overall_assessment": _text(raw_judgment.get("overall_assessment")),
+        "fact_check_report": copy.deepcopy(raw_judgment.get("fact_check_report")),
+        "evidence_citations": [],
+    }
+    if judgment["verdict"] not in {"real", "fake"}:
+        raise ValueError("teacher judgment verdict is invalid")
+    all_steps.append(canonical_judgment)
+    totals = _runtime_totals(all_steps)
+    state.update(
+        {
+            "investigation_state": investigation.model_dump(mode="json"),
+            "judgment": judgment,
+            "all_steps": all_steps,
+            "total_tool_calls": totals["total_tool_calls"],
+            "total_tool_subcalls": totals["total_tool_subcalls"],
+            "tool_subcalls_by_kind": totals["tool_subcalls_by_kind"],
+            "llm_api_calls": totals["llm_api_calls"],
+            "token_usage": totals["token_usage"],
+            "termination": "success",
+            "errors": [],
+        }
+    )
+    trace.update(
+        {
+            "judgment": judgment,
+            "verdict": judgment["verdict"],
+            "confidence": judgment["confidence"],
+            "overall_assessment": judgment["overall_assessment"],
+            "fact_check_report": copy.deepcopy(judgment["fact_check_report"]),
+            "evidence_citations": [],
+            "stop_reason": investigation.stop_reason,
+            "action_count": investigation.action_count,
+            "verdict_basis": basis,
+            "state": state,
+            "termination": "success",
+            "token_usage": totals["token_usage"],
+            "total_tool_calls": totals["total_tool_calls"],
+            "total_tool_subcalls": totals["total_tool_subcalls"],
+            "tool_subcalls_by_kind": totals["tool_subcalls_by_kind"],
+            "llm_api_calls": totals["llm_api_calls"],
+            "error": None,
+            "psd_repair": {
+                "role": "teacher",
+                "repair_step_id": _text(getattr(failure_site, "step_id", "")),
+                "source_step_index": source_index,
+                "terminal_state_replayed": True,
+            },
+        }
+    )
+    _assert_no_private_fields(trace)
     return trace
 
 
@@ -421,10 +628,14 @@ def verify_continuation_pair(
         teacher_steps,
         role="teacher",
     )
-    student_suffix_trace = merge_suffix_into_trace(
-        base_trace,
-        student_steps,
-        role="student",
+    student_suffix_trace = (
+        merge_suffix_into_trace(
+            base_trace,
+            student_steps,
+            role="student",
+        )
+        if student_steps
+        else None
     )
     teacher_prompt_sha256, teacher_completion_sha256 = _teacher_step_binding(
         teacher_steps

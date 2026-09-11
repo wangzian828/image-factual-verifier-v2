@@ -19,6 +19,7 @@ if str(TRAINING_ROOT) not in sys.path:
 from src.orchestrator.pipeline import Orchestrator
 from src.orchestrator.llm_backend import APIBackend
 from src.orchestrator.runtime_events import CaseRuntimeStore
+from src.orchestrator.unified_prompts import UNIFIED_JUDGMENT_SYSTEM_PROMPT
 from ifv_training.io import load_json, sha256_file, write_json, write_jsonl
 from ifv_training.psd_repair import (
     PSDModelRoles,
@@ -43,12 +44,50 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
-def _capture_from_steps(steps: list[Any]) -> dict[str, Any]:
+def _capture_from_steps(
+    steps: list[Any],
+    *,
+    failure_stage: str,
+) -> dict[str, Any]:
+    expected_stage = (
+        "psd_teacher_judgment"
+        if failure_stage == "unified_judgment"
+        else "psd_teacher_repair"
+    )
+    expected_action = (
+        "output" if failure_stage == "unified_judgment" else "tool_call"
+    )
     for step in steps:
+        if (
+            _text(getattr(step, "stage_name", "")) != expected_stage
+            or _text(getattr(step, "action_type", "")) != expected_action
+        ):
+            continue
         capture = _mapping(getattr(step, "metadata", {}).get("policy_token_capture"))
         if _text(capture.get("status")) == "complete":
             return dict(capture)
     return {}
+
+
+def _capture_from_source_step(
+    trace: Mapping[str, Any],
+    *,
+    source_step_index: int | None,
+) -> dict[str, Any]:
+    rows = _mapping(trace.get("state")).get("all_steps")
+    if (
+        not isinstance(rows, list)
+        or not isinstance(source_step_index, int)
+        or isinstance(source_step_index, bool)
+        or not (0 <= source_step_index < len(rows))
+    ):
+        return {}
+    step = rows[source_step_index]
+    if not isinstance(step, Mapping):
+        return {}
+    return dict(
+        _mapping(_mapping(step.get("metadata")).get("policy_token_capture"))
+    )
 
 
 def _step_ids(capture: Mapping[str, Any]) -> tuple[list[int], list[int]]:
@@ -157,6 +196,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--hint-count", type=int, default=4)
     parser.add_argument("--hint-level", type=int, default=1)
     parser.add_argument("--max-suffix-actions", type=int, default=8)
+    parser.add_argument("--run-student-diagnostic", action="store_true")
     parser.add_argument("--verification-bundle", type=Path)
     return parser
 
@@ -245,6 +285,15 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
         tool_call_limits=policy_orchestrator.verification_tool_limits,
         source_runtime_store_path=site.runtime_store_path,
         hint_constructor_thinking_level=args.hint_constructor_thinking_level,
+        generation_config=policy_orchestrator._stage_generation_config(
+            "UNIFIED_REACT"
+        ),
+        judgment_generation_config=policy_orchestrator._stage_generation_config(
+            "UNIFIED_JUDGMENT"
+        ),
+        judgment_system_prompt=policy_orchestrator._sp(
+            UNIFIED_JUDGMENT_SYSTEM_PROMPT
+        ),
     )
     try:
         proposals = await adapter.propose_hints(
@@ -259,7 +308,9 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
             continuation = await adapter.run_hinted_episode(
                 failure_site=site,
                 hint=hint,
+                base_trace=trace,
                 max_suffix_actions=args.max_suffix_actions,
+                run_student_diagnostic=args.run_student_diagnostic,
             )
             bound = verification_rows.get(index, {})
             expected_hint_sha = _text(hint.audit.get("hint_sha256"))
@@ -282,6 +333,28 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
                 bound.get("hinted_teacher_episode_trace"),
                 root=bundle_root,
             )
+            generated_teacher_trace = continuation.teacher_episode_trace
+            if generated_teacher_trace is None:
+                raise RuntimeError("repair driver did not produce a teacher episode")
+            if (
+                hinted_teacher_episode_trace is not None
+                and json.dumps(
+                    hinted_teacher_episode_trace,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                != json.dumps(
+                    generated_teacher_trace,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+            ):
+                raise ValueError(
+                    "verification bundle teacher trace differs from generated episode"
+                )
+            hinted_teacher_episode_trace = generated_teacher_trace
             unhinted_student_episode_trace = _load_bound_artifact(
                 bound.get("unhinted_student_episode_trace"),
                 root=bundle_root,
@@ -298,10 +371,24 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
                 repair_step_id=site.step_id,
                 hint_sha256=expected_hint_sha,
             )
-            teacher_capture = _capture_from_steps(continuation.teacher_steps)
+            teacher_capture = _capture_from_steps(
+                continuation.teacher_steps,
+                failure_stage=site.stage,
+            )
             teacher_prompt_ids, completion_ids = _step_ids(teacher_capture)
-            student_capture = _capture_from_steps(continuation.student_steps)
-            student_prompt_ids, _student_completion_ids = _step_ids(student_capture)
+            if not teacher_prompt_ids or not completion_ids:
+                raise RuntimeError(
+                    "hinted teacher action lacks prompt/completion token IDs"
+                )
+            source_capture = _capture_from_source_step(
+                trace,
+                source_step_index=site.source_step_index,
+            )
+            student_prompt_ids, _student_completion_ids = _step_ids(source_capture)
+            if not student_prompt_ids:
+                raise RuntimeError(
+                    "source failure step lacks the no-hint student prompt token IDs"
+                )
             record = build_psd_attempt_record(
                 candidate_id=_text(trace.get("image_id")) + f":repair:{index}",
                 case_id=_text(_mapping(trace.get("state")).get("runtime_case", {}).get("case_id"))
@@ -332,7 +419,23 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
                 ],
                 "unhinted_student_affects_acceptance": False,
             }
+            episode_dir = output_dir / "episodes"
+            episode_dir.mkdir(parents=True, exist_ok=True)
+            teacher_episode_name = f"hint-{index:02d}-teacher.json"
+            write_json(
+                episode_dir / teacher_episode_name,
+                hinted_teacher_episode_trace,
+            )
+            record["continuation"]["hinted_teacher_episode_trace"] = (
+                f"episodes/{teacher_episode_name}"
+            )
+            record["continuation"]["hinted_teacher_episode_trace_sha256"] = (
+                sha256_file(episode_dir / teacher_episode_name)
+            )
             records.append(record)
+            # Preserve every completed provider/tool attempt immediately.  A
+            # resumed offline finalization never repeats successful calls.
+            write_jsonl(output_dir / "repair_attempts.jsonl", records)
         write_jsonl(output_dir / "repair_attempts.jsonl", records)
         result = {
             "schema_version": "ifv-psd-repair-driver-result-v1",

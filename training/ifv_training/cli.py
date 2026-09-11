@@ -39,8 +39,10 @@ from .psd import (
 from .psd_candidates import build_psd_candidate_package
 from .psd_datums import build_sparse_topk_package
 from .psd_repairs import assemble_psd_repair_package
+from .psd_repair_finalize import finalize_psd_repair_run
 from .psd_preflight import verify_psd_training_input
 from .psd_round import complete_psd_round, verify_psd_round_rollout
+from .psd_topk import collect_psd_topk_cache
 from .rewards import (
     build_and_write_ledger,
     build_ledgers_from_run_artifacts,
@@ -139,6 +141,8 @@ def _parser() -> argparse.ArgumentParser:
         required=True,
     )
     serving.add_argument("--checkpoint-manifest", type=Path)
+    serving.add_argument("--engine-model-path")
+    serving.add_argument("--adapter-path")
 
     semantic_audit = subparsers.add_parser("audit-semantic-reward")
     semantic_audit.add_argument("--input", type=Path, required=True)
@@ -215,6 +219,20 @@ def _parser() -> argparse.ArgumentParser:
     psd_topk.add_argument("--output-dir", type=Path, required=True)
     psd_topk.add_argument("--topk", type=int, default=20)
 
+    psd_topk_collect = subparsers.add_parser("collect-psd-topk")
+    psd_topk_collect.add_argument("--targets", type=Path, required=True)
+    psd_topk_collect.add_argument(
+        "--serving-profile", type=Path, required=True
+    )
+    psd_topk_collect.add_argument(
+        "--round-start-checkpoint-manifest", type=Path, required=True
+    )
+    psd_topk_collect.add_argument("--output-dir", type=Path, required=True)
+    psd_topk_collect.add_argument("--topk", type=int, default=20)
+    psd_topk_collect.add_argument("--retries", type=int, default=3)
+    psd_topk_collect.add_argument("--timeout", type=float, default=1800.0)
+    psd_topk_collect.add_argument("--limit", type=int)
+
     psd_repairs = subparsers.add_parser("assemble-psd-repairs")
     psd_repairs.add_argument("--repair-candidates", type=Path, required=True)
     psd_repairs.add_argument("--repair-attempts", type=Path, required=True)
@@ -224,6 +242,15 @@ def _parser() -> argparse.ArgumentParser:
         required=True,
     )
     psd_repairs.add_argument("--output-dir", type=Path, required=True)
+
+    psd_finalize = subparsers.add_parser("finalize-psd-repair-run")
+    psd_finalize.add_argument("--run-dir", type=Path, required=True)
+    psd_finalize.add_argument("--source-trace", type=Path, required=True)
+    psd_finalize.add_argument("--gold", type=Path, required=True)
+    psd_finalize.add_argument(
+        "--verification-bundle", type=Path, required=True
+    )
+    psd_finalize.add_argument("--require-all", action="store_true")
 
     psd_datums = subparsers.add_parser("build-psd-datums")
     psd_datums.add_argument("--targets", type=Path, required=True)
@@ -426,6 +453,8 @@ def main() -> None:
             reasoning_parser=args.reasoning_parser,
             thinking_enabled=args.thinking_enabled == "true",
             checkpoint_manifest_path=args.checkpoint_manifest,
+            engine_model_path=args.engine_model_path,
+            adapter_path=args.adapter_path,
         )
     elif args.command == "audit-semantic-reward":
         result = validate_semantic_reward_artifact(load_json(args.input))
@@ -510,6 +539,20 @@ def main() -> None:
             output_dir=args.output_dir,
             topk=args.topk,
         )
+    elif args.command == "collect-psd-topk":
+        result = collect_psd_topk_cache(
+            targets_path=args.targets,
+            serving_profile_path=args.serving_profile,
+            checkpoint_manifest_path=args.round_start_checkpoint_manifest,
+            output_dir=args.output_dir,
+            topk=args.topk,
+            retries=args.retries,
+            timeout=args.timeout,
+            limit=args.limit,
+        )
+        if result["status"] == "blocked_collection_errors":
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            raise SystemExit(1)
     elif args.command == "assemble-psd-repairs":
         result = assemble_psd_repair_package(
             repair_candidates_path=args.repair_candidates,
@@ -517,6 +560,17 @@ def main() -> None:
             preservation_candidates_path=args.preservation_candidates,
             output_dir=args.output_dir,
         )
+    elif args.command == "finalize-psd-repair-run":
+        result = finalize_psd_repair_run(
+            run_dir=args.run_dir,
+            source_trace_path=args.source_trace,
+            gold_path=args.gold,
+            verification_bundle_path=args.verification_bundle,
+            require_all=args.require_all,
+        )
+        if result["status"] == "blocked_unresolved_verifiers":
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            raise SystemExit(1)
     elif args.command == "build-psd-datums":
         result = build_sparse_topk_package(
             targets_path=args.targets,

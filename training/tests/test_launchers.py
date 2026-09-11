@@ -238,6 +238,9 @@ def test_psd_repair_binds_the_served_round_start_checkpoint() -> None:
     assert "GEMINI_API_KEY or" in driver
     assert "IFV_CHECKPOINT_MANIFEST" in serving
     assert '--checkpoint-manifest "$CHECKPOINT_MANIFEST"' in serving
+    assert "IFV_VLLM_LORA_ADAPTER" in serving
+    assert "--enable-lora" in serving
+    assert "--lora-modules" in serving
 
 
 def test_qwen35_serving_and_lifecycle_are_fail_closed() -> None:

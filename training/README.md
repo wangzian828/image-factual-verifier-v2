@@ -115,6 +115,32 @@ PSD 使用当前 round-start Qwen 的冻结副本生成 top-20 分布，Gemini �
 LoRA rank 32；不再保留 SP1 profile：
 
 ```bash
+python -m ifv_training collect-psd-topk \
+  --targets <target-package>/targets.jsonl \
+  --serving-profile <serving-profile.json> \
+  --round-start-checkpoint-manifest <checkpoint-manifest.json> \
+  --output-dir <server-topk-cache> \
+  --topk 20
+
+python -m ifv_training materialize-psd-topk \
+  --targets <target-package>/targets.jsonl \
+  --cache <server-topk-cache>/teacher_topk_cache.jsonl \
+  --output-dir <materialized-target-package> \
+  --topk 20
+```
+
+top-20 collector 对冻结 Qwen 强制输入原始 token IDs，并读取 completion 位置的
+prompt logprobs；不会把文本 decode 后再 encode。它绑定 serving profile、round-start
+checkpoint manifest 和逐 target token hash，每成功一条立即持久化；同一输出目录重跑
+只补失败/缺失 target。
+
+repair driver 会在一次运行中生成完整 hinted teacher episode；局部 task verifier
+完成后，用 `ifv-training finalize-psd-repair-run --run-dir <同一目录> ...` 离线收口。
+finalizer 不调用模型或工具，并保留 pre-finalize 备份，避免为工程重试重复成功 case。
+
+先把 materialized targets 转成 datums 并通过 preflight，再启动训练：
+
+```bash
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 training/scripts/train/run_psd_topk.sh \
   training/configs/models/qwen3.5-9b.env \

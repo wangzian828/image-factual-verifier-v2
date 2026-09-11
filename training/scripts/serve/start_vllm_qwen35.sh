@@ -11,6 +11,7 @@ PORT="${3:-8901}"
 TP_SIZE="${4:-2}"
 CONTEXT_LENGTH="${5:-131072}"
 CHECKPOINT_MANIFEST="${6:-${IFV_CHECKPOINT_MANIFEST:-}}"
+LORA_ADAPTER="${IFV_VLLM_LORA_ADAPTER:-}"
 ENV_PREFIX="${IFV_VLLM_ENV_PREFIX:-${CONDA_PREFIX:-}}"
 VLLM="$ENV_PREFIX/bin/vllm"
 
@@ -28,6 +29,10 @@ if [[ ! -x "$VLLM" || ! -f "$ENV_PREFIX/.ifv-vllm-qwen35-ready" ]]; then
 fi
 if [[ ! -d "$MODEL" ]]; then
   echo "model directory does not exist: $MODEL" >&2
+  exit 2
+fi
+if [[ -n "$LORA_ADAPTER" && ! -d "$LORA_ADAPTER" ]]; then
+  echo "LoRA adapter directory does not exist: $LORA_ADAPTER" >&2
   exit 2
 fi
 if [[ "$CONTEXT_LENGTH" -ne 131072 ]]; then
@@ -66,7 +71,8 @@ profile_args=(
   "$ENV_PREFIX/bin/python" -m ifv_training serving-profile
   --output "$PROFILE_DIR/serving-profile.json" \
   --profile-id "$SERVED_NAME" \
-  --model-path "$MODEL" \
+  --model-path "${LORA_ADAPTER:-$MODEL}" \
+  --engine-model-path "$MODEL" \
   --engine vllm \
   --port "$PORT" \
   --tensor-parallel-size "$TP_SIZE" \
@@ -76,6 +82,9 @@ profile_args=(
   --reasoning-parser qwen3 \
   --thinking-enabled true
 )
+if [[ -n "$LORA_ADAPTER" ]]; then
+  profile_args+=(--adapter-path "$LORA_ADAPTER")
+fi
 if [[ -n "$CHECKPOINT_MANIFEST" ]]; then
   if [[ ! -s "$CHECKPOINT_MANIFEST" ]]; then
     echo "checkpoint manifest does not exist or is empty: $CHECKPOINT_MANIFEST" >&2
@@ -85,11 +94,15 @@ if [[ -n "$CHECKPOINT_MANIFEST" ]]; then
 fi
 PYTHONPATH="$REPO_ROOT${PYTHONPATH:+:$PYTHONPATH}" "${profile_args[@]}"
 
+ENGINE_SERVED_NAME="$SERVED_NAME"
+if [[ -n "$LORA_ADAPTER" ]]; then
+  ENGINE_SERVED_NAME="${SERVED_NAME}-base"
+fi
 args=(
   "$VLLM" serve "$MODEL"
   --host 127.0.0.1
   --port "$PORT"
-  --served-model-name "$SERVED_NAME"
+  --served-model-name "$ENGINE_SERVED_NAME"
   --dtype bfloat16
   --tensor-parallel-size "$TP_SIZE"
   --disable-custom-all-reduce
@@ -107,5 +120,11 @@ args=(
   --max-log-len 4000
   --disable-uvicorn-access-log
 )
+if [[ -n "$LORA_ADAPTER" ]]; then
+  args+=(
+    --enable-lora
+    --lora-modules "$SERVED_NAME=$LORA_ADAPTER"
+  )
+fi
 print_command "${args[@]}"
 exec "${args[@]}"

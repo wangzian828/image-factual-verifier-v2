@@ -349,7 +349,8 @@ def install_ms_swift_psd_plugin() -> None:
             encoded = {
                 "input_ids": [int(token) for token in input_ids],
                 # The custom loss ignores labels. They make Seq2SeqTrainer take
-                # its supported custom-loss route and never reach model.forward.
+                # its supported custom-loss route; model.forward therefore
+                # never computes the model's built-in label loss.
                 "labels": [-100] * len(input_ids),
                 "psd_target_tokens": [
                     [int(token) for token in tokens]

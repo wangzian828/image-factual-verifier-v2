@@ -432,11 +432,32 @@ def build_serving_profile(
     reasoning_parser: str,
     thinking_enabled: bool,
     checkpoint_manifest_path: Path | None,
+    engine_model_path: str | None = None,
+    adapter_path: str | None = None,
 ) -> dict[str, Any]:
+    if adapter_path and adapter_path != model_path:
+        raise ValueError(
+            "LoRA serving model_path must identify the effective adapter"
+        )
+    if adapter_path and checkpoint_manifest_path is None:
+        raise ValueError("LoRA serving requires a checkpoint manifest")
+    if adapter_path and checkpoint_manifest_path is not None:
+        checkpoint = load_json(checkpoint_manifest_path)
+        checkpoint_record = checkpoint.get("checkpoint")
+        checkpoint_record = (
+            checkpoint_record if isinstance(checkpoint_record, dict) else {}
+        )
+        if str(checkpoint_record.get("path", "")).strip() != adapter_path:
+            raise ValueError(
+                "LoRA adapter does not match checkpoint manifest path"
+            )
     profile = {
         "schema_version": "ifv-qwen-serving-profile-v1",
         "profile_id": profile_id,
         "model_path": model_path,
+        "engine_model_path": engine_model_path or model_path,
+        "adapter_path": adapter_path,
+        "deployment_mode": "lora_adapter" if adapter_path else "full_model",
         "engine": engine,
         "base_url": f"http://127.0.0.1:{port}/v1",
         "wire_api": "chat_completions",

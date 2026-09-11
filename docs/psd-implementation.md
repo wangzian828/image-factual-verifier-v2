@@ -47,6 +47,34 @@ Qwen rollout and for the teacher repair. The capture is fail-closed: missing
 numeric token IDs, log-probabilities, or complete top-k positions leave the
 candidate pending/rejected rather than being inferred from text.
 
+If the online continuation did not return all top-20 positions, collect them
+from the same frozen round-start Qwen deployment without decoding or
+re-encoding the banked action:
+
+```powershell
+python -m ifv_training collect-psd-topk `
+  --targets <target-package/targets.jsonl> `
+  --serving-profile <serving-profile.json> `
+  --round-start-checkpoint-manifest <checkpoint-manifest.json> `
+  --output-dir <server-topk-cache> `
+  --topk 20
+
+python -m ifv_training materialize-psd-topk `
+  --targets <target-package/targets.jsonl> `
+  --cache <server-topk-cache/teacher_topk_cache.jsonl> `
+  --output-dir <materialized-target-package> `
+  --topk 20
+```
+
+The collector forces `teacher_prompt_ids + completion_ids` through the vLLM
+Completions endpoint and reads prompt log-probabilities at the completion
+positions, matching the upstream scorer. It accepts only loopback vLLM,
+verifies the serving profile, checkpoint path, checkpoint-manifest hash and
+returned token IDs, and fsyncs each successful row. Re-running the same command
+in the same output directory skips verified rows and retries only missing or
+failed targets. `--limit` is for a bounded collection smoke, not a complete
+training package.
+
 ## Training gates
 
 - Only `causal_episode_pass` rows enter primary PSD targets.
@@ -155,7 +183,7 @@ $env:GEMINI_API_KEY="<secret>"
 python scripts/run_psd_repair_driver.py `
   <other arguments> `
   --hint-constructor-provider gemini `
-  --hint-constructor-model gemini-3.7-flash `
+  --hint-constructor-model <available-gemini-hint-model> `
   --hint-constructor-wire-api interactions `
   --hint-constructor-thinking-level low
 ```
@@ -166,11 +194,31 @@ but its outputs still pass the hint-leakage audit. Gemini probabilities never
 enter the PSD target: numeric top-20 supervision must come from the frozen
 round-start Qwen service.
 
-It writes `repair_attempts.jsonl` and a runtime archive. Without a bound
-`ifv-psd-repair-verification-bundle-v1`, attempts remain pending. Bundle rows
-are keyed by hint index and exact hint hash; each may point to a local verifier
-artifact, a complete hinted teacher trace, and an optional unhinted student
-diagnostic trace.
+It writes `repair_attempts.jsonl`, complete generated teacher episodes under
+`episodes/`, and a runtime archive. The failed source suffix is removed before
+the hinted replacement branch is serialized; the driver itself carries the
+frozen teacher through terminal Judgment. An optional no-hint resample is only
+a diagnostic (`--run-student-diagnostic`) and is disabled by default because
+the original no-hint rollout has already established the failure.
+
+Without a bound `ifv-psd-repair-verification-bundle-v1`, attempts remain
+pending. Bundle rows are keyed by hint index and exact hint hash and point to a
+real local task-verifier artifact. Because that artifact binds token hashes
+known only after generation, finish it offline in the same run directory:
+
+```powershell
+python -m ifv_training finalize-psd-repair-run `
+  --run-dir <server-repair-run> `
+  --source-trace <failed-no-hint-trace.json> `
+  --gold <private-gold-row.json> `
+  --verification-bundle <verification-bundle.json> `
+  --require-all
+```
+
+Finalization makes zero provider/tool calls, verifies the already persisted
+teacher episode, preserves `repair_attempts.pre-finalize.jsonl`, and atomically
+updates `repair_attempts.jsonl`. Thus an engineering retry never resamples a
+successful repair action merely to attach its later verifier result.
 
 The rollout, runtime archive, images, and checkpoints stay on the server. Only
 code and documentation belong in this repository.
@@ -193,6 +241,23 @@ Round 2 and later must pass the preceding `round-completion.json` to
 `verify-psd-round-rollout --previous-round-completion`. The next round-start
 manifest must be byte-identical to the preceding output manifest and the
 rollout run ID must be new.
+
+PSD checkpoints are LoRA adapters. For a later round, serve the immutable base
+model with that adapter as the effective policy rather than trying to load the
+adapter directory as a standalone model:
+
+```bash
+export IFV_VLLM_LORA_ADAPTER=<previous-round-adapter-checkpoint>
+export IFV_CHECKPOINT_MANIFEST=<previous-round-checkpoint-manifest.json>
+training/scripts/serve/start_vllm_qwen35.sh \
+  <immutable-base-model> <new-round-profile-id> 8901 8 131072
+```
+
+The generated serving profile records the effective `model_path` (adapter),
+the `engine_model_path` (base model), `deployment_mode=lora_adapter`, and the
+checkpoint-manifest digest. Rollout, repair and top-20 collection all address
+the adapter's profile ID, so the frozen self-teacher is the previous round's
+actual policy.
 
 ## Sparse loss and launch gate
 

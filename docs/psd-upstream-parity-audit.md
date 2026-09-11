@@ -34,12 +34,13 @@ abbreviation; the current public method and this repository use PSD.
 | Preservation comes from verified current-policy passes | full-task pass plus strict trace audit are mandatory | Aligned |
 | Published target weighting is per-target, without aggregate source rebalancing | every repair and every retained preservation step keeps its configured row weight; both kinds remain mandatory | Aligned |
 | Row weights affect gradient magnitude | weighted token losses are summed, then averaged across datums | Aligned; fixed from weight-mass normalization |
-| Resumable, provenance-bound target materialization | target IDs, token hashes, teacher identity, checkpoint and manifest hash are checked | Aligned for imported/online caches |
+| Resumable, provenance-bound target collection/materialization | forced token-ID scoring through vLLM; target IDs, returned IDs, token hashes, serving profile, teacher identity, checkpoint and manifest hash are checked; successful rows are fsynced and skipped on retry | Aligned |
 | Training refuses incomplete target packages | launcher verifies manifest schema/status, file hash, top-K, context, source kinds and effective mass | Aligned |
 | Finite forward/backward and recoverable checkpoints | plugin rejects non-finite weights/loss; launcher records resources and supports checkpoint resume | Aligned at framework-smoke level |
+| Repair verification can finish after asynchronous local audit without resampling | driver persists the complete teacher episode; in-place offline finalization makes zero provider calls, keeps a pre-finalize backup and updates attempts atomically | Aligned |
 | Native long-context sparse loss | top-20 targets follow ms-swift's SP/RP split; only scalar position losses are gathered and fp32 CE is chunk-recomputed | Aligned backend substitution |
 | Published optimizer recipe | LoRA rank 32, `4e-5`, 32 unique targets/step, five epochs, clip 1.0, seed 0 | Aligned in the production profile |
-| Every new PSD round recollects from the previous round output | rollout gate binds the served round-start checkpoint; round completion binds the new checkpoint; later rounds require that exact prior output and a new run ID | Aligned and fail-closed |
+| Every new PSD round recollects from the previous round output | rollout gate binds the served round-start checkpoint; LoRA serving records base/adapter separately; round completion binds the new adapter; later rounds require that exact prior output and a new run ID | Aligned and fail-closed |
 
 ## Intentional backend differences
 
@@ -50,6 +51,10 @@ change:
 
 - top-20 probabilities are captured during the actual frozen-policy
   continuation when the server exposes numeric token IDs and top logprobs;
+- incomplete online captures are scored exactly once more by forcing the
+  original `teacher_prompt_ids + completion_ids` through the same attested
+  frozen vLLM checkpoint and selecting the completion-position prompt
+  logprobs, mirroring upstream `river_topk.py`;
 - the same sparse `[T, K]` target representation is passed to a custom
   ms-swift cross-entropy loss;
 - imported caches are accepted only when their teacher deployment and exact
@@ -74,6 +79,10 @@ be structurally valid yet unsupported.
   to the published Qwen3.5 recipe: 506 repair targets and 815 preservation
   step-targets, each at weight 1.0 before token-length effects. Datum manifests
   now state `weighting_policy=per_target` and reject aggregate rebalancing.
+- Current completion pass: added the native SP8 sparse-loss path, fixed the
+  production profile to the published Qwen3.5 recipe, wired Gemini only as the
+  hint constructor, and added an attested resumable vLLM forced-token top-20
+  collector.
 
 ## Validation boundary
 
@@ -81,15 +90,21 @@ The following are not yet empirical claims:
 
 1. No real IFV Qwen repair/preservation package exists yet, so an actual
    top-20 teacher collection followed by an optimizer step has not been run.
-2. The repair driver consumes a separately produced, hash-bound complete
-   hinted-episode artifact. It does not yet reconstruct and finish the entire
-   IFV Orchestrator episode by itself from an arbitrary historical step.
-3. The SP8 target ordering, global loss and gradient scaling have a distributed
+2. The SP8 target ordering, global loss and gradient scaling have a distributed
    CPU smoke, and the checked-in profiles are fixed to eight-GPU 128K SP8. This
    does not prove a 131072-token Qwen target fits on the eight A100s; that claim
    requires the real one-step memory probe while all eight GPUs are idle.
-4. Multi-round chaining is now enforced by immutable rollout and completion
+3. Multi-round chaining is now enforced by immutable rollout and completion
    gates, but it has not yet been exercised on a real two-round IFV run.
+
+The frozen GPU-13 vLLM environment (`0.23.1rc1.dev1348+g47f1b47a7`) was
+inspected directly: both Chat Completions and Completions expose
+`prompt_logprobs`, `return_token_ids`, `return_tokens_as_token_ids`, and the
+response protocol carries `prompt_token_ids` plus integer-keyed per-position
+logprobs. A real Gemini native Interactions structured-output smoke also
+completed with `thinking_level=low`; that validates hint-constructor transport,
+not Qwen repair quality. The remaining empirical boundaries above are kept
+explicit.
 
 Formal PSD training therefore remains gated on real training data, a real
 five-case repair smoke, complete verifier-bound episodes, top-20 capture, and
