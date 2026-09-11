@@ -166,6 +166,8 @@ def _load_policy_serving_attestation(
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--trace", type=Path, required=True)
+    parser.add_argument("--candidate", type=Path, required=True,
+                        help="One repair seed JSON from the training candidate bank")
     parser.add_argument("--audit", type=Path, required=True)
     parser.add_argument("--semantic-verification", type=Path)
     parser.add_argument("--image", type=Path, required=True)
@@ -226,8 +228,12 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
         )
     verification_rows = _load_verification_bundle(args.verification_bundle)
     source_trace_sha256 = sha256_file(args.trace)
+    from ifv_training.psd_candidate_binding import bind_localized_candidate
+    candidate, site = bind_localized_candidate(
+        load_json(args.candidate), trace, site, source_trace_sha256=source_trace_sha256)
     output_dir = args.output_dir
     output_dir.mkdir(parents=True, exist_ok=False)
+    write_jsonl(output_dir / "repair_candidates.jsonl", [candidate])
     runtime_root = output_dir / "runtime"
     runtime_store = CaseRuntimeStore(
         runtime_root,
@@ -390,10 +396,9 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
                     "source failure step lacks the no-hint student prompt token IDs"
                 )
             record = build_psd_attempt_record(
-                candidate_id=_text(trace.get("image_id")) + f":repair:{index}",
-                case_id=_text(_mapping(trace.get("state")).get("runtime_case", {}).get("case_id"))
-                or _text(trace.get("image_id")),
-                episode_id=_text(trace.get("image_id")),
+                candidate_id=candidate["candidate_id"],
+                case_id=candidate["case_id"],
+                episode_id=candidate["episode_id"],
                 failure_site=site,
                 hint=hint,
                 model_roles=model_roles,

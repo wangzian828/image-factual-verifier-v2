@@ -14,6 +14,10 @@ Completions fallback is never used for image targets.
 
 Validation on the H20 host, without interrupting GPU evaluation:
 
+- Full PSD regression suite: 70 tests passed (including candidate-to-driver
+  identity binding and semantic relocation). The driver now consumes a seed
+  explicitly and emits the correctly localized candidate used by assembly.
+
 - Real deployed Qwen3.5-9B weights on CPU, two repeated images, hinted teacher
   top-20, unhinted student LoRA rank32 optimizer step: passed.
 - Loss 8.3161335; visual adapter gradient L1 15815.1431; changing image pixels

@@ -192,6 +192,7 @@ The server-side repair driver is:
 
 ```powershell
 python scripts/run_psd_repair_driver.py `
+  --candidate <one-repair-seed.json> `
   --trace <server-trace.json> `
   --audit <server-audit.json> `
   --image <server-image> `
@@ -227,12 +228,19 @@ but its outputs still pass the hint-leakage audit. Gemini probabilities never
 enter the PSD target: numeric top-20 supervision must come from the frozen
 round-start Qwen service.
 
-It writes `repair_attempts.jsonl`, complete generated teacher episodes under
+It writes `repair_candidates.jsonl` with the localized canonical step/ID,
+`repair_attempts.jsonl`, complete generated teacher episodes under
 `episodes/`, and a runtime archive. The failed source suffix is removed before
 the hinted replacement branch is serialized; the driver itself carries the
 frozen teacher through terminal Judgment. An optional no-hint resample is only
 a diagnostic (`--run-student-diagnostic`) and is disabled by default because
 the original no-hint rollout has already established the failure.
+
+Pass the driver's emitted `repair_candidates.jsonl` to `assemble-psd-repairs`.
+When semantic localization moves the repair away from the seed's provisional
+anchor, the emitted candidate is rebound to the actual source step and retains
+`parent_candidate_id`. Its ID and the attempts' IDs then join correctly. The
+original candidate bank is not edited.
 
 Without a bound `ifv-psd-repair-verification-bundle-v1`, attempts remain
 pending. Bundle rows are keyed by hint index and exact hint hash and point to a
