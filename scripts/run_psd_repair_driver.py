@@ -39,6 +39,18 @@ from ifv_training.psd_repair_verifier import (
 PSD_VERIFICATION_BUNDLE_SCHEMA_VERSION = "ifv-psd-repair-verification-bundle-v1"
 
 
+def _policy_runtime_kwargs(args, policy_base_url, source_policy):
+    # Explicitly bind BOTH policy and visual tools to the attested service.
+    # Orchestrator does not inherit llm_base_url into vlm_base_url; leaving it
+    # unset silently falls back to the unrelated 8899 endpoint.
+    return dict(provider=args.policy_provider, model_name=args.policy_model,
+                llm_base_url=policy_base_url, llm_wire_api=args.policy_wire_api,
+                vlm_provider=args.policy_provider, vlm_model=args.policy_model,
+                vlm_base_url=policy_base_url, vlm_wire_api=args.policy_wire_api,
+                image_access_mode="direct_multimodal", validate_startup=True,
+                source_access_policy=source_policy)
+
+
 def _mapping(value: Any) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
 
@@ -356,15 +368,7 @@ async def _run_single(args: argparse.Namespace) -> dict[str, Any]:
     source_policy = SourceAccessPolicy.load(args.source_access_policy)
     if not source_policy.active:
         raise ValueError("PSD training repair requires an active source-exclusion policy")
-    policy_orchestrator = Orchestrator(
-        provider=args.policy_provider,
-        model_name=args.policy_model,
-        llm_base_url=policy_base_url,
-        llm_wire_api=args.policy_wire_api,
-        image_access_mode="direct_multimodal",
-        validate_startup=True,
-        source_access_policy=source_policy,
-    )
+    policy_orchestrator = Orchestrator(**_policy_runtime_kwargs(args, policy_base_url, source_policy))
     hint_constructor_llm = APIBackend(
         provider=args.hint_constructor_provider,
         model_name=args.hint_constructor_model,
@@ -416,6 +420,8 @@ async def _run_single(args: argparse.Namespace) -> dict[str, Any]:
         judgment_system_prompt=policy_orchestrator._sp(
             UNIFIED_JUDGMENT_SYSTEM_PROMPT
         ),
+        request_timeout_seconds=policy_orchestrator.stage_request_timeout_seconds,
+        tool_timeout_seconds=policy_orchestrator.tool_action_timeout_seconds,
     )
     try:
         if args.search_media:
@@ -440,14 +446,12 @@ async def _run_single(args: argparse.Namespace) -> dict[str, Any]:
             proposals = await adapter.propose_hints(
                 failure_site=site, public_trace_context=public_context,
                 private_context=private_context, hint_count=args.hint_count, hint_level=args.hint_level)
-            excluded = {text.strip() for text in search_feedback.get("excluded_hints", [])}
-            locked = search_feedback.get("locked_hint", "")
+            from ifv_training.psd_repair_search import revision_rejection
             filtered = []
             audit_path = output_dir / "proposer-hint-audits.json"
             audits = load_json(audit_path).get("proposals", []) if audit_path.exists() else []
             for hint in proposals:
-                reason = ("repeated_completed_hint" if hint.text.strip() in excluded else
-                          "changed_verified_hint" if locked and not hint.text.startswith(locked + "\n") else "")
+                reason = revision_rejection(hint.text, search_feedback)
                 if reason:
                     audits.append({"passed": False, "reason": reason})
                 else:

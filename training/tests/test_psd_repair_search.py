@@ -7,9 +7,9 @@ import pytest
 
 from ifv_training.io import load_json, load_jsonl, sha256_file, write_json, write_jsonl
 from ifv_training.psd_repair_search import (
-    CHECKS, inspect_round, public_attempt_feedback, revision_context, run_search, search_lock,
+    CHECKS, inspect_round, public_attempt_feedback, revision_context, revision_rejection, run_search, search_lock,
 )
-from ifv_training.psd_repair import FailureSite, build_proposer_prompt
+from ifv_training.psd_repair import FailureSite, build_proposer_prompt, parse_proposer_response
 
 
 def make_round(directory, *, passed=False, pending=False, hint="Check the observed timing.",
@@ -172,3 +172,33 @@ def test_invalid_budget_rejected_before_calls(tmp_path, budget):
         raise AssertionError("must not run")
     with pytest.raises(ValueError):
         run(tmp_path, execute, max_attempts=budget)
+
+
+def test_repeated_or_modified_verified_hint_is_rejected_before_policy_call():
+    locked = "Recheck the observed time relation."
+    feedback = {"excluded_hints": [locked], "locked_hint": locked}
+    assert revision_rejection(locked, feedback) == "repeated_completed_hint"
+    assert revision_rejection("Check something unrelated.", feedback) == "changed_verified_hint"
+    assert revision_rejection(locked + "\nCheck the remaining conflicting observation.", feedback) == ""
+
+
+@pytest.mark.parametrize("value", [{}, {"hints": None}, {"hints": [3]}, {"hints": [""]},
+                                   {"hints": [], "extra": True}, {"hints": ["a", "b"]}])
+def test_invalid_proposer_response_is_not_a_no_repair_vote(value):
+    with pytest.raises(ValueError):
+        parse_proposer_response(value, limit=1)
+
+
+def test_empty_hint_list_is_an_explicit_stop_vote():
+    assert parse_proposer_response({"hints": []}, limit=1) == []
+
+
+def test_visual_tools_and_policy_share_the_attested_endpoint():
+    from scripts.run_psd_repair_driver import _policy_runtime_kwargs
+    args = SimpleNamespace(policy_provider="qwen_local", policy_model="frozen-model",
+                           policy_wire_api="chat_completions")
+    policy = object()
+    values = _policy_runtime_kwargs(args, "http://127.0.0.1:8901/v1", policy)
+    assert values["llm_base_url"] == values["vlm_base_url"] == "http://127.0.0.1:8901/v1"
+    assert values["vlm_model"] == values["model_name"] == "frozen-model"
+    assert values["source_access_policy"] is policy

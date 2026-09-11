@@ -260,12 +260,34 @@ python scripts/run_psd_repair_driver.py `
 ```
 
 The Gemini request uses a strict `hints[]` JSON response schema and creates no
-interaction-history dependency. It may inspect training-only private context,
-but its outputs still pass the hint-leakage audit. Gemini probabilities never
+interaction-history dependency. The proposer receives observed traces, images
+and allowlisted checker feedback, **not private references or private judge
+explanations**. `--private-context` is used only by the local leakage audit;
+`--gold` remains mandatory for independent verification. Gemini probabilities never
 enter the PSD target: numeric top-20 supervision must come from the frozen
 round-start Qwen service.
 
-It writes `repair_candidates.jsonl` with the localized canonical step/ID,
+By default `--search-mode feedback --repair-attempts 6 --proposal-rounds 12
+--search-seconds 3600` runs one hint/complete continuation/judge cycle at a time.
+The next proposer sees previous actual executions, failed checker bits and hint
+audit codes. Invalid/repeated hints cannot run Qwen again. Already locally
+verified advice is kept verbatim; wrong-anchor feedback triggers re-localization.
+Success, exhausted budgets and an explicit no-further-hint decision stop search.
+Malformed/pending judgments and execution errors pause the same child attempt.
+`--resume` verifies completed snapshots and reuses provider caches; changing
+inputs or budgets requires a new search directory. The time budget is soft,
+checked between rounds so it never kills an in-flight paid call.
+
+IFV's task is one image with one selected source decision, not BFCL's series of
+user turns. Additional advice remains at that original anchor; we do not inject
+downstream hints or train patched-prefix states as fresh original-policy data.
+This is a documented domain adaptation, not exact multi-turn slate parity.
+
+The search root writes aggregate `repair_candidates.jsonl` and
+`repair_attempts.jsonl`, plus `search-state.json` and an explicit stop manifest.
+Each child under `rounds/round-NN/` preserves its own native archives, proposals,
+completed continuations, judge results and complete teacher episode. It writes
+`repair_candidates.jsonl` with the localized canonical step/ID,
 `repair_attempts.jsonl`, complete generated teacher episodes under
 `episodes/`, and a runtime archive. The failed source suffix is removed before
 the hinted replacement branch is serialized; the driver itself carries the
@@ -279,7 +301,7 @@ anchor, the emitted candidate is rebound to the actual source step and retains
 `parent_candidate_id`. Its ID and the attempts' IDs then join correctly. The
 original candidate bank is not edited.
 
-With `--skip-auto-judge`, attempts without a bound
+With `--search-mode single --skip-auto-judge`, attempts without a bound
 `ifv-psd-repair-verification-bundle-v1` remain pending. The automatic judge
 normally creates this bundle. Bundle rows are keyed by hint index and exact hint hash and point to a
 real local task-verifier artifact. Because that artifact binds token hashes

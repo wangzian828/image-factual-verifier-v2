@@ -102,7 +102,9 @@ abbreviation; the current public method and this repository use PSD.
 |---|---|---|
 | Collect failures from the current policy's own rollout | `psd_candidates.py` accepts explicit train cases and retains the exact student-reached raw-history step | Aligned |
 | Locate a recoverable model-reached decision | strict/runtime locations plus named verifier-guided semantic localization in `psd_repair.py` | Aligned |
-| Hint constructor may use privileged training information | separate `hint_constructor` role and audited L1-L3 procedural hints | Aligned |
+| Agentic hint constructor sees traces/checker feedback, not reference answers | Public-only proposer; private references remain in verifier/leak audit | Corrected 2026-09-12; old private-reference proposer did not match this branch |
+| Failed repair drives revised advice and another checked execution | Sequential bounded feedback search, not batch proposals or transport retries | Implemented; live feedback-search acceptance tracked separately |
+| Preserve successful BFCL user-turn hints while fixing failed turns | IFV preserves verified advice at one original source anchor; does not inject a BFCL multi-user-turn slate | Domain adaptation, not exact parity |
 | Frozen self-teacher is the round-start policy | teacher/student provider, model, checkpoint and checkpoint-manifest hash must match | Aligned and fail-closed |
 | Teacher sees the hint; student receives the same state without it | separate teacher/student native histories; role flags are mandatory | Aligned |
 | A tool call is not proof of repair | local admission requires a named task-verifier artifact with checks and observed evidence | Aligned |

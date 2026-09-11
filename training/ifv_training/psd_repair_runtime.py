@@ -490,7 +490,7 @@ class QwenContinuationAdapter:
                 model=str(
                     getattr(self.hint_constructor_llm, "model_name", "")
                 ),
-                prompt_version="ifv-psd-repair-proposer-v3-multimodal",
+                prompt_version="ifv-psd-repair-proposer-v4-public-feedback",
             )
         started = time.perf_counter()
         try:

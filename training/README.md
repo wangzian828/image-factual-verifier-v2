@@ -134,7 +134,12 @@ prompt logprobs；不会把文本 decode 后再 encode。它绑定 serving profi
 checkpoint manifest 和逐 target token hash，每成功一条立即持久化；同一输出目录重跑
 只补失败/缺失 target。
 
-repair driver 会在一次运行中生成完整 hinted teacher episode；局部 task verifier
+repair driver 默认逐次执行“提示 → 完整轨迹 → judge → 根据失败反馈修改提示”，
+默认最多 6 次完整续跑、12 次提示提议，成功立即停止；已完成请求有绑定缓存，
+`--resume` 不会为了审核失败而重采样相同判断。提示生成器不读取私有标准答案，
+私有参考只用于验收和提示泄漏检查。完整历史保存在每个 `rounds/round-NN/` 下。
+需要旧的单次/离线验证方式时显式指定 `--search-mode single`。
+repair driver 会在每次尝试中生成完整 hinted teacher episode；局部 task verifier
 完成后，用 `ifv-training finalize-psd-repair-run --run-dir <同一目录> ...` 离线收口。
 finalizer 不调用模型或工具，并保留 pre-finalize 备份，避免为工程重试重复成功 case。
 

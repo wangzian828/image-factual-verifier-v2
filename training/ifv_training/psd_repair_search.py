@@ -87,6 +87,16 @@ def revision_context(history):
     }
 
 
+def revision_rejection(hint, feedback):
+    """Enforce the search decisions locally, not just through prompt wording."""
+    if hint.strip() in {text.strip() for text in feedback.get("excluded_hints", [])}:
+        return "repeated_completed_hint"
+    locked = feedback.get("locked_hint", "")
+    if locked and not hint.startswith(locked + "\n"):
+        return "changed_verified_hint"
+    return ""
+
+
 def inspect_round(directory):
     """Snapshot only a finalized round. Pending votes must not drive search."""
     manifest = load_json(directory / "manifest.json")
