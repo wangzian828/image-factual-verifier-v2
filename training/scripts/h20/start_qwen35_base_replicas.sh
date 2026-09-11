@@ -52,6 +52,7 @@ start() {
       CUDA_VISIBLE_DEVICES="$gpu" \
       HF_HOME="${ROOT}/cache/h20-huggingface" \
       XDG_CACHE_HOME="${RUN_ROOT}/cache" \
+      FLASHINFER_WORKSPACE_DIR="${RUN_ROOT}/cache/flashinfer" \
       TMPDIR="${RUN_ROOT}/tmp" \
       VLLM_USE_FLASHINFER_SAMPLER=0 \
       "$VLLM" serve "$MODEL" \
@@ -60,9 +61,10 @@ start() {
         --dtype bfloat16 \
         --tensor-parallel-size 1 \
         --max-model-len 131072 \
-        --gpu-memory-utilization 0.90 \
-        --max-num-seqs 2 \
-        --max-num-batched-tokens 8192 \
+        --gpu-memory-utilization 0.94 \
+        --max-num-seqs 4 \
+        --max-num-batched-tokens 16384 \
+        --gdn-prefill-backend triton \
         --reasoning-parser qwen3 \
         --enable-auto-tool-choice \
         --tool-call-parser qwen3_coder \
