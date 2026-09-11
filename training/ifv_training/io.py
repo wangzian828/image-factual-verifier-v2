@@ -27,7 +27,7 @@ def load_jsonl(path: Path) -> list[dict[str, Any]]:
     if not path.is_file():
         return rows
     for line_number, line in enumerate(
-        path.read_text(encoding="utf-8").splitlines(),
+        path.read_text(encoding="utf-8").split("\n"),
         start=1,
     ):
         if not line.strip():

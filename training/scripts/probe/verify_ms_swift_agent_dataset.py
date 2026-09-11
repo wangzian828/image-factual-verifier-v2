@@ -63,7 +63,7 @@ def _template_kwargs(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _rows(path: Path) -> Iterable[tuple[int, dict[str, Any]]]:
-    for index, line in enumerate(path.read_text(encoding="utf-8").splitlines()):
+    for index, line in enumerate(path.read_text(encoding="utf-8").split("\n")):
         if not line.strip():
             continue
         value = json.loads(line)
