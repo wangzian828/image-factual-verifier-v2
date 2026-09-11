@@ -62,6 +62,24 @@ python -m ifv_training verify-psd-datums \
   --max-context "$IFV_MAX_LENGTH" \
   --output "$PSD_INPUT_GATE"
 
+# Datums deliberately omit private teacher context, but the launch must still
+# attest the model used to generate their distribution. A later round uses
+# --model BASE --adapters PREVIOUS_ADAPTER, not a new random LoRA from BASE.
+require_value IFV_PSD_SERVING_PROFILE
+require_value IFV_PSD_ROUND_START_MANIFEST
+initialization_args=(
+  python "$REPO_ROOT/training/scripts/probe/verify_psd_initialization.py"
+  --datum-manifest "$PSD_DATUM_MANIFEST"
+  --serving-profile "$IFV_PSD_SERVING_PROFILE"
+  --checkpoint-manifest "$IFV_PSD_ROUND_START_MANIFEST"
+  --model "$IFV_MODEL_ID"
+  --output "$LOG_DIR/psd-initialization-gate.json"
+)
+if [[ -n "${IFV_PSD_INITIAL_ADAPTER:-}" ]]; then
+  initialization_args+=(--adapter "$IFV_PSD_INITIAL_ADAPTER")
+fi
+"${initialization_args[@]}"
+
 PSD_PROFILE_GATE="$LOG_DIR/psd-training-profile-gate.json"
 profile_gate_args=(
   python "$REPO_ROOT/training/scripts/probe/verify_psd_training_profile.py"
@@ -220,6 +238,8 @@ if [[ -n "$RESUME_CHECKPOINT" ]]; then
     exit 2
   fi
   args+=(--resume_from_checkpoint "$RESUME_CHECKPOINT")
+elif [[ -n "${IFV_PSD_INITIAL_ADAPTER:-}" ]]; then
+  args+=(--adapters "$IFV_PSD_INITIAL_ADAPTER" --load_args false)
 fi
 
 if [[ -n "${IFV_NUM_TRAIN_EPOCHS:-}" ]]; then
