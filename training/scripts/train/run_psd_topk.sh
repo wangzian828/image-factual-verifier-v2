@@ -108,6 +108,20 @@ if [[ -n "${IFV_MAX_STEPS:-}" ]]; then
 fi
 "${profile_gate_args[@]}"
 
+resume_gate_args=(
+  python "$REPO_ROOT/training/scripts/probe/verify_psd_resume.py"
+  --output-root "$OUTPUT_DIR"
+  --datum-manifest-path "$PSD_DATUM_MANIFEST"
+  --initialization-gate-path "$LOG_DIR/psd-initialization-gate.json"
+  --profile-gate-path "$PSD_PROFILE_GATE"
+  --seed "${IFV_SEED:-0}"
+  --max-grad-norm "${IFV_MAX_GRAD_NORM:-1.0}"
+)
+if [[ -n "$RESUME_CHECKPOINT" ]]; then
+  resume_gate_args+=(--checkpoint "$RESUME_CHECKPOINT")
+fi
+"${resume_gate_args[@]}"
+
 PSD_PLUGIN_PREFLIGHT="$LOG_DIR/psd-plugin-preflight.json"
 python "$REPO_ROOT/training/scripts/probe/psd_ms_swift_plugin_smoke.py" \
   --plugin "$REPO_ROOT/training/plugins/ifv_psd_topk_plugin.py" \
