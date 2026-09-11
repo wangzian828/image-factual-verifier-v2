@@ -6,6 +6,42 @@ are separate milestones. A component test is not an end-to-end acceptance.
 
 ## Current evidence (2026-09-12)
 
+### Acceptance update at 02:47 China time
+
+- Real 9B CPU diagnostic completed in 5,574.53 seconds. Its `result.json`
+  reports `passed=true`, a real parameter update and nonzero visual gradients.
+  Restoring adapter, optimizer, scheduler and RNG reproduced the uninterrupted
+  second-step losses **and all trainable parameter fingerprints exactly**.
+  Previous adapter weights with a fresh optimizer initialization also passed.
+  This used the original frozen 45-datum bank (one complete repair and one
+  complete preservation datum selected for the diagnostic); it is not a
+  production PSD round or an H20 capacity measurement. Keep checkpoint-1 and
+  the evidence; do not rerun this completed diagnostic.
+- New public-only feedback canary r2 finished all three fixed failed cases:
+  `e20bf448737e2505`: 12 proposals, 5 continuations, 0 accepted, proposal budget
+  exhausted (2539.68s); `6f8580432ff9805b`: 12 proposals, 3 continuations,
+  1 accepted (622.06s); `7e5b935397d714f0`: 9 proposals, 1 continuation,
+  1 accepted (644.84s). Seven completed continuations remained rejected.
+  These are three diagnostic cases, not a general repair-rate estimate.
+- New assembly admitted **2 repair + 44 preservation targets**, all with frozen
+  top-20 distributions; 46 datums, zero materialization rejections, 13,440 loss
+  positions, maximum sequence 26,331 tokens. Independent read-only input
+  preflight passed with zero errors and a 131,072-token ceiling. Datums SHA-256:
+  `6b102370b2904d8f3dbd4b6b4144041c4f8b4fe21389678c18ae9ff518e4788a`.
+  Final status is `search_complete_datums_materialized`; original bank unchanged.
+- Full regression at029a7d0: 154 passed. Remaining gates: detailed per-attempt
+  rejection/cost audit, interrupted intermediate assembly recovery, real case-pool
+  throughput, isolated H20 SP4 capacity/update, full next-round fresh-rollout
+  integration and held-out capability improvement. Single-anchor adaptation and
+  the round-end barrier remain; do not claim BFCL multi-turn slate parity or
+  fully asynchronous cross-version training. No production PSD training started.
+- Main baseline remained running without interruption: 1,652 / 1,682 trace
+  files at this check, not necessarily 1,652 successful cases. Main judge/SFT/
+  post-evaluation ordering and the frozen 1,527 formal denominator are unchanged.
+
+The subsections below retain earlier historical checkpoints; this update
+supersedes their pending CPU and feedback-canary statuses.
+
 ### Reopened audit: feedback search was missing
 
 The previous implementation generated a batch of hints and judged them only
