@@ -53,6 +53,19 @@ These are **old 1,682 exploratory comparisons**, not the unrecovered frozen
 
 ## GPU protection and next transition
 
+04:32 preparation: `training/scripts/h20/prepare_formal_sft.py` prepared
+`/volume/ybo/wza/training-artifacts/h20-formal-sft-20260912/training-plan.json`.
+Five focused tests passed; the server rechecked dataset/processor hashes. The
+plan preserves the measured 64K/SP4 command except full training input, one
+epoch (`max_steps=-1`) and full-state epoch saving (one retained checkpoint,
+not model-only; no best-model selection). It does not execute training. Use
+the H20 environment wrapper and resource monitor when launching after judge.
+Epoch-only saving limits storage but offers no mid-epoch checkpoint. Actual
+user quota is still unknown (`quota` unavailable); measured current owned-tree
+usage was 92GiB. Do not use shared 39TiB free space as user allowance or remove
+source data. Final full-state checkpoint and separate inference export require
+a conservative storage check before launch.
+
 After confirming no Agent/PSD rollout or training remained, the owned base-model
 replicas/gateway were stopped using their checked-PID manager. Four 12GiB,
 25%-duty idle GPU keepers were started; the original utilization guard remains
