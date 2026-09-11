@@ -506,6 +506,7 @@ def verify_causal_episode(
     teacher_completion_sha256: str = "",
     downstream_patch_count: int = 0,
     score_metadata: Mapping[str, Any] | None = None,
+    source_access_policy: Any = None,
 ) -> VerificationResult:
     """Verify one hinted frozen-policy continuation against its failed source.
 
@@ -561,7 +562,7 @@ def verify_causal_episode(
     elif not token_binding_pass:
         reasons.append("hinted_episode_teacher_token_binding_mismatch")
     try:
-        report = audit_trace(path)
+        report = audit_trace(path, source_access_policy=source_access_policy) if source_access_policy is not None else audit_trace(path)
         failures = report.failures(strict_scheduler=True)
         if failures:
             reasons.extend(f"audit:{item.code}" for item in failures)
@@ -628,6 +629,7 @@ def verify_continuation_pair(
     local_verification: Mapping[str, Any] | None,
     repair_step_id: str,
     hint_sha256: str,
+    source_access_policy: Any = None,
 ) -> tuple[VerificationResult, dict[str, Any]]:
     """Verify the hinted teacher; keep the unhinted student as diagnostics."""
 
@@ -681,6 +683,7 @@ def verify_continuation_pair(
             hint_sha256=hint_sha256,
             teacher_prompt_sha256=teacher_prompt_sha256,
             teacher_completion_sha256=teacher_completion_sha256,
+            source_access_policy=source_access_policy,
         )
     student_diagnostic = None
     if unhinted_student_episode_trace is not None:

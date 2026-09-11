@@ -74,6 +74,14 @@ def finalize_psd_repair_run(
     manifest = load_json(manifest_path)
     if manifest.get("schema_version") != "ifv-psd-repair-driver-result-v1":
         raise ValueError("PSD repair driver manifest schema is invalid")
+    source_policy = None
+    if manifest.get("source_access_policy"):
+        from src.orchestrator.source_access import SourceAccessPolicy
+        recorded_policy = manifest["source_access_policy"]
+        policy_path = Path(recorded_policy["path"])
+        if sha256_file(policy_path) != recorded_policy["sha256"]:
+            raise ValueError("PSD source policy changed before finalization")
+        source_policy = SourceAccessPolicy.load(policy_path)
     source_trace = load_json(source_trace_path)
     gold = load_json(gold_path)
     source_sha256 = sha256_file(source_trace_path)
@@ -158,6 +166,7 @@ def finalize_psd_repair_run(
             teacher_completion_sha256=_sha(
                 [int(item) for item in completion_ids]
             ),
+            source_access_policy=source_policy,
         )
         attempt.update(
             {

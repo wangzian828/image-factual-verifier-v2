@@ -1,0 +1,45 @@
+import hashlib
+import json
+from pathlib import Path
+import sys
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from scripts.continue_psd_canary import completed_stage
+from scripts.prepare_psd_training_canary import project_frozen_training
+from src.orchestrator.source_access import benchmark_source_access_policy
+from ifv_training.io import load_jsonl
+
+
+def test_completed_stage_is_cached_but_mutation_rejected(tmp_path):
+    artifact = tmp_path / "artifact.json"
+    calls = []
+    def action():
+        calls.append(1)
+        artifact.write_text("{}")
+        return {"passed": True}, [artifact]
+    assert completed_stage(tmp_path, "test", {"input": "hash"}, action)["passed"]
+    assert completed_stage(tmp_path, "test", {"input": "hash"}, action)["passed"]
+    assert len(calls) == 1
+    artifact.write_text('{"changed": true}')
+    with pytest.raises(ValueError, match="changed"):
+        completed_stage(tmp_path, "test", {"input": "hash"}, action)
+
+
+def test_projection_preserves_frozen_train_split_and_excludes_private_fields(tmp_path):
+    staging = tmp_path / "source"
+    staging.mkdir()
+    image = staging / "image.jpg"
+    image.write_bytes(b"unit-test image bytes")
+    digest = hashlib.sha256(image.read_bytes()).hexdigest()
+    cases = ["a", "b"]
+    rows = [{"case_id": case, "unified_image_path": "image.jpg", "source_url": "https://reference.invalid", "factual_status": "supported"} for case in cases]
+    split = {case: {"case_id": case, "split": "train", "image_sha256": digest} for case in cases}
+    result = project_frozen_training(staging=staging, output_dir=tmp_path / "release",
+        rows=rows, gold=rows, split=split,
+        policy=benchmark_source_access_policy(["https://reference.invalid"]))
+    public = load_jsonl(Path(result["benchmark"]))
+    assert len(public) == 2
+    assert all(set(row) == {"case_id", "image_path", "image_sha256"} for row in public)
+    assert all(row["split"] == "train" for row in load_jsonl(Path(result["case_split"])))
+    assert not result["new_validation_split"]

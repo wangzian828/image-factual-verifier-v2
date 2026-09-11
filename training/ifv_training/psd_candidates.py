@@ -345,6 +345,10 @@ def _source_metadata(
         "runtime_commit": _text(run_manifest.get("git_commit")),
         "psd_round_index": rollout_gate.get("round_index"),
         "psd_rollout_gate_sha256": sha256_file(rollout_gate_path),
+        "source_access_policy_sha256": (
+            sha256_file(Path(run_manifest["source_access_policy"]["path"]))
+            if isinstance(run_manifest.get("source_access_policy"), Mapping)
+            and run_manifest["source_access_policy"].get("path") else None),
     }
 
 

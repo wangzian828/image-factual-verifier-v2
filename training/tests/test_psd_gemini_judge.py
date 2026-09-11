@@ -22,6 +22,35 @@ class Client:
                 "outputs": [{"type": "text", "text": json.dumps(self.result)}]}
 
 
+def test_review_images_uses_correct_archive_for_colliding_request_ids(tmp_path, monkeypatch):
+    import base64
+    import io
+    from PIL import Image
+    buffer = io.BytesIO()
+    Image.new("RGB", (4, 4), "red").save(buffer, format="PNG")
+    blob = buffer.getvalue()
+    path = tmp_path / "task.png"
+    path.write_bytes(blob)
+    digest = hashlib.sha256(blob).hexdigest()
+    image = {"type": "image_url", "image_url": {"url": "data:image/png;base64," + base64.b64encode(blob).decode()}}
+    def trace(root, repaired=False):
+        return {"state": {"runtime_case": {"image_sha256": digest}, "runtime_store": {"runtime_path": root},
+            "all_steps": [{"metadata": {"context_request_id": "1", "policy_input": {}, "psd_suffix_step": False}},
+                          {"metadata": {"context_request_id": "2", "policy_input": {}, "psd_suffix_step": repaired}}]}}
+    calls = []
+    def archived(root, request_id):
+        calls.append((root, request_id))
+        return {"input_payload": [image, image]}
+    monkeypatch.setattr("src.orchestrator.runtime_events.reconstruct_archived_request", archived)
+    blocks, mapping = judge.review_images({"source": trace("original"), "repaired": trace("repair", True)}, image_path=path)
+    assert calls == [("original", "1"), ("original", "2"), ("original", "1"), ("repair", "2")]
+    assert len([x for x in blocks if x["type"] == "image"]) == 1
+    assert all(row["image_sha256"] == [digest, digest] for row in mapping["policy_images"])
+    path.write_bytes(b"changed")
+    with pytest.raises(Exception):
+        judge.review_images({"source": trace("original")}, image_path=path)
+
+
 def packet():
     return {"selected_step_index": 1, "episode_complete": True, "hint": "Compare fields",
             "source_steps": [{"index": 0, "observation": "record says 2019"},

@@ -226,6 +226,9 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
         else None
     )
     gold = load_json(args.gold)
+    seed = load_json(args.candidate)
+    if seed.get("source", {}).get("source_access_policy_sha256") != sha256_file(args.source_access_policy):
+        raise ValueError("PSD repair source-access policy differs from original rollout")
     public_context = load_json(args.public_context)
     private_context = load_json(args.private_context) if args.private_context else None
     from ifv_training.psd_gemini_judge import require_training_case
@@ -285,6 +288,8 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
         "schema_version": "ifv-psd-repair-driver-result-v1", "status": "generating",
         "trace": str(args.trace), "runtime_archive": str(runtime_root),
         "train_cases_sha256": sha256_file(args.train_cases),
+        "source_access_policy": {"path": str(args.source_access_policy.resolve()),
+                                 "sha256": sha256_file(args.source_access_policy)},
         "candidate_count": 0, "accepted_count": 0,
         })
     from src.orchestrator.source_access import SourceAccessPolicy
@@ -452,6 +457,7 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
                 local_verification=local_verification,
                 repair_step_id=site.step_id,
                 hint_sha256=expected_hint_sha,
+                source_access_policy=source_policy,
             )
             teacher_capture = _capture_from_steps(
                 continuation.teacher_steps,
@@ -549,6 +555,8 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
             "schema_version": "ifv-psd-repair-driver-result-v1",
             "status": "generated",
             "train_cases_sha256": sha256_file(args.train_cases),
+            "source_access_policy": {"path": str(args.source_access_policy.resolve()),
+                                     "sha256": sha256_file(args.source_access_policy)},
             "trace": str(args.trace),
             "runtime_archive": str(runtime_root),
             "policy_serving_attestation": {
