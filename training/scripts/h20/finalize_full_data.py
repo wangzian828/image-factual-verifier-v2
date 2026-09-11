@@ -35,7 +35,7 @@ def main():
     equality = {}
     source = Path(report['source_package'])
     buckets = defaultdict(list)
-    for kind in ('policy','perception'):
+    for kind in ('policy',):
         for split in ('train','validation','test'):
             path = root/f'ms-swift-{kind}/{split}.jsonl'
             originals, normalized = rows(source/f'ms-swift-{kind}/{split}.jsonl'), rows(path)
@@ -54,7 +54,7 @@ def main():
     report['content_equality_audit'] = {'passed':True,'rows':equality,'changes':'image paths only'}
     write(report_path, report)
     gates = {}
-    for kind in ('policy','perception'):
+    for kind in ('policy',):
         dataset = root/f'ms-swift-{kind}'
         result = gate.verify_sft_data_contract(
             train_jsonl=dataset/'train.jsonl', validation_jsonl=dataset/'validation.jsonl',
@@ -96,7 +96,7 @@ def main():
             extreme.append(item)
     tiny_names = {r['name'] for r in tiny}
     tiny_references = []
-    for kind in ('policy','perception'):
+    for kind in ('policy',):
         for split in ('train','validation'):
             for i, row in enumerate(rows(root/f'ms-swift-{kind}/{split}.jsonl')):
                 affected = [Path(p).name for p in row['images'] if Path(p).name in tiny_names]
@@ -117,7 +117,7 @@ def main():
     write(root/'RELEASE.json',{'status':'data_processing_complete','training_started':False,
         'processor_report_sha256':sha(report_path),'row_features_sha256':sha(root/'row-features.jsonl'),
         'policy_train_sha256':sha(root/'ms-swift-policy/train.jsonl'),
-        'perception_train_sha256':sha(root/'ms-swift-perception/train.jsonl'),
+        'training_scope':'Complete policy episodes only; legacy perception and action-only are excluded.',
         'validation_warning':'Only one accepted validation case. Not sufficient for model-quality selection.',
         'images':'Referenced in original delivery; do not delete the source images directory.'})
     print(json.dumps(supplement,ensure_ascii=False,indent=2))

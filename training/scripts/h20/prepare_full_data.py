@@ -141,7 +141,8 @@ def main():
     features, identities = [], defaultdict(lambda: defaultdict(set))
     unique_images = set()
     known_images = {r['name'] for r in image_stats}
-    for kind in ('policy', 'perception'):
+    # This release trains complete reasoning episodes only. Perception is legacy.
+    for kind in ('policy',):
         src, dst = package/f'ms-swift-{kind}', output/f'ms-swift-{kind}'
         dst.mkdir()
         manifest = json.loads((src/'manifest.json').read_text())
@@ -222,7 +223,7 @@ def main():
     errors = [r for r in results if 'error' in r]
     good = [r for r in results if 'error' not in r]
     summaries = {}
-    for kind in ('policy','perception'):
+    for kind in ('policy',):
         for split in ('train','validation','test'):
             subset = [r for r in good if r['kind']==kind and r['split']==split]
             counts = Counter()
