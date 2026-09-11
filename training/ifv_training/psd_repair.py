@@ -124,6 +124,7 @@ class PSDModelRoles:
     frozen_self_teacher_provider: str
     frozen_self_teacher_model: str
     round_start_checkpoint: str
+    round_start_checkpoint_manifest_sha256: str
     trainable_student_provider: str
     trainable_student_model: str
     trainable_student_initial_checkpoint: str
@@ -137,6 +138,7 @@ class PSDModelRoles:
                 "frozen_self_teacher_provider",
                 "frozen_self_teacher_model",
                 "round_start_checkpoint",
+                "round_start_checkpoint_manifest_sha256",
                 "trainable_student_provider",
                 "trainable_student_model",
                 "trainable_student_initial_checkpoint",
@@ -169,6 +171,13 @@ class PSDModelRoles:
                 "frozen self-teacher and trainable student must use the same "
                 "policy provider"
             )
+        checkpoint_manifest_sha256 = values[
+            "round_start_checkpoint_manifest_sha256"
+        ]
+        if not re.fullmatch(r"[0-9a-fA-F]{64}", checkpoint_manifest_sha256):
+            raise ValueError(
+                "round-start checkpoint manifest SHA-256 must be 64 hex characters"
+            )
 
     def record(self) -> dict[str, Any]:
         return {
@@ -181,6 +190,9 @@ class PSDModelRoles:
                 "provider": _text(self.frozen_self_teacher_provider),
                 "model": _text(self.frozen_self_teacher_model),
                 "round_start_checkpoint": _text(self.round_start_checkpoint),
+                "checkpoint_manifest_sha256": _text(
+                    self.round_start_checkpoint_manifest_sha256
+                ).casefold(),
                 "sees_hint": True,
                 "supplies_training_distribution": True,
             },
@@ -190,6 +202,9 @@ class PSDModelRoles:
                 "initial_checkpoint": _text(
                     self.trainable_student_initial_checkpoint
                 ),
+                "checkpoint_manifest_sha256": _text(
+                    self.round_start_checkpoint_manifest_sha256
+                ).casefold(),
                 "sees_hint": False,
             },
         }

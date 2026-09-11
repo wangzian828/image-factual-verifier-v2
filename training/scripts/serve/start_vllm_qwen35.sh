@@ -10,6 +10,7 @@ SERVED_NAME="${2:-ifv-qwen3.5-9b}"
 PORT="${3:-8901}"
 TP_SIZE="${4:-2}"
 CONTEXT_LENGTH="${5:-131072}"
+CHECKPOINT_MANIFEST="${6:-${IFV_CHECKPOINT_MANIFEST:-}}"
 ENV_PREFIX="${IFV_VLLM_ENV_PREFIX:-${CONDA_PREFIX:-}}"
 VLLM="$ENV_PREFIX/bin/vllm"
 
@@ -61,8 +62,8 @@ export TRANSFORMERS_OFFLINE=1
 export VLLM_USE_FLASHINFER_SAMPLER=0
 PROFILE_DIR="$DATA_ROOT/exports/$SERVED_NAME"
 mkdir -p "$PROFILE_DIR"
-PYTHONPATH="$REPO_ROOT${PYTHONPATH:+:$PYTHONPATH}" \
-  "$ENV_PREFIX/bin/python" -m ifv_training serving-profile \
+profile_args=(
+  "$ENV_PREFIX/bin/python" -m ifv_training serving-profile
   --output "$PROFILE_DIR/serving-profile.json" \
   --profile-id "$SERVED_NAME" \
   --model-path "$MODEL" \
@@ -74,6 +75,15 @@ PYTHONPATH="$REPO_ROOT${PYTHONPATH:+:$PYTHONPATH}" \
   --tool-call-parser qwen3_coder \
   --reasoning-parser qwen3 \
   --thinking-enabled true
+)
+if [[ -n "$CHECKPOINT_MANIFEST" ]]; then
+  if [[ ! -s "$CHECKPOINT_MANIFEST" ]]; then
+    echo "checkpoint manifest does not exist or is empty: $CHECKPOINT_MANIFEST" >&2
+    exit 2
+  fi
+  profile_args+=(--checkpoint-manifest "$CHECKPOINT_MANIFEST")
+fi
+PYTHONPATH="$REPO_ROOT${PYTHONPATH:+:$PYTHONPATH}" "${profile_args[@]}"
 
 args=(
   "$VLLM" serve "$MODEL"

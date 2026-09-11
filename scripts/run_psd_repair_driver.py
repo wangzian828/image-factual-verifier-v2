@@ -96,6 +96,34 @@ def _load_verification_bundle(path: Path | None) -> dict[int, Mapping[str, Any]]
     return result
 
 
+def _load_policy_serving_attestation(
+    args: argparse.Namespace,
+) -> tuple[Mapping[str, Any], str, str]:
+    profile = load_json(args.policy_serving_profile)
+    if profile.get("schema_version") != "ifv-qwen-serving-profile-v1":
+        raise ValueError("policy serving profile schema is invalid")
+    if _text(profile.get("profile_id")) != _text(args.policy_model):
+        raise ValueError("policy model does not match serving profile ID")
+    if _text(profile.get("wire_api")) != _text(args.policy_wire_api):
+        raise ValueError("policy wire API does not match serving profile")
+    if _text(profile.get("model_path")) != _text(args.round_start_checkpoint):
+        raise ValueError("round-start checkpoint does not match served model path")
+    profile_base_url = _text(profile.get("base_url")).rstrip("/")
+    requested_base_url = _text(args.policy_base_url).rstrip("/")
+    if requested_base_url and requested_base_url != profile_base_url:
+        raise ValueError("policy base URL does not match serving profile")
+    checkpoint_manifest_sha256 = sha256_file(
+        args.round_start_checkpoint_manifest
+    )
+    if _text(profile.get("checkpoint_manifest_sha256")).casefold() != (
+        checkpoint_manifest_sha256.casefold()
+    ):
+        raise ValueError(
+            "checkpoint manifest does not match the serving profile attestation"
+        )
+    return profile, profile_base_url, checkpoint_manifest_sha256
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--trace", type=Path, required=True)
@@ -110,11 +138,17 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--policy-model", required=True)
     parser.add_argument("--policy-base-url")
     parser.add_argument("--policy-wire-api", default="chat_completions")
+    parser.add_argument("--policy-serving-profile", type=Path, required=True)
     parser.add_argument("--hint-constructor-provider", required=True)
     parser.add_argument("--hint-constructor-model", required=True)
     parser.add_argument("--hint-constructor-base-url")
     parser.add_argument("--hint-constructor-wire-api")
     parser.add_argument("--round-start-checkpoint", required=True)
+    parser.add_argument(
+        "--round-start-checkpoint-manifest",
+        type=Path,
+        required=True,
+    )
     parser.add_argument("--hint-count", type=int, default=4)
     parser.add_argument("--hint-level", type=int, default=1)
     parser.add_argument("--max-suffix-actions", type=int, default=8)
@@ -123,6 +157,9 @@ def _parser() -> argparse.ArgumentParser:
 
 
 async def _run(args: argparse.Namespace) -> dict[str, Any]:
+    policy_profile, policy_base_url, checkpoint_manifest_sha256 = (
+        _load_policy_serving_attestation(args)
+    )
     trace = load_json(args.trace)
     audit = load_json(args.audit)
     semantic_verification = (
@@ -156,7 +193,7 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
     policy_orchestrator = Orchestrator(
         provider=args.policy_provider,
         model_name=args.policy_model,
-        llm_base_url=args.policy_base_url,
+        llm_base_url=policy_base_url,
         llm_wire_api=args.policy_wire_api,
         image_access_mode="direct_multimodal",
         validate_startup=True,
@@ -175,6 +212,7 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
         frozen_self_teacher_provider=args.policy_provider,
         frozen_self_teacher_model=args.policy_model,
         round_start_checkpoint=args.round_start_checkpoint,
+        round_start_checkpoint_manifest_sha256=checkpoint_manifest_sha256,
         trainable_student_provider=args.policy_provider,
         trainable_student_model=args.policy_model,
         trainable_student_initial_checkpoint=args.round_start_checkpoint,
@@ -284,6 +322,14 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
             "schema_version": "ifv-psd-repair-driver-result-v1",
             "trace": str(args.trace),
             "runtime_archive": str(runtime_root),
+            "policy_serving_attestation": {
+                "profile": str(args.policy_serving_profile),
+                "profile_sha256": sha256_file(args.policy_serving_profile),
+                "profile_id": _text(policy_profile.get("profile_id")),
+                "model_path": _text(policy_profile.get("model_path")),
+                "checkpoint_manifest": str(args.round_start_checkpoint_manifest),
+                "checkpoint_manifest_sha256": checkpoint_manifest_sha256,
+            },
             "candidate_count": len(records),
             "accepted_count": sum(1 for row in records if row.get("accepted") is True),
             "pending_hinted_episode_count": sum(

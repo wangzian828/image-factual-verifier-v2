@@ -375,6 +375,17 @@ def _validated_model_roles(value: Any) -> dict[str, Any]:
     student_checkpoint = _text(student.get("initial_checkpoint"))
     if not teacher_checkpoint or teacher_checkpoint != student_checkpoint:
         raise ValueError("PSD self-teacher/student checkpoint mismatch")
+    teacher_manifest_sha256 = _text(
+        teacher.get("checkpoint_manifest_sha256")
+    ).casefold()
+    student_manifest_sha256 = _text(
+        student.get("checkpoint_manifest_sha256")
+    ).casefold()
+    if (
+        not re.fullmatch(r"[0-9a-f]{64}", teacher_manifest_sha256)
+        or teacher_manifest_sha256 != student_manifest_sha256
+    ):
+        raise ValueError("PSD self-teacher/student checkpoint manifest mismatch")
     return {
         "hint_constructor": dict(constructor),
         "frozen_self_teacher": dict(teacher),
@@ -389,6 +400,9 @@ def _teacher_identity(target: Mapping[str, Any]) -> dict[str, str]:
         "provider": _text(teacher.get("provider")).casefold(),
         "model": _text(teacher.get("model")),
         "checkpoint": _text(teacher.get("round_start_checkpoint")),
+        "checkpoint_manifest_sha256": _text(
+            teacher.get("checkpoint_manifest_sha256")
+        ).casefold(),
     }
 
 
@@ -824,12 +838,19 @@ def materialize_psd_topk_cache(
                 cache_row.get("teacher_model") or cache_row.get("model")
             )
             teacher_checkpoint = _text(cache_row.get("teacher_checkpoint"))
+            teacher_checkpoint_manifest_sha256 = _text(
+                cache_row.get("teacher_checkpoint_manifest_sha256")
+            ).casefold()
             if teacher_provider != expected_teacher["provider"]:
                 raise ValueError("cache_teacher_provider_mismatch")
             if teacher_model != expected_teacher["model"]:
                 raise ValueError("cache_teacher_model_mismatch")
             if teacher_checkpoint != expected_teacher["checkpoint"]:
                 raise ValueError("cache_teacher_checkpoint_mismatch")
+            if teacher_checkpoint_manifest_sha256 != expected_teacher[
+                "checkpoint_manifest_sha256"
+            ]:
+                raise ValueError("cache_teacher_checkpoint_manifest_mismatch")
             if _text(cache_row.get("teacher_prompt_sha256")) != _token_ids_sha256(
                 teacher_prompt_ids
             ):
@@ -859,6 +880,7 @@ def materialize_psd_topk_cache(
             "provider": teacher_provider,
             "model": teacher_model,
             "checkpoint": teacher_checkpoint,
+            "checkpoint_manifest_sha256": teacher_checkpoint_manifest_sha256,
             "teacher_prompt_sha256": _token_ids_sha256(teacher_prompt_ids),
             "completion_sha256": _token_ids_sha256(completion_ids),
         }

@@ -37,6 +37,7 @@ def _roles() -> PSDModelRoles:
         frozen_self_teacher_provider="qwen_local",
         frozen_self_teacher_model="qwen-round-start",
         round_start_checkpoint="checkpoint-round-0",
+        round_start_checkpoint_manifest_sha256="a" * 64,
         trainable_student_provider="qwen_local",
         trainable_student_model="qwen-round-start",
         trainable_student_initial_checkpoint="checkpoint-round-0",
@@ -576,6 +577,33 @@ def test_privileged_proposer_request_is_recorded_in_runtime_ledger(tmp_path) -> 
     manifests = list((store.root / "context").glob("*.json"))
     assert len(manifests) == 1
     assert '"stage": "psd_proposer"' in manifests[0].read_text(encoding="utf-8")
+
+
+def test_model_roles_require_checkpoint_attestation_and_one_policy_provider() -> None:
+    with pytest.raises(ValueError, match="manifest SHA-256"):
+        PSDModelRoles(
+            hint_constructor_provider="frontier",
+            hint_constructor_model="constructor",
+            frozen_self_teacher_provider="qwen_local",
+            frozen_self_teacher_model="round-policy",
+            round_start_checkpoint="round-0",
+            round_start_checkpoint_manifest_sha256="not-a-sha",
+            trainable_student_provider="qwen_local",
+            trainable_student_model="round-policy",
+            trainable_student_initial_checkpoint="round-0",
+        )
+    with pytest.raises(ValueError, match="same policy provider"):
+        PSDModelRoles(
+            hint_constructor_provider="frontier",
+            hint_constructor_model="constructor",
+            frozen_self_teacher_provider="qwen_local",
+            frozen_self_teacher_model="round-policy",
+            round_start_checkpoint="round-0",
+            round_start_checkpoint_manifest_sha256="a" * 64,
+            trainable_student_provider="different-provider",
+            trainable_student_model="round-policy",
+            trainable_student_initial_checkpoint="round-0",
+        )
 
 
 def test_repository_has_no_legacy_psd_repair_name() -> None:

@@ -55,6 +55,7 @@ def _repair_row(**overrides: object) -> dict:
                 "provider": "qwen_local",
                 "model": "qwen-round-start",
                 "round_start_checkpoint": "checkpoint-round-0",
+                "checkpoint_manifest_sha256": "a" * 64,
                 "sees_hint": True,
                 "supplies_training_distribution": True,
             },
@@ -62,6 +63,7 @@ def _repair_row(**overrides: object) -> dict:
                 "provider": "qwen_local",
                 "model": "qwen-round-start",
                 "initial_checkpoint": "checkpoint-round-0",
+                "checkpoint_manifest_sha256": "a" * 64,
                 "sees_hint": False,
             },
         },
@@ -196,6 +198,7 @@ def test_materialize_topk_cache_requires_exact_token_hashes(tmp_path: Path) -> N
                 "teacher_provider": "qwen_local",
                 "teacher_model": "qwen-round-start",
                 "teacher_checkpoint": "checkpoint-round-0",
+                "teacher_checkpoint_manifest_sha256": "a" * 64,
                 "teacher_prompt_sha256": _token_hash(
                     target["teacher_prompt_ids"]
                 ),
@@ -241,6 +244,7 @@ def test_materialize_topk_cache_rejects_wrong_self_teacher_checkpoint(
                 "teacher_provider": "qwen_local",
                 "teacher_model": "qwen-round-start",
                 "teacher_checkpoint": "different-checkpoint",
+                "teacher_checkpoint_manifest_sha256": "a" * 64,
                 "teacher_prompt_sha256": _token_hash(
                     target["teacher_prompt_ids"]
                 ),

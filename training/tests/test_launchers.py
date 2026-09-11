@@ -181,6 +181,20 @@ def test_psd_and_grpo_use_framework_entrypoints() -> None:
     assert "vllm==0.22.1" in requirements
 
 
+def test_psd_repair_binds_the_served_round_start_checkpoint() -> None:
+    driver = (ROOT.parent / "scripts/run_psd_repair_driver.py").read_text(
+        encoding="utf-8"
+    )
+    serving = _source("scripts/serve/start_vllm_qwen35.sh")
+
+    assert "--policy-serving-profile" in driver
+    assert "--round-start-checkpoint-manifest" in driver
+    assert "checkpoint_manifest_sha256" in driver
+    assert "round-start checkpoint does not match served model path" in driver
+    assert "IFV_CHECKPOINT_MANIFEST" in serving
+    assert '--checkpoint-manifest "$CHECKPOINT_MANIFEST"' in serving
+
+
 def test_qwen35_serving_and_lifecycle_are_fail_closed() -> None:
     launcher = _source("scripts/serve/start_vllm_qwen35.sh")
     manager = _source("scripts/serve/manage_vllm_qwen35.sh")

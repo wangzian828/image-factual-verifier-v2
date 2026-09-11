@@ -236,6 +236,16 @@ def _validate_attempt(
         student.get("provider")
     ).casefold():
         raise ValueError("self_teacher_student_provider_mismatch")
+    teacher_manifest_sha256 = _text(
+        teacher.get("checkpoint_manifest_sha256")
+    ).casefold()
+    if (
+        len(teacher_manifest_sha256) != 64
+        or any(character not in "0123456789abcdef" for character in teacher_manifest_sha256)
+        or teacher_manifest_sha256
+        != _text(student.get("checkpoint_manifest_sha256")).casefold()
+    ):
+        raise ValueError("self_teacher_student_checkpoint_manifest_mismatch")
 
     hint_record = _mapping(attempt.get("hint_record"))
     hint = _text(hint_record.get("text") or attempt.get("hint"))
