@@ -4,6 +4,52 @@ This checklist supersedes any earlier claim that PSD was fully accepted.
 Implementation, synthetic tests, live-provider tests and a real training round
 are separate milestones. A component test is not an end-to-end acceptance.
 
+## Current evidence (2026-09-12)
+
+- Implemented automatic native-multimodal Gemini semantic localization and PSD
+  repair judging, literal-evidence/anchor/full-episode/hash checks, native image
+  hints, persisted continuations/reviews, bounded generation retries and offline
+  re-finalization without trajectory resampling.
+- Implemented original source-exclusion-policy binding for both repair tools
+  and final strict audit. Student initialization must match the frozen teacher,
+  including the previous-round adapter. Round completion checks real weight
+  artifacts and resumable optimizer/scheduler/RNG state.
+- Server regression at `40527ac`: **112 PSD tests passed**. Local focused suite:
+  47 passed. Source edits/commits originate locally; server only fast-forward
+  pulls. Agent implementation is unchanged.
+- Live Gemini `gemini-3.1-pro-preview` repair-judge diagnostic: **25/25 correct**,
+  comprising 21 distinct synthetic controls and four repeated inputs. Zero
+  false admissions in this diagnostic. Seven initially rejected literal-JSON
+  evidence formats were fixed and validated from cached responses, without
+  extra API sampling. This is not a real-trajectory quality estimate.
+- Official training archive: `jiashuhong/factcheck_train`,
+  `factcheck_train-8490-20260907.tar.gz`, SHA-256
+  `2fda3ca7144d899e355fcbbaa4e6b93350878dbf5225ab423402123d5e37a448`.
+  Stream-verified all 24,127,361,006 compressed bytes; retained 137,227,221
+  metadata bytes, no archive/image download stored. Reused delivered images
+  using hardlinks. Original train split and full held-out case/image exclusions
+  are preserved.
+- Fresh real on-policy canary: **8/8 completed, 8/8 strict-audit passes, zero
+  engineering errors, zero incomplete token captures**. Five correct complete
+  trajectories form preservation candidates, three wrong complete trajectories
+  form repair seeds. The fixed case selection was independent of model outcomes.
+  Frozen pretrained 9B files and serving profile are hash-attested. This bank
+  is a diagnostic training subset, not the official evaluation set.
+- Real semantic localization/repair/judge and target assembly are running;
+  until accepted artifacts and optimizer/resume reports exist, **do not mark
+  the real PSD end-to-end gate passed**. CPU and GPU diagnostics, production
+  round completion and held-out quality remain separate acceptance levels.
+
+Server evidence roots:
+
+- `/volume/ybo/wza/runs/psd-gemini-repair-controls-20260912-r1`
+- `/volume/ybo/wza/runs/psd-base-snapshot-20260912`
+- `/volume/ybo/wza/runs/psd-real-training-canary-20260912-r2`
+- `/volume/ybo/wza/data/psd-official-train-metadata-20260912`
+
+The abandoned preparation directory without `-r2` contains only a failed
+projection attempt; it is not an accepted dataset/run.
+
 ## Scope and ordering
 
 Do not modify the Agent runtime, consume evaluation cases as training data, or

@@ -2,6 +2,15 @@
 
 Audit date: 2026-09-11
 
+Current follow-up: 2026-09-12. Use the
+[completion checklist](psd-completion-checklist.md) for current acceptance;
+the historical findings and "Aligned" entries below describe implementation
+contracts, not real-case repair success or measured capability improvement.
+Automatic multimodal Gemini localization/repair judging, native image hint
+proposals, cached resumption and actual student checkpoint initialization have
+since been added. The synthetic live judge diagnostic scored 25/25, with 21
+unique controls and four repeats; this is not an IFV-task quality estimate.
+
 ## H20 follow-up: multimodal implementation and validation
 
 The gap described below has now been implemented in `psd_media.py`,
@@ -44,7 +53,7 @@ template carry no image pixels, image grids or multimodal position IDs.
 Exact prompt token IDs alone do not preserve visual conditioning. Therefore
 the earlier "aligned" entries must not be read as multimodal readiness.
 
-Visual targets now fail explicitly before target export, offline scoring,
+At that historical audit, visual targets failed explicitly before target export, offline scoring,
 datum materialization and template encoding. The Qwen3.5 special IDs are
 verified against the deployed 9B config (vision start/end 248053/248054,
 image/video 248056/248057). This is a correctness guard, **not completion of
@@ -58,7 +67,8 @@ This does not certify H20 capacity or replace a real optimizer canary.
 The shared launcher root was also corrected from `training/` to repository
 root, preventing duplicated `training/training/` script and plugin paths.
 
-Remaining acceptance work, using training cases only:
+Historical implementation checklist (items 1–3 now implemented; real-case
+optimizer/quality acceptance remains separately tracked):
 
 1. Preserve immutable media references, byte hashes, processor settings and
    visual ordering from the actual archived teacher/student requests.

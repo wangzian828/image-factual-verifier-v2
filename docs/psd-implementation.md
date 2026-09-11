@@ -1,5 +1,40 @@
 # IFV Privileged On-Policy Self-Distillation (PSD) Implementation
 
+> Current acceptance status and remaining gates are maintained in
+> [psd-completion-checklist.md](psd-completion-checklist.md). Implemented does
+> not mean a real PSD round or a capability improvement has been demonstrated.
+
+## Automatic repair verification and recovery (2026-09-12)
+
+`psd_gemini_judge.py` now implements the training-only semantic localizer and
+PSD repair judge. This is separate from the final-answer evaluation judge.
+It sends actual archived images through native Gemini Interactions, preserves
+raw failed/empty tool observations and checks source failure, the selected
+decision, a grounded complete repaired episode and procedural hint safety.
+Positive reviews need literal source/repaired-step evidence. Source, hint,
+token IDs, full episode, private reference, prompt, model and image hashes bind
+the artifact. Runtime checks cannot be overridden by a model's boolean answer.
+
+The driver auto-localizes semantic failures and judges persisted repairs by
+default. `--skip-auto-judge` explicitly leaves manual-verification work pending.
+`--train-cases` and `--source-access-policy` are mandatory; the latter must
+match the original rollout bank and is reused for tools and final strict audit.
+The hint constructor receives native image blocks, not base64 inside JSON prose.
+
+Use the same inputs plus `--resume` to continue. Completed hint proposals,
+teacher episodes and judge responses are saved before subsequent validation.
+Malformed or negative completed judge responses are not resampled until they
+pass. Only failed/incomplete generations have bounded retries, with new archive
+namespaces. Offline finalization itself makes no provider calls.
+
+`scripts/postprocess_psd_training.py` derives training-only rewards and strict
+audits from private gold; it does not export perception or SFT examples.
+`scripts/continue_psd_canary.py --root <prepared-training-canary> --snapshot
+<frozen-base-snapshot>` resumes the concrete rollout → candidates → repair →
+judge → target → datum diagnostic. Every input case must be on the original
+train split, with held-out case/image exclusions checked at preparation.
+It does not launch production training.
+
 > H20 update (2026-09-11): image conditioning is now carried through immutable
 > `psd_media` tensors, exact-token Transformers teacher scoring and the native
 > Qwen3.5 Swift template. Missing or changed media is rejected. The real 9B CPU
@@ -99,7 +134,7 @@ python -m ifv_training materialize-psd-topk `
   --topk 20
 ```
 
-The collector forces `teacher_prompt_ids + completion_ids` through the vLLM
+The text-only collector forces `teacher_prompt_ids + completion_ids` through the vLLM
 Completions endpoint and reads prompt log-probabilities at the completion
 positions, matching the upstream scorer. It accepts only loopback vLLM,
 verifies the serving profile, checkpoint path, checkpoint-manifest hash and
@@ -197,6 +232,8 @@ python scripts/run_psd_repair_driver.py `
   --audit <server-audit.json> `
   --image <server-image> `
   --gold <server-private-gold-row.json> `
+  --train-cases <original-train-case-split.jsonl> `
+  --source-access-policy <original-rollout-source-policy.json> `
   --public-context <server-public-context.json> `
   --semantic-verification <semantic-localization.json> `
   --policy-provider qwen_local `
@@ -242,8 +279,9 @@ anchor, the emitted candidate is rebound to the actual source step and retains
 `parent_candidate_id`. Its ID and the attempts' IDs then join correctly. The
 original candidate bank is not edited.
 
-Without a bound `ifv-psd-repair-verification-bundle-v1`, attempts remain
-pending. Bundle rows are keyed by hint index and exact hint hash and point to a
+With `--skip-auto-judge`, attempts without a bound
+`ifv-psd-repair-verification-bundle-v1` remain pending. The automatic judge
+normally creates this bundle. Bundle rows are keyed by hint index and exact hint hash and point to a
 real local task-verifier artifact. Because that artifact binds token hashes
 known only after generation, finish it offline in the same run directory:
 
@@ -312,13 +350,14 @@ not rebalanced. This matters when one successful preservation rollout contains
 multiple retained assistant steps.
 
 `training/scripts/train/run_psd_topk.sh` runs the datum-manifest/hash gate,
-profile gate, ms-swift plugin forward/backward smoke, eight-rank distributed
+profile gate, ms-swift plugin forward/backward smoke, configured-rank distributed
 SP loss smoke, frozen-environment preflight and checkpoint storage preflight
 before model loading. During training it runs the same resource sampler and
 watchdog used by SFT; afterward it validates checkpoint I/O and refuses a run
 that misses the production gate. It also accepts an optional resume checkpoint.
 
-The checked-in profiles use LoRA rank 32 and 128K SP8 across all eight GPUs.
+The current H20 profile uses LoRA rank 32 and 128K SP4 across four GPUs.
+Historical A100 SP8 profiles are not the current deployment.
 The production profile matches the upstream published optimizer recipe:
 top-20, learning rate `4e-5`, 32 unique targets per optimizer step, five epochs,
 gradient clipping at 1.0 and seed 0. The custom loss splits `[T,K]` targets with
@@ -327,5 +366,20 @@ it never gathers `[T,V]` logits. Cross-entropy is recomputed in bounded chunks
 during backward, so it does not retain a full fp32 softmax.
 
 Run the one-step memory probe before the production profile. Passing the CPU
-distributed smoke proves ordering and gradient scaling, not 128K A100 capacity;
-the latter remains gated on an idle eight-GPU real optimizer step.
+distributed smoke proves ordering and gradient scaling, not 128K H20 capacity;
+the latter remains gated on an idle four-GPU real optimizer step.
+
+Before launch set `IFV_PSD_SERVING_PROFILE` and `IFV_PSD_ROUND_START_MANIFEST`.
+For a later round also set `IFV_PSD_INITIAL_ADAPTER` to that exact round-start
+adapter: Swift receives `--model BASE --adapters PREVIOUS --load_args false`.
+The initialization gate verifies target roles and actual model-file hashes.
+A new round uses a fresh optimizer; the optional same-round resume checkpoint
+instead restores optimizer, scheduler and RNG. Round completion additionally
+requires a positive optimizer step, changed weight artifacts, intact artifact
+hashes, bound nonempty dataset hashes and complete resumable training state.
+
+`training/scripts/probe/psd_real_datum_cpu_smoke.py` is a separate diagnostic:
+it selects the shortest complete admitted repair and preservation datum,
+performs real 9B LoRA updates and compares uninterrupted/resumed next-step
+weights, plus previous-adapter initialization with a fresh optimizer. It never
+truncates a datum and is not a production-batch, GPU-capacity or quality result.
