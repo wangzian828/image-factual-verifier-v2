@@ -12,6 +12,29 @@ from ifv_training.io import load_jsonl
 from ifv_training.psd_repair_runtime import QwenContinuationAdapter
 
 
+def test_completed_proposer_response_cached_before_json_validation(tmp_path):
+    import asyncio
+    from types import SimpleNamespace
+    from src.orchestrator.llm_backend import LLMResponse
+    adapter = QwenContinuationAdapter.__new__(QwenContinuationAdapter)
+    calls = []
+    async def respond(*args, **kwargs):
+        calls.append(1)
+        return LLMResponse(text="not valid JSON", prompt_tokens=3, completion_tokens=2, raw={"id": "response-id"})
+    adapter.hint_constructor_llm = SimpleNamespace(model_name="test", provider="qwen_local",
+        wire_api="chat_completions", get_response=respond)
+    adapter.runtime_store = None
+    adapter.max_output_tokens = 8192
+    adapter.hint_constructor_thinking_level = "low"
+    adapter.proposer_cache_path = tmp_path / "proposer-response.json"
+    messages = [{"role": "system", "content": "test"}, {"role": "user", "content": "prompt"}]
+    for _ in range(2):
+        response = asyncio.run(adapter._call_proposer(messages))
+        with pytest.raises(json.JSONDecodeError):
+            json.loads(response.text)
+    assert calls == [1]
+
+
 def test_native_history_removes_only_the_identical_transport_system_copy():
     original = [{"role": "system", "content": "original system"}, {"role": "user", "content": "original image"}]
     assert QwenContinuationAdapter._native_history(original, "original system") == original[1:]

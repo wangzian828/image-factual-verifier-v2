@@ -398,6 +398,7 @@ class QwenContinuationAdapter:
         except (TypeError, json.JSONDecodeError) as exc:
             raise ValueError("privileged proposer returned non-JSON output") from exc
         proposals: list[HintProposal] = []
+        proposal_audits = []
         candidate_id = failure_site.step_id
         for text in parse_proposer_response(payload, limit=hint_count):
             try:
@@ -423,8 +424,13 @@ class QwenContinuationAdapter:
                         private_context=private_context,
                     )
                 )
-            except ValueError:
+                proposal_audits.append({"text": text, "passed": True, "audit": proposals[-1].audit})
+            except ValueError as exc:
+                proposal_audits.append({"text": text, "passed": False, "reason": str(exc)})
                 continue
+        if getattr(self, "proposer_cache_path", None):
+            from .io import write_json
+            write_json(self.proposer_cache_path.with_name("proposer-hint-audits.json"), {"proposals": proposal_audits})
         return proposals
 
     async def _call_proposer(
@@ -433,6 +439,14 @@ class QwenContinuationAdapter:
     ) -> Any:
         """Call the privileged proposer while preserving an auditable request."""
 
+        from .psd_repair import _sha
+        from .psd_repair_storage import load_bound, save_bound
+        cache = getattr(self, "proposer_cache_path", None)
+        identity = {"messages_sha256": _sha(messages), "model": self.hint_constructor_llm.model_name,
+            "provider": self.hint_constructor_llm.provider, "wire_api": self.hint_constructor_llm.wire_api,
+            "thinking_level": self.hint_constructor_thinking_level, "max_tokens": min(self.max_output_tokens, 2048)}
+        if cache and cache.exists():
+            return LLMResponse(**load_bound(cache, identity=identity))
         request_id = ""
         hint_schema = {
             "type": "object",
@@ -540,6 +554,10 @@ class QwenContinuationAdapter:
                     },
                 )
             raise
+        if cache:
+            save_bound(cache, identity=identity, payload={"text": response.text,
+                "raw": response.raw, "prompt_tokens": response.prompt_tokens,
+                "completion_tokens": response.completion_tokens})
         if request_id:
             raw = response.raw if isinstance(getattr(response, "raw", None), dict) else {}
             usage = raw.get("usage", {}) if isinstance(raw.get("usage"), dict) else {
@@ -550,6 +568,7 @@ class QwenContinuationAdapter:
                 request_id,
                 usage=usage,
                 status="completed",
+                interaction_id=_text(raw.get("id")) or None,
                 response_metadata={
                     "psd_proposer": True,
                     "provider": str(

@@ -358,6 +358,7 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
         ),
     )
     try:
+        adapter.proposer_cache_path = output_dir / "proposer-response.json"
         proposals_path = output_dir / "hint-proposals.json"
         if proposals_path.exists():
             proposals = [HintProposal(**row) for row in load_bound(proposals_path, identity=config)]
