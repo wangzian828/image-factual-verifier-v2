@@ -120,10 +120,10 @@ causal_episode_pass
 第一版只训 policy，不训 perception；优先采用 `separate_vlm`，让 policy 输入保持文本化观察和工具结果。
 
 ```text
-L_psd = row_normalized(
-  KL(teacher_topK(action | state + hint)
-     || student(action | state))
-)
+L_psd = batch_mean(sum_over_target_tokens(
+  row_weight * CE(teacher_topK(action | state + hint),
+                  student(action | state))
+))
 
 L_total = L_psd + λ_preserve * L_preserve
 ```

@@ -6,6 +6,10 @@ This repository implements the IFV adaptation of Essam Sleiman's
 it becomes a repair target after a hint-conditioned continuation of the frozen
 round-start policy passes the task verifier.
 
+The implementation was compared against upstream commit
+`778be78bdac582b51a975ff819046583aad383e0`; see
+[`psd-upstream-parity-audit.md`](psd-upstream-parity-audit.md).
+
 ## Model roles
 
 PSD keeps three roles separate:
@@ -20,7 +24,9 @@ PSD keeps three roles separate:
    receives the original prefix without the hint.
 
 `PSDModelRoles` binds these identities and rejects a self-teacher/student
-checkpoint or policy mismatch.
+provider, checkpoint or policy mismatch. The repair driver additionally binds
+the served model path to an immutable checkpoint-manifest SHA-256 through an
+`ifv-qwen-serving-profile-v1` artifact.
 
 ## Runtime contract
 
@@ -51,6 +57,9 @@ candidate pending/rejected rather than being inferred from text.
   hint hash, and contains named checks plus observed evidence.
 - The complete hinted episode must match the private expected verdict, pass
   strict trace audit, and require no downstream patch.
+- The local verifier and complete hinted episode must contain the SHA-256 of
+  the exact teacher prompt/completion token IDs that become the training
+  target. A passing episode cannot validate another sampled action.
 - L5/exact-action scaffolds are never primary PSD targets.
 - Missing prompt/completion/top-k capture remains pending or rejected; it is
   never reconstructed from the canonical trace.
@@ -99,6 +108,8 @@ python -m ifv_training verify-psd-episode `
   --local-verification <local-task-verification.json> `
   --repair-step-id <student-reached-step-id> `
   --hint-sha256 <exact-hint-sha256> `
+  --teacher-prompt-sha256 <teacher-prompt-token-sha256> `
+  --teacher-completion-sha256 <teacher-completion-token-sha256> `
   --output <verification.json>
 ```
 
@@ -119,7 +130,9 @@ python scripts/run_psd_repair_driver.py `
   --semantic-verification <semantic-localization.json> `
   --policy-provider qwen_local `
   --policy-model <round-start-qwen-model> `
+  --policy-serving-profile <serving-profile.json> `
   --round-start-checkpoint <round-start-checkpoint-id> `
+  --round-start-checkpoint-manifest <checkpoint-manifest.json> `
   --hint-constructor-provider <provider> `
   --hint-constructor-model <hint-constructor-model> `
   --output-dir <new-server-repair-run>
@@ -133,3 +146,17 @@ diagnostic trace.
 
 The rollout, runtime archive, images, and checkpoints stay on the server. Only
 code and documentation belong in this repository.
+
+## Sparse loss and launch gate
+
+Teacher top-20 probabilities are multiplied by each target's effective row
+weight. The loss sums contributing completion-token cross-entropies and then
+averages across datums; it never divides by total weight mass, which would
+erase repair/preservation weighting. Both source kinds are mandatory and are
+normalized to 1:1 effective row mass.
+
+`training/scripts/train/run_psd_topk.sh` runs the datum-manifest/hash gate,
+ms-swift plugin forward/backward smoke, frozen-environment preflight and
+checkpoint storage preflight before model loading. It also accepts an optional
+resume checkpoint. The current checked-in PSD profile remains an SP1 LoRA
+one-step engineering smoke; 128K SP8 PSD is not yet validated.
