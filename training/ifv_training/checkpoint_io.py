@@ -86,7 +86,10 @@ def _category(path: Path) -> str:
     name = path.name
     lowered = name.casefold()
     lowered_parts = [part.casefold() for part in path.parts]
-    if any(part.startswith("optimizer_") for part in lowered_parts):
+    if any(part.startswith("optimizer_") for part in lowered_parts) or lowered in {
+        "optimizer.pt",
+        "optimizer.bin",
+    }:
         return "optimizer_state"
     if any(part.startswith("pytorch_model_fsdp_") for part in lowered_parts):
         return "model_export"
