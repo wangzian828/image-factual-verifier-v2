@@ -210,7 +210,8 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         required=True,
     )
-    parser.add_argument("--hint-count", type=int, default=4)
+    parser.add_argument("--hint-count", type=int, default=4,
+                        help="Proposal count in single mode; feedback mode always proposes one at a time")
     parser.add_argument("--hint-level", type=int, default=1)
     parser.add_argument("--max-suffix-actions", type=int, default=8)
     parser.add_argument("--run-student-diagnostic", action="store_true")
@@ -293,7 +294,8 @@ async def _run_single(args: argparse.Namespace) -> dict[str, Any]:
     if seed.get("source", {}).get("source_access_policy_sha256") != sha256_file(args.source_access_policy):
         raise ValueError("PSD repair source-access policy differs from original rollout")
     public_context = load_json(args.public_context)
-    private_context = load_json(args.private_context) if args.private_context else None
+    # Available only to the local hint audit, never serialized into its prompt.
+    private_context = load_json(args.private_context) if args.private_context else gold
     from ifv_training.psd_gemini_judge import require_training_case
     require_training_case(trace, args.train_cases)
     source_verification = verify_source_rollout_failure(trace, gold=gold)

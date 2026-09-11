@@ -242,3 +242,32 @@ def test_storage_budget_pauses_without_deleting_artifacts_or_generating(tmp_path
     result = run(tmp_path, execute)
     assert result["status"] == "paused_storage_budget"
     assert (tmp_path / "search-state.json").exists()
+
+
+def test_proposer_wire_request_contains_observed_feedback_not_private_reference():
+    from ifv_training.psd_repair_runtime import QwenContinuationAdapter
+    from src.orchestrator.llm_backend import LLMResponse
+    captured = []
+    async def respond(messages, **kwargs):
+        captured.append(messages)
+        return LLMResponse(text='{"hints":["Check the observed spatial relationship."]}',
+                           prompt_tokens=10, completion_tokens=5, raw={})
+    adapter = QwenContinuationAdapter.__new__(QwenContinuationAdapter)
+    adapter._site = lambda site: site
+    adapter.runtime_store = None
+    adapter.max_output_tokens = 8192
+    adapter.hint_constructor_thinking_level = "low"
+    adapter.hint_constructor_llm = SimpleNamespace(provider="frontier", model_name="test", wire_api="responses",
+                                                   get_response=respond)
+    site = FailureSite(0, "site", "unified_react", "react",
+                       {"input_payload": [{"role": "user", "content": "observed task"}]}, {})
+    proposals = asyncio.run(adapter.propose_hints(failure_site=site,
+        public_trace_context={"repair_search": {"checker": {"procedural_hint": False},
+                                                "observation": "A tool returned no matching evidence."}},
+        private_context={"expected_verdict": "PRIVATE_REFERENCE_SENTINEL", "source_url": "PRIVATE_URL_SENTINEL"},
+        hint_count=1))
+    assert len(proposals) == 1 and len(captured) == 1
+    wire = json.dumps(captured)
+    assert "PRIVATE_REFERENCE_SENTINEL" not in wire and "PRIVATE_URL_SENTINEL" not in wire
+    assert "no matching evidence" in wire
+    assert '"procedural_hint": false' in captured[0][-1]["content"]

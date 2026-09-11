@@ -65,15 +65,16 @@ Further live audit and fixes:
   The first real attempt was rejected for answer-bearing advice and unsuccessful
   visual reasoning; the actual execution/checker bits reached round01. This is
   evidence of feedback flow, **not evidence of a successful repair yet**.
-- Server suite at17ff302: **142 passed**. Further local case-pool/live-service/
-  storage-gate tests: **142 non-PyTorch tests passed**, full server rerun pending.
+- Server suite at17ff302: **142 passed**; at4313a1a: **152 passed**, including
+  case-pool/live-service/storage gates. The live serving-root/128K gate also
+  matched the running pretrained service without changing it.
 - Added bounded completion-order asynchronous **case** scheduling, preserving
   serial dependencies within a case and the fixed checkpoint across the round.
   Controlled tests prove fast cases progress/refill while the first case waits,
   and one failed case does not cancel others. Live throughput improvement has
   NOT been measured. Current in-flight diagnostic remains serial; do not restart
   paid calls solely to switch its scheduler.
-- Added live model-root/context checks before policy generations and a2GiB
+- Added live model-root/context checks before policy generations and a 2GiB
   per-search artifact soft cap. This is not stale-policy asynchronous RL training;
   round-end data validation and the training phase remain separate.
 
