@@ -386,6 +386,12 @@ if [[ -n "${IFV_GPU_MEMORY_MAX_IMBALANCE_MIB:-}" ]]; then
     "$IFV_GPU_MEMORY_MAX_IMBALANCE_MIB"
   )
 fi
+if [[ -n "${IFV_GPU_UTILIZATION_TARGET_MIN_PERCENT:-}" ]]; then
+  resource_monitor_args+=(
+    --utilization-target-min-percent
+    "$IFV_GPU_UTILIZATION_TARGET_MIN_PERCENT"
+  )
+fi
 set +e
 "${resource_monitor_args[@]}" -- "${args[@]}" 2>&1 | tee "$LOG_DIR/train.log"
 train_status="${PIPESTATUS[0]}"

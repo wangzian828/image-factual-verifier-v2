@@ -33,6 +33,7 @@ def test_training_launchers_delegate_to_ms_swift() -> None:
     assert "IFV_GPU_MEMORY_TARGET_MAX_MIB" in single
     assert "IFV_GPU_MEMORY_MAX_IMBALANCE_MIB" in single
     assert "IFV_GPU_UTILIZATION_TARGET_MIN_PERCENT" in single
+    assert "--utilization-target-min-percent" in single
     assert "verify_qwen35_sft_environment.py" in single
     assert "environment-preflight.json" in single
     assert "IFV_REQUIRE_TRAINING_ENV_PREFLIGHT" in single

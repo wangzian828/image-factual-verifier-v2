@@ -34,6 +34,7 @@ def main() -> None:
     parser.add_argument("--memory-target-min-mib", type=int)
     parser.add_argument("--memory-target-max-mib", type=int)
     parser.add_argument("--memory-max-imbalance-mib", type=int)
+    parser.add_argument("--utilization-target-min-percent", type=float)
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     for name in (
@@ -50,6 +51,11 @@ def main() -> None:
         and args.memory_target_min_mib >= args.memory_target_max_mib
     ):
         parser.error("--memory-target-min-mib must be below --memory-target-max-mib")
+    if (
+        args.utilization_target_min_percent is not None
+        and not 0 <= args.utilization_target_min_percent <= 100
+    ):
+        parser.error("--utilization-target-min-percent must be in [0, 100]")
     command = list(args.command)
     if command and command[0] == "--":
         command = command[1:]
@@ -63,6 +69,9 @@ def main() -> None:
             memory_target_min_mib=args.memory_target_min_mib,
             memory_target_max_mib=args.memory_target_max_mib,
             memory_max_imbalance_mib=args.memory_max_imbalance_mib,
+            utilization_target_min_percent=(
+                args.utilization_target_min_percent
+            ),
         )
     )
 

@@ -148,3 +148,49 @@ def test_resource_summary_rejects_low_or_imbalanced_memory() -> None:
         result["acceptance"]["checks"]["peak_memory_imbalance_respected"]
         is False
     )
+
+
+def test_resource_summary_enforces_active_median_gpu_utilization() -> None:
+    samples = [
+        {
+            "timestamp_epoch": float(index),
+            "gpu": {
+                "total_memory_mib_by_physical_gpu": {
+                    "0": 40960,
+                    "1": 40960,
+                },
+                "whole_gpu_memory_mib_by_physical_gpu": {
+                    "0": 37000,
+                    "1": 37100,
+                },
+                "utilization_percent_by_physical_gpu": {
+                    "0": value,
+                    "1": 95,
+                },
+            },
+        }
+        for index, value in enumerate((70, 80, 90))
+    ]
+
+    result = summarize_resource_samples(
+        samples,
+        command=["swift", "sft"],
+        exit_code=0,
+        started_at="start",
+        finished_at="finish",
+        wall_seconds=3.0,
+        selected_gpu_ids=[0, 1],
+        utilization_target_min_percent=85,
+    )
+
+    assert result["acceptance"]["required"] is True
+    assert result["acceptance"]["passed"] is False
+    assert result["acceptance"]["checks"][
+        "all_selected_gpus_active_utilization_observed"
+    ] is True
+    assert result["acceptance"]["checks"][
+        "minimum_active_median_utilization_reached"
+    ] is False
+    assert result["gpu_active_utilization_percent_by_physical_gpu"]["0"][
+        "median"
+    ] == 80
