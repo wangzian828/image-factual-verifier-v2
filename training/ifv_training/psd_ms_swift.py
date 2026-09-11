@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 from typing import Any, Mapping
+from .psd_modality import require_text_only_psd
 
 
 PSD_MS_SWIFT_TEMPLATE = "ifv_psd_topk"
@@ -332,6 +333,7 @@ def install_ms_swift_psd_plugin() -> None:
                 raise ValueError("IFV PSD datum is missing token arrays")
             if len(target_tokens) != len(input_ids) or len(weights) != len(input_ids):
                 raise ValueError("IFV PSD datum sequence dimensions do not match")
+            require_text_only_psd(inputs, input_ids)
             if not isinstance(topk, int) or topk < 1:
                 raise ValueError("IFV PSD datum has invalid topk")
             for position, (tokens, values) in enumerate(

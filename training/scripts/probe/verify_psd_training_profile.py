@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail-closed profile gate for the 8-GPU IFV PSD recipe."""
+"""Fail-closed profile gate for the four/eight-GPU IFV PSD recipe."""
 
 from __future__ import annotations
 
@@ -39,10 +39,10 @@ def main() -> None:
     args = parser.parse_args()
 
     errors: list[str] = []
-    if args.world_size != 8:
-        errors.append("world_size_must_be_8")
-    if args.sequence_parallel_size != 8:
-        errors.append("sequence_parallel_size_must_be_8")
+    if args.world_size not in {4, 8}:
+        errors.append("world_size_must_be_4_or_8")
+    if args.sequence_parallel_size != args.world_size:
+        errors.append("sequence_parallel_size_must_equal_world_size")
     if not args.padding_free:
         errors.append("padding_free_required")
     if args.max_context != 131_072:

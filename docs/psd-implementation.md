@@ -1,5 +1,13 @@
 # IFV Privileged On-Policy Self-Distillation (PSD) Implementation
 
+> Readiness correction (H20 audit, 2026-09-11): the current scorer and trainer
+> are text-token only. Visual targets now raise
+> `psd_multimodal_not_supported` instead of silently losing image conditioning.
+> Multimodal PSD is not ready for a production run; see the H20 follow-up in
+> [the parity audit](psd-upstream-parity-audit.md) for the remaining work.
+> The profile gate supports 4/SP4 and 8/SP8; existing checked-in A100 profiles
+> still describe the old hardware and must not be used as H20 profiles.
+
 This repository implements the IFV adaptation of Essam Sleiman's
 [Privileged On-Policy Self-Distillation](https://canvas.inc/research/privileged-self-distillation)
 (PSD) as a verifier-gated data path. A failed rollout is only raw experience;

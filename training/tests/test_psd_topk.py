@@ -118,6 +118,23 @@ def test_normalized_topk_drops_forced_token_outside_ranked_topk() -> None:
     assert sum(float(item[1]) for item in result) == pytest.approx(1.0)
 
 
+def test_visual_scoring_is_rejected_before_network(tmp_path: Path) -> None:
+    targets, profile, checkpoint = _write_inputs(tmp_path)
+    row = json.loads(targets.read_text(encoding="utf-8"))
+    row["teacher_prompt_ids"].append(248056)
+    targets.write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+    def requester(*args):
+        pytest.fail("visual token-only targets must never reach the server")
+
+    with pytest.raises(ValueError, match="psd_multimodal_not_supported"):
+        collect_psd_topk_cache(
+            targets_path=targets, serving_profile_path=profile,
+            checkpoint_manifest_path=checkpoint, output_dir=tmp_path / "cache",
+            topk=2, requester=requester,
+        )
+
+
 def test_collect_topk_uses_forced_ids_and_resumes_without_server(
     tmp_path: Path,
 ) -> None:

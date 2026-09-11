@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 from .io import canonical_json, load_jsonl, require_new_or_empty, sha256_file, write_json, write_jsonl
+from .psd_modality import require_text_only_psd
 
 
 PSD_HINT_AUDIT_SCHEMA_VERSION = "ifv-psd-hint-audit-v1"
@@ -433,6 +434,7 @@ def build_repair_target(
     student_prompt_ids = _prompt_ids(row, "student_prompt_ids")
     teacher_prompt_ids = _prompt_ids(row, "teacher_prompt_ids")
     completion_ids = _completion_ids(row)
+    require_text_only_psd(row, student_prompt_ids, teacher_prompt_ids, completion_ids)
     if student_prompt_ids == teacher_prompt_ids:
         raise ValueError("teacher prompt must differ from student prompt")
 
@@ -556,6 +558,7 @@ def build_preservation_targets(
         merged = {**row, **step}
         student_prompt_ids = _prompt_ids(merged, "student_prompt_ids")
         completion_ids = _completion_ids(merged)
+        require_text_only_psd(merged, student_prompt_ids, completion_ids)
         target_status, teacher_topk = _topk_payload(
             merged, completion_ids, topk=topk
         )

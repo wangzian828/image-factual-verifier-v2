@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 DEFAULT_DATA_ROOT="${XDG_DATA_HOME:-${HOME}/.local/share}/image-factual-verifier/training"
 DATA_ROOT="${IFV_TRAINING_DATA_ROOT:-${IFV_DATA_ROOT:+${IFV_DATA_ROOT}/training}}"
 DATA_ROOT="${DATA_ROOT:-${DEFAULT_DATA_ROOT}}"

@@ -2,6 +2,46 @@
 
 Audit date: 2026-09-11
 
+## H20 follow-up: multimodal readiness correction
+
+The alignment table below describes the text-token implementation, not a
+validated image-Agent training path. The H20 follow-up found a material gap:
+target builders, forced-token Completions scoring and the pre-tokenized Swift
+template carry no image pixels, image grids or multimodal position IDs.
+Exact prompt token IDs alone do not preserve visual conditioning. Therefore
+the earlier "aligned" entries must not be read as multimodal readiness.
+
+Visual targets now fail explicitly before target export, offline scoring,
+datum materialization and template encoding. The Qwen3.5 special IDs are
+verified against the deployed 9B config (vision start/end 248053/248054,
+image/video 248056/248057). This is a correctness guard, **not completion of
+multimodal PSD**. Existing text-only unit/sparse-loss tests remain useful but
+cannot establish image-Agent readiness.
+
+The profile gate now accepts four ranks with SP4 as well as eight with SP8.
+Both preserve 32 unique targets per optimizer step through accumulation 32;
+SP ranks cooperate on one datum and must not be counted as independent data.
+This does not certify H20 capacity or replace a real optimizer canary.
+The shared launcher root was also corrected from `training/` to repository
+root, preventing duplicated `training/training/` script and plugin paths.
+
+Remaining acceptance work, using training cases only:
+
+1. Preserve immutable media references, byte hashes, processor settings and
+   visual ordering from the actual archived teacher/student requests.
+2. Implement exact-completion teacher scoring with those media inputs. The
+   existing token-only Completions fallback is unsuitable for visual targets.
+3. Feed processor pixel tensors, grids and independently computed teacher and
+   student multimodal positions through the datum/template/SP paths without
+   re-tokenizing the banked completion or exposing the hint to the student.
+4. Verify multi-image and repeated-image cases, missing/changed media rejection,
+   frozen-teacher provenance, causal loss positions and finite gradients on
+   real H20 inputs. Then run repair verification and an optimizer canary.
+
+Official evaluation cases, including the frozen 1527 and ongoing 1682 runs,
+must never be used to construct PSD training targets. The current baseline,
+SFT and post-training evaluation sequence remains separate from this work.
+
 Upstream reference:
 
 - Repository: <https://github.com/essamsleiman/psd>

@@ -75,4 +75,28 @@ def test_production_psd_profile_gate_rejects_sp1(tmp_path: Path) -> None:
 
     assert result.returncode == 1
     gate = json.loads(output.read_text(encoding="utf-8"))
-    assert "sequence_parallel_size_must_be_8" in gate["errors"]
+    assert "sequence_parallel_size_must_equal_world_size" in gate["errors"]
+
+
+def test_h20_sp4_preserves_optimizer_batch(tmp_path: Path) -> None:
+    output = tmp_path / "gate.json"
+    command = _command(output)
+    for option in ("--world-size", "--sequence-parallel-size"):
+        command[command.index(option) + 1] = "4"
+    result = subprocess.run(command, check=False, capture_output=True)
+    assert result.returncode == 0, result.stderr.decode()
+    gate = json.loads(output.read_text(encoding="utf-8"))
+    assert gate["optimization"]["unique_targets_per_step"] == 32
+    assert gate["parallelism"]["data_parallel_size"] == 1
+
+
+def test_h20_rejects_halved_accumulation(tmp_path: Path) -> None:
+    output = tmp_path / "gate.json"
+    command = _command(output)
+    for option in ("--world-size", "--sequence-parallel-size"):
+        command[command.index(option) + 1] = "4"
+    command[command.index("--gradient-accumulation-steps") + 1] = "16"
+    result = subprocess.run(command, check=False, capture_output=True)
+    assert result.returncode == 1
+    gate = json.loads(output.read_text(encoding="utf-8"))
+    assert "production_unique_targets_per_step_must_be_32" in gate["errors"]

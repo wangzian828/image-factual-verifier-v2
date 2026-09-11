@@ -34,6 +34,7 @@ from .psd import (
     _teacher_identity,
     validate_topk_by_position,
 )
+from .psd_modality import require_text_only_psd
 
 
 PSD_TOPK_COLLECTION_SCHEMA_VERSION = "ifv-psd-topk-collection-v1"
@@ -216,6 +217,7 @@ def _validated_targets(
             )
         teacher_prompt_ids = _prompt_ids(target, "teacher_prompt_ids")
         completion_ids = _completion_ids(target)
+        require_text_only_psd(target, teacher_prompt_ids, completion_ids)
         if len(teacher_prompt_ids) + len(completion_ids) + 1 > context_length:
             raise ValueError(
                 f"{target_id}: forced scoring request exceeds served context"

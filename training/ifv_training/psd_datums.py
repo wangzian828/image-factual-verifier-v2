@@ -15,6 +15,7 @@ from .io import (
     write_jsonl,
 )
 from .psd import validate_topk_by_position
+from .psd_modality import require_text_only_psd
 
 
 PSD_SPARSE_DATUM_SCHEMA_VERSION = "ifv-psd-sparse-topk-datum-v3"
@@ -98,6 +99,7 @@ def build_sparse_topk_datum(
         field="completion_ids",
     )
     combined = [*prompt_ids, *completion_ids]
+    require_text_only_psd(target, combined)
     if len(combined) > max_sequence_length:
         raise ValueError(
             f"sequence_length_exceeds_limit:{len(combined)}>{max_sequence_length}"
