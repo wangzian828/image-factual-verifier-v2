@@ -236,6 +236,8 @@ def _parser() -> argparse.ArgumentParser:
     psd_verify.add_argument("--local-verification", type=Path, required=True)
     psd_verify.add_argument("--repair-step-id", required=True)
     psd_verify.add_argument("--hint-sha256", required=True)
+    psd_verify.add_argument("--teacher-prompt-sha256", required=True)
+    psd_verify.add_argument("--teacher-completion-sha256", required=True)
     psd_verify.add_argument("--output", type=Path, required=True)
     psd_verify.add_argument("--downstream-patch-count", type=int, default=0)
 
@@ -487,6 +489,8 @@ def main() -> None:
             local_verification=local_verification,
             repair_step_id=args.repair_step_id,
             hint_sha256=args.hint_sha256,
+            teacher_prompt_sha256=args.teacher_prompt_sha256,
+            teacher_completion_sha256=args.teacher_completion_sha256,
             downstream_patch_count=args.downstream_patch_count,
         )
         result = {

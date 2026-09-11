@@ -93,6 +93,15 @@ def _attempt(
             "repair_step_id": "episode-1:react:1",
             "source_trace_sha256": "trace-sha",
             "hint_sha256": hashlib.sha256(hint.encode("utf-8")).hexdigest(),
+            "teacher_prompt_sha256": hashlib.sha256(
+                json.dumps(
+                    teacher_prompt_ids or [1, 2, 3, 4],
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest(),
+            "teacher_completion_sha256": hashlib.sha256(
+                json.dumps([5, 6], separators=(",", ":")).encode("utf-8")
+            ).hexdigest(),
             "passed": True,
             "verifier": {
                 "kind": "task",
@@ -292,6 +301,12 @@ def test_assembler_uses_complete_repair_rollout_capture(
         "prompt_token_ids": [20, 21],
         "completion_token_ids": [22],
     }
+    attempt["local_verification"]["teacher_prompt_sha256"] = hashlib.sha256(
+        json.dumps([20, 21], separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    attempt["local_verification"]["teacher_completion_sha256"] = hashlib.sha256(
+        json.dumps([22], separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
     _write_jsonl(attempts, [attempt])
     _write_jsonl(preservation, [])
 

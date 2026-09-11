@@ -7,6 +7,7 @@ prefix always comes from the original no-hint rollout capture.
 
 from __future__ import annotations
 
+import hashlib
 import math
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -58,6 +59,10 @@ def _positive_weight(value: Any, *, field: str) -> float:
     if not math.isfinite(weight) or weight <= 0:
         raise ValueError(f"{field} must be finite and positive")
     return weight
+
+
+def _sha_ids(value: list[int]) -> str:
+    return hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
 
 
 def _source_trace_sha256(row: Mapping[str, Any]) -> str:
@@ -284,6 +289,14 @@ def _validate_attempt(
     teacher_prompt_ids, completion_ids = _attempt_token_ids(attempt)
     if teacher_prompt_ids == student_prompt_ids:
         raise ValueError("teacher_prompt_equals_student_prompt")
+    if _text(local_verification.get("teacher_prompt_sha256")) != _sha_ids(
+        teacher_prompt_ids
+    ):
+        raise ValueError("local_verification_teacher_prompt_mismatch")
+    if _text(local_verification.get("teacher_completion_sha256")) != _sha_ids(
+        completion_ids
+    ):
+        raise ValueError("local_verification_teacher_completion_mismatch")
     capture = _mapping(
         attempt.get("repair_rollout_token_capture")
         or attempt.get("rollout_token_capture")

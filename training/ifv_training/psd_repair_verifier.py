@@ -56,6 +56,59 @@ def _assert_no_private_fields(value: Any, *, path: str = "") -> None:
             _assert_no_private_fields(child, path=f"{path}[{index}]")
 
 
+def _int_ids(value: Any) -> list[int]:
+    if not isinstance(value, list) or not value:
+        return []
+    result: list[int] = []
+    for item in value:
+        if isinstance(item, bool):
+            return []
+        try:
+            result.append(int(item))
+        except (TypeError, ValueError):
+            return []
+    return result
+
+
+def _capture_binding(value: Any) -> tuple[str, str]:
+    capture = _mapping(value)
+    if _text(capture.get("status")) != "complete":
+        return "", ""
+    prompt_ids = _int_ids(capture.get("prompt_token_ids"))
+    completion_ids = _int_ids(capture.get("completion_token_ids"))
+    if not prompt_ids or not completion_ids:
+        return "", ""
+    return _sha(prompt_ids), _sha(completion_ids)
+
+
+def _teacher_step_binding(steps: Sequence[StageStep]) -> tuple[str, str]:
+    for step in steps:
+        prompt_sha256, completion_sha256 = _capture_binding(
+            _mapping(step.metadata).get("policy_token_capture")
+        )
+        if prompt_sha256 and completion_sha256:
+            return prompt_sha256, completion_sha256
+    return "", ""
+
+
+def _trace_contains_token_binding(
+    trace: Mapping[str, Any],
+    *,
+    teacher_prompt_sha256: str,
+    teacher_completion_sha256: str,
+) -> bool:
+    for step in _rows(_mapping(trace.get("state")).get("all_steps")):
+        prompt_sha256, completion_sha256 = _capture_binding(
+            _mapping(step.get("metadata")).get("policy_token_capture")
+        )
+        if (
+            prompt_sha256 == teacher_prompt_sha256
+            and completion_sha256 == teacher_completion_sha256
+        ):
+            return True
+    return False
+
+
 def _step_row(step: StageStep, *, stage: str, role: str) -> dict[str, Any]:
     metadata = copy.deepcopy(step.metadata or {})
     metadata["psd_role"] = role
@@ -135,6 +188,8 @@ def validate_local_verification(
     repair_step_id: str,
     source_trace_sha256: str,
     hint_sha256: str,
+    teacher_prompt_sha256: str = "",
+    teacher_completion_sha256: str = "",
 ) -> dict[str, Any]:
     """Validate a task-verifier artifact; model activity is never a proxy."""
 
@@ -150,6 +205,19 @@ def validate_local_verification(
         errors.append("local_verifier_source_trace_mismatch")
     if _text(artifact.get("hint_sha256")) != _text(hint_sha256):
         errors.append("local_verifier_hint_mismatch")
+    artifact_prompt_sha256 = _text(artifact.get("teacher_prompt_sha256"))
+    artifact_completion_sha256 = _text(
+        artifact.get("teacher_completion_sha256")
+    )
+    if not artifact_prompt_sha256 or not artifact_completion_sha256:
+        errors.append("local_verifier_teacher_token_binding_missing")
+    if teacher_prompt_sha256 and artifact_prompt_sha256 != teacher_prompt_sha256:
+        errors.append("local_verifier_teacher_prompt_mismatch")
+    if (
+        teacher_completion_sha256
+        and artifact_completion_sha256 != teacher_completion_sha256
+    ):
+        errors.append("local_verifier_teacher_completion_mismatch")
     verifier = _mapping(artifact.get("verifier"))
     if _text(verifier.get("kind")) != "task":
         errors.append("local_verifier_kind_not_task")
@@ -178,6 +246,8 @@ def validate_local_verification(
             "version": _text(verifier.get("version")),
         },
         "repair_step_id": _text(artifact.get("repair_step_id")),
+        "teacher_prompt_sha256": artifact_prompt_sha256,
+        "teacher_completion_sha256": artifact_completion_sha256,
         "artifact_sha256": _sha(artifact) if artifact else "",
     }
 
@@ -225,6 +295,8 @@ def verify_causal_episode(
     local_verification: Mapping[str, Any] | None,
     repair_step_id: str,
     hint_sha256: str,
+    teacher_prompt_sha256: str = "",
+    teacher_completion_sha256: str = "",
     downstream_patch_count: int = 0,
     score_metadata: Mapping[str, Any] | None = None,
 ) -> VerificationResult:
@@ -247,6 +319,8 @@ def verify_causal_episode(
         repair_step_id=repair_step_id,
         source_trace_sha256=source_trace_sha256,
         hint_sha256=hint_sha256,
+        teacher_prompt_sha256=teacher_prompt_sha256,
+        teacher_completion_sha256=teacher_completion_sha256,
     )
     path = _write_trace(hinted_trace)
     reasons: list[str] = []
@@ -258,6 +332,19 @@ def verify_causal_episode(
     expected_verdict = ""
     strict_pass = False
     full_pass = False
+    token_binding_pass = bool(
+        teacher_prompt_sha256
+        and teacher_completion_sha256
+        and _trace_contains_token_binding(
+            hinted_trace,
+            teacher_prompt_sha256=teacher_prompt_sha256,
+            teacher_completion_sha256=teacher_completion_sha256,
+        )
+    )
+    if not teacher_prompt_sha256 or not teacher_completion_sha256:
+        reasons.append("teacher_token_binding_missing")
+    elif not token_binding_pass:
+        reasons.append("hinted_episode_teacher_token_binding_mismatch")
     try:
         report = audit_trace(path)
         failures = report.failures(strict_scheduler=True)
@@ -292,6 +379,7 @@ def verify_causal_episode(
             and has_report
             and has_terminal_output
             and recorded_verdict in {"real", "fake"}
+            and token_binding_pass
         )
         if not has_terminal_output:
             reasons.append("terminal_judgment_missing")
@@ -338,6 +426,9 @@ def verify_continuation_pair(
         student_steps,
         role="student",
     )
+    teacher_prompt_sha256, teacher_completion_sha256 = _teacher_step_binding(
+        teacher_steps
+    )
     if hinted_teacher_episode_trace is None:
         source_result = verify_source_rollout_failure(base_trace, gold=gold)
         local_result = validate_local_verification(
@@ -345,6 +436,8 @@ def verify_continuation_pair(
             repair_step_id=repair_step_id,
             source_trace_sha256=source_trace_sha256,
             hint_sha256=hint_sha256,
+            teacher_prompt_sha256=teacher_prompt_sha256,
+            teacher_completion_sha256=teacher_completion_sha256,
         )
         reasons = [*source_result["reasons"]]
         reasons.extend(f"local:{item}" for item in local_result["errors"])
@@ -367,6 +460,8 @@ def verify_continuation_pair(
             local_verification=local_verification,
             repair_step_id=repair_step_id,
             hint_sha256=hint_sha256,
+            teacher_prompt_sha256=teacher_prompt_sha256,
+            teacher_completion_sha256=teacher_completion_sha256,
         )
     student_diagnostic = None
     if unhinted_student_episode_trace is not None:
@@ -378,6 +473,8 @@ def verify_continuation_pair(
         "teacher_suffix_trace": teacher_trace,
         "student_suffix_trace": student_suffix_trace,
         "hinted_teacher_episode_verified": hinted_teacher_episode_trace is not None,
+        "teacher_prompt_sha256": teacher_prompt_sha256,
+        "teacher_completion_sha256": teacher_completion_sha256,
         "unhinted_student_diagnostic": student_diagnostic,
         "unhinted_student_affects_acceptance": False,
     }

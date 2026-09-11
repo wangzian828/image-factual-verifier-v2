@@ -560,6 +560,23 @@ def build_psd_attempt_record(
         raise ValueError(
             "accepted PSD repair requires its bound local task-verifier artifact"
         )
+    if verification.accepted_for_primary_psd:
+        expected_prompt_sha256 = _sha([int(item) for item in teacher_prompt_ids])
+        expected_completion_sha256 = _sha(
+            [int(item) for item in completion_ids]
+        )
+        if not teacher_prompt_ids or not completion_ids:
+            raise ValueError(
+                "accepted PSD repair requires teacher prompt/completion token IDs"
+            )
+        if _text(local_artifact.get("teacher_prompt_sha256")) != (
+            expected_prompt_sha256
+        ):
+            raise ValueError("local verifier teacher prompt binding mismatch")
+        if _text(local_artifact.get("teacher_completion_sha256")) != (
+            expected_completion_sha256
+        ):
+            raise ValueError("local verifier teacher completion binding mismatch")
     return {
         "schema_version": PSD_ATTEMPT_SCHEMA_VERSION,
         "candidate_id": _text(candidate_id),

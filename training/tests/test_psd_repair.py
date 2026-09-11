@@ -49,12 +49,16 @@ def _local_verification(
     passed: bool = True,
     source_trace_sha256: str = "source-trace-sha",
     hint_sha256: str = "b" * 64,
+    teacher_prompt_sha256: str = _sha([1]),
+    teacher_completion_sha256: str = _sha([2]),
 ) -> dict:
     return {
         "schema_version": PSD_LOCAL_VERIFICATION_SCHEMA_VERSION,
         "repair_step_id": step_id,
         "source_trace_sha256": source_trace_sha256,
         "hint_sha256": hint_sha256,
+        "teacher_prompt_sha256": teacher_prompt_sha256,
+        "teacher_completion_sha256": teacher_completion_sha256,
         "passed": passed,
         "verifier": {
             "kind": "task",
@@ -70,7 +74,13 @@ def _local_verification(
     }
 
 
-def _complete_episode(*, image_id: str, verdict: str) -> dict:
+def _complete_episode(
+    *,
+    image_id: str,
+    verdict: str,
+    teacher_prompt_ids: list[int] | None = None,
+    teacher_completion_ids: list[int] | None = None,
+) -> dict:
     judgment = {"fact_check_report": {"summary": "verified"}}
     return {
         "image_id": image_id,
@@ -79,12 +89,37 @@ def _complete_episode(*, image_id: str, verdict: str) -> dict:
         "state": {
             "all_steps": [
                 {
+                    "stage": "unified_react",
+                    "action_type": "tool_call",
+                    "metadata": {
+                        "policy_token_capture": {
+                            "status": "complete",
+                            "prompt_token_ids": teacher_prompt_ids or [1],
+                            "completion_token_ids": teacher_completion_ids or [2],
+                        }
+                    },
+                },
+                {
                     "stage": "unified_judgment",
                     "action_type": "output",
                 }
             ]
         },
     }
+
+
+def _teacher_step() -> StageStep:
+    return StageStep(
+        action_type="tool_call",
+        tool_name="text_search",
+        metadata={
+            "policy_token_capture": {
+                "status": "complete",
+                "prompt_token_ids": [1],
+                "completion_token_ids": [2],
+            }
+        },
+    )
 
 
 def _patch_episode_verifiers(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -209,6 +244,8 @@ def test_hint_boundary_and_primary_repair_gate() -> None:
         model_roles=_roles(),
         verification=verification,
         local_verification=_local_verification(site.step_id),
+        teacher_prompt_ids=[1],
+        completion_ids=[2],
     )
     assert attempt["accepted"] is True
     assert attempt["scaffold_only"] is False
@@ -247,6 +284,8 @@ def test_attempt_record_preserves_case_and_episode_identity() -> None:
             hinted_episode_pass=True,
         ),
         local_verification=_local_verification(site.step_id),
+        teacher_prompt_ids=[1],
+        completion_ids=[2],
     )
     assert record["case_id"] == "case-1"
     assert record["episode_id"] == "episode-1"
@@ -377,7 +416,7 @@ def test_failed_source_and_passing_hinted_teacher_are_accepted_even_if_student_f
     result, artifacts = verify_continuation_pair(
         base_trace=source_trace,
         source_trace_sha256="a" * 64,
-        teacher_steps=[StageStep(action_type="tool_call", tool_name="text_search")],
+        teacher_steps=[_teacher_step()],
         student_steps=[StageStep(action_type="tool_call", tool_name="text_search")],
         hinted_teacher_episode_trace=_complete_episode(
             image_id="hinted-pass", verdict="fake"
@@ -414,7 +453,7 @@ def test_hinted_continuation_that_fails_task_verification_is_rejected(
     result, _artifacts = verify_continuation_pair(
         base_trace=source_trace,
         source_trace_sha256="a" * 64,
-        teacher_steps=[StageStep(action_type="tool_call", tool_name="text_search")],
+        teacher_steps=[_teacher_step()],
         student_steps=[StageStep(action_type="tool_call", tool_name="text_search")],
         hinted_teacher_episode_trace=_complete_episode(
             image_id="hinted-still-fails", verdict="real"
@@ -434,6 +473,42 @@ def test_hinted_continuation_that_fails_task_verification_is_rejected(
     assert result.hinted_local_pass is False
     assert result.hinted_episode_pass is False
     assert result.accepted_for_primary_psd is False
+
+
+def test_passing_episode_cannot_validate_a_different_teacher_action(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_episode_verifiers(monkeypatch)
+    repair_step_id = "episode-1:unified_react:call-1"
+    source_trace = {"image_id": "source-fail", "state": {"all_steps": []}}
+    hint_sha256 = "b" * 64
+
+    result, artifacts = verify_continuation_pair(
+        base_trace=source_trace,
+        source_trace_sha256="a" * 64,
+        teacher_steps=[_teacher_step()],
+        student_steps=[StageStep(action_type="tool_call", tool_name="visit")],
+        hinted_teacher_episode_trace=_complete_episode(
+            image_id="hinted-pass",
+            verdict="fake",
+            teacher_prompt_ids=[999],
+            teacher_completion_ids=[998],
+        ),
+        unhinted_student_episode_trace=None,
+        gold={"factual_status": "fake", "case_id": "episode-1"},
+        local_verification=_local_verification(
+            repair_step_id,
+            source_trace_sha256="a" * 64,
+            hint_sha256=hint_sha256,
+        ),
+        repair_step_id=repair_step_id,
+        hint_sha256=hint_sha256,
+    )
+
+    assert result.hinted_episode_pass is False
+    assert result.accepted_for_primary_psd is False
+    assert "hinted_episode_teacher_token_binding_mismatch" in result.reasons
+    assert artifacts["teacher_prompt_sha256"] == _sha([1])
 
 
 def test_tool_calls_alone_cannot_become_local_pass() -> None:
