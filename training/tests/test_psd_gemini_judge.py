@@ -112,6 +112,12 @@ def test_cache_tamper_fails(tmp_path):
         asyncio.run(judge.judge_repair(client, packet(), cache_dir=tmp_path))
 
 
+def test_literal_json_field_quote_is_valid_observed_evidence():
+    data = review()
+    data["evidence"][0]["quote"] = '"action": "assert 2018"'
+    assert asyncio.run(judge.judge_repair(Client(data), packet()))["passed"]
+
+
 def test_train_case_gate_rejects_evaluation_split(tmp_path):
     path = tmp_path / "train.jsonl"
     path.write_text(json.dumps({"case_id": "case-a", "split": "test"}) + "\n")

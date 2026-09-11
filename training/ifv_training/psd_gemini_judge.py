@@ -115,7 +115,8 @@ def validate_evidence(evidence, packet, *, positive, localization=False):
             raise ValueError("invalid PSD judge evidence location")
         steps = {step["index"]: step for step in packet.get(trace + "_steps", [])}
         if (index not in steps or not isinstance(quote, str) or not quote.strip()
-                or not any(quote in text for text in _strings(steps[index]))):
+                or not (any(quote in text for text in _strings(steps[index]))
+                        or quote in json.dumps(steps[index], ensure_ascii=False))):
             raise ValueError("PSD judge evidence is not a literal observed quote")
         seen.add(trace)
     required = {"source"} if localization else {"source", "repaired"}

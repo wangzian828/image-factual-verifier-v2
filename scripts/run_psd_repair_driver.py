@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import json
 import sys
+import uuid
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -20,9 +21,10 @@ from src.orchestrator.pipeline import Orchestrator
 from src.orchestrator.llm_backend import APIBackend
 from src.orchestrator.runtime_events import CaseRuntimeStore
 from src.orchestrator.unified_prompts import UNIFIED_JUDGMENT_SYSTEM_PROMPT
-from ifv_training.io import load_json, sha256_file, write_json, write_jsonl
+from ifv_training.io import load_json, load_jsonl, sha256_file, write_json, write_jsonl
 from ifv_training.psd_repair import (
     PSDModelRoles,
+    HintProposal,
     build_psd_attempt_record,
     locate_failure_site,
 )
@@ -204,6 +206,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--judge-model", default="gemini-3.1-pro-preview")
     parser.add_argument("--skip-auto-judge", action="store_true",
                         help="Persist pending attempts for offline task verification")
+    parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--generation-retries", type=int, default=1,
+                        help="Bounded retries of failed/incomplete generations; completed calls are cached")
     return parser
 
 
@@ -230,7 +235,24 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
             + ",".join(source_verification["reasons"])
         )
     output_dir = args.output_dir
-    output_dir.mkdir(parents=True, exist_ok=False)
+    from ifv_training.psd_repair_storage import save_bound, load_bound, cached_continuation
+    from ifv_training.psd_repair import _sha
+    if args.generation_retries < 0 or args.generation_retries > 3:
+        raise ValueError("generation retries must be between 0 and 3")
+    config = {key: str(value) if isinstance(value, Path) else value for key, value in vars(args).items()
+              if key not in {"resume", "skip_auto_judge", "generation_retries"}}
+    for key in ("trace", "candidate", "audit", "gold", "public_context", "private_context",
+                "image", "train_cases", "policy_serving_profile", "round_start_checkpoint_manifest",
+                "semantic_verification", "verification_bundle"):
+        value = getattr(args, key)
+        if value is not None:
+            config[key] = {"path": str(value.resolve()), "sha256": sha256_file(value)}
+    config_path = output_dir / "run-inputs.json"
+    if args.resume:
+        load_bound(config_path, identity=config)
+    else:
+        output_dir.mkdir(parents=True, exist_ok=False)
+        save_bound(config_path, identity=config, payload={"status": "initialized"})
     site = locate_failure_site(trace, audit, semantic_verification)
     if site is None and not args.skip_auto_judge:
         from ifv_training.psd_gemini_judge import localize_failure
@@ -256,12 +278,13 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
     )
     runtime_root = runtime_store.root
     # An interrupted run remains inspectable/finalizable after each attempt.
-    write_json(output_dir / "manifest.json", {
+    if not (output_dir / "manifest.json").exists():
+        write_json(output_dir / "manifest.json", {
         "schema_version": "ifv-psd-repair-driver-result-v1", "status": "generating",
         "trace": str(args.trace), "runtime_archive": str(runtime_root),
         "train_cases_sha256": sha256_file(args.train_cases),
         "candidate_count": 0, "accepted_count": 0,
-    })
+        })
     policy_orchestrator = Orchestrator(
         provider=args.policy_provider,
         model_name=args.policy_model,
@@ -323,26 +346,47 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
         ),
     )
     try:
-        proposals = await adapter.propose_hints(
-            failure_site=site,
-            public_trace_context=public_context,
-            private_context=private_context,
-            hint_count=args.hint_count,
-            hint_level=args.hint_level,
-        )
-        write_jsonl(output_dir / "hint-proposals.jsonl", [
-            {"text": hint.text, "level": hint.level, "proposal_id": hint.proposal_id,
-             "provider": hint.provider, "model": hint.model, "audit": dict(hint.audit)}
-            for hint in proposals])
-        records: list[dict[str, Any]] = []
+        proposals_path = output_dir / "hint-proposals.json"
+        if proposals_path.exists():
+            proposals = [HintProposal(**row) for row in load_bound(proposals_path, identity=config)]
+        else:
+            proposals = await adapter.propose_hints(
+                failure_site=site, public_trace_context=public_context,
+                private_context=private_context, hint_count=args.hint_count, hint_level=args.hint_level)
+            save_bound(proposals_path, identity=config, payload=[
+                {"text": hint.text, "level": hint.level, "proposal_id": hint.proposal_id,
+                 "provider": hint.provider, "model": hint.model, "audit": dict(hint.audit)} for hint in proposals])
+        records = load_jsonl(output_dir / "repair_attempts.jsonl")
         for index, hint in enumerate(proposals):
-            continuation = await adapter.run_hinted_episode(
-                failure_site=site,
-                hint=hint,
-                base_trace=trace,
-                max_suffix_actions=args.max_suffix_actions,
-                run_student_diagnostic=args.run_student_diagnostic,
-            )
+            if index < len(records):
+                record = records[index]
+                if record["source_trace_sha256"] != source_trace_sha256 or record["hint_record"]["proposal_id"] != hint.proposal_id:
+                    raise ValueError("saved PSD attempt changed on resume")
+                episode = record["continuation"]
+                if sha256_file(output_dir / episode["hinted_teacher_episode_trace"]) != episode["hinted_teacher_episode_trace_sha256"]:
+                    raise ValueError("saved teacher episode changed on resume")
+                continue
+
+            async def generate():
+                for retry in range(args.generation_retries + 1):
+                    # A new context-ledger namespace prevents request-ID reuse
+                    # after process restarts; all failed tries remain archived.
+                    adapter.runtime_store = CaseRuntimeStore(output_dir, case_id=candidate["case_id"],
+                        attempt_id=f"hint-{index:02d}-{uuid.uuid4().hex[:12]}", resume_from=output_dir)
+                    try:
+                        return await adapter.run_hinted_episode(failure_site=site, hint=hint,
+                            base_trace=trace, max_suffix_actions=args.max_suffix_actions,
+                            run_student_diagnostic=args.run_student_diagnostic)
+                    except Exception as exc:
+                        write_json(output_dir / "generation-last-error.json", {
+                            "hint_index": index, "retry": retry, "error_type": type(exc).__name__,
+                            "archive": str(adapter.runtime_store.root)})
+                        if retry == args.generation_retries:
+                            raise
+
+            continuation = await cached_continuation(output_dir / "continuations" / f"hint-{index:02d}.json",
+                identity={"run": _sha(config), "hint": hint.audit["hint_sha256"]}, generate=generate)
+            runtime_root = Path(continuation.teacher_episode_trace["state"]["runtime_store"]["runtime_path"])
             bound = verification_rows.get(index, {})
             expected_hint_sha = _text(hint.audit.get("hint_sha256"))
             if not expected_hint_sha:

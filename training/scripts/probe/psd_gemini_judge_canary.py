@@ -65,7 +65,15 @@ def controls():
 async def run(args):
     from src.integrations.gemini import GeminiInteractionsClient
     rows = controls()
-    args.output_dir.mkdir(parents=True, exist_ok=False)
+    if args.resume:
+        config = json.loads((args.output_dir / "config.json").read_text())
+        saved_rows = json.loads((args.output_dir / "controls.json").read_text())
+        if config["model"] != args.model or saved_rows != rows:
+            raise ValueError("canary resume inputs changed")
+        if (args.output_dir / "results.jsonl").exists():
+            (args.output_dir / "results.jsonl").replace(args.output_dir / f"results-before-resume-{time.time_ns()}.jsonl")
+    else:
+        args.output_dir.mkdir(parents=True, exist_ok=False)
     (args.output_dir / "controls.json").write_text(json.dumps(rows, ensure_ascii=False, indent=2))
     (args.output_dir / "config.json").write_text(json.dumps({"model": args.model,
         "prompt_sha256": hashlib.sha256(PROMPT.encode()).hexdigest(),
@@ -114,6 +122,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--model", default="gemini-3.1-pro-preview")
+    parser.add_argument("--resume", action="store_true")
     result = asyncio.run(run(parser.parse_args()))
     if not result["passed"]:
         raise SystemExit(2)
