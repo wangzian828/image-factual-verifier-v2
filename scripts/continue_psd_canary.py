@@ -109,6 +109,10 @@ async def run(args):
             summary["repairs"].append({"case_id": case, "output": str(output), "result": result})
         except Exception as exc:
             # Keep a negative/no-site result; never manufacture a passing example.
+            import traceback
+            write_json(output / "driver-error.json", {"error_type": type(exc).__name__,
+                "frames": [{"file": frame.filename, "line": frame.lineno, "function": frame.name}
+                           for frame in traceback.extract_tb(exc.__traceback__)]})
             summary["repairs"].append({"case_id": case, "output": str(output), "error_type": type(exc).__name__})
         save()
         if (output / "repair_candidates.jsonl").exists() and (output / "repair_attempts.jsonl").exists():

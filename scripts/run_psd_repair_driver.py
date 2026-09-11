@@ -553,7 +553,7 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
         write_jsonl(output_dir / "repair_attempts.jsonl", records)
         result = {
             "schema_version": "ifv-psd-repair-driver-result-v1",
-            "status": "generated",
+            "status": "generated" if records else "no_admissible_hints",
             "train_cases_sha256": sha256_file(args.train_cases),
             "source_access_policy": {"path": str(args.source_access_policy.resolve()),
                                      "sha256": sha256_file(args.source_access_policy)},
@@ -584,7 +584,7 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
             "artifacts": {"repair_attempts": "repair_attempts.jsonl"},
         }
         write_json(output_dir / "manifest.json", result)
-        if not args.skip_auto_judge:
+        if not args.skip_auto_judge and records:
             from ifv_training.psd_gemini_judge import judge_run
             from src.integrations.gemini import GeminiInteractionsClient
             async with GeminiInteractionsClient(timeout=240, max_retries=2) as client:

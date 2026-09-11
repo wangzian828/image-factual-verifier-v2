@@ -9,6 +9,17 @@ from scripts.continue_psd_canary import completed_stage
 from scripts.prepare_psd_training_canary import project_frozen_training
 from src.orchestrator.source_access import benchmark_source_access_policy
 from ifv_training.io import load_jsonl
+from ifv_training.psd_repair_runtime import QwenContinuationAdapter
+
+
+def test_native_history_removes_only_the_identical_transport_system_copy():
+    original = [{"role": "system", "content": "original system"}, {"role": "user", "content": "original image"}]
+    assert QwenContinuationAdapter._native_history(original, "original system") == original[1:]
+    assert len(original) == 2
+    with pytest.raises(ValueError, match="differs"):
+        QwenContinuationAdapter._native_history(original, "changed instruction")
+    with pytest.raises(ValueError, match="interior"):
+        QwenContinuationAdapter._native_history(original[1:] + original[:1], "original system")
 
 
 def test_completed_stage_is_cached_but_mutation_rejected(tmp_path):

@@ -209,10 +209,26 @@ class QwenContinuationAdapter:
             tool_timeout_seconds=self.tool_timeout_seconds,
             capture_policy_tokens=True,
             policy_topk=self.policy_topk,
-            native_history=[dict(item) for item in history],
+            native_history=self._native_history(history, _text(site.policy_input.get("system_instruction"))),
             native_system_instruction=_text(site.policy_input.get("system_instruction")),
             native_history_includes_pending_user=include_hint_as_pending_user,
         )
+
+    @staticmethod
+    def _native_history(history, system_instruction):
+        """The request archive includes its system message; StageRunner adds it.
+
+        Remove only the identical leading transport copy. Never edit the source
+        user/assistant/tool prefix, and reject any non-leading system message.
+        """
+        rows = [dict(item) for item in history]
+        if rows and rows[0].get("role") == "system":
+            if rows[0].get("content") != system_instruction:
+                raise ValueError("PSD archived system instruction differs from replay")
+            rows = rows[1:]
+        if any(row.get("role") == "system" for row in rows):
+            raise ValueError("PSD native history contains an interior system message")
+        return rows
 
     @staticmethod
     def _stage_step_from_row(row: Mapping[str, Any]) -> StageStep:
@@ -306,6 +322,7 @@ class QwenContinuationAdapter:
         history: Sequence[Mapping[str, Any]],
         basis: Mapping[str, Any],
         include_pending_user: bool,
+        system_instruction: str | None = None,
     ) -> StageRunner:
         allowed = {
             _text(item) for item in basis.get("observation_ids", []) if _text(item)
@@ -320,9 +337,10 @@ class QwenContinuationAdapter:
                 return False, "verdict observation IDs must be unique"
             return True, ""
 
+        instruction = self.judgment_system_prompt if system_instruction is None else system_instruction
         return StageRunner(
             llm=self.policy_llm,
-            system_prompt=self.judgment_system_prompt,
+            system_prompt=instruction,
             tools=[],
             output_schema=RawHistoryJudgmentOutput,
             max_rounds=1,
@@ -337,8 +355,8 @@ class QwenContinuationAdapter:
             request_timeout_seconds=self.request_timeout_seconds,
             capture_policy_tokens=True,
             policy_topk=self.policy_topk,
-            native_history=[dict(item) for item in history],
-            native_system_instruction=self.judgment_system_prompt,
+            native_history=self._native_history(history, instruction),
+            native_system_instruction=instruction,
             native_history_includes_pending_user=include_pending_user,
         )
 
@@ -685,6 +703,7 @@ class QwenContinuationAdapter:
             history=teacher_history,
             basis=basis,
             include_pending_user=site.stage == "unified_judgment",
+            system_instruction=_text(site.policy_input.get("system_instruction")) if site.stage == "unified_judgment" else None,
         )
         parsed_judgment, judgment_steps = await judgment_runner.run(
             ""
