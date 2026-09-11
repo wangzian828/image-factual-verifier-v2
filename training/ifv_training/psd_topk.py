@@ -287,7 +287,9 @@ def _cache_record(
         field="response.prompt_token_ids",
     )
     if returned_prompt_ids != combined_ids:
-        raise ValueError("vLLM returned different forced prompt token IDs")
+        raise ValueError(
+            "vLLM response.prompt_token_ids differ from the forced prompt"
+        )
     prompt_logprobs = choice.get("prompt_logprobs")
     if not isinstance(prompt_logprobs, list):
         raise ValueError("vLLM response omitted prompt_logprobs")
