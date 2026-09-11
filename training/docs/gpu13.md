@@ -61,6 +61,11 @@ gpu-13 的 glibc 为 2.28，长上下文 bootstrap 会固定版本并从源码�
 模型名称和 checkpoint 路径以实际任务配置为准。换模型时必须用该模型自己的
 processor 重新验证，不能只复用旧环境的通过结果。
 
+独立 RL 环境使用
+`/gsdata/home/wza/conda/envs/ifv-qwen35-rl-ms-swift442-vllm0221`。其验收报告应位于
+`<training-data-root>/logs/environments/ifv-qwen35-rl-ms-swift442-vllm0221/environment-preflight.json`。
+`.ifv-qwen35-rl-ready` 保存该报告的 SHA-256；空的历史 marker 不构成验收依据。
+
 ## 2. 从 GitHub 更新
 
 ```bash

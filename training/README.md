@@ -103,6 +103,11 @@ reward ledger 负责记录工程审计、正确性和过程质量；训练框架
 ms-swift/Gym/GRPO 工程接线，不是正式在线 Agent RL。正式 RL 仍需独立实现并验证
 真实 runtime gateway、同 prompt rollout 分组、reward ledger 绑定和训练资源配置。
 
+RL bootstrap 会生成独立的 `environment-preflight.json`，核对固定依赖、`pip
+check`、CUDA/GPU、Qwen3.5 上下文、ms-swift RL 参数契约，以及 `swift rlhf` 和
+`vllm serve` 两个 CLI。旧的 ready 文件不能单独证明环境可用；新 ready 文件保存
+本次通过报告的 SHA-256，任何环境修复后都必须重新生成报告和摘要。
+
 ## 环境边界
 
 - SFT 和 RL 使用独立环境。

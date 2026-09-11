@@ -312,3 +312,8 @@ def test_qwen35_training_bootstrap_is_fresh_pinned_and_isolated() -> None:
     assert "transformers==5.12.1" in sft
     assert "liger-kernel==0.8.0" in sft
     assert "vllm==0.22.1" in rl
+    assert "openai==2.32.0" in rl
+    assert "jiter==0.14.0" in rl
+    assert "verify_qwen35_rl_environment.py" in source
+    assert 'rm -f "$RL_PREFIX/.ifv-qwen35-rl-ready"' in source
+    assert 'sha256sum "$rl_preflight"' in source

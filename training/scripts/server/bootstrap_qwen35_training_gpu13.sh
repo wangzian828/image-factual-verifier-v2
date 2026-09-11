@@ -242,6 +242,7 @@ install_long_sft() {
 
 install_rl() {
   local incomplete_marker=".ifv-qwen35-rl-bootstrap-incomplete"
+  rm -f "$RL_PREFIX/.ifv-qwen35-rl-ready"
   prepare_base "$RL_PREFIX" 13.0.88 "$incomplete_marker"
   "$RL_PREFIX/bin/python" -m pip install \
     torch==2.11.0 torchvision==0.26.0 torchaudio==2.11.0
@@ -249,10 +250,36 @@ install_rl() {
     --no-build-isolation --requirement "$REPO_ROOT/requirements/rl-qwen35.txt"
   "$RL_PREFIX/bin/python" -m pip install --no-deps --editable "$REPO_ROOT"
   freeze_env "$RL_PREFIX" ifv-qwen35-rl-ms-swift442-vllm0221
-  "$RL_PREFIX/bin/swift" rlhf --help >/dev/null
-  "$RL_PREFIX/bin/vllm" serve --help >/dev/null
+  local rl_preflight="$ARTIFACT_ROOT/logs/environments/ifv-qwen35-rl-ms-swift442-vllm0221/environment-preflight.json"
+  local runtime_ld="$RL_PREFIX/targets/x86_64-linux/lib:$RL_PREFIX/lib:$RL_PREFIX/lib/python3.12/site-packages/nvidia/curand/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+  CUDA_HOME="$RL_PREFIX" PATH="$RL_PREFIX/bin:$PATH" \
+    LD_LIBRARY_PATH="$runtime_ld" \
+    CUDA_VISIBLE_DEVICES="${IFV_BOOTSTRAP_GPU_ID:-0}" \
+    "$RL_PREFIX/bin/python" \
+    "$REPO_ROOT/scripts/probe/verify_qwen35_rl_environment.py" \
+    --model "$MODEL" \
+    --max-context 131072 \
+    --expected-package-version torch=2.11.0 \
+    --expected-package-version transformers=5.12.1 \
+    --expected-package-version ms-swift=4.4.2 \
+    --expected-package-version deepspeed=0.19.2 \
+    --expected-package-version flash-attn=2.8.3 \
+    --expected-package-version flash-linear-attention=0.5.1 \
+    --expected-package-version causal-conv1d=1.6.2.post1 \
+    --expected-package-version liger-kernel=0.8.0 \
+    --expected-package-version vllm=0.22.1 \
+    --expected-package-version openai=2.32.0 \
+    --expected-package-version jiter=0.14.0 \
+    --expected-package-version llguidance=1.7.5 \
+    --expected-package-version huggingface-hub=1.24.0 \
+    --expected-python 3.12 \
+    --expected-torch-cuda 13.0 \
+    --expected-gpu-count 1 \
+    --expected-gpu-name "${IFV_EXPECTED_GPU_NAME:-NVIDIA A100-SXM4-40GB}" \
+    --expected-gpu-memory-mib "${IFV_EXPECTED_GPU_MEMORY_MIB:-40960}" \
+    --output "$rl_preflight"
   rm -f "$RL_PREFIX/$incomplete_marker"
-  touch "$RL_PREFIX/.ifv-qwen35-rl-ready"
+  sha256sum "$rl_preflight" >"$RL_PREFIX/.ifv-qwen35-rl-ready"
 }
 
 if [[ "$MODE" == "sft" || "$MODE" == "all" ]]; then
