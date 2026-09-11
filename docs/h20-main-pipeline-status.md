@@ -2,6 +2,28 @@
 
 ## Current phase: pre-training independent judge
 
+06:34 update: **pre-training judge finished**. `progress.json` is
+`judge_complete`, 1,682/1,682, no remaining cases. Independent checks verified
+unique/equal case sets, all judge response contracts, the frozen ledger SHA
+and every selected trace SHA. Final judge SHA-256:
+`5c70e962b44ec63e77af2a70692b086c9250510c9c39b6656173d8ca3cbd6a84`.
+Report is under the judged root's `report/`. Exploratory old1682 results:
+accuracy60.9394%, balanced accuracy62.7968%; 38 correct with strong evidence,
+987 correct with insufficient evidence,657 wrong. Zero engineering/judge errors
+does not mean zero tool failures or good evidence quality. No test-result tuning.
+
+**Training launch is held on an unresolved storage constraint**, not judge.
+Historical real full-parameter H20 resume cleanup inventory records
+112,933,396,586 bytes (105.18GiB) of model/optimizer shards. Current owned-tree
+usage was92GiB; a separate inference export and temporary/cache headroom are
+additional. Conservatively allow at least150GiB additional usable storage.
+The mount is GPFS `f0b48339[/.userfset/f0af7518]`; `quota` and `mmlsquota` are
+not exposed in this container. Shared39TiB free does not verify that allowance.
+Need the actual personal allowance, or a scoped way to verify it, before
+committing a >105GiB full-state write. Do not silently switch to model-only
+checkpoints or delete preserved data to get around this constraint. Four
+keepers and guard remain running while this is unresolved.
+
 04:00 follow-up: judge controller remained active (306 returned judgments,
 zero engineering errors at the snapshot). Do not interpret the controller's
 batch-level `completed: 1` as stalled: in-flight batch progress is in
