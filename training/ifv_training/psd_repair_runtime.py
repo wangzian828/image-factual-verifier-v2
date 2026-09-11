@@ -318,17 +318,19 @@ class QwenContinuationAdapter:
                         "Gemini PSD hint constructor requires status=completed, "
                         f"received status={status}"
                     )
+                usage = interaction.get("usage")
+                usage = usage if isinstance(usage, Mapping) else {}
                 response = LLMResponse(
                     text=extract_text(interaction),
                     prompt_tokens=int(
-                        _mapping(interaction.get("usage")).get(
+                        usage.get(
                             "total_input_tokens",
                             0,
                         )
                         or 0
                     ),
                     completion_tokens=int(
-                        _mapping(interaction.get("usage")).get(
+                        usage.get(
                             "total_output_tokens",
                             0,
                         )
