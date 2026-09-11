@@ -239,7 +239,7 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
         return await _run_single(args)
     if args.skip_auto_judge or args.verification_bundle:
         raise ValueError("feedback search requires live/cached per-attempt verification; use single mode for offline bundles")
-    from ifv_training.psd_repair_search import run_search
+    from ifv_training.psd_repair_search import run_search, reusable_localization
     from ifv_training.psd_repair_storage import save_bound, load_bound
     # Bind every original input, not just filesystem paths. The single-attempt
     # driver repeats the source/train/checkpoint gates before any policy call.
@@ -257,6 +257,13 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
         child.search_mode, child.hint_count = "single", 1
         child.output_dir = directory
         child.resume = (directory / "run-inputs.json").exists()
+        if child.resume:
+            # Resume an existing round with its exact original localization input
+            # (including older rounds which localized in their own cache).
+            original = load_json(directory / "run-inputs.json")["identity"].get("semantic_verification")
+            child.semantic_verification = Path(original["path"]) if original else None
+        else:
+            child.semantic_verification = reusable_localization(history, feedback) or args.semantic_verification
         context = {**original_context, "repair_search": feedback}
         inputs = directory.parent.parent / "round-inputs" / directory.name
         context_path = inputs / "public.json"
@@ -343,6 +350,8 @@ async def _run_single(args: argparse.Namespace) -> dict[str, Any]:
                   "accepted_count": 0, "pending_hinted_episode_count": 0}
         write_json(output_dir / "manifest.json", result)
         return result
+    if semantic_verification is not None:
+        write_json(output_dir / "semantic-localization.json", semantic_verification)
     verification_rows = _load_verification_bundle(args.verification_bundle)
     source_trace_sha256 = sha256_file(args.trace)
     from ifv_training.psd_candidate_binding import bind_localized_candidate

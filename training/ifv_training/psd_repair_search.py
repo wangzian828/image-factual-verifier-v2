@@ -98,6 +98,19 @@ def revision_rejection(hint, feedback):
     return ""
 
 
+def reusable_localization(history, feedback):
+    """Keep the same source anchor unless the actual checker disputes it."""
+    if feedback.get("needs_relocalization"):
+        return None
+    for row in reversed(history):
+        path = Path(row["directory"]) / "semantic-localization.json"
+        if path.is_file():
+            if str(path.resolve()) in row["files"] and sha256_file(path) != row["files"][str(path.resolve())]:
+                raise ValueError("saved localization changed")
+            return path
+    return None
+
+
 def validate_live_model(profile, models):
     """An unchanged alias is not proof that it still serves the round's weights."""
     rows = [row for row in models.get("data", []) if row.get("id") == profile["profile_id"]]
@@ -136,7 +149,7 @@ def inspect_round(directory):
     # Keep only procedural audit codes, not raw rejected hints that could leak an answer.
     rejected = [row.get("reason", "hint_audit_failed") for row in audits if not row.get("passed")]
     for path in (audits_path, directory / "hint-proposals.json", directory / "proposer-response.json",
-                 directory / "live-serving-check.json"):
+                 directory / "live-serving-check.json", directory / "semantic-localization.json"):
         if path.exists():
             files[str(path.resolve())] = sha256_file(path)
     return {"directory": str(directory.resolve()), "files": files,

@@ -8,7 +8,7 @@ import pytest
 from ifv_training.io import load_json, load_jsonl, sha256_file, write_json, write_jsonl
 from ifv_training.psd_repair_search import (
     CHECKS, inspect_round, public_attempt_feedback, revision_context, revision_rejection, run_search, search_lock,
-    validate_live_model,
+    validate_live_model, reusable_localization,
 )
 from ifv_training.psd_repair import FailureSite, build_proposer_prompt, parse_proposer_response
 
@@ -271,3 +271,14 @@ def test_proposer_wire_request_contains_observed_feedback_not_private_reference(
     assert "PRIVATE_REFERENCE_SENTINEL" not in wire and "PRIVATE_URL_SENTINEL" not in wire
     assert "no matching evidence" in wire
     assert '"procedural_hint": false' in captured[0][-1]["content"]
+
+
+def test_localization_is_reused_unless_checker_disputes_anchor(tmp_path):
+    path = tmp_path / "semantic-localization.json"
+    write_json(path, {"source_step_index": 4})
+    history = [{"directory": str(tmp_path), "files": {str(path.resolve()): sha256_file(path)}}]
+    assert reusable_localization(history, {}) == path
+    assert reusable_localization(history, {"needs_relocalization": True}) is None
+    write_json(path, {"source_step_index": 7})
+    with pytest.raises(ValueError, match="changed"):
+        reusable_localization(history, {})
