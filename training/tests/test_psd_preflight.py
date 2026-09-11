@@ -44,7 +44,7 @@ def _package(tmp_path: Path) -> Path:
     return package
 
 
-def test_psd_training_input_preflight_binds_ready_balanced_package(
+def test_psd_training_input_preflight_binds_ready_per_target_package(
     tmp_path: Path,
 ) -> None:
     package = _package(tmp_path)
@@ -63,6 +63,7 @@ def test_psd_training_input_preflight_binds_ready_balanced_package(
         "preserve": 1.0,
         "repair": 1.0,
     }
+    assert result["datums"]["lengths"]["input_tokens"]["max"] == 3
 
 
 def test_psd_training_input_preflight_detects_post_manifest_mutation(

@@ -118,7 +118,7 @@ def test_topk_validation_requires_exact_length_and_normalized_mass() -> None:
         )
 
 
-def test_preservation_row_weight_is_split_across_steps() -> None:
+def test_preservation_weight_is_applied_to_each_retained_target() -> None:
     repair = _repair_row()
     row = {
         "case_id": "case-1",
@@ -134,7 +134,7 @@ def test_preservation_row_weight_is_split_across_steps() -> None:
     }
     targets = build_preservation_targets(row)
     assert len(targets) == 2
-    assert [item["row_weight"] for item in targets] == [0.5, 0.5]
+    assert [item["row_weight"] for item in targets] == [1.0, 1.0]
     assert all(item["target_status"] == "pending_topk" for item in targets)
 
 

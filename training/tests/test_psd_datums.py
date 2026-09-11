@@ -57,7 +57,7 @@ def test_sparse_datum_uses_causal_completion_prediction_positions() -> None:
     ]
 
 
-def test_sparse_package_balances_repair_and_preservation_row_mass(
+def test_sparse_package_preserves_official_per_target_weights(
     tmp_path: Path,
 ) -> None:
     targets = tmp_path / "targets.jsonl"
@@ -79,9 +79,11 @@ def test_sparse_package_balances_repair_and_preservation_row_mass(
     )
 
     assert manifest["status"] == "ready_for_trainer"
+    assert manifest["weighting_policy"] == "per_target"
+    assert manifest["aggregate_source_rebalancing"] is False
     assert manifest["effective_row_mass_by_kind"] == {
         "preserve": 1.0,
-        "repair": 1.0,
+        "repair": 2.0,
     }
     rows = [
         json.loads(line)
@@ -89,7 +91,17 @@ def test_sparse_package_balances_repair_and_preservation_row_mass(
             encoding="utf-8"
         ).splitlines()
     ]
-    assert [row["row_weight"] for row in rows] == [0.5, 0.5, 0.25, 0.75]
+    assert [row["row_weight"] for row in rows] == [1.0, 1.0, 0.25, 0.75]
+    assert manifest["lengths"]["input_tokens"] == {
+        "count": 4,
+        "min": 3,
+        "p50": 3,
+        "p90": 3,
+        "p95": 3,
+        "p99": 3,
+        "max": 3,
+    }
+    assert manifest["lengths"]["input_context_buckets"]["le_8192"] == 4
 
 
 def test_sparse_package_fails_closed_on_incomplete_or_oversized_target(

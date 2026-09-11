@@ -180,8 +180,11 @@ rollout run ID must be new.
 Teacher top-20 probabilities are multiplied by each target's effective row
 weight. The loss sums contributing completion-token cross-entropies and then
 averages across datums; it never divides by total weight mass, which would
-erase repair/preservation weighting. Both source kinds are mandatory and are
-normalized to 1:1 effective row mass.
+erase target weighting. Both source kinds are mandatory. In the published
+Qwen3.5 PSD recipe, every repair target and every retained preservation
+assistant-step target has weight 1.0; aggregate repair and preservation mass is
+not rebalanced. This matters when one successful preservation rollout contains
+multiple retained assistant steps.
 
 `training/scripts/train/run_psd_topk.sh` runs the datum-manifest/hash gate,
 ms-swift plugin forward/backward smoke, frozen-environment preflight and

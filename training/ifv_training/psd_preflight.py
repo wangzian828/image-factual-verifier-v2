@@ -13,6 +13,7 @@ from .io import load_json, load_jsonl, sha256_file
 from .psd_datums import (
     PSD_SPARSE_DATUM_MANIFEST_SCHEMA_VERSION,
     PSD_SPARSE_DATUM_SCHEMA_VERSION,
+    PSD_WEIGHTING_POLICY,
 )
 
 
@@ -61,10 +62,23 @@ def _datum_error(row: Mapping[str, Any], *, topk: int, max_context: int) -> str:
         return "datum_weight_shape_invalid"
     try:
         row_weight = float(row.get("row_weight"))
+        source_row_weight = float(row.get("source_row_weight"))
     except (TypeError, ValueError):
         return "datum_row_weight_invalid"
-    if not math.isfinite(row_weight) or row_weight <= 0:
+    if (
+        not math.isfinite(row_weight)
+        or row_weight <= 0
+        or not math.isfinite(source_row_weight)
+        or source_row_weight <= 0
+    ):
         return "datum_row_weight_invalid"
+    if not math.isclose(
+        row_weight,
+        source_row_weight,
+        rel_tol=1e-9,
+        abs_tol=1e-9,
+    ):
+        return "datum_aggregate_source_rebalancing_detected"
     active = False
     for tokens, values in zip(target_tokens, weights, strict=True):
         if not isinstance(tokens, list) or len(tokens) != topk:
@@ -137,8 +151,10 @@ def verify_psd_training_input(
             errors.append("manifest_not_ready_for_trainer")
         if _integer(manifest.get("topk")) != expected_topk:
             errors.append("manifest_topk_mismatch")
-        if manifest.get("balance_kinds") is not True:
-            errors.append("manifest_source_balance_disabled")
+        if manifest.get("weighting_policy") != PSD_WEIGHTING_POLICY:
+            errors.append("manifest_weighting_policy_invalid")
+        if manifest.get("aggregate_source_rebalancing") is not False:
+            errors.append("manifest_aggregate_source_rebalancing_enabled")
         if manifest.get("require_both_kinds") is not True:
             errors.append("manifest_both_source_kinds_not_required")
         if manifest.get("missing_source_kinds") not in ([], None):
@@ -188,13 +204,6 @@ def verify_psd_training_input(
         errors.append("datum_contract_rejections")
     if set(kind_counts) != {"repair", "preserve"}:
         errors.append("repair_and_preserve_datums_required")
-    if not math.isclose(
-        effective_mass.get("repair", 0.0),
-        effective_mass.get("preserve", 0.0),
-        rel_tol=1e-7,
-        abs_tol=1e-7,
-    ):
-        errors.append("effective_source_mass_not_1_to_1")
     expected_count = _integer(
         _mapping(manifest.get("counts")).get("candidate_datums")
     )
@@ -214,6 +223,7 @@ def verify_psd_training_input(
             "by_kind": dict(sorted(kind_counts.items())),
             "effective_row_mass_by_kind": dict(sorted(effective_mass.items())),
             "max_observed_input_tokens": max_observed_context,
+            "lengths": _mapping(manifest.get("lengths")),
         },
         "manifest": {
             "path": str(manifest_path),

@@ -547,8 +547,8 @@ def build_preservation_targets(
     episode_id = _text(row.get("episode_id"))
     if not case_id or not episode_id:
         raise ValueError("preservation row requires case_id and episode_id")
-    per_step_weight = float(row.get("row_weight", 1.0)) / len(steps)
-    if not math.isfinite(per_step_weight) or per_step_weight <= 0:
+    per_target_weight = float(row.get("row_weight", 1.0))
+    if not math.isfinite(per_target_weight) or per_target_weight <= 0:
         raise ValueError("preservation row_weight must be finite and positive")
 
     targets: list[dict[str, Any]] = []
@@ -586,7 +586,11 @@ def build_preservation_targets(
                 "teacher_prompt_ids": student_prompt_ids,
                 "completion_ids": completion_ids,
                 "teacher_topk_by_position": teacher_topk,
-                "row_weight": per_step_weight,
+                # Match the published PSD recipe: every retained preservation
+                # assistant step is one target and receives the configured
+                # per-target weight.  Do not divide an episode's weight across
+                # its steps or rebalance aggregate repair/preservation mass.
+                "row_weight": per_target_weight,
                 "model_roles": bound_roles,
                 "verification": {
                     "local_pass": True,

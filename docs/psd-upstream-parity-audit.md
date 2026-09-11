@@ -32,7 +32,7 @@ abbreviation; the current public method and this repository use PSD.
 | Sparse top-20 normalized teacher distribution | exact length, uniqueness, finite probability and normalized-mass checks | Aligned |
 | Loss only on completion next-token positions | prompt/observation positions receive zero weight | Aligned |
 | Preservation comes from verified current-policy passes | full-task pass plus strict trace audit are mandatory | Aligned |
-| Repair and preservation have 1:1 effective mass | datum builder requires both kinds and normalizes each source mass to 1.0 | Aligned |
+| Published target weighting is per-target, without aggregate source rebalancing | every repair and every retained preservation step keeps its configured row weight; both kinds remain mandatory | Aligned |
 | Row weights affect gradient magnitude | weighted token losses are summed, then averaged across datums | Aligned; fixed from weight-mass normalization |
 | Resumable, provenance-bound target materialization | target IDs, token hashes, teacher identity, checkpoint and manifest hash are checked | Aligned for imported/online caches |
 | Training refuses incomplete target packages | launcher verifies manifest schema/status, file hash, top-K, context, source kinds and effective mass | Aligned |
@@ -68,6 +68,10 @@ be structurally valid yet unsupported.
   checkpoint-space gate and resume support.
 - `9d7b9a2`: bound repair collection to a serving profile and immutable
   checkpoint-manifest digest.
+- Current completion pass: corrected the earlier aggregate 1:1 interpretation
+  to the published Qwen3.5 recipe: 506 repair targets and 815 preservation
+  step-targets, each at weight 1.0 before token-length effects. Datum manifests
+  now state `weighting_policy=per_target` and reject aggregate rebalancing.
 
 ## Validation boundary
 

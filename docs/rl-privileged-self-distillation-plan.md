@@ -134,7 +134,9 @@ L_total = L_psd + λ_preserve * L_preserve
 - LoRA rank：16、32；
 - learning rate：`5e-6`、`1e-5`；
 - 先训练 1 epoch；
-- repair/preservation 按 row mass 维持 1:1；
+- repair/preservation 都必须存在；按上游最终公开配置逐 target 等权，默认每个
+  repair target 和每个 preservation assistant-step target 权重均为 1.0，不再做
+  两类 aggregate row mass 的 1:1 重平衡；
 - 每个 repair site 第一版只训练第一个修复 assistant action；
 - system、user、tool observation 不计 loss；
 - ReAct 保留 Qwen 原生 `<think>` / `<tool_call>` 格式，不自行发明协议。

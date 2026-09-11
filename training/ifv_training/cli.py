@@ -235,12 +235,6 @@ def _parser() -> argparse.ArgumentParser:
         default=131_072,
     )
     psd_datums.add_argument(
-        "--no-balance-kinds",
-        action="store_false",
-        dest="balance_kinds",
-    )
-    psd_datums.set_defaults(balance_kinds=True)
-    psd_datums.add_argument(
         "--allow-single-kind",
         action="store_false",
         dest="require_both_kinds",
@@ -529,7 +523,6 @@ def main() -> None:
             output_dir=args.output_dir,
             topk=args.topk,
             max_sequence_length=args.max_sequence_length,
-            balance_kinds=args.balance_kinds,
             require_both_kinds=args.require_both_kinds,
         )
     elif args.command == "verify-psd-datums":

@@ -17,8 +17,9 @@ from .io import (
 from .psd import validate_topk_by_position
 
 
-PSD_SPARSE_DATUM_SCHEMA_VERSION = "ifv-psd-sparse-topk-datum-v2"
-PSD_SPARSE_DATUM_MANIFEST_SCHEMA_VERSION = "ifv-psd-sparse-topk-manifest-v2"
+PSD_SPARSE_DATUM_SCHEMA_VERSION = "ifv-psd-sparse-topk-datum-v3"
+PSD_SPARSE_DATUM_MANIFEST_SCHEMA_VERSION = "ifv-psd-sparse-topk-manifest-v3"
+PSD_WEIGHTING_POLICY = "per_target"
 
 
 def _text(value: Any) -> str:
@@ -150,23 +151,42 @@ def build_sparse_topk_datum(
     }
 
 
-def _balanced_weights(
-    targets: list[Mapping[str, Any]],
-) -> dict[str, float]:
-    totals: Counter[str] = Counter()
-    for target in targets:
-        kind = _text(target.get("kind"))
-        if kind not in {"repair", "preserve"}:
-            raise ValueError(f"unsupported target kind: {kind}")
-        totals[kind] += _positive_weight(
-            target.get("row_weight", 1.0),
-            field="row_weight",
-        )
+def _length_summary(values: list[int]) -> dict[str, Any]:
+    if not values:
+        return {
+            "count": 0,
+            "min": 0,
+            "p50": 0,
+            "p90": 0,
+            "p95": 0,
+            "p99": 0,
+            "max": 0,
+        }
+    ordered = sorted(values)
+
+    def percentile(percent: int) -> int:
+        rank = max(0, math.ceil((percent / 100) * len(ordered)) - 1)
+        return ordered[rank]
+
     return {
-        kind: 1.0 / total
-        for kind, total in totals.items()
-        if total > 0
+        "count": len(ordered),
+        "min": ordered[0],
+        "p50": percentile(50),
+        "p90": percentile(90),
+        "p95": percentile(95),
+        "p99": percentile(99),
+        "max": ordered[-1],
     }
+
+
+def _context_buckets(values: list[int]) -> dict[str, int]:
+    bounds = (8_192, 16_384, 32_768, 65_536, 131_072)
+    result = {
+        f"le_{bound}": sum(value <= bound for value in values)
+        for bound in bounds
+    }
+    result["gt_131072"] = sum(value > bounds[-1] for value in values)
+    return result
 
 
 def build_sparse_topk_package(
@@ -175,7 +195,6 @@ def build_sparse_topk_package(
     output_dir: Path,
     topk: int = 20,
     max_sequence_length: int = 131_072,
-    balance_kinds: bool = True,
     require_both_kinds: bool = True,
 ) -> dict[str, Any]:
     """Create a fail-closed sparse top-K training interface package."""
@@ -199,21 +218,17 @@ def build_sparse_topk_package(
     missing_kinds = sorted({"repair", "preserve"} - input_kinds)
     source_kind_gate = not require_both_kinds or not missing_kinds
 
-    kind_scales = _balanced_weights(targets) if balance_kinds else {}
     datums: list[dict[str, Any]] = []
     rejections: list[dict[str, Any]] = []
     for row_index, target in enumerate(targets):
         kind = _text(target.get("kind"))
         source_weight = target.get("row_weight", 1.0)
         try:
-            effective_weight = float(source_weight)
-            if balance_kinds:
-                effective_weight *= kind_scales[kind]
             datums.append(
                 build_sparse_topk_datum(
                     target,
                     topk=topk,
-                    effective_row_weight=effective_weight,
+                    effective_row_weight=float(source_weight),
                     max_sequence_length=max_sequence_length,
                 )
             )
@@ -247,6 +262,9 @@ def build_sparse_topk_package(
     for datum in datums:
         effective_mass[datum["kind"]] += float(datum["row_weight"])
         loss_positions[datum["kind"]] += len(datum["loss_positions"])
+    input_lengths = [int(datum["input_tokens"]) for datum in datums]
+    sequence_lengths = [int(datum["sequence_tokens"]) for datum in datums]
+    completion_lengths = [int(datum["completion_tokens"]) for datum in datums]
     manifest = {
         "schema_version": PSD_SPARSE_DATUM_MANIFEST_SCHEMA_VERSION,
         "source": {
@@ -255,7 +273,8 @@ def build_sparse_topk_package(
         },
         "topk": topk,
         "max_sequence_length": max_sequence_length,
-        "balance_kinds": balance_kinds,
+        "weighting_policy": PSD_WEIGHTING_POLICY,
+        "aggregate_source_rebalancing": False,
         "require_both_kinds": require_both_kinds,
         "missing_source_kinds": missing_kinds,
         "counts": {
@@ -269,6 +288,12 @@ def build_sparse_topk_package(
         ).items())),
         "loss_positions_by_kind": dict(sorted(loss_positions.items())),
         "effective_row_mass_by_kind": dict(sorted(effective_mass.items())),
+        "lengths": {
+            "input_tokens": _length_summary(input_lengths),
+            "sequence_tokens": _length_summary(sequence_lengths),
+            "completion_tokens": _length_summary(completion_lengths),
+            "input_context_buckets": _context_buckets(input_lengths),
+        },
         "artifacts": artifacts,
         "artifact_sha256": {
             "candidate_datums": sha256_file(output_dir / "candidate_datums.jsonl"),
