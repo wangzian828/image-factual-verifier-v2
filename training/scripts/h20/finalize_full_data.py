@@ -35,6 +35,7 @@ def main():
     equality = {}
     source = Path(report['source_package'])
     buckets = defaultdict(list)
+    referenced_images = set()
     for kind in ('policy',):
         for split in ('train','validation','test'):
             path = root/f'ms-swift-{kind}/{split}.jsonl'
@@ -45,6 +46,7 @@ def main():
                 assert len(before['images'])==len(after['images'])
                 assert [Path(p).name for p in before['images']]==[Path(p).name for p in after['images']]
                 assert {k:v for k,v in before.items() if k!='images'}=={k:v for k,v in after.items() if k!='images'}
+                referenced_images.update(Path(p).name for p in after['images'])
             equality[f'{kind}:{split}'] = len(subset)
             report['input_tokens_by_dataset'][str(path)] = dist([r['input_tokens'] for r in subset])
             report['input_token_boundaries_by_dataset'][str(path)] = probe._boundary_summary(subset)
@@ -85,11 +87,13 @@ def main():
           'warning':'Planning only, not GPU-memory validation or guaranteed ms-swift packing order; image counts also affect memory.'})
     # Identify tiny/extreme images without dropping legitimate tool results.
     from PIL import Image
-    tiny, extreme = [], []
-    for path in (source/'images').iterdir():
+    tiny, extreme, image_records = [], [], []
+    for name in sorted(referenced_images):
+        path = source/'images'/name
         with Image.open(path) as image:
             w,h = image.size
         item = {'name':path.name,'width':w,'height':h}
+        image_records.append({**item,'bytes':path.stat().st_size})
         if min(w,h)<28:
             tiny.append(item)
         if max(w,h)/min(w,h)>100:
@@ -103,6 +107,8 @@ def main():
                 if affected:
                     tiny_references.append({'kind':kind,'split':split,'row_index':i,'images':affected})
     supplement = {'launch_data_gates':gates, 'content_unchanged':True,
+        'policy_referenced_images':{'count':len(image_records),
+            **{field:dist([r[field] for r in image_records]) for field in ('width','height','bytes')}},
         'policy_source_case_families':dict(Counter('main' if r['case_id'].startswith('main-') else 'route-aware/other' for r in policy_train)),
         'policy_unique_train_cases':len({r['case_id'] for r in policy_train}),
         'policy_teacher_verdicts_not_gold':dict(Counter(r['teacher_verdict'] for r in policy_train)),
