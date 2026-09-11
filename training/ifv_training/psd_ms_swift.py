@@ -335,6 +335,8 @@ def install_ms_swift_psd_plugin() -> None:
             if len(target_tokens) != len(input_ids) or len(weights) != len(input_ids):
                 raise ValueError("IFV PSD datum sequence dimensions do not match")
             require_text_only_psd(inputs, input_ids)
+            if len(input_ids) > (getattr(self, "max_length", None) or 131072):
+                raise ValueError("PSD datum exceeds max_length; truncation is forbidden")
             if not isinstance(topk, int) or topk < 1:
                 raise ValueError("IFV PSD datum has invalid topk")
             for position, (tokens, values) in enumerate(

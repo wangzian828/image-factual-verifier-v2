@@ -1,9 +1,4 @@
-"""Prevent text-only PSD adapters from silently dropping visual conditioning.
-
-The current target format has no pixel tensors or image-grid/position data.
-Qwen3.5 token IDs below are verified against the deployed 9B config.json.
-These guards must remain until both scorer and trainer support bound media.
-"""
+"""Require immutable media for visual Qwen3.5 PSD prompts."""
 
 from typing import Any, Mapping, Sequence
 
@@ -17,10 +12,16 @@ def require_text_only_psd(
     media = row.get("psd_media")
     if media:
         from .psd_media import validate_media
+        if any(248057 in sequence for sequence in token_sequences):
+            raise ValueError("PSD video inputs are not supported by the image adapter")
+        found_visual = False
         for sequence in token_sequences:
             # Completions have no images; validate prompt sequences only.
             if any(token in QWEN35_VISUAL_TOKEN_IDS for token in sequence):
                 validate_media(media, sequence)
+                found_visual = True
+        if not found_visual:
+            raise ValueError("PSD media supplied without visual prompt tokens")
         return
     visual_fields = (
         "images", "videos", "multi_modal_data", "pixel_values",
@@ -35,7 +36,6 @@ def require_text_only_psd(
     )
     if has_media or has_visual_ids:
         raise ValueError(
-            "psd_multimodal_not_supported: token-only scoring/training would "
-            "drop visual conditioning; requires bound media, processor grids "
-            "and multimodal position IDs"
+            "psd_multimodal_not_supported: unbound visual input; attach psd_media "
+            "from the archived request before scoring or training"
         )

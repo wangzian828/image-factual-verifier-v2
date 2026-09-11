@@ -90,6 +90,7 @@ def bind_media(
         "processor_config": processor.image_processor.to_dict(),
         "image_sha256": [hashlib.sha256(blob).hexdigest() for blob in blobs],
         "image_grid_thw": tensors["image_grid_thw"].tolist(),
+        "pixel_values_sha256": hashlib.sha256(tensors["pixel_values"].float().numpy().tobytes()).hexdigest(),
         "merge_size": merge_size,
     }
     identity = hashlib.sha256(canonical_json(provenance).encode()).hexdigest()
@@ -143,4 +144,7 @@ def load_media(media: Mapping[str, Any], ids: Sequence[int]) -> dict[str, Any]:
         raise ValueError("PSD media tensor grid mismatch")
     if not torch.isfinite(tensors["pixel_values"]).all():
         raise ValueError("nonfinite PSD image pixels")
+    pixels_sha = hashlib.sha256(tensors["pixel_values"].float().numpy().tobytes()).hexdigest()
+    if pixels_sha != media.get("pixel_values_sha256"):
+        raise ValueError("PSD pixel content differs from processor output")
     return tensors

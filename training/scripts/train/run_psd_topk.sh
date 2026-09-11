@@ -168,8 +168,11 @@ args=(
   --padding_free "$IFV_PADDING_FREE"
   --sequence_parallel_size "$IFV_SEQUENCE_PARALLEL_SIZE"
   --max_length "$IFV_MAX_LENGTH"
-  --truncation_strategy raise
+  --truncation_strategy delete
   --tuner_type "$IFV_TUNER_TYPE"
+  --freeze_llm false
+  --freeze_vit false
+  --freeze_aligner false
   --lora_rank "$IFV_LORA_RANK"
   --lora_alpha "$IFV_LORA_ALPHA"
   --lora_dropout "$IFV_LORA_DROPOUT"
@@ -336,7 +339,7 @@ fi
 if [[ "$train_status" -eq 0 && "$profile_status" -ne 0 ]]; then
   exit "$profile_status"
 fi
-if [[ "$train_status" -eq 0 ]]; then
+if [[ "$train_status" -eq 0 && "$IFV_PSD_PROFILE_MODE" == "production" ]]; then
   python - "$LOG_DIR/profile.json" <<'PY'
 import json
 import sys

@@ -56,6 +56,11 @@ def _datum_error(row: Mapping[str, Any], *, topk: int, max_context: int) -> str:
         return "datum_input_ids_invalid"
     if len(input_ids) > max_context:
         return "datum_context_exceeded"
+    try:
+        from .psd_modality import require_text_only_psd
+        require_text_only_psd(row, input_ids)
+    except (ValueError, OSError, KeyError, TypeError) as exc:
+        return f"datum_media_invalid:{exc}"
     if not isinstance(target_tokens, list) or len(target_tokens) != len(input_ids):
         return "datum_target_shape_invalid"
     if not isinstance(weights, list) or len(weights) != len(input_ids):

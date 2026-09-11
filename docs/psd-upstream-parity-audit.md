@@ -2,7 +2,36 @@
 
 Audit date: 2026-09-11
 
-## H20 follow-up: multimodal readiness correction
+## H20 follow-up: multimodal implementation and validation
+
+The gap described below has now been implemented in `psd_media.py`,
+`psd_hf_teacher.py`, target/repair assembly and the native Qwen3.5 Swift
+template. Image bytes, order (including repeats), processor settings, tensor
+hashes, grids and cache identity are bound. Missing/changed media and mismatched
+placeholder grids fail before scoring or training. Teacher scoring keeps exact
+token IDs and uses the original round-start checkpoint. The text-only vLLM
+Completions fallback is never used for image targets.
+
+Validation on the H20 host, without interrupting GPU evaluation:
+
+- Real deployed Qwen3.5-9B weights on CPU, two repeated images, hinted teacher
+  top-20, unhinted student LoRA rank32 optimizer step: passed.
+- Loss 8.3161335; visual adapter gradient L1 15815.1431; changing image pixels
+  changes logits (maximum difference 18.0).
+- Adapter save/reload reproduces logits exactly (maximum difference 0.0);
+  optimizer state and RNG save/reload passed.
+- Four-rank native Swift SP loss/gradient smoke passed; reference and SP loss
+  both 5.741323, without gathering full-vocabulary logits.
+- Reports: `/volume/ybo/wza/runs/psd-multimodal-9b-cpu-smoke/result.json` and
+  `/volume/ybo/wza/runs/psd-sp4-cpu-smoke.json`.
+
+These checks validate the implemented data/model path, not repair quality on
+IFV tasks or 128K GPU capacity. Real training-only verifier-approved repairs,
+a full H20 optimizer probe on the actual target lengths and any multi-round
+quality claims still require their respective run artifacts. The current
+baseline/SFT/post-training evaluation order is unchanged.
+
+### Historical finding that motivated this change
 
 The alignment table below describes the text-token implementation, not a
 validated image-Agent training path. The H20 follow-up found a material gap:

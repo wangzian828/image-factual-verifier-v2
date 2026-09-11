@@ -1,12 +1,37 @@
 # IFV Privileged On-Policy Self-Distillation (PSD) Implementation
 
-> Readiness correction (H20 audit, 2026-09-11): the current scorer and trainer
-> are text-token only. Visual targets now raise
-> `psd_multimodal_not_supported` instead of silently losing image conditioning.
-> Multimodal PSD is not ready for a production run; see the H20 follow-up in
-> [the parity audit](psd-upstream-parity-audit.md) for the remaining work.
-> The profile gate supports 4/SP4 and 8/SP8; existing checked-in A100 profiles
-> still describe the old hardware and must not be used as H20 profiles.
+> H20 update (2026-09-11): image conditioning is now carried through immutable
+> `psd_media` tensors, exact-token Transformers teacher scoring and the native
+> Qwen3.5 Swift template. Missing or changed media is rejected. The real 9B CPU
+> canary passed top-20 scoring, a LoRA optimizer step, visual gradients and
+> adapter/optimizer reload. This is not a 128K H20 capacity measurement.
+> See [the parity audit](psd-upstream-parity-audit.md) for validation scope.
+
+## Multimodal execution
+
+The repair driver reconstructs the actual source and teacher requests and
+requires identical ordered image inputs. Preservation assembly reconstructs
+each passing step's own archived request. Repeated images stay repeated. Only
+archived image bytes are accepted; remote image URLs are never refetched.
+The processor's tensors, grids, configuration and ordered image hashes are
+stored under the server run's `media/` directory. Every target, cache and datum
+binds this artifact. The student receives pixels and token IDs, not hint text.
+
+For visual targets use `collect-psd-topk --backend transformers --device cuda:0`
+with the existing target/profile/checkpoint-manifest arguments. This loads a
+frozen local round-start model (and its adapter when applicable), directly
+scores the banked IDs plus pixels and computes completion-position top-20.
+It never decodes/re-encodes the completion. `--device cpu` uses Transformers'
+reference kernels for diagnostic runs. Token-only vLLM Completions remains
+available for text-only targets and explicitly rejects visual targets.
+
+Use `training/configs/psd/qwen3.5-lora-r32-h20-sp4-128k.env` as the H20 PSD
+profile. Set `IFV_PSD_PROFILE_MODE=memory_probe` for one step before production.
+The cap remains 131072; SP4 cooperates on one target and accumulation 32
+preserves the upstream optimizer batch. No empirical memory-utilization target
+is invented before the real GPU probe. Training is launched only after the
+existing baseline/SFT/post-training evaluation sequence and the required
+training-only repair admission gates; evaluation cases are never PSD data.
 
 This repository implements the IFV adaptation of Essam Sleiman's
 [Privileged On-Policy Self-Distillation](https://canvas.inc/research/privileged-self-distillation)
