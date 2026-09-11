@@ -17,6 +17,15 @@ from src.orchestrator.react_runtime import RuntimeToolAdapter, UnifiedReactState
 from src.orchestrator.runtime_events import CaseRuntimeStore, bind_case_runtime_store, reset_case_runtime_store
 
 
+def bound_visual_tool(orchestrator, episode):
+    digest = sha256_file(Path(episode["image_path"]))
+    if digest != episode["state"]["runtime_case"]["image_sha256"]:
+        raise ValueError("visual probe image differs from original runtime case")
+    return RuntimeToolAdapter(delegate=orchestrator.all_tools["focused_visual_inspection"],
+        state=UnifiedReactState(case_id=episode["case_id"], image_sha256=digest),
+        image_path=episode["image_path"])
+
+
 async def run(args):
     if args.output.exists():
         raise ValueError("visual diagnostic output must be new; do not silently resample")
@@ -36,8 +45,7 @@ async def run(args):
             "serving_profile_sha256": sha256_file(args.serving_profile), "tool_args": params})
         # Canonical tool_args are the PUBLIC schema. Use the same existing
         # runtime adapter to bind image_input/internal fields, not a raw delegate.
-        tool = RuntimeToolAdapter(delegate=orchestrator.all_tools["focused_visual_inspection"],
-            state=UnifiedReactState(case_id=episode["case_id"]), image_path=episode["image_path"])
+        tool = bound_visual_tool(orchestrator, episode)
         result = await asyncio.to_thread(tool.call, params)
         write_json(args.output / "tool-result.json", result)
         summary = {"passed": result.get("status") == "success", "status": result.get("status"),

@@ -202,3 +202,20 @@ def test_visual_tools_and_policy_share_the_attested_endpoint():
     assert values["llm_base_url"] == values["vlm_base_url"] == "http://127.0.0.1:8901/v1"
     assert values["vlm_model"] == values["model_name"] == "frozen-model"
     assert values["source_access_policy"] is policy
+
+
+def test_visual_probe_uses_real_image_binding_and_public_runtime_adapter(tmp_path):
+    from training.scripts.probe.psd_visual_endpoint_smoke import bound_visual_tool
+    from src.tools.focused_visual_inspection import FocusedVisualInspectionTool
+    path = tmp_path / "synthetic-image"
+    path.write_bytes(b"unit-test-not-a-real-image")
+    episode = {"case_id": "test-case", "image_path": str(path),
+               "state": {"runtime_case": {"image_sha256": sha256_file(path)}}}
+    orchestrator = SimpleNamespace(all_tools={"focused_visual_inspection": FocusedVisualInspectionTool()})
+    tool = bound_visual_tool(orchestrator, episode)
+    bound = tool._provider_args({"question": "Which direction is the object facing?"})
+    assert bound["image_input"] == str(path) and bound["visual_question_id"]
+    assert bound["question"] == bound["expected_property"]
+    path.write_bytes(b"changed")
+    with pytest.raises(ValueError, match="differs"):
+        bound_visual_tool(orchestrator, episode)
