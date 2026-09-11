@@ -6,6 +6,52 @@ are separate milestones. A component test is not an end-to-end acceptance.
 
 ## Current evidence (2026-09-12)
 
+### Reopened audit: feedback search was missing
+
+The previous implementation generated a batch of hints and judged them only
+afterwards. Transport retries were NOT verifier-guided repair search. Earlier
+"aligned"/"complete" statements about this part were incorrect. A second gap
+was sending private references to the proposer: the upstream **agentic**
+controller sees execution/checker feedback, not the reference answer (other
+upstream oracle/ablation scripts have different information boundaries).
+
+New work, not yet real-provider accepted:
+
+- `run_psd_repair_driver.py` defaults to sequential feedback search: 6 complete
+  continuation attempts, at most 12 proposal rounds, 3600-second soft budget
+  checked between rounds. Each proposal is judged before the next is generated.
+  Invalid/repeated proposals do not spend a continuation but cannot loop forever.
+- Only observed source/repaired steps, original images and allowlisted checker
+  flags reach the proposer. Private reference, expected label and private judge
+  explanations remain in verifier/audit artifacts. No gold-conditioned prior
+  hints are imported into the new public-only diagnostic.
+- Wrong-anchor feedback triggers fresh bound localization; a locally verified
+  procedural hint is preserved verbatim if remaining downstream problems need
+  additional advice. Completed unsuccessful calls remain cached as negatives.
+  Pending/invalid judges and transport failures pause the current child attempt;
+  resumption does not turn them into rejections or resample a completed judgment.
+- SHA-bound per-round inputs/outputs, exclusive process-owned writer lock,
+  finite budgets, explicit stop reasons and aggregation of accepted/rejected
+  attempts. A successful repair stops further case search immediately.
+- **Domain boundary:** IFV currently distills one selected source decision per
+  image task, with its original unhinted on-policy prefix. It is NOT a port of
+  BFCL's multi-user-turn slate injector. Working advice can be extended at the
+  same anchor; later-turn hints/patched prefixes are not silently admitted as
+  independent fresh on-policy targets. This is an explicit algorithmic
+  adaptation, not a claim of exact upstream multi-turn parity.
+- Local non-PyTorch PSD suite: **123 passed**. Full server suite and live fixed
+  three-case feedback-search acceptance remain pending at this checkpoint.
+- New real diagnostic root planned separately from frozen inputs:
+  `/volume/ybo/wza/runs/psd-feedback-canary-20260912-r1`. The existing 45-row
+  datum bank and its ongoing CPU optimizer diagnostic must not be rewritten.
+
+Upstream execution sources:
+[agentic strategy](https://github.com/essamsleiman/psd/blob/main/experiments/bfcl/agentic/system_prompt.md),
+[attempt budget](https://github.com/essamsleiman/psd/blob/main/experiments/bfcl/agentic/run_agentic_repair.py),
+[checker feedback](https://github.com/essamsleiman/psd/blob/main/experiments/bfcl/agentic/attempt_runner.py).
+
+### Earlier component and single-round evidence
+
 - Implemented automatic native-multimodal Gemini semantic localization and PSD
   repair judging, literal-evidence/anchor/full-episode/hash checks, native image
   hints, persisted continuations/reviews, bounded generation retries and offline

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import copy
 import json
 import sys
 import uuid
@@ -211,10 +212,60 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--generation-retries", type=int, default=1,
                         help="Bounded retries of failed/incomplete generations; completed calls are cached")
+    parser.add_argument("--search-mode", choices=("feedback", "single"), default="feedback")
+    parser.add_argument("--repair-attempts", type=int, default=6)
+    parser.add_argument("--proposal-rounds", type=int, default=12)
+    parser.add_argument("--search-seconds", type=int, default=3600,
+                        help="Soft budget checked between rounds, never cancels an in-flight provider call")
+    parser.add_argument("--search-media", type=Path, help=argparse.SUPPRESS)
     return parser
 
 
 async def _run(args: argparse.Namespace) -> dict[str, Any]:
+    if args.search_mode == "single":
+        return await _run_single(args)
+    if args.skip_auto_judge or args.verification_bundle:
+        raise ValueError("feedback search requires live/cached per-attempt verification; use single mode for offline bundles")
+    from ifv_training.psd_repair_search import run_search
+    from ifv_training.psd_repair_storage import save_bound, load_bound
+    # Bind every original input, not just filesystem paths. The single-attempt
+    # driver repeats the source/train/checkpoint gates before any policy call.
+    identity = {}
+    for key, value in vars(args).items():
+        if key == "resume":
+            continue
+        identity[key] = ({"path": str(value.resolve()), "sha256": sha256_file(value)}
+                         if isinstance(value, Path) and key != "output_dir" else
+                         str(value.resolve()) if isinstance(value, Path) else value)
+    original_context = load_json(args.public_context)
+
+    async def execute_round(directory, feedback, history):
+        child = copy.copy(args)
+        child.search_mode, child.hint_count = "single", 1
+        child.output_dir = directory
+        child.resume = (directory / "run-inputs.json").exists()
+        context = {**original_context, "repair_search": feedback}
+        inputs = directory.parent.parent / "round-inputs" / directory.name
+        context_path = inputs / "public.json"
+        media_path = inputs / "media.json"
+        media = {"episodes": [{"path": name, "sha256": digest}
+                 for row in history for name, digest in row["files"].items()
+                 if name.endswith("-teacher.json")]}
+        for path, payload in ((context_path, context), (media_path, media)):
+            if path.exists():
+                if load_json(path) != payload:
+                    raise ValueError("search child input changed on resume")
+            else:
+                write_json(path, payload)
+        child.public_context, child.search_media = context_path, media_path
+        await _run_single(child)
+
+    return await run_search(root=args.output_dir, identity=identity, resume=args.resume,
+        execute_round=execute_round, max_attempts=args.repair_attempts,
+        max_proposals=args.proposal_rounds, max_seconds=args.search_seconds)
+
+
+async def _run_single(args: argparse.Namespace) -> dict[str, Any]:
     policy_profile, policy_base_url, checkpoint_manifest_sha256 = (
         _load_policy_serving_attestation(args)
     )
@@ -248,7 +299,7 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
               if key not in {"resume", "skip_auto_judge", "generation_retries"}}
     for key in ("trace", "candidate", "audit", "gold", "public_context", "private_context",
                 "image", "train_cases", "policy_serving_profile", "round_start_checkpoint_manifest",
-                "semantic_verification", "verification_bundle", "source_access_policy"):
+                "semantic_verification", "verification_bundle", "source_access_policy", "search_media"):
         value = getattr(args, key)
         if value is not None:
             config[key] = {"path": str(value.resolve()), "sha256": sha256_file(value)}
@@ -259,16 +310,25 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
         output_dir.mkdir(parents=True, exist_ok=False)
         save_bound(config_path, identity=config, payload={"status": "initialized"})
     site = locate_failure_site(trace, audit, semantic_verification)
+    search_feedback = public_context.get("repair_search", {})
+    if search_feedback.get("needs_relocalization"):
+        site = None
     if site is None and not args.skip_auto_judge:
         from ifv_training.psd_gemini_judge import localize_failure
         from src.integrations.gemini import GeminiInteractionsClient
         async with GeminiInteractionsClient(timeout=240, max_retries=2) as client:
             semantic_verification = await localize_failure(client, trace, gold=gold,
-                image_path=args.image, model=args.judge_model, cache_dir=output_dir / "judge-cache")
+                image_path=args.image, model=args.judge_model, cache_dir=output_dir / "judge-cache",
+                feedback=search_feedback.get("anchor_feedback") if search_feedback.get("needs_relocalization") else None)
         write_json(output_dir / "semantic-localization.json", semantic_verification)
         site = locate_failure_site(trace, audit, semantic_verification)
     if site is None:
-        raise RuntimeError("no observed PSD repair failure site in trace/audit")
+        write_jsonl(output_dir / "repair_candidates.jsonl", [])
+        write_jsonl(output_dir / "repair_attempts.jsonl", [])
+        result = {"status": "no_recoverable_site", "candidate_count": 0,
+                  "accepted_count": 0, "pending_hinted_episode_count": 0}
+        write_json(output_dir / "manifest.json", result)
+        return result
     verification_rows = _load_verification_bundle(args.verification_bundle)
     source_trace_sha256 = sha256_file(args.trace)
     from ifv_training.psd_candidate_binding import bind_localized_candidate
@@ -358,6 +418,20 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
         ),
     )
     try:
+        if args.search_media:
+            from ifv_training.psd_gemini_judge import review_images
+            adapter.search_review_images = []
+            seen_images = set()
+            for media in load_json(args.search_media)["episodes"]:
+                path = Path(media["path"])
+                if sha256_file(path) != media["sha256"]:
+                    raise ValueError("search feedback episode changed")
+                images, _ = review_images({"source": trace, "repaired": load_json(path)}, image_path=args.image)
+                for position in range(0, len(images), 2):
+                    label = images[position]["text"]
+                    if label not in seen_images:
+                        seen_images.add(label)
+                        adapter.search_review_images.extend(images[position:position + 2])
         adapter.proposer_cache_path = output_dir / "proposer-response.json"
         proposals_path = output_dir / "hint-proposals.json"
         if proposals_path.exists():
@@ -366,6 +440,20 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
             proposals = await adapter.propose_hints(
                 failure_site=site, public_trace_context=public_context,
                 private_context=private_context, hint_count=args.hint_count, hint_level=args.hint_level)
+            excluded = {text.strip() for text in search_feedback.get("excluded_hints", [])}
+            locked = search_feedback.get("locked_hint", "")
+            filtered = []
+            audit_path = output_dir / "proposer-hint-audits.json"
+            audits = load_json(audit_path).get("proposals", []) if audit_path.exists() else []
+            for hint in proposals:
+                reason = ("repeated_completed_hint" if hint.text.strip() in excluded else
+                          "changed_verified_hint" if locked and not hint.text.startswith(locked + "\n") else "")
+                if reason:
+                    audits.append({"passed": False, "reason": reason})
+                else:
+                    filtered.append(hint)
+            proposals = filtered
+            write_json(audit_path, {"proposals": audits})
             save_bound(proposals_path, identity=config, payload=[
                 {"text": hint.text, "level": hint.level, "proposal_id": hint.proposal_id,
                  "provider": hint.provider, "model": hint.model, "audit": dict(hint.audit)} for hint in proposals])

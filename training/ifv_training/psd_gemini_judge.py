@@ -262,10 +262,12 @@ def review_images(traces, *, image_path):
     return images, {"task_image_sha256": primary_sha, "policy_images": sources}
 
 
-async def localize_failure(client, trace, *, gold, image_path, model, cache_dir):
+async def localize_failure(client, trace, *, gold, image_path, model, cache_dir, feedback=None):
     from .psd_repair import project_policy_steps
     images, media = review_images({"source": trace}, image_path=image_path)
     packet = {"source_steps": trace_steps(trace), "private_reference": gold, "media": media}
+    if feedback is not None:
+        packet["previous_anchor_disagreement"] = feedback
     value, provenance = await _request(client, packet, prompt=LOCALIZE_PROMPT,
         schema=LOCALIZE_SCHEMA, model=model, images=images, cache_dir=cache_dir)
     if (not isinstance(value, dict) or set(value) != set(LOCALIZE_SCHEMA["required"])

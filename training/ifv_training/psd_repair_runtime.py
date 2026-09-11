@@ -380,7 +380,8 @@ class QwenContinuationAdapter:
         )
         from .psd_media import proposer_image_inputs
         _, native_images = proposer_image_inputs({"policy_input": failure_site.policy_input,
-            "trace_context": public_trace_context, "private_context": private_context or {}})
+            "trace_context": public_trace_context})
+        native_images.extend(getattr(self, "search_review_images", []))
         messages = [
             {
                 "role": "system",
