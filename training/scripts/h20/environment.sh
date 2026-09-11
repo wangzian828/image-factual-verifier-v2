@@ -10,6 +10,7 @@ export LIBRARY_PATH="$CUDA_HOME/targets/x86_64-linux/lib${LIBRARY_PATH:+:$LIBRAR
 export HF_HOME="$IFV_H20_ROOT/cache/h20-huggingface" MODELSCOPE_CACHE="$IFV_H20_ROOT/cache/h20-modelscope"
 export PIP_CACHE_DIR="$IFV_H20_ROOT/cache/pip" TMPDIR="$IFV_H20_ROOT/tmp" XDG_CACHE_HOME="$IFV_H20_ROOT/cache"
 export TORCH_HOME="$IFV_H20_ROOT/cache/torch" TORCH_EXTENSIONS_DIR="$IFV_H20_ROOT/cache/torch-extensions" TRITON_CACHE_DIR="$IFV_H20_ROOT/cache/triton"
+export TILELANG_CACHE_DIR="$IFV_H20_ROOT/cache/tilelang" TVM_FFI_CACHE_DIR="$IFV_H20_ROOT/cache/tvm-ffi"
 export HF_DATASETS_CACHE="$HF_HOME/datasets" XDG_CONFIG_HOME="$IFV_H20_ROOT/cache/config" MPLCONFIGDIR="$IFV_H20_ROOT/cache/matplotlib"
 export WANDB_MODE=disabled IMAGE_MAX_TOKEN_NUM=1024 MAX_PIXELS=262144 OMP_NUM_THREADS=1 TOKENIZERS_PARALLELISM=false
 export PYTORCH_ALLOC_CONF=expandable_segments:True
