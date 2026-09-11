@@ -2,7 +2,7 @@ import subprocess,os,time,json,sys,threading
 from pathlib import Path
 root=Path(os.environ['IFV_H20_ROOT']);out=Path(os.environ['IFV_H20_RUN_ROOT'])
 batch=int(sys.argv[1]) if len(sys.argv)>1 else 1
-name=sys.argv[2] if len(sys.argv)>2 else f'sdpa-zero2-b{batch}'
+name=sys.argv[2] if len(sys.argv)>2 else f'h20-sp4-b{batch}'
 run=out/name;run.mkdir(exist_ok=False)
 args=['swift','sft','--model',str(root/'models/Qwen3.5-9B-local'),'--model_type','qwen3_5','--tuner_type','full','--dataset',str(out/'train.jsonl'),'--split_dataset_ratio','0','--torch_dtype','bfloat16','--bf16','true','--freeze_llm','false','--freeze_vit','false','--freeze_aligner','false','--deepspeed','zero2','--attn_impl','sdpa','--gradient_checkpointing','true','--vit_gradient_checkpointing','true','--per_device_train_batch_size',str(batch),'--gradient_accumulation_steps','1','--max_steps','6','--learning_rate','1e-5','--warmup_ratio','0','--max_length','16384','--truncation_strategy','raise','--group_by_length','true','--padding_free','false','--packing','false','--loss_scale','ignore_empty_think','--enable_thinking','false','--add_non_thinking_prefix','false','--use_logits_to_keep','true','--dataset_num_proc','4','--dataloader_num_workers','4','--dataloader_persistent_workers','true','--load_from_cache_file','true','--logging_steps','1','--eval_strategy','no','--save_strategy','no','--report_to','none','--output_dir',str(run/'output'),'--add_version','false','--seed','42']
 def setarg(k,v):

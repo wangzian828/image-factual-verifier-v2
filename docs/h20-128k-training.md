@@ -42,3 +42,47 @@ Source references:
 Changes are committed and pushed from the development workstation. The server only
 fast-forwards clean checkouts and runs committed code; data, logs, environments, and
 checkpoints remain outside the checkout.
+
+## Measured configuration (2026-09-11)
+
+Four H20 GPUs reported 97,871 MiB each, with NV18 links between every pair. The
+container CPU quota was 108 cores. The separate environment passed `pip check`:
+Python 3.12, PyTorch 2.10.0+cu128, Transformers 5.12.1, ms-swift 4.4.2,
+FlashAttention 2.8.3, flash-linear-attention 0.5.1, causal-conv1d 1.6.2.post1,
+Liger 0.8.0, and TileLang 0.1.14. TileLang is required for this tested Hopper GDN
+backward path; see the [FLA correctness issue](https://github.com/fla-org/flash-linear-attention/issues/640).
+All four GPUs passed FlashAttention forward/backward and NCCL checks.
+
+The real benchmark used seven complete policy train episodes, 18,040–52,403
+tokens (237,501 total). Processor probes checked native tool rendering, retained
+tool responses, and supervised `<think>` tokens. This is stratified sampling,
+not a complete processor audit of all 2,578 train rows. All image paths were resolved.
+Packing retained all seven episodes as three packs (43,040–97,506 tokens).
+
+| Run | Measured steps | Effective input tokens/s | Seconds/step | Highest sampled GPU MiB |
+| --- | --- | ---: | ---: | ---: |
+| Real SP4, batch 1, full shard | 4–6 | 1,064 | 38.19 | 73,000 |
+| Real SP2, batch 1, no reshard | 4–6 | 3,783 | 15.29 | 95,882 |
+| Real SP4, batch 1, packing budget 120K | 4–6 | 6,121 | 12.93 | 95,501 |
+| Synthetic SP4, single 129,999-token sequence | 2–3 | 3,980 | 32.66 | 95,918 |
+
+Token counts are divided by sequence-parallel degree to remove replicated accounting.
+These short intervals exclude initial warmup but are not controlled quality comparisons:
+packing changes the tokens per update, and compilation can still affect shape-dependent
+timing. Synthetic data has 19,816 supervised tokens and one image per sequence; its loss
+does not measure task quality. All listed runs completed full-parameter backward and
+optimizer updates with finite losses and gradient norms.
+
+The preferred tested real-data setting is SP4 + FSDP2 full shard + native activation
+checkpointing + padding-free + `H20_PACKING=true H20_PACKING_LENGTH=120000`, batch 1.
+Keep `max_length=131072`. This uses about 97.6% peak device memory; the near-128K
+capacity run used about 98.0%, so there is little headroom for different image counts
+or shapes. Do not infer that SP2 supports 128K: only SP4 passed the long capacity test.
+Packing budget is not the supported context ceiling. Route episodes longer than the
+packing budget through a separately validated unpacked SP4 path rather than dropping
+or truncating them. Do not increase microbatch at near-full memory without a new test.
+
+`summarize.py` writes `benchmark-summary.json` from completed runs and corrects SP
+accounting and resumed-step timing. Each run retains command, source commit, trainer
+logs, sampled GPU utilization/memory, and exit status. Full freeze is kept in the
+server logs directory. Preserve benchmark checkpoints separately from production models.

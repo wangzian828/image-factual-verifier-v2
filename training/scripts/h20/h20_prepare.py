@@ -47,11 +47,12 @@ for pos in positions:
                 assert not v or probe._contains_subsequence(ids,v)
         stat={'source_row':i,'size_rank':pos,'tokens':len(ids),'labels':sum(x!=-100 for x in labels),'images':len(row['images'])}
         stats.append(stat)
-        if pos>=644: long_rows.append(row)
+        if pos>=int((len(order)-1)*.25): long_rows.append(row)
         if len(ids)<=16384 and len(selected)<32: selected.append((row,stat))
         print(stat,flush=True)
     except Exception as e:
         stats.append({'source_row':i,'error':str(e)});print('ERROR',i,str(e),flush=True)
+assert not any('error' in stat for stat in stats), 'Processor probe failed; inspect errors before benchmarking'
 assert len(selected)>=8, len(selected)
 with (out/'train.jsonl').open('w') as f:
     for row,s in selected: f.write(json.dumps(row,ensure_ascii=False)+'\n')
