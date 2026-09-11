@@ -57,3 +57,37 @@ def test_rl_preflight_uses_same_native_core_as_long_sft() -> None:
         "causal-conv1d",
         "liger-kernel",
     } == MODULE.CORE_REQUIRED_PACKAGES
+
+
+def test_rl_preflight_runs_core_verifier_with_same_timeout(monkeypatch) -> None:
+    captured = {}
+
+    def fake_run(command, timeout):
+        captured["command"] = command
+        captured["timeout"] = timeout
+        return {
+            "passed": False,
+            "timed_out": True,
+            "returncode": None,
+            "elapsed_seconds": 3.0,
+            "stdout_excerpt": "",
+            "stderr_excerpt": "",
+        }
+
+    monkeypatch.setattr(MODULE, "run_command", fake_run)
+    result = MODULE.verify_core_environment(
+        model=Path("/model"),
+        max_context=131072,
+        expected_versions={"torch": "2.11.0"},
+        expected_python="3.12",
+        expected_torch_cuda="13.0",
+        expected_gpu_count=1,
+        expected_gpu_name="NVIDIA A100-SXM4-40GB",
+        expected_gpu_memory_mib=40960,
+        gpu_memory_tolerance_mib=128,
+        timeout=17,
+    )
+
+    assert result["passed"] is False
+    assert captured["timeout"] == 17
+    assert str(MODULE.BASE_SCRIPT) in captured["command"]

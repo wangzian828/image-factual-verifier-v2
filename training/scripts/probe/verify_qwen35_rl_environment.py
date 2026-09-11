@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -134,6 +135,70 @@ print(json.dumps({{
     }
 
 
+def verify_core_environment(
+    *,
+    model: Path,
+    max_context: int,
+    expected_versions: dict[str, str],
+    expected_python: str,
+    expected_torch_cuda: str,
+    expected_gpu_count: int,
+    expected_gpu_name: str,
+    expected_gpu_memory_mib: int,
+    gpu_memory_tolerance_mib: int,
+    timeout: int,
+) -> dict[str, Any]:
+    with tempfile.TemporaryDirectory(prefix="ifv-rl-preflight-") as directory:
+        output = Path(directory) / "core-environment.json"
+        command = [
+            sys.executable,
+            str(BASE_SCRIPT),
+            "--model",
+            str(model),
+            "--max-context",
+            str(max_context),
+            "--expected-python",
+            expected_python,
+            "--expected-torch-cuda",
+            expected_torch_cuda,
+            "--expected-gpu-count",
+            str(expected_gpu_count),
+            "--expected-gpu-name",
+            expected_gpu_name,
+            "--expected-gpu-memory-mib",
+            str(expected_gpu_memory_mib),
+            "--gpu-memory-tolerance-mib",
+            str(gpu_memory_tolerance_mib),
+            "--output",
+            str(output),
+        ]
+        for package, version in sorted(expected_versions.items()):
+            command.extend(
+                ["--expected-package-version", f"{package}={version}"]
+            )
+        for package in sorted(CORE_REQUIRED_PACKAGES):
+            command.extend(["--required-package", package])
+        process = run_command(command, timeout)
+        report: dict[str, Any] | None = None
+        parse_error = ""
+        if output.is_file():
+            try:
+                report = json.loads(output.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError) as exc:
+                parse_error = f"could not parse core environment report: {exc}"
+        return {
+            "passed": bool(
+                process["passed"]
+                and report
+                and report.get("passed")
+                and not parse_error
+            ),
+            "report": report,
+            "parse_error": parse_error,
+            "process": process,
+        }
+
+
 def verify(
     *,
     model: Path,
@@ -147,7 +212,7 @@ def verify(
     gpu_memory_tolerance_mib: int,
     command_timeout: int,
 ) -> dict[str, Any]:
-    base = BASE.verify(
+    core = verify_core_environment(
         model=model,
         max_context=max_context,
         expected_versions=expected_versions,
@@ -157,7 +222,7 @@ def verify(
         expected_gpu_name=expected_gpu_name,
         expected_gpu_memory_mib=expected_gpu_memory_mib,
         gpu_memory_tolerance_mib=gpu_memory_tolerance_mib,
-        required_packages=CORE_REQUIRED_PACKAGES,
+        timeout=command_timeout,
     )
     environment_bin = Path(sys.executable).resolve().parent
     commands = {
@@ -174,7 +239,9 @@ def verify(
         ),
     }
     rlhf_contract = verify_rl_contract(command_timeout)
-    errors = list(base["errors"])
+    errors: list[str] = []
+    if not core["passed"]:
+        errors.append("core CUDA/Qwen environment preflight failed")
     for name, result in commands.items():
         if not result["passed"]:
             errors.append(f"RL environment command failed: {name}")
@@ -184,7 +251,7 @@ def verify(
         "schema_version": "ifv-qwen35-rl-environment-preflight-v1",
         "passed": not errors,
         "errors": errors,
-        "core_environment": base,
+        "core_environment": core,
         "rlhf_argument_contract": rlhf_contract,
         "commands": commands,
     }
