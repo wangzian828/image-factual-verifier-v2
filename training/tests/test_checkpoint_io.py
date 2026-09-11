@@ -83,6 +83,23 @@ def test_checkpoint_io_profile_accepts_fsdp2_distributed_state(
     assert result["optimizer_rank_file_count"] == 2
 
 
+def test_checkpoint_io_profile_accepts_resumable_lora_adapter(
+    tmp_path: Path,
+) -> None:
+    checkpoint = tmp_path / "checkpoint-1"
+    _touch(checkpoint / "adapter_model.safetensors", 11, 1_000_000_000)
+    _touch(checkpoint / "adapter_config.json", 3, 1_100_000_000)
+    _touch(checkpoint / "optimizer.pt", 13, 2_000_000_000)
+    _touch(checkpoint / "scheduler.pt", 2, 3_000_000_000)
+    _touch(checkpoint / "rng_state_0.pth", 2, 3_100_000_000)
+    _touch(checkpoint / "trainer_state.json", 2, 3_200_000_000)
+
+    result = checkpoint_io_profile(checkpoint)
+
+    assert result["passed"] is True
+    assert result["categories"]["model_export"]["bytes"] == 11
+
+
 def test_checkpoint_storage_preflight_checks_reserve(tmp_path: Path) -> None:
     free_bytes = int(shutil.disk_usage(tmp_path).free)
 

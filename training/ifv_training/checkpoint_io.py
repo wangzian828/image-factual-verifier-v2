@@ -94,6 +94,8 @@ def _category(path: Path) -> str:
         lowered.startswith("model-")
         and lowered.endswith(".safetensors")
     ) or lowered in {
+        "adapter_model.safetensors",
+        "adapter_model.bin",
         "model.safetensors",
         "model.safetensors.index.json",
         "pytorch_model.bin",
