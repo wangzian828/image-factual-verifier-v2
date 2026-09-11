@@ -20,6 +20,9 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 
+LONG_CONTEXT_BOUNDARIES = (32_768, 65_536, 98_304, 120_000, 131_072)
+
+
 def _boolean(value: str) -> bool:
     normalized = value.strip().lower()
     if normalized == "true":
@@ -244,6 +247,42 @@ def _distribution(values: list[int]) -> dict[str, float | int]:
     }
 
 
+def _boundary_summary(
+    rows: list[dict[str, Any]],
+    *,
+    boundaries: tuple[int, ...] = LONG_CONTEXT_BOUNDARIES,
+) -> list[dict[str, Any]]:
+    """Summarize exact long-context coverage without retaining every row.
+
+    Candidate records let later capacity planning identify a real row nearest
+    each boundary.  Counts prevent a single maximum from being mistaken for a
+    representative length distribution.
+    """
+
+    normalized = sorted(
+        rows,
+        key=lambda item: (int(item["input_tokens"]), int(item["row_index"])),
+    )
+    result: list[dict[str, Any]] = []
+    for boundary in boundaries:
+        at_or_above = [
+            item for item in normalized if int(item["input_tokens"]) >= boundary
+        ]
+        at_or_below = [
+            item for item in normalized if int(item["input_tokens"]) <= boundary
+        ]
+        result.append(
+            {
+                "boundary_tokens": boundary,
+                "rows_at_or_above": len(at_or_above),
+                "rows_at_or_below": len(at_or_below),
+                "closest_at_or_above": at_or_above[0] if at_or_above else None,
+                "closest_at_or_below": at_or_below[-1] if at_or_below else None,
+            }
+        )
+    return result
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Encode IFV agent/perception rows with the real ms-swift processor."
@@ -307,6 +346,7 @@ def main() -> None:
     trainable_lengths: list[int] = []
     by_kind: dict[str, list[int]] = {"policy": [], "perception": []}
     by_dataset: dict[str, list[int]] = {}
+    rows_by_dataset: dict[str, list[dict[str, Any]]] = {}
     checks = Counter()
     longest: list[dict[str, Any]] = []
     dataset_files: list[dict[str, Any]] = []
@@ -379,18 +419,20 @@ def main() -> None:
                 by_dataset.setdefault(
                     str(path.expanduser().resolve()), []
                 ).append(len(input_ids))
-                longest.append(
-                    {
-                        "kind": kind,
-                        "path": str(path.expanduser().resolve()),
-                        "row_index": row_index,
-                        "input_tokens": len(input_ids),
-                        "trainable_tokens": len(loss_positions),
-                        "message_count": len(messages),
-                        "tool_call_count": roles.count("tool_call"),
-                        "image_count": len(encoded_images),
-                    }
-                )
+                row_summary = {
+                    "kind": kind,
+                    "path": str(path.expanduser().resolve()),
+                    "row_index": row_index,
+                    "input_tokens": len(input_ids),
+                    "trainable_tokens": len(loss_positions),
+                    "message_count": len(messages),
+                    "tool_call_count": roles.count("tool_call"),
+                    "image_count": len(encoded_images),
+                }
+                longest.append(row_summary)
+                rows_by_dataset.setdefault(
+                    str(path.expanduser().resolve()), []
+                ).append(row_summary)
             except Exception as exc:
                 errors.append(
                     {
@@ -426,6 +468,10 @@ def main() -> None:
         "input_tokens_by_dataset": {
             path: _distribution(values)
             for path, values in sorted(by_dataset.items())
+        },
+        "input_token_boundaries_by_dataset": {
+            path: _boundary_summary(rows)
+            for path, rows in sorted(rows_by_dataset.items())
         },
         "longest_rows": sorted(
             longest,

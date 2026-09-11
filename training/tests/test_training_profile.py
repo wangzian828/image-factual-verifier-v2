@@ -68,6 +68,8 @@ def test_training_profile_summarizes_ms_swift_metric_lines(tmp_path: Path) -> No
     assert result["parallelism"]["sequence_parallel_size"] == 4
     assert result["parallelism"]["data_parallel_size"] == 1
     assert result["parallelism"]["unique_samples_per_optimizer_step"] == 2
+    assert result["launch"]["max_length"] is None
+    assert result["launch"]["padding_free"] is False
     assert result["throughput"]["train_dataset_size"] == 445
     assert result["throughput"]["observed_unique_samples"] == 4
     assert result["throughput"]["unique_samples_per_second"] == 0.069444

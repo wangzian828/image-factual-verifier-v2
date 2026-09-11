@@ -120,6 +120,7 @@ def test_current_qwen35_profiles_are_explicit_and_bounded() -> None:
         assert "IFV_MAX_LENGTH=131072" in profile
         assert "IFV_TRUNCATION_STRATEGY=raise" in profile
         assert "IFV_MIN_PROCESSOR_TRAIN_INPUT_TOKENS=120000" in profile
+        assert "IFV_MIN_PROCESSOR_TRAIN_ROWS_AT_OR_ABOVE=1" in profile
         assert "IFV_PADDING_FREE=true" in profile
         assert "IFV_SEQUENCE_PARALLEL_SIZE=8" in profile
         assert "IFV_USE_LOGITS_TO_KEEP=false" in profile
@@ -140,6 +141,12 @@ def test_current_qwen35_profiles_are_explicit_and_bounded() -> None:
     assert "IFV_MAX_STEPS=11" in resume_128k
     assert "IFV_SAVE_STEPS=11" in resume_128k
     assert "IFV_EVAL_STEPS=11" in resume_128k
+
+    acceptance = _source("scripts/train/run_128k_acceptance.sh")
+    assert "long-context-plan" in acceptance
+    assert "validate-128k-stage" in acceptance
+    assert "checkpoint-10" in acceptance
+    assert "Existing incomplete" in acceptance
 
 
 def test_deepspeed_optimizer_offload_keeps_model_parameters_on_gpu() -> None:

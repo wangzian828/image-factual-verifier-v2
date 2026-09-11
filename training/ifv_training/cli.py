@@ -23,6 +23,7 @@ from .manifests import (
     write_cached_dataset_verification,
     write_environment_manifest,
 )
+from .long_context import build_long_context_plan, validate_128k_stage
 from .perception import (
     convert_accepted_perception_dataset,
     convert_perception_runs,
@@ -320,6 +321,22 @@ def _parser() -> argparse.ArgumentParser:
     monitor_sft.add_argument("--stale-seconds", type=float, default=900.0)
     monitor_sft.add_argument("--trend-window", type=int, default=5)
     monitor_sft.add_argument("--strict", action="store_true")
+
+    long_plan = subparsers.add_parser("long-context-plan")
+    long_plan.add_argument("--processor-report", type=Path, required=True)
+    long_plan.add_argument("--train-jsonl", type=Path, required=True)
+    long_plan.add_argument("--sft-profile", type=Path, action="append", required=True)
+    long_plan.add_argument("--empirical-profile", type=Path, action="append")
+    long_plan.add_argument("--epochs", type=float, default=1.0)
+    long_plan.add_argument("--parameter-count", type=int, default=9_000_000_000)
+    long_plan.add_argument("--output", type=Path, required=True)
+
+    stage_gate = subparsers.add_parser("validate-128k-stage")
+    stage_gate.add_argument("--stage", choices=("memory-probe", "canary", "resume"), required=True)
+    stage_gate.add_argument("--training-profile", type=Path, required=True)
+    stage_gate.add_argument("--sft-profile", type=Path, required=True)
+    stage_gate.add_argument("--prior-gate", type=Path)
+    stage_gate.add_argument("--output", type=Path, required=True)
     return parser
 
 
@@ -619,6 +636,30 @@ def main() -> None:
             trend_window=args.trend_window,
         )
         if args.strict and result["health"] == "critical":
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            raise SystemExit(1)
+    elif args.command == "long-context-plan":
+        result = build_long_context_plan(
+            processor_report_path=args.processor_report,
+            train_jsonl=args.train_jsonl,
+            sft_profile_paths=args.sft_profile,
+            output=args.output,
+            epochs=args.epochs,
+            parameter_count=args.parameter_count,
+            empirical_profile_paths=args.empirical_profile or (),
+        )
+        if not result["passed_static_gate"]:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            raise SystemExit(1)
+    elif args.command == "validate-128k-stage":
+        result = validate_128k_stage(
+            stage=args.stage,
+            training_profile_path=args.training_profile,
+            sft_profile_path=args.sft_profile,
+            prior_gate_path=args.prior_gate,
+            output=args.output,
+        )
+        if not result["passed"]:
             print(json.dumps(result, ensure_ascii=False, indent=2))
             raise SystemExit(1)
     else:

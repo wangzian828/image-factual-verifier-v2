@@ -126,9 +126,10 @@ export IFV_PROCESSOR_VERIFICATION=<processor-verification.json>
 模型路径和 template 参数。processor 审计后修改任何输入文件或训练 profile 都必须
 重新审计。
 
-128K probe/canary 还要求 processor 报告证明训练 split 至少有一条编码后不短于
-120,000 token 的真实样本。只设置 `IFV_MAX_LENGTH=131072`、但所有样本都很短，不算
-128K 容量验证。
+128K probe/canary 还要求 processor 报告中的精确边界计数证明训练 split 至少有一条
+编码后不短于 120,000 token 的真实样本。报告同时记录 32K、64K、96K、120K 和
+128K 边界两侧的行数及最近真实行，供容量排查使用。只设置
+`IFV_MAX_LENGTH=131072`、但所有样本都很短，不算 128K 容量验证。
 
 ## 4. 数据格式
 
@@ -202,6 +203,21 @@ IFV_GPU_UTILIZATION_TARGET_MIN_PERCENT=85
 三个 profile 都固定为 FSDP2 + SP8：8 张卡共同处理一条序列，数据并行度为 1；使用
 FlashAttention、padding-free、gradient checkpointing 和分块交叉熵。不要直接把
 memory probe 当成正式训练结果。
+
+推荐使用一次性验收入口。它会先生成静态容量/时间预算，再逐级执行并验证数据血缘、
+资源目标、eval、完整 checkpoint 和从 step 10 到 step 11 的真实恢复；已有通过的 gate
+可复用，发现同名未完成目录时会停止，避免换目录重复成功 case：
+
+```bash
+bash training/scripts/train/run_128k_acceptance.sh \
+  training/configs/models/qwen3.5-9b.env \
+  <train.jsonl> <validation.jsonl> <processor-verification.json> \
+  <run-prefix> <capacity-plan.json>
+```
+
+`capacity-plan.json` 只给出全参训练状态的分片显存下界；activation、collective 和
+allocator 的实际占用必须由一步 120K+ 真样本探针证明。预计总时长也只接受已经通过
+production gate 且同为 128K/world8/SP8 的 profile，不会拿 16K 或不同并行方式外推。
 
 ```bash
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7

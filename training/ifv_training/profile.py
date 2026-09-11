@@ -671,6 +671,20 @@ def summarize_training_log(
         "passed_production_gate": passed_production_gate,
         "smoke_only": smoke_only,
         "run_mode": "smoke_only" if smoke_only else "production_candidate",
+        "launch": {
+            "command": launch_command,
+            "max_length": _int_value(_command_value(launch_command, "max_length")),
+            "attention_implementation": _command_value(
+                launch_command, "attn_impl"
+            ),
+            "padding_free": (
+                (_command_value(launch_command, "padding_free") or "false").lower()
+                == "true"
+            ),
+            "tuner_type": _command_value(launch_command, "tuner_type") or "",
+            "fsdp": _command_value(launch_command, "fsdp") or "",
+            "deepspeed": _command_value(launch_command, "deepspeed") or "",
+        },
         "steps": {
             "observed": steps,
             "last": last_step,

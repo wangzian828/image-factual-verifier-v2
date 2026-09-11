@@ -202,6 +202,10 @@ if [[ "$raw_dataset_mode" == "true" ]]; then
       --minimum-train-input-tokens
       "$IFV_MIN_PROCESSOR_TRAIN_INPUT_TOKENS"
     )
+    raw_gate_args+=(
+      --minimum-train-rows-at-or-above
+      "${IFV_MIN_PROCESSOR_TRAIN_ROWS_AT_OR_ABOVE:-1}"
+    )
   fi
   "${raw_gate_args[@]}"
 fi

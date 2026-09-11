@@ -69,6 +69,7 @@ def verify_sft_data_contract(
     model: str,
     expected_template_contract: Mapping[str, Any],
     minimum_train_input_tokens: int | None = None,
+    minimum_train_rows_at_or_above: int = 1,
 ) -> dict[str, Any]:
     errors: list[str] = []
     train_record = _file_record(train_jsonl)
@@ -93,6 +94,7 @@ def verify_sft_data_contract(
         errors.append("processor template contract does not match the training profile")
 
     train_input_tokens_max: int | None = None
+    train_rows_at_or_above: int | None = None
     if minimum_train_input_tokens is not None:
         exact_train_path = str(train_jsonl.expanduser().resolve())
         by_dataset = processor_report.get("input_tokens_by_dataset")
@@ -111,6 +113,33 @@ def verify_sft_data_contract(
                 "processor train rows do not reach the required long-context "
                 f"boundary: required>={minimum_train_input_tokens}, "
                 f"observed={train_input_tokens_max}"
+            )
+        boundary_map = processor_report.get("input_token_boundaries_by_dataset")
+        boundary_map = boundary_map if isinstance(boundary_map, Mapping) else {}
+        boundary_rows = boundary_map.get(exact_train_path)
+        boundary_rows = boundary_rows if isinstance(boundary_rows, list) else []
+        exact_boundary = next(
+            (
+                item
+                for item in boundary_rows
+                if isinstance(item, Mapping)
+                and item.get("boundary_tokens") == minimum_train_input_tokens
+            ),
+            None,
+        )
+        if isinstance(exact_boundary, Mapping) and isinstance(
+            exact_boundary.get("rows_at_or_above"), int
+        ):
+            train_rows_at_or_above = int(exact_boundary["rows_at_or_above"])
+        if train_rows_at_or_above is None:
+            errors.append(
+                "processor report does not expose an exact train boundary count"
+            )
+        elif train_rows_at_or_above < minimum_train_rows_at_or_above:
+            errors.append(
+                "processor train boundary has too few real rows: "
+                f"required>={minimum_train_rows_at_or_above}, "
+                f"observed={train_rows_at_or_above}"
             )
 
     reported_files = processor_report.get("dataset_files")
@@ -186,10 +215,14 @@ def verify_sft_data_contract(
             "required": minimum_train_input_tokens is not None,
             "minimum_train_input_tokens": minimum_train_input_tokens,
             "observed_train_input_tokens_max": train_input_tokens_max,
+            "minimum_train_rows_at_or_above": minimum_train_rows_at_or_above,
+            "observed_train_rows_at_or_above": train_rows_at_or_above,
             "passed": (
                 train_input_tokens_max is not None
+                and train_rows_at_or_above is not None
                 and minimum_train_input_tokens is not None
                 and train_input_tokens_max >= minimum_train_input_tokens
+                and train_rows_at_or_above >= minimum_train_rows_at_or_above
                 if minimum_train_input_tokens is not None
                 else True
             ),
@@ -223,6 +256,7 @@ def main() -> int:
     )
     parser.add_argument("--image-max-token-num", type=int, required=True)
     parser.add_argument("--minimum-train-input-tokens", type=int)
+    parser.add_argument("--minimum-train-rows-at-or-above", type=int, default=1)
     args = parser.parse_args()
     if args.max_context < 1 or args.sequence_parallel_size < 1:
         parser.error("context and sequence parallel sizes must be positive")
@@ -231,6 +265,8 @@ def main() -> int:
         and args.minimum_train_input_tokens < 1
     ):
         parser.error("--minimum-train-input-tokens must be positive")
+    if args.minimum_train_rows_at_or_above < 1:
+        parser.error("--minimum-train-rows-at-or-above must be positive")
 
     result = verify_sft_data_contract(
         train_jsonl=args.train_jsonl,
@@ -240,6 +276,7 @@ def main() -> int:
         model=args.model,
         expected_template_contract=_expected_template_contract(args),
         minimum_train_input_tokens=args.minimum_train_input_tokens,
+        minimum_train_rows_at_or_above=args.minimum_train_rows_at_or_above,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(

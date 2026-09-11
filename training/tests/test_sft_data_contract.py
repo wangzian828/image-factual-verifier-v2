@@ -105,6 +105,19 @@ def _processor_report(
                         "mean": 1000.0,
                     },
                 },
+                "input_token_boundaries_by_dataset": {
+                    str(train.resolve()): [
+                        {
+                            "boundary_tokens": 120000,
+                            "rows_at_or_above": 1,
+                        },
+                        {
+                            "boundary_tokens": 128000,
+                            "rows_at_or_above": 0,
+                        },
+                    ],
+                    str(validation.resolve()): [],
+                },
             }
         ),
         encoding="utf-8",

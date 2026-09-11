@@ -97,3 +97,18 @@ def test_file_record_binds_processor_report_to_exact_dataset(tmp_path: Path) -> 
     assert record["path"] == str(dataset.resolve())
     assert record["size"] == dataset.stat().st_size
     assert len(record["sha256"]) == 64
+
+
+def test_boundary_summary_counts_rows_and_selects_nearest_candidates() -> None:
+    rows = [
+        {"row_index": 0, "input_tokens": 30_000},
+        {"row_index": 1, "input_tokens": 65_000},
+        {"row_index": 2, "input_tokens": 121_000},
+    ]
+
+    summary = MODULE._boundary_summary(rows, boundaries=(32_768, 120_000))
+
+    assert summary[0]["rows_at_or_above"] == 2
+    assert summary[0]["closest_at_or_below"]["row_index"] == 0
+    assert summary[1]["rows_at_or_above"] == 1
+    assert summary[1]["closest_at_or_above"]["row_index"] == 2
