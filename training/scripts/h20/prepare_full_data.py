@@ -162,8 +162,12 @@ def main():
                         # frozen source-image identity; never assume all IDs are main-N.
                         candidates = [key for key, value in frozen.items()
                                       if value['image_sha256'] == meta['image_sha256'] and value['split'] == split]
-                        assert len(candidates) == 1, f'Ambiguous perception case identity: {meta["episode_id"]}'
-                        case = candidates[0]
+                        parsed = re.fullmatch(r'initial-a\d+-n\d+-(.+)--[0-9a-f]+--r\d+', meta['episode_id'])
+                        if parsed and parsed.group(1) in candidates:
+                            case = parsed.group(1)
+                        else:
+                            assert len(candidates) == 1, f'Ambiguous perception case identity: {meta["episode_id"]}'
+                            case = candidates[0]
                     assert frozen[case]['split'] == split, 'Frozen split mismatch'
                     for field, value in [('case', case), ('group', frozen[case]['split_group_id']),
                                          ('source_image', frozen[case]['image_sha256'])]:
