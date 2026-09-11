@@ -374,7 +374,11 @@ For a later round also set `IFV_PSD_INITIAL_ADAPTER` to that exact round-start
 adapter: Swift receives `--model BASE --adapters PREVIOUS --load_args false`.
 The initialization gate verifies target roles and actual model-file hashes.
 A new round uses a fresh optimizer; the optional same-round resume checkpoint
-instead restores optimizer, scheduler and RNG. Round completion additionally
+instead restores optimizer, scheduler and RNG. Resume also requires an ancestor
+`psd-resume-binding.json` with the identical datum manifest, initialization,
+training profile, seed and clipping settings. Use a new experiment ID/output
+directory for the resumed launch and pass the old checkpoint as the fifth
+argument; existing logs/checkpoints are never overwritten. Round completion additionally
 requires a positive optimizer step, changed weight artifacts, intact artifact
 hashes, bound nonempty dataset hashes and complete resumable training state.
 

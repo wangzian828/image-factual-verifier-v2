@@ -53,6 +53,26 @@ async def run(args):
     checkpoint = args.snapshot / "checkpoint-manifest.json"
     identity = {str(path): sha256_file(path) for path in (preparation_path, split, gold_path, policy,
         benchmark, serving, checkpoint, run_dir / "run_manifest.json", run_dir / "run_results.jsonl")}
+    progress_path = root / "acceptance-progress.json"
+    if progress_path.exists():
+        previous = load_json(progress_path)
+        if previous.get("status") == "datums_materialized_pending_optimizer_acceptance":
+            # A completed bank is immutable. Later offline reviews of rejected
+            # or pending attempts cannot mutate an in-flight training input.
+            completed_stage(root, "postprocess", identity, lambda: (_ for _ in ()).throw(ValueError("missing completed stage")))
+            for marker in (root / "stage-cache").glob("*.json"):
+                saved = load_json(marker)
+                payload = load_bound(marker, identity=saved["identity"])
+                if isinstance(payload, dict):
+                    for path, digest in payload.get("files", {}).items():
+                        if sha256_file(Path(path)) != digest:
+                            raise ValueError("completed PSD bank was changed")
+            from ifv_training.psd_preflight import verify_psd_training_input
+            gate = verify_psd_training_input(datums_path=root / "datums/datums.jsonl",
+                manifest_path=root / "datums/manifest.json", expected_topk=20, max_context=131072)
+            if not gate["passed"]:
+                raise ValueError("completed PSD datum gate no longer passes")
+            return previous
     summary = {"status": "postprocessing", "canary_only": True, "training_started": False}
     def save():
         write_json(root / "acceptance-progress.json", summary)

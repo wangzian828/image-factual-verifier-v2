@@ -35,10 +35,30 @@ are separate milestones. A component test is not an end-to-end acceptance.
   form repair seeds. The fixed case selection was independent of model outcomes.
   Frozen pretrained 9B files and serving profile are hash-attested. This bank
   is a diagnostic training subset, not the official evaluation set.
-- Real semantic localization/repair/judge and target assembly are running;
-  until accepted artifacts and optimizer/resume reports exist, **do not mark
-  the real PSD end-to-end gate passed**. CPU and GPU diagnostics, production
-  round completion and held-out quality remain separate acceptance levels.
+- Real repair admission: one repaired trajectory passed all local, complete
+  episode, private-gold, strict-audit and exact-token binding gates; two sampled
+  continuations were rejected; one seed produced no admissible hint. The two
+  hints for the same road-direction case were discriminated correctly: the
+  uncorrected `real` response failed, while the grounded corrected `fake`
+  response passed. This small diagnostic does not estimate general repair rate.
+- The third attempt's review contained an explicitly elided quote. Its ordered
+  literal fragments were checked against the same original field; cached
+  re-finalization made no API calls and rejected the attempt. No fuzzy matching
+  or changed judge vote was used.
+- **45/45 frozen top-20 datums passed materialization**: 1 repair and 44 assistant
+  preservation turns from five passing episodes; 13,417 supervised positions,
+  zero rejected datums. Sequence lengths: min 4,370, median 14,355, p90 20,518,
+  p95 23,782, max 26,331. Both source kinds keep per-target weight 1; there is
+  no aggregate 1:1 rebalancing or truncation.
+- Real 9B CPU optimizer/resume diagnostic is running on the full 15,740-token
+  repair and 4,369-token preservation inputs, not the old short synthetic
+  fixture. Until its final `result.json` passes, **do not mark the optimizer
+  acceptance gate passed**. H20 capacity, production PSD rounds and held-out
+  capability improvement have not been demonstrated by this diagnostic.
+- The live replay found and fixed duplicated leading system messages in the
+  archived-request → native-history adapter (vLLM returned HTTP 400). The fix
+  removes only the identical transport copy and rejects changed/interior system
+  messages. Agent code was not modified. Failed calls remained archived.
 
 Server evidence roots:
 
@@ -46,6 +66,13 @@ Server evidence roots:
 - `/volume/ybo/wza/runs/psd-base-snapshot-20260912`
 - `/volume/ybo/wza/runs/psd-real-training-canary-20260912-r2`
 - `/volume/ybo/wza/data/psd-official-train-metadata-20260912`
+- `/volume/ybo/wza/runs/psd-real-datum-9b-cpu-20260912`
+
+Existing half-hour `h20` follow-up now includes CPU result validation, local
+fix/test/commit if needed and a deferred isolated H20 SP4 one-step probe after
+the main experiment. It must not promote diagnostic adapters or start an
+unrequested production PSD training round. Local scheduling requires the app
+and computer to remain running. The main experiment's ordering is unchanged.
 
 The abandoned preparation directory without `-r2` contains only a failed
 projection attempt; it is not an accepted dataset/run.

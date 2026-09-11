@@ -78,6 +78,9 @@ def main():
         losses, visual_grad = [], 0.0
         optimizer.zero_grad(set_to_none=True)
         for datum in selected:
+            write_json(args.output_dir / "progress.json", {"phase": "optimizer_diagnostic",
+                "target_id": datum["target_id"], "kind": datum["kind"],
+                "sequence_tokens": len(datum["input_ids"]), "seconds": time.monotonic() - started})
             template = TEMPLATE_MAPPING["ifv_psd_topk"].template_cls.__new__(TEMPLATE_MAPPING["ifv_psd_topk"].template_cls)
             template.processor, template.padding_free, template.sequence_parallel_size = processor, False, 1
             template._get_get_rope_index = lambda: model.get_base_model().model.get_rope_index
@@ -103,6 +106,7 @@ def main():
     optimizer, scheduler = configure(model)
     before = fingerprint(model)
     first = step(model, optimizer, scheduler)
+    write_json(args.output_dir / "first-step.json", first)
     updated = fingerprint(model)
     if before == updated or first["visual_gradient_l1"] <= 0:
         raise ValueError("real PSD step did not update image-conditioned policy")
