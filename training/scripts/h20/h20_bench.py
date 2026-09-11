@@ -30,6 +30,9 @@ setarg('--use_logits_to_keep','false')
 setarg('--optim','adamw_torch_fused')
 setarg('--include_num_input_tokens_seen','true')
 setarg('--max_pixels','262144')
+if os.environ.get('H20_PACKING')=='true':
+    setarg('--packing','true')
+    setarg('--packing_length',os.environ.get('H20_PACKING_LENGTH','120000'))
 if os.environ.get('H20_SAVE')=='1':
     setarg('--save_strategy','steps')
     setarg('--save_steps',os.environ.get('H20_STEPS','6'))
