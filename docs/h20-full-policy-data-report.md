@@ -76,6 +76,17 @@ Three referenced files have a dimension below 28 pixels (28×24, 69×23, 1×1).
 Their row indices are retained for inspection, and no tool-return image was silently
 deleted. They passed processor encoding; that does not establish useful visual content.
 
+The 13,857-file delivery contains 2,604 files not referenced by policy: 2,576
+original-image files associated with retained episodes, plus 28 originals from
+excluded action-only episodes. These are all legacy perception references, not
+2,604 missing policy cases. Policy uses the images actually seen in runtime
+requests. Across all 2,579 paired initial images, resized pixel comparison is
+consistent with resizing/re-encoding (mean absolute difference 0.2045 on a
+0–255 scale after 64×64 normalization; diagnostic, not semantic proof).
+The most common dimension pair is original 2400×1792 versus policy 1024×765
+(1,982 episodes). Original files remain untouched. The full diagnostic is
+`image-coverage-explanation.json` in the processed server directory.
+
 An index-only first-fit-decreasing 120K packing plan produces 531 packs, 98.36%
 token-budget fill, averaging 118,029 tokens and 21.23 images; the largest image
 count is 40 per pack. Each train row appears exactly once. This is not a claim
