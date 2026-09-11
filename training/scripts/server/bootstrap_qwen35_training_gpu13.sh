@@ -210,6 +210,23 @@ PY
     [[ "$(find "$wheelhouse" -maxdepth 1 -type f -name '*.whl' | wc -l)" -eq 2 ]] || return 1
     grep -q '  flash_attn-' "$wheel_manifest" || return 1
     grep -q '  causal_conv1d-' "$wheel_manifest" || return 1
+    IFV_EXPECTED_ABI_FINGERPRINT="$abi_fingerprint" \
+      IFV_EXPECTED_REQUIREMENTS_SHA="$requirements_sha" \
+      "$prefix/bin/python" - "$wheel_provenance" <<'PY' || return 1
+import json
+import os
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    value = json.load(handle)
+checks = (
+    value.get("schema_version") == "ifv-cuda-extension-wheel-cache-v1",
+    value.get("abi_fingerprint") == os.environ["IFV_EXPECTED_ABI_FINGERPRINT"],
+    value.get("requirements_sha256")
+    == os.environ["IFV_EXPECTED_REQUIREMENTS_SHA"],
+)
+raise SystemExit(0 if all(checks) else 1)
+PY
     (cd "$wheelhouse" && sha256sum -c SHA256SUMS >/dev/null)
   }
 
