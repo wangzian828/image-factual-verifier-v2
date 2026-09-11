@@ -22,6 +22,14 @@ class Client:
                 "outputs": [{"type": "text", "text": json.dumps(self.result)}]}
 
 
+def test_explicit_ellipsis_requires_ordered_literal_fragments_in_one_field():
+    text = "The initial observed premise contains detail. The observed final consequence follows."
+    assert judge._literal_excerpt("The initial observed premise...The observed final consequence follows.", text)
+    assert not judge._literal_excerpt("The observed final consequence...The initial observed premise", text)
+    assert not judge._literal_excerpt("The invented premise...The observed final consequence follows.", text)
+    assert not judge._literal_excerpt("The...follows", text)
+
+
 def test_review_images_uses_correct_archive_for_colliding_request_ids(tmp_path, monkeypatch):
     import base64
     import io

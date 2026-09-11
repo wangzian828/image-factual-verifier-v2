@@ -115,13 +115,31 @@ def validate_evidence(evidence, packet, *, positive, localization=False):
             raise ValueError("invalid PSD judge evidence location")
         steps = {step["index"]: step for step in packet.get(trace + "_steps", [])}
         if (index not in steps or not isinstance(quote, str) or not quote.strip()
-                or not (any(quote in text for text in _strings(steps[index]))
+                or not (any(_literal_excerpt(quote, text) for text in _strings(steps[index]))
                         or quote in json.dumps(steps[index], ensure_ascii=False))):
             raise ValueError("PSD judge evidence is not a literal observed quote")
         seen.add(trace)
     required = {"source"} if localization else {"source", "repaired"}
     if positive and not required.issubset(seen):
         raise ValueError("positive PSD review lacks observed evidence")
+
+
+def _literal_excerpt(quote, text):
+    if quote in text:
+        return True
+    # Explicit omission is allowed, but not paraphrase/fuzzy matching. Every
+    # substantive fragment must occur in order within the same observed field.
+    import re
+    fragments = re.split(r"\s*(?:\.\.\.|…)\s*", quote)
+    if len(fragments) < 2 or any(len(part) < 12 for part in fragments):
+        return False
+    end = 0
+    for part in fragments:
+        start = text.find(part, end)
+        if start < 0:
+            return False
+        end = start + len(part)
+    return True
 
 
 def _atomic_json(path, value):
