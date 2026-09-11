@@ -58,6 +58,12 @@ gpu-13 的 glibc 为 2.28，长上下文 bootstrap 会固定版本并从源码�
 `<training-data-root>/logs/environments/ifv-qwen35-sft-long-ms-swift442/environment-preflight.json`
 必须通过；构建失败时不得回退到 SDPA 启动 128K。
 
+源码构建成功后会把两个 wheel 写入
+`<training-data-root>/wheels/qwen35-cuda-extensions/<ABI-fingerprint>`。指纹绑定 Python、
+Torch、Torch CUDA、glibc、A100 架构和 pinned requirements；`SHA256SUMS` 与
+`build-context.json` 均通过后才会复用。因而第一次构建仍需编译，之后相同 ABI 的全新
+环境直接安装缓存 wheel；缓存残缺或哈希错误时 fail-closed，不会静默覆盖或误用。
+
 模型名称和 checkpoint 路径以实际任务配置为准。换模型时必须用该模型自己的
 processor 重新验证，不能只复用旧环境的通过结果。
 

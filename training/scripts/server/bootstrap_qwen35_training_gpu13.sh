@@ -169,27 +169,142 @@ install_cuda_extensions() {
     echo "CUDA runtime headers are missing below $cuda_target/include" >&2
     exit 2
   fi
+  local requirements="$REPO_ROOT/requirements/train-qwen35-long-context.txt"
+  local requirements_sha
+  requirements_sha="$(sha256sum "$requirements" | awk '{print $1}')"
+  local abi_fingerprint
+  abi_fingerprint="$(
+    IFV_REQUIREMENTS_SHA="$requirements_sha" \
+      IFV_BUILD_ARCH="${IFV_TORCH_CUDA_ARCH_LIST:-8.0}" \
+      "$prefix/bin/python" - <<'PY'
+import os
+import platform
+import re
+import sys
+
+import torch
+
+raw = "-".join(
+    (
+        f"cp{sys.version_info.major}{sys.version_info.minor}",
+        f"torch-{torch.__version__}",
+        f"cuda-{torch.version.cuda}",
+        f"glibc-{platform.libc_ver()[1]}",
+        f"arch-{os.environ['IFV_BUILD_ARCH']}",
+        f"req-{os.environ['IFV_REQUIREMENTS_SHA'][:16]}",
+    )
+)
+print(re.sub(r"[^A-Za-z0-9._-]+", "_", raw))
+PY
+  )"
+  local wheel_root="${IFV_CUDA_EXTENSION_WHEEL_ROOT:-$ARTIFACT_ROOT/wheels/qwen35-cuda-extensions}"
+  local wheelhouse="$wheel_root/$abi_fingerprint"
+  local wheel_manifest="$wheelhouse/SHA256SUMS"
+  local wheel_provenance="$wheelhouse/build-context.json"
+  mkdir -p "$wheel_root" "$ARTIFACT_ROOT/tmp"
+  exec 9>"$wheel_root/$abi_fingerprint.lock"
+  flock 9
+
+  wheel_cache_valid() {
+    [[ -s "$wheel_manifest" && -s "$wheel_provenance" ]] || return 1
+    [[ "$(find "$wheelhouse" -maxdepth 1 -type f -name '*.whl' | wc -l)" -eq 2 ]] || return 1
+    grep -q '  flash_attn-' "$wheel_manifest" || return 1
+    grep -q '  causal_conv1d-' "$wheel_manifest" || return 1
+    (cd "$wheelhouse" && sha256sum -c SHA256SUMS >/dev/null)
+  }
+
+  if ! wheel_cache_valid; then
+    if [[ -e "$wheelhouse" ]]; then
+      echo "refusing to replace an incomplete or corrupt CUDA wheel cache: $wheelhouse" >&2
+      exit 2
+    fi
+    local build_dir
+    build_dir="$(mktemp -d "$ARTIFACT_ROOT/tmp/qwen35-cuda-wheels.XXXXXX")"
+    CUDA_HOME="$prefix" PATH="$prefix/bin:$PATH" \
+      LD_LIBRARY_PATH="$runtime_ld" \
+      CPATH="$cuda_target/include${CPATH:+:$CPATH}" \
+      LIBRARY_PATH="$cuda_target/lib${LIBRARY_PATH:+:$LIBRARY_PATH}" \
+      CC="$prefix/bin/x86_64-conda-linux-gnu-cc" \
+      CXX="$prefix/bin/x86_64-conda-linux-gnu-c++" \
+      TORCH_CUDA_ARCH_LIST="${IFV_TORCH_CUDA_ARCH_LIST:-8.0}" \
+      FLASH_ATTN_CUDA_ARCHS="${IFV_FLASH_ATTN_CUDA_ARCHS:-80}" \
+      MAX_JOBS="${IFV_EXTENSION_MAX_JOBS:-16}" \
+      NVCC_THREADS="${IFV_EXTENSION_NVCC_THREADS:-2}" \
+      FLASH_ATTENTION_FORCE_BUILD=TRUE \
+      CAUSAL_CONV1D_FORCE_BUILD=TRUE \
+      PIP_NO_CACHE_DIR=1 \
+      "$prefix/bin/python" -m pip wheel \
+      --wheel-dir "$build_dir" \
+      --no-build-isolation \
+      --no-cache-dir \
+      --no-deps \
+      --no-binary=:all: \
+      --requirement "$requirements"
+    if [[ "$(find "$build_dir" -maxdepth 1 -type f -name '*.whl' | wc -l)" -ne 2 ]] || \
+       ! find "$build_dir" -maxdepth 1 -type f -name 'flash_attn-*.whl' | grep -q . || \
+       ! find "$build_dir" -maxdepth 1 -type f -name 'causal_conv1d-*.whl' | grep -q .; then
+      echo "CUDA extension build did not produce the two required wheels: $build_dir" >&2
+      exit 2
+    fi
+    (
+      cd "$build_dir"
+      sha256sum ./*.whl | sed 's# \./# #' >SHA256SUMS
+    )
+    IFV_WHEEL_CONTEXT_OUTPUT="$build_dir/build-context.json" \
+      IFV_WHEEL_ABI_FINGERPRINT="$abi_fingerprint" \
+      IFV_REQUIREMENTS_SHA="$requirements_sha" \
+      IFV_BUILD_ARCH="${IFV_TORCH_CUDA_ARCH_LIST:-8.0}" \
+      IFV_BUILD_COMPILER="$prefix/bin/x86_64-conda-linux-gnu-cc" \
+      "$prefix/bin/python" - <<'PY'
+import json
+import os
+import platform
+import subprocess
+
+import torch
+
+payload = {
+    "schema_version": "ifv-cuda-extension-wheel-cache-v1",
+    "abi_fingerprint": os.environ["IFV_WHEEL_ABI_FINGERPRINT"],
+    "requirements_sha256": os.environ["IFV_REQUIREMENTS_SHA"],
+    "python": platform.python_version(),
+    "torch": torch.__version__,
+    "torch_cuda": torch.version.cuda,
+    "glibc": platform.libc_ver()[1],
+    "torch_cuda_arch_list": os.environ["IFV_BUILD_ARCH"],
+    "compiler": subprocess.run(
+        [os.environ["IFV_BUILD_COMPILER"], "--version"],
+        check=True,
+        text=True,
+        stdout=subprocess.PIPE,
+    ).stdout.splitlines()[0],
+}
+with open(os.environ["IFV_WHEEL_CONTEXT_OUTPUT"], "w", encoding="utf-8") as handle:
+    json.dump(payload, handle, ensure_ascii=False, indent=2)
+    handle.write("\n")
+PY
+    mv "$build_dir" "$wheelhouse"
+  fi
+
   "$prefix/bin/python" -m pip uninstall -y flash-attn causal-conv1d || true
   CUDA_HOME="$prefix" PATH="$prefix/bin:$PATH" \
     LD_LIBRARY_PATH="$runtime_ld" \
-    CPATH="$cuda_target/include${CPATH:+:$CPATH}" \
-    LIBRARY_PATH="$cuda_target/lib${LIBRARY_PATH:+:$LIBRARY_PATH}" \
-    CC="$prefix/bin/x86_64-conda-linux-gnu-cc" \
-    CXX="$prefix/bin/x86_64-conda-linux-gnu-c++" \
-    TORCH_CUDA_ARCH_LIST="${IFV_TORCH_CUDA_ARCH_LIST:-8.0}" \
-    FLASH_ATTN_CUDA_ARCHS="${IFV_FLASH_ATTN_CUDA_ARCHS:-80}" \
-    MAX_JOBS="${IFV_EXTENSION_MAX_JOBS:-16}" \
-    NVCC_THREADS="${IFV_EXTENSION_NVCC_THREADS:-2}" \
-    FLASH_ATTENTION_FORCE_BUILD=TRUE \
-    CAUSAL_CONV1D_FORCE_BUILD=TRUE \
-    PIP_NO_CACHE_DIR=1 \
     "$prefix/bin/python" -m pip install \
+    --no-index \
+    --find-links "$wheelhouse" \
     --no-build-isolation \
-    --no-cache-dir \
     --no-deps \
     --force-reinstall \
-    --no-binary=:all: \
-    --requirement "$REPO_ROOT/requirements/train-qwen35-long-context.txt"
+    --requirement "$requirements"
+  CUDA_HOME="$prefix" PATH="$prefix/bin:$PATH" \
+    LD_LIBRARY_PATH="$runtime_ld" \
+    "$prefix/bin/python" - <<'PY'
+import causal_conv1d_cuda
+import flash_attn_2_cuda
+
+assert causal_conv1d_cuda.__file__
+assert flash_attn_2_cuda.__file__
+PY
 }
 
 install_long_sft() {

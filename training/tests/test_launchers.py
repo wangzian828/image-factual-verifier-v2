@@ -319,6 +319,14 @@ def test_qwen35_training_bootstrap_is_fresh_pinned_and_isolated() -> None:
     assert 'FLASH_ATTN_CUDA_ARCHS="${IFV_FLASH_ATTN_CUDA_ARCHS:-80}"' in source
     assert 'MAX_JOBS="${IFV_EXTENSION_MAX_JOBS:-16}"' in source
     assert 'NVCC_THREADS="${IFV_EXTENSION_NVCC_THREADS:-2}"' in source
+    assert "ifv-cuda-extension-wheel-cache-v1" in source
+    assert "abi_fingerprint" in source
+    assert "sha256sum -c SHA256SUMS" in source
+    assert "refusing to replace an incomplete or corrupt CUDA wheel cache" in source
+    assert "python\" -m pip wheel" in source
+    assert '--find-links "$wheelhouse"' in source
+    assert "import causal_conv1d_cuda" in source
+    assert "import flash_attn_2_cuda" in source
     assert "IFV_RESUME_INCOMPLETE_ENV" in source
     assert "refusing to resume an unmarked or invalid environment" in source
     assert "ms-swift==4.4.2" in sft
