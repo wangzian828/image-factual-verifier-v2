@@ -13,6 +13,7 @@ from ifv_training.io import load_json, sha256_file, write_json
 from scripts.run_psd_repair_driver import _policy_runtime_kwargs
 from src.orchestrator.pipeline import Orchestrator
 from src.orchestrator.source_access import SourceAccessPolicy
+from src.orchestrator.react_runtime import RuntimeToolAdapter, UnifiedReactState
 from src.orchestrator.runtime_events import CaseRuntimeStore, bind_case_runtime_store, reset_case_runtime_store
 
 
@@ -33,7 +34,11 @@ async def run(args):
     try:
         write_json(args.output / "inputs.json", {"episode_sha256": sha256_file(args.episode),
             "serving_profile_sha256": sha256_file(args.serving_profile), "tool_args": params})
-        result = await asyncio.to_thread(orchestrator.all_tools["focused_visual_inspection"].call, params)
+        # Canonical tool_args are the PUBLIC schema. Use the same existing
+        # runtime adapter to bind image_input/internal fields, not a raw delegate.
+        tool = RuntimeToolAdapter(delegate=orchestrator.all_tools["focused_visual_inspection"],
+            state=UnifiedReactState(case_id=episode["case_id"]), image_path=episode["image_path"])
+        result = await asyncio.to_thread(tool.call, params)
         write_json(args.output / "tool-result.json", result)
         summary = {"passed": result.get("status") == "success", "status": result.get("status"),
                    "answer_status": result.get("answer_status"), "runtime_archive": str(store.root),
