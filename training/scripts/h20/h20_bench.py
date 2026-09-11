@@ -11,6 +11,10 @@ def setarg(k,v):
 # H20-specific 128K baseline; no A100 profile is sourced.
 i=args.index('--deepspeed');del args[i:i+2]
 setarg('--fsdp','fsdp2')
+if os.environ.get('H20_RESHARD')=='false':
+    config={'fsdp':'shard_grad_op auto_wrap','fsdp_config':{'fsdp_version':2,'reshard_after_forward':False,'auto_wrap_policy':'TRANSFORMER_BASED_WRAP','cpu_ram_efficient_loading':True,'state_dict_type':'SHARDED_STATE_DICT','activation_checkpointing':True}}
+    (run/'fsdp.json').write_text(json.dumps(config,indent=2))
+    setarg('--fsdp',run/'fsdp.json')
 setarg('--gradient_checkpointing','false')
 setarg('--vit_gradient_checkpointing','false')
 setarg('--attn_impl','flash_attn')
@@ -32,6 +36,7 @@ if os.environ.get('H20_RESUME'):
     setarg('--resume_from_checkpoint',os.environ['H20_RESUME'])
 env=dict(os.environ,NPROC_PER_NODE='4',CUDA_VISIBLE_DEVICES='0,1,2,3',MASTER_PORT='29641')
 (run/'command.json').write_text(json.dumps(args,indent=2))
+(run/'provenance.json').write_text(json.dumps({'sequence_parallel_size':int(env.get('H20_SP','4')),'data':args[args.index('--dataset')+1],'max_length':131072,'commit':subprocess.check_output(['git','-C',str(Path(__file__).resolve().parents[3]),'rev-parse','HEAD'],text=True).strip()},indent=2))
 start=time.time()
 with (run/'train.log').open('w') as log,(run/'gpu.csv').open('w') as gpu:
     p=subprocess.Popen(args,env=env,stdout=log,stderr=subprocess.STDOUT)
