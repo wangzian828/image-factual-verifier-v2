@@ -50,16 +50,20 @@ def sparse_topk_cross_entropy(
     active = weights > 0
     if not active.any():
         raise ValueError("PSD batch has no active top-k target")
+    active_by_datum = active.reshape(active.shape[0], -1).any(dim=1)
+    if not active_by_datum.all():
+        raise ValueError("every PSD datum must contain an active top-k target")
     active_tokens = target_tokens[active]
     if active_tokens.min() < 0 or active_tokens.max() >= logits.shape[-1]:
         raise ValueError("PSD target token ID is outside model vocabulary")
 
     log_probabilities = torch.log_softmax(logits.float(), dim=-1)
     selected = torch.gather(log_probabilities, -1, target_tokens)
-    denominator = weights.sum()
-    if not torch.isfinite(denominator) or denominator <= 0:
-        raise ValueError("PSD weight mass must be finite and positive")
-    loss = -(selected * weights).sum() / denominator
+    # Match the official PSD backends: teacher probabilities are multiplied by
+    # the row loss weight, contributing token losses are summed, and the batch
+    # is averaged over datums.  Normalizing by weights.sum() would cancel the
+    # repair/preservation row weights entirely.
+    loss = -(selected * weights).sum() / logits.shape[0]
     if not torch.isfinite(loss):
         raise ValueError("PSD loss is non-finite")
     return loss

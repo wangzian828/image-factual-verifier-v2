@@ -37,6 +37,61 @@ def test_sparse_topk_cross_entropy_has_expected_value_and_gradient() -> None:
     assert torch.count_nonzero(logits.grad[0, 1]) == 0
 
 
+def test_sparse_topk_cross_entropy_preserves_row_weight_scale() -> None:
+    logits = torch.tensor([[[0.0, 1.0, 2.0]]], dtype=torch.float32)
+    target_tokens = torch.tensor([[[2, 1]]])
+    full = torch.tensor([[[0.75, 0.25]]])
+    quarter = full * 0.25
+
+    full_loss = sparse_topk_cross_entropy(
+        SimpleNamespace(logits=logits),
+        psd_target_tokens=target_tokens,
+        psd_weights=full,
+    )
+    quarter_loss = sparse_topk_cross_entropy(
+        SimpleNamespace(logits=logits),
+        psd_target_tokens=target_tokens,
+        psd_weights=quarter,
+    )
+
+    assert torch.allclose(quarter_loss, full_loss * 0.25)
+
+
+def test_sparse_topk_cross_entropy_sums_tokens_then_averages_batch() -> None:
+    logits = torch.tensor(
+        [
+            [[0.0, 1.0, 2.0], [1.0, 0.0, -1.0]],
+            [[2.0, 1.0, 0.0], [0.0, 1.0, 2.0]],
+        ],
+        dtype=torch.float32,
+    )
+    target_tokens = torch.tensor(
+        [
+            [[2, 1], [0, 1]],
+            [[0, 1], [2, 1]],
+        ]
+    )
+    weights = torch.tensor(
+        [
+            [[0.75, 0.25], [0.0, 0.0]],
+            [[0.375, 0.125], [0.375, 0.125]],
+        ]
+    )
+
+    loss = sparse_topk_cross_entropy(
+        SimpleNamespace(logits=logits),
+        psd_target_tokens=target_tokens,
+        psd_weights=weights,
+    )
+    selected = torch.gather(
+        torch.log_softmax(logits, dim=-1),
+        -1,
+        target_tokens,
+    )
+    expected = -(selected * weights).sum() / 2
+    assert torch.allclose(loss, expected)
+
+
 def test_ms_swift_plugin_contract_constants_are_stable() -> None:
     assert PSD_MS_SWIFT_TEMPLATE == "ifv_psd_topk"
     assert PSD_MS_SWIFT_LOSS == "ifv_psd_topk"

@@ -17,8 +17,8 @@ from .io import (
 from .psd import validate_topk_by_position
 
 
-PSD_SPARSE_DATUM_SCHEMA_VERSION = "ifv-psd-sparse-topk-datum-v1"
-PSD_SPARSE_DATUM_MANIFEST_SCHEMA_VERSION = "ifv-psd-sparse-topk-manifest-v1"
+PSD_SPARSE_DATUM_SCHEMA_VERSION = "ifv-psd-sparse-topk-datum-v2"
+PSD_SPARSE_DATUM_MANIFEST_SCHEMA_VERSION = "ifv-psd-sparse-topk-manifest-v2"
 
 
 def _text(value: Any) -> str:
@@ -176,6 +176,7 @@ def build_sparse_topk_package(
     topk: int = 20,
     max_sequence_length: int = 131_072,
     balance_kinds: bool = True,
+    require_both_kinds: bool = True,
 ) -> dict[str, Any]:
     """Create a fail-closed sparse top-K training interface package."""
 
@@ -193,6 +194,10 @@ def build_sparse_topk_package(
         raise ValueError("all targets must have target_id")
     if len(target_ids) != len(set(target_ids)):
         raise ValueError("PSD target IDs must be unique")
+
+    input_kinds = {_text(target.get("kind")) for target in targets}
+    missing_kinds = sorted({"repair", "preserve"} - input_kinds)
+    source_kind_gate = not require_both_kinds or not missing_kinds
 
     kind_scales = _balanced_weights(targets) if balance_kinds else {}
     datums: list[dict[str, Any]] = []
@@ -222,7 +227,11 @@ def build_sparse_topk_package(
                 }
             )
 
-    ready = len(datums) == len(targets) and not rejections
+    ready = (
+        len(datums) == len(targets)
+        and not rejections
+        and source_kind_gate
+    )
     write_jsonl(output_dir / "candidate_datums.jsonl", datums)
     write_jsonl(output_dir / "rejections.jsonl", rejections)
     artifacts = {
@@ -247,6 +256,8 @@ def build_sparse_topk_package(
         "topk": topk,
         "max_sequence_length": max_sequence_length,
         "balance_kinds": balance_kinds,
+        "require_both_kinds": require_both_kinds,
+        "missing_source_kinds": missing_kinds,
         "counts": {
             "input_targets": len(targets),
             "candidate_datums": len(datums),
@@ -259,7 +270,17 @@ def build_sparse_topk_package(
         "loss_positions_by_kind": dict(sorted(loss_positions.items())),
         "effective_row_mass_by_kind": dict(sorted(effective_mass.items())),
         "artifacts": artifacts,
-        "status": "ready_for_trainer" if ready else "blocked_invalid_target",
+        "artifact_sha256": {
+            "candidate_datums": sha256_file(output_dir / "candidate_datums.jsonl"),
+            "datums": sha256_file(output_dir / "datums.jsonl") if ready else None,
+        },
+        "status": (
+            "ready_for_trainer"
+            if ready
+            else "blocked_invalid_target"
+            if rejections or len(datums) != len(targets)
+            else "blocked_missing_source_kind"
+        ),
     }
     write_json(output_dir / "manifest.json", manifest)
     return manifest

@@ -78,12 +78,14 @@ def _attempt(
                 "provider": "qwen_local",
                 "model": "qwen-round-start",
                 "round_start_checkpoint": "checkpoint-round-0",
+                "sees_hint": True,
                 "supplies_training_distribution": True,
             },
             "trainable_student": {
                 "provider": "qwen_local",
                 "model": "qwen-round-start",
                 "initial_checkpoint": "checkpoint-round-0",
+                "sees_hint": False,
             },
         },
         "local_verification": {

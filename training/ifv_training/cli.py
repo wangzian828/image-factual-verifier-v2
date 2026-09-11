@@ -215,6 +215,13 @@ def _parser() -> argparse.ArgumentParser:
         dest="balance_kinds",
     )
     psd_datums.set_defaults(balance_kinds=True)
+    psd_datums.add_argument(
+        "--allow-single-kind",
+        action="store_false",
+        dest="require_both_kinds",
+        help="Allow a diagnostic/ablation package without both repair and preservation.",
+    )
+    psd_datums.set_defaults(require_both_kinds=True)
 
     psd_locate = subparsers.add_parser("locate-psd-failure")
     psd_locate.add_argument("--trace", type=Path, required=True)
@@ -447,6 +454,7 @@ def main() -> None:
             topk=args.topk,
             max_sequence_length=args.max_sequence_length,
             balance_kinds=args.balance_kinds,
+            require_both_kinds=args.require_both_kinds,
         )
     elif args.command == "locate-psd-failure":
         from .psd_repair import locate_failure_site

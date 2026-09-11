@@ -161,6 +161,14 @@ class PSDModelRoles:
                 "frozen self-teacher and trainable student must identify the "
                 "same round-start policy"
             )
+        if (
+            values["frozen_self_teacher_provider"].casefold()
+            != values["trainable_student_provider"].casefold()
+        ):
+            raise ValueError(
+                "frozen self-teacher and trainable student must use the same "
+                "policy provider"
+            )
 
     def record(self) -> dict[str, Any]:
         return {

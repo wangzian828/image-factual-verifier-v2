@@ -13,13 +13,14 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .io import (
+    canonical_json,
     load_jsonl,
     require_new_or_empty,
     sha256_file,
     write_json,
     write_jsonl,
 )
-from .psd import TRAINABLE_HINT_LEVELS, audit_hint
+from .psd import TRAINABLE_HINT_LEVELS, audit_hint, validate_topk_by_position
 
 
 PSD_REPAIR_SCHEMA_VERSION = "ifv-psd-repair-v1"
@@ -124,6 +125,27 @@ def _attempt_token_ids(
     )
 
 
+def _captured_topk(
+    capture: Mapping[str, Any],
+    *,
+    completion_ids: list[int],
+) -> list[Any] | None:
+    value = capture.get("completion_topk_by_position")
+    if value in (None, []):
+        return None
+    topk = capture.get("topk")
+    if isinstance(topk, bool):
+        raise ValueError("captured_topk_invalid")
+    try:
+        topk_value = int(topk)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("captured_topk_invalid") from exc
+    if topk_value != 20:
+        raise ValueError(f"captured_topk_must_be_20:{topk_value}")
+    validate_topk_by_position(completion_ids, value, topk=topk_value)
+    return list(value)
+
+
 def _attempt_rejection(
     *,
     row_index: int,
@@ -195,12 +217,20 @@ def _validate_attempt(
         raise ValueError("hint_constructor_distribution_must_not_train_student")
     if teacher.get("supplies_training_distribution") is not True:
         raise ValueError("frozen_self_teacher_distribution_required")
+    if teacher.get("sees_hint") is not True:
+        raise ValueError("frozen_self_teacher_must_see_hint")
+    if student.get("sees_hint") is not False:
+        raise ValueError("trainable_student_must_not_see_hint")
     if _text(teacher.get("round_start_checkpoint")) != _text(
         student.get("initial_checkpoint")
     ):
         raise ValueError("self_teacher_student_checkpoint_mismatch")
     if _text(teacher.get("model")) != _text(student.get("model")):
         raise ValueError("self_teacher_student_policy_mismatch")
+    if _text(teacher.get("provider")).casefold() != _text(
+        student.get("provider")
+    ).casefold():
+        raise ValueError("self_teacher_student_provider_mismatch")
 
     hint_record = _mapping(attempt.get("hint_record"))
     hint = _text(hint_record.get("text") or attempt.get("hint"))
@@ -254,6 +284,15 @@ def _validate_attempt(
     teacher_prompt_ids, completion_ids = _attempt_token_ids(attempt)
     if teacher_prompt_ids == student_prompt_ids:
         raise ValueError("teacher_prompt_equals_student_prompt")
+    capture = _mapping(
+        attempt.get("repair_rollout_token_capture")
+        or attempt.get("rollout_token_capture")
+    )
+    captured_topk = (
+        _captured_topk(capture, completion_ids=completion_ids)
+        if capture
+        else None
+    )
 
     return {
         "attempt_id": attempt_id,
@@ -263,6 +302,7 @@ def _validate_attempt(
         "student_prompt_ids": student_prompt_ids,
         "teacher_prompt_ids": teacher_prompt_ids,
         "completion_ids": completion_ids,
+        "teacher_topk_by_position": captured_topk,
         "row_weight": _positive_weight(
             attempt.get("row_weight", 1.0),
             field="row_weight",
@@ -298,6 +338,15 @@ def _repair_row(
         "student_prompt_ids": list(selected["student_prompt_ids"]),
         "teacher_prompt_ids": list(selected["teacher_prompt_ids"]),
         "completion_ids": list(selected["completion_ids"]),
+        **(
+            {
+                "teacher_topk_by_position": list(
+                    selected["teacher_topk_by_position"]
+                )
+            }
+            if selected.get("teacher_topk_by_position") is not None
+            else {}
+        ),
         "row_weight": float(selected["row_weight"]),
         "verification": dict(_mapping(selected.get("verification"))),
         "model_roles": dict(_mapping(selected.get("model_roles"))),
@@ -308,7 +357,11 @@ def _repair_row(
     }
 
 
-def _preservation_row(candidate: Mapping[str, Any]) -> dict[str, Any]:
+def _preservation_row(
+    candidate: Mapping[str, Any],
+    *,
+    model_roles: Mapping[str, Any],
+) -> dict[str, Any]:
     if _text(candidate.get("class")) != "base_pass_preserve":
         raise ValueError("preservation_candidate_class_invalid")
     if candidate.get("verified_full_task") is not True:
@@ -345,6 +398,17 @@ def _preservation_row(candidate: Mapping[str, Any]) -> dict[str, Any]:
                 "example_type": _text(step.get("example_type")),
                 "student_prompt_ids": prompt_ids,
                 "completion_ids": completion_ids,
+                **(
+                    {"teacher_topk_by_position": captured_topk}
+                    if (
+                        captured_topk := _captured_topk(
+                            capture,
+                            completion_ids=completion_ids,
+                        )
+                    )
+                    is not None
+                    else {}
+                ),
             }
         )
 
@@ -360,6 +424,7 @@ def _preservation_row(candidate: Mapping[str, Any]) -> dict[str, Any]:
             candidate.get("row_weight", 1.0),
             field="row_weight",
         ),
+        "model_roles": dict(model_roles),
         "preservation_steps": steps,
         **_source_fields(candidate),
     }
@@ -485,6 +550,23 @@ def assemble_psd_repair_package(
                 }
             )
 
+    role_records = {
+        canonical_json(row["model_roles"]): row["model_roles"]
+        for row in repairs
+    }
+    if len(role_records) > 1:
+        raise ValueError(
+            "selected repairs do not share one round-start policy"
+        )
+    round_model_roles = (
+        next(iter(role_records.values())) if role_records else None
+    )
+    repair_source_runs = {
+        _text(row.get("source_run_id")) for row in repairs
+    } - {""}
+    if len(repair_source_runs) > 1:
+        raise ValueError("selected repairs span multiple source rollout runs")
+
     preservation: list[dict[str, Any]] = []
     preservation_rejections: list[dict[str, Any]] = []
     seen_preservation_ids: set[str] = set()
@@ -509,7 +591,20 @@ def assemble_psd_repair_package(
             continue
         seen_preservation_ids.add(candidate_id)
         try:
-            preservation.append(_preservation_row(candidate))
+            if round_model_roles is None:
+                raise ValueError("round_start_model_roles_missing")
+            candidate_run = _text(
+                candidate.get("source_run_id")
+                or _mapping(candidate.get("source")).get("source_run_id")
+            )
+            if repair_source_runs and candidate_run not in repair_source_runs:
+                raise ValueError("preservation_source_run_mismatch")
+            preservation.append(
+                _preservation_row(
+                    candidate,
+                    model_roles=round_model_roles,
+                )
+            )
         except ValueError as exc:
             preservation_rejections.append(
                 {
@@ -565,7 +660,9 @@ def assemble_psd_repair_package(
         },
         "status": (
             "ready_for_target_build"
-            if repairs or preservation
+            if repairs and preservation
+            else "blocked_missing_source_kind"
+            if repairs or preservation_candidates
             else "empty"
         ),
     }

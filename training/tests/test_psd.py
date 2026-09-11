@@ -55,12 +55,14 @@ def _repair_row(**overrides: object) -> dict:
                 "provider": "qwen_local",
                 "model": "qwen-round-start",
                 "round_start_checkpoint": "checkpoint-round-0",
+                "sees_hint": True,
                 "supplies_training_distribution": True,
             },
             "trainable_student": {
                 "provider": "qwen_local",
                 "model": "qwen-round-start",
                 "initial_checkpoint": "checkpoint-round-0",
+                "sees_hint": False,
             },
         },
     }
@@ -115,11 +117,14 @@ def test_topk_validation_requires_exact_length_and_normalized_mass() -> None:
 
 
 def test_preservation_row_weight_is_split_across_steps() -> None:
+    repair = _repair_row()
     row = {
         "case_id": "case-1",
         "episode_id": "episode-pass",
         "class": "base_pass_preserve",
         "verified_full_task": True,
+        "strict_trace_audit_pass": True,
+        "model_roles": repair["model_roles"],
         "preservation_steps": [
             {"step_id": "s1", "student_prompt_ids": [1], "completion_ids": [2]},
             {"step_id": "s2", "student_prompt_ids": [1, 2], "completion_ids": [3]},
@@ -151,7 +156,7 @@ def test_target_package_rejects_test_rows_and_writes_manifest(tmp_path: Path) ->
     )
     assert manifest["counts"]["repair_targets"] == 1
     assert manifest["counts"]["rejections"] == 1
-    assert manifest["status"] == "ready_for_topk_cache"
+    assert manifest["status"] == "blocked_missing_source_kind"
     assert (out_dir / "targets.jsonl").is_file()
     stored = json.loads((out_dir / "manifest.json").read_text(encoding="utf-8"))
     assert stored["schema_version"].startswith("ifv-psd-target-manifest")
@@ -186,9 +191,11 @@ def test_materialize_topk_cache_requires_exact_token_hashes(tmp_path: Path) -> N
     cache.write_text(
         json.dumps(
             {
-                "schema_version": "ifv-psd-teacher-topk-cache-v1",
+                "schema_version": "ifv-psd-teacher-topk-cache-v2",
                 "target_id": target["target_id"],
-                "teacher_model": "qwen-test",
+                "teacher_provider": "qwen_local",
+                "teacher_model": "qwen-round-start",
+                "teacher_checkpoint": "checkpoint-round-0",
                 "teacher_prompt_sha256": _token_hash(
                     target["teacher_prompt_ids"]
                 ),
@@ -215,7 +222,49 @@ def test_materialize_topk_cache_requires_exact_token_hashes(tmp_path: Path) -> N
         (output / "targets.jsonl").read_text(encoding="utf-8").splitlines()[0]
     )
     assert completed["target_status"] == "complete"
-    assert completed["teacher"]["model"] == "qwen-test"
+    assert completed["teacher"]["model"] == "qwen-round-start"
+    assert completed["teacher"]["checkpoint"] == "checkpoint-round-0"
+
+
+def test_materialize_topk_cache_rejects_wrong_self_teacher_checkpoint(
+    tmp_path: Path,
+) -> None:
+    target = build_repair_target(_repair_row(), topk=2)
+    targets = tmp_path / "targets.jsonl"
+    targets.write_text(json.dumps(target) + "\n", encoding="utf-8")
+    cache = tmp_path / "topk.jsonl"
+    cache.write_text(
+        json.dumps(
+            {
+                "schema_version": "ifv-psd-teacher-topk-cache-v2",
+                "target_id": target["target_id"],
+                "teacher_provider": "qwen_local",
+                "teacher_model": "qwen-round-start",
+                "teacher_checkpoint": "different-checkpoint",
+                "teacher_prompt_sha256": _token_hash(
+                    target["teacher_prompt_ids"]
+                ),
+                "completion_sha256": _token_hash(target["completion_ids"]),
+                "teacher_topk_by_position": [
+                    [[5, 0.7], [8, 0.3]],
+                    [[6, 0.6], [9, 0.4]],
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    output = tmp_path / "blocked-checkpoint"
+    result = materialize_psd_topk_cache(
+        targets_path=targets,
+        cache_path=cache,
+        output_dir=output,
+        topk=2,
+    )
+    assert result["status"] == "blocked_topk_cache"
+    assert "cache_teacher_checkpoint_mismatch" in (
+        output / "topk_cache_rejections.jsonl"
+    ).read_text(encoding="utf-8")
 
 
 def test_materialize_topk_cache_fails_closed_when_target_is_missing(

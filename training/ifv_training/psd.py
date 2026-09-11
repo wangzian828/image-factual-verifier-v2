@@ -19,10 +19,10 @@ from .io import canonical_json, load_jsonl, require_new_or_empty, sha256_file, w
 
 
 PSD_HINT_AUDIT_SCHEMA_VERSION = "ifv-psd-hint-audit-v1"
-PSD_TARGET_SCHEMA_VERSION = "ifv-psd-target-v1"
-PSD_MANIFEST_SCHEMA_VERSION = "ifv-psd-target-manifest-v1"
-PSD_TOPK_CACHE_SCHEMA_VERSION = "ifv-psd-teacher-topk-cache-v1"
-PSD_TOPK_MATERIALIZATION_SCHEMA_VERSION = "ifv-psd-topk-materialization-v1"
+PSD_TARGET_SCHEMA_VERSION = "ifv-psd-target-v2"
+PSD_MANIFEST_SCHEMA_VERSION = "ifv-psd-target-manifest-v2"
+PSD_TOPK_CACHE_SCHEMA_VERSION = "ifv-psd-teacher-topk-cache-v2"
+PSD_TOPK_MATERIALIZATION_SCHEMA_VERSION = "ifv-psd-topk-materialization-v2"
 
 REPAIR_TIERS = frozenset(
     {
@@ -348,6 +348,50 @@ def _topk_payload(
     return "complete", value
 
 
+def _validated_model_roles(value: Any) -> dict[str, Any]:
+    """Validate the three PSD roles and return a detached role record."""
+
+    model_roles = _mapping(value)
+    constructor = _mapping(model_roles.get("hint_constructor"))
+    teacher = _mapping(model_roles.get("frozen_self_teacher"))
+    student = _mapping(model_roles.get("trainable_student"))
+    if constructor.get("supplies_training_distribution") is not False:
+        raise ValueError("hint constructor cannot supply PSD training targets")
+    if teacher.get("supplies_training_distribution") is not True:
+        raise ValueError("frozen self-teacher must supply PSD training targets")
+    if teacher.get("sees_hint") is not True:
+        raise ValueError("frozen self-teacher must see the verified hint")
+    if student.get("sees_hint") is not False:
+        raise ValueError("trainable student must not see the hint")
+    teacher_provider = _text(teacher.get("provider")).casefold()
+    student_provider = _text(student.get("provider")).casefold()
+    if not teacher_provider or teacher_provider != student_provider:
+        raise ValueError("PSD self-teacher/student provider mismatch")
+    teacher_model = _text(teacher.get("model"))
+    student_model = _text(student.get("model"))
+    if not teacher_model or teacher_model != student_model:
+        raise ValueError("PSD self-teacher/student policy mismatch")
+    teacher_checkpoint = _text(teacher.get("round_start_checkpoint"))
+    student_checkpoint = _text(student.get("initial_checkpoint"))
+    if not teacher_checkpoint or teacher_checkpoint != student_checkpoint:
+        raise ValueError("PSD self-teacher/student checkpoint mismatch")
+    return {
+        "hint_constructor": dict(constructor),
+        "frozen_self_teacher": dict(teacher),
+        "trainable_student": dict(student),
+    }
+
+
+def _teacher_identity(target: Mapping[str, Any]) -> dict[str, str]:
+    roles = _validated_model_roles(target.get("model_roles"))
+    teacher = _mapping(roles["frozen_self_teacher"])
+    return {
+        "provider": _text(teacher.get("provider")).casefold(),
+        "model": _text(teacher.get("model")),
+        "checkpoint": _text(teacher.get("round_start_checkpoint")),
+    }
+
+
 def build_repair_target(
     row: Mapping[str, Any],
     *,
@@ -398,20 +442,7 @@ def build_repair_target(
                 "causal_episode_pass requires verified PSD repair fields: "
                 + ",".join(missing)
             )
-    model_roles = _mapping(row.get("model_roles"))
-    constructor_role = _mapping(model_roles.get("hint_constructor"))
-    teacher_role = _mapping(model_roles.get("frozen_self_teacher"))
-    student_role = _mapping(model_roles.get("trainable_student"))
-    if constructor_role.get("supplies_training_distribution") is not False:
-        raise ValueError("hint constructor cannot supply PSD training targets")
-    if teacher_role.get("supplies_training_distribution") is not True:
-        raise ValueError("frozen self-teacher must supply PSD training targets")
-    if _text(teacher_role.get("model")) != _text(student_role.get("model")):
-        raise ValueError("PSD self-teacher/student policy mismatch")
-    if _text(teacher_role.get("round_start_checkpoint")) != _text(
-        student_role.get("initial_checkpoint")
-    ):
-        raise ValueError("PSD self-teacher/student checkpoint mismatch")
+    model_roles = _validated_model_roles(row.get("model_roles"))
 
     row_weight = float(row.get("row_weight", 1.0))
     if not math.isfinite(row_weight) or row_weight <= 0:
@@ -477,17 +508,19 @@ def build_preservation_targets(
     row: Mapping[str, Any],
     *,
     topk: int = 20,
+    model_roles: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     _assert_trainable_source(row)
-    verified_pass = bool(
-        row.get("verified_full_task")
-        or row.get("base_passed")
-        or row.get("base_passed_outright")
-        or row.get("class") == "base_pass_preserve"
-        or row.get("source") == "base_pass_trace"
-    )
-    if not verified_pass:
+    if row.get("verified_full_task") is not True:
         raise ValueError("preservation row is not a verified policy pass")
+    if row.get("strict_trace_audit_pass") is not True:
+        raise ValueError("preservation row did not pass strict trace audit")
+    bound_roles = _validated_model_roles(model_roles or row.get("model_roles"))
+    row_roles = row.get("model_roles")
+    if row_roles is not None and canonical_json(bound_roles) != canonical_json(
+        _validated_model_roles(row_roles)
+    ):
+        raise ValueError("preservation row model roles differ from PSD round")
     steps = _preservation_steps(row)
     if not steps:
         raise ValueError("preservation row has no usable steps")
@@ -536,10 +569,11 @@ def build_preservation_targets(
                 "completion_ids": completion_ids,
                 "teacher_topk_by_position": teacher_topk,
                 "row_weight": per_step_weight,
+                "model_roles": bound_roles,
                 "verification": {
                     "local_pass": True,
                     "full_episode_pass": True,
-                    "strict_trace_audit_pass": row.get("strict_trace_audit_pass"),
+                    "strict_trace_audit_pass": True,
                 },
                 "source": {
                     "source_run_id": _text(row.get("source_run_id")),
@@ -605,10 +639,28 @@ def build_psd_target_package(
                 }
             )
 
+    round_model_roles: Mapping[str, Any] | None = None
+    if repair_targets:
+        role_records = {
+            canonical_json(item["model_roles"]): item["model_roles"]
+            for item in repair_targets
+        }
+        if len(role_records) != 1:
+            raise ValueError(
+                "all PSD repairs in one package must use the same round-start policy"
+            )
+        round_model_roles = next(iter(role_records.values()))
+
     if preservation_path is not None:
         for index, row in enumerate(load_jsonl(preservation_path)):
             try:
-                preservation_targets.extend(build_preservation_targets(row, topk=topk))
+                preservation_targets.extend(
+                    build_preservation_targets(
+                        row,
+                        topk=topk,
+                        model_roles=round_model_roles,
+                    )
+                )
             except ValueError as exc:
                 rejected.append(
                     {
@@ -661,7 +713,9 @@ def build_psd_target_package(
             "rejections": "rejections.jsonl",
         },
         "status": (
-            "ready_for_topk_cache"
+            "blocked_missing_source_kind"
+            if targets and (not repair_targets or not preservation_targets)
+            else "ready_for_topk_cache"
             if targets and pending_topk
             else "ready_for_training"
             if targets
@@ -755,16 +809,27 @@ def materialize_psd_topk_cache(
             continue
         target_ids.add(target_id)
         try:
+            if _text(target.get("schema_version")) != PSD_TARGET_SCHEMA_VERSION:
+                raise ValueError("target_schema_invalid")
             teacher_prompt_ids = _prompt_ids(target, "teacher_prompt_ids")
             completion_ids = _completion_ids(target)
+            expected_teacher = _teacher_identity(target)
             cache_row = cache_by_target.get(target_id)
             if cache_row is None:
                 raise ValueError("cache_entry_missing")
+            if _text(cache_row.get("schema_version")) != PSD_TOPK_CACHE_SCHEMA_VERSION:
+                raise ValueError("cache_schema_invalid")
+            teacher_provider = _text(cache_row.get("teacher_provider")).casefold()
             teacher_model = _text(
                 cache_row.get("teacher_model") or cache_row.get("model")
             )
-            if not teacher_model:
-                raise ValueError("cache_teacher_model_missing")
+            teacher_checkpoint = _text(cache_row.get("teacher_checkpoint"))
+            if teacher_provider != expected_teacher["provider"]:
+                raise ValueError("cache_teacher_provider_mismatch")
+            if teacher_model != expected_teacher["model"]:
+                raise ValueError("cache_teacher_model_mismatch")
+            if teacher_checkpoint != expected_teacher["checkpoint"]:
+                raise ValueError("cache_teacher_checkpoint_mismatch")
             if _text(cache_row.get("teacher_prompt_sha256")) != _token_ids_sha256(
                 teacher_prompt_ids
             ):
@@ -791,7 +856,9 @@ def materialize_psd_topk_cache(
         resolved_target["target_status"] = "complete"
         resolved_target["teacher_topk_by_position"] = cache_topk
         resolved_target["teacher"] = {
+            "provider": teacher_provider,
             "model": teacher_model,
+            "checkpoint": teacher_checkpoint,
             "teacher_prompt_sha256": _token_ids_sha256(teacher_prompt_ids),
             "completion_sha256": _token_ids_sha256(completion_ids),
         }

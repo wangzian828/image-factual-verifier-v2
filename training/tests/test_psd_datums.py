@@ -121,3 +121,19 @@ def test_sparse_package_fails_closed_on_incomplete_or_oversized_target(
     assert manifest["status"] == "blocked_invalid_target"
     assert manifest["counts"]["rejections"] == 2
     assert not (output / "datums.jsonl").exists()
+
+
+def test_sparse_package_blocks_single_kind_training(tmp_path: Path) -> None:
+    targets = tmp_path / "targets.jsonl"
+    _write_jsonl(targets, [_target("repair-only")])
+
+    output = tmp_path / "datums"
+    manifest = build_sparse_topk_package(
+        targets_path=targets,
+        output_dir=output,
+        topk=2,
+    )
+
+    assert manifest["status"] == "blocked_missing_source_kind"
+    assert manifest["missing_source_kinds"] == ["preserve"]
+    assert not (output / "datums.jsonl").exists()
