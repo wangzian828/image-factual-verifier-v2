@@ -63,6 +63,40 @@ def image_bytes(request: Any) -> list[bytes]:
     return result
 
 
+def proposer_image_inputs(value):
+    """Replace encoded images in JSON prose with references and native blocks.
+
+    Unlike student/teacher conditioning, the reviewer can receive each unique
+    image once while the JSON references retain its exact order and repeats.
+    """
+    blocks = {}
+
+    def visit(item):
+        if isinstance(item, list):
+            return [visit(child) for child in item]
+        if not isinstance(item, Mapping):
+            return item
+        if item.get("type") in {"image_url", "image"}:
+            blob = image_bytes(item)[0]
+            digest = hashlib.sha256(blob).hexdigest()
+            if item["type"] == "image_url":
+                url = item["image_url"]["url"]
+            else:
+                mime = item.get("mime_type") or "image/jpeg"
+                url = f"data:{mime};base64,{base64.b64encode(blob).decode()}"
+            blocks[digest] = {"type": "image_url", "image_url": {"url": url}}
+            return {"type": "archived_image_reference", "image_sha256": digest}
+        if item.get("type") in {"video", "video_url", "input_audio"}:
+            raise ValueError("PSD proposer currently supports images only")
+        return {key: visit(child) for key, child in item.items()}
+
+    cleaned = visit(value)
+    native = []
+    for digest, block in blocks.items():
+        native.extend([{"type": "text", "text": "Archived image SHA-256: " + digest}, block])
+    return cleaned, native
+
+
 def bind_media(
     request: Mapping[str, Any], *, processor: Any, output_dir: Path,
     prompt_ids: Sequence[int], processor_id: str,

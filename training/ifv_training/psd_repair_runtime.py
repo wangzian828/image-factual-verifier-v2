@@ -360,6 +360,9 @@ class QwenContinuationAdapter:
             private_context=private_context,
             hint_count=hint_count,
         )
+        from .psd_media import proposer_image_inputs
+        _, native_images = proposer_image_inputs({"policy_input": failure_site.policy_input,
+            "trace_context": public_trace_context, "private_context": private_context or {}})
         messages = [
             {
                 "role": "system",
@@ -368,7 +371,8 @@ class QwenContinuationAdapter:
                     "the generated hints must not reveal the answer or exact action."
                 ),
             },
-            {"role": "user", "content": prompt},
+            {"role": "user", "content": [{"type": "text", "text": prompt}, *native_images]
+             if native_images else prompt},
         ]
         response = await self._call_proposer(messages)
         try:
@@ -453,7 +457,7 @@ class QwenContinuationAdapter:
                 model=str(
                     getattr(self.hint_constructor_llm, "model_name", "")
                 ),
-                prompt_version="ifv-psd-repair-proposer-v2",
+                prompt_version="ifv-psd-repair-proposer-v3-multimodal",
             )
         started = time.perf_counter()
         try:

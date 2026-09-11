@@ -118,6 +118,19 @@ def test_literal_json_field_quote_is_valid_observed_evidence():
     assert asyncio.run(judge.judge_repair(Client(data), packet()))["passed"]
 
 
+def test_proposer_receives_native_images_not_base64_json_prose():
+    import base64
+    from ifv_training.psd_media import proposer_image_inputs
+    encoded = base64.b64encode(b"synthetic test image bytes").decode()
+    block = {"type": "image_url", "image_url": {"url": "data:image/png;base64," + encoded}}
+    raw = {"input_payload": [block, {"text": "compare the visual fields"}, block]}
+    cleaned, native = proposer_image_inputs(raw)
+    assert encoded not in json.dumps(cleaned)
+    assert cleaned["input_payload"][0] == cleaned["input_payload"][2]
+    assert [x["type"] for x in native] == ["text", "image_url"]
+    assert native[1] == block
+
+
 def test_train_case_gate_rejects_evaluation_split(tmp_path):
     path = tmp_path / "train.jsonl"
     path.write_text(json.dumps({"case_id": "case-a", "split": "test"}) + "\n")

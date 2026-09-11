@@ -274,7 +274,7 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
         output_dir,
         case_id=_text(_mapping(trace.get("state")).get("runtime_case", {}).get("case_id"))
         or _text(trace.get("image_id")),
-        attempt_id="psd-repair",
+        attempt_id=f"psd-proposer-{uuid.uuid4().hex[:12]}",
     )
     runtime_root = runtime_store.root
     # An interrupted run remains inspectable/finalizable after each attempt.
