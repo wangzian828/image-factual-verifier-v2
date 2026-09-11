@@ -142,6 +142,7 @@ def build_sparse_topk_datum(
         "kind": kind,
         "topk": topk,
         "input_ids": input_ids,
+        **({"psd_media": dict(target["psd_media"])} if target.get("psd_media") else {}),
         "target_tokens": target_tokens,
         "weights": weights,
         "loss_positions": loss_positions,

@@ -419,6 +419,28 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
                 ],
                 "unhinted_student_affects_acceptance": False,
             }
+            if 248056 in student_prompt_ids or 248056 in teacher_prompt_ids:
+                from ifv_training.psd_media import media_from_archive
+                processor_path = str(policy_profile.get("engine_model_path") or args.round_start_checkpoint)
+                source_media = media_from_archive(
+                    {"runtime_store_path": site.runtime_store_path,
+                     "context_request_id": site.context_request_id},
+                    processor_path=processor_path, output_dir=output_dir / "media",
+                    prompt_ids=student_prompt_ids,
+                )
+                matching_steps = [step for step in continuation.teacher_steps
+                                  if step.metadata.get("policy_token_capture", {}).get("prompt_token_ids") == teacher_prompt_ids]
+                if len(matching_steps) != 1:
+                    raise ValueError("cannot bind exact teacher request to PSD media")
+                teacher_media = media_from_archive(
+                    {"runtime_store_path": str(runtime_root),
+                     "context_request_id": matching_steps[0].metadata["context_request_id"]},
+                    processor_path=processor_path, output_dir=output_dir / "media",
+                    prompt_ids=teacher_prompt_ids,
+                )
+                if source_media != teacher_media:
+                    raise ValueError("teacher and student visual conditioning differs")
+                record["psd_media"] = source_media
             episode_dir = output_dir / "episodes"
             episode_dir.mkdir(parents=True, exist_ok=True)
             teacher_episode_name = f"hint-{index:02d}-teacher.json"

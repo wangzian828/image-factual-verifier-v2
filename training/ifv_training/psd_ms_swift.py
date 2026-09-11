@@ -277,6 +277,7 @@ def install_ms_swift_psd_plugin() -> None:
     from swift.loss.mapping import loss_map
     from swift.sequence_parallel import GatherLoss, sequence_parallel
     from swift.template import Template, TemplateMeta, register_template
+    from swift.template.templates.qwen import Qwen3_5Template
     from swift.trainers.seq2seq_trainer import Seq2SeqTrainer
 
     class IfvPsdTopKLoss(BaseLoss):
@@ -307,7 +308,7 @@ def install_ms_swift_psd_plugin() -> None:
                 psd_weights=psd_weights,
             )
 
-    class IfvPsdTopKTemplate(Template):
+    class IfvPsdTopKTemplate(Qwen3_5Template):
         """Pass repository-produced token IDs through without re-tokenization."""
 
         support_padding_free = True
@@ -362,6 +363,13 @@ def install_ms_swift_psd_plugin() -> None:
                     [float(weight) for weight in values] for values in weights
                 ],
             }
+            if inputs.get("psd_media"):
+                from .psd_media import load_media
+                encoded.update(load_media(inputs["psd_media"], input_ids))
+                encoded["mm_token_type_ids"] = torch.tensor(
+                    [1 if token == 248056 else 0 for token in input_ids],
+                    dtype=torch.long,
+                )
             if return_length:
                 encoded["length"] = len(input_ids)
             if return_template_inputs:
@@ -449,6 +457,21 @@ def install_ms_swift_psd_plugin() -> None:
                 "psd_target_tokens": target_tokens,
                 "psd_weights": weights,
             }
+            if any("pixel_values" in row for row in batch):
+                if len(batch) != 1:
+                    raise ValueError("multimodal PSD requires one datum per device")
+                row = batch[0]
+                result["pixel_values"] = row["pixel_values"]
+                result["image_grid_thw"] = row["image_grid_thw"]
+                mm_types = torch.zeros_like(input_ids)
+                mm_types[0, :len(row["input_ids"])] = row["mm_token_type_ids"]
+                result["mm_token_type_ids"] = mm_types
+                positions = self._get_position_ids(result)["position_ids"]
+                result["position_ids"] = positions[1:]
+                if self.padding_free:
+                    result.pop("attention_mask")
+                    result["text_position_ids"] = torch.arange(sequence_length).unsqueeze(0)
+                return result
             if self.padding_free:
                 result.pop("attention_mask")
                 result["position_ids"] = torch.arange(

@@ -232,6 +232,8 @@ def _parser() -> argparse.ArgumentParser:
     psd_topk_collect.add_argument("--retries", type=int, default=3)
     psd_topk_collect.add_argument("--timeout", type=float, default=1800.0)
     psd_topk_collect.add_argument("--limit", type=int)
+    psd_topk_collect.add_argument("--backend", choices=("vllm", "transformers"), default="vllm")
+    psd_topk_collect.add_argument("--device", default="cuda:0")
 
     psd_repairs = subparsers.add_parser("assemble-psd-repairs")
     psd_repairs.add_argument("--repair-candidates", type=Path, required=True)
@@ -541,6 +543,8 @@ def main() -> None:
         )
     elif args.command == "collect-psd-topk":
         result = collect_psd_topk_cache(
+            backend=args.backend,
+            device=args.device,
             targets_path=args.targets,
             serving_profile_path=args.serving_profile,
             checkpoint_manifest_path=args.round_start_checkpoint_manifest,

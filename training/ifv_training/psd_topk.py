@@ -35,6 +35,7 @@ from .psd import (
     validate_topk_by_position,
 )
 from .psd_modality import require_text_only_psd
+from .psd_media import media_digest
 
 
 PSD_TOPK_COLLECTION_SCHEMA_VERSION = "ifv-psd-topk-collection-v1"
@@ -327,6 +328,8 @@ def _cache_record(
             scored["teacher_prompt_ids"]
         ),
         "completion_sha256": _token_ids_sha256(scored["completion_ids"]),
+        **({"media_sha256": media_digest(scored["target"]["psd_media"])}
+           if scored["target"].get("psd_media") else {}),
         "teacher_topk_by_position": distributions,
         "collection": {
             "engine": "vllm",
@@ -370,6 +373,8 @@ def _validate_existing_cache(
                 raise ValueError(
                     f"existing cache {target_id} has mismatched {field}"
                 )
+        if scored["target"].get("psd_media") and row.get("media_sha256") != media_digest(scored["target"]["psd_media"]):
+            raise ValueError("existing cache media mismatch")
         validate_topk_by_position(
             scored["completion_ids"],
             row.get("teacher_topk_by_position"),
@@ -399,6 +404,8 @@ def collect_psd_topk_cache(
     limit: int | None = None,
     requester: Requester | None = None,
     retry_sleep: Callable[[float], None] = time.sleep,
+    backend: str = "vllm",
+    device: str = "cuda:0",
 ) -> dict[str, Any]:
     """Collect or resume an attested, per-target frozen-teacher top-k cache."""
 
@@ -422,6 +429,10 @@ def collect_psd_topk_cache(
         checkpoint_path=checkpoint_path,
     )
     targets_by_id = {row["target_id"]: row for row in scored_targets}
+    if backend not in {"vllm", "transformers"}:
+        raise ValueError("unsupported PSD teacher backend")
+    if backend == "vllm" and any(row["target"].get("psd_media") for row in scored_targets):
+        raise ValueError("multimodal exact-token scoring requires --backend transformers")
     output_dir.mkdir(parents=True, exist_ok=True)
     cache_path = output_dir / "teacher_topk_cache.jsonl"
     manifest_path = output_dir / "manifest.json"
@@ -449,7 +460,11 @@ def collect_psd_topk_cache(
     pending = [row for row in scored_targets if row["target_id"] not in existing]
     selected = pending[:limit] if limit is not None else pending
     request = requester or _request_json
-    if selected:
+    teacher = None
+    if selected and backend == "transformers":
+        from .psd_hf_teacher import FrozenTeacher
+        teacher = FrozenTeacher(profile, device=device)
+    if selected and backend == "vllm":
         models = request(f"{base_url}/models", None, timeout)
         cards = models.get("data")
         if not isinstance(cards, list) or not any(
@@ -468,7 +483,7 @@ def collect_psd_topk_cache(
                     *scored["teacher_prompt_ids"],
                     *scored["completion_ids"],
                 ]
-                response = request(
+                response = teacher.score(scored, topk) if teacher else request(
                     f"{base_url}/completions",
                     {
                         "model": _text(profile.get("profile_id")),
@@ -487,6 +502,7 @@ def collect_psd_topk_cache(
                     topk=topk,
                     response=response,
                 )
+                row["collection"]["engine"] = backend
                 _append_cache_row(cache_path, row)
                 existing[scored["target_id"]] = row
                 collected += 1
@@ -520,6 +536,7 @@ def collect_psd_topk_cache(
         "status": status,
         "topk": topk,
         "method": "forced_token_ids_prompt_logprobs",
+        "backend": backend,
         "upstream_reference": {
             "repository": "essamsleiman/psd",
             "commit": PSD_UPSTREAM_REFERENCE_COMMIT,

@@ -213,6 +213,8 @@ def _policy_steps(
                 "stage": _text(step.get("stage")),
                 "example_type": example_type,
                 "interaction_id": interaction_id,
+                "context_request_id": _text(metadata.get("context_request_id")),
+                "runtime_store_path": _trace_runtime_store_path(trace),
                 "action_type": action_type,
                 "protocol_rejected": protocol_rejected,
                 "model_visible": {"policy_input": dict(policy_input)},

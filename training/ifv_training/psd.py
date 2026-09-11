@@ -17,6 +17,7 @@ from typing import Any, Iterable, Mapping, Sequence
 
 from .io import canonical_json, load_jsonl, require_new_or_empty, sha256_file, write_json, write_jsonl
 from .psd_modality import require_text_only_psd
+from .psd_media import media_digest
 
 
 PSD_HINT_AUDIT_SCHEMA_VERSION = "ifv-psd-hint-audit-v1"
@@ -489,6 +490,7 @@ def build_repair_target(
         "hint_sha256": hint_audit["hint_sha256"],
         "student_prompt_ids": student_prompt_ids,
         "teacher_prompt_ids": teacher_prompt_ids,
+        **({"psd_media": dict(row["psd_media"])} if row.get("psd_media") else {}),
         "completion_ids": completion_ids,
         "teacher_topk_by_position": teacher_topk,
         "row_weight": row_weight,
@@ -587,6 +589,7 @@ def build_preservation_targets(
                 "hint_sha256": "",
                 "student_prompt_ids": student_prompt_ids,
                 "teacher_prompt_ids": student_prompt_ids,
+                **({"psd_media": dict(merged["psd_media"])} if merged.get("psd_media") else {}),
                 "completion_ids": completion_ids,
                 "teacher_topk_by_position": teacher_topk,
                 # Match the published PSD recipe: every retained preservation
@@ -875,6 +878,8 @@ def materialize_psd_topk_cache(
             ):
                 raise ValueError("cache_completion_sha256_mismatch")
             cache_topk = _cache_topk(cache_row)
+            if target.get("psd_media") and cache_row.get("media_sha256") != media_digest(target["psd_media"]):
+                raise ValueError("cache_media_sha256_mismatch")
             validate_topk_by_position(completion_ids, cache_topk, topk=topk)
         except ValueError as exc:
             target_rejections.append(

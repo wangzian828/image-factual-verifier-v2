@@ -339,6 +339,7 @@ def _validate_attempt(
         "hint_audit": hint_audit,
         "student_prompt_ids": student_prompt_ids,
         "teacher_prompt_ids": teacher_prompt_ids,
+        **({"psd_media": dict(attempt["psd_media"])} if attempt.get("psd_media") else {}),
         "completion_ids": completion_ids,
         "teacher_topk_by_position": captured_topk,
         "row_weight": _positive_weight(
@@ -375,6 +376,7 @@ def _repair_row(
         "hint_audit": dict(_mapping(selected.get("hint_audit"))),
         "student_prompt_ids": list(selected["student_prompt_ids"]),
         "teacher_prompt_ids": list(selected["teacher_prompt_ids"]),
+        **({"psd_media": dict(selected["psd_media"])} if selected.get("psd_media") else {}),
         "completion_ids": list(selected["completion_ids"]),
         **(
             {
@@ -399,6 +401,7 @@ def _preservation_row(
     candidate: Mapping[str, Any],
     *,
     model_roles: Mapping[str, Any],
+    media_dir: Path | None = None,
 ) -> dict[str, Any]:
     if _text(candidate.get("class")) != "base_pass_preserve":
         raise ValueError("preservation_candidate_class_invalid")
@@ -426,6 +429,15 @@ def _preservation_row(
             capture.get("completion_token_ids"),
             field=f"preservation_steps[{index}].completion_token_ids",
         )
+        media = {}
+        if 248056 in prompt_ids:
+            from .psd_media import media_from_archive
+            if media_dir is None:
+                raise ValueError("visual preservation requires a media output directory")
+            media = media_from_archive(
+                step, processor_path=model_roles["frozen_self_teacher"]["round_start_checkpoint"],
+                output_dir=media_dir, prompt_ids=prompt_ids,
+            )
         step_id = _text(step.get("step_id"))
         if not step_id:
             raise ValueError(f"preservation_step_{index}_step_id_missing")
@@ -435,6 +447,7 @@ def _preservation_row(
                 "stage": _text(step.get("stage")),
                 "example_type": _text(step.get("example_type")),
                 "student_prompt_ids": prompt_ids,
+                **({"psd_media": media} if media else {}),
                 "completion_ids": completion_ids,
                 **(
                     {"teacher_topk_by_position": captured_topk}
@@ -656,6 +669,7 @@ def assemble_psd_repair_package(
                 _preservation_row(
                     candidate,
                     model_roles=round_model_roles,
+                    media_dir=output_dir / "media",
                 )
             )
         except ValueError as exc:

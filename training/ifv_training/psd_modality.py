@@ -14,6 +14,14 @@ QWEN35_VISUAL_TOKEN_IDS = frozenset({248053, 248054, 248056, 248057})
 def require_text_only_psd(
     row: Mapping[str, Any], *token_sequences: Sequence[int]
 ) -> None:
+    media = row.get("psd_media")
+    if media:
+        from .psd_media import validate_media
+        for sequence in token_sequences:
+            # Completions have no images; validate prompt sequences only.
+            if any(token in QWEN35_VISUAL_TOKEN_IDS for token in sequence):
+                validate_media(media, sequence)
+        return
     visual_fields = (
         "images", "videos", "multi_modal_data", "pixel_values",
         "pixel_values_videos", "image_grid_thw", "video_grid_thw",
