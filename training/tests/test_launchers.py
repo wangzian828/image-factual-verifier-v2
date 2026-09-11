@@ -309,6 +309,8 @@ def test_qwen35_training_bootstrap_is_fresh_pinned_and_isolated() -> None:
     assert "--no-binary=:all:" in source
     assert 'TORCH_CUDA_ARCH_LIST="${IFV_TORCH_CUDA_ARCH_LIST:-8.0}"' in source
     assert 'FLASH_ATTN_CUDA_ARCHS="${IFV_FLASH_ATTN_CUDA_ARCHS:-80}"' in source
+    assert 'MAX_JOBS="${IFV_EXTENSION_MAX_JOBS:-16}"' in source
+    assert 'NVCC_THREADS="${IFV_EXTENSION_NVCC_THREADS:-2}"' in source
     assert "IFV_RESUME_INCOMPLETE_ENV" in source
     assert "refusing to resume an unmarked or invalid environment" in source
     assert "ms-swift==4.4.2" in sft
