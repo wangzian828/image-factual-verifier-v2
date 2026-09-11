@@ -181,7 +181,38 @@ def test_psd_and_grpo_use_framework_entrypoints() -> None:
     assert "watch_sft.py" in psd
     assert "checkpoint-io-profile" in psd
     assert "passed_production_gate" in psd
+    assert 'IFV_SEQUENCE_PARALLEL_SIZE' in psd
+    assert 'IFV_PSD_LOSS_CHUNK_TOKENS' in psd
+    assert "psd_sequence_parallel_smoke.py" in psd
+    assert "verify_psd_training_profile.py" in psd
+    assert '--lora_rank "$IFV_LORA_RANK"' in psd
+    assert '--lora_alpha "$IFV_LORA_ALPHA"' in psd
+    assert '--target_modules "$IFV_LORA_TARGET_MODULES"' in psd
     assert "Trainer" not in psd
+
+    psd_probe = _source(
+        "configs/psd/qwen3.5-lora-r32-1step-8gpu-sp8-128k-memory-probe.env"
+    )
+    psd_production = _source(
+        "configs/psd/qwen3.5-lora-r32-5epoch-8gpu-sp8-128k.env"
+    )
+    for profile in (psd_probe, psd_production):
+        assert "IFV_TUNER_TYPE=lora" in profile
+        assert "IFV_FSDP=fsdp2" in profile
+        assert "IFV_MAX_LENGTH=131072" in profile
+        assert "IFV_PADDING_FREE=true" in profile
+        assert "IFV_SEQUENCE_PARALLEL_SIZE=8" in profile
+        assert "IFV_PSD_TOPK=20" in profile
+        assert "IFV_LORA_RANK=32" in profile
+        assert "IFV_LORA_ALPHA=32" in profile
+        assert "IFV_LORA_DROPOUT=0.0" in profile
+        assert "IFV_LORA_TARGET_MODULES=all-linear" in profile
+    assert "IFV_PSD_PROFILE_MODE=memory_probe" in psd_probe
+    assert "IFV_MAX_STEPS=1" in psd_probe
+    assert "IFV_PSD_PROFILE_MODE=production" in psd_production
+    assert "IFV_NUM_TRAIN_EPOCHS=5" in psd_production
+    assert "IFV_GRADIENT_ACCUMULATION_STEPS=32" in psd_production
+    assert "IFV_LEARNING_RATE=4e-5" in psd_production
 
     assert "swift rlhf" in grpo
     assert "--multi_turn_scheduler gym_scheduler" in grpo

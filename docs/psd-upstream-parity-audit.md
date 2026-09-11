@@ -37,6 +37,8 @@ abbreviation; the current public method and this repository use PSD.
 | Resumable, provenance-bound target materialization | target IDs, token hashes, teacher identity, checkpoint and manifest hash are checked | Aligned for imported/online caches |
 | Training refuses incomplete target packages | launcher verifies manifest schema/status, file hash, top-K, context, source kinds and effective mass | Aligned |
 | Finite forward/backward and recoverable checkpoints | plugin rejects non-finite weights/loss; launcher records resources and supports checkpoint resume | Aligned at framework-smoke level |
+| Native long-context sparse loss | top-20 targets follow ms-swift's SP/RP split; only scalar position losses are gathered and fp32 CE is chunk-recomputed | Aligned backend substitution |
+| Published optimizer recipe | LoRA rank 32, `4e-5`, 32 unique targets/step, five epochs, clip 1.0, seed 0 | Aligned in the production profile |
 | Every new PSD round recollects from the previous round output | rollout gate binds the served round-start checkpoint; round completion binds the new checkpoint; later rounds require that exact prior output and a new run ID | Aligned and fail-closed |
 
 ## Intentional backend differences
@@ -82,9 +84,10 @@ The following are not yet empirical claims:
 2. The repair driver consumes a separately produced, hash-bound complete
    hinted-episode artifact. It does not yet reconstruct and finish the entire
    IFV Orchestrator episode by itself from an arbitrary historical step.
-3. The current PSD training profile is a LoRA, one-step, sequence-parallel-size
-   1 engineering smoke. The SFT environment supports 131072 tokens, but that
-   does not prove a 131072-token PSD target fits or that PSD can use SP8.
+3. The SP8 target ordering, global loss and gradient scaling have a distributed
+   CPU smoke, and the checked-in profiles are fixed to eight-GPU 128K SP8. This
+   does not prove a 131072-token Qwen target fits on the eight A100s; that claim
+   requires the real one-step memory probe while all eight GPUs are idle.
 4. Multi-round chaining is now enforced by immutable rollout and completion
    gates, but it has not yet been exercised on a real two-round IFV run.
 

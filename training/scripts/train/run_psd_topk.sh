@@ -24,15 +24,19 @@ configure_distributed_backend
 require_model_path
 require_dataset "$PSD_DATUMS"
 require_value EXPERIMENT_ID
-
-if [[ "${IFV_PADDING_FREE:-false}" != "false" ]]; then
-  echo "PSD top-k training requires IFV_PADDING_FREE=false" >&2
-  exit 2
-fi
-if [[ "${IFV_SEQUENCE_PARALLEL_SIZE:-1}" != "1" ]]; then
-  echo "PSD top-k training requires IFV_SEQUENCE_PARALLEL_SIZE=1" >&2
-  exit 2
-fi
+for name in \
+  IFV_PSD_PROFILE_MODE \
+  IFV_PSD_TOPK \
+  IFV_PSD_LOSS_CHUNK_TOKENS \
+  IFV_PADDING_FREE \
+  IFV_SEQUENCE_PARALLEL_SIZE \
+  IFV_LORA_RANK \
+  IFV_LORA_ALPHA \
+  IFV_LORA_DROPOUT \
+  IFV_LORA_TARGET_MODULES
+do
+  require_value "$name"
+done
 
 training_backend_args=()
 if [[ -n "${IFV_DEEPSPEED:-}" ]]; then
@@ -58,10 +62,46 @@ python -m ifv_training verify-psd-datums \
   --max-context "$IFV_MAX_LENGTH" \
   --output "$PSD_INPUT_GATE"
 
+PSD_PROFILE_GATE="$LOG_DIR/psd-training-profile-gate.json"
+profile_gate_args=(
+  python "$REPO_ROOT/training/scripts/probe/verify_psd_training_profile.py"
+  --mode "$IFV_PSD_PROFILE_MODE"
+  --world-size "$NPROC_PER_NODE"
+  --sequence-parallel-size "$IFV_SEQUENCE_PARALLEL_SIZE"
+  --padding-free "$IFV_PADDING_FREE"
+  --max-context "$IFV_MAX_LENGTH"
+  --topk "$IFV_PSD_TOPK"
+  --loss-chunk-tokens "$IFV_PSD_LOSS_CHUNK_TOKENS"
+  --tuner-type "$IFV_TUNER_TYPE"
+  --lora-rank "$IFV_LORA_RANK"
+  --lora-alpha "$IFV_LORA_ALPHA"
+  --lora-dropout "$IFV_LORA_DROPOUT"
+  --target-modules "$IFV_LORA_TARGET_MODULES"
+  --train-batch-size "$IFV_TRAIN_BATCH_SIZE"
+  --gradient-accumulation-steps "$IFV_GRADIENT_ACCUMULATION_STEPS"
+  --learning-rate "$IFV_LEARNING_RATE"
+  --output "$PSD_PROFILE_GATE"
+)
+if [[ -n "${IFV_NUM_TRAIN_EPOCHS:-}" ]]; then
+  profile_gate_args+=(--num-train-epochs "$IFV_NUM_TRAIN_EPOCHS")
+fi
+if [[ -n "${IFV_MAX_STEPS:-}" ]]; then
+  profile_gate_args+=(--max-steps "$IFV_MAX_STEPS")
+fi
+"${profile_gate_args[@]}"
+
 PSD_PLUGIN_PREFLIGHT="$LOG_DIR/psd-plugin-preflight.json"
 python "$REPO_ROOT/training/scripts/probe/psd_ms_swift_plugin_smoke.py" \
   --plugin "$REPO_ROOT/training/plugins/ifv_psd_topk_plugin.py" \
   --output "$PSD_PLUGIN_PREFLIGHT"
+
+PSD_SP_PREFLIGHT="$LOG_DIR/psd-sequence-parallel-preflight.json"
+CUDA_VISIBLE_DEVICES="" \
+IFV_PSD_SP_SMOKE_OUTPUT="$PSD_SP_PREFLIGHT" \
+python -m torch.distributed.run \
+  --standalone \
+  --nproc_per_node "$IFV_SEQUENCE_PARALLEL_SIZE" \
+  "$REPO_ROOT/training/scripts/probe/psd_sequence_parallel_smoke.py"
 
 ENVIRONMENT_PREFLIGHT=""
 if [[ "${IFV_REQUIRE_TRAINING_ENV_PREFLIGHT:-false}" == "true" ]]; then
@@ -125,26 +165,51 @@ args=(
   --loss_type ifv_psd_topk
   --external_plugins "$REPO_ROOT/training/plugins/ifv_psd_topk_plugin.py"
   --remove_unused_columns false
-  --padding_free false
-  --sequence_parallel_size 1
+  --padding_free "$IFV_PADDING_FREE"
+  --sequence_parallel_size "$IFV_SEQUENCE_PARALLEL_SIZE"
   --max_length "$IFV_MAX_LENGTH"
   --truncation_strategy raise
   --tuner_type "$IFV_TUNER_TYPE"
+  --lora_rank "$IFV_LORA_RANK"
+  --lora_alpha "$IFV_LORA_ALPHA"
+  --lora_dropout "$IFV_LORA_DROPOUT"
+  --target_modules "$IFV_LORA_TARGET_MODULES"
   --torch_dtype "$IFV_TORCH_DTYPE"
   --per_device_train_batch_size "$IFV_TRAIN_BATCH_SIZE"
   --gradient_accumulation_steps "$IFV_GRADIENT_ACCUMULATION_STEPS"
   --learning_rate "$IFV_LEARNING_RATE"
+  --max_grad_norm "${IFV_MAX_GRAD_NORM:-1.0}"
+  --seed "${IFV_SEED:-0}"
   --gradient_checkpointing "${IFV_GRADIENT_CHECKPOINTING:-true}"
   --logging_steps "$IFV_LOGGING_STEPS"
-  --save_strategy steps
-  --save_steps "$IFV_SAVE_STEPS"
-  --save_total_limit "$IFV_SAVE_TOTAL_LIMIT"
   --output_dir "$OUTPUT_DIR"
   --dataset_num_proc "${IFV_DATASET_NUM_PROC:-1}"
   --dataloader_num_workers "${IFV_DATALOADER_NUM_WORKERS:-0}"
   --report_to tensorboard
   "${training_backend_args[@]}"
 )
+
+SAVE_STRATEGY="${IFV_SAVE_STRATEGY:-steps}"
+args+=(--save_strategy "$SAVE_STRATEGY")
+if [[ "$SAVE_STRATEGY" != "no" ]]; then
+  args+=(--save_steps "$IFV_SAVE_STEPS")
+  args+=(--save_total_limit "$IFV_SAVE_TOTAL_LIMIT")
+fi
+if [[ -n "${IFV_ATTN_IMPL:-}" ]]; then
+  args+=(--attn_impl "$IFV_ATTN_IMPL")
+fi
+if [[ -n "${IFV_GROUP_BY_LENGTH:-}" ]]; then
+  args+=(--group_by_length "$IFV_GROUP_BY_LENGTH")
+fi
+if [[ -n "${IFV_USE_LOGITS_TO_KEEP:-}" ]]; then
+  args+=(--use_logits_to_keep "$IFV_USE_LOGITS_TO_KEEP")
+fi
+if [[ -n "${IFV_DATALOADER_PREFETCH_FACTOR:-}" ]]; then
+  args+=(--dataloader_prefetch_factor "$IFV_DATALOADER_PREFETCH_FACTOR")
+fi
+if [[ -n "${IFV_DATALOADER_PERSISTENT_WORKERS:-}" ]]; then
+  args+=(--dataloader_persistent_workers "$IFV_DATALOADER_PERSISTENT_WORKERS")
+fi
 
 if [[ -n "$RESUME_CHECKPOINT" ]]; then
   if [[ ! -d "$RESUME_CHECKPOINT" ]]; then

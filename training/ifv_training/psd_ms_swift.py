@@ -8,6 +8,7 @@ paths.  It does not train standard SFT labels.
 
 from __future__ import annotations
 
+import os
 from typing import Any, Mapping
 
 
@@ -15,13 +16,113 @@ PSD_MS_SWIFT_TEMPLATE = "ifv_psd_topk"
 PSD_MS_SWIFT_LOSS = "ifv_psd_topk"
 
 
-def sparse_topk_cross_entropy(
+def _validate_sparse_targets(
+    target_tokens: Any,
+    weights: Any,
+    *,
+    batch_size: int,
+    sequence_length: int,
+    require_active_per_datum: bool,
+) -> Any:
+    import torch
+
+    if target_tokens.ndim != 3 or tuple(target_tokens.shape[:2]) != (
+        batch_size,
+        sequence_length,
+    ):
+        raise ValueError(
+            "psd_target_tokens must have shape [batch, sequence, topk]"
+        )
+    if tuple(weights.shape) != tuple(target_tokens.shape):
+        raise ValueError("psd_weights shape must match psd_target_tokens")
+    if not torch.isfinite(weights).all() or (weights < 0).any():
+        raise ValueError("psd_weights must be finite and non-negative")
+    active = weights.sum(dim=-1) > 0
+    if require_active_per_datum and not active.reshape(batch_size, -1).any(dim=1).all():
+        raise ValueError("every PSD datum must contain an active top-k target")
+    return active
+
+
+def _chunked_sparse_position_losses(
+    logits: Any,
+    target_tokens: Any,
+    weights: Any,
+    *,
+    chunk_size: int,
+) -> Any:
+    """Compute active-position losses without retaining a full fp32 softmax."""
+
+    import torch
+
+    if chunk_size < 1:
+        raise ValueError("PSD loss chunk size must be positive")
+
+    class ChunkedSparseTopKCrossEntropy(torch.autograd.Function):
+        @staticmethod
+        def forward(ctx: Any, raw_logits: Any, tokens: Any, values: Any) -> Any:
+            ctx.save_for_backward(raw_logits, tokens, values)
+            losses = []
+            for start in range(0, raw_logits.shape[0], chunk_size):
+                end = min(start + chunk_size, raw_logits.shape[0])
+                logits_chunk = raw_logits[start:end].float()
+                weights_chunk = values[start:end].float()
+                mass = weights_chunk.sum(dim=-1)
+                selected = torch.gather(
+                    logits_chunk,
+                    -1,
+                    tokens[start:end],
+                )
+                losses.append(
+                    mass * torch.logsumexp(logits_chunk, dim=-1)
+                    - (selected * weights_chunk).sum(dim=-1)
+                )
+            return torch.cat(losses)
+
+        @staticmethod
+        def backward(ctx: Any, grad_output: Any) -> tuple[Any, None, None]:
+            raw_logits, tokens, values = ctx.saved_tensors
+            for start in range(0, raw_logits.shape[0], chunk_size):
+                end = min(start + chunk_size, raw_logits.shape[0])
+                logits_chunk = (
+                    raw_logits[start:end].detach().float().requires_grad_(True)
+                )
+                weights_chunk = values[start:end].float()
+                with torch.enable_grad():
+                    mass = weights_chunk.sum(dim=-1)
+                    selected = torch.gather(
+                        logits_chunk,
+                        -1,
+                        tokens[start:end],
+                    )
+                    losses = (
+                        mass * torch.logsumexp(logits_chunk, dim=-1)
+                        - (selected * weights_chunk).sum(dim=-1)
+                    )
+                    gradient = torch.autograd.grad(
+                        losses,
+                        logits_chunk,
+                        grad_outputs=grad_output[start:end].float(),
+                        retain_graph=False,
+                    )[0]
+                # This follows ms-swift's ChunkedCrossEntropyLoss: reuse the
+                # saved logits buffer for its gradient instead of allocating a
+                # second [active_tokens, vocab] tensor at long context.
+                with torch.no_grad():
+                    raw_logits[start:end].copy_(gradient.to(raw_logits.dtype))
+            return raw_logits, None, None
+
+    return ChunkedSparseTopKCrossEntropy.apply(logits, target_tokens, weights)
+
+
+def sparse_topk_position_losses(
     outputs: Any,
     *,
     psd_target_tokens: Any,
     psd_weights: Any,
+    chunk_size: int | None = None,
+    require_active_per_datum: bool = True,
 ) -> Any:
-    """Return truncated teacher top-K cross entropy over PSD action positions."""
+    """Return one sparse teacher cross-entropy value per sequence position."""
 
     import torch
 
@@ -38,35 +139,130 @@ def sparse_topk_cross_entropy(
         dtype=torch.float32,
         non_blocking=True,
     )
-    expected = (*logits.shape[:2], target_tokens.shape[-1])
-    if target_tokens.ndim != 3 or tuple(target_tokens.shape) != expected:
-        raise ValueError(
-            "psd_target_tokens must have shape [batch, sequence, topk]"
-        )
-    if tuple(weights.shape) != tuple(target_tokens.shape):
-        raise ValueError("psd_weights shape must match psd_target_tokens")
-    if not torch.isfinite(weights).all() or (weights < 0).any():
-        raise ValueError("psd_weights must be finite and non-negative")
-    active = weights > 0
-    if not active.any():
-        raise ValueError("PSD batch has no active top-k target")
-    active_by_datum = active.reshape(active.shape[0], -1).any(dim=1)
-    if not active_by_datum.all():
-        raise ValueError("every PSD datum must contain an active top-k target")
+    active = _validate_sparse_targets(
+        target_tokens,
+        weights,
+        batch_size=logits.shape[0],
+        sequence_length=logits.shape[1],
+        require_active_per_datum=require_active_per_datum,
+    )
     active_tokens = target_tokens[active]
-    if active_tokens.min() < 0 or active_tokens.max() >= logits.shape[-1]:
+    if active_tokens.numel() and (
+        active_tokens.min() < 0 or active_tokens.max() >= logits.shape[-1]
+    ):
         raise ValueError("PSD target token ID is outside model vocabulary")
 
-    log_probabilities = torch.log_softmax(logits.float(), dim=-1)
-    selected = torch.gather(log_probabilities, -1, target_tokens)
+    # Keep every SP rank connected to the forward graph even when the short
+    # PSD completion falls wholly on a different sequence shard.
+    position_losses = logits[..., 0].float() * 0.0
+    if active.any():
+        active_logits = logits[active]
+        configured_chunk = chunk_size
+        if configured_chunk is None:
+            raw_chunk = os.getenv(
+                "IFV_PSD_LOSS_CHUNK_TOKENS",
+                os.getenv("CELOSS_PARALLEL_SIZE", "2048"),
+            )
+            try:
+                configured_chunk = int(raw_chunk)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "IFV_PSD_LOSS_CHUNK_TOKENS must be a positive integer"
+                ) from exc
+        active_losses = _chunked_sparse_position_losses(
+            active_logits,
+            active_tokens,
+            weights[active],
+            chunk_size=configured_chunk,
+        )
+        position_losses = position_losses.masked_scatter(active, active_losses)
+    return position_losses
+
+
+def sparse_topk_cross_entropy(
+    outputs: Any,
+    *,
+    psd_target_tokens: Any,
+    psd_weights: Any,
+    chunk_size: int | None = None,
+    require_active_per_datum: bool = True,
+) -> Any:
+    """Return truncated teacher top-K cross entropy over PSD action positions."""
+    logits = outputs["logits"] if isinstance(outputs, Mapping) else outputs.logits
+    position_losses = sparse_topk_position_losses(
+        outputs,
+        psd_target_tokens=psd_target_tokens,
+        psd_weights=psd_weights,
+        chunk_size=chunk_size,
+        require_active_per_datum=require_active_per_datum,
+    )
     # Match the official PSD backends: teacher probabilities are multiplied by
     # the row loss weight, contributing token losses are summed, and the batch
     # is averaged over datums.  Normalizing by weights.sum() would cancel the
     # repair/preservation row weights entirely.
-    loss = -(selected * weights).sum() / logits.shape[0]
+    loss = position_losses.sum() / logits.shape[0]
+    import torch
+
     if not torch.isfinite(loss):
         raise ValueError("PSD loss is non-finite")
     return loss
+
+
+def sequence_parallel_sparse_topk_cross_entropy(
+    outputs: Any,
+    *,
+    psd_target_tokens: Any,
+    psd_weights: Any,
+    sequence_parallel_instance: Any,
+    gather_loss: Any,
+) -> Any:
+    """Compute the global PSD objective without gathering vocabulary logits."""
+
+    import torch
+
+    position_losses = sparse_topk_position_losses(
+        outputs,
+        psd_target_tokens=psd_target_tokens,
+        psd_weights=psd_weights,
+        require_active_per_datum=False,
+    )
+    position_losses, _ = gather_loss.apply(
+        position_losses,
+        None,
+        1,
+        sequence_parallel_instance.real_position_ids,
+    )
+    loss = position_losses.sum() / position_losses.shape[0]
+    if not torch.isfinite(loss):
+        raise ValueError("PSD sequence-parallel loss is non-finite")
+    return loss
+
+
+def split_psd_targets_for_sequence_parallel(
+    target_tokens: Any,
+    weights: Any,
+    *,
+    sequence_parallel_instance: Any,
+) -> tuple[Any, Any]:
+    """Pad/split sparse targets with ms-swift's exact SP/RP ordering."""
+
+    position_ids = sequence_parallel_instance.real_position_ids
+    if position_ids is None:
+        raise ValueError("PSD sequence parallel requires cached position_ids")
+    *_, extra_values = sequence_parallel_instance.pad_and_split_inputs(
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        real_position_ids=position_ids,
+        extra_split_values=[
+            (target_tokens, 0, 1),
+            (weights, 0.0, 1),
+        ],
+    )
+    return extra_values[0], extra_values[1]
 
 
 def install_ms_swift_psd_plugin() -> None:
@@ -75,6 +271,7 @@ def install_ms_swift_psd_plugin() -> None:
     import torch
     from swift.loss.base import BaseLoss
     from swift.loss.mapping import loss_map
+    from swift.sequence_parallel import GatherLoss, sequence_parallel
     from swift.template import Template, TemplateMeta, register_template
     from swift.trainers.seq2seq_trainer import Seq2SeqTrainer
 
@@ -92,6 +289,14 @@ def install_ms_swift_psd_plugin() -> None:
                 raise ValueError(
                     "ifv_psd_topk requires psd_target_tokens and psd_weights"
                 )
+            if sequence_parallel.enabled():
+                return sequence_parallel_sparse_topk_cross_entropy(
+                    outputs,
+                    psd_target_tokens=psd_target_tokens,
+                    psd_weights=psd_weights,
+                    sequence_parallel_instance=sequence_parallel,
+                    gather_loss=GatherLoss,
+                )
             return sparse_topk_cross_entropy(
                 outputs,
                 psd_target_tokens=psd_target_tokens,
@@ -100,6 +305,8 @@ def install_ms_swift_psd_plugin() -> None:
 
     class IfvPsdTopKTemplate(Template):
         """Pass repository-produced token IDs through without re-tokenization."""
+
+        support_padding_free = True
 
         def encode(
             self,
@@ -165,10 +372,13 @@ def install_ms_swift_psd_plugin() -> None:
         ) -> dict[str, Any]:
             if not batch:
                 raise ValueError("IFV PSD data collator received an empty batch")
-            if self.padding_free or self.sequence_parallel_size > 1:
+            if self.sequence_parallel_size > 1 and not self.padding_free:
                 raise ValueError(
-                    "IFV PSD top-k training requires padding_free=false and "
-                    "sequence_parallel_size=1"
+                    "IFV PSD sequence parallel requires padding_free=true"
+                )
+            if self.padding_free and len(batch) != 1:
+                raise ValueError(
+                    "IFV PSD padding-free training requires one datum per device"
                 )
             topk = len(batch[0]["psd_target_tokens"][0])
             sequence_length = max(len(row["input_ids"]) for row in batch)
@@ -226,13 +436,20 @@ def install_ms_swift_psd_plugin() -> None:
                     row["psd_weights"],
                     dtype=torch.float32,
                 )
-            return {
+            result = {
                 "input_ids": input_ids,
                 "attention_mask": attention_mask,
                 "labels": labels,
                 "psd_target_tokens": target_tokens,
                 "psd_weights": weights,
             }
+            if self.padding_free:
+                result.pop("attention_mask")
+                result["position_ids"] = torch.arange(
+                    sequence_length,
+                    dtype=torch.long,
+                ).unsqueeze(0)
+            return result
 
     loss_map[PSD_MS_SWIFT_LOSS] = IfvPsdTopKLoss
     register_template(
@@ -270,6 +487,19 @@ def install_ms_swift_psd_plugin() -> None:
         if target_tokens is None or weights is None:
             raise ValueError(
                 "IFV PSD batch must contain both psd_target_tokens and psd_weights"
+            )
+        _validate_sparse_targets(
+            target_tokens,
+            weights,
+            batch_size=target_tokens.shape[0],
+            sequence_length=target_tokens.shape[1],
+            require_active_per_datum=True,
+        )
+        if sequence_parallel.enabled():
+            target_tokens, weights = split_psd_targets_for_sequence_parallel(
+                target_tokens,
+                weights,
+                sequence_parallel_instance=sequence_parallel,
             )
         base_loss_func = inputs.get("compute_loss_func")
         if base_loss_func is None:

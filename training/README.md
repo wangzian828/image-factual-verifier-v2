@@ -108,6 +108,33 @@ check`、CUDA/GPU、Qwen3.5 上下文、ms-swift RL 参数契约，以及 `swift
 `vllm serve` 两个 CLI。旧的 ready 文件不能单独证明环境可用；新 ready 文件保存
 本次通过报告的 SHA-256，任何环境修复后都必须重新生成报告和摘要。
 
+## PSD
+
+PSD 使用当前 round-start Qwen 的冻结副本生成 top-20 分布，Gemini 等外部模型只可
+构造 privileged hint，不能提供 self-teacher logits。训练入口固定为 8 卡 SP8、128K、
+LoRA rank 32；不再保留 SP1 profile：
+
+```bash
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+training/scripts/train/run_psd_topk.sh \
+  training/configs/models/qwen3.5-9b.env \
+  training/configs/psd/qwen3.5-lora-r32-1step-8gpu-sp8-128k-memory-probe.env \
+  <psd-package>/datums.jsonl \
+  <memory-probe-experiment-id>
+
+training/scripts/train/run_psd_topk.sh \
+  training/configs/models/qwen3.5-9b.env \
+  training/configs/psd/qwen3.5-lora-r32-5epoch-8gpu-sp8-128k.env \
+  <psd-package>/datums.jsonl \
+  <production-experiment-id>
+```
+
+启动器在加载模型前校验逐 target 权重、数据 hash、top-20、128K/SP8、LoRA 超参和
+每步 32 个 unique target，并跑 8-rank CPU 分布式 loss smoke。自定义 loss 直接沿用
+ms-swift 的 sequence/ring split 顺序，只 gather 每位置标量 loss，不 gather 全词表
+logits；fp32 cross-entropy 按 active completion position 分块重算。真实 production
+仍必须先通过空闲 8 卡的一步 memory probe。
+
 ## 环境边界
 
 - SFT 和 RL 使用独立环境。

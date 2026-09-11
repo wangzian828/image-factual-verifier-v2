@@ -187,10 +187,20 @@ not rebalanced. This matters when one successful preservation rollout contains
 multiple retained assistant steps.
 
 `training/scripts/train/run_psd_topk.sh` runs the datum-manifest/hash gate,
-ms-swift plugin forward/backward smoke, frozen-environment preflight and
-checkpoint storage preflight before model loading. During training it runs the
-same resource sampler and watchdog used by SFT; afterward it validates
-checkpoint I/O and refuses a run that misses the production gate. It also
-accepts an optional resume checkpoint. The current checked-in PSD profile
-remains an SP1 LoRA one-step engineering smoke; 128K SP8 PSD is not yet
-validated.
+profile gate, ms-swift plugin forward/backward smoke, eight-rank distributed
+SP loss smoke, frozen-environment preflight and checkpoint storage preflight
+before model loading. During training it runs the same resource sampler and
+watchdog used by SFT; afterward it validates checkpoint I/O and refuses a run
+that misses the production gate. It also accepts an optional resume checkpoint.
+
+The checked-in profiles use LoRA rank 32 and 128K SP8 across all eight GPUs.
+The production profile matches the upstream published optimizer recipe:
+top-20, learning rate `4e-5`, 32 unique targets per optimizer step, five epochs,
+gradient clipping at 1.0 and seed 0. The custom loss splits `[T,K]` targets with
+ms-swift's own Ulysses/ring ordering and gathers only scalar per-position losses;
+it never gathers `[T,V]` logits. Cross-entropy is recomputed in bounded chunks
+during backward, so it does not retain a full fp32 softmax.
+
+Run the one-step memory probe before the production profile. Passing the CPU
+distributed smoke proves ordering and gradient scaling, not 128K A100 capacity;
+the latter remains gated on an idle eight-GPU real optimizer step.
